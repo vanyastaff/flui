@@ -4077,9 +4077,9 @@ mod tests {
     /// is what this test's thread starts from regardless of what any other
     /// concurrently-running test does on ITS OWN thread — the same reasoning
     /// this file's other thread-local-only tests below rely on. The retired
-    /// `AppBinding`-era version of this test carried a
-    /// `SINGLETON_WINDOW_TEST_LOCK`, and later, briefly, `Scheduler` carried
-    /// a sibling `SCHEDULER_PHASE_TEST_LOCK`; both are deleted now, not
+    /// `AppBinding`-era version of this test carried a dedicated per-test
+    /// window-identity lock, and later, briefly, `Scheduler` carried a
+    /// sibling per-test scheduler-phase lock; both are deleted now, not
     /// ported forward, because the state each one guarded
     /// (`AppBinding::instance()`'s active window, and the process-global
     /// half of the `Scheduler` singleton respectively) no longer exists —

@@ -455,7 +455,7 @@ struct WidgetsBindingInner {
     root_element: Option<ElementId>,
 
     /// Pipeline owner for render tree management.
-    /// This is set by the application binding (e.g., WidgetsFlutterBinding)
+    /// This is set by the application binding (`flui-app`'s `UiRealm`)
     /// and propagated to elements during mounting.
     pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
 
@@ -594,10 +594,10 @@ impl WidgetsBinding {
 
     /// Set the PipelineOwner for render tree management.
     ///
-    /// This should be called by the application binding (e.g.,
-    /// WidgetsFlutterBinding) before attaching the root widget. The
-    /// PipelineOwner will be propagated to elements during mounting so they
-    /// can create their RenderObjects.
+    /// This should be called by the application binding (`flui-app`'s
+    /// `UiRealm`) before attaching the root widget. The PipelineOwner will
+    /// be propagated to elements during mounting so they can create their
+    /// RenderObjects.
     ///
     /// # Flutter Equivalent
     ///

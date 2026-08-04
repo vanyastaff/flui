@@ -72,9 +72,11 @@ OWNER_ISSUE_MIN, OWNER_ISSUE_MAX = 551, 565
 # Runtime crates covered by the singleton and lock-surface nets.
 RUNTIME_CRATES = ["flui-app", "flui-scheduler", "flui-platform", "flui-engine"]
 
-# The macro-defining file: holds the definition, doc examples, and cfg(test)
-# invocations of impl_binding_singleton!; exempt from the singleton net.
-SINGLETON_NET_EXEMPT = {Path("crates/flui-foundation/src/binding.rs")}
+# Empty: the macro-defining file (crates/flui-foundation/src/binding.rs) that
+# used to need this exemption is deleted along with impl_binding_singleton!
+# itself under #553 -- there is no `HasInstance`/`BindingBase` left anywhere
+# in the workspace, so nothing needs exempting from the singleton net below.
+SINGLETON_NET_EXEMPT: set[Path] = set()
 
 header = registry.get("registry", {})
 if not isinstance(header, dict):
@@ -447,7 +449,9 @@ for crate in RUNTIME_CRATES + [
 # check idiom, e.g. `ui_realm.rs`'s hot-reload test asserting
 # `AppBinding::instance()` was untouched) is not a production ambient reach.
 # ---------------------------------------------------------------------------
-AMBIENT_REACH_EXEMPT = {Path("crates/flui-foundation/src/binding.rs")}
+# Empty: the macro-defining file this used to exempt is deleted under #553
+# along with impl_binding_singleton! itself (see SINGLETON_NET_EXEMPT above).
+AMBIENT_REACH_EXEMPT: set[Path] = set()
 AMBIENT_STATIC_MARKERS = (
     "fn global() -> &'static",
     "fn global_timer_service() -> &'static",

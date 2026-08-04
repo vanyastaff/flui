@@ -148,7 +148,6 @@
 // Core modules - fundamental types with minimal dependencies
 pub mod affinity;
 pub mod async_snapshot;
-pub mod binding;
 pub mod callbacks;
 // Generic at-most-once request/reply primitive (ADR-0039 §3): the winit
 // owner lane's claim-slot reply protocol composes this; its state-machine
@@ -188,10 +187,8 @@ pub mod debug;
 // ============================================================================
 
 // Core types - IDs for all tree levels
-// Binding infrastructure
 pub use affinity::OwnerAffinity;
 pub use async_snapshot::{AsyncSnapshot, ConnectionState};
-pub use binding::{BindingBase, HasInstance, check_instance};
 // Callbacks
 pub use callbacks::{
     FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer,
@@ -268,8 +265,6 @@ pub use wasm::WasmNotSendSync;
 /// ```
 pub mod prelude {
     pub use crate::{
-        // Binding infrastructure
-        BindingBase,
         // Change notification
         ChangeNotifier,
         // Constants
@@ -282,8 +277,6 @@ pub mod prelude {
         ElementId,
         // Callbacks
         FallibleCallback,
-        // Keys
-        HasInstance,
         IS_DESKTOP,
         IS_MOBILE,
         IS_WEB,

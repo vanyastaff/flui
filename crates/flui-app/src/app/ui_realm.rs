@@ -9,16 +9,18 @@
 //! `RebuildHandle`/`PipelineOwnerHandle` pattern: enqueue-and-wake, never
 //! touch the tree.
 //!
-//! # Transitional coupling
+//! # Coexistence
 //!
-//! Until singleton retirement (in a prior iteration), the runtime
-//! coexists with the process-global `AppBinding`/`Scheduler` graph rather
-//! than owning those subsystems. A per-window type over process-global
-//! internals would be a lying API, so construction enforces **at most one
-//! live runtime per process** ([`UiRealmError::AlreadyExists`]); the
-//! guard retires with the singletons. Each incarnation still gets a fresh
-//! generational [`RealmId`], so results stamped for a dead runtime are
-//! droppable by identity, not by convention.
+//! Singleton retirement is complete: every service a `UiRealm` consumes
+//! (widgets binding, gesture arena, focus tree, scheduler) is owned by the
+//! realm itself, resolved once at construction (`RealmServices::construct`,
+//! `runtime.rs`) rather than reached ambiently. There is no process-global
+//! graph left to alias, so nothing enforces at-most-one instance any more —
+//! any number of realms may be constructed and driven concurrently, on one
+//! thread or several (see `two_realms_coexist_same_thread` and
+//! `two_realms_two_threads_no_shared_state` below). Each incarnation still
+//! gets a fresh generational [`RealmId`], so results stamped for a dead
+//! runtime are droppable by identity, not by convention.
 
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -56,9 +58,6 @@ use crate::bindings::RenderingFlutterBinding;
 /// runtime via `UiCommandSender::capacity`; not part of the public API.
 const DEFAULT_COMMAND_CAPACITY: usize = 256;
 
-/// Claim flag for the at-most-one-instance transitional guard.
-static REALM_CLAIMED: AtomicBool = AtomicBool::new(false);
-
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -67,16 +66,6 @@ static REALM_CLAIMED: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub(crate) enum UiRealmError {
-    /// A `UiRealm` is already live in this process.
-    ///
-    /// Transitional: the runtime still fronts process-global binding state,
-    /// so a second instance would alias it while claiming isolation. The
-    /// guard retires with the singletons.
-    #[error(
-        "a UiRealm is already live in this process; the at-most-one guard \
-         holds until singleton retirement (in a prior iteration)"
-    )]
-    AlreadyExists,
     /// The owner-local interaction lane could not be created.
     #[error("failed to create the realm interaction lane: {0}")]
     InteractionLane(#[from] flui_interaction::InteractionDispatchError),
@@ -468,8 +457,6 @@ pub(crate) struct UiRealm {
     )]
     sender_prototype: UiCommandSender,
     redraw_pending: Arc<AtomicBool>,
-    /// Whether this instance owns the transitional process-wide claim.
-    claimed: bool,
     /// This realm's OWN scheduler — the strong root every `WeakScheduler`
     /// this realm vends (tickers, `PostFrameHandle`s) upgrades against.
     /// Built fresh per realm by [`RealmServices::construct`], never a
@@ -604,8 +591,8 @@ impl UiRealm {
     ///
     /// # Errors
     ///
-    /// [`UiRealmError::AlreadyExists`] while another runtime is live
-    /// (transitional at-most-one guard, see module docs).
+    /// [`UiRealmError::InteractionLane`] if the owner-local interaction lane
+    /// could not be created.
     pub(crate) fn new(
         wake: Arc<dyn Fn() + Send + Sync>,
         window: Arc<dyn PlatformWindow>,
@@ -625,7 +612,8 @@ impl UiRealm {
     ///
     /// # Errors
     ///
-    /// [`UiRealmError::AlreadyExists`] while another runtime is live.
+    /// [`UiRealmError::InteractionLane`] if the owner-local interaction lane
+    /// could not be created.
     ///
     /// # Panics
     ///
@@ -639,29 +627,19 @@ impl UiRealm {
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
-        if REALM_CLAIMED.swap(true, Ordering::AcqRel) {
-            return Err(UiRealmError::AlreadyExists);
-        }
         let (realm_id, presentation_id) = super::runtime::next_identity();
         let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
         pipeline.write().set_device_pixel_ratio(device_pixel_ratio);
         let presentation = PresentationState::new(presentation_id, pipeline, window);
         let services = RealmServices::construct();
-        match Self::construct(
+        Self::construct(
             capacity,
             wake,
             realm_id,
             presentation,
-            true,
             services,
             needs_redraw,
-        ) {
-            Ok(realm) => Ok(realm),
-            Err(error) => {
-                REALM_CLAIMED.store(false, Ordering::Release);
-                Err(error)
-            }
-        }
+        )
     }
 
     /// Builds the realm from already-resolved pieces. Takes `services:
@@ -676,7 +654,6 @@ impl UiRealm {
         wake: Arc<dyn Fn() + Send + Sync>,
         realm_id: RealmId,
         presentation: PresentationState,
-        claimed: bool,
         services: RealmServices,
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
@@ -753,7 +730,6 @@ impl UiRealm {
                 wake,
             },
             redraw_pending,
-            claimed,
             scheduler,
             _owner_affine: PhantomData,
         })
@@ -788,7 +764,6 @@ impl UiRealm {
             wake,
             realm_id,
             presentation,
-            false,
             RealmServices::construct(),
             needs_redraw,
         )
@@ -1715,9 +1690,6 @@ impl UiRealm {
 impl Drop for UiRealm {
     fn drop(&mut self) {
         self.presentation.close();
-        if self.claimed {
-            REALM_CLAIMED.store(false, Ordering::Release);
-        }
     }
 }
 
@@ -1736,12 +1708,6 @@ mod tests {
     use super::*;
 
     static_assertions::assert_not_impl_any!(UiRealm: Send, Sync);
-
-    /// Serializes tests that claim the process-global `REALM_CLAIMED`
-    /// flag (the repo rule for tests mutating shared binding state —
-    /// AGENTS.md "Testing Quirks"). nextest gives each test its own
-    /// process, but `cargo test` / IDE runners share one.
-    static REALM_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     fn noop_wake() -> Arc<dyn Fn() + Send + Sync> {
         Arc::new(|| {})
@@ -1789,7 +1755,6 @@ mod tests {
 
     #[test]
     fn realm_entry_activates_its_global_key_registry() {
-        let _claim = REALM_TEST_LOCK.lock();
         let realm = new_runtime(noop_wake()).expect("runtime");
         let key = flui_view::GlobalKey::<()>::new();
         let element = flui_foundation::ElementId::new(17);
@@ -1814,7 +1779,6 @@ mod tests {
 
     #[test]
     fn presentation_and_widget_tree_share_the_exact_focus_owner() {
-        let _claim = REALM_TEST_LOCK.lock();
         let realm = new_runtime(noop_wake()).expect("runtime");
 
         let presentation_focus = realm.focus_manager();
@@ -1829,19 +1793,7 @@ mod tests {
     }
 
     #[test]
-    fn at_most_one_runtime_second_construction_fails_typed() {
-        let _claim = REALM_TEST_LOCK.lock();
-        let first = new_runtime(noop_wake()).expect("first runtime claims");
-        let second = new_runtime(noop_wake());
-        assert!(matches!(second, Err(UiRealmError::AlreadyExists)));
-        drop(first);
-        let third = new_runtime(noop_wake()).expect("claim released on drop");
-        drop(third);
-    }
-
-    #[test]
     fn recreated_runtime_gets_fresh_realm_id() {
-        let _claim = REALM_TEST_LOCK.lock();
         let first = new_runtime(noop_wake()).expect("first runtime");
         let first_id = first.realm_id();
         drop(first);
@@ -1855,7 +1807,6 @@ mod tests {
 
     #[test]
     fn cross_thread_navigation_command_drains_on_owner_thread() {
-        let _claim = REALM_TEST_LOCK.lock();
         let runtime = new_runtime(noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
 
@@ -2025,7 +1976,6 @@ mod tests {
 
     #[test]
     fn dead_navigation_target_is_dropped_at_commit() {
-        let _claim = REALM_TEST_LOCK.lock();
         let runtime = new_runtime(noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
         let target = {
@@ -2044,7 +1994,6 @@ mod tests {
 
     #[test]
     fn inbox_reports_backpressure_at_capacity() {
-        let _claim = REALM_TEST_LOCK.lock();
         let runtime = new_runtime_with_capacity(2, noop_wake()).expect("runtime with tiny inbox");
         let sender = runtime.command_sender();
         let navigator = NavigatorHandle::new();
@@ -2067,7 +2016,6 @@ mod tests {
 
     #[test]
     fn dropped_runtime_yields_owner_gone() {
-        let _claim = REALM_TEST_LOCK.lock();
         let runtime = new_runtime(noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
         drop(runtime);
@@ -2081,7 +2029,6 @@ mod tests {
 
     #[test]
     fn channel_full_retry_preserves_the_rejected_payload() {
-        let _claim = REALM_TEST_LOCK.lock();
         let runtime = new_runtime_with_capacity(1, noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
         let filler_navigator = NavigatorHandle::new();
@@ -2109,7 +2056,6 @@ mod tests {
 
     #[test]
     fn redraw_requests_coalesce_to_one_flag_and_one_wake() {
-        let _claim = REALM_TEST_LOCK.lock();
         let (wake, wake_count) = counting_wake();
         let runtime = new_runtime(wake).expect("runtime");
         let sender = runtime.command_sender();
@@ -2135,7 +2081,6 @@ mod tests {
 
     #[test]
     fn every_send_wakes_the_owner() {
-        let _claim = REALM_TEST_LOCK.lock();
         let (wake, wake_count) = counting_wake();
         let runtime = new_runtime(wake).expect("runtime");
         let sender = runtime.command_sender();
@@ -2155,6 +2100,474 @@ mod tests {
 
     fn test_route(name: &'static str) -> SimpleRoute<i32> {
         SimpleRoute::new(move |_ctx| SizedBox::new(1.0, 1.0).into_view().boxed()).named(name)
+    }
+
+    // ========================================================================
+    // Realm coexistence — the criterion-1/2 evidence for singleton retirement.
+    // Every process-global graph `UiRealm` used to front (the transitional
+    // at-most-one-instance construction guard, `AppBinding`, the `Scheduler`
+    // singleton) is gone: these tests prove what that actually buys, rather
+    // than asserting the absence of code that no longer exists.
+    // ========================================================================
+
+    fn coexistence_constraints() -> BoxConstraints {
+        BoxConstraints::tight(Size::new(px(200.0), px(200.0)))
+    }
+
+    /// Two realms constructed through the PRODUCTION path (`UiRealm::new`,
+    /// via `new_runtime` — not the `for_test` bypass), on ONE thread,
+    /// simultaneously live.
+    ///
+    /// Red at the old shape: resurrecting the deleted at-most-one claim
+    /// flag's swap-and-check inside `with_capacity` (an atomic swap
+    /// returning early with a now-deleted typed "already exists" error
+    /// variant) turns the second `new_runtime` call below into a typed
+    /// error instead of a live realm — this test would fail immediately.
+    /// What made that guard load-bearing at the old HEAD is also gone:
+    /// `UiRealm::construct` resolves its own
+    /// `RealmServices` (a fresh `Scheduler` strong root) instead of reaching
+    /// a process-global one, so two realms on one thread no longer alias
+    /// anything to guard against.
+    #[test]
+    fn two_realms_coexist_same_thread() {
+        use std::cell::Cell;
+
+        let realm_a = new_runtime(noop_wake()).expect("realm A claims cleanly");
+        let realm_b = new_runtime(noop_wake())
+            .expect("realm B claims cleanly ALONGSIDE realm A, same thread");
+
+        // Disjoint identities.
+        assert_ne!(
+            realm_a.realm_id(),
+            realm_b.realm_id(),
+            "two live realms must never compare equal"
+        );
+
+        // Disjoint focus tree and disjoint PipelineOwner (the container a
+        // SemanticsOwner is set on, `pipeline.write().set_semantics_owner`)
+        // -- neither realm's focus dispatch nor its semantics state can be
+        // the other's Rc/Arc.
+        assert!(
+            !Rc::ptr_eq(&realm_a.focus_manager(), &realm_b.focus_manager()),
+            "two realms must never share one focus tree"
+        );
+        assert!(
+            !Arc::ptr_eq(&realm_a.pipeline_for_test(), &realm_b.pipeline_for_test()),
+            "two realms must never share one PipelineOwner (and therefore never one SemanticsOwner)"
+        );
+
+        // Independent widget mounts: A gets a root; B stays unattached, so
+        // A's mount must not leak into B's own WidgetsBinding.
+        realm_a
+            .attach_root_widget_with_size(&SizedBox::new(50.0, 50.0), 50.0, 50.0)
+            .expect("realm A mounts its own root");
+        assert!(
+            realm_a.draw_frame(coexistence_constraints()).is_some(),
+            "realm A produced a scene from its own mounted root"
+        );
+        assert!(
+            realm_b.draw_frame(coexistence_constraints()).is_none(),
+            "realm B has no root attached; realm A's mount must not leak into it"
+        );
+
+        // Independent scheduler phases: drive realm A's frame transaction
+        // and observe realm B's scheduler from inside it, mid-frame.
+        let phase_a_mid_frame = Cell::new(None);
+        let phase_b_mid_frame = Cell::new(None);
+        realm_a
+            .scheduler()
+            .drive_frame(flui_scheduler::Instant::now(), || {
+                phase_a_mid_frame.set(Some(realm_a.scheduler().phase()));
+                phase_b_mid_frame.set(Some(realm_b.scheduler().phase()));
+                let _ = realm_a.draw_frame(coexistence_constraints());
+            });
+        assert_ne!(
+            phase_a_mid_frame.get(),
+            Some(SchedulerPhase::Idle),
+            "realm A's own scheduler must be mid-frame while its pipeline runs"
+        );
+        assert_eq!(
+            phase_b_mid_frame.get(),
+            Some(SchedulerPhase::Idle),
+            "realm B's scheduler must stay Idle while realm A alone is driving a frame"
+        );
+
+        // Independent gesture arenas: a route registered on A must never
+        // fire for input dispatched into B.
+        use flui_interaction::PointerId;
+        use flui_interaction::events::{PointerType, make_down_event_for_id};
+        use flui_interaction::routing::PointerRouteHandler;
+        use flui_types::geometry::Pixels;
+
+        let pointer = PointerId::new(9002).expect("nonzero pointer id");
+        let position = flui_types::Offset::new(Pixels(10.0), Pixels(10.0));
+        let fired = Rc::new(Cell::new(0));
+        let fired_by_route = Rc::clone(&fired);
+        let handler: PointerRouteHandler = Rc::new(move |_| {
+            fired_by_route.set(fired_by_route.get() + 1);
+        });
+        realm_a
+            .gestures()
+            .pointer_router()
+            .add_route(pointer, handler);
+
+        let down_b = make_down_event_for_id(pointer, position, PointerType::Touch);
+        realm_b.enter(|realm| {
+            realm.handle_input_entered(PlatformInput::Pointer(down_b));
+        });
+        assert_eq!(
+            fired.get(),
+            0,
+            "a route registered on realm A must not fire for realm B's input"
+        );
+        assert_eq!(realm_b.gestures().active_pointer_count(), 1);
+        assert_eq!(realm_a.gestures().active_pointer_count(), 0);
+    }
+
+    /// Realm A on the test's own thread, realm B constructed, driven, and
+    /// dropped entirely on a SECOND thread — proving there is no shared
+    /// mutable state to race on, not merely that construction succeeds.
+    /// `UiRealm` stays `!Send` throughout: `realm_b` never crosses the
+    /// thread boundary, only its `Send + Sync` wake counter and plain
+    /// `RealmId` do, via the join return value.
+    ///
+    /// A barrier released BEFORE either side's frame work only proves both
+    /// threads STARTED around the same time — the OS scheduler is free to
+    /// run one side's whole `draw_frame` to completion before the other
+    /// even resumes, so the frame TRANSACTIONS themselves might never
+    /// actually overlap. The rendezvous below fixes that by sitting INSIDE
+    /// each realm's own `drive_frame` pipeline closure — which
+    /// `Scheduler::handle_draw_frame` guarantees runs during
+    /// `SchedulerPhase::PersistentCallbacks` (see
+    /// `the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline`)
+    /// — so neither closure can proceed past the rendezvous until BOTH
+    /// realms are provably mid-transaction at the same instant.
+    /// `std::sync::Barrier` has no timeout, so a regression that stops one
+    /// side from ever reaching its frame closure would hang the test
+    /// forever instead of failing it; `rendezvous_or_timeout` below fails
+    /// loudly on a bounded deadline instead of deadlocking.
+    #[test]
+    fn two_realms_two_threads_no_shared_state() {
+        let parties_arrived = std::sync::atomic::AtomicUsize::new(0);
+        let rendezvous_or_timeout = |label: &'static str| {
+            parties_arrived.fetch_add(1, Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while parties_arrived.load(Ordering::SeqCst) < 2 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{label}: rendezvous timed out -- the other realm's frame \
+                     transaction never became concurrently mid-flight"
+                );
+                std::thread::yield_now();
+            }
+        };
+
+        let (wake_a, wakes_a) = counting_wake();
+        let realm_a = new_runtime(wake_a).expect("realm A claims cleanly on this thread");
+        let sender_a = realm_a.command_sender();
+
+        let (wakes_b, realm_b_id) = std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let (wake_b, wakes_b) = counting_wake();
+                let realm_b = new_runtime(wake_b)
+                    .expect("realm B claims cleanly on its OWN thread, concurrently with A");
+                let sender_b = realm_b.command_sender();
+
+                sender_b.request_redraw();
+                let _ = realm_b.drain_commands();
+                realm_b
+                    .scheduler()
+                    .drive_frame(flui_scheduler::Instant::now(), || {
+                        // Mid-PersistentCallbacks rendezvous: cannot return
+                        // until realm A's own closure below has ALSO
+                        // reached this point.
+                        rendezvous_or_timeout("realm B");
+                        let _ = realm_b.draw_frame(coexistence_constraints());
+                    });
+                (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
+            });
+
+            sender_a.request_redraw();
+            let _ = realm_a.drain_commands();
+            realm_a
+                .scheduler()
+                .drive_frame(flui_scheduler::Instant::now(), || {
+                    rendezvous_or_timeout("realm A");
+                    let _ = realm_a.draw_frame(coexistence_constraints());
+                });
+
+            handle.join().expect("realm B's thread did not panic")
+        });
+
+        assert_eq!(
+            wakes_a.load(Ordering::Relaxed),
+            1,
+            "realm A's wake counter reflects only its own request"
+        );
+        assert_eq!(
+            wakes_b, 1,
+            "realm B's wake counter reflects only its own request, made on its own thread"
+        );
+        assert_ne!(realm_a.realm_id(), realm_b_id);
+    }
+
+    /// Extends `dropped_runtime_yields_owner_gone`'s single-realm shape
+    /// (`UiRealmError`/`CommandSendError::OwnerGone`) across two coexisting
+    /// realms: dropping realm A must leave realm B's wake counter and inbox
+    /// completely untouched, and A's own senders must turn `OwnerGone`
+    /// rather than silently reaching B.
+    ///
+    /// Also bounds the blast radius of `global_timer_service()` (a NAMED
+    /// ambient-reach residual — `docs/runtime-contract.toml`'s ratchet;
+    /// unlike the realm construction guard or the retired `Scheduler`
+    /// singleton, this one is process-global BY DESIGN, not by omission).
+    /// Stated precisely, not aspirationally: `global_timer_service()` has
+    /// **zero production callers** today (verified by grep) — FLUI's actual
+    /// long-press/double-tap deadlines are driven through each realm's OWN
+    /// gesture arena (`tick_deadlines()`/`has_pending_deadlines()`, polled
+    /// every frame; see `long_press_fires_at_its_deadline_with_no_further_input`),
+    /// never through this ambient service. The residual's real bound,
+    /// PROVEN here rather than merely asserted: a callback that captures
+    /// LIVE realm-A state (its own `UiCommandSender`, cloned before the
+    /// drop) and fires from this process-global service AFTER realm A is
+    /// gone reaches only the typed `OwnerGone` failure path — never a
+    /// crash, never realm B — even though nothing in production wires this
+    /// service to any realm at all.
+    #[test]
+    fn dropping_realm_a_cannot_wake_realm_b() {
+        // Realm A's own wake counter has nothing left to assert once A is
+        // dropped below (its `wake` closure can never fire again); only
+        // realm B's counter is the interesting observable here.
+        let (wake_a, _wakes_a) = counting_wake();
+        let (wake_b, wakes_b) = counting_wake();
+        let realm_a = new_runtime(wake_a).expect("realm A");
+        let realm_b = new_runtime(wake_b).expect("realm B, alongside realm A");
+
+        let sender_a = realm_a.command_sender();
+        let realm_b_id_before = realm_b.realm_id();
+
+        drop(realm_a);
+
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(test_route("/"));
+        assert!(
+            matches!(
+                sender_a.send_navigation(NavigatorCommand::maybe_pop(navigator.command_target())),
+                Err(CommandSendError::OwnerGone { .. })
+            ),
+            "a sender into the dropped realm A must turn OwnerGone"
+        );
+        assert_eq!(
+            wakes_b.load(Ordering::Relaxed),
+            0,
+            "dropping realm A must not wake realm B"
+        );
+        assert_eq!(
+            realm_b.realm_id(),
+            realm_b_id_before,
+            "realm B is unaffected by realm A's drop"
+        );
+
+        // realm B's own inbox still drains normally — dropping a SIBLING
+        // realm leaves it fully live, not merely non-crashed.
+        let sender_b = realm_b.command_sender();
+        let navigator_b = NavigatorHandle::new();
+        navigator_b.seed_initial(test_route("/"));
+        sender_b
+            .send_navigation(NavigatorCommand::maybe_pop(navigator_b.command_target()))
+            .expect("realm B's inbox has room");
+        let report = realm_b.drain_commands();
+        assert_eq!(report.invoked, 1);
+        assert_eq!(report.dropped_stale, 0);
+
+        // Pending-gesture-timer probe, strengthened: `global_timer_service()`
+        // has no production caller and no realm ever registers with it (see
+        // this test's own doc comment) -- so instead of pretending a realm
+        // "armed" a timer, capture realm A's OWN sender (cloned before the
+        // drop above) directly into the fired closure, and observe what
+        // happens when this unrelated ambient service invokes it well after
+        // realm A is gone.
+        let sender_a_for_timer = sender_a.clone();
+        let navigator_for_timer = NavigatorHandle::new();
+        navigator_for_timer.seed_initial(test_route("/"));
+        let target_for_timer = navigator_for_timer.command_target();
+        let observed_owner_gone = Arc::new(AtomicBool::new(false));
+        let observed_owner_gone_marker = Arc::clone(&observed_owner_gone);
+        let _timer = flui_interaction::global_timer_service().schedule(
+            std::time::Duration::ZERO,
+            move || {
+                let result = sender_a_for_timer
+                    .send_navigation(NavigatorCommand::maybe_pop(target_for_timer));
+                observed_owner_gone_marker.store(
+                    matches!(result, Err(CommandSendError::OwnerGone { .. })),
+                    Ordering::SeqCst,
+                );
+            },
+        );
+        // `wakes_b` already sits at 1 from the legitimate send above; the
+        // probe asserts it stays EXACTLY there (unchanged), not that it is
+        // zero.
+        let wakes_b_before_timer = wakes_b.load(Ordering::Relaxed);
+
+        // Deliberately NOT asserting on this call's own `check_timers()`
+        // return value: `global_timer_service()` is process-global BY
+        // DESIGN (unlike every other retired singleton), so under `cargo
+        // test`'s shared-process parallelism (never under `cargo nextest
+        // run`, which gives every test its own process) a second,
+        // concurrently-running test that also happens to call
+        // `check_timers()` could drain and fire THIS test's timer before
+        // this call gets to it -- the closure still runs exactly the same
+        // either way (state mutation doesn't care which caller triggered
+        // it), only trusting THIS call's local return count would be
+        // fragile. Polling the actual observable instead
+        // (`observed_owner_gone`), with `check_timers()` as a same-process
+        // nudge and a bounded deadline so a genuine failure to fire still
+        // fails loudly rather than hanging, tolerates that interleaving
+        // without needing new cross-test lock infrastructure.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !observed_owner_gone.load(Ordering::SeqCst) {
+            flui_interaction::global_timer_service().check_timers();
+            if observed_owner_gone.load(Ordering::SeqCst) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the scheduled timer never fired -- observed_owner_gone stayed false"
+            );
+            std::thread::yield_now();
+        }
+        assert!(
+            observed_owner_gone.load(Ordering::SeqCst),
+            "a callback capturing realm A's own sender, fired from this ambient \
+             service after realm A is gone, must reach the typed OwnerGone \
+             failure path -- never a crash, never realm B"
+        );
+        assert_eq!(
+            wakes_b.load(Ordering::Relaxed),
+            wakes_b_before_timer,
+            "the global timer residual must never reach into a coexisting realm's wake state"
+        );
+        assert_eq!(
+            realm_b.gestures().active_pointer_count(),
+            0,
+            "...nor its gesture arena"
+        );
+    }
+
+    /// The sharpest widget-state isolation probe (per ADR-0027 §8: GlobalKey
+    /// is realm-scoped, not process-global). Within ONE realm, mounting a
+    /// second element under an already-registered `GlobalKey` value panics
+    /// eagerly (`register_global_key_with_collision_check`,
+    /// `element_tree.rs`) — that is FLUI's documented divergence from
+    /// Flutter's end-of-frame duplicate detection. Mounting the SAME key
+    /// VALUE as a root in two DIFFERENT realms must succeed in both: each
+    /// realm's `WidgetsBinding` owns its own `ElementOwner`/registry, and the
+    /// collision check is scoped to the currently-active one, never to the
+    /// key's numeric id process-wide.
+    ///
+    /// Both realms go through the PRODUCTION constructor (`UiRealm::new`,
+    /// via `new_runtime`), matching every other coexistence proof in this
+    /// module — not the `for_test` bypass, so this test exercises the exact
+    /// path a real embedder would.
+    #[test]
+    fn cross_realm_duplicate_global_key_mounts_succeed_in_both() {
+        #[derive(Clone)]
+        struct GlobalKeyedRootView {
+            key: flui_view::GlobalKey<Self>,
+        }
+
+        impl flui_view::RenderView for GlobalKeyedRootView {
+            type Protocol = flui_rendering::protocol::BoxProtocol;
+            type RenderObject = flui_objects::RenderSizedBox;
+
+            fn create_render_object(
+                &self,
+                _ctx: &flui_view::RenderObjectContext<'_>,
+            ) -> Self::RenderObject {
+                flui_objects::RenderSizedBox::shrink()
+            }
+
+            fn update_render_object(
+                &self,
+                _ctx: &flui_view::RenderObjectContext<'_>,
+                render_object: &mut Self::RenderObject,
+            ) {
+                *render_object = flui_objects::RenderSizedBox::shrink();
+            }
+        }
+
+        impl flui_view::View for GlobalKeyedRootView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::render_variable(self)
+            }
+
+            fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+                Some(&self.key)
+            }
+        }
+
+        let shared_key = flui_view::GlobalKey::<GlobalKeyedRootView>::new();
+        let realm_a = new_runtime(noop_wake()).expect("realm A claims cleanly");
+        let realm_b = new_runtime(noop_wake()).expect("realm B claims cleanly ALONGSIDE realm A");
+
+        realm_a
+            .attach_root_widget_with_size(
+                &GlobalKeyedRootView {
+                    key: shared_key.clone(),
+                },
+                10.0,
+                10.0,
+            )
+            .expect("realm A mounts the keyed root");
+        let _ = realm_a.draw_frame(coexistence_constraints());
+
+        // Realm B wraps the SAME keyed view one layer deeper (a `SizedBox`
+        // ancestor realm A's mount doesn't have) -- deliberately, so the two
+        // trees are NOT structurally identical. A bare identical-shape mount
+        // in both realms would legitimately allocate the same local slab
+        // index in each realm's independent `ElementTree`, which would make
+        // an `ElementId` equality/inequality assertion below pure
+        // coincidence either way, discriminating nothing. With the shapes
+        // different, a numeric match WOULD be suspicious.
+        realm_b
+            .attach_root_widget_with_size(
+                &SizedBox::new(10.0, 10.0).child(GlobalKeyedRootView {
+                    key: shared_key.clone(),
+                }),
+                10.0,
+                10.0,
+            )
+            .expect(
+                "realm B mounts the SAME GlobalKey value without a duplicate-attachment \
+                 panic -- the eager collision check is scoped to one realm's own \
+                 ElementOwner, never process-wide",
+            );
+        let _ = realm_b.draw_frame(coexistence_constraints());
+
+        let element_in_a = realm_a.enter(|_| shared_key.current_element());
+        let element_in_b = realm_b.enter(|_| shared_key.current_element());
+
+        assert!(element_in_a.is_some(), "realm A resolves its own mount");
+        assert!(element_in_b.is_some(), "realm B resolves its own mount");
+        assert_ne!(
+            element_in_a, element_in_b,
+            "each realm mounted its OWN distinct element under the same key value -- \
+             structurally guaranteed distinct here (B's tree has one extra ancestor \
+             element A's doesn't), not a coincidence of matching slab layouts"
+        );
+
+        // The distinctness above is a snapshot; the deeper isolation proof
+        // is behavioral: tear realm A down entirely and confirm realm B's
+        // registration is completely unaffected -- if the registries were
+        // secretly shared, dropping A's `ElementOwner` would clear or
+        // corrupt B's entry too.
+        drop(realm_a);
+        let element_in_b_after_a_dropped = realm_b.enter(|_| shared_key.current_element());
+        assert_eq!(
+            element_in_b_after_a_dropped, element_in_b,
+            "realm B's registration under the shared key value must survive \
+             realm A's teardown completely untouched"
+        );
     }
 
     /// A hot-reload command mutates the exact presentation owned by this
@@ -2191,7 +2604,6 @@ mod tests {
     #[cfg(feature = "hot-reload")]
     #[test]
     fn full_restart_command_does_not_arm_a_presentation_redraw() {
-        let _claim = REALM_TEST_LOCK.lock();
         let runtime = new_runtime(noop_wake()).expect("runtime");
 
         runtime
