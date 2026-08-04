@@ -40,10 +40,11 @@ members = [
     # "examples/android_demo",      # Android GPU demo (cdylib)
     # "examples/android_scene",     # Hot-reloadable scene plugin (cdylib)
     # "examples/android_app",       # Widget-based hot-reloadable plugin (cdylib)
-    "examples/desktop_scene",            # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
+    "examples/desktop_scene",                # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
     "examples/hot_reload_counter/types",
     "examples/hot_reload_counter/logic",
     "examples/hot_reload_counter/host",
+    "examples/hot_reload_lifecycle_fixture", # Dev-only app_plugin! fixture, dlopen'd by flui-hot-reload's own reload-lifecycle test
 
     # NOTE: Web examples are excluded from default workspace members because they
     # require wasm32 target. Build with:

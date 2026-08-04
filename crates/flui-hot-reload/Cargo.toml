@@ -43,6 +43,14 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Libr
 
 [dev-dependencies]
 flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
+# Dev-only: built for its `cdylib` side artifact, which
+# `tests/reload_lifecycle.rs` locates via `std::env::current_exe()`'s
+# directory (cargo always places a dependency's `cdylib` output there) and
+# `dlopen`s directly — never linked into this crate's own Rust code. This is
+# how that ONE integration test gets a real, built `app_plugin!` plugin
+# without a nested `cargo build` invocation: it's an ordinary dev-dependency
+# edge, so cargo's own build graph builds it before any test runs.
+flui-hot-reload-lifecycle-fixture = { path = "../../examples/hot_reload_lifecycle_fixture", version = "0.2.0" }
 
 [lints]
 workspace = true

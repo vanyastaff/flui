@@ -8,6 +8,13 @@
 //! locks) and would violate the no-flaky-tests rule. These tests pin the parts
 //! that ARE deterministic: the loader rejects bad inputs, and `file_mtime`
 //! reflects and detects an on-disk change (the reload trigger).
+//!
+//! `reload_lifecycle.rs` (same directory) is the ONE deliberate exception to
+//! "no built plugin inside a test": it needs a real `dlopen`/`dlclose` cycle
+//! to observe the unload hazard `app_plugin!`'s `ManuallyDrop` thread-local
+//! storage exists to avoid, and gets its plugin without nested `cargo build`
+//! by making the fixture an ordinary `[dev-dependencies]` path entry instead
+//! (cargo's own build graph produces it — see that file's module doc).
 
 use std::fs;
 use std::path::PathBuf;
