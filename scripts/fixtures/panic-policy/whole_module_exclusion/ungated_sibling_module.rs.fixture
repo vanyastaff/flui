@@ -1,0 +1,9 @@
+//! Fixture: an ordinary, ungated production sibling of
+//! `gated_testing_module.rs.fixture`. Its bare (non-`BUG:`) expect() MUST be
+//! scanned and flagged -- proving the whole-module exclusion is scoped to
+//! the one gated declaration, not every module a gated file happens to sit
+//! next to.
+
+pub fn ordinary_production_code(slot: Option<u32>) -> u32 {
+    slot.expect("ungated sibling, this must be flagged")
+}

@@ -65,7 +65,12 @@ except (OSError, tomllib.TOMLDecodeError) as error:
 # ---------------------------------------------------------------------------
 VALID_STATES = {"implemented", "partial", "planned", "documented-divergence"}
 VALID_CLASSIFICATIONS = {"stable-candidate", "experimental", "transitional", "removal-target"}
-VALID_DOMAINS = {"application", "realm", "presentation", "raster", "platform", "shared-engine"}
+# "workspace" is deliberately not a Runtime.1 topology domain (the other six
+# are). It exists for the rare cross-cutting engineering-discipline contract
+# that has no other mechanically-checked registry to live in (e.g. the
+# expect("BUG: …") panic-policy gate) -- narrow on purpose, not a general
+# dumping ground for anything that lacks a home.
+VALID_DOMAINS = {"application", "realm", "presentation", "raster", "platform", "shared-engine", "workspace"}
 VALID_EVIDENCE_KINDS = {"symbol", "test", "compile-time", "source-gate"}
 OWNER_ISSUE_MIN, OWNER_ISSUE_MAX = 551, 565
 

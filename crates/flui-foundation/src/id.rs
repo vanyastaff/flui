@@ -808,7 +808,7 @@ impl<T: Marker> GenId<T> {
         let packed = (u64::from(generation.get()) << 32) | u64::from(index);
         Self(
             core::num::NonZeroU64::new(packed)
-                .expect("generation >= 1 ensures packed value is non-zero"),
+                .expect("BUG: generation is typed NonZeroU32, so generation >= 1 always keeps the packed value's high bits non-zero"),
             PhantomData,
         )
     }
@@ -852,7 +852,7 @@ impl<T: Marker> GenId<T> {
     pub fn generation(self) -> core::num::NonZeroU32 {
         let generation = (self.0.get() >> 32) as u32;
         core::num::NonZeroU32::new(generation)
-            .expect("GenId generation is always >= 1; packed value invariant violated")
+            .expect("BUG: every GenId is built via new/new_gen, which only accept a NonZeroU32 generation, so the packed high bits are always non-zero")
     }
 
     /// The raw packed `NonZeroU64` value (tracing/logging).
@@ -1199,7 +1199,7 @@ impl ElementId {
         // packed value is always non-zero.
         Self(
             core::num::NonZeroU64::new(packed)
-                .expect("generation >= 1 ensures packed value is non-zero"),
+                .expect("BUG: generation is typed NonZeroU32, so generation >= 1 always keeps the packed value's high bits non-zero"),
         )
     }
 
@@ -1248,11 +1248,13 @@ impl ElementId {
     ///
     /// # Panics
     ///
-    /// In practice this function cannot panic: any `ElementId` constructed via
-    /// `new` or `new_gen` has a non-zero generation in the high 32 bits. The
-    /// `.expect` is a proof guard that fires only if a zero-generation id was
-    /// somehow constructed outside the public API, which is prevented by the
-    /// `NonZeroU64` newtype wrapper.
+    /// In practice this function cannot panic: every `ElementId` construction
+    /// path keeps the high 32 bits non-zero — `new`/`new_gen` require a
+    /// `NonZeroU32` generation by their own typing, and `Deserialize` (the
+    /// only other path) explicitly rejects a zero generation field before
+    /// building the value. The `.expect` is a proof guard that fires only if
+    /// a zero-generation id was somehow constructed outside all of the above,
+    /// which the `NonZeroU64` newtype wrapper prevents.
     #[inline]
     #[must_use]
     pub fn generation(self) -> core::num::NonZeroU32 {
@@ -1260,9 +1262,10 @@ impl ElementId {
         // `new_gen` requires a `NonZeroU32` generation, and the minimum packed
         // value with generation=1 is `1 << 32` which has non-zero high bits.
         let generation = (self.0.get() >> 32) as u32;
-        // Invariant: `new_gen` only accepts `NonZeroU32`, so generation is always >= 1.
+        // Invariant: every construction path (new/new_gen's NonZeroU32 typing,
+        // Deserialize's explicit validation) keeps generation >= 1.
         core::num::NonZeroU32::new(generation)
-            .expect("ElementId generation is always >= 1; packed value invariant violated")
+            .expect("BUG: the high 32 bits are a NonZeroU32 generation by construction (new/new_gen typing; Deserialize validation)")
     }
 
     /// The raw packed `NonZeroU64` value. Useful for tracing / logging.

@@ -1,0 +1,115 @@
+# Per-file ratchet for docs/PANIC-POLICY.md's `expect("BUG: …")` convention,
+# enforced by scripts/check-panic-policy.sh (wired into `just
+# panic-policy-check` and `just ci`).
+#
+# Format: `relative/path.rs <count>`, one entry per line. `<count>` is the
+# file's CURRENT number of production `expect()` sites whose message does
+# not start with `BUG: ` -- it is load-bearing, not a label: the checker
+# compares it against the file's actual count on every run. This is a
+# SHRINK-ONLY ratchet per file, not merely per file-set:
+#
+#   * a file with a non-conforming site that is NOT listed here fails the
+#     gate (new debt must be declared here, not introduced silently);
+#   * a file listed here whose actual count no longer matches the listed
+#     count fails in EITHER direction -- higher (new bare expect() calls
+#     landed in an already-listed file; staying "on the list" is not a free
+#     pass to keep adding debt) or lower (the file improved but the count
+#     was not updated down, which would let a later regression back up to
+#     the stale number go unnoticed);
+#   * a file listed here with zero actual sites left ALSO fails (a fully
+#     cleaned file must leave this list).
+#
+# Burn down by rewording a genuine internal invariant to
+# `expect("BUG: <invariant>")`, or converting a genuinely caller-triggerable/
+# environmental failure to a typed `Result` per docs/PANIC-POLICY.md's table
+# -- never by blanket-prefixing without reading the site.
+#
+# Seeded 2026-08-04 with the worst offenders already burned down in the same
+# change that seeded this list: flui-hot-reload/src/worker.rs,
+# flui-engine/src/wgpu/backend.rs, flui-painting/src/text_painter/paint.rs,
+# flui-widgets/src/scroll/refresh_indicator.rs (all fully conforming now),
+# and flui-app/src/app/runner.rs (its one site converted to match
+# run_desktop's environmental-failure pattern instead of reworded, since the
+# failure is a real platform-init error, not an invariant).
+# flui-rendering/src/testing/harness.rs never belonged on this list at all:
+# it lives under a `#[cfg(any(test, feature = "testing"))]`-gated module
+# (test-support, compiled only for this crate's own tests or an opt-in
+# consumer feature), which check-panic-policy.sh's whole-module exclusion
+# (mirroring `tests/`/`benches/`/`examples/`) correctly never scans.
+#
+# flui-foundation/src/id.rs keeps 3 of its original 7 sites here rather than
+# rewording them: `RawId::zip`, `GenId::new`, and `ElementId::new` all carry
+# a documented `# Panics` section and are genuinely caller-triggerable (a
+# caller passes an index of 0, or one that overflows u32) rather than an
+# internal invariant this module maintains -- the strict PANIC-POLICY.md
+# reading calls for a `Result`, but `zip` is the ID offset pattern's public,
+# widely-used constructor (`AGENTS.md`'s "Insert: slab_index + 1"); making it
+# fallible would ripple across every ID type in every crate that mints one.
+# Out of scope for an internal-only pass; recorded as a breaking-API item in
+# the panic-policy-gate PR notes instead of forced into either bucket.
+
+crates/flui-animation/src/controller.rs 4
+crates/flui-devtools/src/hot_reload.rs 1
+crates/flui-engine/src/wgpu/advanced_blend/pipeline.rs 1
+crates/flui-engine/src/wgpu/batches/images.rs 3
+crates/flui-engine/src/wgpu/headless.rs 1
+crates/flui-engine/src/wgpu/mode/pipeline.rs 1
+crates/flui-engine/src/wgpu/offscreen/blit.rs 1
+crates/flui-engine/src/wgpu/offscreen/blur.rs 3
+crates/flui-engine/src/wgpu/offscreen/mask.rs 2
+crates/flui-engine/src/wgpu/renderer.rs 2
+crates/flui-engine/src/wgpu/state_stack.rs 2
+crates/flui-engine/src/wgpu/texture_cache.rs 2
+crates/flui-engine/src/wgpu/texture_pool.rs 3
+crates/flui-foundation/src/id.rs 3
+crates/flui-foundation/src/key.rs 4
+crates/flui-hot-reload/src/dev/source_watch.rs 1
+crates/flui-hot-reload/src/driver.rs 1
+crates/flui-hot-reload/src/plugin.rs 1
+crates/flui-interaction/src/binding.rs 1
+crates/flui-interaction/src/ids.rs 2
+crates/flui-interaction/src/processing/resampler.rs 1
+crates/flui-interaction/src/processing/sampling_clock.rs 1
+crates/flui-interaction/src/processing/velocity.rs 2
+crates/flui-interaction/src/recognizers/multidrag.rs 1
+crates/flui-macros/src/derive_animatable.rs 1
+crates/flui-macros/src/derive_diagnosticable.rs 1
+crates/flui-material/src/ink_well.rs 2
+crates/flui-material/src/scaffold.rs 1
+crates/flui-material/src/scaffold_messenger.rs 1
+crates/flui-material/src/tab_bar_view.rs 2
+crates/flui-material/src/tab_controller.rs 1
+crates/flui-material/src/tabs.rs 5
+crates/flui-material/src/theme.rs 1
+crates/flui-painting/src/text_painter/measure.rs 5
+crates/flui-platform/src/executor.rs 1
+crates/flui-platform/src/platforms/android/memory.rs 2
+crates/flui-platform/src/platforms/macos/view.rs 2
+crates/flui-platform/src/platforms/macos/window.rs 2
+crates/flui-platform/src/platforms/web/display.rs 2
+crates/flui-platform/src/platforms/web/events.rs 1
+crates/flui-platform/src/platforms/web/platform.rs 1
+crates/flui-platform/src/platforms/web/window.rs 1
+crates/flui-platform/src/platforms/winit/clipboard.rs 1
+crates/flui-platform/src/task.rs 1
+crates/flui-rendering/src/pipeline/owner/paint.rs 2
+crates/flui-rendering/src/pipeline/scheduler.rs 2
+crates/flui-rendering/src/storage/node.rs 2
+crates/flui-rendering/src/storage/tree.rs 5
+crates/flui-rendering/src/view/render_view.rs 1
+crates/flui-rendering/src/virtualization/sumtree.rs 6
+crates/flui-scheduler/src/budget.rs 3
+crates/flui-scheduler/src/frame.rs 2
+crates/flui-scheduler/src/scheduler.rs 4
+crates/flui-scheduler/src/vsync.rs 1
+crates/flui-testing/src/lib.rs 3
+crates/flui-view/src/element/behavior.rs 2
+crates/flui-view/src/tree/element_tree.rs 5
+crates/flui-view/src/tree/id_reconcile.rs 2
+crates/flui-widgets/src/app/media_query.rs 1
+crates/flui-widgets/src/interaction/focus.rs 1
+crates/flui-widgets/src/interaction/gesture_detector.rs 1
+crates/flui-widgets/src/navigator/hero.rs 1
+crates/flui-widgets/src/navigator/transition_route.rs 1
+crates/flui-widgets/src/overlay/mod.rs 1
+crates/flui-widgets/src/scroll/scrollable.rs 1

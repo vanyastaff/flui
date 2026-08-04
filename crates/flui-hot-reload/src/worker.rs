@@ -70,11 +70,11 @@ extern "C" fn host_register_worker_build(fingerprint: u64, build: *const ()) {
     let ptr = BuildPtr(build);
     worker_builds()
         .lock()
-        .expect("worker build registry poisoned")
+        .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
         .insert(fingerprint, ptr);
     if let Some(session) = &mut *REGISTRATION_SESSION
         .lock()
-        .expect("worker registration session poisoned")
+        .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
     {
         session.push((fingerprint, ptr));
     } else {
@@ -111,7 +111,7 @@ pub fn host_register_fn() -> RegisterWorkerBuildFn {
 pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
     worker_builds()
         .lock()
-        .expect("worker build registry poisoned")
+        .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
         .get(&fingerprint)
         .map(|slot| slot.0)
 }
@@ -217,18 +217,18 @@ impl WorkerPlugin {
         {
             let mut session = REGISTRATION_SESSION
                 .lock()
-                .expect("worker registration session poisoned");
+                .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
             *session = Some(Vec::new());
         }
         (self.init_fn)(host_register_fn());
         let registered_now = REGISTRATION_SESSION
             .lock()
-            .expect("worker registration session poisoned")
+            .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
             .take()
             .unwrap_or_default();
         self.registered
             .lock()
-            .expect("worker registration list poisoned")
+            .expect("BUG: WorkerPlugin::registered mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
             .extend(registered_now);
     }
 
@@ -272,14 +272,14 @@ impl Drop for WorkerPlugin {
             &mut *self
                 .registered
                 .lock()
-                .expect("worker registration list poisoned"),
+                .expect("BUG: WorkerPlugin::registered mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state"),
         );
         if registered.is_empty() {
             return;
         }
         let mut builds = worker_builds()
             .lock()
-            .expect("worker build registry poisoned");
+            .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
         for (fingerprint, ptr) in registered {
             if builds.get(&fingerprint) == Some(&ptr) {
                 builds.remove(&fingerprint);
@@ -426,7 +426,10 @@ impl WorkerReloadDriver {
                 path = %load_path.display(),
                 "WorkerReloadDriver: worker dylib updated — reloading"
             );
-            let old = self.plugin.take().expect("plugin was Some");
+            let old = self
+                .plugin
+                .take()
+                .expect("BUG: self.plugin just matched Some above and nothing else can clear it before this take() runs");
             old.unload();
 
             self.plugin = WorkerPlugin::load(&load_path);

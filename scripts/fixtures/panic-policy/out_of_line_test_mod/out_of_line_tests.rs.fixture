@@ -1,0 +1,11 @@
+//! Fixture: the sibling file `lib.rs.fixture` declares out-of-line via
+//! `#[cfg(test)] mod out_of_line_tests;`. Its bare (non-`BUG:`) expect()
+//! must never be scanned -- the whole file is test-support, excluded by
+//! `test_support_paths_for_crate` (the same mechanism that excludes
+//! `flui-rendering/src/testing/`).
+
+#[test]
+fn some_test() {
+    let value: Option<u32> = Some(1);
+    let _ = value.expect("test-only, never scanned");
+}

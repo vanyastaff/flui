@@ -339,6 +339,11 @@ inventory-check:
 runtime-conformance-check:
     bash scripts/check-runtime-conformance.sh
 
+[group("quality")]
+[doc("Gate the expect(\"BUG: …\") panic-policy convention (docs/PANIC-POLICY.md) via its per-file ratchet")]
+panic-policy-check:
+    bash scripts/check-panic-policy.sh
+
 # =============================================================================
 # Port methodology
 # =============================================================================
@@ -501,8 +506,8 @@ watch-test crate="":
 #   just deny             (advisories / bans / licenses / sources)
 #   just miri             (nightly UB check, narrow scope — see its comment)
 [group("ci")]
-[doc("Run local CI gates (fmt-check + inventory + runtime-conformance + port-check + clippy + test + doctests + rustdoc)")]
-ci: fmt-check inventory-check runtime-conformance-check port-check clippy test-ci test-doc doc-strict
+[doc("Run local CI gates (fmt-check + inventory + runtime-conformance + panic-policy + port-check + clippy + test + doctests + rustdoc)")]
+ci: fmt-check inventory-check runtime-conformance-check panic-policy-check port-check clippy test-ci test-doc doc-strict
 
 # =============================================================================
 # Maintenance

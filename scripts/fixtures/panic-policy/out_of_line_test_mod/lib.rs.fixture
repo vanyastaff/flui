@@ -1,0 +1,21 @@
+//! Fixture: exercises the OUT-OF-LINE `#[cfg(test)] mod NAME;` declaration
+//! shape (as opposed to the inline `#[cfg(test)] mod NAME { ... }` the
+//! `conforming.rs.fixture` fixture covers). This shape occurs in several
+//! real crate roots (`flui-engine/src/wgpu/mod.rs`,
+//! `flui-widgets/src/navigator/mod.rs`, and others) as a bare `mod NAME;`
+//! declaration with no body of its own -- the body lives in a sibling file.
+//!
+//! `find_cfg_test_gated_items`'s item scanner must stop at the terminating
+//! `;` and treat this as a body-less declaration (nothing to blank here;
+//! the whole-module mechanism excludes the sibling FILE instead). Before
+//! that fix, the scanner kept looking forward past the `;` for the next
+//! `{`, found the one opening `production_after_declaration` below, and
+//! blanked THAT function's body as though it were the mod's -- silently
+//! swallowing a real, unlisted violation.
+
+#[cfg(test)]
+mod out_of_line_tests;
+
+pub fn production_after_declaration(slot: Option<u32>) -> u32 {
+    slot.expect("must be flagged -- not swallowed by the mod declaration above")
+}
