@@ -255,6 +255,53 @@ impl AnimationController {
         Self::with_bounds_inner(duration, None, lower_bound, upper_bound)
     }
 
+    /// Create an animation controller with a real, but permanently detached,
+    /// ticker — no `Scheduler` at all, bounds `0.0..1.0`.
+    ///
+    /// [`Self::without_ticker`] skips the `Ticker` field entirely, and
+    /// [`AnimationController::is_animating`] is intentionally ticker-based
+    /// (Flutter parity: mirrors `Ticker.isActive`, not this controller's own
+    /// status), so a `without_ticker` controller can never report
+    /// `is_animating() == true`, even mid-run. Some call sites need
+    /// `is_animating()` to report correctly but never actually need a live
+    /// scheduler to pump anything (`Vsync` — see [`crate::vsync`] — is the
+    /// real widget-layer clock seam; nothing ever calls
+    /// `Scheduler::execute_frame` for these controllers' tickers). Before
+    /// this constructor existed, those sites built a full, private
+    /// `Scheduler::new()` purely so [`Ticker::new_with_scheduler`] had
+    /// something to downgrade — a whole `SchedulerInner` allocation whose
+    /// `Weak` was already dead by the end of the constructing statement (the
+    /// `Scheduler` itself was never bound to anything), labeled with a
+    /// misleading "real ticker" comment at each call site.
+    ///
+    /// [`Ticker::new()`] already builds exactly the needed shape: a
+    /// manually-driven ticker with no scheduler attached
+    /// (`Ticker`'s own `scheduler: Option<WeakScheduler>` field takes its
+    /// `None` arm). `start_inner` sets [`TickerState::Active`](flui_scheduler::TickerState::Active) before it
+    /// ever attempts to upgrade that `None` scheduler to auto-reschedule, so
+    /// `is_animating()`/`Ticker::is_active()` report correctly the instant a
+    /// run starts — the ticker simply never fires on its own, exactly like
+    /// the throwaway-`Scheduler` shape it replaces, but without allocating
+    /// the scheduler nobody was ever going to pump.
+    #[must_use]
+    pub fn with_detached_ticker(duration: Duration) -> Self {
+        Self::with_bounds_inner(duration, Some(Ticker::new()), 0.0, 1.0)
+            .expect("default bounds (0.0, 1.0) satisfy lower < upper")
+    }
+
+    /// [`Self::with_detached_ticker`] with custom bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::InvalidBounds`] if `lower_bound >= upper_bound`.
+    pub fn with_detached_ticker_bounds(
+        duration: Duration,
+        lower_bound: f32,
+        upper_bound: f32,
+    ) -> Result<Self, AnimationError> {
+        Self::with_bounds_inner(duration, Some(Ticker::new()), lower_bound, upper_bound)
+    }
+
     /// Create an animation controller with custom bounds.
     ///
     /// # Arguments
@@ -1756,6 +1803,59 @@ mod tests {
         assert!(matches!(rejected, Err(AnimationError::InvalidBounds(_))));
 
         let c = AnimationController::without_ticker_bounds(
+            Duration::from_millis(1),
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+        )
+        .expect("NEG_INFINITY < INFINITY satisfies the bounds invariant");
+        assert_eq!(c.value(), f32::NEG_INFINITY);
+        c.dispose();
+    }
+
+    /// `with_detached_ticker` is the shape the throwaway-`Scheduler` sites
+    /// migrated to: unlike `without_ticker`, this controller has a REAL
+    /// `Ticker`, so `is_animating()` reports `true` mid-run exactly as it
+    /// would with a live (but never-pumped) scheduler attached — while still
+    /// advancing only via `tick_at`, never on its own, because the ticker's
+    /// scheduler is `None`.
+    #[test]
+    fn with_detached_ticker_reports_animating_and_advances_via_tick_at_only() {
+        let _serial = serial();
+        let c = AnimationController::with_detached_ticker(Duration::from_millis(100));
+        assert_eq!(c.value(), 0.0);
+        assert!(
+            !c.is_animating(),
+            "a freshly built, un-started controller must not report animating"
+        );
+
+        c.forward().unwrap();
+        assert!(
+            c.is_animating(),
+            "a detached ticker must still report is_animating() == true once started -- \
+             this is exactly the behavior without_ticker cannot provide"
+        );
+        c.tick_at(0.05);
+        assert!((c.value() - 0.5).abs() < 1e-4);
+
+        c.stop().unwrap();
+        assert!(
+            !c.is_animating(),
+            "stop() must end animating for a detached ticker just as it does for a scheduled one"
+        );
+        c.dispose();
+    }
+
+    /// `with_detached_ticker_bounds` is the same shape with custom bounds --
+    /// mirrors `without_ticker_bounds`'s coverage of bounds validation and
+    /// the wide-open fling/ballistic-simulation range.
+    #[test]
+    fn with_detached_ticker_bounds_rejects_invalid_bounds_and_accepts_wide_open_ones() {
+        let _serial = serial();
+        let rejected =
+            AnimationController::with_detached_ticker_bounds(Duration::from_millis(1), 20.0, 10.0);
+        assert!(matches!(rejected, Err(AnimationError::InvalidBounds(_))));
+
+        let c = AnimationController::with_detached_ticker_bounds(
             Duration::from_millis(1),
             f32::NEG_INFINITY,
             f32::INFINITY,

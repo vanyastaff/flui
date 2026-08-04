@@ -535,9 +535,17 @@ impl std::fmt::Debug for Scheduler {
 
 /// Shared body of [`Scheduler::request_frame`] and the async driver's wake hook.
 ///
-/// Factored out so the hook can capture only `Arc<FrameState>` + `Arc<BindingState>`
-/// instead of a whole `Scheduler`. Capturing the `Scheduler` would form an
-/// `Arc` cycle (`Scheduler → AsyncDriver → hook → Scheduler`) and leak the driver.
+/// Factored out so both callers can hand it plain field references
+/// (`&FrameState`, `&BindingState`) rather than duplicating the
+/// scheduled-frame coalescing logic. This is a plumbing convenience, not the
+/// cycle-avoidance mechanism itself: `Scheduler` collapsed to one
+/// `Arc<SchedulerInner>` (see that type's own doc), so the wake hook's actual
+/// acyclic guarantee lives in `Scheduler::new`'s `Weak<SchedulerInner>`
+/// capture, not in this function's split parameters — a stale earlier
+/// version of this doc described the hook capturing `Arc<FrameState>` +
+/// `Arc<BindingState>` separately to dodge an `Arc` cycle; that split-Arc
+/// scheme predates the single-`Arc` `SchedulerInner` and no longer describes
+/// what the hook actually captures.
 fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
     let was_scheduled = frame.frame_scheduled.swap(true, Ordering::AcqRel);
     if !was_scheduled {
@@ -1003,8 +1011,10 @@ impl Scheduler {
     /// The one shared frame ordering: **begin → persistent → pipeline → post-frame → idle.**
     ///
     /// Every frame driver goes through here — `HeadlessBinding::pump_frame` on its
-    /// binding-local scheduler, and the desktop / android / wasm runners on the
-    /// `Scheduler::instance()` singleton — so headless and production cannot drift.
+    /// binding-local scheduler, and the desktop / android / wasm runners on
+    /// the realm's own owned `Scheduler` (`UiRealm.scheduler`, in flui-app —
+    /// there is no process-global scheduler singleton any more) — so
+    /// headless and production cannot drift.
     ///
     /// `pipeline` is the binding's build → layout → compositing → paint step. It
     /// runs in the [`SchedulerPhase::PersistentCallbacks`] slot without being

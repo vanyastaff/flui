@@ -103,9 +103,10 @@ pub trait BuildContext {
     ///
     /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
     /// unit test), reported honestly rather than by silently spawning into a
-    /// driver nobody polls. Never reach for `Scheduler::instance()` from a
-    /// widget: `HeadlessBinding` drives a binding-local `Scheduler`, so the
-    /// singleton's tasks would never run headlessly.
+    /// driver nobody polls. Never reach for some OTHER binding's or realm's
+    /// `Scheduler` from a widget: `HeadlessBinding` drives its own
+    /// binding-local `Scheduler`, and a production `UiRealm` likewise owns
+    /// its own — a task spawned into the wrong one would never run.
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver>;
 
     /// The binding's post-frame capability — schedule work that must observe this

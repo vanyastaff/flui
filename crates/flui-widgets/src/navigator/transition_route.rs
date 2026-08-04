@@ -77,7 +77,7 @@ use std::{rc::Rc, sync::Arc};
 
 use flui_animation::{
     ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationController, AnimationStatus,
-    AnimationSwitch, ConstantAnimation, ProxyAnimation, Scheduler, VsyncRegistration,
+    AnimationSwitch, ConstantAnimation, ProxyAnimation, VsyncRegistration,
 };
 use flui_foundation::ChangeNotifier;
 use parking_lot::Mutex;
@@ -610,17 +610,17 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
              `NavigatorHandle::push` fills its `RouteBindingSlot` first"
         );
 
-        // A real (but never-pumped) ticker, not `without_ticker`: this
-        // controller's `is_animating()` is read by `BackGestureController`
+        // A real, but permanently detached, ticker -- not `without_ticker`:
+        // this controller's `is_animating()` is read by `BackGestureController`
         // and by tests (`transition_route_tests.rs`), and `is_animating` is
         // intentionally ticker-based (Flutter parity: `Ticker.isActive`),
         // not status-based — a ticker-less controller can never report
         // `is_animating() == true`. The navigator's `Vsync` (registered
         // below when present) drives the actual value ticks
-        // deterministically; this scheduler is never pumped and its ticker
-        // never fires on its own — it exists only so `start()`/`stop()`
-        // transition real ticker state.
-        let controller = AnimationController::new(self.duration, &Scheduler::new());
+        // deterministically; `with_detached_ticker` gives this controller a
+        // ticker whose `start()`/`stop()` transition real ticker state
+        // without needing a `Scheduler` at all.
+        let controller = AnimationController::with_detached_ticker(self.duration);
         if let Some(reverse) = self.reverse_duration {
             controller.set_reverse_duration(reverse);
         }

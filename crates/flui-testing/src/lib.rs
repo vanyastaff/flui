@@ -177,10 +177,11 @@ pub struct HeadlessBinding {
     /// The mounted tree this binding rebuilds + renders each frame. `None` for a
     /// gesture-only binding ([`new`](Self::new)); `Some` once tree-bound.
     tree: Option<TreeBinding>,
-    /// Owns the frame-driven async task driver. Binding-local, not
-    /// the `Scheduler::instance()` singleton, so headless tests stay isolated and
-    /// parallel-safe; the *driver step* is the same `drive_async_tasks` method
-    /// `AppBinding::draw_frame` calls.
+    /// Owns the frame-driven async task driver. Binding-local — its own
+    /// fresh `Scheduler` value, never shared with any other binding — so
+    /// headless tests stay isolated and parallel-safe; the *driver step* is
+    /// the same `drive_async_tasks` method a production frame drive calls on
+    /// its own, likewise dedicated, `Scheduler`.
     scheduler: Scheduler,
     /// Owner-affine post-frame callback storage, active across every owner entry.
     local_post_frame: LocalPostFrameLane,
@@ -189,8 +190,8 @@ pub struct HeadlessBinding {
     /// The composited [`LayerTree`] the most recent [`pump_frame`](Self::pump_frame)
     /// produced, retained rather than dropped.
     ///
-    /// On screen this value is the frame's whole point — `AppBinding::draw_frame`
-    /// hands it to the compositor. Headlessly there is nothing downstream to hand
+    /// On screen this value is the frame's whole point — the production draw-frame
+    /// path hands it to the compositor. Headlessly there is nothing downstream to hand
     /// it to, so the pipeline's return value used to be discarded, leaving no way
     /// to ask what a frame actually composited. Keeping it makes the headless
     /// frame observable in the same terms as the on-screen one; see
@@ -250,9 +251,10 @@ impl HeadlessBinding {
     /// that first `build_scope` already asks for them. `bind_tree` re-installs for
     /// owners bound afterwards.
     ///
-    /// Naming the `Scheduler::instance()` singleton here would leave every headless
-    /// post-frame callback undrained — nothing drives the singleton's frames in a
-    /// headless process.
+    /// Naming any OTHER binding's `Scheduler` here — a production realm's, say —
+    /// would leave every headless post-frame callback undrained: nothing in this
+    /// process drives frames for a scheduler this binding does not itself own and
+    /// pump.
     pub fn install_build_capabilities(&self, build_owner: &mut flui_view::BuildOwner) {
         build_owner.set_async_driver(self.scheduler.async_driver().clone());
         build_owner.set_post_frame_handle(self.local_post_frame.post_frame_handle());
@@ -341,13 +343,15 @@ impl HeadlessBinding {
         pipeline_owner: Arc<RwLock<PipelineOwner>>,
     ) {
         // Widgets spawn into the driver this binding's frame step
-        // polls — the binding-local one, never `Scheduler::instance()`. Idempotent:
-        // installing it again is a no-op if the caller already did.
+        // polls — the binding-local one, never some OTHER binding's or
+        // realm's `Scheduler`. Idempotent: installing it again is a no-op if
+        // the caller already did.
         let mut build_owner = build_owner;
         build_owner.set_async_driver(self.scheduler.async_driver().clone());
         // The post-frame capability must name THIS binding's
-        // scheduler — the one `pump_frame`'s `drive_frame` drains — never the
-        // `Scheduler::instance()` singleton, which nothing drives headlessly.
+        // scheduler — the one `pump_frame`'s `drive_frame` drains — never
+        // some other binding's or realm's `Scheduler`, which nothing drives
+        // headlessly.
         build_owner.set_post_frame_handle(self.local_post_frame.post_frame_handle());
         build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
         self.tree = Some(TreeBinding {
@@ -672,8 +676,8 @@ impl HeadlessBinding {
                 //   -> Idle
                 //
                 // The desktop / android / wasm runners call the SAME `Scheduler::drive_frame`
-                // on the `Scheduler::instance()` singleton; this binding calls it on its
-                // binding-local scheduler. A post-frame callback therefore observes THIS
+                // on the production realm's own owned scheduler; this binding calls it on
+                // its binding-local scheduler. A post-frame callback therefore observes THIS
                 // frame's committed layout in both, which is what `HeroController` needs.
                 //
                 // `drive_async_tasks` is no longer called here: the scheduler owns that
