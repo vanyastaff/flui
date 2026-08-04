@@ -91,8 +91,8 @@ proptest! {
         // being uselessly loose at small magnitudes. Absolute + relative term.
         let tolerance = 1e-4 + (dist_ab + dist_bc) * 8.0 * f32::EPSILON;
         prop_assert!(dist_ac <= dist_ab + dist_bc + tolerance,
-            "Triangle inequality violated: dist({:?},{:?})={} > dist({:?},{:?})={} + dist({:?},{:?})={}",
-            a, c, dist_ac, a, b, dist_ab, b, c, dist_bc);
+            "Triangle inequality violated beyond tolerance: dist({:?},{:?})={} > dist({:?},{:?})={} + dist({:?},{:?})={} + tolerance {} (bound {})",
+            a, c, dist_ac, a, b, dist_ab, b, c, dist_bc, tolerance, dist_ab + dist_bc + tolerance);
     }
 }
 
@@ -110,14 +110,13 @@ fn triangle_inequality_tolerates_one_ulp_at_large_magnitude() {
     let dist_ab = a.distance(b);
     let dist_bc = b.distance(c);
 
-    let absolute_only = 1e-4;
-    assert!(
-        dist_ac > dist_ab + dist_bc + absolute_only,
-        "expected the historical counterexample to violate the absolute-only bound \
-         (dist_ac={dist_ac}, sum={})",
-        dist_ab + dist_bc
-    );
-
+    // Deliberately NOT asserted: that this triple violates the absolute-only
+    // 1e-4 bound. It did on the CI host that found it, but `distance` bottoms
+    // out in `f32::hypot`, whose last-ULP rounding is platform- and
+    // toolchain-dependent — a conforming implementation may round these
+    // distances so the absolute bound already holds, and the test must not
+    // fail on such a platform. The property defended here is only that the
+    // magnitude-scaled tolerance covers the worst rounding this shape produces.
     let tolerance = 1e-4 + (dist_ab + dist_bc) * 8.0 * f32::EPSILON;
     assert!(
         dist_ac <= dist_ab + dist_bc + tolerance,
