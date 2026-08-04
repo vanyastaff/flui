@@ -712,7 +712,7 @@ impl Ticker {
     /// be invoked from inside the captured closure without retaining a
     /// `&self` borrow across the callback registration boundary.
     ///
-    /// Takes `scheduler` as a [`WeakScheduler`], not a strong `Scheduler`:
+    /// Takes `scheduler` as a [`WeakScheduler`](crate::scheduler::WeakScheduler), not a strong `Scheduler`:
     /// this function itself runs FROM inside the scheduler it was
     /// registered on, so it always has a live scheduler in hand at the top —
     /// the weakness matters only for what gets captured in the

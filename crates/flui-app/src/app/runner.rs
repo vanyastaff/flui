@@ -2313,7 +2313,7 @@ enum WakeAction {
     /// frames are enabled and there is real work or a scheduled ticker.
     Render,
     /// Frames are disabled (`AppLifecycleState::Hidden`/`Paused`/
-    /// `Detached`): poll only [`Scheduler::drive_async_tasks`] — never
+    /// `Detached`): poll only [`Scheduler::drive_async_tasks`](flui_scheduler::Scheduler::drive_async_tasks) — never
     /// begin/draw a frame, tick, run the pipeline, or present. Dirty work
     /// is left untouched; it accumulates until frames re-enable.
     PumpAsync,
@@ -2323,7 +2323,7 @@ enum WakeAction {
 }
 
 /// Decides what a platform wake should do, given the scheduler's
-/// [`Scheduler::frames_enabled`] fact (ADR-0035) alongside the pre-existing
+/// [`Scheduler::frames_enabled`](flui_scheduler::Scheduler::frames_enabled) fact (ADR-0035) alongside the pre-existing
 /// dirty/scheduled-ticker signals.
 ///
 /// `frames_enabled == false` takes priority over everything else — even
