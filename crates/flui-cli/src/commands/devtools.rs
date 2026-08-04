@@ -1,69 +1,82 @@
-//! `DevTools` command for launching the FLUI development tools.
+//! `DevTools` command for the FLUI development tools.
 //!
-//! When the `devtools` feature is enabled, launches the `DevTools` server.
-//! When disabled, displays instructions on how to enable it.
+//! There is no `DevTools` server to launch — this command has never started
+//! one, regardless of the `devtools` feature. Both paths below say so
+//! honestly and name what `flui-devtools` actually offers as a library
+//! today: `InspectorCounters` (mount/rebuild/unmount tallies over the
+//! ADR-0040 observation seam) plus opt-in `profiler`/`timeline`/`hot_reload`
+//! modules an embedder wires up manually. See `crates/flui-devtools/FEATURES.md`.
 
-use crate::error::CliResult;
+use crate::error::{CliError, CliResult};
 use console::style;
 
 /// Execute the devtools command.
 ///
-/// Behavior depends on whether the `devtools` feature is compiled in:
-/// - **Enabled**: Launches the `DevTools` server on the specified port.
-/// - **Disabled**: Displays instructions for enabling the feature.
+/// Neither build reaches a running server: with the `devtools` feature
+/// compiled in this reports what `flui-devtools` provides as a library and
+/// returns [`CliError::NotImplemented`] (nonzero exit); without it, this
+/// shows the same message plus the build instruction.
 pub fn execute(port: u16) -> CliResult<()> {
     cliclack::intro(style(" flui devtools ").on_green().black())?;
 
     #[cfg(feature = "devtools")]
     {
-        launch_devtools_server(port)?;
+        report_not_implemented(port)
     }
 
     #[cfg(not(feature = "devtools"))]
     {
-        show_unavailable_message(port)?;
+        show_unavailable_message(port)
     }
-
-    Ok(())
 }
 
-/// Launch the DevTools server (only compiled when devtools feature is enabled).
+/// Report honestly that no DevTools server exists, and name what
+/// `flui-devtools` actually provides as a library (only compiled when the
+/// `devtools` feature is available).
 #[cfg(feature = "devtools")]
-fn launch_devtools_server(port: u16) -> CliResult<()> {
-    // Check if port is already in use.
-    check_port_available(port)?;
-
-    cliclack::log::info(format!(
-        "DevTools server started on {}",
-        style(format!("http://localhost:{port}"))
-            .cyan()
-            .underlined()
+fn report_not_implemented(port: u16) -> CliResult<()> {
+    cliclack::log::warning(format!(
+        "DevTools server is not implemented — no listener opens on port {port}."
     ))?;
-    cliclack::log::info("Press Ctrl+C to stop")?;
 
-    // TODO: Call flui_devtools::start_server(port) when the crate API is available.
-    // For now, block until Ctrl+C.
-    tracing::info!(port, "DevTools server listening");
+    let available = format!(
+        "{}\n\n  {}\n  {}\n  {}\n  {}\n\n{}",
+        "`flui-devtools` exists as a library with feature-gated subsystems \
+         the CLI does not wire up:",
+        "- inspector: InspectorCounters — mount/rebuild/unmount tallies \
+         over the ADR-0040 observation seam",
+        "- profiling: Profiler — frame/phase timing, jank detection",
+        "- timeline: Timeline — Chrome-trace event export",
+        "- hot-reload: HotReloader — file-watch callbacks",
+        style(
+            "An embedder wires these in directly today; there is no \
+             CLI-launched server. See crates/flui-devtools/FEATURES.md."
+        )
+        .dim(),
+    );
+    cliclack::note("What actually exists", available)?;
+    cliclack::outro(style("DevTools server not implemented").red())?;
 
-    // Block on Ctrl+C via tokio's signal driver (same runtime idiom as `run`).
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            tracing::warn!("Failed to listen for Ctrl+C: {e}");
-        }
-    });
-    cliclack::outro("DevTools server stopped")?;
-    Ok(())
+    tracing::info!(port, "flui devtools: no server implementation to launch");
+
+    Err(CliError::not_implemented("flui devtools server"))
 }
 
-/// Show a message when devtools feature is not available.
+/// Show a message when the `devtools` feature is not compiled in.
+///
+/// Note: enabling the feature does not change the outcome — see
+/// [`report_not_implemented`], which this build does not compile. There is
+/// no server to gain access to; this only unlocks `flui-devtools` as a
+/// library dependency.
 #[cfg(not(feature = "devtools"))]
 fn show_unavailable_message(_port: u16) -> CliResult<()> {
     cliclack::log::warning("DevTools is not available in this build.")?;
 
     let instructions = format!(
         "{}\n\n  {}\n\n{}",
-        "To enable DevTools, rebuild flui-cli with the devtools feature:",
+        "To use `flui-devtools`' library subsystems (inspector counters, \
+         profiler, timeline, hot-reload), rebuild flui-cli with the \
+         devtools feature — note this does not add a DevTools server:",
         style("cargo install flui-cli --features devtools").cyan(),
         style("DevTools requires the flui-devtools crate.").dim(),
     );
@@ -72,23 +85,4 @@ fn show_unavailable_message(_port: u16) -> CliResult<()> {
     cliclack::outro(style("DevTools not enabled").dim())?;
 
     Ok(())
-}
-
-/// Check if a TCP port is available for binding.
-#[cfg(feature = "devtools")]
-fn check_port_available(port: u16) -> CliResult<()> {
-    use std::net::TcpListener;
-
-    if let Ok(_listener) = TcpListener::bind(("127.0.0.1", port)) {
-        // Port is available — the listener is dropped here, freeing the port.
-        Ok(())
-    } else {
-        cliclack::log::error(format!(
-            "Port {port} is already in use. Try a different port with --port <PORT>"
-        ))?;
-        Err(crate::error::CliError::build_failed(
-            "devtools",
-            format!("Port {port} is already in use"),
-        ))
-    }
 }

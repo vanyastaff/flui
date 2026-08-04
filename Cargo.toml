@@ -254,7 +254,7 @@ regex = "1"
 # - lyon (tessellation)
 # - guillotiere (texture atlas)
 
-# CACHING - Used by flui_core and flui-assets
+# CACHING - Used by flui-assets
 moka = { version = "0.12", features = ["future"] }
 
 # NETWORKING - Used by flui-assets
