@@ -210,7 +210,7 @@ impl Vsync {
 
     /// Whether at least one registered controller is currently running.
     ///
-    /// Used by a production frame driver (e.g. `AppBinding`) to decide whether
+    /// Used by a production frame driver (e.g. `flui-app`'s `UiRealm`) to decide whether
     /// to request the next frame: call this after [`tick_all`](Self::tick_all)
     /// and, if `true`, schedule a wake so the frame loop keeps going. Once the
     /// last running controller completes, `has_running()` returns `false` and

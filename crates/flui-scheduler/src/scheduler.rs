@@ -1203,8 +1203,8 @@ impl Scheduler {
         self.inner.async_driver.spawn_local_eager(future)
     }
 
-    /// **The** async-driver step of a frame — the single call site both bindings
-    /// use (`HeadlessBinding::pump_frame` and `AppBinding::draw_frame`).
+    /// **The** async-driver step of a frame — the single call site both frame
+    /// drivers use (`HeadlessBinding::pump_frame` and `UiRealm::draw_frame`).
     ///
     /// Polls every task whose waker fired, on the calling thread. A future
     /// completing here calls `RebuildHandle::schedule()`, whose id the *same*

@@ -41,12 +41,14 @@
 //!    a device-global service — of FLUI's eventual backend targets, Android
 //!    is the one with the most granular haptics contract, and per-window is
 //!    the FLUI shape closest to that reality.
-//! 3. **It is the only scope `flui-app` can reach today.** `AppBinding`
-//!    retains `active_window` as its one live platform handle —
-//!    `Platform`/`Box<dyn Platform>` is consumed by `run()` and not kept
-//!    around — so a device-global accessor on `Platform` would be unreachable
-//!    from the one production bridge this capability needs
-//!    (`AppBinding::perform_haptic_feedback`).
+//! 3. **It is the only scope `flui-app` can reach today.** `flui-app`'s
+//!    `PresentationState` retains the active window as its one live
+//!    platform handle (`with_window`, the retired `AppBinding::with_window`'s
+//!    replacement) — `Platform`/`Box<dyn Platform>` is consumed by `run()`
+//!    and not kept around — so a device-global accessor on `Platform` would
+//!    be unreachable from the one production bridge this capability needs
+//!    (`UiRealm::perform_haptic_feedback`, forwarded through
+//!    `PresentationState`).
 //!
 //! Desktop backends with a single device-global haptics engine (if one ever
 //! exists) can trivially satisfy this by returning the same `Arc` from every

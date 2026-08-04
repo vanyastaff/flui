@@ -14,7 +14,7 @@ This roadmap sits on top of [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architect
 |---|---|
 | Core.0 — spine to spec | ✅ **Complete.** Pipeline phases wired and tested, keyed reconciliation production-wired, contracts locked, gate green. |
 | Core.1 — vertical slice | ✅ Slice widgets, contract validation, combined demo app + acceptance tests, parity ports, frame evidence, drag-to-scroll — all delivered. |
-| Core.2 — render-object catalog | ✅ **79 of ~80** objects built with harness tests in `crates/flui-objects`, incl. `RenderAnimatedOpacity`/`RenderSliverAnimatedOpacity`; exit verification (scrolling test, intrinsics audit, coverage ≥80%) met. |
+| Core.2 — render-object catalog | ✅ **81** objects built with harness tests in `crates/flui-objects` (exceeds the original ~80 estimate), incl. `RenderAnimatedOpacity`/`RenderSliverAnimatedOpacity`; exit verification (scrolling test, intrinsics audit, coverage ≥80%) met. |
 | Business.1 — widget catalog | ◐ Every named catalog widget implemented and integration-tested; named `Hero` gaps are closed (cross-navigator flights + user-gesture flights, `ROADMAP-TRACKER.md` B1.4; `push_replacement` was checked and needs no fix — it already flies heroes with no dedicated wiring). **Fidelity** (ported parity corpus) is the only Business.1 residue remaining. |
 | Catalog.1 — Material ∥ Cupertino | ◐ `flui-localizations` created; `flui-material` underway (theming + per-component themes, the button family, `Scaffold`/`AppBar`/secondary tabs, `Card`, `Dialog`, `TextField`/`InputDecorator` (filled), `ListTile`/`Divider`, `Drawer`, `SnackBar`/`ScaffoldMessenger`, `NavigationBar`, selection controls, `Chip`/`FilterChip`, `DataTable`) — still owed ink ripple, bottom sheets, sorting/pagination, primary-style tabs, floating `SnackBar`; against the 210.8k LOC oracle. `flui-cupertino` underway (theming foundation, `CupertinoButton`, `cupertino_page_route`, `CupertinoNavigationBar`, `CupertinoPageScaffold`, `CupertinoTabScaffold`+`CupertinoTabBar`) — still early against the 48.3k LOC oracle. |
 | App.1 — application integration | ◐ `run_app`, both bindings, the vsync-paced frame loop ([ADR-0029](adr/ADR-0029-frame-pacing-swapchain-block-with-fallback-throttle.md)), the facade crate, the full IME pipeline incl. `EditableText` adoption, caret-following cursor area, and composing-region rendering ([ADR-0030](adr/ADR-0030-platform-text-input-ime-capability.md)…[ADR-0033](adr/ADR-0033-composing-region-rendering.md)), `PlatformHaptics` + clipboard reachability ([ADR-0031](adr/ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md), [ADR-0034](adr/ADR-0034-clipboard-reachability-without-a-platform-handle.md)), lifecycle/framesEnabled ([ADR-0035](adr/ADR-0035-lifecycle-consolidation-and-frames-enabled.md)), and a completed full-crate audit-and-repair pass all landed. Remains: real-IME manual verification and native-backend pacing evidence (Cross.P). |
@@ -36,7 +36,7 @@ The target is **full parity with released Flutter** — every framework package,
 | `semantics` | 7.9k | ~70% | Cross.H |
 | `animation` | 5.3k | ~85% | Core.1 (active workspace member) |
 | `painting` | 24.9k | ~60% | Core.0 → Core.2 |
-| `rendering` | 52.1k | machine ~90%; catalog **79/~80 harness-tested** (`crates/flui-objects`) | Core.2 ✅ |
+| `rendering` | 52.1k | machine ~90%; catalog **81 harness-tested** (exceeds the original ~80 estimate) (`crates/flui-objects`) | Core.2 ✅ |
 | `widgets` | 157.4k | catalog built, **89.72% line coverage measured 2026-07-15** (bar ≥85% met), **fidelity partial** | Business.1 (fidelity) |
 | `services` | 30.2k | ~40% | App.1 + Cross.P (dissolved into `flui-platform`) |
 | `material` | 210.8k | ~3% — theming foundation (`ColorScheme`/`TextTheme`/`ThemeData`/`Theme`), `Material`/`InkWell`, the M3 button family, `Scaffold`/`AppBar` | Catalog.1 |
@@ -197,7 +197,7 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
 - **Composited-layer pipeline gap** (no `updateCompositedLayer`/retained-layer alpha-blend-without-repaint path) — tracked under Cross.H below; it is a `flui-rendering` machine capability, not specific to the opacity pair, and would benefit any future retained-layer effect.
 - **`AnimatedOpacity` widget rewiring** — delivered 2026-07-15: the widget now builds `RenderAnimatedOpacity` directly through an injected, hot-swappable `ProxyAnimation<f32>` (retarget = widget-side `set_parent`, the render object never sees controller or curve), and a probe test pins that animation ticks no longer rebuild the child subtree. Surfaced pre-existing gap, now named under Business.1: `ImplicitAnimation` ignores a changed `curve` on rebuild across all implicit widgets (Flutter re-creates the `CurvedAnimation`).
 
-**Parity delta.** `rendering` catalog → ~95% coverage (mechanical count 79/~80); `painting` advanced correspondingly.
+**Parity delta.** `rendering` catalog → ~95% coverage (mechanical count 81, exceeding the original ~80 estimate); `painting` advanced correspondingly.
 
 ---
 
@@ -337,8 +337,8 @@ Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-
 ```
 MAIN VERTICAL (sequential — Core → Business → Catalog → App):
   Core.0 ✅ ── Core.1 ✅ ── Core.2 ✅ ── Business.1 ◐ ── Catalog.1 ◐ ── App.1 ◐
-                            (79/~80      (built;        (Material ∥     (partial:
-                             objects;     fidelity       Cupertino —     vsync, IME,
+                            (81 objects; (built;        (Material ∥     (partial:
+                             ~80 est.     fidelity       Cupertino —     vsync, IME,
                              exit met)    open)          not started)    facade left)
 
 CROSS layer — continuous, with cross-track gates marked:
@@ -365,7 +365,7 @@ Within phases: Core.2's render-object families parallelize (box / sliver / paint
 | # | Risk | Mitigation |
 |---|---|---|
 | R1 | Widget catalog built on a spine not yet at target spec — defects compound across ~80 widgets, silently | **Realized as designed:** Core.0 was a hard gate with objective exit tests and is met; Core.1's vertical slice re-proved the spine under live load before breadth |
-| R2 | Render-object catalog under-scoped — Business.1 stalls mid-widget on a missing render object | The widget → render-object checklist ([`research/widget-renderobject-map.md`](research/widget-renderobject-map.md)) was built before the catalog; Core.2 is complete — 79/~80 objects exist with harness tests |
+| R2 | Render-object catalog under-scoped — Business.1 stalls mid-widget on a missing render object | The widget → render-object checklist ([`research/widget-renderobject-map.md`](research/widget-renderobject-map.md)) was built before the catalog; Core.2 is complete — 81 objects exist with harness tests (exceeds the original ~80 estimate) |
 | R3 | A contract flaw discovered inside `flui-material` (210k LOC) = catastrophic rework | Core.1's slice exercised every contract on live code; Catalog.1 starts only after the contract-validation report ([`research/2026-06-30-phase1-contract-validation.md`](research/2026-06-30-phase1-contract-validation.md)) is clean and Core.1's residues close |
 | R4 | `flui-material` is one monolithic terminal phase | Phased internally by component family (theming → buttons → inputs → navigation → data); ships in increments; runs ∥ `flui-cupertino` |
 | R5 | `Scene`/`DrawCommand` contract drift breaks the parallel engine track | The contract is frozen with a documented change protocol (`docs/designs/2026-06-30-scene-drawcommand-contract.md`); any later change is a coordinated cross-track change |

@@ -320,7 +320,7 @@ This document is the **architecture contract** for the port. Its relationship to
 - **`FOUNDATIONS.md`** (this document) — *what* (the target architecture, the locked contracts, the crate graph).
 - [`PORT.md`](PORT.md) — *how* (the port methodology, refusal triggers, mapping rules).
 - [`ROADMAP.md`](ROADMAP.md) — *when / in what order* (the dependency-ordered construction phases).
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the ratified rules. **It requires amendment** (MINOR bump): the layer table must be replaced with Part IV's, and the edition/Rust-version line corrected to 2024 / 1.95.
+- [`AGENTS.md`](../AGENTS.md) — the cross-tool ratified rules living in this checkout today. (There is no `.specify/memory/constitution.md` here — that path, and the amendment it once needed, are stale; `AGENTS.md` is kept current directly instead.)
 
 **Amendment.** A change to a locked contract (Part III) or the target crate graph (Part IV) requires: documented rationale, a corresponding `STRATEGY.md`/`PORT.md`/constitution sync if affected, and — once construction has begun — an explicit migration assessment, because a contract change after Phase 1 has catalog-wide blast radius. The contracts are locked precisely so that they are *not* casually amended.
 

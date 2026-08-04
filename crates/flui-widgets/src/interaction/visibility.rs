@@ -37,9 +37,11 @@ use crate::layout::SizedBox;
 ///
 /// **Divergences from Flutter:**
 /// - `maintainAnimation` controls descendants registered through an ambient
-///   `VsyncScope`, as production `AppBinding` roots provide. Without an ambient
-///   scope, FLUI's `TickerMode` intentionally passes its child through so an
-///   undriven nested registry cannot swallow wall-clock fallback animations.
+///   `VsyncScope`, as a production `UiRealm` root provides (it auto-wraps the
+///   attached root view in one — see `flui_app`'s realm attach path). Without
+///   an ambient scope, FLUI's `TickerMode` intentionally passes its child
+///   through so an undriven nested registry cannot swallow wall-clock
+///   fallback animations.
 /// - `maintainSize` (requires `maintainAnimation`) — deferred.
 /// - `maintainInteractivity` (requires `maintainSize` in Flutter) — accepted
 ///   but currently a no-op beyond `maintain_state`; full semantics deferred
@@ -100,7 +102,8 @@ impl Visibility {
     /// remount the child, and lose its state.
     ///
     /// Animation muting applies to descendants registered through an ambient
-    /// `VsyncScope`; production `AppBinding` roots provide that scope.
+    /// `VsyncScope`; a production `UiRealm` root provides that scope
+    /// automatically (there is no `AppBinding` — that type was retired).
     #[must_use]
     pub fn maintain_animation(mut self, maintain_animation: bool) -> Self {
         self.maintain_animation = maintain_animation;

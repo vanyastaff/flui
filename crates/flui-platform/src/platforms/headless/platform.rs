@@ -625,9 +625,9 @@ impl PlatformTextInput for FakeTextInput {
 ///
 /// Every `perform` call is appended to an in-memory history so a test can
 /// assert exactly which feedback kinds the haptics bridge
-/// (`flui-app`'s `AppBinding::perform_haptic_feedback`) told the platform
-/// to perform, in delivery order, rather than only that the call didn't
-/// panic.
+/// (`flui-app`'s `UiRealm::perform_haptic_feedback`, forwarded through
+/// `PresentationState`) told the platform to perform, in delivery order,
+/// rather than only that the call didn't panic.
 #[derive(Default)]
 pub struct FakeHaptics {
     calls: Mutex<Vec<HapticFeedback>>,

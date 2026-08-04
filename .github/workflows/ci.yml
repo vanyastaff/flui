@@ -167,9 +167,12 @@ jobs:
         run: cargo clippy -p flui-engine --all-targets --locked --features enable-wgpu-tests -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
-  # test — workspace build + nextest. Matrix: Linux + Windows.
-  # Gated on `checks`. macOS deferred until the workspace AppKit code is
-  # re-enabled (see CLAUDE.md: many high-level crates disabled in workspace).
+  # test — workspace build + nextest. Matrix: Linux only today (see the
+  # Windows note on `os:` below for why it was dropped; macOS was never
+  # added here). All 28 crates are active — nothing is workspace-disabled.
+  # `cross-typecheck` is the only job touching the AppKit/Win32 backends,
+  # and it only type-checks them (no link, no tests) — see AGENTS.md's CI
+  # Pipeline notes for what that gate does and does not prove.
   # ─────────────────────────────────────────────────────────────────────────
   test:
     name: test (${{ matrix.os }})
@@ -244,13 +247,20 @@ jobs:
 
       # Runs BOTH unit (--lib) and integration (tests/) targets — the
       # integration dirs carry the Core.0/Core.2 exit-gate suites
-      # (flui-rendering 37 files, flui-widgets 51, flui-view 26) and were
-      # previously never executed in CI (the invocation was `--lib` only).
-      # Runs fully parallel: nextest gives each test its own process, so the
-      # flui-app process-global singletons cannot leak across tests, and the
-      # in-process AppBinding/Scheduler races under plain `cargo test` are
-      # serialized by `SINGLETON_WINDOW_TEST_LOCK`/`SCHEDULER_PHASE_TEST_LOCK`
-      # in flui-app. flui-platform tests are excluded until the spawned
+      # (flui-rendering 39 files, flui-widgets 63, flui-view 27 as of
+      # 2026-08-04 — recount if this drifts) and were previously never
+      # executed in CI (the invocation was `--lib` only).
+      # Runs fully parallel: nextest gives each test its own process. The
+      # old process-global singletons (`AppBinding`, singleton `Scheduler`)
+      # this used to guard are fully retired — there is no more shared
+      # binding/scheduler state to race on, and the locks that once
+      # serialized it (`SINGLETON_WINDOW_TEST_LOCK`, `SCHEDULER_PHASE_TEST_LOCK`,
+      # `SEMANTICS_TEST_LOCK`) are deleted along with it; each is a
+      # forbidden-pattern ratchet in docs/runtime-contract.toml now, so a
+      # PR cannot reintroduce the pattern by reintroducing the name. Any
+      # genuinely process-global resource that remains (see AGENTS.md's
+      # Testing Quirks) needs its own explicit test-local lock instead.
+      # flui-platform tests are excluded until the spawned
       # STATUS_HEAP_CORRUPTION investigation lands a fix.
       - name: cargo nextest run (lib + integration)
         run: >
@@ -659,9 +669,10 @@ jobs:
   # painting_demo are workspace members but were only ever compiled for the
   # host target; this checks the wasm-capable set under the real
   # wasm32-unknown-unknown target. The set was verified crate-by-crate before
-  # wiring (27 of 34 packages green); the excluded seven genuinely cannot
-  # target wasm today — see NO_WASM_PKGS. A crate that gains wasm support is
-  # REMOVED from the exclude list, never worked around.
+  # wiring (29 of 36 packages green, as of 2026-08-04 — `cargo metadata
+  # --no-deps` counts packages, recount if this drifts); the excluded seven
+  # genuinely cannot target wasm today — see NO_WASM_PKGS. A crate that
+  # gains wasm support is REMOVED from the exclude list, never worked around.
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
     name: wasm-check (wasm32-unknown-unknown)

@@ -37,7 +37,7 @@ enum OffsetSource {
 /// - **Lazy** ([`ListView::builder`]): children built on demand from a
 ///   closure, only for the viewport-visible + cache band. Backed by
 ///   [`SliverList`] (variable-height, element-owned). Wired into both
-///   `HeadlessBinding::pump_frame` and the production `AppBinding::draw_frame`,
+///   `HeadlessBinding::pump_frame` and the production `UiRealm::draw_frame`,
 ///   where the child-manager wiring and its test coverage converge.
 ///
 ///   **First-frame settling (Flutter divergence):** lazy children are built

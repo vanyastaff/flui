@@ -75,7 +75,7 @@ driver.
 - **GPU-first rendering.** `wgpu` 29.x backend with `lyon` tessellation and `cosmic-text` / `glyphon` for high-quality text.
 - **Cross-platform.** Native Win32 and AppKit backends, headless mode for CI, Android NDK target, WASM/WebGPU, plus a `winit` fallback.
 - **Hot-reload scenes.** `dlopen`-based plugin host (`flui-hot-reload`) for desktop iteration without process restarts.
-- **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is confined to `flui-platform`, `flui-painting`, `flui-engine`. Constitution-mandated and reviewed at the workspace level.
+- **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is *not* confined to a fixed crate list — it concentrates wherever a crate touches an FFI or ABI boundary. By unsafe-site count in `src/` (`rg -c '\bunsafe\s+(fn|impl|trait|extern)\b|\bunsafe\s*\{'`, measured 2026-08-04): `flui-platform` (Win32/AppKit/Android FFI) dominates by a wide margin, followed by `flui-rendering` (a miri-audited arena, `subtree_arena.rs`), `flui-hot-reload` (the `dlopen` ABI boundary), and `flui-engine` (wgpu/raw-window-handle FFI); smaller counts exist in `flui-layer`, `flui-foundation`, `flui-types`, `flui-log`, `flui-view`, and `flui-app`. `flui-painting` carries zero unsafe code today. Reviewed at the workspace level — see `docs/PANIC-POLICY.md` and each crate's `ARCHITECTURE.md`.
 
 ## Hello World
 
