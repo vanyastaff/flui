@@ -329,12 +329,20 @@ unwrap_used = "warn"
 # `undocumented_unsafe_blocks` is deliberately NOT enabled. It was tried and
 # reverted, for two reasons worth recording so it is not re-adopted casually:
 #
-#   * It can only see what the Linux clippy job compiles. The `cfg(windows)` and
-#     `cfg(target_os = "macos")` backends in flui-platform carry ~91 further
-#     undocumented sites that no gate here reaches, so a green workspace run
-#     would license the claim "every unsafe site is documented" while that is
-#     false for two of three desktop targets. Enabling it is only meaningful
-#     once the cross-target job runs `clippy`, not `cargo check`.
+#   * It can only see what the Linux clippy job compiles. `cfg(windows)`'s
+#     flui-platform backend (Win32 window/platform FFI) is now fully
+#     SAFETY-documented — every unsafe block there carries an invariant
+#     comment, verified via `cargo clippy --target x86_64-pc-windows-msvc`.
+#     `cfg(target_os = "macos")` and the Android/`wasm32` backends are not:
+#     as of the last full audit (docs/audits/2026-08-04-full-audit.md §2.1),
+#     macOS carried ~11 undocumented sites, Android ~14 (mostly outside the
+#     now-scoped `platforms::android::memory` FFI island), web ~9 — none of
+#     which the Linux clippy job reaches. A green workspace run would still
+#     license the claim "every unsafe site is documented" while that remains
+#     false for two of three desktop targets plus mobile/web. Enabling it is
+#     only meaningful once the cross-target jobs run `clippy`, not `cargo
+#     check` (today `cross-typecheck` type-checks msvc/darwin without
+#     linting, and there is no Android/wasm clippy job at all).
 #   * Turning it on first and writing comments to satisfy it produces prose, not
 #     review. That is how several comments in flui-hot-reload came to state
 #     invariants the code does not establish. Document unsafe because the
