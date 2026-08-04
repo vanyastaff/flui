@@ -348,7 +348,7 @@ enum BatchEntry {
 ///
 /// # Example
 /// ```ignore
-/// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format, font_system)?;
+/// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format, font_system);
 ///
 /// // Add plain text during frame
 /// text_renderer.add_text("Hello, World!", Point::new(10.0, 10.0), 16.0, Color::BLACK);

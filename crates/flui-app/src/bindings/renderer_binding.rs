@@ -466,7 +466,9 @@ impl RenderingFlutterBinding {
         SemanticsBinding::instance()
     }
 
-    /// Returns a throwaway, unshared [`PaintingBinding`] value.
+    /// Returns a fresh [`PaintingBinding`] value; its `ImageCache` is
+    /// throwaway, but `font_system()` still reaches shared state (see
+    /// below).
     ///
     /// **Inert by construction, not just as a compile-preserving stopgap.**
     /// `PaintingBinding` left the ambient-singleton graph as the remaining
@@ -480,11 +482,23 @@ impl RenderingFlutterBinding {
     /// which is the opposite of what retiring these singletons is for.
     /// Until `RenderingFlutterBinding` is re-homed to receive its painting
     /// service from the owning runtime instead of constructing its own,
-    /// every call to this method returns a brand new, empty
-    /// `PaintingBinding` — its `ImageCache` starts and ends empty, and
-    /// nothing else in the process observes whatever you do with it.
-    /// Do not use this to configure or read the "real" image cache; there
-    /// isn't one reachable from here today.
+    /// every call to this method returns a brand new `PaintingBinding` whose
+    /// `ImageCache` and `SystemFontsNotifier` start and end empty/unused —
+    /// nothing else in the process observes whatever you do to THOSE two
+    /// fields through this handle. Do not use this to configure or read the
+    /// "real" image cache; there isn't one reachable from here today.
+    ///
+    /// **`font_system()` is the one exception.** Unlike the image cache,
+    /// `PaintingBinding::font_system()` does not read this struct's own
+    /// fields at all — it reaches the process-wide shared `FONT_SYSTEM`
+    /// (`flui-painting`'s `text_layout/layout.rs`), the exact same one every
+    /// other `PaintingBinding` value (including the real one on
+    /// `AppRuntime`) resolves to. So `Self::painting().font_system()...` or
+    /// `Self::painting().register_font(...)` through this "throwaway" value
+    /// DOES mutate real, shared, process-wide font state, visible to every
+    /// other consumer — the isolation this doc comment describes is
+    /// specific to the image cache and font-change notifier, not to
+    /// everything reachable through the returned value.
     pub fn painting() -> PaintingBinding {
         PaintingBinding::new()
     }
@@ -493,19 +507,19 @@ impl RenderingFlutterBinding {
     // Memory Management
     // ========================================================================
 
-    /// Attempts to handle memory pressure by clearing the image cache.
+    /// Currently a no-op: does NOT clear any real image cache.
     ///
-    /// **Currently inert** — see [`Self::painting`]'s doc comment. Deliberately
-    /// does NOT call `Self::painting().handle_memory_pressure()`: that inner
-    /// method's own `tracing::info!("Memory pressure: clearing image cache")`
-    /// is legitimate for a real, owned `PaintingBinding` value, but firing it
-    /// here — against a throwaway value whose `ImageCache` starts and ends
-    /// empty — would be exactly the false "it worked" signal this method is
-    /// trying not to emit. This becomes meaningful again once
-    /// `RenderingFlutterBinding` is re-homed to receive its painting service
-    /// from the owning runtime. Traced at `trace`, not `info`, so the no-op
-    /// itself does not read as a real memory-pressure response in a
-    /// production log.
+    /// See [`Self::painting`]'s doc comment for why. This method
+    /// deliberately does NOT call `Self::painting().handle_memory_pressure()`:
+    /// that inner method's own `tracing::info!("Memory pressure: clearing
+    /// image cache")` is legitimate for a real, owned `PaintingBinding`
+    /// value, but firing it here — against a throwaway value whose
+    /// `ImageCache` starts and ends empty — would be exactly the false "it
+    /// worked" signal this method is trying not to emit. This becomes
+    /// meaningful again once `RenderingFlutterBinding` is re-homed to
+    /// receive its painting service from the owning runtime. Traced at
+    /// `trace`, not `info`, so the no-op itself does not read as a real
+    /// memory-pressure response in a production log.
     pub fn handle_memory_pressure(&self) {
         tracing::trace!(
             "RenderingFlutterBinding::handle_memory_pressure: inert no-op on a \
