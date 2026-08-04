@@ -1,7 +1,7 @@
 //! The single `WindowId -> PresentationAddress` mapping authority.
 //!
 //! ADR-0037 §2 names one authority for the native-window-to-presentation
-//! map; no second one may live in `AppBinding`, `UiRealm`, an input
+//! map; no second one may live in `AppRuntime`, `UiRealm`, an input
 //! registry, or a platform callback. This module is that authority's home.
 //! `WindowId` (the platform-internal native-handle key) is confined to this
 //! file within `flui-app` — every other module addresses a presentation

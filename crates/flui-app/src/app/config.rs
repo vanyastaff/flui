@@ -81,7 +81,7 @@ pub struct AppConfig {
     /// Whether to enable vsync.
     ///
     /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
-    /// drops this field. `AppBinding::vsync()`/`VsyncScope` is an unrelated
+    /// drops this field. `UiRealm::vsync()`/`VsyncScope` is an unrelated
     /// animation-ticker registry, not the GPU present mode — do not confuse
     /// the two. The intended consumer is `flui-engine`'s
     /// `select_present_mode`, which today always chooses `Fifo` regardless of
@@ -119,7 +119,7 @@ pub struct AppConfig {
     /// tree, so it is a repaint rate, not a wall-clock frame rate.
     ///
     /// Flutter's `showPerformanceOverlay`. The bootstrap runner forwards this
-    /// to `AppBinding::set_performance_overlay`, which is what actually starts
+    /// to `UiRealm::set_performance_overlay`, which is what actually starts
     /// the rolling frame-time window; the frame path then appends a
     /// `PerformanceOverlayLayer` as the root layer's last child. Off costs one
     /// uncontended lock and a `None` check per frame.

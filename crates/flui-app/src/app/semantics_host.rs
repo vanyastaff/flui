@@ -80,33 +80,30 @@ pub(crate) struct SemanticsHost {
     handle_count: Arc<AtomicUsize>,
 
     /// Whether the platform has requested semantics for this presentation.
-    platform_semantics_enabled: AtomicBool,
+    ///
+    /// `Arc`-wrapped (not a bare `AtomicBool`) so
+    /// [`Self::platform_semantics_enabled_handle`] can hand a cheap clone to
+    /// the realm's `RenderingFlutterBinding::add_semantics_enabled_listener`
+    /// fan-out closure without that closure borrowing this host (which lives
+    /// on the same `UiRealm` the renderer does — a self-reference the
+    /// closure's `'static` bound forbids). Mirrors `AppRuntime`'s
+    /// `needs_redraw` handle-sharing shape for the identical reason.
+    platform_semantics_enabled: Arc<AtomicBool>,
 
-    /// Callback for accessibility announcements.
+    /// Callback for accessibility announcements. `PresentationState::close()`
+    /// clears this unconditionally in production (see
+    /// [`Self::clear_announce_callback`]); `announce()`'s read side still
+    /// has no production caller until a platform embedder wires delivery.
     #[allow(clippy::type_complexity)]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read only by announce(), itself unreached outside tests \
-                      until a production caller wires platform announce delivery"
-        )
-    )]
     announce_callback: RwLock<Option<Arc<dyn Fn(&str, Assertiveness) + Send + Sync>>>,
 
     /// Callback for semantics events dispatched via [`Self::dispatch_event`]/
     /// [`Self::tooltip`]. Set by the platform embedder when the
     /// accessibility surface is brought up; cleared when the platform goes
-    /// silent. Mirrors [`Self::announce_callback`]'s shape.
+    /// silent (or the presentation closes — see
+    /// [`Self::clear_event_callback`]). Mirrors [`Self::announce_callback`]'s
+    /// shape.
     #[allow(clippy::type_complexity)]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read only by dispatch_event(), itself unreached outside \
-                      tests until a production caller wires platform event delivery"
-        )
-    )]
     event_callback: RwLock<Option<Arc<dyn Fn(&SemanticsEvent) + Send + Sync>>>,
 }
 
@@ -115,7 +112,7 @@ impl SemanticsHost {
     pub(crate) fn new() -> Self {
         Self {
             handle_count: Arc::new(AtomicUsize::new(0)),
-            platform_semantics_enabled: AtomicBool::new(false),
+            platform_semantics_enabled: Arc::new(AtomicBool::new(false)),
             announce_callback: RwLock::new(None),
             event_callback: RwLock::new(None),
         }
@@ -181,6 +178,14 @@ impl SemanticsHost {
         self.platform_semantics_enabled.load(Ordering::Relaxed)
     }
 
+    /// A cheap clone of the platform-enablement flag, for wiring into a
+    /// realm's `RenderingFlutterBinding::add_semantics_enabled_listener` fan-out
+    /// closure — see this field's own doc for why a handle rather than
+    /// borrowing `&self`. Wired at `UiRealm::construct`.
+    pub(crate) fn platform_semantics_enabled_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.platform_semantics_enabled)
+    }
+
     // ========== Announcements ==========
 
     /// Sets the callback for accessibility announcements.
@@ -197,6 +202,21 @@ impl SemanticsHost {
         F: Fn(&str, Assertiveness) + Send + Sync + 'static,
     {
         *self.announce_callback.write() = Some(Arc::new(callback));
+    }
+
+    /// Remove the registered announce callback — the platform-embedder
+    /// teardown half of [`Self::set_announce_callback`]. Called from
+    /// `PresentationState::close()` alongside the cursor-change-callback
+    /// clear, for the identical reason: a torn-down presentation must not
+    /// keep a live platform accessibility-bridge `Arc` pinned past its own
+    /// teardown. **Decides announce-after-close semantics**: once cleared,
+    /// a stray `announce()`/`dispatch_event()` call that races teardown
+    /// falls through to the existing no-callback trace fallback (never a
+    /// panic, never a call into a torn-down bridge) — the same degrade path
+    /// a host that never registered a callback in the first place already
+    /// exercises.
+    pub(crate) fn clear_announce_callback(&self) {
+        self.announce_callback.write().take();
     }
 
     /// Announces a message to assistive technology.
@@ -258,6 +278,14 @@ impl SemanticsHost {
         F: Fn(&SemanticsEvent) + Send + Sync + 'static,
     {
         *self.event_callback.write() = Some(Arc::new(callback));
+    }
+
+    /// Remove the registered event callback — mirrors
+    /// [`Self::clear_announce_callback`]'s teardown rationale and
+    /// announce-after-close decision, for `dispatch_event`/`tooltip` instead
+    /// of `announce`.
+    pub(crate) fn clear_event_callback(&self) {
+        self.event_callback.write().take();
     }
 
     /// Dispatches a semantics event to the registered platform callback,

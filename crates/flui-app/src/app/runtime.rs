@@ -137,6 +137,10 @@ use std::cell::OnceCell;
 #[cfg(not(target_os = "ios"))]
 use std::collections::VecDeque;
 #[cfg(not(target_os = "ios"))]
+use std::sync::Arc;
+#[cfg(not(target_os = "ios"))]
+use std::sync::atomic::AtomicBool;
+#[cfg(not(target_os = "ios"))]
 use std::thread::ThreadId;
 
 #[cfg(not(target_os = "ios"))]
@@ -146,9 +150,11 @@ use flui_painting::PaintingBinding;
 #[cfg(not(target_os = "ios"))]
 use flui_platform::OwnerPlatform;
 #[cfg(not(target_os = "ios"))]
+use flui_platform::traits::{Clipboard, PlatformWindow};
+#[cfg(not(target_os = "ios"))]
 use flui_semantics::AccessibilityFeatures;
 #[cfg(not(target_os = "ios"))]
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 #[cfg(not(target_os = "ios"))]
 use super::runner::{RealmTask, SurfaceApplier};
@@ -245,7 +251,11 @@ impl SharedEngineServices {
         *self.accessibility_features.write() = features;
     }
 
-    fn resolve() -> Self {
+    /// `wake` is `AppRuntime::frame_wake_callback()` — the same `Send +
+    /// Sync` capability [`AppRuntime::ensure_services`] passes in, extracted
+    /// by its caller BEFORE the `&mut self.services` borrow that resolves
+    /// this struct, so both can happen in one non-conflicting call.
+    fn resolve(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
         let painting = PaintingBinding::new();
 
         // `SharedEngineServices::resolve()` -- reached only through
@@ -262,12 +272,88 @@ impl SharedEngineServices {
         // icon-font-loading/sharding work).
         let _ = painting.font_system();
 
+        let scheduler = SchedulerRef::resolve();
+
+        // Once-per-thread wiring, moved here from the retired
+        // `AppBinding::instance()`'s TLS initializer. `ensure_services`
+        // resolving THIS struct exactly once per owner thread
+        // (`OnceCell::get_or_init`) is what makes this installation
+        // steal-proof and idempotent — the same guarantee the retired
+        // `instance()`'s thread-local initializer gave: a throwaway
+        // `UiRealm::for_test()` built alongside a live `AppRuntime` never
+        // touches these hooks (it never resolves `SharedEngineServices` at
+        // all), and a second realm installed on this same thread
+        // (hot-restart) never re-registers them either.
+        //
+        // Animation-wake wiring: scheduling a frame callback (a ticker tick
+        // on the `Scheduler::instance()` singleton, e.g. an
+        // `AnimationController` built directly against it rather than a
+        // realm's Vsync registry) fires this hook on the scheduler's
+        // false->true `frame_scheduled` transition. The SAME hook also
+        // fires from the async-driver's task waker whenever a spawned
+        // future's `Waker::wake` runs, possibly from a thread that never
+        // touched this runtime at all -- `wake` is exactly the `Arc`-backed,
+        // `Send + Sync` handle that makes firing it safe regardless of
+        // which thread does so.
+        scheduler
+            .get()
+            .set_on_frame_scheduled(Some(Arc::clone(&wake)));
+
+        // Frames-disabled->enabled re-dirty wiring (ADR-0035): FLUI has no
+        // retained-scene re-present, so an app that was
+        // `Hidden`/`Paused`/`Detached` and comes back to
+        // `Resumed`/`Inactive` needs the root explicitly re-dirtied
+        // alongside the frame the scheduler's re-enable leg already
+        // guarantees gets requested. Per-realm now (not a fixed pipeline
+        // captured once): the pipeline this needs to touch is whichever
+        // realm is CURRENTLY installed on this thread when the edge fires,
+        // which can change across a hot-restart -- see
+        // `install_frames_reenable_redirty_listener`'s own doc.
+        install_frames_reenable_redirty_listener(scheduler.get(), wake);
+
         Self {
             painting,
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
-            scheduler: SchedulerRef::resolve(),
+            scheduler,
         }
     }
+}
+
+/// Registers a `Scheduler` lifecycle listener that re-dirties whichever
+/// realm is currently installed in [`super::runner::APP_RUNTIME`] on this
+/// thread and calls `wake` on the frames-disabled->enabled edge (ADR-0035).
+///
+/// Reaches `APP_RUNTIME` (rather than capturing one fixed
+/// `Arc<RwLock<PipelineOwner>>`, the retired `AppBinding`-era shape) because
+/// the pipeline that needs re-dirtying is per-realm now: a hot-restart tears
+/// down and reinstalls a fresh `UiRealm` — and therefore a fresh
+/// pipeline — on the SAME thread, and this listener is only ever installed
+/// once per thread (see [`SharedEngineServices::resolve`]'s doc). Safe to
+/// resolve the thread-local at fire time here specifically because this
+/// listener only ever fires on the thread whose `Scheduler::instance()` it
+/// is registered against (`Scheduler` is itself thread-local) — never the
+/// cross-thread case `AppRuntime::frame_wake_callback`'s own doc warns
+/// against.
+#[cfg(not(target_os = "ios"))]
+fn install_frames_reenable_redirty_listener(
+    scheduler: &Scheduler,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    let frames_were_enabled = Arc::new(AtomicBool::new(scheduler.frames_enabled()));
+    scheduler.add_lifecycle_state_listener(Arc::new(
+        move |state: flui_scheduler::AppLifecycleState| {
+            let now_enabled = state.should_render();
+            let was_enabled = frames_were_enabled.swap(now_enabled, Ordering::AcqRel);
+            if !was_enabled && now_enabled {
+                super::runner::APP_RUNTIME.with(|slot| {
+                    if let Some(realm) = slot.borrow().realm.as_ref() {
+                        realm.redirty_root_for_frames_reenable();
+                    }
+                });
+                wake();
+            }
+        },
+    ));
 }
 
 /// What [`UiRealm::construct`](super::ui_realm) needs from the scheduler at
@@ -289,12 +375,10 @@ impl RealmServices {
     /// yields the exact same `&'static Scheduler` a live `AppRuntime`'s own
     /// [`SharedEngineServices`] resolved on this thread — whether or not an
     /// `AppRuntime` has actually been touched yet. That is what lets every
-    /// existing `UiRealm` constructor (`new`, `with_capacity`, `for_test`,
-    /// `for_test_with_text_input`) keep its exact current signature here:
-    /// each calls this instead of reaching for `Scheduler::instance()`
-    /// directly. Rewriting `for_test`/`for_test_with_text_input` onto
-    /// explicit `RealmServices` + `PresentationState` injection (dropping
-    /// `&AppBinding` entirely) is a separate, later change, not this one.
+    /// `UiRealm` constructor (`new`, `with_capacity`, `for_test`,
+    /// `for_test_with_text_input`) call this instead of reaching for
+    /// `Scheduler::instance()` directly, none of them taking a process-host
+    /// parameter any more (the retired `AppBinding` is gone).
     pub(crate) fn resolve() -> Self {
         let scheduler = SchedulerRef::resolve();
         let backing = scheduler.get();
@@ -325,6 +409,43 @@ pub(crate) fn next_identity() -> (RealmId, PresentationId) {
         RealmId::new_gen(0, generation),
         PresentationId::new_gen(0, generation),
     )
+}
+
+/// Cross-thread wake capability for the platform event loop.
+///
+/// Setting `needs_redraw` and poking a live window are two independent
+/// effects `AppRuntime::wake_frame` used to perform directly against its own
+/// fields; this handle exists so the SAME two effects can be captured into a
+/// `Send + Sync` closure — the scheduler's `on_frame_scheduled` hook and the
+/// async-driver's task waker each fire from possibly-any thread (an executor
+/// thread completing an image-decode future, for instance), never
+/// necessarily the owner thread that hosts `AppRuntime`'s thread-local slot.
+/// A hook that re-resolved `APP_RUNTIME` at fire time would, on a non-owner
+/// thread, either find no runtime at all or (worse, on a future multi-runtime
+/// host) find the WRONG one — this handle's `Arc` clones sidestep thread-local
+/// resolution entirely, so firing it only ever touches shared, thread-safe
+/// state and always reaches the intended owner.
+#[cfg(not(target_os = "ios"))]
+#[derive(Clone)]
+struct FrameWakeHandle {
+    needs_redraw: Arc<AtomicBool>,
+    redraw_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+}
+
+#[cfg(not(target_os = "ios"))]
+impl FrameWakeHandle {
+    fn wake_frame(&self) {
+        self.needs_redraw.store(true, Ordering::Relaxed);
+        let window = self.redraw_window.lock().as_ref().cloned();
+        if let Some(window) = window {
+            window.request_redraw();
+            tracing::trace!("wake_frame: platform window request_redraw sent");
+        }
+    }
+
+    fn into_callback(self) -> Arc<dyn Fn() + Send + Sync> {
+        Arc::new(move || self.wake_frame())
+    }
 }
 
 /// The loop-scoped composition root: platform event-loop demux, the single
@@ -383,23 +504,57 @@ pub(crate) struct AppRuntime {
     /// Process-level engine services. Deliberately **not** resolved in
     /// [`AppRuntime::new`] -- see [`AppRuntime::ensure_services`] for why.
     services: OnceCell<SharedEngineServices>,
+    /// Whether a redraw has been requested since the last
+    /// [`Self::mark_rendered`] — the loop-scoped half of the retired
+    /// `AppBinding.needs_redraw` flag (ADR-0027 step 3: `AppBinding`
+    /// dissolution). Loop-scoped, not realm-scoped: a hot-restart that tears
+    /// down and reinstalls a realm on this same thread must not lose a
+    /// pending redraw request, and [`Self::frame_wake_callback`] hands a
+    /// clone of this exact `Arc` to callbacks that may fire from any thread.
+    needs_redraw: Arc<AtomicBool>,
+    /// The window [`Self::wake_frame`] pokes via
+    /// [`PlatformWindow::request_redraw`], installed by
+    /// [`Self::set_redraw_window`] once the realm's window is open and
+    /// cleared at teardown. Distinct from `PresentationState.window`
+    /// (per-presentation, `Weak`, used for cursor/haptics/close): this slot
+    /// is `Arc`-strong and `Send + Sync` specifically so
+    /// [`Self::frame_wake_callback`] can hand a cross-thread-safe clone to a
+    /// callback that fires off the owner thread, which a `Weak` field owned
+    /// by a `!Send` `UiRealm` cannot support.
+    redraw_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+    /// The platform's clipboard capability (ADR-0034), moved here from the
+    /// retired `AppBinding` — a process/loop-scoped OS-session capability,
+    /// vended to presentations rather than owned by one. `set_platform_clipboard`/
+    /// `clear_platform_clipboard` are the install/teardown symmetry: without
+    /// the clear half, a live platform resource (arboard on X11 owns a live
+    /// X11 connection) would stay pinned behind this `Arc` past the event
+    /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
+    /// path.
+    platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
 }
 
 #[cfg(not(target_os = "ios"))]
 impl AppRuntime {
-    /// Construct the composition root: cheap, side-effect-free, `const`.
-    /// Called as the `APP_RUNTIME` TLS slot's own `const` initializer
-    /// (`runner.rs`), so simply *touching* the thread-local -- for any
-    /// reason, on any thread -- can never itself run singleton construction
-    /// or full system-font enumeration. Real service resolution happens
-    /// only via the explicit [`Self::ensure_services`] call from
-    /// `install_platform_realm` -- when a realm is actually installed --
-    /// never from an incidental first touch such as
-    /// `OwnerHostClearGuard::drop` unwinding through a virgin thread, and
-    /// never from `install_owner_platform` either (every backend calls
-    /// that, including `run_direct`, which never installs a realm and
-    /// never needs these services).
-    pub(super) const fn new() -> Self {
+    /// Construct the composition root: cheap, side-effect-free.
+    /// Called as the `APP_RUNTIME` TLS slot's own initializer (`runner.rs`),
+    /// so simply *touching* the thread-local -- for any reason, on any
+    /// thread -- can never itself run singleton construction or full
+    /// system-font enumeration. Real service resolution happens only via the
+    /// explicit [`Self::ensure_services`] call from `install_platform_realm`
+    /// -- when a realm is actually installed -- never from an incidental
+    /// first touch such as `OwnerHostClearGuard::drop` unwinding through a
+    /// virgin thread, and never from `install_owner_platform` either (every
+    /// backend calls that, including `run_direct`, which never installs a
+    /// realm and never needs these services).
+    ///
+    /// Not `const fn`: the wake/clipboard fields below need their own
+    /// independent `Arc` allocations (three small ones), which the allocator
+    /// makes non-const-evaluable. That is a cheap, ordinary heap allocation,
+    /// not the singleton construction or system-font enumeration this
+    /// function's side-effect-free contract is actually about — `services`
+    /// (the `OnceCell`) staying unresolved is what that contract depends on,
+    /// and this change does not touch it.
+    pub(super) fn new() -> Self {
         Self {
             realm: None,
             queue: VecDeque::new(),
@@ -412,6 +567,9 @@ impl AppRuntime {
             focused: true,
             owner_platform: None,
             services: OnceCell::new(),
+            needs_redraw: Arc::new(AtomicBool::new(false)),
+            redraw_window: Arc::new(Mutex::new(None)),
+            platform_clipboard: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -438,7 +596,9 @@ impl AppRuntime {
     /// touching the thread-local is always safe to do from within a
     /// clear-guard drop.
     pub(super) fn ensure_services(&mut self) -> &SharedEngineServices {
-        self.services.get_or_init(SharedEngineServices::resolve)
+        let wake = self.frame_wake_callback();
+        self.services
+            .get_or_init(|| SharedEngineServices::resolve(wake))
     }
 
     /// Test-only introspection: whether `SharedEngineServices` has been
@@ -470,6 +630,206 @@ impl AppRuntime {
     )]
     pub(crate) fn realm(&self, id: RealmId) -> Option<&UiRealm> {
         self.realm.as_ref().filter(|realm| realm.realm_id() == id)
+    }
+
+    // ========================================================================
+    // Frame wake (retired from `AppBinding`)
+    // ========================================================================
+
+    fn wake_handle(&self) -> FrameWakeHandle {
+        FrameWakeHandle {
+            needs_redraw: Arc::clone(&self.needs_redraw),
+            redraw_window: Arc::clone(&self.redraw_window),
+        }
+    }
+
+    /// A `Send + Sync`, `'static` capability that sets `needs_redraw` and
+    /// pokes the installed window — safe to hand to a `Scheduler` lifecycle
+    /// hook, an `on_frame_scheduled` hook, or a spawned future's `Waker`,
+    /// none of which may resolve this thread-local `AppRuntime` at fire time
+    /// (see [`FrameWakeHandle`]'s doc).
+    pub(super) fn frame_wake_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
+        self.wake_handle().into_callback()
+    }
+
+    /// Wake the platform event loop so the next frame is rendered: sets
+    /// `needs_redraw` and, if a window is installed, calls
+    /// `PlatformWindow::request_redraw()` so a quiescent event loop wakes up.
+    ///
+    /// Every production bootstrap wires and calls this indirectly through
+    /// [`Self::frame_wake_callback`]'s `Send + Sync` closure instead of this
+    /// direct form (the closure is what a `UiRealm`/cross-thread hook needs
+    /// to capture); this method stays a direct, same-thread convenience —
+    /// exercised today by this module's own tests and the ordering proof in
+    /// `runner.rs`'s `desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "production call sites go through frame_wake_callback()'s \
+                      Send + Sync closure instead of this direct, same-thread form"
+        )
+    )]
+    pub(super) fn wake_frame(&self) {
+        self.wake_handle().wake_frame();
+    }
+
+    /// Request a redraw without poking the window — the flag-only half of
+    /// [`Self::wake_frame`], for callers already inside a live dispatch that
+    /// does not need to wake an idle loop (mirrors the retired
+    /// `AppBinding::request_redraw`).
+    #[expect(
+        dead_code,
+        reason = "production redraw requests are realm-scoped \
+                  (UiRealm::request_redraw, sharing this same needs_redraw \
+                  atomic via needs_redraw_handle); no loop-scoped caller \
+                  needs the direct form yet, and no test exercises the \
+                  flag-only form in isolation from wake_frame either"
+    )]
+    pub(super) fn request_redraw(&self) {
+        self.needs_redraw.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether a redraw is needed.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "production reads go through UiRealm::needs_redraw, sharing \
+                      this same needs_redraw atomic via needs_redraw_handle"
+        )
+    )]
+    pub(super) fn needs_redraw(&self) -> bool {
+        self.needs_redraw.load(Ordering::Relaxed)
+    }
+
+    /// Mark the frame as rendered, clearing the redraw flag.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "production clears go through UiRealm::mark_rendered, sharing \
+                      this same needs_redraw atomic via needs_redraw_handle"
+        )
+    )]
+    pub(super) fn mark_rendered(&self) {
+        self.needs_redraw.store(false, Ordering::Relaxed);
+    }
+
+    /// A clone of the `needs_redraw` flag, for a `UiRealm`'s own
+    /// flag-only redraw requests (its `attach_root_widget`/
+    /// `handle_input_entered` call sites) — the SAME atomic this runtime
+    /// reads, so either side observes the other's writes.
+    pub(super) fn needs_redraw_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.needs_redraw)
+    }
+
+    /// Install the window [`Self::wake_frame`] pokes. Called once the
+    /// realm's window is open, before anything that could synchronously
+    /// observe it (the initial redraw request, `Lifecycle::Started`) runs —
+    /// otherwise the first such observer would silently see no window.
+    pub(super) fn set_redraw_window(&self, window: Arc<dyn PlatformWindow>) {
+        *self.redraw_window.lock() = Some(window);
+    }
+
+    /// Test-only: read-only access to the installed redraw-poke window,
+    /// without going through [`Self::wake_frame`]'s poke — lets a test
+    /// observe whether `set_redraw_window` took effect before some other
+    /// action runs, the same ordering proof the retired
+    /// `AppBinding::with_window` supported.
+    #[cfg(test)]
+    pub(super) fn with_redraw_window<R>(
+        &self,
+        f: impl FnOnce(&dyn PlatformWindow) -> R,
+    ) -> Option<R> {
+        self.redraw_window.lock().as_ref().map(|w| f(w.as_ref()))
+    }
+
+    /// Remove the installed redraw-poke window at teardown, so a torn-down
+    /// realm's window is not kept artificially alive by this slot.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "only teardown_platform_realm calls this, and that function \
+                      is desktop/android-only (the web backend's host stays \
+                      resident for the page's lifetime -- ADR-0039 §6/§7)"
+        )
+    )]
+    pub(super) fn clear_redraw_window(&self) {
+        self.redraw_window.lock().take();
+    }
+
+    // ========================================================================
+    // Clipboard (ADR-0034), moved from the retired `AppBinding`
+    // ========================================================================
+
+    /// Install the platform's clipboard capability. See `AppBinding`'s
+    /// former doc (now this field's) for why this is a plain slot rather
+    /// than a new `Platform` surface.
+    pub(super) fn set_platform_clipboard(&self, clipboard: Arc<dyn Clipboard>) {
+        *self.platform_clipboard.lock() = Some(clipboard);
+    }
+
+    /// The explicit, deterministic teardown clear — the first of the two
+    /// non-last-resort clear paths (the second is the bootstrap `set` itself
+    /// replacing a prior installation; see [`Drop`]'s impl for the third,
+    /// last-resort path).
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "only teardown_platform_realm calls this, and that function \
+                      is desktop/android-only (the web backend's host stays \
+                      resident for the page's lifetime -- ADR-0039 §6/§7)"
+        )
+    )]
+    pub(super) fn clear_platform_clipboard(&self) {
+        self.platform_clipboard.lock().take();
+    }
+
+    /// Access the installed platform clipboard, if any.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production caller yet -- a Clipboard capability \
+                      through BuildContext is future wiring; kept for parity \
+                      with the retired AppBinding::clipboard accessor"
+        )
+    )]
+    pub(super) fn clipboard(&self) -> Option<Arc<dyn Clipboard>> {
+        let clipboard = self.platform_clipboard.lock().clone();
+        if clipboard.is_none() {
+            tracing::debug!(
+                "AppRuntime::clipboard: no platform clipboard installed (not yet \
+                 bootstrapped, or torn down)"
+            );
+        }
+        clipboard
+    }
+
+    /// Test-only: a clone of the exact `Arc<Mutex<...>>` slot [`Self::clipboard`]
+    /// reads from — see the retired `AppBinding::platform_clipboard_slot`'s
+    /// identical rationale.
+    #[cfg(test)]
+    pub(super) fn platform_clipboard_slot(&self) -> Arc<Mutex<Option<Arc<dyn Clipboard>>>> {
+        Arc::clone(&self.platform_clipboard)
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+impl Drop for AppRuntime {
+    /// The third, last-resort clipboard clear (critic finding 6's
+    /// leak→drop enumeration): the deterministic path is the explicit
+    /// `teardown_platform_realm` clear; this is only a backstop for
+    /// whatever construction/panic ordering skips it. Idempotent — clearing
+    /// an already-empty slot is a no-op — and must never assert platform
+    /// presence: a thread-local's destructor is not guaranteed to run in any
+    /// particular order relative to window/surface teardown, so this may
+    /// run before, after, or never relative to those.
+    fn drop(&mut self) {
+        self.platform_clipboard.lock().take();
     }
 }
 
@@ -584,6 +944,204 @@ mod app_runtime_tests {
              never resolve SharedEngineServices -- that would reintroduce \
              the double-panic-during-unwind hazard this shape closes"
         );
+    }
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+mod wake_and_clipboard_tests {
+    use super::*;
+
+    /// `wake_frame` must set `needs_redraw` even when no window is stored
+    /// (the window lock is a leaf that is independently optional).
+    #[test]
+    fn wake_frame_sets_needs_redraw_without_window() {
+        let runtime = AppRuntime::new();
+        runtime.mark_rendered();
+        assert!(!runtime.needs_redraw(), "precondition: no redraw pending");
+
+        runtime.wake_frame();
+
+        assert!(
+            runtime.needs_redraw(),
+            "wake_frame must set needs_redraw even without an active window"
+        );
+    }
+
+    /// `wake_frame` must call `PlatformWindow::request_redraw` when a window
+    /// is installed.
+    #[test]
+    fn wake_frame_calls_platform_request_redraw() {
+        use std::sync::atomic::AtomicU32;
+
+        use flui_platform::traits::PlatformWindow;
+        use flui_types::geometry::{DevicePixels, Pixels, Size, device_px, px};
+
+        struct CountingWindow {
+            redraw_count: Arc<AtomicU32>,
+        }
+
+        impl PlatformWindow for CountingWindow {
+            fn id(&self) -> flui_platform::traits::WindowId {
+                flui_platform::traits::WindowId(1)
+            }
+            fn physical_size(&self) -> Size<DevicePixels> {
+                Size::new(device_px(800), device_px(600))
+            }
+            fn logical_size(&self) -> Size<Pixels> {
+                Size::new(px(800.0), px(600.0))
+            }
+            fn scale_factor(&self) -> f64 {
+                1.0
+            }
+            fn request_redraw(&self) {
+                self.redraw_count.fetch_add(1, Ordering::Relaxed);
+            }
+            fn is_focused(&self) -> bool {
+                false
+            }
+            fn is_visible(&self) -> bool {
+                true
+            }
+            fn set_cursor(
+                &self,
+                _cursor: flui_platform::CursorIcon,
+            ) -> Result<(), flui_platform::CursorError> {
+                Ok(())
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        let redraw_count = Arc::new(AtomicU32::new(0));
+        let window = CountingWindow {
+            redraw_count: Arc::clone(&redraw_count),
+        };
+
+        let runtime = AppRuntime::new();
+        runtime.mark_rendered();
+        runtime.set_redraw_window(Arc::new(window));
+
+        runtime.wake_frame();
+
+        assert!(runtime.needs_redraw(), "wake_frame must set needs_redraw");
+        assert_eq!(
+            redraw_count.load(Ordering::Relaxed),
+            1,
+            "wake_frame must call PlatformWindow::request_redraw exactly once"
+        );
+    }
+
+    /// `AppRuntime::clipboard()` reaching the platform clipboard installed
+    /// via `set_platform_clipboard` (ADR-0034) — migrated from the retired
+    /// `AppBinding`'s test module.
+    #[test]
+    fn app_runtime_clipboard_reaches_the_installed_platform_clipboard() {
+        let runtime = AppRuntime::new();
+        assert!(
+            runtime.clipboard().is_none(),
+            "no platform installed yet must read back as None"
+        );
+
+        let clipboard = flui_platform::headless_platform().clipboard();
+        runtime.set_platform_clipboard(Arc::clone(&clipboard));
+
+        let reached = runtime
+            .clipboard()
+            .expect("set_platform_clipboard must make the clipboard reachable");
+        reached.write_text("clipboard-reachability".to_string());
+
+        assert_eq!(
+            runtime
+                .clipboard()
+                .expect("still installed")
+                .read_text()
+                .as_deref(),
+            Some("clipboard-reachability"),
+            "AppRuntime::clipboard() must reach through to the SAME platform \
+             clipboard instance set_platform_clipboard installed"
+        );
+    }
+
+    #[test]
+    fn clipboard_with_no_platform_installed_is_none_not_a_panic() {
+        let runtime = AppRuntime::new();
+        assert!(runtime.clipboard().is_none());
+    }
+
+    /// Teardown symmetry: after `clear_platform_clipboard`, the slot reads
+    /// back `None` again.
+    #[test]
+    fn clear_platform_clipboard_removes_the_installed_clipboard() {
+        let runtime = AppRuntime::new();
+        runtime.set_platform_clipboard(flui_platform::headless_platform().clipboard());
+        assert!(runtime.clipboard().is_some());
+
+        runtime.clear_platform_clipboard();
+
+        assert!(
+            runtime.clipboard().is_none(),
+            "clear_platform_clipboard must remove the installed clipboard"
+        );
+    }
+
+    /// The last-resort `Drop` clear: dropping an `AppRuntime` with a
+    /// clipboard still installed must not panic, and must clear the slot.
+    #[test]
+    fn drop_clears_the_installed_clipboard_as_a_last_resort() {
+        let runtime = AppRuntime::new();
+        let slot = runtime.platform_clipboard_slot();
+        runtime.set_platform_clipboard(flui_platform::headless_platform().clipboard());
+        assert!(slot.lock().is_some());
+
+        drop(runtime);
+
+        assert!(
+            slot.lock().is_none(),
+            "Drop for AppRuntime must clear the clipboard slot as a last resort"
+        );
+    }
+
+    /// A reentrant read through the exact same slot must not deadlock — the
+    /// clone-then-drop-guard discipline `clipboard()` follows.
+    #[test]
+    fn clipboard_reentrant_read_does_not_deadlock() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct ReentrantClipboard {
+            slot: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
+        }
+
+        impl Clipboard for ReentrantClipboard {
+            fn read_text(&self) -> Option<String> {
+                let reentered = self.slot.lock().clone();
+                assert!(
+                    reentered.is_some(),
+                    "reentrant read through the same slot must still see the installed clipboard"
+                );
+                Some("reentrant".to_string())
+            }
+
+            fn write_text(&self, _text: String) {}
+        }
+
+        let (result_tx, result_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = AppRuntime::new();
+            let slot = runtime.platform_clipboard_slot();
+            runtime.set_platform_clipboard(Arc::new(ReentrantClipboard { slot }));
+
+            let reached = runtime.clipboard().expect("clipboard installed above");
+            let text = reached.read_text();
+            let _ = result_tx.send(text);
+        });
+
+        let text = result_rx.recv_timeout(Duration::from_secs(5)).expect(
+            "AppRuntime::clipboard() deadlocked: a reentrant read_text call must not block on \
+             the platform_clipboard lock it itself just released",
+        );
+        assert_eq!(text.as_deref(), Some("reentrant"));
     }
 }
 
