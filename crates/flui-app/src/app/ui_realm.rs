@@ -2231,17 +2231,36 @@ mod tests {
     /// thread boundary, only its `Send + Sync` wake counter and plain
     /// `RealmId` do, via the join return value.
     ///
-    /// A [`std::sync::Barrier`] of 2 makes the concurrency claim true rather
-    /// than merely plausible: both threads construct their own realm, then
-    /// rendezvous at the barrier before either drives/drains/paints it, so
-    /// realm A's own frame work below provably runs WHILE realm B's thread
-    /// is live and doing its own frame work too — not sequentially before
-    /// or after `join()` (the original shape: realm A never touched
-    /// anything until after `join()` returned, which only proved
-    /// construction could happen on two threads, not that operation could).
+    /// A barrier released BEFORE either side's frame work only proves both
+    /// threads STARTED around the same time — the OS scheduler is free to
+    /// run one side's whole `draw_frame` to completion before the other
+    /// even resumes, so the frame TRANSACTIONS themselves might never
+    /// actually overlap. The rendezvous below fixes that by sitting INSIDE
+    /// each realm's own `drive_frame` pipeline closure — which
+    /// `Scheduler::handle_draw_frame` guarantees runs during
+    /// `SchedulerPhase::PersistentCallbacks` (see
+    /// `the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline`)
+    /// — so neither closure can proceed past the rendezvous until BOTH
+    /// realms are provably mid-transaction at the same instant.
+    /// `std::sync::Barrier` has no timeout, so a regression that stops one
+    /// side from ever reaching its frame closure would hang the test
+    /// forever instead of failing it; `rendezvous_or_timeout` below fails
+    /// loudly on a bounded deadline instead of deadlocking.
     #[test]
     fn two_realms_two_threads_no_shared_state() {
-        let barrier = std::sync::Barrier::new(2);
+        let parties_arrived = std::sync::atomic::AtomicUsize::new(0);
+        let rendezvous_or_timeout = |label: &'static str| {
+            parties_arrived.fetch_add(1, Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while parties_arrived.load(Ordering::SeqCst) < 2 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{label}: rendezvous timed out -- the other realm's frame \
+                     transaction never became concurrently mid-flight"
+                );
+                std::thread::yield_now();
+            }
+        };
 
         let (wake_a, wakes_a) = counting_wake();
         let realm_a = new_runtime(wake_a).expect("realm A claims cleanly on this thread");
@@ -2254,21 +2273,28 @@ mod tests {
                     .expect("realm B claims cleanly on its OWN thread, concurrently with A");
                 let sender_b = realm_b.command_sender();
 
-                // Rendezvous: realm A's operation below is guaranteed to
-                // overlap this thread's operation, not merely precede or
-                // follow it.
-                barrier.wait();
-
                 sender_b.request_redraw();
                 let _ = realm_b.drain_commands();
-                let _ = realm_b.draw_frame(coexistence_constraints());
+                realm_b
+                    .scheduler()
+                    .drive_frame(flui_scheduler::Instant::now(), || {
+                        // Mid-PersistentCallbacks rendezvous: cannot return
+                        // until realm A's own closure below has ALSO
+                        // reached this point.
+                        rendezvous_or_timeout("realm B");
+                        let _ = realm_b.draw_frame(coexistence_constraints());
+                    });
                 (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
             });
 
-            barrier.wait();
             sender_a.request_redraw();
             let _ = realm_a.drain_commands();
-            let _ = realm_a.draw_frame(coexistence_constraints());
+            realm_a
+                .scheduler()
+                .drive_frame(flui_scheduler::Instant::now(), || {
+                    rendezvous_or_timeout("realm A");
+                    let _ = realm_a.draw_frame(coexistence_constraints());
+                });
 
             handle.join().expect("realm B's thread did not panic")
         });
@@ -2382,11 +2408,34 @@ mod tests {
         // probe asserts it stays EXACTLY there (unchanged), not that it is
         // zero.
         let wakes_b_before_timer = wakes_b.load(Ordering::Relaxed);
-        let fired_count = flui_interaction::global_timer_service().check_timers();
-        assert!(
-            fired_count >= 1,
-            "the scheduled timer must still fire after realm A dropped"
-        );
+
+        // Deliberately NOT asserting on this call's own `check_timers()`
+        // return value: `global_timer_service()` is process-global BY
+        // DESIGN (unlike every other retired singleton), so under `cargo
+        // test`'s shared-process parallelism (never under `cargo nextest
+        // run`, which gives every test its own process) a second,
+        // concurrently-running test that also happens to call
+        // `check_timers()` could drain and fire THIS test's timer before
+        // this call gets to it -- the closure still runs exactly the same
+        // either way (state mutation doesn't care which caller triggered
+        // it), only trusting THIS call's local return count would be
+        // fragile. Polling the actual observable instead
+        // (`observed_owner_gone`), with `check_timers()` as a same-process
+        // nudge and a bounded deadline so a genuine failure to fire still
+        // fails loudly rather than hanging, tolerates that interleaving
+        // without needing new cross-test lock infrastructure.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !observed_owner_gone.load(Ordering::SeqCst) {
+            flui_interaction::global_timer_service().check_timers();
+            if observed_owner_gone.load(Ordering::SeqCst) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the scheduled timer never fired -- observed_owner_gone stayed false"
+            );
+            std::thread::yield_now();
+        }
         assert!(
             observed_owner_gone.load(Ordering::SeqCst),
             "a callback capturing realm A's own sender, fired from this ambient \
@@ -2415,6 +2464,11 @@ mod tests {
     /// realm's `WidgetsBinding` owns its own `ElementOwner`/registry, and the
     /// collision check is scoped to the currently-active one, never to the
     /// key's numeric id process-wide.
+    ///
+    /// Both realms go through the PRODUCTION constructor (`UiRealm::new`,
+    /// via `new_runtime`), matching every other coexistence proof in this
+    /// module — not the `for_test` bypass, so this test exercises the exact
+    /// path a real embedder would.
     #[test]
     fn cross_realm_duplicate_global_key_mounts_succeed_in_both() {
         #[derive(Clone)]
@@ -2453,8 +2507,8 @@ mod tests {
         }
 
         let shared_key = flui_view::GlobalKey::<GlobalKeyedRootView>::new();
-        let realm_a = UiRealm::for_test();
-        let realm_b = UiRealm::for_test();
+        let realm_a = new_runtime(noop_wake()).expect("realm A claims cleanly");
+        let realm_b = new_runtime(noop_wake()).expect("realm B claims cleanly ALONGSIDE realm A");
 
         realm_a
             .attach_root_widget_with_size(
