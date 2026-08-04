@@ -10,7 +10,7 @@ Flutter's tree behavior without copying its process/runtime topology:
 
 | FLUI | Flutter |
 |------|---------|
-| `UiRealm` + transitional `AppBinding` | `WidgetsFlutterBinding` |
+| `UiRealm` + `AppRuntime` | `WidgetsFlutterBinding` |
 | `run_app` / `run_app_with_config` | `runApp` |
 | `WidgetsBinding` | `WidgetsBinding` |
 | `RenderingFlutterBinding` + `PipelineOwner` | `RendererBinding` |
@@ -28,16 +28,20 @@ run_app(view)                       — bootstrap: window, GPU surface, frame lo
     ▼
 UiRealm (owner-affine, !Send + !Sync)
     ├── WidgetsBinding              — View → Element, BuildOwner, GlobalKey scope
-    └── GestureBinding              — single-presentation pointer state
+    ├── GestureBinding              — single-presentation pointer state
+    ├── RenderingFlutterBinding     — render-view registry, first-frame gate
+    └── Scheduler                   — frame callbacks, animation tickers (flui-scheduler);
+                                       one fresh instance per realm, never shared
 
 PresentationState (per-window, private to flui-app)
     ├── FocusManager                — keyboard event dispatch
     ├── PipelineOwner               — layout/paint (flui-rendering)
     └── SemanticsHost               — enablement + announce/event delivery (flui-app)
 
-AppBinding (transitional host)
-    ├── RenderingFlutterBinding     — render-view registry, first-frame gate
-    └── Scheduler                   — frame callbacks, animation tickers (flui-scheduler)
+AppRuntime (loop-scoped composition root)
+    ├── SharedEngineServices        — painting/accessibility, resolved once per owner thread
+    ├── frame-wake + platform clipboard
+    └── the single realm slot (RealmId-keyed; real 1..N hosting is issue #555)
 ```
 
 - **Entry points** — `run_app` / `run_app_with_config` bootstrap a platform
@@ -70,13 +74,19 @@ that implement it are tracked in issue #573.
 
 ## Known architectural debt
 
-`WidgetsBinding` and GlobalKey identity are realm-owned. `AppBinding`,
-`Scheduler`, renderer orchestration, and focus services remain process-scoped
-migration debt. Gesture state is realm-owned but intentionally models one
-presentation per realm; it moves to `PresentationRuntime` only when a second
-real presentation consumer exists. Tests mutating the remaining globals must
-use their existing serialization guard; the guard retires as each service
-moves behind an explicit owner.
+Singleton retirement is complete: `WidgetsBinding`, `GestureBinding`,
+`RenderingFlutterBinding`, `Scheduler`, and GlobalKey identity are all
+realm-owned now — `AppBinding` is deleted, not slimmed, and no test needs a
+serialization guard against shared binding state any more (each test
+constructs its own independent realm). What remains is *hosting* debt, not
+singleton debt: `AppRuntime` hosts exactly one realm per owner thread behind
+a `RealmId`-keyed accessor (issue #555 grows that into real 1..N hosting once
+the element forest lets a realm host multiple presentations); `Scheduler`
+still combines logical/physical/raster scheduling concerns that issue #556
+splits apart; and the production runners don't yet adopt the `RasterOwner`
+mailbox protocol (issue #559). Gesture state is realm-owned but intentionally
+models one presentation per realm; it moves to `PresentationRuntime` only
+when a second real presentation consumer exists.
 
 ## Documentation
 
