@@ -20,7 +20,10 @@
 //! RenderingFlutterBinding
 //!   ├── root_pipeline_owner   - Root of PipelineOwner tree
 //!   ├── render_views          - Map<ViewId, RenderView>
-//!   └── semantics integration - Via SemanticsBinding
+//!   └── semantics enablement  - fan-out via add_semantics_enabled_listener;
+//!                               per-presentation announce/event delivery
+//!                               lives on that presentation's SemanticsHost
+//!                               (crate::app::semantics_host), not here
 //! ```
 //!
 //! # Usage
@@ -37,7 +40,6 @@ use std::{
     },
 };
 
-use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
 use flui_painting::PaintingBinding;
 use flui_rendering::{
     binding::RendererBinding,
@@ -45,10 +47,10 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     view::{RenderView, ViewConfiguration},
 };
-use flui_scheduler::Scheduler;
-use flui_semantics::{Assertiveness, SemanticsBinding};
 use flui_types::Offset;
 use parking_lot::RwLock;
+
+use crate::app::runtime::SchedulerRef;
 
 /// A subscriber to [`RenderingFlutterBinding::set_semantics_enabled`] changes.
 ///
@@ -99,7 +101,9 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &RwLock<PipelineOwner>) {
 /// - Managing [`RenderView`]s (add/remove)
 /// - Creating [`ViewConfiguration`]s for views
 /// - Coordinating frame production
-/// - Integrating with [`SemanticsBinding`] for accessibility
+/// - Fanning out semantics-enabled changes to listeners (per-presentation
+///   announce/event delivery lives on that presentation's `SemanticsHost`
+///   instead — see `crate::app::semantics_host`)
 ///
 /// # Thread Safety
 ///
@@ -151,8 +155,8 @@ impl Default for RenderingFlutterBinding {
 impl RenderingFlutterBinding {
     /// Creates a new rendering binding with its own PipelineOwner.
     ///
-    /// Used by the singleton pattern. For sharing a PipelineOwner with
-    /// AppBinding, use [`new_with_pipeline`](Self::new_with_pipeline) instead.
+    /// For sharing a PipelineOwner with `AppBinding`, use
+    /// [`new_with_pipeline`](Self::new_with_pipeline) instead.
     pub fn new() -> Self {
         Self::new_with_pipeline(Arc::new(RwLock::new(PipelineOwner::new())))
     }
@@ -162,31 +166,42 @@ impl RenderingFlutterBinding {
     /// This allows AppBinding to pass in the same `Arc<RwLock<PipelineOwner>>`
     /// that elements use, ensuring a single PipelineOwner instance at runtime.
     pub fn new_with_pipeline(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
-        let mut binding = Self {
+        Self::init_instances();
+        Self {
             root_pipeline_owner: pipeline_owner,
             render_views: RwLock::new(HashMap::new()),
             semantics_enabled: AtomicBool::new(false),
             semantics_listeners: RwLock::new(Vec::new()),
             first_frame_deferred_count: AtomicU32::new(0),
             first_frame_sent: AtomicBool::new(false),
-        };
-        binding.init_instances();
-        binding
+        }
     }
 
-    /// Returns an instance of the binding that implements [`RendererBinding`].
+    /// One-time construction-side setup.
     ///
-    /// If no binding has yet been initialized, creates and initializes one.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flui_app::RenderingFlutterBinding;
-    ///
-    /// let binding = RenderingFlutterBinding::ensure_initialized();
-    /// ```
-    pub fn ensure_initialized() -> &'static Self {
-        Self::instance()
+    /// Not a `BindingBase`/singleton-macro hook any more (the singleton
+    /// pattern this binding used to implement is retired) — a plain
+    /// associated function [`new_with_pipeline`](Self::new_with_pipeline)
+    /// calls once, right before building the value (there is nothing yet to
+    /// take `&self` of).
+    fn init_instances() {
+        // Gesture state is owned by the entered `UiRealm`, which is the
+        // authoritative instance driving input and frame-time coalescing for
+        // its current presentation. This rendering binding deliberately does
+        // not initialize a second gesture singleton with a disconnected arena.
+        //
+        // Painting has no process-wide binding to eagerly initialize here
+        // either: `PaintingBinding` stopped being a singleton as the
+        // remaining singletons move behind explicit owners -- its owned
+        // value lives on `AppRuntime`'s `SharedEngineServices`, constructed
+        // at realm install (`app/runtime.rs`). See `Self::painting`'s doc
+        // comment for why `RenderingFlutterBinding` cannot simply reach that
+        // value instead.
+        //
+        // Semantics enablement is per-presentation now (`SemanticsHost`,
+        // `app/semantics_host.rs`) -- there is no process-wide semantics
+        // binding for this method to touch.
+        tracing::info!("RenderingFlutterBinding initialized");
     }
 
     // ========================================================================
@@ -416,9 +431,16 @@ impl RenderingFlutterBinding {
     // Semantics Integration
     // ========================================================================
 
-    /// Sets whether semantics are enabled.
+    /// Sets whether semantics are enabled, fanning the change out to every
+    /// registered listener.
     ///
-    /// When enabled, the framework will maintain the semantics tree.
+    /// When enabled, the framework will maintain the semantics tree. This no
+    /// longer forwards to a process-wide semantics binding (retired —
+    /// enablement is per-presentation now, via `SemanticsHost`
+    /// (`crate::app::semantics_host`)): a caller that owns a presentation's
+    /// `SemanticsHost` and wants it to track this toggle registers
+    /// [`Self::add_semantics_enabled_listener`] and calls
+    /// `SemanticsHost::set_platform_semantics_enabled` from that listener.
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
         if was_enabled != enabled {
@@ -433,38 +455,12 @@ impl RenderingFlutterBinding {
             for listener in &listeners {
                 listener(enabled);
             }
-
-            // Update SemanticsBinding if available
-            if SemanticsBinding::is_initialized() {
-                SemanticsBinding::instance().set_platform_semantics_enabled(enabled);
-            }
-        }
-    }
-
-    /// Announces a message via accessibility services.
-    pub fn announce(&self, message: &str, assertiveness: Assertiveness) {
-        if SemanticsBinding::is_initialized() {
-            SemanticsBinding::instance().announce(message, assertiveness);
         }
     }
 
     // ========================================================================
     // Binding Accessors
     // ========================================================================
-
-    /// Get the Scheduler singleton.
-    ///
-    /// Equivalent to Flutter's `SchedulerBinding.instance`.
-    pub fn scheduler() -> &'static Scheduler {
-        Scheduler::instance()
-    }
-
-    /// Get the SemanticsBinding singleton.
-    ///
-    /// Equivalent to Flutter's `SemanticsBinding.instance`.
-    pub fn semantics() -> &'static SemanticsBinding {
-        SemanticsBinding::instance()
-    }
 
     /// Returns a fresh [`PaintingBinding`] value; its `ImageCache` is
     /// throwaway, but `font_system()` still reaches shared state (see
@@ -530,40 +526,6 @@ impl RenderingFlutterBinding {
 }
 
 // ============================================================================
-// BindingBase Implementation
-// ============================================================================
-
-impl BindingBase for RenderingFlutterBinding {
-    fn init_instances(&mut self) {
-        // Gesture state is owned by the entered `UiRealm`, which is the
-        // authoritative instance driving input and frame-time coalescing for
-        // its current presentation. This rendering binding deliberately does
-        // not initialize a second gesture singleton with a disconnected arena.
-
-        // Initialize scheduler
-        let _ = Scheduler::instance();
-        tracing::debug!("Scheduler initialized via RenderingFlutterBinding");
-
-        // Initialize semantics binding
-        let _ = SemanticsBinding::instance();
-        tracing::debug!("SemanticsBinding initialized via RenderingFlutterBinding");
-
-        // Painting no longer has a process-wide binding to eagerly
-        // initialize here: `PaintingBinding` stopped being a singleton as
-        // the remaining singletons move behind explicit owners -- its owned
-        // value now lives on `AppRuntime`'s `SharedEngineServices`,
-        // constructed at realm install (`app/runtime.rs`). See
-        // `Self::painting`'s doc comment for why `RenderingFlutterBinding`
-        // cannot simply reach that value instead.
-
-        tracing::info!("RenderingFlutterBinding initialized");
-    }
-}
-
-// Singleton pattern
-impl_binding_singleton!(RenderingFlutterBinding);
-
-// ============================================================================
 // RendererBinding Implementation
 // ============================================================================
 
@@ -571,9 +533,18 @@ impl RendererBinding for RenderingFlutterBinding {
     // ---- formerly PipelineManifold ----
 
     fn request_visual_update(&self) {
-        Scheduler::instance().schedule_frame(Box::new(|_timing| {
-            // Visual update frame callback
-        }));
+        // Same-thread reach: `request_visual_update` is only ever called
+        // with `&self` on the thread that owns this binding, so a freshly
+        // resolved `SchedulerRef` is exactly as safe as the `Scheduler::
+        // instance()` this replaces -- typed instead of ambient. Not stored
+        // as a field: nothing here observes it across a call boundary, and
+        // `Scheduler::instance()` underneath already memoizes per owner
+        // thread, so resolving fresh costs nothing beyond the wrapper.
+        SchedulerRef::resolve()
+            .get()
+            .schedule_frame(Box::new(|_timing| {
+                // Visual update frame callback
+            }));
     }
 
     fn semantics_enabled(&self) -> bool {
@@ -661,40 +632,15 @@ impl RendererBinding for RenderingFlutterBinding {
 mod tests {
     use super::*;
 
-    /// `RenderingFlutterBinding::instance()` is a process-wide singleton, so any
-    /// test that mutates its shared state — the `semantics_enabled` flag, the
-    /// first-frame deferral counter, or (through `allow_first_frame`) the
-    /// global `Scheduler::instance()` — shares that state with every other
-    /// test in this module under `cargo test`'s one-process, multi-threaded
-    /// run (nextest's per-test process makes this belt and braces there, per
-    /// AGENTS.md "Testing quirks"). They serialize through this lock (held for
-    /// each test's duration) so they cannot interleave their writes and
-    /// observe each other's state — the listener tests in particular assert
-    /// exact callback counts that a concurrent toggle would corrupt.
-    static SEMANTICS_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-
-    #[test]
-    fn test_singleton() {
-        let binding1 = RenderingFlutterBinding::instance();
-        let binding2 = RenderingFlutterBinding::instance();
-        assert!(std::ptr::eq(binding1, binding2));
-    }
-
-    #[test]
-    fn test_ensure_initialized() {
-        let binding = RenderingFlutterBinding::ensure_initialized();
-        assert!(RenderingFlutterBinding::is_initialized());
-        assert!(std::ptr::eq(binding, RenderingFlutterBinding::instance()));
-    }
+    /// `RenderingFlutterBinding` is no longer singleton-backed — each test
+    /// below constructs its own, independent instance instead of sharing a
+    /// process-wide one, so there is nothing left for a test lock to
+    /// serialize (the retired `SEMANTICS_TEST_LOCK` guarded exactly this
+    /// shared-singleton hazard; see AGENTS.md's "Testing quirks").
 
     #[test]
     fn test_semantics_enabled() {
-        let _guard = SEMANTICS_TEST_LOCK.lock();
-        let binding = RenderingFlutterBinding::instance();
-
-        // Establish a known starting state under the lock rather than assuming
-        // the process-wide default (the listener test toggles the same flag).
-        binding.set_semantics_enabled(false);
+        let binding = RenderingFlutterBinding::new();
         assert!(!binding.semantics_enabled());
 
         // Enable
@@ -708,9 +654,7 @@ mod tests {
 
     #[test]
     fn test_send_frames_to_engine() {
-        let _guard = SEMANTICS_TEST_LOCK.lock();
-        let binding = RenderingFlutterBinding::instance();
-        binding.reset_first_frame_sent();
+        let binding = RenderingFlutterBinding::new();
 
         // Initially should send (no deferrals)
         assert!(binding.send_frames_to_engine());
@@ -824,7 +768,7 @@ mod tests {
 
     #[test]
     fn test_render_view_management() {
-        let binding = RenderingFlutterBinding::instance();
+        let binding = RenderingFlutterBinding::new();
 
         // Add a render view via the `add_render_view_with_config`
         // default-impl helper, which delegates to `insert_render_view`
@@ -845,13 +789,7 @@ mod tests {
     fn test_semantics_listener() {
         use std::sync::atomic::AtomicUsize;
 
-        let _guard = SEMANTICS_TEST_LOCK.lock();
-        let binding = RenderingFlutterBinding::instance();
-
-        // Force a known `false` baseline *before* attaching the listener, so
-        // the listener only counts the toggles this test performs and the
-        // first `set_semantics_enabled(true)` is an observable state change.
-        binding.set_semantics_enabled(false);
+        let binding = RenderingFlutterBinding::new();
 
         let call_count = Arc::new(AtomicUsize::new(0));
         let call_count_clone = call_count.clone();
@@ -875,9 +813,6 @@ mod tests {
         binding.set_semantics_enabled(true);
         // Should not increment (listener removed)
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
-
-        // Leave the shared singleton disabled for the next test.
-        binding.set_semantics_enabled(false);
     }
 
     /// A listener that registers another listener from inside its own
@@ -891,29 +826,27 @@ mod tests {
     /// drops the read guard before invoking any of them.
     ///
     /// The whole scenario (attach, both toggles, detach) runs on one
-    /// dedicated background thread rather than the test thread, for two
-    /// reasons: `RenderingFlutterBinding::instance()` is owner-thread-local
-    /// (ADR-0027) — a fresh OS thread's first `instance()` call leaks its own
-    /// binding, so splitting the steps across threads would silently operate
-    /// on two unrelated bindings — and the deadlock under test is itself a
-    /// same-thread read-then-write lock reacquisition, which only reproduces
-    /// when every step runs on that one thread. The test thread only bounds
-    /// how long it waits for that thread's result over a channel: a bare
-    /// `.join()` would hang forever (and, under `cargo test`'s shared-process
-    /// threads, wedge the rest of the suite) if the deadlock regressed;
-    /// `recv_timeout` turns that hang into an explicit `expect` panic
-    /// instead.
+    /// dedicated background thread rather than the test thread purely so a
+    /// deadlock regression hangs a throwaway thread, not the test-runner
+    /// thread itself: `binding` is `Send + Sync` (an `Arc` clone moves into
+    /// the spawned thread), so this is no longer forced by any
+    /// singleton/owner-thread affinity the way it used to be. The test
+    /// thread only bounds how long it waits for that thread's result over a
+    /// channel: a bare `.join()` would hang forever (and, under `cargo
+    /// test`'s shared-process threads, wedge the rest of the suite) if the
+    /// deadlock regressed; `recv_timeout` turns that hang into an explicit
+    /// `expect` panic instead.
     #[test]
     fn semantics_listener_that_registers_another_listener_does_not_deadlock() {
         use std::sync::{atomic::AtomicUsize, mpsc};
         use std::time::Duration;
 
-        let _guard = SEMANTICS_TEST_LOCK.lock();
+        let binding = Arc::new(RenderingFlutterBinding::new());
+        let binding_for_thread = Arc::clone(&binding);
 
         let (result_tx, result_rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let binding = RenderingFlutterBinding::instance();
-            binding.set_semantics_enabled(false);
+            let binding = binding_for_thread;
 
             let late_calls = Arc::new(AtomicUsize::new(0));
             let late_calls_for_listener = Arc::clone(&late_calls);
@@ -921,12 +854,10 @@ mod tests {
                 late_calls_for_listener.fetch_add(1, Ordering::Relaxed);
             });
 
-            // The listener is `'static`, so the reentrant call resolves the
-            // thread's binding through its singleton accessor instead of
-            // capturing this stack-local reference.
             let late_listener_for_reentrant = late_listener.clone();
+            let binding_for_reentrant = Arc::clone(&binding);
             let reentrant_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
-                RenderingFlutterBinding::instance()
+                binding_for_reentrant
                     .add_semantics_enabled_listener(late_listener_for_reentrant.clone());
             });
             binding.add_semantics_enabled_listener(reentrant_listener.clone());

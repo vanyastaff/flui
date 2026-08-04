@@ -7,8 +7,10 @@
 //! - [`GestureBinding`] - Hit testing and gestures (from flui-interaction)
 //! - [`PipelineOwner`] - Render tree and layout/paint (from flui_rendering)
 //! - [`Scheduler`] - Frame scheduling (from flui-scheduler)
-//! - [`SemanticsBinding`] - Accessibility (from flui-semantics)
-//! - [`RenderingFlutterBinding`] - Rendering integration (local)
+//! - [`RenderingFlutterBinding`] - Rendering integration (local); per-window
+//!   semantics enablement/announce/event delivery lives on `SemanticsHost`
+//!   (`crate::app::semantics_host`), not on a process-wide accessibility
+//!   binding
 //!
 //! # Flutter Equivalence
 //!
@@ -33,7 +35,6 @@ pub use flui_interaction::binding::GestureBinding;
 pub use flui_painting::PaintingBinding;
 pub use flui_rendering::{binding::RendererBinding, pipeline::PipelineOwner};
 pub use flui_scheduler::Scheduler;
-pub use flui_semantics::SemanticsBinding;
 pub use flui_view::WidgetsBinding;
 // Re-export the local binding
 pub use renderer_binding::RenderingFlutterBinding;

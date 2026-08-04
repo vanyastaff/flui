@@ -23,6 +23,8 @@ use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_view::WidgetsBinding;
 use parking_lot::RwLock;
 
+use super::semantics_host::SemanticsHost;
+
 #[cfg(test)]
 struct TestPresentationWindow {
     text_input: Option<Arc<dyn PlatformTextInput>>,
@@ -111,6 +113,17 @@ pub(crate) struct PresentationState {
     gestures: GestureBinding,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read only through semantics_host(), itself unreached \
+                      outside tests until a production caller wires \
+                      semantics enablement/announce/event delivery through a \
+                      presentation"
+        )
+    )]
+    semantics: SemanticsHost,
 }
 
 impl PresentationState {
@@ -164,6 +177,7 @@ impl PresentationState {
             gestures,
             focus: FocusManager::new(),
             text_input: TextInputOwner::new(platform_text_input),
+            semantics: SemanticsHost::new(),
         };
         state.attach_surface();
         state
@@ -214,6 +228,24 @@ impl PresentationState {
     #[must_use]
     pub(crate) fn text_input_handle(&self) -> TextInputHandle {
         self.text_input.handle()
+    }
+
+    /// This presentation's semantics enablement gate and platform
+    /// accessibility delivery — the per-window home the retired
+    /// `SemanticsBinding` singleton's enablement/announce/event state moved
+    /// into.
+    #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production caller yet -- semantics enablement/\
+                      announce/event delivery through a presentation is \
+                      future wiring"
+        )
+    )]
+    pub(crate) fn semantics_host(&self) -> &SemanticsHost {
+        &self.semantics
     }
 
     fn attach_surface(&self) {
@@ -392,6 +424,25 @@ mod tests {
             presentation.dispatch_semantics_action(request),
             Err(SemanticsActionError::PresentationClosed)
         );
+    }
+
+    #[test]
+    fn semantics_host_is_exclusive_to_this_presentation() {
+        let a = presentation();
+        let b = presentation();
+
+        assert!(!a.semantics_host().semantics_enabled());
+        assert!(!b.semantics_host().semantics_enabled());
+
+        let handle = a.semantics_host().ensure_semantics();
+        assert!(a.semantics_host().semantics_enabled());
+        assert!(
+            !b.semantics_host().semantics_enabled(),
+            "a's SemanticsHandle must not enable b's independently-owned SemanticsHost"
+        );
+
+        drop(handle);
+        assert!(!a.semantics_host().semantics_enabled());
     }
 
     #[test]
