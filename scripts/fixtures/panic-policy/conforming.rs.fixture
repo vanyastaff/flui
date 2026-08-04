@@ -1,0 +1,63 @@
+//! Fixture: every production `.expect(` site here must be recognized as
+//! conforming (or excluded from the scan entirely). See
+//! check-panic-policy.sh's self-test for what each shape exercises.
+
+/// A commented-out call must never count: `foo.expect("not real")`.
+// let bare = foo.expect("also not real, this whole line is a comment");
+pub fn documented_urls() -> &'static str {
+    // A string containing "//" must not desync line-comment stripping (the
+    // masking pass runs first so this "//" is never mistaken for a comment
+    // marker) and the .expect(...) on the SAME line must still resolve.
+    let value = "see https://example.com/docs for details";
+    value
+}
+
+/// A genuine internal invariant, correctly prefixed.
+pub fn real_invariant(items: &[u32]) -> u32 {
+    *items
+        .first()
+        .expect("BUG: caller guarantees items is non-empty before calling real_invariant")
+}
+
+const REASON: &str = "BUG: identifier-resolved invariant message";
+
+/// An identifier argument (not a literal) that resolves to a `const` in this
+/// same file -- the checker must follow it rather than treat it as an
+/// unresolved dynamic argument.
+pub fn identifier_argument(slot: Option<u32>) -> u32 {
+    slot.expect(REASON)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn bare_expect_inside_a_test_mod_is_never_scanned() {
+        let value: Option<u32> = Some(1);
+        let _ = value.expect("test-only message, no BUG: prefix needed");
+    }
+}
+
+/// An individual `#[cfg(test)]`-gated function (not a whole `mod`) must also
+/// be excluded -- this workspace has ~90 real sites shaped exactly like
+/// this one.
+#[cfg(test)]
+fn for_test_helper() -> u32 {
+    let value: Option<u32> = Some(1);
+    value.expect("test-only helper, no BUG: prefix needed")
+}
+
+struct Thing;
+
+/// A multi-line `#[cfg(all(...))]` attribute gating an `impl` block must be
+/// recognized even though the `test` token is not on the same physical line
+/// as `#[cfg(`.
+#[cfg(all(
+    test,
+    not(target_os = "ios")
+))]
+impl Thing {
+    fn test_only_method(&self) -> u32 {
+        let value: Option<u32> = Some(1);
+        value.expect("gated impl block, no BUG: prefix needed")
+    }
+}

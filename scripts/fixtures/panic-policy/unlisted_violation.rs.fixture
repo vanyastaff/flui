@@ -1,0 +1,8 @@
+//! Fixture: a bare production `.expect()` with no `BUG: ` prefix, simulating
+//! a new site landing in a file the allowlist does not know about yet.
+//! check-panic-policy.sh's self-test asserts this file is flagged when it
+//! is not named in the (synthetic, in-test) allowlist.
+
+pub fn planted_violation(slot: Option<u32>) -> u32 {
+    slot.expect("no BUG: prefix here — this must fail the gate")
+}

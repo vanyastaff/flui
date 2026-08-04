@@ -72,3 +72,13 @@ the message, not the call. Audit them with:
 rg '\.expect\("(?!BUG: )' crates/*/src --pcre2   # expects missing the convention
 rg '\.unwrap\(\)' crates/*/src                   # should be test-only or allow-tracked
 ```
+
+**Mechanical gate.** `scripts/check-panic-policy.sh` (`just
+panic-policy-check`, wired into `just ci` and the CI `checks` job) enforces
+the `BUG:` prefix on every production `expect()` under `crates/*/src`,
+excluding `#[cfg(test)]`/`#[cfg(any(test, feature = "testing"))]`-gated
+modules, functions, and impls (test-support code is exempt, same as
+`tests/`/`benches/`/`examples/`). It is a per-file, shrink-only ratchet
+against `docs/panic-policy-allowlist.txt`: a file with a non-conforming site
+must be listed there, and a listed file that has been fully burned down must
+be delisted — the script fails either way it drifts.

@@ -52,6 +52,11 @@
 #
 # Ownership domains:
 #   application | realm | presentation | raster | platform | shared-engine
+#   workspace — deliberately not a Runtime.1 topology domain like the other
+#   six. Reserved for the rare cross-cutting engineering-discipline contract
+#   (not scoped to any single runtime domain) that has no other
+#   mechanically-checked registry to live in, e.g. the
+#   expect("BUG: …") panic-policy gate below. Narrow on purpose.
 
 [registry]
 milestone = "Runtime.1"
@@ -1180,6 +1185,39 @@ domain = "platform"
 owner_issue = 551
 mechanical = true
 mechanism = "the checker pins run_direct's experimental marking and classification"
+
+[[contract]]
+key = "panic-policy-bug-prefix-gated"
+statement = """
+Every production-path `expect()` under `crates/*/src` carries a message \
+prefixed `BUG: ` naming the internal invariant it asserts (docs/PANIC-POLICY.md), \
+distinguishing it from a caller-triggerable/environmental failure, which must \
+return a typed `Result` instead. This is not a Runtime.1 topology contract like \
+its six domain-scoped siblings above -- it is a workspace-wide coding \
+discipline with its own mechanical enforcement, recorded here because this \
+registry is the only one in the workspace that tracks a contract's \
+`mechanical`/`mechanism` pair. Enforcement is a per-file, shrink-only ratchet \
+(docs/panic-policy-allowlist.txt): a file with a non-conforming site must be \
+listed, and a listed file that has been fully burned down must be delisted. \
+Seeded 2026-08-04 at 65 listed files / 125 sites, down from the audit's 158 \
+after burning down the five worst-offender files it named (flui-hot-reload's \
+worker.rs, flui-engine's wgpu/backend.rs, flui-painting's \
+text_painter/paint.rs, flui-widgets' scroll/refresh_indicator.rs, and one \
+site in flui-app's runner.rs); flui-rendering's testing/harness.rs, the \
+audit's sixth named file, was never in scope -- it lives under a \
+`#[cfg(any(test, feature = "testing"))]`-gated module, which the checker's \
+whole-module test-support exclusion (mirroring tests/benches/examples) \
+correctly never scans.\
+"""
+state = "implemented"
+domain = "workspace"
+mechanical = true
+mechanism = "scripts/check-panic-policy.sh (just panic-policy-check, wired into just ci and the CI checks job)"
+evidence = [
+    { kind = "symbol", file = "scripts/check-panic-policy.sh", contains = "def nonconforming_sites" },
+    { kind = "test", file = "scripts/check-panic-policy.sh", contains = "def self_test" },
+    { kind = "source-gate", file = "justfile", contains = "panic-policy-check:" },
+]
 
 # =============================================================================
 # Public runtime surface classification

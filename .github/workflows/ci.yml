@@ -1,7 +1,7 @@
 name: CI
 
 # Job graph (every job is gated on the fast `checks` source gate):
-#   checks         — fmt + taplo + typos + inventory + runtime-conformance + port-check + actionlint + zizmor (seconds, no compile)
+#   checks         — fmt + taplo + typos + inventory + runtime-conformance + panic-policy + port-check + actionlint + zizmor (seconds, no compile)
 #   clippy         — workspace lint with -D warnings
 #   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps), xilem-style,
 #                    plus a bounded backend-feature-pair powerset for flui-engine, plus every
@@ -59,7 +59,7 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # checks — fast source gate. fmt + inventory + runtime-conformance +
-  # port-check + typos + Taplo + the workflow
+  # panic-policy + port-check + typos + Taplo + the workflow
   # linters (actionlint semantics, zizmor security audit). No compile. Every
   # downstream job (clippy, test, doc, bench-compile) depends on this, so a
   # malformed PR fails in seconds before any workspace build starts.
@@ -119,6 +119,9 @@ jobs:
 
       - name: Runtime contract registry check
         run: bash scripts/check-runtime-conformance.sh
+
+      - name: panic-policy expect("BUG: …") convention gate
+        run: bash scripts/check-panic-policy.sh
 
       - name: scripts/port-check.sh (22 refusal triggers + FR-033)
         run: bash scripts/port-check.sh -v

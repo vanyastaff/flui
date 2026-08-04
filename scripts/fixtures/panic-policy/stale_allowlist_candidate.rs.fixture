@@ -1,0 +1,9 @@
+//! Fixture: a fully conforming file, simulating one that used to carry
+//! non-conforming `expect()` sites and was burned down -- but whose entry
+//! was (hypothetically) left on the allowlist. check-panic-policy.sh's
+//! self-test asserts this combination is flagged as a stale entry: the
+//! ratchet shrinks only if a cleaned file also leaves the list.
+
+pub fn cleaned_up(slot: Option<u32>) -> u32 {
+    slot.expect("BUG: this file was burned down; every site here is conforming now")
+}
