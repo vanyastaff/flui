@@ -20,7 +20,7 @@ use crate::Opacity;
 /// fully opaque; the child is always laid out (only its painting fades).
 ///
 /// ```rust,ignore
-/// let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+/// let controller = AnimationController::without_ticker(Duration::from_millis(300));
 /// let fade = FadeTransition::new(Arc::new(controller), Text::new("hi"));
 /// controller.forward(); // each frame re-reads the opacity into the child
 /// ```

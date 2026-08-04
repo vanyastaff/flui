@@ -189,16 +189,18 @@ pub(crate) type TransitionRegistry = Arc<Mutex<HashMap<RouteId, TransitionPeer>>
 /// The clock a route's `AnimationController` registers with.
 ///
 /// **Correction to ADR-0020.** Flutter's `vsync: navigator!` works
-/// because `NavigatorState` mixes in `TickerProviderStateMixin`. FLUI's
-/// `AnimationController::new` takes an `Arc<Scheduler>` and builds its **own**
-/// ticker; `flui_animation::Vsync` is not a `TickerProvider` at all but a
-/// *registry* a binding drives with `tick_all`. So the seam is not "the navigator
-/// is the ticker" but "the navigator owns the `Vsync` its routes register with" —
+/// because `NavigatorState` mixes in `TickerProviderStateMixin`.
+/// `flui_animation::Vsync` is not a `TickerProvider` at all but a *registry*
+/// a binding drives with `tick_all`. So the seam is not "the navigator is the
+/// ticker" but "the navigator owns the `Vsync` its routes register with" —
 /// which preserves the property that matters: one clock per navigator, and
 /// transitions freeze when the navigator's binding stops ticking.
 ///
-/// `None` when no `VsyncScope` is above the navigator; the controller then falls
-/// back to its own wall-clock ticker, exactly as `AnimatedSize` does.
+/// `None` when no `VsyncScope` is above the navigator. There is no wall-clock
+/// fallback: a route's `AnimationController` is built with
+/// [`AnimationController::without_ticker`](flui_animation::AnimationController::without_ticker) —
+/// no scheduler, no ticker at all — so with no `Vsync` to register with, the
+/// controller simply never advances (the same shape `AnimatedSize` uses).
 pub(crate) type RouteVsync = Arc<Mutex<Option<Vsync>>>;
 
 /// `RouteId -> OverlayEntry`, the navigator's map. A route reaches **its own**

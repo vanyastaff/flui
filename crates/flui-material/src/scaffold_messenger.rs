@@ -486,10 +486,8 @@ impl MessengerCore {
         let Some(front) = self.queue.borrow().front().cloned() else {
             return;
         };
-        let controller = AnimationController::new(
-            front.snack_bar.configured_duration(),
-            Arc::new(Scheduler::new()),
-        );
+        let controller =
+            AnimationController::new(front.snack_bar.configured_duration(), &Scheduler::new());
         if let Some(vsync) = self.vsync.borrow().as_ref() {
             let registration = vsync.register(controller.clone());
             *self.duration_vsync_registration.borrow_mut() = Some(registration);
@@ -607,7 +605,7 @@ impl ScaffoldMessengerHandle {
     /// that.
     fn new() -> Self {
         let entry_controller =
-            AnimationController::new(ENTRY_TRANSITION_DURATION, Arc::new(Scheduler::new()));
+            AnimationController::new(ENTRY_TRANSITION_DURATION, &Scheduler::new());
         let shared = Rc::new(MessengerCore {
             entry_controller,
             duration_controller: RefCell::new(None),

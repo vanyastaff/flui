@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves, Scheduler, Vsync,
+    Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves, Vsync,
     VsyncRegistration,
 };
 use flui_foundation::{ListenerId, ViewKey};
@@ -331,7 +331,9 @@ impl ChildEntry {
         transition_builder: &AnimatedSwitcherTransitionBuilder,
         animate: bool,
     ) -> Self {
-        let controller = AnimationController::new(duration, Arc::new(Scheduler::new()));
+        // No ticker: `Vsync` drives this controller once registered (see
+        // `ChildEntry::register`).
+        let controller = AnimationController::without_ticker(duration);
         if let Some(reverse_duration) = reverse_duration {
             controller.set_reverse_duration(reverse_duration);
         }

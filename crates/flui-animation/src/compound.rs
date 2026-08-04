@@ -47,14 +47,14 @@ pub enum AnimationOperator {
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Arc::new(Scheduler::new());
+/// let scheduler = Scheduler::new();
 /// let controller1 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     scheduler.clone(),
+///     &scheduler,
 /// ));
 /// let controller2 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     scheduler,
+///     &scheduler,
 /// ));
 ///
 /// controller1.set_value(0.5);
@@ -157,14 +157,14 @@ impl CompoundAnimation {
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let controller1 = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
-    ///     scheduler.clone(),
+    ///     &scheduler,
     /// ));
     /// let controller2 = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// ));
     ///
     /// controller1.set_value(0.4);
@@ -258,10 +258,10 @@ mod tests {
     use std::time::Duration;
 
     fn create_controller(value: f32) -> Arc<AnimationController> {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         controller.set_value(value);
         controller

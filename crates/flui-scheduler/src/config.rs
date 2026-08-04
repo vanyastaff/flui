@@ -16,8 +16,6 @@ use std::sync::{
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use flui_foundation::{BindingBase, HasInstance};
-
 use crate::{frame::FrameTiming, scheduler::Scheduler};
 
 // ============================================================================
@@ -91,6 +89,12 @@ pub enum InvalidTimeDilation {
 /// Set time dilation scaling factor (Flutter parity at
 /// `binding.dart::timeDilation`).
 ///
+/// Validates and stores the process-wide dilation factor only — it has no
+/// reach into any particular [`Scheduler`]'s epoch. A caller that also holds
+/// a live scheduler and wants its epoch reset on a dilation change should use
+/// [`Scheduler::set_time_dilation`] instead, which delegates here and then
+/// resets its own epoch.
+///
 /// # Errors
 ///
 /// Returns [`InvalidTimeDilation::NonPositive`] if `value <= 0.0` and
@@ -101,18 +105,6 @@ pub fn set_time_dilation(value: f64) -> Result<(), InvalidTimeDilation> {
     }
     if value <= 0.0 {
         return Err(InvalidTimeDilation::NonPositive(value));
-    }
-
-    let old_bits = TIME_DILATION.load(Ordering::Relaxed);
-    let old_value = f64::from_bits(old_bits);
-
-    if (old_value - value).abs() < f64::EPSILON {
-        return Ok(());
-    }
-
-    // If scheduler is initialized, reset epoch first
-    if <Scheduler as BindingBase>::is_initialized() {
-        Scheduler::instance().reset_epoch();
     }
 
     TIME_DILATION.store(value.to_bits(), Ordering::Relaxed);

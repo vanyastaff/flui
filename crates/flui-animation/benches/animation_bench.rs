@@ -137,8 +137,8 @@ fn spring_step(c: &mut Criterion) {
 fn controller_tick(c: &mut Criterion) {
     let mut group = c.benchmark_group("controller");
 
-    let scheduler = Arc::new(Scheduler::new());
-    let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    let scheduler = Scheduler::new();
+    let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
     controller.forward().unwrap();
     let mut t = 0.0_f64;
     group.bench_function("tick_at", |b| {

@@ -9,13 +9,11 @@ use std::time::Duration;
 
 use crate::common::{lay_out, tight};
 use flui_animation::{Animation, AnimationController};
-use flui_scheduler::Scheduler;
 use flui_widgets::{FadeTransition, SizedBox};
 
 #[test]
 fn fade_transition_reads_animation_opacity_on_each_tick() {
-    let scheduler = Arc::new(Scheduler::new());
-    let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    let controller = AnimationController::without_ticker(Duration::from_millis(300));
     controller.set_value(0.25);
     // The controller's clone shares its notifier, so `set_value` on the handle
     // below notifies the listener the FadeTransition registers on this `Arc`.
@@ -50,8 +48,7 @@ fn fade_transition_reads_animation_opacity_on_each_tick() {
 
 #[test]
 fn fade_transition_lays_its_child_out_as_a_passthrough() {
-    let scheduler = Arc::new(Scheduler::new());
-    let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    let controller = AnimationController::without_ticker(Duration::from_millis(300));
     controller.set_value(1.0);
     let opacity: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
 

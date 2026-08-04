@@ -10,15 +10,19 @@
 //! The full production loop, no shortcuts:
 //!
 //! ```text
-//! AnimationController::repeat(reverse) → Ticker on the GLOBAL Scheduler
-//!   → ticker registration fires the scheduler's frame-scheduled hook
-//!   → AppRuntime's frame_wake_callback wakes the platform
-//!   → runner pumps handle_begin_frame/handle_draw_frame on the frame
+//! AnimationController::repeat(reverse) → registered with the realm's Vsync
+//!   → the realm ticks Vsync once per frame (`UiRealm::draw_frame`)
 //!   → the controller's Listenable notification marks this AnimatedView's
 //!     element dirty (see `flui_view::AnimatedView`) → `build` recolors the
 //!     leaf render object from the controller's current value
-//!   → next tick re-registers the ticker → next wake → …
+//!   → next frame, next tick → …
 //! ```
+//!
+//! There is no process-global scheduler to reach for any more (each realm
+//! now owns its own): the controller is built with
+//! [`AnimationController::without_ticker`] and driven entirely through the
+//! ambient `VsyncScope` the realm wraps every mounted tree in — the same
+//! seam `AnimatedSize`/`ImplicitController` use internally.
 //!
 //! The loop is self-sustaining and STOPS sustaining itself the moment
 //! the controller stops — no busy-looping while idle.
@@ -48,15 +52,16 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flui_animation::{Animation, AnimationController};
-use flui_app::{Scheduler, run_app};
-use flui_foundation::{HasInstance, Listenable};
+use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
+use flui_app::run_app;
+use flui_foundation::Listenable;
 use flui_objects::RenderColoredBox;
 use flui_types::{Color, Size, geometry::px};
 use flui_view::{
-    AnimatedView, BuildContext, IntoView, RenderView, StatefulView, StatelessView, View, ViewExt,
-    ViewState, impl_animated_view,
+    AnimatedView, BuildContext, BuildContextExt, IntoView, RenderView, StatefulView, StatelessView,
+    View, ViewExt, ViewState, impl_animated_view,
 };
+use flui_widgets::VsyncScope;
 
 /// Env var that turns the frame histogram on; see the module doc.
 const FRAME_HISTOGRAM_ENV_VAR: &str = "FLUI_FRAME_HISTOGRAM";
@@ -171,17 +176,18 @@ impl App {
     /// (`examples/screenshot.rs`, which mounts and captures a single frame
     /// at t=0 without ever starting the controller) go through.
     pub fn new() -> Self {
-        // `Scheduler` is a cheap handle over shared `Arc` state, so cloning
-        // the global singleton yields a handle onto the SAME registries the
-        // runner pumps every frame — the controller's ticker actually ticks
-        // once `main` starts it. The screenshot harness never starts it, so
-        // touching the singleton here is harmless there too (it mounts its
-        // own separate `HeadlessBinding` tree).
-        let scheduler = Arc::new(Scheduler::instance().clone());
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(1400),
-            scheduler,
-        ));
+        // No ticker: there is no process-global scheduler to reach for any
+        // more (each realm now owns its own). `AnimatedBoxDemoState::init_state`
+        // registers this controller with the ambient `VsyncScope` the realm
+        // wraps every mounted tree in — the same seam `AnimatedSize` uses
+        // internally — so it advances once mounted under a real realm.
+        // `repeat(true)` happens there too, after registration, not here:
+        // the screenshot harness mounts this tree without ever registering
+        // (a headless `HeadlessBinding` tree with no `VsyncScope`), so this
+        // constructor alone must never start the run.
+        let controller = Arc::new(AnimationController::without_ticker(Duration::from_millis(
+            1400,
+        )));
 
         Self {
             controller,
@@ -215,7 +221,10 @@ impl StatefulView for AnimatedBoxDemo {
     type State = AnimatedBoxDemoState;
 
     fn create_state(&self) -> Self::State {
-        AnimatedBoxDemoState
+        AnimatedBoxDemoState {
+            controller: Arc::clone(&self.controller),
+            registration: None,
+        }
     }
 }
 
@@ -227,9 +236,36 @@ impl AnimatedView for AnimatedBoxDemo {
 
 impl_animated_view!(AnimatedBoxDemo);
 
-struct AnimatedBoxDemoState;
+struct AnimatedBoxDemoState {
+    controller: Arc<AnimationController>,
+    /// The ambient `Vsync` this state registered with, plus the
+    /// registration handle -- `None` when mounted with no `VsyncScope`
+    /// above it (the headless screenshot harness's tree), in which case the
+    /// controller simply never advances.
+    registration: Option<(Vsync, VsyncRegistration)>,
+}
 
 impl ViewState<AnimatedBoxDemo> for AnimatedBoxDemoState {
+    /// Lifecycle-only (ADR-0021, port-check trigger #22): registers with the
+    /// ambient `VsyncScope` and starts the bounce here, never from `build`.
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
+            let registration = vsync.register((*self.controller).clone());
+            self.registration = Some((vsync, registration));
+        }
+        // Bounce 0 → 1 → 0 forever. A freshly built controller always
+        // accepts `repeat()`.
+        self.controller
+            .repeat(true)
+            .expect("a freshly created controller accepts repeat()");
+    }
+
+    fn dispose(&mut self) {
+        if let Some((vsync, registration)) = self.registration.take() {
+            vsync.unregister(registration);
+        }
+    }
+
     fn build(&self, view: &AnimatedBoxDemo, _ctx: &dyn BuildContext) -> impl IntoView {
         if view.histogram_enabled {
             view.histogram.lock().record(Instant::now());
@@ -256,10 +292,8 @@ fn main() {
         );
     }
 
-    // Bounce 0 → 1 → 0 forever.
-    app.controller
-        .repeat(true)
-        .expect("a freshly created controller accepts repeat()");
-
+    // The bounce itself starts once mounted -- see
+    // `AnimatedBoxDemoState::init_state`, which registers with the ambient
+    // `VsyncScope` before calling `repeat(true)`.
     run_app(app);
 }

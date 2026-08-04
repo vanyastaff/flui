@@ -98,7 +98,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Scheduler, Vsync};
+use flui_animation::{Animation, AnimationController, Vsync};
 use flui_foundation::{ValueKey, ViewKey};
 use flui_types::Color;
 use flui_view::element::ElementKind;
@@ -775,7 +775,7 @@ fn reentering_a_still_dismissing_key_starts_a_fresh_entry_not_a_duplicate() {
 /// over the reverse duration.
 #[test]
 fn demoting_an_entry_still_at_the_lower_bound_dismisses_it_immediately() {
-    let controller = AnimationController::new(RUN, Arc::new(Scheduler::new()));
+    let controller = AnimationController::without_ticker(RUN);
     assert_eq!(controller.value(), 0.0);
     let _ = controller.reverse();
     assert_eq!(
@@ -816,7 +816,7 @@ fn does_not_crash_at_zero_area() {
 #[test]
 fn reverse_needs_a_detection_tick_before_progress_is_observable() {
     let vsync = Vsync::new();
-    let controller = AnimationController::new(RUN, Arc::new(Scheduler::new()));
+    let controller = AnimationController::without_ticker(RUN);
     controller.set_value(1.0);
     let root = VsyncScope::new(
         vsync.clone(),

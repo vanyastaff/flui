@@ -3242,8 +3242,7 @@ fn harness_opacity_paints_with_alpha_layer() {
 // ── RenderAnimatedOpacity ────────────────────────────────────────────────
 
 fn ticking_controller(ms: u64, value: f32) -> AnimationController {
-    let controller =
-        AnimationController::new(Duration::from_millis(ms), Arc::new(Scheduler::new()));
+    let controller = AnimationController::new(Duration::from_millis(ms), &Scheduler::new());
     controller.set_value(value);
     controller
 }
@@ -10227,8 +10226,7 @@ fn harness_table_unset_cell_alignment_follows_a_later_default_change_but_an_expl
 // `attach`) is drained on the very next `pump()`/`run_frame()` after a tick.
 
 fn animated_size_controller(ms: u64) -> (AnimationController, AnimationController) {
-    let controller =
-        AnimationController::new(Duration::from_millis(ms), Arc::new(Scheduler::new()));
+    let controller = AnimationController::new(Duration::from_millis(ms), &Scheduler::new());
     let driver = controller.clone();
     (controller, driver)
 }
@@ -11024,7 +11022,7 @@ fn harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_c
 #[test]
 fn harness_sliver_persistent_header_floating_snap_animation_drives_effective_scroll_offset_across_ticks()
  {
-    let ctl = AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+    let ctl = AnimationController::new(Duration::from_millis(100), &Scheduler::new());
     let driver = ctl.clone();
     let header: RenderSliverFloatingPersistentHeader =
         RenderSliverFloatingPersistentHeader::new(40.0, 120.0, Some(ctl)).with_snap_configuration(

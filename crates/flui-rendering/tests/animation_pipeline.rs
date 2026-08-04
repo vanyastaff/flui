@@ -35,7 +35,7 @@ type BoxedRenderObject =
     Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
 
 fn controller() -> AnimationController {
-    AnimationController::new(Duration::from_secs(1), Arc::new(Scheduler::new()))
+    AnimationController::new(Duration::from_secs(1), &Scheduler::new())
 }
 
 fn frame(owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {

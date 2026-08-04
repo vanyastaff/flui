@@ -30,107 +30,20 @@
 //! *ownership* (one struct, one thread-local slot instead of two), not the
 //! dispatch/teardown semantics those functions implement.
 
-use std::marker::PhantomData;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use flui_foundation::{HasInstance, PresentationId, RealmId};
-use flui_scheduler::{AsyncDriver, LocalPostFrameLane, Scheduler, SchedulerPhase};
+use flui_foundation::{PresentationId, RealmId};
+use flui_scheduler::{AsyncDriver, LocalPostFrameLane, Scheduler};
 
-// `SchedulerRef`, `RealmServices`, and `next_identity` below are used
-// unconditionally by `ui_realm.rs` (every `UiRealm` constructor resolves its
-// own `RealmServices` now, on every platform `UiRealm` itself compiles for,
+// `RealmServices` and `next_identity` below are used unconditionally by
+// `ui_realm.rs` (every `UiRealm` constructor resolves its own
+// `RealmServices` now, on every platform `UiRealm` itself compiles for,
 // including iOS's stub). `AppRuntime` and `SharedEngineServices` further
 // down are the loop-scoped composition root that only the non-iOS runners
 // (`runner.rs`'s desktop/android/web dispatch) instantiate, so they -- and
 // the imports only they need -- stay `#[cfg(not(target_os = "ios"))]`,
 // matching the cfg the absorbed `RealmHost`/`OWNER_PLATFORM_HOST` carried.
-
-/// Newtype over `&'static Scheduler`, resolved once in
-/// [`SharedEngineServices::resolve`] / [`RealmServices::resolve`].
-///
-/// Exists rather than a bare `&'static Scheduler` field so a future flip to
-/// a realm-owned `Scheduler` value changes one type's internals, not every
-/// call site's field-access syntax — the same "flip-containment" shape
-/// `PaintingBinding::font_system` already proves for painting (it returns
-/// `SharedFontSystem` by value, so consumers never observe the `'static`
-/// lifetime).
-///
-/// # Thread affinity
-///
-/// `Scheduler::instance()` is itself thread-local — `impl_binding_singleton!`
-/// `Box::leak`s a *separate* instance per owner thread, so the `&'static`
-/// inside this newtype is only meaningful on the thread that resolved it. A
-/// bare `&'static Scheduler` field would make this struct auto-`Send +
-/// Sync` (a `&'static T` is `Send + Sync` whenever `T: Sync`, regardless of
-/// which thread produced the reference), which would let a `SchedulerRef`
-/// minted on thread A cross to thread B and silently read thread A's phase
-/// there instead of failing to compile or panicking. That is latent today
-/// only because every current holder (`UiRealm`, `AppRuntime`) is itself
-/// already `!Send` for unrelated reasons — it turns actively wrong the
-/// moment either type's ownership model changes to allow crossing threads
-/// while still carrying a `SchedulerRef`. The `PhantomData<*const ()>`
-/// field below is the same zero-cost thread-affinity marker `UiRealm` uses
-/// for itself (`_owner_affine`), and the item-position assertion after this
-/// impl block pins `!Send + !Sync` as a compile-time fact, not a comment.
-#[derive(Clone, Copy)]
-pub(crate) struct SchedulerRef {
-    scheduler: &'static Scheduler,
-    _owner_affine: PhantomData<*const ()>,
-}
-
-impl SchedulerRef {
-    /// Mints a fresh handle from the current owner thread's `Scheduler`
-    /// singleton.
-    ///
-    /// `pub(crate)` rather than module-private: [`SharedEngineServices`] and
-    /// [`RealmServices`] below are each `resolve()`'s primary, cached
-    /// caller, but this is also the ONE typed reach a same-thread ambient
-    /// `Scheduler::instance()` call site elsewhere in this crate
-    /// (`bindings/renderer_binding.rs`) is rewritten onto, instead of
-    /// touching the raw singleton accessor directly — the newtype's
-    /// thread-affinity guarantee (see the type-level doc above) applies
-    /// equally whether the handle is cached or resolved fresh per call;
-    /// `Scheduler::instance()` itself already memoizes per owner thread, so
-    /// resolving here instead of caching costs nothing beyond the wrapper.
-    pub(crate) fn resolve() -> Self {
-        Self {
-            scheduler: Scheduler::instance(),
-            _owner_affine: PhantomData,
-        }
-    }
-
-    /// The current scheduler phase — the seam `UiRealm::drain_commands`
-    /// reads for its idle-only commit-gate debug assertion, so `UiRealm`
-    /// itself never has to call `Scheduler::instance()`.
-    pub(crate) fn phase(&self) -> SchedulerPhase {
-        self.scheduler.phase()
-    }
-
-    /// Borrow the backing scheduler directly, for the handful of
-    /// construction-time calls ([`RealmServices::resolve`]) that need more
-    /// than the phase probe. This is the one place that leaks the
-    /// `&'static` the newtype otherwise exists to contain -- it dies with
-    /// the scheduler-ownership flip: once `Scheduler` becomes an owned,
-    /// realm-local value instead of a `'static` singleton, this method
-    /// simply stops type-checking, which is the point.
-    pub(crate) fn get(&self) -> &'static Scheduler {
-        self.scheduler
-    }
-}
-
-#[cfg(test)]
-mod scheduler_ref_tests {
-    use super::*;
-
-    // Compile-time fence: a `SchedulerRef` minted on one thread must never
-    // be movable/shareable to another, because the `&'static Scheduler` it
-    // wraps is only meaningful on the thread that resolved it
-    // (`Scheduler::instance()` is thread-local underneath). Widening this
-    // bound is exactly the landmine described on `SchedulerRef`'s own
-    // rustdoc -- it would silently compile a cross-thread phase read.
-    static_assertions::assert_not_impl_any!(SchedulerRef: Send, Sync);
-}
 
 #[cfg(not(target_os = "ios"))]
 use std::cell::OnceCell;
@@ -181,12 +94,10 @@ use super::window_registry::WindowRegistry;
 /// `super::semantics_host` — since that half of the old binding was a
 /// per-window platform seam, not process-global state); only the OS-level,
 /// read-mostly accessibility flags stayed process-scoped, and this struct
-/// now owns that value directly. `scheduler` is still the process-global
-/// singleton underneath (`Scheduler::instance()`) — only the *resolution
-/// point* moves to this one constructor; it flips to an owned value once
-/// the change that retires the scheduler singleton lands. Until then this
-/// field is `pub(super)`, not part of any public surface (ADR-0027 §9:
-/// transitional runtime types stay `pub(crate)` at most).
+/// now owns that value directly. There is no `scheduler` field here any
+/// more: each realm now owns its own `Scheduler` strong root (see
+/// [`RealmServices::construct`]), so there is no process-level scheduler
+/// left for this struct to resolve.
 #[cfg(not(target_os = "ios"))]
 pub(crate) struct SharedEngineServices {
     #[cfg_attr(
@@ -210,15 +121,6 @@ pub(crate) struct SharedEngineServices {
         )
     )]
     pub(super) accessibility_features: RwLock<AccessibilityFeatures>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this change only creates the resolution seam; a later \
-                      change wires the first real consumer"
-        )
-    )]
-    pub(super) scheduler: SchedulerRef,
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -251,11 +153,12 @@ impl SharedEngineServices {
         *self.accessibility_features.write() = features;
     }
 
-    /// `wake` is `AppRuntime::frame_wake_callback()` — the same `Send +
-    /// Sync` capability [`AppRuntime::ensure_services`] passes in, extracted
-    /// by its caller BEFORE the `&mut self.services` borrow that resolves
-    /// this struct, so both can happen in one non-conflicting call.
-    fn resolve(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+    /// Resolves the process-level services that survive a scheduler that is
+    /// no longer process-global. Called once per owner thread
+    /// (`ensure_services`'s `OnceCell::get_or_init`), the same steal-proof,
+    /// idempotent guarantee the retired `AppBinding::instance()`'s
+    /// thread-local initializer gave.
+    fn resolve() -> Self {
         let painting = PaintingBinding::new();
 
         // `SharedEngineServices::resolve()` -- reached only through
@@ -272,86 +175,37 @@ impl SharedEngineServices {
         // icon-font-loading/sharding work).
         let _ = painting.font_system();
 
-        let scheduler = SchedulerRef::resolve();
-
-        // Once-per-thread wiring, moved here from the retired
-        // `AppBinding::instance()`'s TLS initializer. `ensure_services`
-        // resolving THIS struct exactly once per owner thread
-        // (`OnceCell::get_or_init`) is what makes this installation
-        // steal-proof and idempotent — the same guarantee the retired
-        // `instance()`'s thread-local initializer gave: a throwaway
-        // `UiRealm::for_test()` built alongside a live `AppRuntime` never
-        // touches this hook (it never resolves `SharedEngineServices` at
-        // all), and a second realm installed on this same thread
-        // (hot-restart) never re-registers it either.
-        //
-        // Animation-wake wiring: scheduling a frame callback (a ticker tick
-        // on the `Scheduler::instance()` singleton, e.g. an
-        // `AnimationController` built directly against it rather than a
-        // realm's Vsync registry) fires this hook on the scheduler's
-        // false->true `frame_scheduled` transition. The SAME hook also
-        // fires from the async-driver's task waker whenever a spawned
-        // future's `Waker::wake` runs, possibly from a thread that never
-        // touched this runtime at all -- `wake` is exactly the `Arc`-backed,
-        // `Send + Sync` handle that makes firing it safe regardless of
-        // which thread does so.
-        //
-        // The frames-disabled->enabled root re-dirty (an app that was
-        // `Hidden`/`Paused`/`Detached` coming back to `Resumed`/`Inactive`
-        // needs its root explicitly re-dirtied, or the next frame finds
-        // nothing dirty and stays Idle) does NOT live here as a `Scheduler`
-        // lifecycle listener. It used to, and that shipped a real bug: every
-        // production lifecycle transition runs through
-        // `runner.rs`'s `emit_lifecycle_transition`, which itself always
-        // runs inside `dispatch_platform_realm`'s dispatch window — the
-        // window during which the realm is taken OUT of `APP_RUNTIME` and
-        // only restored once the dispatch returns. A listener resolving
-        // `APP_RUNTIME` at fire time therefore always saw `None` and
-        // silently no-opped on every real transition. The fix lives at
-        // `emit_lifecycle_transition` itself, which already has the live
-        // realm in scope and needs no thread-local resolution at all — see
-        // that function's own doc.
-        scheduler
-            .get()
-            .set_on_frame_scheduled(Some(Arc::clone(&wake)));
-
         Self {
             painting,
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
-            scheduler,
         }
     }
 }
 
-/// What [`UiRealm::construct`](super::ui_realm) needs from the scheduler at
-/// construction time: `local_post_frame_lane()` and `async_driver()`
-/// (formerly `Scheduler::instance()` calls inside `ui_realm.rs` itself),
-/// plus the [`SchedulerRef`] `UiRealm` retains for its idle-only commit-gate
-/// phase probe (formerly another `Scheduler::instance()` call in the same
-/// file). Resolved once, here — never inside `ui_realm.rs` itself, so
-/// `UiRealm`'s own source performs zero `::instance()` calls.
+/// What [`UiRealm::construct`](super::ui_realm) needs to wire itself up: a
+/// fresh, realm-owned [`Scheduler`] — the strong root — plus the
+/// `local_post_frame_lane()` and `async_driver()` handles derived from that
+/// SAME scheduler (formerly `Scheduler::instance()` calls inside
+/// `ui_realm.rs` itself). Resolved once, here — never inside `ui_realm.rs`
+/// itself, so `UiRealm`'s own source performs zero `::instance()` calls.
 pub(crate) struct RealmServices {
     pub(crate) local_post_frame: LocalPostFrameLane,
     pub(crate) async_driver: AsyncDriver,
-    pub(crate) scheduler: SchedulerRef,
+    pub(crate) scheduler: Scheduler,
 }
 
 impl RealmServices {
-    /// Resolves directly from the still-singleton-backed `Scheduler`.
-    /// Because `Scheduler::instance()` memoizes per owner thread, this
-    /// yields the exact same `&'static Scheduler` a live `AppRuntime`'s own
-    /// [`SharedEngineServices`] resolved on this thread — whether or not an
-    /// `AppRuntime` has actually been touched yet. That is what lets every
-    /// `UiRealm` constructor (`new`, `with_capacity`, `for_test`,
-    /// `for_test_with_text_input`) call this instead of reaching for
-    /// `Scheduler::instance()` directly, none of them taking a process-host
+    /// Builds a brand-new `Scheduler` for a realm about to be constructed.
+    /// Every `UiRealm` constructor (`new`, `with_capacity`, `for_test`,
+    /// `for_test_with_text_input`) calls this instead of reaching for a
+    /// process-global scheduler — each realm gets its OWN strong root, torn
+    /// down when the realm drops, none of them taking a process-host
     /// parameter any more (the retired `AppBinding` is gone).
-    pub(crate) fn resolve() -> Self {
-        let scheduler = SchedulerRef::resolve();
-        let backing = scheduler.get();
+    pub(crate) fn construct() -> Self {
+        let scheduler = Scheduler::new();
         Self {
-            local_post_frame: backing.local_post_frame_lane(),
-            async_driver: backing.async_driver().clone(),
+            local_post_frame: scheduler.local_post_frame_lane(),
+            async_driver: scheduler.async_driver().clone(),
             scheduler,
         }
     }
@@ -468,6 +322,25 @@ pub(crate) struct AppRuntime {
     /// Deliberately *not* cleared by realm teardown — the loop may host
     /// another realm before it exits (hot-restart does exactly this).
     pub(super) owner_platform: Option<OwnerPlatform>,
+    /// A clone of the currently-dispatched realm's scheduler, held ONLY
+    /// while `dispatch_platform_realm` (in `runner.rs`) has taken that realm
+    /// out of `realm` above for the duration of a queued task. Without this,
+    /// [`Self::installed_realm_phase`] (`with_owner_platform`'s fence (c))
+    /// reads `None` for the realm's entire dispatched extent — not just when
+    /// no realm is installed at all — because `dispatch_platform_realm`
+    /// checks the realm OUT of this struct before running any task,
+    /// including the frame pump that drives the scheduler through
+    /// `PersistentCallbacks`. That makes the fence blind exactly when a
+    /// frame phase is actually running, which is the one case trigger #22
+    /// exists to catch. `Scheduler` is a single-`Arc` handle (see
+    /// `flui-scheduler`'s `Scheduler`/`SchedulerInner` split), so cloning it
+    /// here to survive the checkout is cheap — an `Arc::clone`, not a new
+    /// scheduler. Set at checkout, cleared at restore
+    /// (`dispatch_platform_realm`), in both cases inside the same
+    /// `catch_unwind`-guarded block that restores `realm` itself, so an
+    /// unwinding dispatched task leaves this `None` exactly as reliably as
+    /// it leaves `realm` restored.
+    pub(super) dispatched_scheduler: Option<Scheduler>,
     /// Process-level engine services. Deliberately **not** resolved in
     /// [`AppRuntime::new`] -- see [`AppRuntime::ensure_services`] for why.
     services: OnceCell<SharedEngineServices>,
@@ -533,6 +406,7 @@ impl AppRuntime {
             visible: true,
             focused: true,
             owner_platform: None,
+            dispatched_scheduler: None,
             services: OnceCell::new(),
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Arc::new(Mutex::new(None)),
@@ -563,9 +437,7 @@ impl AppRuntime {
     /// touching the thread-local is always safe to do from within a
     /// clear-guard drop.
     pub(super) fn ensure_services(&mut self) -> &SharedEngineServices {
-        let wake = self.frame_wake_callback();
-        self.services
-            .get_or_init(|| SharedEngineServices::resolve(wake))
+        self.services.get_or_init(SharedEngineServices::resolve)
     }
 
     /// Test-only introspection: whether `SharedEngineServices` has been
@@ -597,6 +469,29 @@ impl AppRuntime {
     )]
     pub(crate) fn realm(&self, id: RealmId) -> Option<&UiRealm> {
         self.realm.as_ref().filter(|realm| realm.realm_id() == id)
+    }
+
+    /// The installed realm's scheduler phase, or `None` if no realm is
+    /// installed on this thread AND no realm is currently checked out for
+    /// dispatch either — the replacement for `with_owner_platform`'s fence
+    /// (c), formerly a bare `Scheduler::instance().phase()` read.
+    ///
+    /// Falls back to [`Self::dispatched_scheduler`] when `realm` itself is
+    /// empty: `dispatch_platform_realm` takes the realm OUT of `realm` for
+    /// the entire extent of a queued task (including the frame pump that
+    /// drives `PersistentCallbacks`), so reading only `realm` here would
+    /// make this probe blind for every production frame, not merely when no
+    /// realm is installed at all. `None` (truly no realm, and none
+    /// dispatched) is vacuous-but-truthful: no realm means no frame
+    /// transaction can be in flight on this thread, so the caller's
+    /// "not mid-frame" assertion holds trivially. Storage is the single slot
+    /// until the element forest lets a realm host multiple presentations; a
+    /// future multi-realm `AppRuntime` iterates its slot set here instead.
+    pub(super) fn installed_realm_phase(&self) -> Option<flui_scheduler::SchedulerPhase> {
+        self.realm
+            .as_ref()
+            .map(|realm| realm.scheduler().phase())
+            .or_else(|| self.dispatched_scheduler.as_ref().map(Scheduler::phase))
     }
 
     // ========================================================================
@@ -851,18 +746,19 @@ mod app_runtime_tests {
         );
     }
 
-    /// `ensure_services` must actually populate all three
-    /// `SharedEngineServices` fields with live, usable handles -- reading
-    /// each one here (rather than only asserting the struct compiles) is
-    /// what proves the resolution seam works, not just that it type-checks.
+    /// `ensure_services` must actually populate both `SharedEngineServices`
+    /// fields with live, usable handles -- reading each one here (rather
+    /// than only asserting the struct compiles) is what proves the
+    /// resolution seam works, not just that it type-checks. There is no
+    /// `scheduler` field to read any more: each realm now owns its own
+    /// `Scheduler` (see `installed_realm_phase_tests`, below).
     #[test]
-    fn ensure_services_resolves_all_three_and_caches_them() {
+    fn ensure_services_resolves_both_and_caches_them() {
         let mut runtime = AppRuntime::new();
 
         let services = runtime.ensure_services();
         let _painting_image_cache = services.painting.image_cache();
         let _accessibility_features = services.accessibility_features();
-        let _phase = services.scheduler.phase();
 
         assert!(
             runtime.services.get().is_some(),
@@ -1113,39 +1009,36 @@ mod wake_and_clipboard_tests {
         assert_eq!(text.as_deref(), Some("reentrant"));
     }
 
-    /// Serializes tests that drive the owner thread's `Scheduler::instance()`
-    /// singleton, mirroring `ui_realm.rs`'s `SINGLETON_FRAME_LOCK` (both
-    /// guard the same kind of state for the same reason).
-    static WAKE_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// `ensure_services` must wire the animation-wake hook as the
-    /// install-time-captured `Send + Sync` handle
-    /// [`AppRuntime::frame_wake_callback`] returns, not a callback that
-    /// re-resolves this thread-local `AppRuntime` when the hook fires.
+    /// `AppRuntime::frame_wake_callback()` must be usable as the install-time
+    /// `Send + Sync` handle wired onto a scheduler's `on_frame_scheduled`
+    /// hook (what `install_platform_realm` now does against the just-installed
+    /// realm's own `Scheduler` — see that function's doc), never a callback
+    /// that re-resolves this thread-local `AppRuntime` when the hook fires.
     ///
-    /// Proof shape: spawn a task on the real `Scheduler::instance()`,
-    /// capture its `Waker`, then fire that `Waker` from an OS thread that
-    /// never touches `runtime`, `APP_RUNTIME`, or `Scheduler::instance()` —
-    /// and observe `needs_redraw` flip on the ORIGINAL runtime anyway. A
-    /// hook built by re-resolving `APP_RUNTIME` at fire time instead of
-    /// capturing this `Send` handle would see an empty thread-local on the
-    /// foreign thread and never flip this flag — the revert recipe for this
-    /// test. (A real instance of exactly this mistake shipped once, in the
-    /// frames-reenable-redirty logic — see `emit_lifecycle_transition`'s
-    /// doc in `runner.rs` for that story and its fix.)
+    /// Proof shape: wire the handle onto a scheduler built right here (a
+    /// stand-in for a realm's own), spawn a task on it, capture its `Waker`,
+    /// then fire that `Waker` from an OS thread that never touches `runtime`
+    /// or `APP_RUNTIME` at all — and observe `needs_redraw` flip on the
+    /// ORIGINAL runtime anyway. A hook built by re-resolving `APP_RUNTIME` at
+    /// fire time instead of capturing this `Send` handle would see an empty
+    /// thread-local on the foreign thread and never flip this flag — the
+    /// revert recipe for this test. (A real instance of exactly this mistake
+    /// shipped once, in the frames-reenable-redirty logic — see
+    /// `emit_lifecycle_transition`'s doc in `runner.rs` for that story and
+    /// its fix.)
     #[test]
-    fn ensure_services_installs_a_send_wake_hook_that_survives_a_cross_thread_fire() {
+    fn frame_wake_callback_survives_a_cross_thread_fire_once_wired_to_a_scheduler() {
         use std::sync::mpsc;
         use std::task::Waker;
         use std::time::Duration;
 
-        let _serialized = WAKE_HOOK_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        let mut runtime = AppRuntime::new();
-        let scheduler = runtime.ensure_services().scheduler.get();
+        let runtime = AppRuntime::new();
         assert!(!runtime.needs_redraw(), "precondition: no redraw pending");
+
+        // Stand-in for a realm's own scheduler; `install_platform_realm`
+        // wires this exact handle onto `realm.scheduler()` at install time.
+        let scheduler = flui_scheduler::Scheduler::new();
+        scheduler.set_on_frame_scheduled(Some(runtime.frame_wake_callback()));
 
         let stored_waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
         let stored_for_task = Arc::clone(&stored_waker);
@@ -1173,8 +1066,8 @@ mod wake_and_clipboard_tests {
         let (fired_tx, fired_rx) = mpsc::channel();
         std::thread::spawn(move || {
             // Deliberately touches nothing but the waker itself: no
-            // `runtime`, no `APP_RUNTIME`, no `Scheduler::instance()` on
-            // this thread.
+            // `runtime`, no `APP_RUNTIME`, no thread-local scheduler lookup
+            // on this thread.
             waker.wake();
             let _ = fired_tx.send(());
         });
@@ -1184,7 +1077,7 @@ mod wake_and_clipboard_tests {
 
         assert!(
             runtime.needs_redraw(),
-            "the animation-wake hook ensure_services installed must be a Send handle captured \
+            "the wake hook wired onto the scheduler must be a Send handle captured \
              at install time, not one resolved from a thread-local at fire time -- a foreign \
              OS thread has no such thread-local to resolve"
         );

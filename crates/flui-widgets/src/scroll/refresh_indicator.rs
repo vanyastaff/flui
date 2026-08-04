@@ -40,7 +40,7 @@ use std::{
     time::Duration,
 };
 
-use flui_animation::{Animation, AnimationController, Scheduler, Vsync, VsyncRegistration};
+use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::Color;
@@ -391,10 +391,10 @@ impl StatefulView for RefreshIndicator {
     fn create_state(&self) -> Self::State {
         // Wide-open bounds: pixel values from the ballistic simulation are
         // never clamped by the controller — the simulation's own `is_done`
-        // terminates the run. NEG_INFINITY < INFINITY satisfies the bounds check.
-        let fling_controller = AnimationController::with_bounds(
+        // terminates the run. NEG_INFINITY < INFINITY satisfies the bounds
+        // check. No ticker: `Vsync` drives this controller once registered.
+        let fling_controller = AnimationController::without_ticker_bounds(
             Duration::from_millis(1),
-            Arc::new(Scheduler::new()),
             f32::NEG_INFINITY,
             f32::INFINITY,
         )

@@ -27,15 +27,13 @@ mod frame_histogram;
 use flui_app::run_app;
 
 fn main() {
-    // Kept alive for the rest of `main` (which never returns before
-    // `run_app` does) so its ticker keeps registering with the scheduler;
-    // dropping it would deregister the ticker and silently stop the
-    // histogram this binding exists to produce. Any of its own log lines
-    // emitted before `run_app` installs the subscriber (above) are dropped
-    // by the no-op default dispatcher — harmless, since the periodic
-    // histogram windows it exists to report only start firing once the
-    // event loop (and therefore the subscriber) is up.
-    let _frame_histogram_controller = frame_histogram::install_if_requested();
-
-    run_app(tree::DemoApp);
+    // `HistogramProbe::wrap` is a no-op wrapper (identical mounted behavior)
+    // when `FLUI_FRAME_HISTOGRAM` is unset. When set, it mounts a
+    // free-running controller registered with the ambient `VsyncScope` —
+    // see `frame_histogram`'s module doc. Any of its own log lines emitted
+    // before `run_app` installs the subscriber (above) are dropped by the
+    // no-op default dispatcher — harmless, since the periodic histogram
+    // windows it exists to report only start firing once the event loop
+    // (and therefore the subscriber) is up.
+    run_app(frame_histogram::HistogramProbe::wrap(tree::DemoApp));
 }

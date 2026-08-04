@@ -469,7 +469,7 @@ mod tests {
     use flui_types::geometry::px;
 
     fn controller(ms: u64) -> AnimationController {
-        AnimationController::new(Duration::from_millis(ms), Arc::new(Scheduler::new()))
+        AnimationController::new(Duration::from_millis(ms), &Scheduler::new())
     }
 
     fn render(ms: u64) -> RenderAnimatedSize {

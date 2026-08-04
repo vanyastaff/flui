@@ -504,8 +504,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             return;
         };
 
-        let controller =
-            AnimationController::new(Duration::from_millis(200), Arc::new(Scheduler::new()));
+        let controller = AnimationController::new(Duration::from_millis(200), &Scheduler::new());
         let registration = vsync.register(controller.clone());
 
         // Oracle: `_animate()`'s `ticker.then(...)` re-invokes `_animate` if
@@ -754,7 +753,7 @@ mod tests {
     // ---- start_press_fade (pressed_opacity(None) truly starts no run) ----
 
     fn fresh_controller() -> AnimationController {
-        AnimationController::new(Duration::from_millis(200), Arc::new(Scheduler::new()))
+        AnimationController::new(Duration::from_millis(200), &Scheduler::new())
     }
 
     /// Red-check: delete the `pressed_opacity.is_none()` guard in

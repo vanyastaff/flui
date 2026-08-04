@@ -541,11 +541,9 @@ impl BackGestureDetectorState {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_interaction::arena::GestureArena;
-    use flui_scheduler::Scheduler;
-
     use super::*;
     use crate::navigator::overlay_route::SimpleRoute;
+    use flui_interaction::arena::GestureArena;
 
     fn navigator_with_two_routes() -> (NavigatorHandle, RouteId, RouteId) {
         let navigator = NavigatorHandle::new();
@@ -560,9 +558,13 @@ mod tests {
         (navigator, root, top)
     }
 
+    // Real, but permanently detached, ticker -- not `without_ticker`:
+    // `BackGestureController` reads `self.controller.is_animating()`
+    // throughout, which is intentionally ticker-based (Flutter parity:
+    // `Ticker.isActive`) — see `transition_route.rs::install`'s doc for the
+    // full rationale. `with_detached_ticker` needs no `Scheduler` at all.
     fn controller(ms: u64) -> AnimationController {
-        let scheduler = Arc::new(Scheduler::new());
-        AnimationController::new(Duration::from_millis(ms), scheduler)
+        AnimationController::with_detached_ticker(Duration::from_millis(ms))
     }
 
     #[test]

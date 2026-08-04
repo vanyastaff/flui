@@ -42,10 +42,10 @@ fn update_curve_direction(direction: &Mutex<Option<AnimationStatus>>, status: An
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Arc::new(Scheduler::new());
+/// let scheduler = Scheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     scheduler,
+///     &scheduler,
 /// ));
 ///
 /// let curved = CurvedAnimation::new(controller, Curves::EaseInOut);
@@ -198,10 +198,10 @@ mod tests {
 
     #[test]
     fn test_curved_animation() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let curved = CurvedAnimation::new(
@@ -220,10 +220,10 @@ mod tests {
 
     #[test]
     fn test_curved_animation_status() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let curved = CurvedAnimation::new(
@@ -246,10 +246,10 @@ mod tests {
         // B2 regression: a listener on a CurvedAnimation must fire when the
         // parent's value changes. Previously the combinator never subscribed to
         // its parent, so AnimatedBuilder-on-a-curve silently never rebuilt.
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         let curved = CurvedAnimation::new(
             controller.clone() as Arc<dyn Animation<f32>>,
@@ -280,10 +280,10 @@ mod tests {
         // mid-run; the reverse curve only applies to a run entered in
         // Reverse. Without the lock, a mid-run `reverse()` would swap curves
         // underneath the value and cause a visual jump.
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         // Forward curve is the identity cubic; the reverse curve is strongly
         // sub-linear at t=0.5, so any curve swap is observable there.
@@ -330,10 +330,10 @@ mod tests {
         // setter's own `_internalSetValue`, pins the entry direction; a
         // same-run flip (here, `reverse()` with no intervening Dismissed/
         // Completed) keeps that pinned curve to avoid a visual discontinuity.
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         let curved = CurvedAnimation::new(
             controller.clone() as Arc<dyn Animation<f32>>,
@@ -362,10 +362,10 @@ mod tests {
         // Flutter `_updateCurveDirection` resets `_curveDirection` to null on
         // Dismissed/Completed, so a run that genuinely starts fresh after
         // settling picks its own curve rather than inheriting a stale pin.
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         let curved = CurvedAnimation::new(
             controller.clone() as Arc<dyn Animation<f32>>,
@@ -395,10 +395,10 @@ mod tests {
         // — the seed runs BEFORE the listener is registered, so a
         // `CurvedAnimation` built while the parent is ALREADY mid-run captures
         // the run's entering direction immediately.
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         controller.set_value(0.5);
         let _ = controller.forward(); // already Forward before CurvedAnimation exists
@@ -430,10 +430,10 @@ mod tests {
         // The shared ParentSubscription must remove its listener from the parent
         // when the last clone drops, so a long-lived controller does not
         // accumulate dead callbacks.
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         let before = controller.debug_value_listener_count();
         {

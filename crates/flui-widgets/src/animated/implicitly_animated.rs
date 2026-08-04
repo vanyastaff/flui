@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{
-    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves,
-    Scheduler, Tween, Vsync, VsyncRegistration,
+    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves, Tween,
+    Vsync, VsyncRegistration,
 };
 use flui_foundation::Listenable;
 use flui_types::geometry::Lerp;
@@ -71,11 +71,9 @@ pub(crate) struct ImplicitController {
 impl ImplicitController {
     /// A controller at rest (value `0`, `Dismissed`) with `curve` applied.
     pub(crate) fn new(duration: Duration, curve: ArcCurve) -> Self {
-        // A fresh scheduler: on a real display its ticker would drive the
-        // controller off wall-clock time; under a `VsyncScope` the binding drives
-        // it deterministically via `tick_at` instead (this scheduler is never
-        // pumped), so the two paths never double-advance the controller.
-        let controller = AnimationController::new(duration, Arc::new(Scheduler::new()));
+        // No ticker: `VsyncScope` drives this controller deterministically
+        // via `tick_at` instead.
+        let controller = AnimationController::without_ticker(duration);
         let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
         let curved = CurvedAnimation::new(parent, curve.clone());
         Self {

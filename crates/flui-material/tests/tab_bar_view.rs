@@ -13,7 +13,6 @@ mod common;
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, tight};
@@ -213,7 +212,7 @@ impl ViewState<AnimationProbe> for AnimationProbeState {
 #[test]
 fn an_inactive_tabs_animation_is_muted_by_ticker_mode() {
     let vsync = Vsync::new();
-    let animation = AnimationController::new(Duration::from_secs(1), Arc::new(Scheduler::new()));
+    let animation = AnimationController::new(Duration::from_secs(1), &Scheduler::new());
     let tab_controller = TabController::new(2, 0);
 
     let probe_controller = animation.clone();

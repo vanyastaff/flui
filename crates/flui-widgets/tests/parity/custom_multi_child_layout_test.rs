@@ -869,9 +869,12 @@ fn a_child_without_a_layout_id_names_the_missing_id_in_the_captured_log() {
 /// test with `--exact <name>`, so every `#[test]` fn gets its own OS
 /// process and there is no other test's tracing activity in the same
 /// process to race against at all — the same precondition this codebase
-/// already leans on for flui-app's remaining process-global singletons (see
-/// `SINGLETON_WINDOW_TEST_LOCK`/`SCHEDULER_PHASE_TEST_LOCK` in `AGENTS.md`'s
-/// Testing Quirks). This lock still
+/// already leans on for flui-app's genuinely process-global ambient state
+/// (see the "Testing Quirks" section of `AGENTS.md`, and the ambient-reach
+/// ratchet in `docs/runtime-contract.toml` for the named residuals such as
+/// `global_timer_service`/`Registry::global`/`FONT_SYSTEM` — `AppBinding`
+/// and `Scheduler` are no longer singletons at all, so there is no lock left
+/// to name for them). This lock still
 /// serializes these two tests against each other as a defensive backstop
 /// (e.g. a future `--test-threads>1` invocation scoped to just this file),
 /// but it does not and cannot substitute for nextest's process isolation —

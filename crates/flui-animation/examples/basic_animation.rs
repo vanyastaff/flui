@@ -11,11 +11,11 @@ fn main() {
     println!("FLUI Animation Example\n");
 
     // Create a scheduler
-    let scheduler = Arc::new(Scheduler::new());
+    let scheduler = Scheduler::new();
 
     // 1. Basic AnimationController
     println!("1. AnimationController:");
-    let controller = AnimationController::new(Duration::from_millis(300), scheduler.clone());
+    let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 
     controller.set_value(0.0);
     println!("   Initial value: {}", controller.value());
@@ -74,7 +74,7 @@ fn main() {
 
     // 5. CompoundAnimation
     println!("\n5. CompoundAnimation (Addition):");
-    let controller2 = AnimationController::new(Duration::from_millis(300), scheduler);
+    let controller2 = AnimationController::new(Duration::from_millis(300), &scheduler);
     controller2.set_value(0.3);
 
     let compound = CompoundAnimation::add(

@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, Scheduler, Vsync, VsyncRegistration,
+    Animation, AnimationController, AnimationStatus, Curves, Vsync, VsyncRegistration,
 };
 use flui_foundation::ListenerId;
 use flui_objects::RenderAnimatedSize;
@@ -155,12 +155,17 @@ impl StatefulView for AnimatedSize {
     type State = AnimatedSizeState;
 
     fn create_state(&self) -> Self::State {
-        // A fresh, never-pumped scheduler: on a real display its ticker would
-        // drive the controller off wall-clock time; under a `VsyncScope` the
-        // binding drives it deterministically via `tick_at` instead, so the
-        // two paths never double-advance (mirrors `ImplicitController::new`,
-        // `crate::animated::implicitly_animated`).
-        let controller = AnimationController::new(self.duration, Arc::new(Scheduler::new()));
+        // A real, but permanently detached, ticker -- not `without_ticker`:
+        // this controller's `is_animating()` is read by `RenderAnimatedSize`
+        // (`flui-objects`), and `is_animating` is intentionally
+        // ticker-based, not status-based (Flutter parity: `Ticker.isActive`)
+        // — a ticker-less controller can never report `is_animating() ==
+        // true`. `VsyncScope` still drives the actual value ticks
+        // deterministically via `tick_at`; `with_detached_ticker` gives this
+        // controller a ticker whose `start()`/`stop()`/`mute()` transition
+        // real ticker state without needing a `Scheduler` at all — no
+        // allocation for something nothing was ever going to pump.
+        let controller = AnimationController::with_detached_ticker(self.duration);
         if let Some(reverse_duration) = self.reverse_duration {
             controller.set_reverse_duration(reverse_duration);
         }
@@ -313,8 +318,9 @@ mod tests {
     use crate::SizedBox;
 
     fn render_view(alignment: Alignment, clip_behavior: Clip) -> AnimatedSizeRenderView {
-        let controller =
-            AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        // See `create_state`'s doc: a real (detached) ticker is required for
+        // `is_animating()` correctness, even though it never actually fires.
+        let controller = AnimationController::with_detached_ticker(Duration::from_millis(100));
         AnimatedSizeRenderView {
             controller,
             curve: ArcCurve::new(Curves::Linear),

@@ -52,7 +52,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Scheduler, Vsync, VsyncRegistration};
+use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::view::ScrollPosition;
@@ -297,11 +297,12 @@ impl StatefulView for Scrollable {
     fn create_state(&self) -> Self::State {
         // Wide-open bounds: pixel values from the ballistic simulation are
         // never clamped — the simulation's own `is_done` terminates the run.
-        // `NEG_INFINITY < INFINITY` satisfies `with_bounds`'s lower < upper
-        // check; `value.clamp(NEG_INF, INF)` is the identity on finite f32.
-        let fling_controller = AnimationController::with_bounds(
+        // `NEG_INFINITY < INFINITY` satisfies `without_ticker_bounds`'s
+        // lower < upper check; `value.clamp(NEG_INF, INF)` is the identity on
+        // finite f32. No ticker: `Vsync` drives this controller once
+        // registered below.
+        let fling_controller = AnimationController::without_ticker_bounds(
             Duration::from_millis(1),
-            Arc::new(Scheduler::new()),
             f32::NEG_INFINITY,
             f32::INFINITY,
         )
@@ -390,9 +391,9 @@ impl ViewState<Scrollable> for ScrollableState {
             self.vsync = Some(vsync);
             self.vsync_registration = Some(registration);
         }
-        // If no VsyncScope is present, the fling controller falls back to its
-        // own wall-clock Scheduler ticker — animations still work on a real
-        // display, they simply cannot be driven deterministically in tests.
+        // If no VsyncScope is present, the fling controller has no ticker at
+        // all (built via `without_ticker_bounds`) and simply never advances —
+        // there is no wall-clock fallback.
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {

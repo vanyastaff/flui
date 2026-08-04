@@ -161,8 +161,6 @@ mod post_frame;
 pub use web_time::Instant;
 // Re-exports - Duration types
 pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};
-// Re-export from flui-foundation for binding pattern
-pub use flui_foundation::{BindingBase, HasInstance};
 pub use frame::{
     AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder,
     LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback,
@@ -170,7 +168,9 @@ pub use frame::{
 };
 // Re-exports - ID types (unified with flui-foundation)
 pub use id::{CallbackId, Id, IdGenerator, Marker, markers};
-pub use scheduler::{FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder};
+pub use scheduler::{
+    FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder, WeakScheduler,
+};
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 pub use ticker::{
     Ticker, TickerCallback, TickerCanceled, TickerFuture, TickerFutureOrCancel, TickerGroup,

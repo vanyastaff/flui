@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_interaction::FocusNode;
-use flui_scheduler::Scheduler;
 use flui_view::prelude::{BuildContext, StatefulView, StatelessView};
 use flui_view::{
     BoxedView, BuildContextExt, BuildOwner, ElementTree, ErrorView, IntoView, ViewExt, ViewState,
@@ -216,7 +215,7 @@ impl ViewState<AnimationProbe> for AnimationProbeState {
 }
 
 fn animation_controller() -> AnimationController {
-    AnimationController::new(Duration::from_secs(1), Arc::new(Scheduler::new()))
+    AnimationController::without_ticker(Duration::from_secs(1))
 }
 
 type AnimationProbeFixture = (

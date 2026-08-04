@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use flui_foundation::HasInstance;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::prelude::*;
@@ -199,17 +198,19 @@ fn pump_frame_still_polls_the_async_driver_exactly_once_per_frame() {
     );
 }
 
-/// The binding drives its **own** scheduler, never the `Scheduler::instance()`
-/// singleton. A post-frame callback parked on the singleton must not fire here —
-/// otherwise a headless test would silently "prove" things about production.
+/// The binding drives its **own** scheduler, never some other, unrelated one.
+/// A post-frame callback parked on an unrelated scheduler must not fire here —
+/// otherwise a headless test would silently "prove" things about a scheduler
+/// it never actually pumped.
 #[test]
-fn pump_frame_drives_the_binding_local_scheduler_not_the_singleton() {
+fn pump_frame_drives_the_binding_local_scheduler_not_an_unrelated_one() {
     let (mut binding, _pipeline, _root) = binding_with_one_box();
 
-    let singleton_fired = Arc::new(AtomicBool::new(false));
-    let singleton_cb = Arc::clone(&singleton_fired);
-    flui_scheduler::Scheduler::instance().add_post_frame_callback(Box::new(move |_| {
-        singleton_cb.store(true, Ordering::SeqCst);
+    let unrelated_scheduler = flui_scheduler::Scheduler::new();
+    let unrelated_fired = Arc::new(AtomicBool::new(false));
+    let unrelated_cb = Arc::clone(&unrelated_fired);
+    unrelated_scheduler.add_post_frame_callback(Box::new(move |_| {
+        unrelated_cb.store(true, Ordering::SeqCst);
     }));
 
     let local_fired = Arc::new(AtomicBool::new(false));
@@ -227,7 +228,7 @@ fn pump_frame_drives_the_binding_local_scheduler_not_the_singleton() {
         "the binding's own queue drains"
     );
     assert!(
-        !singleton_fired.load(Ordering::SeqCst),
-        "pump_frame must not drive the global singleton's queue"
+        !unrelated_fired.load(Ordering::SeqCst),
+        "pump_frame must not drive an unrelated scheduler's queue"
     );
 }

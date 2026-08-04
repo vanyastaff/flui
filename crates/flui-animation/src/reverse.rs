@@ -27,10 +27,10 @@ use std::sync::Arc;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Arc::new(Scheduler::new());
+/// let scheduler = Scheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     scheduler,
+///     &scheduler,
 /// ));
 ///
 /// let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
@@ -140,10 +140,10 @@ mod tests {
 
     #[test]
     fn test_reverse_animation_value() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
@@ -168,10 +168,10 @@ mod tests {
 
     #[test]
     fn test_reverse_animation_status() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
@@ -200,10 +200,10 @@ mod tests {
 
     #[test]
     fn test_reverse_animation_at_extremes() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);

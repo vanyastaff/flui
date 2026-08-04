@@ -10,7 +10,6 @@
 //! bump makes the reverse leg advance from 1.0 over its own timeline. No tree is
 //! bound here, so the registry is exercised in isolation — and no `thread::sleep`.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus, Scheduler};
@@ -22,8 +21,8 @@ const FRAME: Duration = Duration::from_millis(20);
 #[test]
 fn second_run_ticks_from_its_own_start_not_a_stale_anchor() {
     let mut binding = HeadlessBinding::new();
-    let scheduler = Arc::new(Scheduler::new());
-    let controller = AnimationController::new(Duration::from_millis(100), scheduler);
+    let scheduler = Scheduler::new();
+    let controller = AnimationController::new(Duration::from_millis(100), &scheduler);
 
     // Register before starting so the binding cleanly re-anchors on the first
     // observed run-generation bump.
