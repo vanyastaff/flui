@@ -440,7 +440,11 @@ impl WindowsWindow {
                     restore_bounds.size.height.0,
                     SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
                 ) {
-                    tracing::warn!(?hwnd, ?error, "SetWindowPos (exit fullscreen restore) failed");
+                    tracing::warn!(
+                        ?hwnd,
+                        ?error,
+                        "SetWindowPos (exit fullscreen restore) failed"
+                    );
                 }
 
                 // Update state

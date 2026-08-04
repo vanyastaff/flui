@@ -148,9 +148,17 @@
 //! ```
 
 // Platform FFI is the sanctioned `unsafe` boundary of the workspace (Win32 /
-// AppKit / headless backends); every block carries a `// SAFETY:` comment.
-// Permanent, unlike the tracked debt below.
-#![allow(unsafe_code)]
+// AppKit / Android NDK / wasm-bindgen backends — `headless` has none). The
+// crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
+// FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
+// `platforms::winit`, `platforms::android::memory`) carries its own
+// module-level `#![allow(unsafe_code)]` where it is declared, and the two
+// small marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
+// Every `unsafe` block anywhere in this crate still carries a `// SAFETY:`
+// comment stating the invariant that makes it sound — the workspace lint is
+// scoped per-crate, not proof that every site is documented; see the
+// per-crate documentation coverage tracked in the root `Cargo.toml`'s
+// `undocumented_unsafe_blocks` note.
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 

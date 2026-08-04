@@ -37,6 +37,11 @@
 // this backend deliberately stays on the single cocoa/objc stack until a
 // dedicated objc2 migration replaces it wholesale.
 #![allow(deprecated)]
+// This module (and its submodules) is one of the workspace's sanctioned
+// `unsafe` FFI islands — direct AppKit/Cocoa objc calls have no safe
+// wrapper. The workspace lint `unsafe_code = "warn"` is opted out here, at
+// the module boundary, rather than for the whole crate (see `lib.rs`).
+#![allow(unsafe_code)]
 
 mod clipboard;
 mod display;

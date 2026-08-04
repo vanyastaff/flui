@@ -114,14 +114,25 @@ impl<T> Task<T> {
 impl<T: Send + 'static> Future for Task<T> {
     type Output = T;
 
+    // `unsafe` here is Pin-projection boilerplate (see the two `// SAFETY:`
+    // comments below), not FFI — item-level rather than a module- or
+    // crate-level allow, since this is the only unsafe in the file.
+    #[allow(unsafe_code)]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // `TaskState::Spawned` — the only arm that consults the waker — does not
         // exist on wasm32, where every Task is already `Ready`.
         #[cfg(target_arch = "wasm32")]
         let _ = cx;
 
-        // SAFETY: We only access the inner state through the pin, and TaskState
-        // variants are safe to move when accessed through Pin projection.
+        // SAFETY: `get_unchecked_mut` requires that moving the pointee after
+        // this call cannot violate a pinning invariant `Task<T>` depends on.
+        // `Task<T>` has no `PhantomPinned` field and neither `TaskState`
+        // variant is self-referential: `Option<T>` and `tokio::task::JoinHandle<T>`
+        // are themselves `Unpin` regardless of `T` (the handle is a plain
+        // index into the runtime, not a borrow into this struct), so nothing
+        // here actually needs to stay pinned — this projection cannot
+        // produce a dangling self-reference because there is no
+        // self-reference to begin with.
         let this = unsafe { self.get_unchecked_mut() };
         match &mut this.0 {
             TaskState::Ready(val) => {
@@ -130,7 +141,12 @@ impl<T: Send + 'static> Future for Task<T> {
             }
             #[cfg(not(target_arch = "wasm32"))]
             TaskState::Spawned(handle) => {
-                // SAFETY: JoinHandle is Unpin, so pinning is safe
+                // SAFETY: `tokio::task::JoinHandle<T>` implements `Unpin`
+                // unconditionally (it holds no self-referential data — just
+                // a handle into the runtime), so pinning it via
+                // `new_unchecked` imposes no obligation this code must
+                // uphold; an `Unpin` type can be soundly pinned and unpinned
+                // at will.
                 let handle = unsafe { Pin::new_unchecked(handle) };
                 match handle.poll(cx) {
                     Poll::Ready(Ok(val)) => Poll::Ready(val),
@@ -139,8 +155,22 @@ impl<T: Send + 'static> Future for Task<T> {
                         if join_error.is_panic() {
                             std::panic::resume_unwind(join_error.into_panic());
                         }
-                        // Task was cancelled — this shouldn't happen since we hold the handle
-                        panic!("Task was unexpectedly cancelled");
+                        // Cancellation without an explicit `abort()` call (not exposed by
+                        // this API) means the tokio runtime itself was dropped/shut down
+                        // while this handle was still being polled — holding the
+                        // `JoinHandle` does NOT prevent that. `Task<T>: Future<Output = T>`
+                        // has no error channel to report it through, so this is a genuine
+                        // invariant violation of "the runtime outlives tasks still being
+                        // polled", not a scenario that can be handled by returning a value.
+                        // Converting this to a typed error would mean `Output = Result<T, _>`
+                        // for every `Task<T>` in the crate, touching every await site —
+                        // a breaking change that needs its own dedicated review and test
+                        // pass, not a drive-by edit alongside unrelated work.
+                        panic!(
+                            "BUG: Task was cancelled while its JoinHandle was still held — \
+                             the tokio runtime was dropped/shut down while this task was \
+                             still being polled"
+                        );
                     }
                     Poll::Pending => Poll::Pending,
                 }
