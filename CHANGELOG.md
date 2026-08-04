@@ -13,6 +13,75 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- **Runtime.1 conformance registry and public-API freeze gate** (#576):
+  `docs/runtime-conformance.toml` is the machine-readable inventory of every
+  normative ADR-0027/0037/0029/0039 clause (state verified against current
+  code, evidence or an owning issue) and of every public runtime/platform/
+  scheduler/raster surface, with a stability classification (stable-candidate
+  / experimental / transitional / removal-target), thread affinity, actual
+  owner, and failure semantics. `scripts/check-runtime-conformance.sh`
+  validates citation existence, evidence rules (documentation is never
+  implementation evidence), forbidden retired identifiers, and registration
+  nets for ambient singletons and SP-6 lock exemptions. Wired as
+  `just runtime-conformance-check`, into `just ci`, and into CI's `checks`
+  gate.
+- **Generational presentation addressing** (#585): every frame is now
+  addressed by `PresentationAddress` (`realm_id` + `presentation_id`,
+  promoted to `flui-foundation`) instead of a bare `presentation_id`, since
+  two different `UiRealm` incarnations can mint an identical `PresentationId`
+  and only the full pair disambiguates a frame's owner. `PlatformWindow::id()`
+  gives every window a stable identity; `SceneSnapshot` and every
+  `RasterAck`/`PumpOutcome` variant (now individually `#[non_exhaustive]`)
+  carry the full address; `RasterOwner` rejects a submit whose address
+  doesn't match (`RasterSubmitError::AddressMismatch`) instead of accepting
+  it on a partial (`presentation_id`-only) match. `WindowRegistry` is
+  flui-app's sole native-window-to-presentation map. A new coalesced
+  `SurfaceState` slot carries `SurfaceOutdated`/`DeviceLost` outside the
+  lossy telemetry ack channel, since both are recovery-critical.
+- **`OwnerPlatform` capability and typed owner-lane proxy** (#577, ADR-0039
+  slice 2): `OwnerPlatform` (a `!Send + !Sync` owner-thread capability,
+  minted only by a backend) and `PlatformProxy` (a `Clone + Send + Sync`
+  cross-thread request capability) replace the ambient `&dyn Platform` every
+  backend's `on_ready` used to hand out — the old shape stayed fully
+  `Send + Sync` until a later trait split, so safe code on another thread
+  could call an owner-affine method through it. `flui-foundation`'s new
+  `ClaimSlot<T>`/`ClaimHandle<T>` (`Pending` → `Delivered` → `Claimed`, plus
+  an `OwnerGone` terminal state and a `Future` impl) back `PendingWindow`'s
+  at-most-once open-window reply, closing a window-leak-on-drop gap in the
+  winit owner lane. `Platform::run` and its `on_ready` callback are now
+  fallible (`anyhow::Result<()>`), so a bootstrap failure (window creation,
+  GPU init, root-widget attach) stops the loop on every backend instead of
+  running with no UI. `SharedPlatform` is the `Clone + Send + Sync`-safe
+  residual of `Platform` a proxy can actually hold across threads.
+- **Feature-selective facade, Material-first** (#574): `flui-material`
+  (default), `flui-cupertino`, and the newly exposed `flui-localizations` are
+  optional dependencies behind their own facade features; a module whose
+  feature is off is absent from the graph, not an empty stub. `flui-hot-reload`
+  leaves the production graph — optional in `flui-app` behind `hot-reload`,
+  asserted absent from `flui-app`'s default `cargo tree` rather than assumed.
+  `flui-binding` is renamed to `flui-testing` (directory moved with history;
+  `HeadlessBinding` keeps its name). `flui-app::theme` (`AppTheme`/
+  `AppColorScheme`) is deleted outright per ADR-0042 — theming belongs to the
+  design system (`ThemeMode` on `flui-material`'s `MaterialApp`), not the app
+  framework. `just facade-combos` compiles each supported facade combination
+  in isolation against `flui` alone, since a `--workspace` build proves
+  nothing about the facade surface (feature unification would turn a broken
+  combination green).
+- **`flui-log` restored as a standalone, composition-only logging backend**
+  (#571): `flui-foundation` no longer installs a process-global tracing
+  subscriber (libraries emit through `tracing` only); `flui-log`'s
+  three-outcome `SubscriberOwnership` (`Inherit`/`Auto`/`Install`) makes
+  ownership explicit and never panics on an already-owned slot, replacing an
+  `init()` that used to panic the moment a host process already owned one.
+  Fixes three real defects found while restoring it: a stray `LevelFilter`
+  ceiling that silently discarded events `RUST_LOG` had just selected, an
+  illegal Apple subsystem identifier synthesized from an arbitrary app
+  display name, and a logcat field-renderer separator that never fired when
+  the message arrived first — untested because its tests lived inside a
+  `cfg(target_os = "android")` island that never compiled anywhere.
+  `docs/workspace-layers.toml` gains `allowed_dependents`, so a normal edge
+  into `flui-log` from anything but `flui-app`, `flui-cli`, or the facade now
+  fails `just inventory-check`.
 - **`cargo-deny` CI job** (merge-blocking): the in-repo `deny.toml` was never
   executed in CI; the first wired run surfaced four real advisories —
   `anyhow` 1.0.102 unsound `downcast_mut` (RUSTSEC-2026-0190),
@@ -37,6 +106,20 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **Four miri-confirmed UB paths closed in the Android page-aligned
+  allocator** (#584): `Drop` recomputed the dealloc layout as
+  `capacity * size_of::<T>()`, which undershoots the real page-rounded
+  allocation whenever `size_of::<T>()` doesn't evenly divide it — now stores
+  the allocated byte size verbatim and reuses it. Zero-capacity construction
+  and zero-sized `T` both reached the global allocator with a zero-size
+  `Layout` (the former now uses a non-null dangling pointer instead of
+  allocating; the latter is now a compile-time assertion). Separately,
+  `alloc_page_aligned`'s rounding arithmetic could wrap to zero under
+  release's `overflow-checks = false`, reaching the allocator with a
+  zero-size `Layout` for a large enough request — now checked, returning
+  `Err` instead of wrapping. All four verified by replicating the auditor's
+  scratch-crate `cargo +nightly miri test` harness: reproduces the original
+  UB before the fix, clean after.
 - **Toolchain 1.96.1 → 1.97.1, MSRV 1.96 → 1.97.** `rust-toolchain.toml` no
   longer mirrors the MSRV: it is now explicitly the *development* toolchain
   (a pin at the floor hides new lints and codegen changes from the developer
@@ -130,6 +213,44 @@ file records the repo-consumer-visible summary.
   by a new drift guard in `scripts/check-workspace-inventory.sh`.
 - `flui-assets` restored to `[workspace] members` — it is built and tested by
   CI again.
+
+### Removed
+
+- **Singleton retirement, completed in six PRs (#586–#593).** `flui-app`'s
+  process-global service host — `AppBinding`, plus its `WidgetsFlutterBinding`
+  alias — is deleted outright, not deprecated, along with
+  `flui-foundation`'s `impl_binding_singleton!` macro and the
+  `HasInstance`/`BindingBase` trait pair, `SemanticsBinding`, and the
+  `PaintingBinding`/`Scheduler` singleton `::instance()` accessors. Ownership
+  moves to where it should have lived all along: `AppRuntime` (loop-scoped:
+  wake, clipboard), `UiRealm`/`PresentationState` (realm/presentation-scoped:
+  renderer, vsync, frame counters, haptics, and semantics fan-out through a
+  new per-presentation `SemanticsHost`), and a `WeakScheduler`-backed
+  `Scheduler` owned fresh per realm — the weak handle breaks the
+  `scheduler → transient queue → ticker closure → scheduler` `Arc` cycle
+  that used to leak every active ticker for the scheduler's whole lifetime.
+  `UiRealm`'s transitional at-most-one-construction guard
+  (`REALM_CLAIMED`, `UiRealmError::AlreadyExists`) — which existed only
+  because `UiRealm` used to front that process-global state — is deleted
+  too; four new tests prove actual realm coexistence (independent mounts,
+  scheduler phases, and gesture arenas, including across two threads and
+  across a `GlobalKey` collision in two different realms) rather than
+  merely the absence of the deleted guard. The test locks this family
+  needed — `SINGLETON_WINDOW_TEST_LOCK`, `SCHEDULER_PHASE_TEST_LOCK`,
+  `SEMANTICS_TEST_LOCK` — are gone along with the state they serialized;
+  each is now a `forbidden_pattern` ratchet in `docs/runtime-contract.toml`
+  so a PR cannot reintroduce the pattern by reintroducing the name.
+
+  **Breaking (pre-1.0, sanctioned):** `flui_app::{AppBinding,
+  WidgetsFlutterBinding}` and the `flui::app` facade re-export of both are
+  gone; `crates/flui-foundation/src/binding.rs` (`BindingBase`,
+  `HasInstance`, `impl_binding_singleton!`) is deleted wholesale;
+  `SemanticsBinding` is deleted, not slimmed. `run_app`/
+  `run_app_with_config`/`run_direct` signatures are unchanged — this is an
+  internal-ownership change, not a public entry-point break. Recorded here
+  as the semver trigger for a `0.2.0` → `0.3.0` bump once this workspace is
+  published; no git tag is cut by this entry (release-lead's call, separate
+  from this changelog sweep).
 
 ### Pre-changelog milestones
 
