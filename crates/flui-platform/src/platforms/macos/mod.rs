@@ -64,4 +64,6 @@ pub use window_ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};
 pub use window_manager::{
     GroupId, SharedWindowManager, WindowId, WindowInfo, WindowLevel, WindowManager, WindowOptions,
 };
-pub use window_tiling::{TilePosition, TilingConfiguration, TilingLayout, TilingState};
+pub use window_tiling::{
+    TilePosition, TilingConfiguration, TilingError, TilingLayout, TilingState,
+};

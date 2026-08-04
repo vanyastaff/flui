@@ -198,4 +198,8 @@ impl PlatformWindow for AndroidWindow {
     fn mouse_position(&self) -> Point<Pixels> {
         Point::default()
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }

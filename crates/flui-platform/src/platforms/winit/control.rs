@@ -333,6 +333,9 @@ mod tests {
         ) -> Result<(), crate::traits::CursorError> {
             Ok(())
         }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     #[test]
