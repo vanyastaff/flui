@@ -2038,10 +2038,7 @@ parenthetical Flutter-parity asides, for architectural-contrast \
 documentation -- that is citing an external API for comparison, not \
 reintroducing FLUI's deleted type.\
 """
-allow_files = [
-    "crates/flui-app/src/bindings/mod.rs",
-    "crates/flui-testing/src/lib.rs",
-]
+allow_files = ["crates/flui-app/src/bindings/mod.rs", "crates/flui-testing/src/lib.rs"]
 
 [[forbidden_pattern]]
 pattern = "SEMANTICS_TEST_LOCK"
