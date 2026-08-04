@@ -554,6 +554,10 @@ impl crate::traits::PlatformWindow for MockWindow {
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
         *self.callbacks.on_appearance_changed.lock() = Some(callback);
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Recording fake for [`PlatformTextInput`], backing the headless backend's

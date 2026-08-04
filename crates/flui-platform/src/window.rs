@@ -314,10 +314,21 @@ pub enum RawWindowHandle {
     },
 }
 
-// SAFETY: Raw window handles are just pointers and can be sent between threads
+// SAFETY: every field across every variant is a raw pointer or plain integer
+// (`*mut c_void`, `u64`, `u32`) that this type never dereferences — it only
+// carries the bit pattern for a caller (e.g. `raw-window-handle` / wgpu
+// surface creation) to interpret. Moving or sharing the enum moves/shares
+// those addresses, not access to whatever they point at, so this is sound
+// regardless of what the pointee's own thread-affinity requirements are —
+// same reasoning as the platform-specific `HWND`/`NSView` wrapper types this
+// crate defines elsewhere (see their own SAFETY comments for the caveat that
+// *using* the pointee, as opposed to holding its address, still owes
+// whatever thread-affinity the native handle requires).
+#[allow(unsafe_code)] // small, cross-platform marker impl — not an FFI island
 unsafe impl Send for RawWindowHandle {}
 // SAFETY: as for `Send` above — the handle is an opaque address that is never
 // dereferenced here, so sharing it across threads adds no aliasing.
+#[allow(unsafe_code)] // small, cross-platform marker impl — not an FFI island
 unsafe impl Sync for RawWindowHandle {}
 
 // ============================================================================

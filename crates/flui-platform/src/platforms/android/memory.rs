@@ -21,6 +21,12 @@
 //! assert_eq!(buffer.as_ptr() as usize % get_page_size(), 0);
 //! ```
 
+// This module is one of the workspace's sanctioned `unsafe` FFI islands —
+// raw page-aligned allocation has no safe wrapper. The workspace lint
+// `unsafe_code = "warn"` is opted out here, at the module boundary, rather
+// than for the whole crate (see `lib.rs`).
+#![allow(unsafe_code)]
+
 use std::{
     alloc::{Layout, alloc, dealloc},
     fmt,
@@ -58,10 +64,7 @@ pub fn get_page_size() -> usize {
     {
         // SAFETY: sysconf is a standard POSIX function
         // _SC_PAGESIZE always returns a valid value on Android
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::sysconf(libc::_SC_PAGESIZE) as usize
-        }
+        unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
     }
 
     #[cfg(not(target_os = "android"))]

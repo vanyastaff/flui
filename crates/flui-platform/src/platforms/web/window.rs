@@ -325,4 +325,8 @@ impl PlatformWindow for WebWindow {
         // SAFETY: Web display handle is always valid
         Ok(unsafe { DisplayHandle::borrow_raw(raw) })
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }

@@ -273,6 +273,10 @@ mod tests {
         ) -> Result<(), flui_platform::CursorError> {
             Ok(())
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     fn stub_window(id: u64) -> Arc<dyn PlatformWindow> {

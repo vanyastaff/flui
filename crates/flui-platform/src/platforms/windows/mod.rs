@@ -3,6 +3,14 @@
 //! This module provides native Windows support without winit,
 //! using direct Win32 API calls for maximum control and performance.
 
+// This module (and its submodules) is one of the workspace's sanctioned
+// `unsafe` FFI islands — direct Win32 calls have no safe wrapper. The
+// workspace lint `unsafe_code = "warn"` is opted out here, at the module
+// boundary, rather than for the whole crate (see `lib.rs`); every `unsafe`
+// block still carries its own `// SAFETY:` comment stating the invariant
+// that makes it sound.
+#![allow(unsafe_code)]
+
 mod clipboard;
 mod display;
 mod events;

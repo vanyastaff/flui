@@ -27,6 +27,17 @@ use flui_types::{
     geometry::{Rect, Size},
 };
 
+/// A [`TilingConfiguration`] combines a [`TilePosition`] and [`TilingLayout`]
+/// that are not compatible with each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{position:?} is not a valid primary position for {layout:?}")]
+pub struct TilingError {
+    /// The incompatible position that was set.
+    pub position: TilePosition,
+    /// The layout it was paired with.
+    pub layout: TilingLayout,
+}
+
 // ============================================================================
 // Tiling Configuration
 // ============================================================================
@@ -108,16 +119,34 @@ impl TilingConfiguration {
 
     /// Calculate tile rectangles for the given screen size.
     ///
-    /// Returns (primary_rect, secondary_rect).
-    pub fn calculate_tiles(&self, screen_size: Size<Pixels>) -> (Rect<Pixels>, Rect<Pixels>) {
+    /// Returns `(primary_rect, secondary_rect)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TilingError`] if `self.primary_position` is not one of the
+    /// positions [`TilePosition::is_valid_for_layout`] accepts for
+    /// `self.layout` (e.g. `TopLeft` with a `SideBySide` layout) — the
+    /// builder methods that set `layout`/`primary_position` independently do
+    /// not cross-validate them, so this can only be caught here.
+    pub fn calculate_tiles(
+        &self,
+        screen_size: Size<Pixels>,
+    ) -> Result<(Rect<Pixels>, Rect<Pixels>), TilingError> {
+        if !self.primary_position.is_valid_for_layout(self.layout) {
+            return Err(TilingError {
+                position: self.primary_position,
+                layout: self.layout,
+            });
+        }
+
         let width = screen_size.width;
         let height = screen_size.height;
 
-        match self.layout {
+        let tiles = match self.layout {
             TilingLayout::SideBySide => {
                 let split_x = width * self.split_ratio;
 
-                let (primary, secondary) = match self.primary_position {
+                match self.primary_position {
                     TilePosition::Left => (
                         Rect::from_origin_size(
                             flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
@@ -138,16 +167,18 @@ impl TilingConfiguration {
                             Size::new(width - split_x, height),
                         ),
                     ),
-                    _ => panic!("Invalid position for SideBySide layout"),
-                };
-
-                (primary, secondary)
+                    // Every other `TilePosition` was already rejected by the
+                    // `is_valid_for_layout` guard above.
+                    _ => unreachable!(
+                        "BUG: is_valid_for_layout guard above did not match calculate_tiles's own SideBySide arm"
+                    ),
+                }
             }
 
             TilingLayout::TopBottom => {
                 let split_y = height * self.split_ratio;
 
-                let (primary, secondary) = match self.primary_position {
+                match self.primary_position {
                     TilePosition::Top => (
                         Rect::from_origin_size(
                             flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
@@ -168,10 +199,10 @@ impl TilingConfiguration {
                             Size::new(width, height - split_y),
                         ),
                     ),
-                    _ => panic!("Invalid position for TopBottom layout"),
-                };
-
-                (primary, secondary)
+                    _ => unreachable!(
+                        "BUG: is_valid_for_layout guard above did not match calculate_tiles's own TopBottom arm"
+                    ),
+                }
             }
 
             TilingLayout::Quarters => {
@@ -196,7 +227,9 @@ impl TilingConfiguration {
                         flui_types::geometry::Point::new(half_width, half_height),
                         Size::new(half_width, half_height),
                     ),
-                    _ => panic!("Invalid position for Quarters layout"),
+                    _ => unreachable!(
+                        "BUG: is_valid_for_layout guard above did not match calculate_tiles's own Quarters arm"
+                    ),
                 };
 
                 // Secondary takes the rest (3 quadrants)
@@ -207,7 +240,9 @@ impl TilingConfiguration {
 
                 (primary, secondary)
             }
-        }
+        };
+
+        Ok(tiles)
     }
 
     /// Check if tiling is available on this macOS version.
@@ -409,7 +444,7 @@ mod tests {
             .with_split_ratio(0.5);
 
         let screen = Size::new(Pixels(1920.0), Pixels(1080.0));
-        let (primary, secondary) = config.calculate_tiles(screen);
+        let (primary, secondary) = config.calculate_tiles(screen).unwrap();
 
         assert_eq!(primary.width(), Pixels(960.0));
         assert_eq!(secondary.width(), Pixels(960.0));
@@ -425,10 +460,30 @@ mod tests {
             .with_split_ratio(0.6);
 
         let screen = Size::new(Pixels(1920.0), Pixels(1080.0));
-        let (primary, secondary) = config.calculate_tiles(screen);
+        let (primary, secondary) = config.calculate_tiles(screen).unwrap();
 
         assert_eq!(primary.height(), Pixels(648.0)); // 60% of 1080
         assert_eq!(secondary.height(), Pixels(432.0)); // 40% of 1080
+    }
+
+    #[test]
+    fn test_calculate_tiles_rejects_mismatched_position() {
+        // `with_layout`/`with_primary_position` don't cross-validate each
+        // other, so this combination — a Quarters position paired with a
+        // SideBySide layout — only surfaces as an error here.
+        let config = TilingConfiguration::new()
+            .with_layout(TilingLayout::SideBySide)
+            .with_primary_position(TilePosition::TopLeft);
+
+        let screen = Size::new(Pixels(1920.0), Pixels(1080.0));
+        let err = config.calculate_tiles(screen).unwrap_err();
+        assert_eq!(
+            err,
+            TilingError {
+                position: TilePosition::TopLeft,
+                layout: TilingLayout::SideBySide,
+            }
+        );
     }
 
     #[test]

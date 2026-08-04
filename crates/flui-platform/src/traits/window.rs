@@ -371,10 +371,14 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
-    /// Downcast to concrete type
-    fn as_any(&self) -> &dyn Any {
-        panic!("as_any not implemented")
-    }
+    /// Downcast to concrete type.
+    ///
+    /// No default body: a panicking default here would only be discovered
+    /// the first time some caller downcasts a backend that forgot to
+    /// override it — every implementor must supply its own (invariably
+    /// `{ self }`), the same shape [`super::PlatformHaptics::as_any`]
+    /// already requires.
+    fn as_any(&self) -> &dyn Any;
 }
 
 impl HasWindowHandle for dyn PlatformWindow + '_ {
@@ -627,6 +631,10 @@ impl PlatformWindow for WinitWindow {
         }))
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     // No `haptics()` override: desktop winit targets have no haptic
     // hardware to drive, so the `PlatformWindow` trait default (`None`) is
     // the permanent correct answer here, not a stub awaiting a backend.
@@ -680,6 +688,10 @@ mod tests {
 
         fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
             Ok(())
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 

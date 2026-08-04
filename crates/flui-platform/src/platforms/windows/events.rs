@@ -146,7 +146,15 @@ fn vk_to_key(vk: VIRTUAL_KEY, _scan_code: u16) -> Key {
 }
 
 /// Get current modifiers state
+///
+/// # Safety
+///
+/// None, in the memory-safety sense — this only calls `is_key_pressed`
+/// (see its own `# Safety` section in `util.rs`) with the fixed, in-range
+/// virtual-key constants below. `unsafe fn` purely because it calls an
+/// `unsafe fn`, not because this function itself has a precondition.
 unsafe fn get_modifiers() -> KeyboardModifiers {
+    // SAFETY: see the `# Safety` section above.
     unsafe {
         let mut mods = KeyboardModifiers::empty();
 
@@ -180,6 +188,8 @@ fn pointer_state(
 ) -> (PointerState, KeyboardModifiers) {
     let x = get_x_lparam(lparam);
     let y = get_y_lparam(lparam);
+    // SAFETY: see `get_modifiers`'s own `# Safety` section — no
+    // precondition to discharge here.
     let modifiers = unsafe { get_modifiers() };
     let logical_x = device_to_logical(x as f32, scale_factor);
     let logical_y = device_to_logical(y as f32, scale_factor);
@@ -269,6 +279,7 @@ pub fn key_down_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
     let is_repeat = (lparam.0 & (1 << 30)) != 0;
 
+    // SAFETY: see `pointer_state` above — same call, no precondition.
     let modifiers = unsafe { get_modifiers() };
     let key = vk_to_key(vk, scan_code);
 
@@ -288,6 +299,7 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = VIRTUAL_KEY(wparam.0 as u16);
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
 
+    // SAFETY: see `pointer_state` above — same call, no precondition.
     let modifiers = unsafe { get_modifiers() };
     let key = vk_to_key(vk, scan_code);
 
