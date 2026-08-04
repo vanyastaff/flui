@@ -134,6 +134,22 @@ pub struct RenderingFlutterBinding {
     /// binding must not keep a dead realm's scheduler alive (it is a plain
     /// field on `UiRealm`, not the other way around).
     scheduler: WeakScheduler,
+
+    /// Keeps `scheduler`'s backing `Scheduler` alive — but ONLY for the
+    /// standalone constructor path ([`Self::new`] / [`Default`]), which owns
+    /// no external scheduler for anything else to keep alive. `None` for
+    /// every [`Self::new_with_pipeline`] caller (production: the owning
+    /// `UiRealm` holds the real strong root, per `scheduler`'s own doc).
+    ///
+    /// Without this field, `Self::new()` passed a bare `&Scheduler::new()`
+    /// into `new_with_pipeline`, which only stores the *downgraded*
+    /// `WeakScheduler` — the temporary `Scheduler` had no other strong
+    /// owner, so it dropped at the end of `new()`'s constructing statement,
+    /// and `request_visual_update`'s upgrade silently, permanently failed
+    /// from the moment construction returned. That made the device-metrics
+    /// force-frame path a dead no-op for every standalone binding, with
+    /// nothing in the constructor's signature hinting at it.
+    standalone_scheduler: Option<Scheduler>,
 }
 
 impl std::fmt::Debug for RenderingFlutterBinding {
@@ -160,14 +176,27 @@ impl Default for RenderingFlutterBinding {
 
 impl RenderingFlutterBinding {
     /// Creates a new rendering binding with its own PipelineOwner and a
-    /// fresh, throwaway `Scheduler` — test/standalone use only. Production
-    /// always goes through [`new_with_pipeline`](Self::new_with_pipeline)
-    /// with the owning realm's own scheduler.
+    /// fresh `Scheduler` it owns for its own lifetime — test/standalone use
+    /// only. Production always goes through
+    /// [`new_with_pipeline`](Self::new_with_pipeline) with the owning
+    /// realm's own scheduler.
+    ///
+    /// The constructed `Scheduler` is kept alive internally (in this crate's
+    /// private `standalone_scheduler` field) for exactly as long as this
+    /// binding lives, so `request_visual_update`
+    /// genuinely schedules a frame on it rather than silently failing an
+    /// upgrade against an already-dead weak (see that field's doc for the
+    /// bug this fixes). Nothing pumps this scheduler's frame loop
+    /// automatically — there is no realm behind a standalone binding — so a
+    /// scheduled callback sits queued, harmlessly, until the binding drops;
+    /// a caller that wants it to actually fire must drive the scheduler
+    /// itself.
     pub fn new() -> Self {
-        Self::new_with_pipeline(
-            Arc::new(RwLock::new(PipelineOwner::new())),
-            &Scheduler::new(),
-        )
+        let scheduler = Scheduler::new();
+        let mut binding =
+            Self::new_with_pipeline(Arc::new(RwLock::new(PipelineOwner::new())), &scheduler);
+        binding.standalone_scheduler = Some(scheduler);
+        binding
     }
 
     /// Creates a new rendering binding with a shared PipelineOwner, wired to
@@ -190,6 +219,7 @@ impl RenderingFlutterBinding {
             first_frame_deferred_count: AtomicU32::new(0),
             first_frame_sent: AtomicBool::new(false),
             scheduler: scheduler.downgrade(),
+            standalone_scheduler: None,
         }
     }
 
@@ -538,6 +568,16 @@ impl RenderingFlutterBinding {
              and on Self::painting"
         );
     }
+
+    /// Test-only: upgrades `scheduler` and reports whether it succeeded —
+    /// the direct pin for [`Self::standalone_scheduler`]'s whole reason to
+    /// exist (a standalone binding's weak must stay upgradeable for its
+    /// entire lifetime, unlike a bare `new_with_pipeline` call handed a
+    /// temporary that has already dropped).
+    #[cfg(test)]
+    fn scheduler_is_alive(&self) -> bool {
+        self.scheduler.upgrade().is_some()
+    }
 }
 
 // ============================================================================
@@ -642,11 +682,47 @@ impl RendererBinding for RenderingFlutterBinding {
 mod tests {
     use super::*;
 
-    /// `RenderingFlutterBinding` is no longer singleton-backed — each test
-    /// below constructs its own, independent instance instead of sharing a
-    /// process-wide one, so there is nothing left for a test lock to
-    /// serialize (the retired `SEMANTICS_TEST_LOCK` guarded exactly this
-    /// shared-singleton hazard; see AGENTS.md's "Testing quirks").
+    // `RenderingFlutterBinding` is no longer singleton-backed — each test
+    // below constructs its own, independent instance instead of sharing a
+    // process-wide one, so there is nothing left for a test lock to
+    // serialize (the retired `SEMANTICS_TEST_LOCK` guarded exactly this
+    // shared-singleton hazard; see AGENTS.md's "Testing quirks").
+
+    /// Red before the fix: `RenderingFlutterBinding::new()` used to pass a
+    /// bare `&Scheduler::new()` temporary into `new_with_pipeline`, which
+    /// only stores the *downgraded* `WeakScheduler` — nothing else held a
+    /// strong reference to that freshly constructed `Scheduler`, so it
+    /// dropped at the end of `new()`'s constructing statement and
+    /// `request_visual_update`'s upgrade silently, permanently failed from
+    /// the moment construction returned (this test would have failed both
+    /// assertions below against that shape). Green now: `new()` keeps its
+    /// own `Scheduler` alive in `standalone_scheduler` for exactly as long
+    /// as the binding lives, so the weak stays upgradeable and
+    /// `request_visual_update` genuinely schedules a frame — observable via
+    /// `is_frame_scheduled()` flipping true. Nothing ever pumps this
+    /// scheduler (there is no realm behind a standalone binding), so this
+    /// pins that the SCHEDULING attempt succeeds, not that a frame executes.
+    #[test]
+    fn standalone_binding_keeps_its_scheduler_alive_so_request_visual_update_actually_schedules() {
+        let binding = RenderingFlutterBinding::new();
+        assert!(
+            binding.scheduler_is_alive(),
+            "a standalone binding's own scheduler must outlive construction, \
+             not die the moment new() returns"
+        );
+
+        binding.request_visual_update();
+
+        let scheduler = binding
+            .scheduler
+            .upgrade()
+            .expect("standalone_scheduler keeps this upgradeable for the binding's whole life");
+        assert!(
+            scheduler.is_frame_scheduled(),
+            "request_visual_update must genuinely schedule a frame on a live \
+             standalone scheduler, not silently no-op against an already-dead weak"
+        );
+    }
 
     #[test]
     fn test_semantics_enabled() {
@@ -700,8 +776,15 @@ mod tests {
             o.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
             id
         };
-        let binding =
-            RenderingFlutterBinding::new_with_pipeline(owner, &flui_scheduler::Scheduler::new());
+        // Bound to a local, not passed as a bare temporary: `new_with_pipeline`
+        // only stores a downgraded `WeakScheduler`, so a temporary here would
+        // drop at the end of THIS statement and leave the binding holding a
+        // permanently-dead weak (the exact bug `standalone_scheduler` fixes
+        // for `Self::new()` — this test's binding takes the explicit-scheduler
+        // path instead, so it must keep its own scheduler alive the ordinary
+        // way, via a local binding that outlives the statement).
+        let scheduler = flui_scheduler::Scheduler::new();
+        let binding = RenderingFlutterBinding::new_with_pipeline(owner, &scheduler);
 
         // Deferred: the pipeline still runs (warm-up) but the output
         // is withheld.
@@ -757,8 +840,11 @@ mod tests {
                 px(100.0),
             )));
         }
-        let binding =
-            RenderingFlutterBinding::new_with_pipeline(owner, &flui_scheduler::Scheduler::new());
+        // See the sibling `draw_frame_returns_layer_tree_and_defers_when_gated`
+        // test's comment: bound to a local so it outlives this statement,
+        // not passed as a bare temporary.
+        let scheduler = flui_scheduler::Scheduler::new();
+        let binding = RenderingFlutterBinding::new_with_pipeline(owner, &scheduler);
         let _ = binding.draw_frame();
 
         let mut inside = flui_interaction::routing::HitTestResult::new();
