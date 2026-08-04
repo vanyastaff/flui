@@ -3673,7 +3673,17 @@ where
 
     tracing::info!("Starting web platform via flui-platform");
 
-    let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
+    // Platform init is an environment failure (unsupported browser, missing
+    // wasm feature, driver problem), not a `BUG:` invariant — see the
+    // matching comment in `run_desktop` above for why this is a `match` +
+    // `panic!` with a full error log instead of a bare `.expect()`.
+    let platform = match flui_platform::current_platform() {
+        Ok(platform) => platform,
+        Err(error) => {
+            tracing::error!(%error, "Failed to initialize platform");
+            panic!("web bootstrap failed: platform initialization error: {error:?}");
+        }
+    };
 
     /// The actual web bootstrap: canvas window, renderer, realm, and
     /// callback wiring. Runs once, synchronously, inside `on_ready` —

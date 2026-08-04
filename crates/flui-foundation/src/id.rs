@@ -808,7 +808,7 @@ impl<T: Marker> GenId<T> {
         let packed = (u64::from(generation.get()) << 32) | u64::from(index);
         Self(
             core::num::NonZeroU64::new(packed)
-                .expect("generation >= 1 ensures packed value is non-zero"),
+                .expect("BUG: generation is typed NonZeroU32, so generation >= 1 always keeps the packed value's high bits non-zero"),
             PhantomData,
         )
     }
@@ -852,7 +852,7 @@ impl<T: Marker> GenId<T> {
     pub fn generation(self) -> core::num::NonZeroU32 {
         let generation = (self.0.get() >> 32) as u32;
         core::num::NonZeroU32::new(generation)
-            .expect("GenId generation is always >= 1; packed value invariant violated")
+            .expect("BUG: every GenId is built via new/new_gen, which only accept a NonZeroU32 generation, so the packed high bits are always non-zero")
     }
 
     /// The raw packed `NonZeroU64` value (tracing/logging).
@@ -1199,7 +1199,7 @@ impl ElementId {
         // packed value is always non-zero.
         Self(
             core::num::NonZeroU64::new(packed)
-                .expect("generation >= 1 ensures packed value is non-zero"),
+                .expect("BUG: generation is typed NonZeroU32, so generation >= 1 always keeps the packed value's high bits non-zero"),
         )
     }
 
@@ -1262,7 +1262,7 @@ impl ElementId {
         let generation = (self.0.get() >> 32) as u32;
         // Invariant: `new_gen` only accepts `NonZeroU32`, so generation is always >= 1.
         core::num::NonZeroU32::new(generation)
-            .expect("ElementId generation is always >= 1; packed value invariant violated")
+            .expect("BUG: every ElementId is built via new/new_gen, which only accept a NonZeroU32 generation, so the packed high bits are always non-zero")
     }
 
     /// The raw packed `NonZeroU64` value. Useful for tracing / logging.

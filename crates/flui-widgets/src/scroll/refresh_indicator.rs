@@ -152,7 +152,7 @@ impl RefreshController {
             .inner
             .is_refreshing
             .lock()
-            .expect("refresh controller mutex poisoned: is_refreshing field corrupted")
+            .expect("BUG: RefreshController is_refreshing mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state")
     }
 
     /// The current pull distance in logical pixels.
@@ -165,7 +165,7 @@ impl RefreshController {
             .inner
             .pull_distance_px
             .lock()
-            .expect("refresh controller mutex poisoned: pull_distance_px field corrupted")
+            .expect("BUG: RefreshController pull_distance_px mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state")
     }
 
     /// Signal that the refresh operation is complete. Hides the spinner and
@@ -177,7 +177,7 @@ impl RefreshController {
             .inner
             .is_refreshing
             .lock()
-            .expect("refresh controller mutex poisoned: is_refreshing field corrupted");
+            .expect("BUG: RefreshController is_refreshing mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
         *guard = false;
         drop(guard);
         self.inner.notifier.notify_listeners();
@@ -199,7 +199,7 @@ impl RefreshController {
             .inner
             .pull_distance_px
             .lock()
-            .expect("refresh controller mutex poisoned: pull_distance_px field corrupted") =
+            .expect("BUG: RefreshController pull_distance_px mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state") =
             distance_px;
         self.inner.notifier.notify_listeners();
     }
@@ -210,12 +210,12 @@ impl RefreshController {
                 .inner
                 .is_refreshing
                 .lock()
-                .expect("refresh controller mutex poisoned: is_refreshing field corrupted");
+                .expect("BUG: RefreshController is_refreshing mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
             let mut pull = self
                 .inner
                 .pull_distance_px
                 .lock()
-                .expect("refresh controller mutex poisoned: pull_distance_px field corrupted");
+                .expect("BUG: RefreshController pull_distance_px mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
             *refreshing = true;
             *pull = 0.0;
         }
@@ -398,7 +398,7 @@ impl StatefulView for RefreshIndicator {
             f32::NEG_INFINITY,
             f32::INFINITY,
         )
-        .expect("NEG_INFINITY < INFINITY satisfies the bounds invariant");
+        .expect("BUG: NEG_INFINITY < INFINITY is a hardcoded literal pair, so without_ticker_bounds can never reject it");
 
         RefreshIndicatorState {
             scroll_controller: self.scroll_controller.clone(),

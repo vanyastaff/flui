@@ -399,7 +399,7 @@ impl<'frame> Backend<'frame> {
             let off = self
                 .offscreen
                 .as_deref_mut()
-                .expect("offscreen is_some checked above");
+                .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow");
             (
                 Arc::clone(off.device()),
                 Arc::clone(off.queue()),
@@ -462,7 +462,7 @@ impl<'frame> Backend<'frame> {
         let blur_input = self
             .offscreen
             .as_deref_mut()
-            .expect("offscreen is_some checked above")
+            .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow")
             .texture_pool()
             .acquire(w, h, format);
         flush_encoder.copy_texture_to_texture(
@@ -493,7 +493,7 @@ impl<'frame> Backend<'frame> {
         let blurred = self
             .offscreen
             .as_deref_mut()
-            .expect("offscreen is_some checked above")
+            .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow")
             .render_blur(&blur_input, sigma);
         let clamped_composite_rect = Rect::from_xywh(
             Pixels(x as f32),
@@ -827,7 +827,7 @@ impl CommandRenderer for Backend<'_> {
                 let offscreen = self
                     .offscreen
                     .as_deref_mut()
-                    .expect("checked is_some above");
+                    .expect("BUG: self.offscreen.is_some() was checked above and nothing clears it before this borrow");
                 let device = Arc::clone(offscreen.device());
                 let queue = Arc::clone(offscreen.queue());
                 let format = offscreen.surface_format();
@@ -856,7 +856,7 @@ impl CommandRenderer for Backend<'_> {
                 let offscreen_painter = self
                     .offscreen_painter
                     .as_mut()
-                    .expect("offscreen_painter was just populated by get_or_create");
+                    .expect("BUG: get_or_create_offscreen_painter was just called above and always populates self.offscreen_painter");
                 // Reset per-frame clip/transform/opacity state before rendering
                 // into this painter.  Without this, a clip_rect command from a
                 // previous ShaderMask call in the same frame leaks
@@ -915,7 +915,7 @@ impl CommandRenderer for Backend<'_> {
             let offscreen_painter = self
                 .offscreen_painter
                 .as_mut()
-                .expect("offscreen_painter was populated in step 2 and not moved");
+                .expect("BUG: get_or_create_offscreen_painter populated self.offscreen_painter in step 2 above and nothing takes or clears it before this borrow");
             if let Err(e) = offscreen_painter.render(child_target, &mut encoder) {
                 tracing::error!("Failed to render shader mask child content: {}", e);
             }
@@ -929,7 +929,7 @@ impl CommandRenderer for Backend<'_> {
                 let offscreen = self
                     .offscreen
                     .as_deref_mut()
-                    .expect("checked is_some above");
+                    .expect("BUG: self.offscreen.is_some() was checked above and nothing clears it before this borrow");
                 let result = offscreen.render_masked(
                     bounds,
                     result_size,
