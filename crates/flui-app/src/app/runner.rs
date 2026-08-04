@@ -126,11 +126,7 @@ thread_local! {
     /// itself trigger singleton construction or full system-font
     /// enumeration. Real service resolution happens only via the explicit
     /// `ensure_services` call in `install_platform_realm` below, when a
-    /// realm is actually installed. `pub(super)`: `runtime.rs`'s
-    /// `install_frames_reenable_redirty_listener` reaches this same cell at
-    /// fire time to redirty whichever realm is currently installed (see
-    /// that function's own doc for why the target must be resolved
-    /// dynamically rather than captured once).
+    /// realm is actually installed.
     pub(super) static APP_RUNTIME: std::cell::RefCell<AppRuntime> =
         std::cell::RefCell::new(AppRuntime::new());
 }
@@ -595,13 +591,21 @@ fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLi
 /// synthesized sequence of states.
 ///
 /// Installed as a direct call in the same `PlatformToUi` handler (never a
-/// `Scheduler`-listener closure): a listener captured at bootstrap time would
-/// have to resolve `realm`/`WidgetsBinding` lazily at fire time, which is
-/// exactly the thread-local-resolution/Send-capture trap
-/// `runtime.rs`'s `install_frames_reenable_redirty_listener` avoids
-/// elsewhere in this crate. `realm` is already in scope here
-/// (`PlatformToUi::run`'s parameter), so no
-/// such resolution is needed.
+/// `Scheduler`-listener closure): a listener captured at bootstrap time
+/// would have to resolve `realm`/`WidgetsBinding` lazily at fire time,
+/// which is unsound here specifically because every production caller of
+/// this function runs from inside `dispatch_platform_realm`'s dispatch
+/// window — the window during which the realm is taken OUT of
+/// `APP_RUNTIME` and only restored once the dispatched task returns. A
+/// listener resolving `APP_RUNTIME` at fire time would see `None` on every
+/// real transition and silently no-op (this shipped once and was caught by
+/// `frames_reenable_redirties_root_when_dispatched_through_the_realm_queue`
+/// in `realm_dispatch_tests`, which reproduces via a real dispatched
+/// `PlatformToUi::Lifecycle` sequence rather than driving `Scheduler`
+/// directly). `realm` is already in scope here (`PlatformToUi::run`'s
+/// parameter), so no such resolution is ever needed — the frames-reenable
+/// redirty below reads and writes it directly, in the same stack frame
+/// that owns it for the whole call.
 #[cfg(not(target_os = "ios"))]
 fn emit_lifecycle_transition(
     realm: &super::ui_realm::UiRealm,
@@ -637,6 +641,18 @@ fn emit_lifecycle_transition(
         };
         preserve_first_lifecycle_panic(&mut first_panic, gesture_cleanup_panic, "gesture cleanup");
 
+        // Frames-disabled->enabled re-dirty: FLUI has no retained-scene
+        // re-present, so an app that was `Hidden`/`Paused`/`Detached` and
+        // comes back to `Resumed`/`Inactive` needs the root explicitly
+        // re-dirtied, or the next frame finds nothing dirty and silently
+        // stays Idle instead of repainting the stale window. Read
+        // `frames_enabled()` immediately before and after the scheduler
+        // call below so this observes exactly the edge THIS step produced,
+        // whichever named state it is — `handle_app_lifecycle_state_change`
+        // flips the flag via one atomic swap per call, so bracketing a
+        // single call this way cannot miss or double-count an edge.
+        let frames_were_enabled = Scheduler::instance().frames_enabled();
+
         let scheduler_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Scheduler::instance().handle_app_lifecycle_state_change(step);
         }))
@@ -646,6 +662,19 @@ fn emit_lifecycle_transition(
             scheduler_panic,
             "scheduler lifecycle dispatch",
         );
+
+        if !frames_were_enabled && Scheduler::instance().frames_enabled() {
+            let redirty_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                realm.redirty_root_for_frames_reenable();
+                realm.wake_frame();
+            }))
+            .err();
+            preserve_first_lifecycle_panic(
+                &mut first_panic,
+                redirty_panic,
+                "frames-reenable redirty",
+            );
+        }
 
         let widgets_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             realm.widgets().handle_app_lifecycle_state_changed(step);
@@ -2079,18 +2108,19 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
-    /// The frames-reenable-redirty listener
-    /// (`super::runtime::install_frames_reenable_redirty_listener`) resolves
-    /// `APP_RUNTIME` at fire time instead of capturing one fixed pipeline
-    /// (per its own doc comment) — and had no coverage anywhere until this
-    /// test. A throwaway `Scheduler` drives the lifecycle edges directly,
-    /// independent of `Scheduler::instance()`; `install_test_realm` puts a
-    /// real realm into THIS thread's `APP_RUNTIME`, which is exactly what
-    /// the listener's `APP_RUNTIME.with` lookup needs installed to find.
+    /// A disabled->enabled lifecycle edge must redirty the root when
+    /// delivered the way production actually delivers one: as a
+    /// `PlatformToUi::Lifecycle` event through `dispatch_platform_realm`,
+    /// which takes the realm OUT of `APP_RUNTIME` for the duration of the
+    /// dispatch and only restores it after `emit_lifecycle_transition`
+    /// returns. A fire-time `APP_RUNTIME` lookup (a `Scheduler` lifecycle
+    /// listener, the previous shape of this fix) can never see the realm
+    /// during that exact window — driving a throwaway `Scheduler` directly,
+    /// the previous version of this test's approach, never exercises that
+    /// window at all, which is why it never caught the bug.
     #[test]
-    fn frames_reenable_redirties_root_so_next_frame_paints_not_idle() {
+    fn frames_reenable_redirties_root_when_dispatched_through_the_realm_queue() {
         use std::cell::Cell;
-        use std::sync::atomic::{AtomicU32, Ordering};
 
         #[derive(Clone)]
         struct LeafView;
@@ -2203,40 +2233,22 @@ mod realm_dispatch_tests {
             "precondition: the root must be clean (Idle) going into the lifecycle dance"
         );
 
-        let scheduler = Scheduler::new();
-        let wake_calls = Arc::new(AtomicU32::new(0));
-        let wake_calls_for_hook = Arc::clone(&wake_calls);
-        super::super::runtime::install_frames_reenable_redirty_listener(
-            &scheduler,
-            Arc::new(move || {
-                wake_calls_for_hook.fetch_add(1, Ordering::Relaxed);
-            }),
-        );
+        // The disable edge, delivered the way production actually delivers
+        // a lifecycle transition: as a `PlatformToUi::Lifecycle` event
+        // through the realm dispatch queue, which takes the realm OUT of
+        // `APP_RUNTIME` for the duration of the dispatch.
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Hidden)),
+        )
+        .expect("hidden dispatches");
 
-        // enabled -> enabled: a real state change (Resumed -> Inactive) but
-        // no ENABLE edge, so the listener must not wake.
-        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Inactive);
-        assert_eq!(
-            wake_calls.load(Ordering::Relaxed),
-            0,
-            "an enabled->enabled transition must not wake"
-        );
-
-        // The disable edge: still no wake -- only the RE-enable edge does.
-        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
-        assert_eq!(
-            wake_calls.load(Ordering::Relaxed),
-            0,
-            "the disable edge must not wake"
-        );
-
-        // The re-enable edge: exactly one wake, plus the redirty.
-        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
-        assert_eq!(
-            wake_calls.load(Ordering::Relaxed),
-            1,
-            "the disabled->enabled edge must wake exactly once"
-        );
+        // The re-enable edge under test, same delivery path.
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+        )
+        .expect("resumed dispatches");
 
         let repainted = Rc::new(Cell::new(false));
         let repainted_in_frame = Rc::clone(&repainted);
@@ -2254,8 +2266,10 @@ mod realm_dispatch_tests {
 
         assert!(
             repainted.get(),
-            "the re-enable edge must redirty the root so the next frame actually presents, \
-             not stay Idle"
+            "a disabled->enabled lifecycle edge delivered through the real realm dispatch \
+             queue must redirty the root so the next frame actually presents, not stay Idle \
+             -- this is the exact stale-window-on-resume bug the redirty logic exists to \
+             prevent"
         );
         assert_eq!(
             render_scene_calls.get(),
@@ -4021,7 +4035,7 @@ mod tests {
             .expect("headless platform always opens a window");
 
         // `on_request_frame` requires `Send` on the callback; `AppRuntime` is
-        // not `Send` (owner-thread-affine realm state — ADR-0027), so the
+        // not `Send` (it holds owner-thread-affine realm state), so the
         // closure below cannot capture a specific `&AppRuntime`. Resolving
         // `APP_RUNTIME` fresh inside the closure (zero captures for the
         // runtime itself) sidesteps that entirely.

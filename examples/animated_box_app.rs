@@ -38,12 +38,12 @@
 //! An earlier version of this example reached into the render pipeline
 //! directly from the ticker listener (`AppBinding::instance().render_pipeline_mut()`)
 //! to mutate the mounted `RenderColoredBox` in place, bypassing the widget
-//! tree. That ambient process-wide reach retired along with `AppBinding`
-//! (ADR-0027 step 3: `AppRuntime`/`UiRealm` are deliberately `pub(crate)`,
-//! not a public escape hatch) — an application author now drives per-tick
-//! recoloring the idiomatic way Flutter's own `AnimatedWidget` does:
-//! subscribe an `AnimatedView` to the controller's `Listenable` and let the
-//! framework mark it dirty and rebuild on every tick.
+//! tree. That ambient process-wide reach retired along with `AppBinding`:
+//! `AppRuntime`/`UiRealm` are deliberately `pub(crate)`, not a public escape
+//! hatch, so an application author now drives per-tick recoloring the
+//! idiomatic way Flutter's own `AnimatedWidget` does instead: subscribe an
+//! `AnimatedView` to the controller's `Listenable` and let the framework
+//! mark it dirty and rebuild on every tick.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

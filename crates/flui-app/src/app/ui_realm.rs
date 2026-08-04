@@ -405,16 +405,17 @@ pub(crate) struct UiRealm {
     /// own interior mutability (`RwLock`/`AtomicBool`), so an outer lock
     /// here would only ever be uncontended — this realm is the single
     /// owner-thread-confined caller, never shared across threads. Moved
-    /// here from the retired `AppBinding` (ADR-0027 step 3): the renderer's
-    /// per-field disposition (render_views, semantics fan-out,
-    /// first-frame-deferral counters) is per-realm state, not a process-wide
-    /// concern — sharing it across realms once `AppRuntime` hosts more than
-    /// one was exactly the hazard this placement designs out.
+    /// here from the retired `AppBinding`: the renderer's per-field
+    /// disposition (render_views, semantics fan-out, first-frame-deferral
+    /// counters) is per-realm state, not a process-wide concern — sharing
+    /// it across realms once `AppRuntime` hosts more than one was exactly
+    /// the hazard this placement designs out.
     renderer: RenderingFlutterBinding,
     /// Controller registry for implicit animations (`VsyncScope`-driven).
-    /// Moved here from the retired `AppBinding` — interim home (ADR-0027 §8:
-    /// a scheduler-owning change re-homes controllers to `UpdateScheduler`
-    /// later); frame-relative, so per-realm now instead of process-wide.
+    /// Moved here from the retired `AppBinding` — an interim home: a later
+    /// scheduler-owning change re-homes controllers to `UpdateScheduler`,
+    /// but for now this is frame-relative, so per-realm instead of
+    /// process-wide.
     /// `Mutex`, not `RwLock`: `set_vsync` replaces the whole handle through
     /// `&self`, and the per-frame `tick_all`/`has_running` calls operate on
     /// a cloned `Vsync` handle (sharing the inner `Arc<Mutex<VsyncInner>>`),
@@ -534,9 +535,12 @@ fn preserve_first_input_panic(
 
 /// Whether [`UiRealm::handle_input_entered`] must drop `input` outright,
 /// before ever reaching the per-kind dispatch above, given the
-/// presentation's current lifecycle (ADR-0037 §9). Moved here from the
-/// retired `AppBinding`, unchanged — see its own doc for the per-lifecycle
-/// rationale.
+/// presentation's current lifecycle. Moved here from the retired
+/// `AppBinding`, unchanged — the match arms below are the per-lifecycle
+/// rationale: a suspended presentation drops pointer/drag input (no gesture
+/// arena to resolve into) but still accepts keyboard/IME (a background
+/// window can keep text-input focus), while a not-yet-attached or closing
+/// presentation drops everything.
 ///
 /// Explicit and exhaustive over **both** axes — lifecycle and input kind —
 /// with no wildcard on the input axis: adding a `PlatformInput` variant
@@ -928,12 +932,14 @@ impl UiRealm {
     }
 
     /// Re-dirty this realm's root so the next frame actually produces
-    /// content instead of finding nothing to do — the per-realm target of
-    /// `AppRuntime`'s frames-disabled->enabled re-enable listener (see
-    /// `runtime.rs`'s `install_frames_reenable_redirty_listener`). FLUI has
-    /// no retained-scene layer to fall back on, so a `Hidden`/`Paused` ->
-    /// `Resumed`/`Inactive` transition needs the same explicit re-dirty
-    /// `allow_first_frame` needs after a deferral lifts.
+    /// content instead of finding nothing to do — called directly from
+    /// `runner.rs`'s `emit_lifecycle_transition` on the frames-disabled->
+    /// enabled edge (that call site already has this realm in scope; see
+    /// its own doc for why the redirty lives there and not in a `Scheduler`
+    /// lifecycle listener). FLUI has no retained-scene layer to fall back
+    /// on, so a `Hidden`/`Paused` -> `Resumed`/`Inactive` transition needs
+    /// the same explicit re-dirty `allow_first_frame` needs after a
+    /// deferral lifts.
     pub(crate) fn redirty_root_for_frames_reenable(&self) {
         crate::bindings::redirty_pipeline_root(self.renderer.root_pipeline_owner());
     }
@@ -1528,7 +1534,7 @@ impl UiRealm {
     /// This is the single runner entry point for platform input. Pointer
     /// events go to this presentation's gesture state; IME and keyboard
     /// events go to the same presentation's text-input and focus owners.
-    /// [`input_dropped_by_lifecycle`] gates every kind first (ADR-0037 §9):
+    /// [`input_dropped_by_lifecycle`] gates every kind first:
     /// `Closing`/`Closed` refuses all input; `Suspended` drops pointer/
     /// drag-drop only (keyboard/IME keep flowing, so a flaky or absent
     /// occlusion signal never becomes a keystroke blackout).
@@ -1589,7 +1595,7 @@ impl UiRealm {
             PlatformInput::DragDrop(drag_drop_event) => {
                 tracing::debug!(
                     drag_drop_kind = drag_drop_kind(&drag_drop_event),
-                    "drag-and-drop input received; realm routing not implemented yet (ADR-0038), dropping"
+                    "drag-and-drop input received; realm routing not implemented yet, dropping"
                 );
             }
         }
@@ -2627,7 +2633,7 @@ mod tests {
             );
         }
 
-        // ---- Input lifecycle gate (ADR-0037 §9) ------------------------------
+        // ---- Input lifecycle gate --------------------------------------------
 
         /// `Suspended` drops pointer input only — gesture-arena protection —
         /// while keyboard/IME continue to flow. A flaky or absent occlusion
@@ -3882,10 +3888,10 @@ mod tests {
             );
         }
 
-        /// End-to-end proof of the literal ADR-0030 claim `flui-widgets`'
-        /// own `editable_text::tests` cannot make on their own: a real
+        /// End-to-end proof of a claim `flui-widgets`' own
+        /// `editable_text::tests` cannot make on their own: a real
         /// mounted `EditableText` receives the weak handle of this realm's
-        /// directly owned platform capability.
+        /// directly owned platform capability, not a mock or a stand-in.
         #[test]
         fn a_mounted_editable_text_toggles_platform_ime_on_focus_and_blur() {
             let (fake, text_input) = headless_text_input();

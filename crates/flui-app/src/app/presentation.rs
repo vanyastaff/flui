@@ -123,8 +123,8 @@ pub(crate) struct PresentationState {
     /// still has no production caller (see [`Self::semantics_host`]'s doc).
     semantics: SemanticsHost,
     /// Total frames rendered successfully for this presentation. Moved here
-    /// from the retired `AppBinding` (ADR-0027 step 3): per-window frame
-    /// accounting, beside its consumer [`Self::performance_overlay`].
+    /// from the retired `AppBinding`: per-window frame accounting, beside
+    /// its consumer [`Self::performance_overlay`].
     /// `Cell`, not `AtomicU64`: `PresentationState` is owner-thread-confined
     /// (`!Send` transitively, via `Rc`-backed fields), so an atomic buys
     /// nothing here that `Cell`'s cheaper interior mutability does not
@@ -136,8 +136,7 @@ pub(crate) struct PresentationState {
     /// frame-time window only exists while the overlay is on, so "enabled
     /// but no stats" is unrepresentable and a disabled overlay costs one
     /// `RefCell` borrow and a `None` check per frame. Moved here from the
-    /// retired `AppBinding` (ADR-0027 step 3) — per-window stats, not a
-    /// process-wide concern.
+    /// retired `AppBinding` — per-window stats, not a process-wide concern.
     performance_overlay: RefCell<Option<PerformanceStats>>,
 }
 

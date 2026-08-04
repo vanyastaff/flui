@@ -7,8 +7,8 @@
 //!   clipboard surfaces retired from the former `AppBinding`)
 //! - `AppConfig` - Application configuration
 //!
-//! Application lifecycle state is `flui_scheduler::AppLifecycleState`
-//! (ADR-0035); the runner drives the scheduler directly.
+//! Application lifecycle state is `flui_scheduler::AppLifecycleState`;
+//! the runner drives the scheduler directly.
 
 mod config;
 pub mod direct;

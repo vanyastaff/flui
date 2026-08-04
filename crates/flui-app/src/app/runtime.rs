@@ -281,9 +281,9 @@ impl SharedEngineServices {
         // steal-proof and idempotent — the same guarantee the retired
         // `instance()`'s thread-local initializer gave: a throwaway
         // `UiRealm::for_test()` built alongside a live `AppRuntime` never
-        // touches these hooks (it never resolves `SharedEngineServices` at
+        // touches this hook (it never resolves `SharedEngineServices` at
         // all), and a second realm installed on this same thread
-        // (hot-restart) never re-registers them either.
+        // (hot-restart) never re-registers it either.
         //
         // Animation-wake wiring: scheduling a frame callback (a ticker tick
         // on the `Scheduler::instance()` singleton, e.g. an
@@ -295,21 +295,25 @@ impl SharedEngineServices {
         // touched this runtime at all -- `wake` is exactly the `Arc`-backed,
         // `Send + Sync` handle that makes firing it safe regardless of
         // which thread does so.
+        //
+        // The frames-disabled->enabled root re-dirty (an app that was
+        // `Hidden`/`Paused`/`Detached` coming back to `Resumed`/`Inactive`
+        // needs its root explicitly re-dirtied, or the next frame finds
+        // nothing dirty and stays Idle) does NOT live here as a `Scheduler`
+        // lifecycle listener. It used to, and that shipped a real bug: every
+        // production lifecycle transition runs through
+        // `runner.rs`'s `emit_lifecycle_transition`, which itself always
+        // runs inside `dispatch_platform_realm`'s dispatch window — the
+        // window during which the realm is taken OUT of `APP_RUNTIME` and
+        // only restored once the dispatch returns. A listener resolving
+        // `APP_RUNTIME` at fire time therefore always saw `None` and
+        // silently no-opped on every real transition. The fix lives at
+        // `emit_lifecycle_transition` itself, which already has the live
+        // realm in scope and needs no thread-local resolution at all — see
+        // that function's own doc.
         scheduler
             .get()
             .set_on_frame_scheduled(Some(Arc::clone(&wake)));
-
-        // Frames-disabled->enabled re-dirty wiring (ADR-0035): FLUI has no
-        // retained-scene re-present, so an app that was
-        // `Hidden`/`Paused`/`Detached` and comes back to
-        // `Resumed`/`Inactive` needs the root explicitly re-dirtied
-        // alongside the frame the scheduler's re-enable leg already
-        // guarantees gets requested. Per-realm now (not a fixed pipeline
-        // captured once): the pipeline this needs to touch is whichever
-        // realm is CURRENTLY installed on this thread when the edge fires,
-        // which can change across a hot-restart -- see
-        // `install_frames_reenable_redirty_listener`'s own doc.
-        install_frames_reenable_redirty_listener(scheduler.get(), wake);
 
         Self {
             painting,
@@ -317,43 +321,6 @@ impl SharedEngineServices {
             scheduler,
         }
     }
-}
-
-/// Registers a `Scheduler` lifecycle listener that re-dirties whichever
-/// realm is currently installed in [`super::runner::APP_RUNTIME`] on this
-/// thread and calls `wake` on the frames-disabled->enabled edge (ADR-0035).
-///
-/// Reaches `APP_RUNTIME` (rather than capturing one fixed
-/// `Arc<RwLock<PipelineOwner>>`, the retired `AppBinding`-era shape) because
-/// the pipeline that needs re-dirtying is per-realm now: a hot-restart tears
-/// down and reinstalls a fresh `UiRealm` — and therefore a fresh
-/// pipeline — on the SAME thread, and this listener is only ever installed
-/// once per thread (see [`SharedEngineServices::resolve`]'s doc). Safe to
-/// resolve the thread-local at fire time here specifically because this
-/// listener only ever fires on the thread whose `Scheduler::instance()` it
-/// is registered against (`Scheduler` is itself thread-local) — never the
-/// cross-thread case `AppRuntime::frame_wake_callback`'s own doc warns
-/// against.
-#[cfg(not(target_os = "ios"))]
-pub(super) fn install_frames_reenable_redirty_listener(
-    scheduler: &Scheduler,
-    wake: Arc<dyn Fn() + Send + Sync>,
-) {
-    let frames_were_enabled = Arc::new(AtomicBool::new(scheduler.frames_enabled()));
-    scheduler.add_lifecycle_state_listener(Arc::new(
-        move |state: flui_scheduler::AppLifecycleState| {
-            let now_enabled = state.should_render();
-            let was_enabled = frames_were_enabled.swap(now_enabled, Ordering::AcqRel);
-            if !was_enabled && now_enabled {
-                super::runner::APP_RUNTIME.with(|slot| {
-                    if let Some(realm) = slot.borrow().realm.as_ref() {
-                        realm.redirty_root_for_frames_reenable();
-                    }
-                });
-                wake();
-            }
-        },
-    ));
 }
 
 /// What [`UiRealm::construct`](super::ui_realm) needs from the scheduler at
@@ -506,8 +473,8 @@ pub(crate) struct AppRuntime {
     services: OnceCell<SharedEngineServices>,
     /// Whether a redraw has been requested since the last
     /// [`Self::mark_rendered`] — the loop-scoped half of the retired
-    /// `AppBinding.needs_redraw` flag (ADR-0027 step 3: `AppBinding`
-    /// dissolution). Loop-scoped, not realm-scoped: a hot-restart that tears
+    /// `AppBinding.needs_redraw` flag, re-homed here as part of `AppBinding`'s
+    /// dissolution. Loop-scoped, not realm-scoped: a hot-restart that tears
     /// down and reinstalls a realm on this same thread must not lose a
     /// pending redraw request, and [`Self::frame_wake_callback`] hands a
     /// clone of this exact `Arc` to callbacks that may fire from any thread.
@@ -522,8 +489,8 @@ pub(crate) struct AppRuntime {
     /// callback that fires off the owner thread, which a `Weak` field owned
     /// by a `!Send` `UiRealm` cannot support.
     redraw_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
-    /// The platform's clipboard capability (ADR-0034), moved here from the
-    /// retired `AppBinding` — a process/loop-scoped OS-session capability,
+    /// The platform's clipboard capability, moved here from the retired
+    /// `AppBinding` — a process/loop-scoped OS-session capability,
     /// vended to presentations rather than owned by one. `set_platform_clipboard`/
     /// `clear_platform_clipboard` are the install/teardown symmetry: without
     /// the clear half, a live platform resource (arboard on X11 owns a live
@@ -753,7 +720,7 @@ impl AppRuntime {
             dead_code,
             reason = "only teardown_platform_realm calls this, and that function \
                       is desktop/android-only (the web backend's host stays \
-                      resident for the page's lifetime -- ADR-0039 §6/§7)"
+                      resident for the page's lifetime)"
         )
     )]
     pub(super) fn clear_redraw_window(&self) {
@@ -761,7 +728,7 @@ impl AppRuntime {
     }
 
     // ========================================================================
-    // Clipboard (ADR-0034), moved from the retired `AppBinding`
+    // Clipboard, moved from the retired `AppBinding`
     // ========================================================================
 
     /// Install the platform's clipboard capability. See `AppBinding`'s
@@ -781,7 +748,7 @@ impl AppRuntime {
             dead_code,
             reason = "only teardown_platform_realm calls this, and that function \
                       is desktop/android-only (the web backend's host stays \
-                      resident for the page's lifetime -- ADR-0039 §6/§7)"
+                      resident for the page's lifetime)"
         )
     )]
     pub(super) fn clear_platform_clipboard(&self) {
@@ -1035,7 +1002,7 @@ mod wake_and_clipboard_tests {
     }
 
     /// `AppRuntime::clipboard()` reaching the platform clipboard installed
-    /// via `set_platform_clipboard` (ADR-0034) — migrated from the retired
+    /// via `set_platform_clipboard` — migrated from the retired
     /// `AppBinding`'s test module.
     #[test]
     fn app_runtime_clipboard_reaches_the_installed_platform_clipboard() {
@@ -1160,11 +1127,12 @@ mod wake_and_clipboard_tests {
     /// capture its `Waker`, then fire that `Waker` from an OS thread that
     /// never touches `runtime`, `APP_RUNTIME`, or `Scheduler::instance()` —
     /// and observe `needs_redraw` flip on the ORIGINAL runtime anyway. A
-    /// hook built by re-resolving `APP_RUNTIME` at fire time (the shape
-    /// `install_frames_reenable_redirty_listener` uses, safely, only
-    /// because that listener fires solely on its own owner thread) would
-    /// see an empty thread-local on the foreign thread and never flip this
-    /// flag — the revert recipe for this test.
+    /// hook built by re-resolving `APP_RUNTIME` at fire time instead of
+    /// capturing this `Send` handle would see an empty thread-local on the
+    /// foreign thread and never flip this flag — the revert recipe for this
+    /// test. (A real instance of exactly this mistake shipped once, in the
+    /// frames-reenable-redirty logic — see `emit_lifecycle_transition`'s
+    /// doc in `runner.rs` for that story and its fix.)
     #[test]
     fn ensure_services_installs_a_send_wake_hook_that_survives_a_cross_thread_fire() {
         use std::sync::mpsc;
