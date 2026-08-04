@@ -1168,8 +1168,14 @@ impl Platform for WindowsPlatform {
         unsafe {
             // Bring the foreground window to front
             let hwnd = GetForegroundWindow();
-            if !hwnd.is_invalid() {
-                let _ = SetForegroundWindow(hwnd);
+            if !hwnd.is_invalid()
+                && let Err(error) = SetForegroundWindow(hwnd).ok()
+            {
+                tracing::warn!(
+                    ?hwnd,
+                    ?error,
+                    "SetForegroundWindow failed in Platform::activate"
+                );
             }
         }
     }

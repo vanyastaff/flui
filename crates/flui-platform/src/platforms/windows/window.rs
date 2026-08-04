@@ -245,8 +245,16 @@ impl WindowsWindow {
 
             // Show window if requested
             if options.visible {
-                let _ = ShowWindow(hwnd, SW_SHOW);
-                let _ = UpdateWindow(hwnd);
+                if let Err(error) = ShowWindow(hwnd, SW_SHOW).ok() {
+                    tracing::warn!(
+                        ?hwnd,
+                        ?error,
+                        "ShowWindow(SW_SHOW) failed in WindowsWindow::new"
+                    );
+                }
+                if let Err(error) = UpdateWindow(hwnd).ok() {
+                    tracing::warn!(?hwnd, ?error, "UpdateWindow failed in WindowsWindow::new");
+                }
                 window.state.lock().visible = true;
             }
 
@@ -498,7 +506,13 @@ impl WindowsWindow {
                     cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                     ..Default::default()
                 };
-                let _ = GetMonitorInfoW(monitor, &raw mut monitor_info);
+                if let Err(error) = GetMonitorInfoW(monitor, &raw mut monitor_info).ok() {
+                    tracing::warn!(
+                        ?hwnd,
+                        ?error,
+                        "GetMonitorInfoW failed entering fullscreen; monitor rect will be zeroed"
+                    );
+                }
 
                 let monitor_rect = monitor_info.rcMonitor;
 
@@ -869,7 +883,9 @@ impl PlatformWindow for WindowsWindow {
         // does not retain the pointer past the call.
         unsafe {
             let title_str = HSTRING::from(title);
-            let _ = SetWindowTextW(self.hwnd, &title_str);
+            if let Err(error) = SetWindowTextW(self.hwnd, &title_str) {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowTextW failed");
+            }
             self.state.lock().title = title.to_string();
         }
     }
@@ -878,7 +894,9 @@ impl PlatformWindow for WindowsWindow {
         // SAFETY: `SetForegroundWindow` takes `self.hwnd` by value, no
         // pointer arguments.
         unsafe {
-            let _ = SetForegroundWindow(self.hwnd);
+            if let Err(error) = SetForegroundWindow(self.hwnd).ok() {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetForegroundWindow failed");
+            }
         }
     }
 
@@ -886,21 +904,27 @@ impl PlatformWindow for WindowsWindow {
         // SAFETY: `ShowWindow` takes `self.hwnd` and a command constant by
         // value, no pointer arguments.
         unsafe {
-            let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
+            if let Err(error) = ShowWindow(self.hwnd, SW_MINIMIZE).ok() {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_MINIMIZE) failed");
+            }
         }
     }
 
     fn maximize(&self) {
         // SAFETY: see `minimize` above — same call shape.
         unsafe {
-            let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
+            if let Err(error) = ShowWindow(self.hwnd, SW_MAXIMIZE).ok() {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_MAXIMIZE) failed");
+            }
         }
     }
 
     fn restore(&self) {
         // SAFETY: see `minimize` above — same call shape.
         unsafe {
-            let _ = ShowWindow(self.hwnd, SW_RESTORE);
+            if let Err(error) = ShowWindow(self.hwnd, SW_RESTORE).ok() {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_RESTORE) failed");
+            }
         }
     }
 
@@ -917,7 +941,7 @@ impl PlatformWindow for WindowsWindow {
             let width = logical_to_device(size.width.0, scale);
             let height = logical_to_device(size.height.0, scale);
 
-            let _ = SetWindowPos(
+            if let Err(error) = SetWindowPos(
                 self.hwnd,
                 None,
                 0,
@@ -925,7 +949,9 @@ impl PlatformWindow for WindowsWindow {
                 width,
                 height,
                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-            );
+            ) {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (PlatformWindow::resize) failed");
+            }
 
             self.state.lock().bounds.size = size;
         }
@@ -938,7 +964,9 @@ impl PlatformWindow for WindowsWindow {
         // thread — Win32 dispatches `WM_DESTROY` to the window procedure
         // before `DestroyWindow` returns.
         unsafe {
-            let _ = DestroyWindow(self.hwnd);
+            if let Err(error) = DestroyWindow(self.hwnd) {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow (PlatformWindow::close) failed");
+            }
         }
     }
 
@@ -958,12 +986,19 @@ impl PlatformWindow for WindowsWindow {
                 WindowBackgroundAppearance::MicaAltBackdrop => 4, // DWMSBT_TABBEDWINDOW (Mica Alt)
             };
 
-            let _ = DwmSetWindowAttribute(
+            if let Err(error) = DwmSetWindowAttribute(
                 self.hwnd,
                 DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
                 (&raw const backdrop_value).cast::<std::ffi::c_void>(),
                 std::mem::size_of::<i32>() as u32,
-            );
+            ) {
+                tracing::warn!(
+                    hwnd = ?self.hwnd,
+                    ?error,
+                    ?appearance,
+                    "DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE) failed"
+                );
+            }
         }
     }
 
@@ -1203,16 +1238,22 @@ impl WindowTrait for WindowsWindow {
                     if self.is_fullscreen() {
                         self.set_fullscreen(false);
                     }
-                    let _ = ShowWindow(self.hwnd, SW_RESTORE);
+                    if let Err(error) = ShowWindow(self.hwnd, SW_RESTORE).ok() {
+                        tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_RESTORE) failed in set_state(Normal)");
+                    }
                 }
                 CrossWindowState::Minimized => {
-                    let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
+                    if let Err(error) = ShowWindow(self.hwnd, SW_MINIMIZE).ok() {
+                        tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_MINIMIZE) failed in set_state(Minimized)");
+                    }
                 }
                 CrossWindowState::Maximized => {
                     if self.is_fullscreen() {
                         self.set_fullscreen(false);
                     }
-                    let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
+                    if let Err(error) = ShowWindow(self.hwnd, SW_MAXIMIZE).ok() {
+                        tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_MAXIMIZE) failed in set_state(Maximized)");
+                    }
                 }
                 CrossWindowState::Fullscreen => {
                     self.set_fullscreen(true);
@@ -1230,7 +1271,9 @@ impl WindowTrait for WindowsWindow {
         // value, no pointer arguments.
         unsafe {
             let cmd = if visible { SW_SHOW } else { SW_HIDE };
-            let _ = ShowWindow(self.hwnd, cmd);
+            if let Err(error) = ShowWindow(self.hwnd, cmd).ok() {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, visible, "ShowWindow failed in set_visible");
+            }
             self.state.lock().visible = visible;
         }
     }
@@ -1341,7 +1384,9 @@ impl WindowTrait for WindowsWindow {
         // SAFETY: `SetForegroundWindow` takes `self.hwnd` by value, no
         // pointer arguments.
         unsafe {
-            let _ = SetForegroundWindow(self.hwnd);
+            if let Err(error) = SetForegroundWindow(self.hwnd).ok() {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetForegroundWindow failed in focus");
+            }
         }
     }
 
