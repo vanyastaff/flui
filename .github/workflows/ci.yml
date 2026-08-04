@@ -9,7 +9,8 @@ name: CI
 #   wasm-check     — cargo check for the wasm-capable crates + real cdylib link of the two web
 #                    demos + import-surface check against scripts/wasm-import-allowlist.txt
 #   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos backends
-#   test           — build + nextest (lib + integration), ubuntu
+#   test           — build + nextest (lib + integration), ubuntu, plus a
+#                    dedicated flui-platform (Linux-runnable subset) step
 #   gpu-test       — full enable-wgpu-tests readback suite on windows/WARP (merge-blocking)
 #   bench-compile  — criterion benches compile + link
 #   doc            — rustdoc with RUSTDOCFLAGS=-D warnings
@@ -260,8 +261,18 @@ jobs:
       # PR cannot reintroduce the pattern by reintroducing the name. Any
       # genuinely process-global resource that remains (see AGENTS.md's
       # Testing Quirks) needs its own explicit test-local lock instead.
-      # flui-platform tests are excluded until the spawned
-      # STATUS_HEAP_CORRUPTION investigation lands a fix.
+      # flui-platform is still excluded from this workspace-wide invocation,
+      # but NOT because of the Windows STATUS_HEAP_CORRUPTION crash tracked
+      # at ROADMAP-TRACKER item H9 — that crash is Windows-only and this
+      # runner is ubuntu-latest, so it can't reproduce here regardless. Two
+      # things this default-feature workspace run cannot give flui-platform:
+      # `--all-features` (the winit backend, its actual Linux-runnable
+      # implementation, only compiles under `winit-backend` — invisible to
+      # `default = ["desktop"]`, see crates/flui-platform/AGENTS.md) and a
+      # real X11 connection for the handful of tests that construct
+      # `WinitPlatform` directly. The dedicated step below supplies both and
+      # runs flui-platform's Linux-runnable suite green; see that step's
+      # comment for what remains excluded and why.
       - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run
@@ -269,6 +280,33 @@ jobs:
           --exclude flui-platform
           --locked
           --no-fail-fast
+
+      # Re-enters flui-platform's suite (audit 2026-08-04 §2.1): the crate
+      # carries 70% of the workspace's unsafe code and previously had zero
+      # executing tests in CI. Ground truth on ubuntu-latest (verified
+      # locally, 5x stable): `--all-features` is required just to compile
+      # the winit backend; of the 171 tests that then run, 11 fail without
+      # help (three integration-test files call `Platform::open_window`
+      # directly instead of inside `Platform::run`'s `on_ready` callback —
+      # a real ordering requirement of the winit event-loop model, not a
+      # display-server issue) and a further 8 winit-internals unit tests
+      # construct `WinitPlatform::new()` directly and need a working X11
+      # clipboard connection. `FLUI_HEADLESS=1` routes `current_platform()`
+      # to the `HeadlessPlatform` mock and fixes the first 11; Xvfb supplies
+      # the real (if virtual) X11 connection the remaining 8 need. Combined,
+      # all 171 pass, 8 more are legitimately `#[ignore]`d (manual-run
+      # perf benchmarks and unimplemented placeholders) — 5x-verified
+      # stable, no filter needed. This step never runs on a Windows or
+      # macOS runner (H9 stays honored): the matrix above is ubuntu-only,
+      # and if that ever changes this step must gain an explicit
+      # `if: runner.os == 'Linux'` guard before Windows/macOS rejoin it.
+      - name: Ensure Xvfb is available (flui-platform winit-backend clipboard init)
+        run: command -v xvfb-run >/dev/null || (sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb)
+
+      - name: cargo nextest run (flui-platform, headless)
+        env:
+          FLUI_HEADLESS: "1"
+        run: xvfb-run -a cargo nextest run -p flui-platform --all-features --locked --no-fail-fast
 
       # flui-assets and flui-widgets both default to `default = []`, so the
       # workspace-default run above never compiles their `images`/`network`
@@ -496,7 +534,10 @@ jobs:
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
   # doctests (cargo-nextest#16), so the `test` job above never covers them;
   # without this job the 700+ doc code fences in the workspace are unverified
-  # prose. Same exclusion as `test`: flui-platform (STATUS_HEAP_CORRUPTION).
+  # prose. Unlike the `test` job, flui-platform is NOT excluded here: its
+  # doctests need neither `--all-features` nor a display server (verified
+  # locally with and without DISPLAY set — identical 12 passed/0 failed
+  # either way), so there is no green-by-construction reason to carve it out.
   # ─────────────────────────────────────────────────────────────────────────
   doc-test:
     name: doc-test
@@ -520,7 +561,7 @@ jobs:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: cargo test --doc
-        run: cargo test --workspace --exclude flui-platform --locked --doc
+        run: cargo test --workspace --locked --doc
 
   # ─────────────────────────────────────────────────────────────────────────
   # msrv — verify the declared MSRV actually compiles the workspace. Every
@@ -753,9 +794,12 @@ jobs:
   # clippy, not plain check, on purpose: `cfg(windows)`/`cfg(macos)` code is
   # invisible to every other lint gate, and running only `cargo check` here
   # let ~80 deny-level lint violations accumulate unseen (found the day this
-  # switched). It still does NOT link and runs NO tests, and flui-platform is
-  # excluded from the `test` job entirely, so this is the only gate touching
-  # those backends. Green means "compiles clean under the workspace lints".
+  # switched). It still does NOT link and runs NO tests. The `test` job's
+  # dedicated flui-platform step (added for audit 2026-08-04 §2.1) only runs
+  # the Linux-buildable backends (headless + winit-on-X11); the Windows and
+  # macOS backends this job lints are never linked or executed by anything,
+  # so this remains the only gate touching that source at all. Green here
+  # means "compiles clean under the workspace lints", nothing more.
   # Triples are the shipped ones — MSVC (what `gpu-test` uses) and aarch64
   # macOS — with `--all-targets` so per-OS test targets compile too.
   # ─────────────────────────────────────────────────────────────────────────
