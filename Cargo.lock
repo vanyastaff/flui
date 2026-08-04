@@ -1631,6 +1631,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-hot-reload-lifecycle-fixture"
+version = "0.2.0"
+dependencies = [
+ "flui-hot-reload",
+ "flui-layer",
+ "flui-view",
+]
+
+[[package]]
 name = "flui-interaction"
 version = "0.2.0"
 dependencies = [

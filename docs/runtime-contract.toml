@@ -1882,6 +1882,23 @@ markers = [
 # lists exact files permitted to contain the pattern.
 
 [[forbidden_pattern]]
+pattern = "PR-0"
+why = """
+Same rule as the `PR-1` entry below: a plan-slice marker (`PR-N` naming one \
+slice of a multi-PR migration plan) banned from source comments by AGENTS.md's \
+"no internal process-ID markers" rule. This entry wasn't seeded when the \
+gate landed because the singleton-retirement migration that motivated it was \
+numbered `PR-1` through `PR-6` (no zero-indexed slice existed yet); a later, \
+unrelated hot-reload thread-affinity change used `PR-0` as its own slice \
+label in a test's doc comments and slipped through review since this table \
+only enumerated `PR-1`..`PR-6`. Zero pre-existing hits at the time this entry \
+was added (the offending file was reworded to plain English in the same \
+change), so the allowlist starts empty; any future `PR-0` marker is a fresh \
+violation, not inherited debt.\
+"""
+allow_files = []
+
+[[forbidden_pattern]]
 pattern = "PR-1"
 why = """
 plan-slice markers (a private review/planning-history identifier like `PR-N` \

@@ -69,7 +69,8 @@ pub enum PluginKind {
 /// ```text
 /// ScenePlugin::load(path)
 ///     ↓
-/// plugin.build_scene(w, h) → Scene   (can call many times)
+/// plugin.build_scene(w, h) → Option<Scene>   (can call many times;
+///                                              None = skip this frame)
 ///     ↓
 /// plugin.has_update()  →  true when library file changed on disk
 ///     ↓
@@ -243,7 +244,7 @@ impl ScenePlugin {
         }
     }
 
-    /// Build a scene by calling the plugin's `flui_scene_build` function.
+    /// Build a scene by calling the plugin's build function.
     ///
     /// The plugin allocates a `Box<Scene>` and returns it raw; this method
     /// moves the `Scene` value out with `ptr::read` and hands the emptied box
@@ -252,6 +253,16 @@ impl ScenePlugin {
     /// `repr(Rust)` compilations is established at `load` by the ABI-token
     /// handshake (same compiler, same crate revision — see [`crate::abi_token`]).
     ///
+    /// Returns `None` when this is a [`PluginKind::App`] plugin and the
+    /// build function refused the call — the wrong-thread case
+    /// `app_plugin!`'s generated `flui_app_build` documents (see its
+    /// "Thread affinity" docs): the pipeline is pinned to whichever thread
+    /// first drove it, and every other thread gets a null pointer back
+    /// instead of a Scene. Treat that exactly like "no plugin loaded": skip
+    /// this frame, keep the plugin, try again later — never as a caller
+    /// error. A [`PluginKind::Scene`] plugin has no such refusal path, so a
+    /// null return there stays a hard contract violation (`assert!`s below).
+    ///
     /// # Safety
     ///
     /// One obligation remains with the caller, and it is why this stays an
@@ -259,25 +270,40 @@ impl ScenePlugin {
     /// `Arc<dyn Any>` whose vtables live in the plugin image, so the caller
     /// must drop it BEFORE the library is unloaded. No lifetime ties the
     /// scene to the [`DynLib`]; dropping it after `dlclose` is a
-    /// use-after-free of code. Development-only tooling either way.
+    /// use-after-free of code. Development-only tooling either way. This
+    /// obligation applies only to a `Some` return — a `None` (skipped frame)
+    /// owns nothing.
     #[allow(unsafe_code)]
-    pub unsafe fn build_scene(&self, width: f32, height: f32) -> Scene {
+    pub unsafe fn build_scene(&self, width: f32, height: f32) -> Option<Scene> {
         // SAFETY: `build_fn`/`free_fn` were resolved from the `DynLib` this
         // struct owns, which outlives the call. The plugin macro returns
-        // `Box::into_raw(Box::new(scene))`, so `ptr` addresses one live,
-        // initialized `Scene`; the load-time token handshake establishes that
-        // both compilations agree on `Scene`'s layout, making the `ptr::read`
-        // a valid move. After the read the box's contents are logically moved
-        // out, and `free_fn` deallocates without dropping (it reads the slot
-        // as `MaybeUninit<Scene>`), in the image that allocated it — no
-        // cross-image allocator or drop-glue mismatch remains.
+        // `Box::into_raw(Box::new(scene))`, so a non-null `ptr` addresses one
+        // live, initialized `Scene`; the load-time token handshake establishes
+        // that both compilations agree on `Scene`'s layout, making the
+        // `ptr::read` a valid move. After the read the box's contents are
+        // logically moved out, and `free_fn` deallocates without dropping (it
+        // reads the slot as `MaybeUninit<Scene>`), in the image that
+        // allocated it — no cross-image allocator or drop-glue mismatch
+        // remains. A null `ptr` never reaches `ptr::read`/`free_fn` at all.
         #[allow(unsafe_code)]
         unsafe {
             let ptr = (self.build_fn)(width, height);
-            assert!(!ptr.is_null(), "flui_scene_build returned null");
+            if ptr.is_null() {
+                let build_symbol = match self.kind {
+                    PluginKind::App => "flui_app_build",
+                    PluginKind::Scene => "flui_scene_build",
+                };
+                assert!(
+                    self.kind == PluginKind::App,
+                    "{build_symbol} returned null — scene_plugin! has no \
+                     legitimate null path (only app_plugin!'s wrong-thread \
+                     refusal does)"
+                );
+                return None;
+            }
             let scene = std::ptr::read(ptr.cast::<Scene>());
             (self.free_fn)(ptr);
-            scene
+            Some(scene)
         }
     }
 

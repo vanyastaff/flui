@@ -149,7 +149,10 @@ impl HotReloadDriver {
     /// Build a scene using the currently loaded plugin.
     ///
     /// Returns `None` if no plugin is loaded (caller should use a fallback
-    /// scene).
+    /// scene) — the same outcome, for the same "skip this frame" reason, as
+    /// a loaded `app_plugin!` refusing a wrong-thread call (see
+    /// [`ScenePlugin::build_scene`]'s docs). The caller cannot and need not
+    /// tell the two apart.
     ///
     /// # Safety
     ///
@@ -161,7 +164,7 @@ impl HotReloadDriver {
         // SAFETY: the caller of this fn has assumed the same obligations.
         self.plugin
             .as_ref()
-            .map(|p| unsafe { p.build_scene(width, height) })
+            .and_then(|p| unsafe { p.build_scene(width, height) })
     }
 
     /// Whether a plugin is currently loaded.

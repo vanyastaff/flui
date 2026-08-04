@@ -8,6 +8,14 @@
 //! locks) and would violate the no-flaky-tests rule. These tests pin the parts
 //! that ARE deterministic: the loader rejects bad inputs, and `file_mtime`
 //! reflects and detects an on-disk change (the reload trigger).
+//!
+//! `examples/hot_reload_lifecycle_fixture/tests/reload_lifecycle.rs` is the
+//! ONE deliberate exception to "no built plugin inside a test": it needs a
+//! real `dlopen`/`dlclose` cycle to observe the unload hazard `app_plugin!`'s
+//! `ManuallyDrop` thread-local storage exists to avoid. It lives in that
+//! fixture crate itself (not here) precisely so it needs no `cargo build`
+//! invocation, nested or otherwise, and no dependency edge back onto this
+//! crate — see that file's module doc.
 
 use std::fs;
 use std::path::PathBuf;
