@@ -17,6 +17,7 @@ pub(crate) mod logging;
 pub(crate) mod presentation;
 pub mod runner;
 pub(crate) mod runtime;
+pub(crate) mod semantics_host;
 pub(crate) mod ui_realm;
 pub(crate) mod window_registry;
 

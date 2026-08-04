@@ -63,8 +63,8 @@
 // MODULES
 // ============================================================================
 
+pub mod accessibility;
 pub mod action;
-pub mod binding;
 pub mod configuration;
 pub mod event;
 pub mod flags;
@@ -83,9 +83,9 @@ pub mod update;
 
 pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsActionRequest};
 // ============================================================================
-// RE-EXPORTS - Binding Types
+// RE-EXPORTS - Accessibility Types
 // ============================================================================
-pub use binding::{AccessibilityFeatures, SemanticsBinding, SemanticsHandle, SemanticsService};
+pub use accessibility::AccessibilityFeatures;
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================
@@ -165,12 +165,11 @@ pub mod prelude {
         AccessibilityFeatures, AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs,
         Assertiveness, AttributedString, DebugSemanticsDumpOrder, SemanticsAction,
         SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
-        SemanticsActionRequest, SemanticsBinding, SemanticsConfiguration, SemanticsEvent,
-        SemanticsEventType, SemanticsFlag, SemanticsFlags, SemanticsHandle, SemanticsId,
-        SemanticsNode, SemanticsNodeData, SemanticsNodeSnapshot, SemanticsNodeUpdate,
-        SemanticsOwner, SemanticsProperties, SemanticsRole, SemanticsService, SemanticsSnapshot,
-        SemanticsSnapshotError, SemanticsTag, SemanticsTree, SemanticsTreeUpdate,
-        SemanticsTreeUpdateBuilder, TextDirection,
+        SemanticsActionRequest, SemanticsConfiguration, SemanticsEvent, SemanticsEventType,
+        SemanticsFlag, SemanticsFlags, SemanticsId, SemanticsNode, SemanticsNodeData,
+        SemanticsNodeSnapshot, SemanticsNodeUpdate, SemanticsOwner, SemanticsProperties,
+        SemanticsRole, SemanticsSnapshot, SemanticsSnapshotError, SemanticsTag, SemanticsTree,
+        SemanticsTreeUpdate, SemanticsTreeUpdateBuilder, TextDirection,
     };
 }
 

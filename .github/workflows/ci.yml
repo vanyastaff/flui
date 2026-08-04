@@ -247,8 +247,9 @@ jobs:
       # (flui-rendering 37 files, flui-widgets 51, flui-view 26) and were
       # previously never executed in CI (the invocation was `--lib` only).
       # Runs fully parallel: nextest gives each test its own process, so the
-      # flui-app process-global binding cannot leak across tests, and the
-      # in-process semantics-flag race is serialized by `SEMANTICS_TEST_LOCK`
+      # flui-app process-global singletons cannot leak across tests, and the
+      # in-process AppBinding/Scheduler races under plain `cargo test` are
+      # serialized by `SINGLETON_WINDOW_TEST_LOCK`/`SCHEDULER_PHASE_TEST_LOCK`
       # in flui-app. flui-platform tests are excluded until the spawned
       # STATUS_HEAP_CORRUPTION investigation lands a fix.
       - name: cargo nextest run (lib + integration)

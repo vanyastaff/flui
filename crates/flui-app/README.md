@@ -14,7 +14,8 @@ Flutter's tree behavior without copying its process/runtime topology:
 | `run_app` / `run_app_with_config` | `runApp` |
 | `WidgetsBinding` | `WidgetsBinding` |
 | `RenderingFlutterBinding` + `PipelineOwner` | `RendererBinding` |
-| `GestureBinding` / `PaintingBinding` / `SemanticsBinding` / `Scheduler` | `GestureBinding` / `PaintingBinding` / `SemanticsBinding` / `SchedulerBinding` |
+| `GestureBinding` / `PaintingBinding` / `Scheduler` | `GestureBinding` / `PaintingBinding` / `SchedulerBinding` |
+| per-presentation `SemanticsHost` | `SemanticsBinding` |
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
 consumed by path (not published to crates.io).
@@ -29,10 +30,13 @@ UiRealm (owner-affine, !Send + !Sync)
     ├── WidgetsBinding              — View → Element, BuildOwner, GlobalKey scope
     └── GestureBinding              — single-presentation pointer state
 
-AppBinding (transitional host)
+PresentationState (per-window, private to flui-app)
     ├── FocusManager                — keyboard event dispatch
-    ├── RenderingFlutterBinding     — layout/paint via PipelineOwner (flui-rendering)
-    ├── SemanticsBinding            — accessibility tree flushes (flui-semantics)
+    ├── PipelineOwner               — layout/paint (flui-rendering)
+    └── SemanticsHost               — enablement + announce/event delivery (flui-app)
+
+AppBinding (transitional host)
+    ├── RenderingFlutterBinding     — render-view registry, first-frame gate
     └── Scheduler                   — frame callbacks, animation tickers (flui-scheduler)
 ```
 

@@ -2555,8 +2555,9 @@ mod tests {
     /// CI runs nextest, which gives each test its own process, so this is belt and
     /// braces there. Plain `cargo test` (a stated gate for this crate) runs them on
     /// threads in one process, where two tests each opening a scheduler frame on the
-    /// singleton would interleave — the same class of hazard `SEMANTICS_TEST_LOCK`
-    /// guards in `flui-app` (AGENTS.md, "Testing quirks").
+    /// singleton would interleave — the same class of hazard
+    /// `SINGLETON_WINDOW_TEST_LOCK`/`SCHEDULER_PHASE_TEST_LOCK` guard in
+    /// `flui-app`'s `runner.rs` (AGENTS.md, "Testing quirks").
     static SINGLETON_FRAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// The production frame path polls the async driver **exactly once**, on the
@@ -4382,8 +4383,9 @@ mod tests {
     /// callable before `run()` consumes the platform value. All tests build
     /// a standalone `AppBinding::new()` rather than touching
     /// `AppBinding::instance()`'s singleton, so none of them need
-    /// `SEMANTICS_TEST_LOCK` (or an equivalent) — the same reasoning
-    /// `haptics_capability`'s tests above rely on.
+    /// `SINGLETON_WINDOW_TEST_LOCK`/`SCHEDULER_PHASE_TEST_LOCK` (or an
+    /// equivalent) — the same reasoning `haptics_capability`'s tests above
+    /// rely on.
     /// `AppConfig::show_performance_overlay` was a write-only field: the
     /// builder set it and nothing ever read it, while the layer, its wgpu
     /// draw path and the rolling stats window all already existed. These

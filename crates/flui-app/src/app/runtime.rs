@@ -80,7 +80,20 @@ pub(crate) struct SchedulerRef {
 }
 
 impl SchedulerRef {
-    fn resolve() -> Self {
+    /// Mints a fresh handle from the current owner thread's `Scheduler`
+    /// singleton.
+    ///
+    /// `pub(crate)` rather than module-private: [`SharedEngineServices`] and
+    /// [`RealmServices`] below are each `resolve()`'s primary, cached
+    /// caller, but this is also the ONE typed reach a same-thread ambient
+    /// `Scheduler::instance()` call site elsewhere in this crate
+    /// (`bindings/renderer_binding.rs`) is rewritten onto, instead of
+    /// touching the raw singleton accessor directly — the newtype's
+    /// thread-affinity guarantee (see the type-level doc above) applies
+    /// equally whether the handle is cached or resolved fresh per call;
+    /// `Scheduler::instance()` itself already memoizes per owner thread, so
+    /// resolving here instead of caching costs nothing beyond the wrapper.
+    pub(crate) fn resolve() -> Self {
         Self {
             scheduler: Scheduler::instance(),
             _owner_affine: PhantomData,
@@ -133,7 +146,9 @@ use flui_painting::PaintingBinding;
 #[cfg(not(target_os = "ios"))]
 use flui_platform::OwnerPlatform;
 #[cfg(not(target_os = "ios"))]
-use flui_semantics::SemanticsBinding;
+use flui_semantics::AccessibilityFeatures;
+#[cfg(not(target_os = "ios"))]
+use parking_lot::RwLock;
 
 #[cfg(not(target_os = "ios"))]
 use super::runner::{RealmTask, SurfaceApplier};
@@ -153,14 +168,19 @@ use super::window_registry::WindowRegistry;
 /// plain owned value — the same "flip-containment" shape
 /// `PaintingBinding::font_system` already proved possible (it returns
 /// `SharedFontSystem` by value, so consumers never observed the `'static`
-/// lifetime in the first place). `semantics` and `scheduler` are still the
-/// process-global singleton underneath (`SemanticsBinding::instance()` and
-/// `Scheduler::instance()`) — only the *resolution point* moves to this one
-/// constructor; each flips to an owned value once the change that retires
-/// that singleton lands (semantics and the scheduler each have their own
-/// separate follow-up). Until then these fields are `pub(super)`, not part
-/// of any public surface (ADR-0027 §9: transitional runtime types stay
-/// `pub(crate)` at most).
+/// lifetime in the first place). `accessibility_features` completed the
+/// same flip alongside `painting`: the retired `SemanticsBinding` singleton
+/// no longer exists at all (its enablement/announce/event state moved to
+/// the per-presentation `SemanticsHost` instead — see
+/// `super::semantics_host` — since that half of the old binding was a
+/// per-window platform seam, not process-global state); only the OS-level,
+/// read-mostly accessibility flags stayed process-scoped, and this struct
+/// now owns that value directly. `scheduler` is still the process-global
+/// singleton underneath (`Scheduler::instance()`) — only the *resolution
+/// point* moves to this one constructor; it flips to an owned value once
+/// the change that retires the scheduler singleton lands. Until then this
+/// field is `pub(super)`, not part of any public surface (ADR-0027 §9:
+/// transitional runtime types stay `pub(crate)` at most).
 #[cfg(not(target_os = "ios"))]
 pub(crate) struct SharedEngineServices {
     #[cfg_attr(
@@ -172,6 +192,9 @@ pub(crate) struct SharedEngineServices {
         )
     )]
     pub(super) painting: PaintingBinding,
+    /// OS-level accessibility flags (reduced motion, high contrast, ...).
+    /// Process-scoped and read-mostly — re-homed here from the retired
+    /// `SemanticsBinding` singleton (see this struct's own doc comment).
     #[cfg_attr(
         not(test),
         expect(
@@ -180,7 +203,7 @@ pub(crate) struct SharedEngineServices {
                       change wires the first real consumer"
         )
     )]
-    pub(super) semantics: &'static SemanticsBinding,
+    pub(super) accessibility_features: RwLock<AccessibilityFeatures>,
     #[cfg_attr(
         not(test),
         expect(
@@ -194,6 +217,34 @@ pub(crate) struct SharedEngineServices {
 
 #[cfg(not(target_os = "ios"))]
 impl SharedEngineServices {
+    /// Current accessibility features (by value — mirrors the retired
+    /// `SemanticsBinding::accessibility_features` accessor's shape).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "this change only creates the resolution seam; a later \
+                      change wires the first real consumer"
+        )
+    )]
+    pub(super) fn accessibility_features(&self) -> AccessibilityFeatures {
+        *self.accessibility_features.read()
+    }
+
+    /// Updates the accessibility features, typically called by the
+    /// platform embedder when OS accessibility settings change.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "this change only creates the resolution seam; a later \
+                      change wires the first real consumer"
+        )
+    )]
+    pub(super) fn set_accessibility_features(&self, features: AccessibilityFeatures) {
+        *self.accessibility_features.write() = features;
+    }
+
     fn resolve() -> Self {
         let painting = PaintingBinding::new();
 
@@ -213,7 +264,7 @@ impl SharedEngineServices {
 
         Self {
             painting,
-            semantics: SemanticsBinding::instance(),
+            accessibility_features: RwLock::new(AccessibilityFeatures::default()),
             scheduler: SchedulerRef::resolve(),
         }
     }
@@ -481,7 +532,7 @@ mod app_runtime_tests {
 
         let services = runtime.ensure_services();
         let _painting_image_cache = services.painting.image_cache();
-        let _semantics_features = services.semantics.accessibility_features();
+        let _accessibility_features = services.accessibility_features();
         let _phase = services.scheduler.phase();
 
         assert!(
@@ -489,6 +540,30 @@ mod app_runtime_tests {
             "ensure_services must cache the resolved value, not re-resolve on \
              every call"
         );
+    }
+
+    /// `accessibility_features` is now a value `SharedEngineServices` owns
+    /// directly (no `SemanticsBinding` singleton underneath it any more) --
+    /// a set/get round-trip is the seam's own regression guard.
+    #[test]
+    fn set_accessibility_features_round_trips_through_shared_engine_services() {
+        use flui_semantics::AccessibilityFeatures;
+
+        let mut runtime = AppRuntime::new();
+        let services = runtime.ensure_services();
+
+        assert_eq!(
+            services.accessibility_features(),
+            AccessibilityFeatures::default(),
+            "a freshly resolved SharedEngineServices starts with default accessibility features"
+        );
+
+        services.set_accessibility_features(AccessibilityFeatures {
+            reduce_motion: true,
+            ..Default::default()
+        });
+
+        assert!(services.accessibility_features().reduce_motion);
     }
 
     /// A `OwnerHostClearGuard`-shaped operation that touches ONLY

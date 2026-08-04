@@ -90,7 +90,7 @@ declarations = [
     "pub mod embedder;",
     "pub use app::{ AppBinding, AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct, };",
     "pub use app::{run_app_android, run_app_android_with_config};",
-    "pub use bindings::{ GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler, SemanticsBinding, WidgetsBinding, };",
+    "pub use bindings::{ GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler, WidgetsBinding, };",
     "pub use flui_log::{AppIdentity, AppleBundleId};",
     "pub use flui_view::{ BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView, StatelessElement, StatelessView, View, };",
     "pub mod prelude {",
@@ -692,6 +692,8 @@ mechanism = "compile-time assert pinned here"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "pub(crate) struct PresentationState" },
     { kind = "compile-time", file = "crates/flui-app/src/app/presentation.rs", contains = "assert_not_impl_any!(PresentationState: Send, Sync)" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "semantics: SemanticsHost" },
+    { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn semantics_host_is_exclusive_to_this_presentation" },
 ]
 
 [[contract]]
@@ -1249,15 +1251,15 @@ owner_issue = 556
 notes = "The type survives; its field set must become fully effective or shrink (the effective-configuration contract)."
 
 [[surface]]
-path = "flui_app::bindings re-export bundle (Scheduler, PipelineOwner, GestureBinding, WidgetsBinding, SemanticsBinding, PaintingBinding, RenderingFlutterBinding)"
+path = "flui_app::bindings re-export bundle (Scheduler, PipelineOwner, GestureBinding, WidgetsBinding, PaintingBinding, RenderingFlutterBinding)"
 crate = "flui-app"
 kind = "re-export"
 declared_in = "crates/flui-app/src/bindings/mod.rs"
 contains = "pub use flui_rendering::{binding::RendererBinding, pipeline::PipelineOwner}"
 classification = "transitional"
-thread_affinity = "mixed; the singleton graph is owner-thread-local via HasInstance"
+thread_affinity = "mixed; the remaining singletons (Scheduler) are owner-thread-local via HasInstance"
 owner = "transitional singleton service graph"
-failure_semantics = "singleton accessors construct lazily per thread; no typed errors (PaintingBinding excepted: it left the singleton graph and is now a plain constructible value, still re-exported here as a type)"
+failure_semantics = "singleton accessors construct lazily per thread; no typed errors (PaintingBinding and RenderingFlutterBinding excepted: both left the singleton graph -- PaintingBinding is a plain constructible value, RenderingFlutterBinding's impl_binding_singleton! invocation and instance()/ensure_initialized() are deleted -- both still re-exported here as types). SemanticsBinding is gone from this bundle entirely: it was deleted, not slimmed -- its process-scoped accessibility_features field moved to AppRuntime's SharedEngineServices, and its per-window enablement/announce/event state moved to the per-presentation SemanticsHost (crates/flui-app/src/app/semantics_host.rs)."
 consumers = ["flui-app prelude", "flui facade via app module"]
 owner_issue = 553
 
@@ -1558,9 +1560,9 @@ classification = "removal-target"
 thread_affinity = "thread-local singleton storage per implementor"
 owner = "the ambient singleton pattern itself — deleted from runtime paths under the owning issue"
 failure_semantics = "lazily constructs a per-thread instance; cannot fail, which is the problem"
-consumers = ["Scheduler", "RenderingFlutterBinding", "SemanticsBinding", "AppBinding (manual)"]
+consumers = ["Scheduler", "AppBinding (manual)"]
 owner_issue = 553
-notes = "PaintingBinding no longer implements HasInstance -- its singleton-macro invocation is deleted; the type is now a plain owned value (SharedEngineServices.painting on AppRuntime)."
+notes = "PaintingBinding no longer implements HasInstance -- its singleton-macro invocation is deleted; the type is now a plain owned value (SharedEngineServices.painting on AppRuntime). RenderingFlutterBinding no longer implements HasInstance either -- its impl_binding_singleton! invocation and instance()/ensure_initialized() are deleted; construction stays explicit (new()/new_with_pipeline()). SemanticsBinding is gone entirely -- deleted, not slimmed; see the bindings re-export bundle surface entry for where its state re-homed."
 
 [[surface]]
 path = "flui_engine::wgpu::Renderer"
@@ -1730,21 +1732,9 @@ contains = "pub fn instance() -> &'static Self"
 owner_issue = 553
 
 [[singleton_exemption]]
-symbol = "impl_binding_singleton!(RenderingFlutterBinding)"
-file = "crates/flui-app/src/bindings/renderer_binding.rs"
-contains = "impl_binding_singleton!(RenderingFlutterBinding)"
-owner_issue = 553
-
-[[singleton_exemption]]
 symbol = "impl_binding_singleton!(Scheduler)"
 file = "crates/flui-scheduler/src/scheduler.rs"
 contains = "impl_binding_singleton!(Scheduler)"
-owner_issue = 553
-
-[[singleton_exemption]]
-symbol = "impl_binding_singleton!(SemanticsBinding)"
-file = "crates/flui-semantics/src/binding.rs"
-contains = "impl_binding_singleton!(SemanticsBinding)"
 owner_issue = 553
 
 # =============================================================================
@@ -1789,7 +1779,7 @@ note = "single AppBinding::instance() reach; re-routed through the runtime once 
 file = "crates/flui-app/src/app/runtime.rs"
 grammar = "instance-call"
 owner_issue = 553
-note = "the deliberate resolution seam this file creates: SemanticsBinding::instance()/Scheduler::instance() are called exactly once each, in SharedEngineServices::resolve() and RealmServices::resolve() -- this is the ONE file allowed to still reach for these singletons directly so every other constructor (including UiRealm's) does not have to. PaintingBinding::instance() already completed its flip: SharedEngineServices.painting is now an owned PaintingBinding value, constructed via PaintingBinding::new(). Each of the remaining two flips to an owned/injected value as the singleton it names is retired (semantics, then the scheduler), at which point this entry shrinks accordingly."
+note = "the deliberate resolution seam this file creates: Scheduler::instance() is called exactly once, inside SchedulerRef::resolve() -- this is the ONE file allowed to still reach for the scheduler singleton directly so every other constructor (including UiRealm's, and bindings/renderer_binding.rs's same-thread reaches) mints a typed SchedulerRef instead of touching the raw singleton. SemanticsBinding::instance() is gone from this file entirely: the retired binding's process-scoped half (accessibility_features) is now a plain RwLock<AccessibilityFeatures> field SharedEngineServices owns directly, and its per-window half (enablement/announce/event) moved to the per-presentation SemanticsHost (app/semantics_host.rs), so there was never a singleton reach to resolve here for it. PaintingBinding::instance() already completed its flip the same way (SharedEngineServices.painting is an owned PaintingBinding value). This entry shrinks to empty once the scheduler singleton itself is retired."
 
 [[ambient_reach]]
 file = "crates/flui-app/src/app/runner.rs"
@@ -1798,22 +1788,10 @@ owner_issue = 553
 note = "AppBinding::instance()/Scheduler::instance() in the platform dispatch/lifecycle-ladder machinery; the AppRuntime skeleton moves ownership (APP_RUNTIME), not these ambient reaches -- retiring AppBinding and the Scheduler singleton retires them"
 
 [[ambient_reach]]
-file = "crates/flui-app/src/bindings/renderer_binding.rs"
-grammar = "instance-call"
-owner_issue = 553
-note = "RenderingFlutterBinding::instance()/AppBinding::instance()/Scheduler::instance() reaches; retired alongside RenderingFlutterBinding, AppBinding, and the Scheduler singleton respectively"
-
-[[ambient_reach]]
 file = "crates/flui-scheduler/src/config.rs"
 grammar = "instance-call"
 owner_issue = 553
 note = "Scheduler::instance() reach in the time-dilation config path; retired together with impl_binding_singleton!(Scheduler)"
-
-[[ambient_reach]]
-file = "crates/flui-semantics/src/binding.rs"
-grammar = "instance-call"
-owner_issue = 553
-note = "SemanticsBinding's own instance()-based SemanticsService::* statics; retired together with the SemanticsBinding type itself"
 
 [[ambient_reach]]
 file = "crates/flui-interaction/src/timer.rs"
@@ -1894,12 +1872,6 @@ markers = [
 symbol = "REALM_CLAIMED"
 file = "crates/flui-app/src/app/ui_realm.rs"
 contains = "static REALM_CLAIMED"
-owner_issue = 553
-
-[[process_global_guard]]
-symbol = "SEMANTICS_TEST_LOCK"
-file = "crates/flui-app/src/bindings/renderer_binding.rs"
-contains = "static SEMANTICS_TEST_LOCK"
 owner_issue = 553
 
 # =============================================================================
