@@ -96,8 +96,11 @@
 //! if let Some(plugin) = ScenePlugin::load(Path::new("/path/to/libflui_scene.so")) {
 //!     // SAFETY: see `ScenePlugin::build_scene` — host and plugin must agree
 //!     // on `Scene`'s layout, and the scene must drop before `unload()`.
-//!     let scene = unsafe { plugin.build_scene(1080.0, 2400.0) };
-//!     renderer.render_scene(&scene);
+//!     // `None` means "skip this frame" (an app_plugin! wrong-thread
+//!     // refusal, or no plugin loaded) — never a caller error.
+//!     if let Some(scene) = unsafe { plugin.build_scene(1080.0, 2400.0) } {
+//!         renderer.render_scene(&scene);
+//!     }
 //!
 //!     // Check for updates later
 //!     if plugin.has_update() {
@@ -128,6 +131,15 @@ pub mod engine;
 
 mod abi;
 pub use abi::abi_token;
+
+// Re-exported so `app_plugin!`'s generated `flui_app_build` can log its
+// wrong-thread refusal via `$crate::__private_tracing::error!` instead of a
+// bare `::tracing::error!` — the macro expands INTO the consumer crate (a
+// plugin cdylib), which has no reason to otherwise depend on `tracing`
+// directly. Not part of the public API; `#[doc(hidden)]` only, never named
+// outside this crate's own macros.
+#[doc(hidden)]
+pub use tracing as __private_tracing;
 
 #[cfg(feature = "app-plugin")]
 mod pipeline;

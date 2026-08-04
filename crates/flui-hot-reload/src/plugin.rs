@@ -199,6 +199,25 @@ macro_rules! hot_reload_worker {
 /// opaque symbol. A null return from `flui_app_build` carries no ownership;
 /// never pass it to `flui_app_drop`/`flui_app_free`.
 ///
+/// # Unload semantics
+///
+/// The mounted `PluginPipeline` is **leaked, never dropped** — on thread
+/// exit, on hot-reload, and on process exit alike. This is not new: the
+/// pipeline was previously behind a plain `static`, and Rust never runs drop
+/// glue for `static` items either, so "leak on unload" was always this
+/// macro's actual contract (the "hot restart: state lost" line above). What
+/// changed is *how* that's now guaranteed: the pipeline lives in a
+/// `thread_local!`, and a thread-local wrapping a type that needs dropping
+/// registers a TLS destructor — one that lives in this plugin's own image.
+/// `dlclose`-ing a DSO with a live TLS destructor registration is unsafe to
+/// varying degrees across runtimes (a deferred-unmap runtime can silently
+/// keep serving the OLD code on a same-path reload; a non-deferring one can
+/// run the destructor after the image is already unmapped). The pipeline is
+/// therefore stored as `ManuallyDrop<PluginPipeline>`, which is
+/// unconditionally drop-glue-free, so no TLS destructor is ever registered
+/// for it — deliberately trading "run `PluginPipeline::drop`" for "never put
+/// this image's unload behavior at the mercy of pending TLS destructors".
+///
 /// # Generated Symbols
 ///
 /// - `flui_app_build(width, height) -> *mut c_void` — runs pipeline, returns
@@ -256,10 +275,47 @@ macro_rules! app_plugin {
             /// discipline over a type that never needed to be `Send`. Only
             /// the pinned thread (enforced in `flui_app_build` below) ever
             /// populates this.
+            ///
+            /// Wrapped in `ManuallyDrop` deliberately: this code is compiled
+            /// INTO the plugin image, and a thread-local with real drop glue
+            /// registers a TLS destructor tied to that image. `dlclose` on a
+            /// DSO with a live TLS destructor registration is exactly the
+            /// unload hazard this exists to dodge — glibc defers the actual
+            /// unmap until every thread that ever touched the slot has
+            /// exited (so a same-path reload can silently keep serving the
+            /// OLD mapped code instead of the rebuilt one — this crate's
+            /// whole reason to exist), and a runtime that does NOT defer can
+            /// instead run the destructor after the image is already
+            /// unmapped (use-after-free). `ManuallyDrop` makes
+            /// `mem::needs_drop` false for this slot unconditionally (see the
+            /// `const` assertion right below), so the standard library never
+            /// registers a destructor for it at all — no deferred unload, no
+            /// UAF, on any runtime. This is not a NEW leak: a plain `static`
+            /// (the previous `OnceLock<Mutex<PluginPipeline>>`) was never
+            /// destructed either — Rust runs no automatic drop glue for
+            /// `static` items — so "leak the pipeline, don't run its Drop"
+            /// was already the contract `app_plugin!` shipped ("hot restart:
+            /// state lost"). This preserves that byte-for-byte; it does not
+            /// introduce it.
             static __FLUI_APP_PIPELINE: ::std::cell::RefCell<
-                ::std::option::Option<$crate::PluginPipeline>,
+                ::std::option::Option<::std::mem::ManuallyDrop<$crate::PluginPipeline>>,
             > = ::std::cell::RefCell::new(::std::option::Option::None);
         }
+
+        // Compile-time proof the thread-local above truly carries no drop
+        // glue — the property the "no TLS destructor in the plugin image"
+        // claim above depends on. If a future edit swaps `ManuallyDrop` for
+        // something that needs dropping, this fails to compile instead of
+        // silently reintroducing the dlclose hazard.
+        const _: () = assert!(
+            !::std::mem::needs_drop::<
+                ::std::option::Option<::std::mem::ManuallyDrop<$crate::PluginPipeline>>,
+            >(),
+            "app_plugin!'s thread-local pipeline slot must stay drop-glue-free \
+             (wrapped in ManuallyDrop) — a droppable thread-local registers a \
+             TLS destructor tied to the plugin image, which dlclose cannot \
+             safely unwind past on every runtime"
+        );
 
         /// Build a scene by running the full widget pipeline and return an opaque
         /// pointer to `Box<Scene>`.
@@ -281,7 +337,7 @@ macro_rules! app_plugin {
             let caller = ::std::thread::current().id();
             let pinned = *__FLUI_APP_PINNED_THREAD.get_or_init(|| caller);
             if pinned != caller {
-                ::tracing::error!(
+                $crate::__private_tracing::error!(
                     pinned = ?pinned,
                     caller = ?caller,
                     "flui_app_build called from a thread other than the one \
@@ -295,7 +351,11 @@ macro_rules! app_plugin {
             __FLUI_APP_PIPELINE.with(|cell| {
                 let mut slot = cell.borrow_mut();
                 let pipeline = slot.get_or_insert_with(|| {
-                    $crate::PluginPipeline::mount($root_view, width, height)
+                    ::std::mem::ManuallyDrop::new($crate::PluginPipeline::mount(
+                        $root_view,
+                        width,
+                        height,
+                    ))
                 });
                 let scene = pipeline.draw_frame(width, height);
                 ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene)).cast::<::std::ffi::c_void>()
