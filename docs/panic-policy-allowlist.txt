@@ -16,21 +16,18 @@
 # environmental failure to a typed `Result` per docs/PANIC-POLICY.md's table
 # -- never by blanket-prefixing without reading the site.
 #
-# Seeded 2026-08-04 from the audit's expect("BUG: …") burn-down item. The
-# worst-offender files the audit named are deliberately absent from this
-# list, having been burned down in the same change that seeded it:
-# flui-hot-reload/src/worker.rs, flui-engine/src/wgpu/backend.rs,
-# flui-painting/src/text_painter/paint.rs,
+# Seeded 2026-08-04 with the worst offenders already burned down in the same
+# change that seeded this list: flui-hot-reload/src/worker.rs,
+# flui-engine/src/wgpu/backend.rs, flui-painting/src/text_painter/paint.rs,
 # flui-widgets/src/scroll/refresh_indicator.rs (all fully conforming now),
 # and flui-app/src/app/runner.rs (its one site converted to match
 # run_desktop's environmental-failure pattern instead of reworded, since the
 # failure is a real platform-init error, not an invariant).
-# flui-rendering/src/testing/harness.rs -- the audit's sixth named file --
-# never belonged on this list at all: it lives under a
-# `#[cfg(any(test, feature = "testing"))]`-gated module (test-support,
-# compiled only for this crate's own tests or an opt-in consumer feature),
-# which check-panic-policy.sh's whole-module exclusion (mirroring
-# `tests/`/`benches/`/`examples/`) correctly never scans.
+# flui-rendering/src/testing/harness.rs never belonged on this list at all:
+# it lives under a `#[cfg(any(test, feature = "testing"))]`-gated module
+# (test-support, compiled only for this crate's own tests or an opt-in
+# consumer feature), which check-panic-policy.sh's whole-module exclusion
+# (mirroring `tests/`/`benches/`/`examples/`) correctly never scans.
 #
 # flui-foundation/src/id.rs keeps 3 of its original 7 sites here rather than
 # rewording them: `RawId::zip`, `GenId::new`, and `ElementId::new` all carry

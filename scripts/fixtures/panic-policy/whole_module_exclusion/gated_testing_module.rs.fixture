@@ -1,0 +1,7 @@
+//! Fixture: the file this crate's `lib.rs.fixture` declares behind
+//! `#[cfg(any(test, feature = "testing"))]`. Its bare (non-`BUG:`) expect()
+//! must never be scanned -- the whole file is test-support.
+
+pub fn only_ever_compiled_under_test(slot: Option<u32>) -> u32 {
+    slot.expect("test-support module, no BUG: prefix needed")
+}

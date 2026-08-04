@@ -120,7 +120,7 @@ jobs:
       - name: Runtime contract registry check
         run: bash scripts/check-runtime-conformance.sh
 
-      - name: panic-policy expect("BUG: …") convention gate
+      - name: 'panic-policy expect-message convention gate'
         run: bash scripts/check-panic-policy.sh
 
       - name: scripts/port-check.sh (22 refusal triggers + FR-033)

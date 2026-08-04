@@ -1,0 +1,22 @@
+//! Fixture: exercises the WHOLE-MODULE test-support exclusion path (as
+//! opposed to the inline `#[cfg(test)] mod X { ... }` / fn / impl exclusion
+//! the other fixtures cover). This file plays the role of a crate's
+//! `lib.rs`: one sibling module is gated the way flui-rendering/
+//! flui-interaction/flui-layer/flui-painting gate their real `testing`
+//! modules; the other is an ordinary, ungated production module.
+//!
+//! check-panic-policy.sh's self-test asserts that ONLY
+//! `gated_testing_module.rs` is excluded -- a regression that widens the
+//! exclusion (e.g. excludes every sibling regardless of its own cfg) would
+//! silently swallow `ungated_sibling_module.rs`'s real violation too, and a
+//! regression that narrows it (stops recognizing the gate at all) would
+//! wrongly flag `gated_testing_module.rs`'s test-only expect() as
+//! production debt. Both directions fail open (an exclusion bug is
+//! invisible until someone notices debt is missing or a test-only file is
+//! wrongly gating CI), so this is asserted directly against
+//! `test_support_paths_for_crate`, not just indirectly through site counts.
+
+#[cfg(any(test, feature = "testing"))]
+pub mod gated_testing_module;
+
+mod ungated_sibling_module;

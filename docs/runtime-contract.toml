@@ -1199,15 +1199,15 @@ registry is the only one in the workspace that tracks a contract's \
 `mechanical`/`mechanism` pair. Enforcement is a per-file, shrink-only ratchet \
 (docs/panic-policy-allowlist.txt): a file with a non-conforming site must be \
 listed, and a listed file that has been fully burned down must be delisted. \
-Seeded 2026-08-04 at 65 listed files / 125 sites, down from the audit's 158 \
-after burning down the five worst-offender files it named (flui-hot-reload's \
-worker.rs, flui-engine's wgpu/backend.rs, flui-painting's \
+Seeded 2026-08-04 at 65 listed files / 125 sites, down from 158 non-conforming \
+sites at introduction after burning down the five worst-offender files \
+(flui-hot-reload's worker.rs, flui-engine's wgpu/backend.rs, flui-painting's \
 text_painter/paint.rs, flui-widgets' scroll/refresh_indicator.rs, and one \
-site in flui-app's runner.rs); flui-rendering's testing/harness.rs, the \
-audit's sixth named file, was never in scope -- it lives under a \
-`#[cfg(any(test, feature = "testing"))]`-gated module, which the checker's \
-whole-module test-support exclusion (mirroring tests/benches/examples) \
-correctly never scans.\
+site in flui-app's runner.rs). flui-rendering's testing/harness.rs was never \
+in scope -- it lives under a `#[cfg(any(test, feature = "testing"))]`-gated \
+module (test-support, cfg-gated), which the checker's whole-module \
+test-support exclusion (mirroring tests/benches/examples) correctly never \
+scans.\
 """
 state = "implemented"
 domain = "workspace"

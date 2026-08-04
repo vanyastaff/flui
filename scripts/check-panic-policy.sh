@@ -645,6 +645,32 @@ def self_test() -> int:
             else:
                 print(f"  FAIL: expected zero errors, got: {errors}")
                 status = 1
+
+            print("self-test: whole-module exclusion excludes exactly the gated sibling")
+            wm_fixtures = fixtures / "whole_module_exclusion"
+            wm_crate_src = tmp_root / "crates" / "whole_module_crate" / "src"
+            wm_crate_src.mkdir(parents=True)
+            for f in wm_fixtures.glob("*.rs.fixture"):
+                shutil.copy(f, wm_crate_src / f.name.replace(".fixture", ""))
+
+            excluded = test_support_paths_for_crate(wm_crate_src)
+            expected_excluded = {Path(f"{rel_prefix.replace('fixture_crate', 'whole_module_crate')}/gated_testing_module.rs")}
+            if excluded == expected_excluded:
+                print("  ok: only the #[cfg(any(test, feature = \"testing\"))]-gated sibling is excluded")
+            else:
+                print(f"  FAIL: expected excluded == {expected_excluded}, got {excluded}")
+                status = 1
+
+            wm_errors, wm_counts = run_check(wm_crate_src.parent.parent, set())
+            wm_rel_prefix = "crates/whole_module_crate/src"
+            if (
+                any(f"{wm_rel_prefix}/ungated_sibling_module.rs" in e and "not on" in e for e in wm_errors)
+                and not any("gated_testing_module.rs" in e for e in wm_errors)
+            ):
+                print("  ok: the ungated sibling's violation is flagged; the gated file's is not scanned at all")
+            else:
+                print(f"  FAIL: expected only the ungated sibling flagged, got errors={wm_errors} counts={wm_counts}")
+                status = 1
         finally:
             root = real_root
 
