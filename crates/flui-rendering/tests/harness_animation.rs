@@ -3,7 +3,6 @@
 //! Mirrors `animation_pipeline.rs` but uses [`RenderTester`] /
 //! [`FrameRun::advance_layout`] instead of hand-rolled `PipelineOwner` wiring.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
@@ -16,7 +15,7 @@ use flui_scheduler::Scheduler;
 use flui_types::{EdgeInsets, Offset, Rect, geometry::px};
 
 fn controller() -> AnimationController {
-    AnimationController::new(Duration::from_secs(1), Arc::new(Scheduler::new()))
+    AnimationController::new(Duration::from_secs(1), &Scheduler::new())
 }
 
 #[test]

@@ -79,13 +79,12 @@ const FLING_TOLERANCE: Tolerance = Tolerance {
 /// ```
 /// use flui_animation::{AnimationController, Animation};
 /// use flui_scheduler::Scheduler;
-/// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Arc::new(Scheduler::new());
+/// let scheduler = Scheduler::new();
 /// let controller = AnimationController::new(
 ///     Duration::from_millis(300),
-///     scheduler,
+///     &scheduler,
 /// );
 ///
 /// // Start animation
@@ -207,17 +206,53 @@ struct AnimationControllerInner {
 }
 
 impl AnimationController {
-    /// Create a new animation controller.
+    /// Create a new animation controller, auto-scheduled off `scheduler`.
     ///
     /// # Arguments
     ///
     /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - Scheduler for frame coordination
+    /// * `scheduler` - Scheduler the controller's ticker auto-schedules against
     #[must_use]
-    pub fn new(duration: Duration, scheduler: Arc<Scheduler>) -> Self {
+    pub fn new(duration: Duration, scheduler: &Scheduler) -> Self {
         // 0.0 < 1.0 always holds, so the default-bounds path cannot fail.
         Self::with_bounds(duration, scheduler, 0.0, 1.0)
             .expect("default bounds (0.0, 1.0) satisfy lower < upper")
+    }
+
+    /// Create an animation controller with no ticker at all — bounds `0.0..1.0`.
+    ///
+    /// This is the shape every FLUI widget-layer controller actually needs:
+    /// production widgets never attach a real, pumped `Scheduler` to their
+    /// controllers (`Vsync` — see [`crate::vsync`] — is the real widget-layer
+    /// clock seam; a plain `AnimationController` advances only through
+    /// external [`Self::tick_at`] calls a `Vsync`-driven caller makes). A
+    /// controller built this way behaves identically to one built with
+    /// [`Self::new`] against a private, never-pumped `Scheduler`: neither
+    /// ever auto-ticks, both advance only via `tick_at`. This constructor
+    /// simply doesn't allocate the ticker (and the dead scheduler) that
+    /// would have gone unused.
+    #[must_use]
+    pub fn without_ticker(duration: Duration) -> Self {
+        Self::with_bounds_inner(duration, None, 0.0, 1.0)
+            .expect("default bounds (0.0, 1.0) satisfy lower < upper")
+    }
+
+    /// [`Self::without_ticker`] with custom bounds — the shape a fling/
+    /// ballistic-simulation controller needs (wide-open
+    /// `f32::NEG_INFINITY..f32::INFINITY` bounds so the simulation's own
+    /// `is_done` terminates the run instead of the controller clamping it),
+    /// while still needing no ticker: the driver is `tick_at`, called
+    /// directly by the simulation stepper, never a scheduler.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::InvalidBounds`] if `lower_bound >= upper_bound`.
+    pub fn without_ticker_bounds(
+        duration: Duration,
+        lower_bound: f32,
+        upper_bound: f32,
+    ) -> Result<Self, AnimationError> {
+        Self::with_bounds_inner(duration, None, lower_bound, upper_bound)
     }
 
     /// Create an animation controller with custom bounds.
@@ -225,7 +260,7 @@ impl AnimationController {
     /// # Arguments
     ///
     /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - Scheduler for frame coordination
+    /// * `scheduler` - Scheduler the controller's ticker auto-schedules against
     /// * `lower_bound` - Minimum value (default 0.0)
     /// * `upper_bound` - Maximum value (default 1.0)
     ///
@@ -239,13 +274,12 @@ impl AnimationController {
     /// # fn main() -> Result<(), flui_animation::AnimationError> {
     /// use flui_animation::AnimationController;
     /// use flui_scheduler::Scheduler;
-    /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let controller = AnimationController::with_bounds(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     ///     0.0,
     ///     100.0,
     /// )?;
@@ -254,7 +288,21 @@ impl AnimationController {
     /// ```
     pub fn with_bounds(
         duration: Duration,
-        scheduler: Arc<Scheduler>,
+        scheduler: &Scheduler,
+        lower_bound: f32,
+        upper_bound: f32,
+    ) -> Result<Self, AnimationError> {
+        let ticker = Ticker::new_with_scheduler(scheduler);
+        Self::with_bounds_inner(duration, Some(ticker), lower_bound, upper_bound)
+    }
+
+    /// Shared construction body for [`Self::with_bounds`] and
+    /// [`Self::without_ticker`] — `ticker: None` is exactly the shape a
+    /// controller ends up in today anyway (a private scheduler's ticker that
+    /// nothing ever pumps), just without allocating the unused parts.
+    fn with_bounds_inner(
+        duration: Duration,
+        ticker: Option<Ticker>,
         lower_bound: f32,
         upper_bound: f32,
     ) -> Result<Self, AnimationError> {
@@ -265,7 +313,6 @@ impl AnimationController {
         }
 
         let notifier = Arc::new(ChangeNotifier::new());
-        let ticker = Ticker::new_with_scheduler(scheduler);
 
         let inner = AnimationControllerInner {
             value: lower_bound,
@@ -274,7 +321,7 @@ impl AnimationController {
             reverse_duration: None,
             lower_bound,
             upper_bound,
-            ticker: Some(ticker),
+            ticker,
             status_listeners: Vec::new(),
             direction: AnimationDirection::Forward,
             start_value: lower_bound,
@@ -714,10 +761,9 @@ impl AnimationController {
     /// ```
     /// # use flui_animation::AnimationController;
     /// # use flui_scheduler::Scheduler;
-    /// # use std::sync::Arc;
     /// # use std::time::Duration;
-    /// # let scheduler = Arc::new(Scheduler::new());
-    /// let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    /// # let scheduler = Scheduler::new();
+    /// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
     /// controller.fling(1.0).unwrap(); // Fling forward
     /// ```
     pub fn fling(&self, velocity: f32) -> Result<(), AnimationError> {
@@ -782,10 +828,9 @@ impl AnimationController {
     /// # use flui_animation::{AnimationController, simulation::SpringSimulation};
     /// # use flui_animation::simulation::SpringDescription;
     /// # use flui_scheduler::Scheduler;
-    /// # use std::sync::Arc;
     /// # use std::time::Duration;
-    /// # let scheduler = Arc::new(Scheduler::new());
-    /// let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    /// # let scheduler = Scheduler::new();
+    /// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
     /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5);
     /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
     /// controller.animate_with(sim).unwrap();
@@ -1453,8 +1498,58 @@ mod tests {
     }
 
     fn controller(ms: u64) -> AnimationController {
-        let scheduler = Arc::new(Scheduler::new());
-        AnimationController::new(Duration::from_millis(ms), scheduler)
+        let scheduler = Scheduler::new();
+        AnimationController::new(Duration::from_millis(ms), &scheduler)
+    }
+
+    /// Migration-premise pin: every production
+    /// `AnimationController` today is built with a private, never-pumped
+    /// `Arc::new(Scheduler::new())` — the "wall-clock fallback" comments in
+    /// `flui-widgets` (`scrollable.rs`, `navigator/binding.rs`) claim the
+    /// ticker on that private scheduler fires on its own. It cannot: nothing
+    /// ever calls `handle_begin_frame`/`execute_frame` on a scheduler no one
+    /// else holds, so the ticker's transient callback registers and then
+    /// simply never runs.
+    ///
+    /// This test proves that premise BEFORE `without_ticker` (a controller
+    /// with no scheduler at all) replaces those throwaway-scheduler call
+    /// sites: it drives a *different*, actually-pumped scheduler for many
+    /// frames and asserts the controller's own private scheduler never once
+    /// produced a tick. If this assertion ever fails, some path pumps a
+    /// controller's private scheduler after all, `without_ticker` would be a
+    /// real behavior change, and the widget migration must stop and be
+    /// re-examined — not proceed on this premise.
+    #[test]
+    fn a_controllers_private_unpumped_scheduler_never_advances_without_vsync() {
+        let _serial = serial();
+        let private_scheduler = Scheduler::new();
+        let c = AnimationController::new(Duration::from_millis(100), &private_scheduler);
+        c.forward().unwrap();
+
+        // Drive an UNRELATED, actually-pumped scheduler for many frames —
+        // this is what a real event loop's realm-owned `Scheduler` does
+        // every frame. It must have zero effect on `c`, which is wired to
+        // `private_scheduler` alone.
+        let other_scheduler = Scheduler::new();
+        for _ in 0..120 {
+            other_scheduler.execute_frame();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+
+        assert_eq!(
+            c.value(),
+            0.0,
+            "a controller wired to a private, never-pumped Scheduler must not \
+             advance no matter how many frames an unrelated scheduler runs — \
+             the ticker's callback is registered on `private_scheduler`'s own \
+             transient queue, which nothing ever drains"
+        );
+        assert_eq!(
+            private_scheduler.frame_count(),
+            0,
+            "precondition: the controller's own private scheduler was never pumped"
+        );
+        c.dispose();
     }
 
     #[test]
@@ -1613,9 +1708,10 @@ mod tests {
     #[test]
     fn custom_bounds_clamp() {
         let _serial = serial();
-        let scheduler = Arc::new(Scheduler::new());
-        let c = AnimationController::with_bounds(Duration::from_millis(100), scheduler, 10.0, 20.0)
-            .unwrap();
+        let scheduler = Scheduler::new();
+        let c =
+            AnimationController::with_bounds(Duration::from_millis(100), &scheduler, 10.0, 20.0)
+                .unwrap();
         assert_eq!(c.value(), 10.0);
         c.set_value(15.0);
         assert_eq!(c.value(), 15.0);
@@ -1627,9 +1723,46 @@ mod tests {
     #[test]
     fn invalid_bounds_rejected() {
         let _serial = serial();
-        let scheduler = Arc::new(Scheduler::new());
-        let r = AnimationController::with_bounds(Duration::from_millis(100), scheduler, 20.0, 10.0);
+        let scheduler = Scheduler::new();
+        let r =
+            AnimationController::with_bounds(Duration::from_millis(100), &scheduler, 20.0, 10.0);
         assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
+    }
+
+    /// `without_ticker` builds a controller with no scheduler attached at
+    /// all — it must still advance via `tick_at` (the widget-layer `Vsync`
+    /// driving path), exactly like a controller built against a private,
+    /// never-pumped `Scheduler`.
+    #[test]
+    fn without_ticker_advances_via_tick_at_only() {
+        let _serial = serial();
+        let c = AnimationController::without_ticker(Duration::from_millis(100));
+        assert_eq!(c.value(), 0.0);
+
+        c.forward().unwrap();
+        c.tick_at(0.05);
+        assert!((c.value() - 0.5).abs() < 1e-4);
+
+        c.dispose();
+    }
+
+    /// `without_ticker_bounds` is the fling/ballistic-simulation shape:
+    /// wide-open bounds, no ticker.
+    #[test]
+    fn without_ticker_bounds_rejects_invalid_bounds_and_accepts_wide_open_ones() {
+        let _serial = serial();
+        let rejected =
+            AnimationController::without_ticker_bounds(Duration::from_millis(1), 20.0, 10.0);
+        assert!(matches!(rejected, Err(AnimationError::InvalidBounds(_))));
+
+        let c = AnimationController::without_ticker_bounds(
+            Duration::from_millis(1),
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+        )
+        .expect("NEG_INFINITY < INFINITY satisfies the bounds invariant");
+        assert_eq!(c.value(), f32::NEG_INFINITY);
+        c.dispose();
     }
 
     #[test]
@@ -1897,8 +2030,8 @@ mod tests {
         // itself with the scheduler every frame while active, and only
         // `ticker.stop()` deregisters it.
         let _serial = serial();
-        let scheduler = Arc::new(Scheduler::new());
-        let c = AnimationController::new(Duration::from_millis(100), scheduler.clone());
+        let scheduler = Scheduler::new();
+        let c = AnimationController::new(Duration::from_millis(100), &scheduler);
 
         c.forward().unwrap();
         scheduler.execute_frame();

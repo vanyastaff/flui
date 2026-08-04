@@ -83,8 +83,8 @@ fn demo_manual_ticker() {
 }
 
 fn demo_auto_scheduling_ticker() {
-    let scheduler = Arc::new(Scheduler::new());
-    let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
+    let scheduler = Scheduler::new();
+    let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     println!("Created auto-scheduling Ticker with ID: {:?}", ticker.id());
 

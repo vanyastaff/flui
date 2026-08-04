@@ -45,7 +45,7 @@ use crate::FractionalTranslation;
 /// values move the child toward the reading-direction start instead.
 ///
 /// ```rust,ignore
-/// let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+/// let controller = AnimationController::without_ticker(Duration::from_millis(300));
 /// let tween = Tween::new(TranslationFraction::new(-1.0, 0.0), TranslationFraction::ZERO);
 /// let position = Arc::new(tween.animate(Arc::new(controller.clone()) as Arc<dyn Animation<f32>>));
 /// let slide = SlideTransition::new(position, Text::new("hi"));
@@ -146,9 +146,9 @@ impl_animated_view!(SlideTransition);
 mod tests {
     use std::time::Duration;
 
+    use flui_animation::AnimationController;
     use flui_animation::Tween;
     use flui_animation::ext::AnimatableExt;
-    use flui_animation::{AnimationController, Scheduler};
 
     use super::*;
 
@@ -156,8 +156,7 @@ mod tests {
         begin: TranslationFraction,
         end: TranslationFraction,
     ) -> (AnimationController, Arc<dyn Animation<TranslationFraction>>) {
-        let controller =
-            AnimationController::new(Duration::from_millis(300), Scheduler::new().into());
+        let controller = AnimationController::without_ticker(Duration::from_millis(300));
         let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
         let animation: Arc<dyn Animation<TranslationFraction>> =
             Arc::new(Tween::new(begin, end).animate(parent));

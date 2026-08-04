@@ -352,7 +352,7 @@ mod tests {
     use crate::AnimationStatus;
 
     fn controller(ms: u64) -> AnimationController {
-        AnimationController::new(Duration::from_millis(ms), Arc::new(Scheduler::new()))
+        AnimationController::new(Duration::from_millis(ms), &Scheduler::new())
     }
 
     /// A muted registry delivers no ticks — neither to its own controllers nor
@@ -599,8 +599,7 @@ mod tests {
     #[test]
     fn a_listener_may_unregister_from_inside_tick_all() {
         let vsync = Vsync::new();
-        let controller =
-            AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        let controller = AnimationController::new(Duration::from_millis(100), &Scheduler::new());
         let registration = vsync.register(controller.clone());
 
         let slot: Arc<Mutex<Option<VsyncRegistration>>> = Arc::new(Mutex::new(Some(registration)));
@@ -629,11 +628,10 @@ mod tests {
     #[test]
     fn a_listener_may_register_from_inside_tick_all() {
         let vsync = Vsync::new();
-        let driver =
-            AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        let driver = AnimationController::new(Duration::from_millis(100), &Scheduler::new());
         let _driver_reg = vsync.register(driver.clone());
 
-        let late = AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        let late = AnimationController::new(Duration::from_millis(100), &Scheduler::new());
         let vsync_for_listener = vsync.clone();
         let late_for_listener = late.clone();
         let registered = Arc::new(Mutex::new(false));

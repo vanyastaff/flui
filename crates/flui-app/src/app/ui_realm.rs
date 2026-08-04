@@ -40,7 +40,7 @@ use flui_platform::traits::{DragDropEvent, PlatformInput, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, SchedulerPhase};
+use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, Scheduler, SchedulerPhase};
 use flui_semantics::SemanticsActionRequest;
 use flui_types::{HapticFeedback, Size, geometry::px};
 use flui_view::WidgetsBinding;
@@ -48,7 +48,7 @@ use flui_widgets::{FocusRoot, GestureArenaScope, NavigatorCommand, VsyncScope};
 use parking_lot::{Mutex, RwLock};
 
 use super::presentation::PresentationState;
-use super::runtime::{RealmServices, SchedulerRef};
+use super::runtime::RealmServices;
 use crate::bindings::RenderingFlutterBinding;
 
 /// Default bound of the owner inbox, matching the pipeline dirty-channel
@@ -470,12 +470,15 @@ pub(crate) struct UiRealm {
     redraw_pending: Arc<AtomicBool>,
     /// Whether this instance owns the transitional process-wide claim.
     claimed: bool,
-    /// The scheduler this realm was constructed against, resolved once by
-    /// the caller (see `RealmServices::resolve`) and retained only for the
-    /// idle-only commit-gate phase probe in [`Self::drain_commands`] — the
-    /// last remaining reach that used to be a bare `Scheduler::instance()`
-    /// call inside this type.
-    scheduler: SchedulerRef,
+    /// This realm's OWN scheduler — the strong root every `WeakScheduler`
+    /// this realm vends (tickers, `PostFrameHandle`s) upgrades against.
+    /// Built fresh per realm by [`RealmServices::construct`], never a
+    /// process-global singleton: when this realm drops, this field drops
+    /// with it, and every retained weak handle starts failing closed.
+    /// Read directly for the idle-only commit-gate phase probe in
+    /// [`Self::drain_commands`] and vended to `runner.rs`'s lifecycle sites
+    /// via [`Self::scheduler`].
+    scheduler: Scheduler,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
     /// so at zero cost (thread-affinity marker).
     _owner_affine: PhantomData<*const ()>,
@@ -643,7 +646,7 @@ impl UiRealm {
         let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
         pipeline.write().set_device_pixel_ratio(device_pixel_ratio);
         let presentation = PresentationState::new(presentation_id, pipeline, window);
-        let services = RealmServices::resolve();
+        let services = RealmServices::construct();
         match Self::construct(
             capacity,
             wake,
@@ -662,11 +665,12 @@ impl UiRealm {
     }
 
     /// Builds the realm from already-resolved pieces. Takes `services:
-    /// RealmServices` rather than reaching for `Scheduler::instance()`
-    /// itself — the last two `Scheduler::instance()` calls this function
-    /// used to make (`local_post_frame_lane()`, `async_driver()`) are now
-    /// the caller's job (`RealmServices::resolve`, in `runtime.rs`), which
-    /// is what makes `UiRealm` perform zero `::instance()` calls.
+    /// RealmServices` — a fresh `Scheduler` plus the
+    /// `local_post_frame_lane()`/`async_driver()` handles derived from it —
+    /// built by the caller (`RealmServices::construct`, in `runtime.rs`),
+    /// which is what makes `UiRealm` perform zero `::instance()` calls and
+    /// gives every realm its own scheduler strong root instead of sharing a
+    /// process-global one.
     fn construct(
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
@@ -697,8 +701,11 @@ impl UiRealm {
         // Renderer, sharing the SAME PipelineOwner as the presentation (one
         // fact, one place) — moved here from the retired
         // `AppBinding::new`/`RenderingFlutterBinding::new_with_pipeline` pair.
-        let renderer =
-            RenderingFlutterBinding::new_with_pipeline(Arc::clone(presentation.pipeline()));
+        // Wired to THIS realm's own scheduler, never a process-global one.
+        let renderer = RenderingFlutterBinding::new_with_pipeline(
+            Arc::clone(presentation.pipeline()),
+            &scheduler,
+        );
 
         // Idle-wake wiring: a dirty mark (mark_needs_layout / mark_needs_paint)
         // fires this callback so a quiescent event loop produces the frame —
@@ -782,7 +789,7 @@ impl UiRealm {
             realm_id,
             presentation,
             false,
-            RealmServices::resolve(),
+            RealmServices::construct(),
             needs_redraw,
         )
         .expect("test UiRealm should create an interaction lane")
@@ -805,6 +812,16 @@ impl UiRealm {
     #[must_use]
     pub fn presentation_id(&self) -> PresentationId {
         self.presentation.id()
+    }
+
+    /// This realm's own scheduler — the strong root. `runner.rs`'s
+    /// realm-scoped lifecycle sites (`emit_lifecycle_transition`, the
+    /// per-backend frame pumps) read through here instead of a process-global
+    /// singleton; see [`Self::scheduler`]'s field doc for the ownership
+    /// story.
+    #[must_use]
+    pub(crate) fn scheduler(&self) -> &flui_scheduler::Scheduler {
+        &self.scheduler
     }
 
     /// The current presentation's lifecycle state, for the input-gate
@@ -2217,7 +2234,6 @@ mod tests {
         use std::sync::atomic::{AtomicBool as StdAtomicBool, AtomicUsize};
 
         use flui_engine::EngineError;
-        use flui_foundation::HasInstance;
         use flui_types::geometry::px;
 
         use super::*;
@@ -2427,21 +2443,13 @@ mod tests {
             );
         }
 
-        /// Serializes the tests that drive the process-global
-        /// `Scheduler::instance()`.
-        static SINGLETON_FRAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
         /// The production frame path polls the async driver **exactly once**,
-        /// on the `Scheduler::instance()` singleton, in the mid-frame slot —
-        /// and the pipeline runs afterwards, in the persistent slot.
+        /// on the realm's own scheduler, in the mid-frame slot — and the
+        /// pipeline runs afterwards, in the persistent slot.
         #[test]
-        fn the_production_frame_polls_the_singletons_async_driver_once_before_the_pipeline() {
-            let _serialized = SINGLETON_FRAME_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-
+        fn the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline() {
             let realm = UiRealm::for_test();
-            let scheduler = flui_scheduler::Scheduler::instance();
+            let scheduler = realm.scheduler();
 
             let polls = Arc::new(AtomicUsize::new(0));
             let polls_for_task = Arc::clone(&polls);
@@ -2477,14 +2485,10 @@ mod tests {
         /// `draw_frame` no longer polls the driver itself.
         #[test]
         fn draw_frame_does_not_poll_the_async_driver_itself() {
-            let _serialized = SINGLETON_FRAME_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-
             let realm = UiRealm::for_test();
             let ran = Arc::new(StdAtomicBool::new(false));
             let ran_for_task = Arc::clone(&ran);
-            let _token = flui_scheduler::Scheduler::instance().spawn_local(Box::pin(async move {
+            let _token = realm.scheduler().spawn_local(Box::pin(async move {
                 ran_for_task.store(true, Ordering::Release);
             }));
 
@@ -2497,14 +2501,10 @@ mod tests {
         }
 
         /// **The production-path acceptance test.** A post-frame callback on
-        /// the `Scheduler::instance()` singleton observes the geometry this
-        /// realm's real pipeline committed **in the same frame**.
+        /// the realm's own scheduler observes the geometry this realm's real
+        /// pipeline committed **in the same frame**.
         #[test]
         fn production_post_frame_callback_observes_this_frames_committed_layout() {
-            let _serialized = SINGLETON_FRAME_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-
             use flui_rendering::prelude::Leaf;
             use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, PaintCx, RenderBox};
 
@@ -2546,7 +2546,7 @@ mod tests {
             let calls_cb = Arc::clone(&calls);
             let pipeline_cb = Arc::clone(&pipeline);
 
-            let scheduler = flui_scheduler::Scheduler::instance();
+            let scheduler = realm.scheduler();
             scheduler.add_post_frame_callback(Box::new(move |_timing| {
                 calls_cb.fetch_add(1, Ordering::SeqCst);
                 *observed_cb.write() = pipeline_cb.read().box_size(root);
@@ -3206,7 +3206,7 @@ mod tests {
             use std::time::Duration;
             flui_animation::AnimationController::new(
                 Duration::from_millis(duration_ms),
-                Arc::new(flui_scheduler::Scheduler::new()),
+                &flui_scheduler::Scheduler::new(),
             )
         }
 
@@ -3380,7 +3380,7 @@ mod tests {
             use std::time::Duration;
             let controller = flui_animation::AnimationController::new(
                 Duration::from_millis(200),
-                Arc::new(flui_scheduler::Scheduler::new()),
+                &flui_scheduler::Scheduler::new(),
             );
             let view = VsyncProbeView {
                 controller_to_register: controller.clone(),

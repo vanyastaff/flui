@@ -13,9 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 #[cfg(not(target_os = "ios"))]
-use flui_foundation::HasInstance;
-#[cfg(not(target_os = "ios"))]
-use flui_scheduler::{AppLifecycleState, Scheduler};
+use flui_scheduler::AppLifecycleState;
 
 #[cfg(not(target_os = "ios"))]
 use super::runtime::AppRuntime;
@@ -165,14 +163,15 @@ pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
 ///     (trigger #22) mechanically rejects any call from inside
 ///     `build`/`perform_layout`/`paint`/composite bodies, across every
 ///     crate the scanner sweeps.
-/// (c) **Runtime backstop.** `debug_assert!`s the process-global scheduler
-///     is not inside the frame transaction. "Not inside a frame phase" per
-///     the ADR means `TransientCallbacks`/`MidFrameMicrotasks`/
-///     `PersistentCallbacks` are forbidden; `Idle` and `PostFrameCallbacks`
-///     are allowed (legitimate ADR-0021-style post-frame work). This fence
-///     is **vacuous on binding-local frame paths**: headless/test bindings
-///     drive their own binding-local `Scheduler`, never the
-///     `Scheduler::instance()` singleton this checks, so fences (a) and (b)
+/// (c) **Runtime backstop.** `debug_assert!`s that the installed realm's own
+///     scheduler (`AppRuntime::installed_realm_phase`) is not inside the
+///     frame transaction. "Not inside a frame phase" per the ADR means
+///     `TransientCallbacks`/`MidFrameMicrotasks`/`PersistentCallbacks` are
+///     forbidden; `Idle` and `PostFrameCallbacks` are allowed (legitimate
+///     ADR-0021-style post-frame work); `None` (no realm installed) holds
+///     vacuously. This fence is **vacuous on binding-local frame paths**:
+///     headless/test bindings drive their own binding-local `Scheduler`,
+///     never a realm installed into `APP_RUNTIME`, so fences (a) and (b)
 ///     are the load-bearing ones there — stated here, not hidden.
 ///
 /// # `owner.shared()`'s method list is a compile-time fence too
@@ -222,15 +221,22 @@ pub(crate) fn with_owner_platform<R>(
 ) -> Option<R> {
     #[cfg(debug_assertions)]
     {
-        let phase = Scheduler::instance().phase();
+        // A sequential, separate `.with()` borrow -- released before the
+        // real one below opens -- so this never re-enters the same
+        // `RefCell`. `None` (no realm installed on this thread) is vacuous
+        // but truthful: no realm means no frame transaction can be in
+        // flight here, so the asserted property holds trivially.
+        let phase = APP_RUNTIME.with(|slot| slot.borrow().installed_realm_phase());
         debug_assert!(
             !matches!(
                 phase,
-                flui_scheduler::SchedulerPhase::TransientCallbacks
-                    | flui_scheduler::SchedulerPhase::MidFrameMicrotasks
-                    | flui_scheduler::SchedulerPhase::PersistentCallbacks
+                Some(
+                    flui_scheduler::SchedulerPhase::TransientCallbacks
+                        | flui_scheduler::SchedulerPhase::MidFrameMicrotasks
+                        | flui_scheduler::SchedulerPhase::PersistentCallbacks
+                )
             ),
-            "BUG: with_owner_platform called while the scheduler is inside \
+            "BUG: with_owner_platform called while the installed realm's scheduler is inside \
              the frame transaction (phase {phase:?}) -- owner_platform must \
              not be acquired from build/layout/paint (ADR-0039 §6, trigger #22)"
         );
@@ -477,7 +483,7 @@ impl PlatformToUi {
                 emit_lifecycle_transition(realm, old, new);
             }
             Self::Lifecycle(new) => {
-                emit_lifecycle_transition(realm, Scheduler::instance().lifecycle_state(), new);
+                emit_lifecycle_transition(realm, realm.scheduler().lifecycle_state(), new);
             }
         }
     }
@@ -585,7 +591,7 @@ fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLi
 }
 
 /// Emits the full ladder from `old` to `new` (see [`lifecycle_ladder`]), one
-/// step at a time, to both the canonical `Scheduler` and the realm's
+/// step at a time, to both the realm's own `Scheduler` and its
 /// `WidgetsBinding` observers — mirroring Flutter's single platform-message
 /// stream driving both `SchedulerBinding` and `WidgetsBinding` from the same
 /// synthesized sequence of states.
@@ -651,10 +657,10 @@ fn emit_lifecycle_transition(
         // whichever named state it is — `handle_app_lifecycle_state_change`
         // flips the flag via one atomic swap per call, so bracketing a
         // single call this way cannot miss or double-count an edge.
-        let frames_were_enabled = Scheduler::instance().frames_enabled();
+        let frames_were_enabled = realm.scheduler().frames_enabled();
 
         let scheduler_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Scheduler::instance().handle_app_lifecycle_state_change(step);
+            realm.scheduler().handle_app_lifecycle_state_change(step);
         }))
         .err();
         preserve_first_lifecycle_panic(
@@ -663,7 +669,7 @@ fn emit_lifecycle_transition(
             "scheduler lifecycle dispatch",
         );
 
-        if !frames_were_enabled && Scheduler::instance().frames_enabled() {
+        if !frames_were_enabled && realm.scheduler().frames_enabled() {
             let redirty_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 realm.redirty_root_for_frames_reenable();
                 realm.wake_frame();
@@ -727,7 +733,6 @@ mod lifecycle_derivation_tests {
         },
     };
 
-    use flui_foundation::HasInstance;
     use flui_interaction::{
         HitTestEntry, HitTestResult, InteractionLane, RenderId,
         events::{PointerType, make_down_event, make_move_event},
@@ -736,8 +741,7 @@ mod lifecycle_derivation_tests {
     use flui_view::WidgetsBindingObserver;
 
     use super::{
-        AppLifecycleState, Scheduler, derive_lifecycle_state, emit_lifecycle_transition,
-        lifecycle_ladder,
+        AppLifecycleState, derive_lifecycle_state, emit_lifecycle_transition, lifecycle_ladder,
     };
 
     struct GestureStateObserver {
@@ -1011,8 +1015,10 @@ mod lifecycle_derivation_tests {
                     "lifecycle observers must see gesture teardown already committed"
                 );
 
-                // Do not leak the scheduler singleton's lifecycle state into
-                // another in-process test.
+                // Restore Resumed before this test-local realm drops -- tidy,
+                // not required for isolation (each realm owns its own
+                // scheduler now, so there is nothing left to leak between
+                // tests).
                 emit_lifecycle_transition(
                     realm,
                     AppLifecycleState::Hidden,
@@ -1034,12 +1040,14 @@ mod lifecycle_derivation_tests {
         let scheduler_listener_panicked = Arc::new(AtomicBool::new(false));
         let scheduler_probe = Arc::clone(&scheduler_listener_panicked);
         let scheduler_listener =
-            Scheduler::instance().add_lifecycle_state_listener(Arc::new(move |state| {
-                if state == AppLifecycleState::Hidden {
-                    scheduler_probe.store(true, Ordering::Release);
-                    panic!("scheduler lifecycle listener panic");
-                }
-            }));
+            realm
+                .scheduler()
+                .add_lifecycle_state_listener(Arc::new(move |state| {
+                    if state == AppLifecycleState::Hidden {
+                        scheduler_probe.store(true, Ordering::Release);
+                        panic!("scheduler lifecycle listener panic");
+                    }
+                }));
         let widget_listener_panicked = Arc::new(AtomicBool::new(false));
         let panicking_observer: Arc<dyn WidgetsBindingObserver> = Arc::new(
             PanickingLifecycleObserver(Arc::clone(&widget_listener_panicked)),
@@ -1087,7 +1095,7 @@ mod lifecycle_derivation_tests {
                 );
                 assert_eq!(realm.gestures().active_pointer_count(), 0);
                 assert_eq!(
-                    Scheduler::instance().lifecycle_state(),
+                    realm.scheduler().lifecycle_state(),
                     AppLifecycleState::Paused,
                     "the target state must commit before the first panic resumes"
                 );
@@ -1101,7 +1109,9 @@ mod lifecycle_derivation_tests {
                 );
 
                 assert!(
-                    Scheduler::instance().remove_lifecycle_state_listener(scheduler_listener),
+                    realm
+                        .scheduler()
+                        .remove_lifecycle_state_listener(scheduler_listener),
                     "test scheduler listener must be removable"
                 );
                 realm.widgets().remove_observer(&panicking_observer);
@@ -2931,7 +2941,7 @@ where
         let _ = dispatch_platform_realm(realm_dispatch, RealmTask::Frame(Box::new(move |realm| {
             worker_reload_frame.poll_and_apply(realm);
 
-            let scheduler = Scheduler::instance();
+            let scheduler = realm.scheduler();
 
         // Owner-inbox drain: commands and worker results
         // commit HERE, at the frame boundary while the scheduler phase is
@@ -3088,12 +3098,14 @@ where
                     realm_dispatch,
                     RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
                 ) {
+                    // Trace-only: the scheduler died WITH the realm now (each
+                    // realm owns its own), so there is no process-global
+                    // scheduler left to notify as a fallback -- unlike the
+                    // singleton era, there is genuinely no observer left.
                     tracing::warn!(
                         ?error,
                         "realm unavailable during Detached lifecycle dispatch"
                     );
-                    Scheduler::instance()
-                        .handle_app_lifecycle_state_change(AppLifecycleState::Detached);
                 }
             }));
         });
@@ -3137,13 +3149,22 @@ where
         // no-op instead of waking the loop.
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
-        // Mark lifecycle as started (Resumed).
+        // Mark lifecycle as started (Resumed). Routed through the same
+        // dispatch every other lifecycle signal uses -- one fact, one place
+        // (`emit_lifecycle_transition` reads the realm's own scheduler) --
+        // rather than reaching for a process-global one that no longer
+        // exists. A fresh realm's scheduler already starts at `Resumed`
+        // (`BindingState::lifecycle_state`'s default), so this ladder is
+        // empty and the call is a documented no-op, matching prior behavior.
         debug_assert_eq!(
             std::thread::current().id(),
             realm_dispatch.owner_thread,
             "desktop bootstrap must run on the realm's owner thread"
         );
-        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+        );
 
         // 10. Request initial redraw, now that the window is stored.
         // `wake` (not a direct `request_redraw()` on the window): it clones
@@ -3423,7 +3444,7 @@ where
 
                     let has_pending = realm.has_pending_work();
                     let dirty = inbox_redraw || realm.needs_redraw() || has_pending;
-                    let scheduler = Scheduler::instance();
+                    let scheduler = realm.scheduler();
                     match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
                     {
                         WakeAction::Skip => return,
@@ -3501,12 +3522,13 @@ where
                     realm_dispatch,
                     RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
                 ) {
+                    // Trace-only: the scheduler died WITH the realm now (each
+                    // realm owns its own), so there is no process-global
+                    // scheduler left to notify as a fallback.
                     tracing::warn!(
                         ?error,
                         "realm unavailable during Detached lifecycle dispatch"
                     );
-                    Scheduler::instance()
-                        .handle_app_lifecycle_state_change(AppLifecycleState::Detached);
                 }
             }));
         });
@@ -3537,7 +3559,7 @@ where
             let _ = dispatch_platform_realm(
                 realm_dispatch,
                 RealmTask::Frame(Box::new(move |realm| {
-                    let old = Scheduler::instance().lifecycle_state();
+                    let old = realm.scheduler().lifecycle_state();
                     emit_lifecycle_transition(realm, old, target);
                 })),
             );
@@ -3551,13 +3573,17 @@ where
         // no-op instead of waking the loop.
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
-        // Mark lifecycle as started (Resumed).
+        // Mark lifecycle as started (Resumed). Routed through dispatch --
+        // see `run_desktop`'s matching comment for why.
         debug_assert_eq!(
             std::thread::current().id(),
             realm_dispatch.owner_thread,
             "android bootstrap must run on the realm's owner thread"
         );
-        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+        );
 
         // 10. Request initial redraw, now that the window is stored.
         wake();
@@ -3753,7 +3779,7 @@ where
 
                     let has_pending = realm.has_pending_work();
                     let dirty = inbox_redraw || realm.needs_redraw() || has_pending;
-                    let scheduler = Scheduler::instance();
+                    let scheduler = realm.scheduler();
                     match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
                     {
                         WakeAction::Skip => return,
@@ -3850,12 +3876,13 @@ where
                     realm_dispatch,
                     RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
                 ) {
+                    // Trace-only: the scheduler died WITH the realm now (each
+                    // realm owns its own), so there is no process-global
+                    // scheduler left to notify as a fallback.
                     tracing::warn!(
                         ?error,
                         "realm unavailable during Detached lifecycle dispatch"
                     );
-                    Scheduler::instance()
-                        .handle_app_lifecycle_state_change(AppLifecycleState::Detached);
                 }
             }));
         });
@@ -3887,7 +3914,11 @@ where
             realm_dispatch.owner_thread,
             "web bootstrap must run on the realm's owner thread"
         );
-        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+        // Routed through dispatch -- see `run_desktop`'s matching comment.
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+        );
 
         tracing::info!("Web platform initialized with callbacks");
         Ok(())
@@ -4083,15 +4114,6 @@ mod tests {
     // Owner-platform host tests (ADR-0039 §6)
     // ========================================================================
 
-    /// Serializes tests that mutate `Scheduler::instance()`'s process-global
-    /// phase (the repo rule for shared binding/scheduler state — AGENTS.md
-    /// "Testing quirks"). `APP_RUNTIME` itself is `thread_local!`, so
-    /// the install/clear tests below need no lock (the standard library
-    /// test harness runs each `#[test]` on its own thread by default); this
-    /// lock exists only for the one test that drives the process-global
-    /// `Scheduler::instance()` singleton through a real frame.
-    static SCHEDULER_PHASE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn owner_platform_host_installs_and_clears_around_run() {
         use flui_platform::headless_platform;
@@ -4212,25 +4234,45 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "with_owner_platform called while the scheduler is inside")]
+    #[should_panic(
+        expected = "with_owner_platform called while the installed realm's scheduler is inside"
+    )]
     #[cfg_attr(
         not(debug_assertions),
         ignore = "the fence is a debug_assert!; release builds don't panic"
     )]
-    fn owner_platform_accessor_fences_the_frame_transaction() {
-        let _serialized = SCHEDULER_PHASE_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    fn owner_platform_accessor_fences_the_installed_realms_frame_transaction() {
+        use flui_platform::headless_platform;
 
-        // `drive_frame` leaves the *production* `Scheduler::instance()`
-        // singleton in `PersistentCallbacks` for the duration of its
-        // `pipeline` closure -- a forbidden phase per fence (c). A
-        // panicking pipeline is caught internally and resolved back to
-        // `Idle` via `abort_frame()` before the panic resumes, so this
-        // test's own `#[should_panic]` unwind leaves the singleton clean
-        // for whatever runs on it next -- no hand-rolled restore guard
-        // needed on top of `drive_frame`'s own recovery path.
-        Scheduler::instance().drive_frame(web_time::Instant::now(), || {
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let window = headless_platform()
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create a test window");
+        install_platform_realm(super::super::ui_realm::UiRealm::for_test(), &window);
+
+        // A clone of the installed realm's OWN scheduler -- same underlying
+        // `SchedulerInner` fence (c) reads through `installed_realm_phase`.
+        // Driven directly, not through `dispatch_platform_realm`: that
+        // function takes the realm OUT of `APP_RUNTIME` for the duration of
+        // any dispatch (see its own doc), so probing the slot from inside a
+        // *dispatched* frame would read `None` and never trip this fence --
+        // the fence only ever sees a realm that is actually resident in the
+        // slot, which this test keeps true throughout.
+        let scheduler = APP_RUNTIME.with(|slot| {
+            slot.borrow()
+                .realm
+                .as_ref()
+                .expect("just installed above")
+                .scheduler()
+                .clone()
+        });
+
+        // `drive_frame` leaves the scheduler in `PersistentCallbacks` for the
+        // duration of its `pipeline` closure -- a forbidden phase per fence
+        // (c). A panicking pipeline is caught internally and resolved back
+        // to `Idle` via `abort_frame()` before the panic resumes, so this
+        // test's own `#[should_panic]` unwind leaves the scheduler clean.
+        scheduler.drive_frame(web_time::Instant::now(), || {
             let _ = with_owner_platform(|_owner| ());
         });
     }

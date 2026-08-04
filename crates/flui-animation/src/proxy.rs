@@ -57,10 +57,10 @@ fn fan_out_status(listeners: &Mutex<StatusListeners>, status: AnimationStatus) {
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Arc::new(Scheduler::new());
+/// let scheduler = Scheduler::new();
 /// let controller1 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     scheduler.clone(),
+///     &scheduler,
 /// ));
 ///
 /// let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
@@ -68,7 +68,7 @@ fn fan_out_status(listeners: &Mutex<StatusListeners>, status: AnimationStatus) {
 /// // Later, swap to a different animation
 /// let controller2 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(500),
-///     scheduler,
+///     &scheduler,
 /// ));
 /// proxy.set_parent(controller2 as Arc<dyn Animation<f32>>);
 /// ```
@@ -234,10 +234,10 @@ mod tests {
 
     #[test]
     fn test_proxy_animation() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler.clone(),
+            &scheduler,
         ));
 
         let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
@@ -248,7 +248,7 @@ mod tests {
         // Swap to a different animation
         let controller2 = Arc::new(AnimationController::new(
             Duration::from_millis(200),
-            scheduler,
+            &scheduler,
         ));
         controller2.set_value(0.75);
         proxy.set_parent(controller2.clone() as Arc<dyn Animation<f32>>);
@@ -261,10 +261,10 @@ mod tests {
 
     #[test]
     fn test_proxy_animation_status() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let proxy = ProxyAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
@@ -282,14 +282,14 @@ mod tests {
         // Status listeners registered on the proxy must keep firing after a
         // hot-swap; previously they stayed registered on the old parent and
         // never saw the new parent's transitions.
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler.clone(),
+            &scheduler,
         ));
         let controller2 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
@@ -327,14 +327,14 @@ mod tests {
 
     #[test]
     fn swap_with_status_change_fires_listeners() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler.clone(),
+            &scheduler,
         ));
         let controller2 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         controller2.set_value(1.0); // Completed
 
@@ -357,14 +357,14 @@ mod tests {
 
     #[test]
     fn remove_status_listener_after_swap() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler.clone(),
+            &scheduler,
         ));
         let controller2 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);

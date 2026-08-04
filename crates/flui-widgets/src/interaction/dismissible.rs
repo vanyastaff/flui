@@ -563,12 +563,17 @@ impl StatefulView for Dismissible {
     type State = DismissibleState;
 
     fn create_state(&self) -> Self::State {
-        // A fresh, never-pumped scheduler: on a real display its ticker
-        // drives the controller off wall-clock time; under a `VsyncScope`
-        // the binding drives it deterministically instead (mirrors
-        // `AnimatedSize`/`RefreshIndicator`).
-        let move_controller =
-            AnimationController::new(self.movement_duration, Arc::new(Scheduler::new()));
+        // A real (but never-pumped) ticker, not `without_ticker`: this
+        // module reads `move_controller.is_animating()` extensively
+        // (`handle_drag_start`/`handle_drag_update`/`handle_drag_end`), and
+        // `is_animating` is intentionally ticker-based (Flutter parity:
+        // `Ticker.isActive`), not status-based — a ticker-less controller
+        // can never report `is_animating() == true`. `VsyncScope` still
+        // drives the actual value ticks deterministically via `tick_at`;
+        // this scheduler is never pumped and its ticker never fires on its
+        // own — it exists only so `start()`/`stop()` transition real ticker
+        // state.
+        let move_controller = AnimationController::new(self.movement_duration, &Scheduler::new());
         DismissibleState {
             move_controller,
             move_value_listener_id: None,
@@ -1202,7 +1207,7 @@ fn start_resize_animation(
     drag.size_prior_to_collapse
         .set(Some(size_prior_to_collapse));
 
-    let resize_controller = AnimationController::new(duration, Arc::new(Scheduler::new()));
+    let resize_controller = AnimationController::without_ticker(duration);
 
     let resize_ref = resize_controller.clone();
     let progress_ticks = Arc::clone(&drag.resize_progress_ticks);
@@ -1692,8 +1697,10 @@ mod tests {
     fn move_controller_reaching_the_clamp_mid_drag_does_not_leave_a_stale_completion_latch() {
         let rebuild = mount_and_capture_rebuild_handle();
 
+        // Real ticker: this test drives `handle_drag_update`, which reads
+        // `move_controller.is_animating()` (ticker-based; see `create_state`'s doc).
         let move_controller =
-            AnimationController::new(Duration::from_millis(200), Arc::new(Scheduler::new()));
+            AnimationController::new(Duration::from_millis(200), &Scheduler::new());
         let drag = Rc::new(DragState::default());
         let move_completed_runs = Arc::clone(&drag.move_completed_runs);
         let _status_listener_id = move_controller.add_status_listener(Arc::new(move |status| {

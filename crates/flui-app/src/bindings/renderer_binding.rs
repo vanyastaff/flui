@@ -50,7 +50,7 @@ use flui_rendering::{
 use flui_types::Offset;
 use parking_lot::RwLock;
 
-use crate::app::runtime::SchedulerRef;
+use flui_scheduler::{Scheduler, WeakScheduler};
 
 /// A subscriber to [`RenderingFlutterBinding::set_semantics_enabled`] changes.
 ///
@@ -128,6 +128,12 @@ pub struct RenderingFlutterBinding {
 
     /// Whether the first frame has been sent.
     first_frame_sent: AtomicBool,
+
+    /// The owning realm's scheduler, weak: `request_visual_update`'s
+    /// device-metrics force-frame path needs to schedule a frame, but this
+    /// binding must not keep a dead realm's scheduler alive (it is a plain
+    /// field on `UiRealm`, not the other way around).
+    scheduler: WeakScheduler,
 }
 
 impl std::fmt::Debug for RenderingFlutterBinding {
@@ -153,19 +159,28 @@ impl Default for RenderingFlutterBinding {
 }
 
 impl RenderingFlutterBinding {
-    /// Creates a new rendering binding with its own PipelineOwner.
-    ///
-    /// For sharing a PipelineOwner with `AppBinding`, use
-    /// [`new_with_pipeline`](Self::new_with_pipeline) instead.
+    /// Creates a new rendering binding with its own PipelineOwner and a
+    /// fresh, throwaway `Scheduler` — test/standalone use only. Production
+    /// always goes through [`new_with_pipeline`](Self::new_with_pipeline)
+    /// with the owning realm's own scheduler.
     pub fn new() -> Self {
-        Self::new_with_pipeline(Arc::new(RwLock::new(PipelineOwner::new())))
+        Self::new_with_pipeline(
+            Arc::new(RwLock::new(PipelineOwner::new())),
+            &Scheduler::new(),
+        )
     }
 
-    /// Creates a new rendering binding with a shared PipelineOwner.
+    /// Creates a new rendering binding with a shared PipelineOwner, wired to
+    /// `scheduler` for its (rare) device-metrics force-frame path.
     ///
-    /// This allows AppBinding to pass in the same `Arc<RwLock<PipelineOwner>>`
-    /// that elements use, ensuring a single PipelineOwner instance at runtime.
-    pub fn new_with_pipeline(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
+    /// This allows the owning `UiRealm` to pass in the same
+    /// `Arc<RwLock<PipelineOwner>>` that elements use, ensuring a single
+    /// PipelineOwner instance at runtime, and its OWN scheduler — never a
+    /// process-global one.
+    pub fn new_with_pipeline(
+        pipeline_owner: Arc<RwLock<PipelineOwner>>,
+        scheduler: &Scheduler,
+    ) -> Self {
         Self::init_instances();
         Self {
             root_pipeline_owner: pipeline_owner,
@@ -174,6 +189,7 @@ impl RenderingFlutterBinding {
             semantics_listeners: RwLock::new(Vec::new()),
             first_frame_deferred_count: AtomicU32::new(0),
             first_frame_sent: AtomicBool::new(false),
+            scheduler: scheduler.downgrade(),
         }
     }
 
@@ -335,22 +351,21 @@ impl RenderingFlutterBinding {
     /// first-frame-deferral module note above): a frame with nothing dirty
     /// produces `FramePaintOutcome::Idle`, not a repeat of the last
     /// `Scene`. Two callers hit this exact problem — [`allow_first_frame`]
-    /// (a deferred frame becoming presentable) and the scheduler's
-    /// frames-disabled→enabled re-enable edge (`AppBinding::instance()`'s
-    /// bootstrap wiring; see `ADR-0035`), which has no retained scene to
-    /// re-present either — so the shared logic lives here, once.
+    /// (a deferred frame becoming presentable) and the realm's own
+    /// scheduler's frames-disabled→enable re-enable edge (see `ADR-0035`
+    /// and `emit_lifecycle_transition`'s doc in `runner.rs`), which has no
+    /// retained scene to re-present either — so the shared logic lives
+    /// here, once.
     ///
     /// Routed through [`PipelineOwner::repaint_handle`]/
     /// [`RepaintHandle::mark_needs_layout`](flui_rendering::pipeline::RepaintHandle::mark_needs_layout),
-    /// NOT `Scheduler::instance()`: a caller may not be the UI thread (an
+    /// not a scheduler reach: a caller may not be the UI thread (an
     /// async-init splash screen resolving on an executor thread, or the
     /// re-enable listener firing from whatever thread drove the lifecycle
-    /// change) — `Scheduler::instance()` is thread-local, so resolving it at
-    /// fire time from the wrong thread would schedule on THAT thread's
-    /// fresh, undriven `Scheduler` and silently lose the wake (the
-    /// fire-time-resolution hazard `AppBinding::new`'s wake-wiring comment
-    /// warns against). `RepaintHandle` is `Send + Sync`, captured over a
-    /// bounded channel at `PipelineOwner` construction time, and its
+    /// change) — resolving a scheduler by any thread-local at fire time from
+    /// the wrong thread would silently target the wrong instance and lose
+    /// the wake. `RepaintHandle` is `Send + Sync`, captured over a bounded
+    /// channel at `PipelineOwner` construction time, and its
     /// `mark_needs_layout` fires the SAME visual-update notifier a local
     /// dirty mark does — safe and non-blocking from any thread.
     ///
@@ -533,18 +548,13 @@ impl RendererBinding for RenderingFlutterBinding {
     // ---- formerly PipelineManifold ----
 
     fn request_visual_update(&self) {
-        // Same-thread reach: `request_visual_update` is only ever called
-        // with `&self` on the thread that owns this binding, so a freshly
-        // resolved `SchedulerRef` is exactly as safe as the `Scheduler::
-        // instance()` this replaces -- typed instead of ambient. Not stored
-        // as a field: nothing here observes it across a call boundary, and
-        // `Scheduler::instance()` underneath already memoizes per owner
-        // thread, so resolving fresh costs nothing beyond the wrapper.
-        SchedulerRef::resolve()
-            .get()
-            .schedule_frame(Box::new(|_timing| {
+        // Upgrade-or-skip: if the owning realm's scheduler is already gone,
+        // there is no frame left to schedule a callback into.
+        if let Some(scheduler) = self.scheduler.upgrade() {
+            scheduler.schedule_frame(Box::new(|_timing| {
                 // Visual update frame callback
             }));
+        }
     }
 
     fn semantics_enabled(&self) -> bool {
@@ -690,7 +700,8 @@ mod tests {
             o.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
             id
         };
-        let binding = RenderingFlutterBinding::new_with_pipeline(owner);
+        let binding =
+            RenderingFlutterBinding::new_with_pipeline(owner, &flui_scheduler::Scheduler::new());
 
         // Deferred: the pipeline still runs (warm-up) but the output
         // is withheld.
@@ -746,7 +757,8 @@ mod tests {
                 px(100.0),
             )));
         }
-        let binding = RenderingFlutterBinding::new_with_pipeline(owner);
+        let binding =
+            RenderingFlutterBinding::new_with_pipeline(owner, &flui_scheduler::Scheduler::new());
         let _ = binding.draw_frame();
 
         let mut inside = flui_interaction::routing::HitTestResult::new();

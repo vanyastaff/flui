@@ -560,9 +560,12 @@ mod tests {
         (navigator, root, top)
     }
 
+    // Real ticker, not `without_ticker`: `BackGestureController` reads
+    // `self.controller.is_animating()` throughout, which is intentionally
+    // ticker-based (Flutter parity: `Ticker.isActive`) — see
+    // `transition_route.rs::install`'s doc for the full rationale.
     fn controller(ms: u64) -> AnimationController {
-        let scheduler = Arc::new(Scheduler::new());
-        AnimationController::new(Duration::from_millis(ms), scheduler)
+        AnimationController::new(Duration::from_millis(ms), &Scheduler::new())
     }
 
     #[test]

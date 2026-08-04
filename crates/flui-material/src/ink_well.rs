@@ -505,7 +505,7 @@ fn begin_press_deactivation(
         return;
     };
 
-    let controller = AnimationController::new(PRESS_DEACTIVATION_DELAY, Arc::new(Scheduler::new()));
+    let controller = AnimationController::new(PRESS_DEACTIVATION_DELAY, &Scheduler::new());
     let registration = vsync.register(controller.clone());
 
     // The status listener only needs to be `Send + Sync` (its bound), so it

@@ -265,7 +265,7 @@ mod tests {
     use std::time::Duration;
 
     fn controller(ms: u64) -> AnimationController {
-        AnimationController::new(Duration::from_millis(ms), Arc::new(Scheduler::new()))
+        AnimationController::new(Duration::from_millis(ms), &Scheduler::new())
     }
 
     fn render_at(opacity: f32) -> RenderSliverAnimatedOpacity {

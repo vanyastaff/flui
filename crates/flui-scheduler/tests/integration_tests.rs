@@ -187,8 +187,8 @@ fn test_app_lifecycle_state_changes() {
 
 #[test]
 fn test_ticker_with_scheduler() {
-    let scheduler = Arc::new(Scheduler::new());
-    let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
+    let scheduler = Scheduler::new();
+    let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     let tick_count = Arc::new(AtomicU32::new(0));
 
@@ -208,8 +208,8 @@ fn test_ticker_with_scheduler() {
 
 #[test]
 fn test_ticker_mute_unmute() {
-    let scheduler = Arc::new(Scheduler::new());
-    let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
+    let scheduler = Scheduler::new();
+    let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     let tick_count = Arc::new(AtomicU32::new(0));
 
@@ -492,11 +492,11 @@ fn test_frame_duration_budget_check() {
 
 #[test]
 fn test_scheduler_thread_safety() {
-    let scheduler = Arc::new(Scheduler::new());
+    let scheduler = Scheduler::new();
 
     let handles: Vec<_> = (0..4)
         .map(|i| {
-            let sched = Arc::clone(&scheduler);
+            let sched = scheduler.clone();
             std::thread::spawn(move || {
                 for _ in 0..100 {
                     sched.schedule_frame_callback(Box::new(move |_| {
@@ -1970,8 +1970,8 @@ fn test_ticker_group_extend() {
 
 #[test]
 fn test_auto_scheduling_ticker_debug() {
-    let scheduler = Arc::new(Scheduler::new());
-    let ticker = Ticker::new_with_scheduler(scheduler);
+    let scheduler = Scheduler::new();
+    let ticker = Ticker::new_with_scheduler(&scheduler);
 
     let debug = format!("{ticker:?}");
     assert!(debug.contains("Ticker"));
@@ -2813,8 +2813,8 @@ fn test_auto_scheduling_ticker_start_typed_works() {
 
     use flui_scheduler::duration::Seconds;
 
-    let scheduler = Arc::new(Scheduler::new());
-    let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
+    let scheduler = Scheduler::new();
+    let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     let called = Arc::new(AtomicBool::new(false));
     let called_clone = called.clone();

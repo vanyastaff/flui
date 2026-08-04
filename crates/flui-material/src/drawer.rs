@@ -696,7 +696,7 @@ impl StatefulView for DrawerController {
     type State = DrawerControllerState;
 
     fn create_state(&self) -> Self::State {
-        let controller = AnimationController::new(BASE_SETTLE_DURATION, Arc::new(Scheduler::new()));
+        let controller = AnimationController::new(BASE_SETTLE_DURATION, &Scheduler::new());
         if self.is_open {
             controller.set_value(1.0);
         }
@@ -936,7 +936,7 @@ mod tests {
     /// fields directly.
     fn test_core() -> Rc<DrawerControllerCore> {
         Rc::new(DrawerControllerCore {
-            controller: AnimationController::new(BASE_SETTLE_DURATION, Arc::new(Scheduler::new())),
+            controller: AnimationController::new(BASE_SETTLE_DURATION, &Scheduler::new()),
             vsync: RefCell::new(None),
             vsync_registration: RefCell::new(None),
             rebuild: RefCell::new(None),
@@ -1130,7 +1130,7 @@ mod tests {
         alignment: DrawerAlignment,
     ) -> (Rc<DrawerControllerCore>, Vsync) {
         let core = Rc::new(DrawerControllerCore {
-            controller: AnimationController::new(BASE_SETTLE_DURATION, Arc::new(Scheduler::new())),
+            controller: AnimationController::new(BASE_SETTLE_DURATION, &Scheduler::new()),
             vsync: RefCell::new(None),
             vsync_registration: RefCell::new(None),
             rebuild: RefCell::new(None),

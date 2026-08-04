@@ -6,7 +6,6 @@
 use crate::controller::AnimationController;
 use crate::error::AnimationError;
 use flui_scheduler::Scheduler;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Builder for creating [`AnimationController`] instances.
@@ -21,14 +20,13 @@ use std::time::Duration;
 /// use flui_animation::builder::AnimationControllerBuilder;
 /// use flui_animation::Animation;
 /// use flui_scheduler::Scheduler;
-/// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Arc::new(Scheduler::new());
+/// let scheduler = Scheduler::new();
 ///
 /// let controller = AnimationControllerBuilder::new(
 ///     Duration::from_millis(300),
-///     scheduler,
+///     &scheduler,
 /// )
 /// .bounds(0.0, 100.0)?
 /// .reverse_duration(Duration::from_millis(500))
@@ -42,7 +40,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct AnimationControllerBuilder {
     duration: Duration,
-    scheduler: Arc<Scheduler>,
+    scheduler: Scheduler,
     lower_bound: f32,
     upper_bound: f32,
     reverse_duration: Option<Duration>,
@@ -74,20 +72,19 @@ impl AnimationControllerBuilder {
     /// ```
     /// use flui_animation::builder::AnimationControllerBuilder;
     /// use flui_scheduler::Scheduler;
-    /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let builder = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// );
     /// ```
     #[must_use]
-    pub fn new(duration: Duration, scheduler: Arc<Scheduler>) -> Self {
+    pub fn new(duration: Duration, scheduler: &Scheduler) -> Self {
         Self {
             duration,
-            scheduler,
+            scheduler: scheduler.clone(),
             lower_bound: 0.0,
             upper_bound: 1.0,
             reverse_duration: None,
@@ -112,13 +109,12 @@ impl AnimationControllerBuilder {
     /// # fn main() -> Result<(), flui_animation::AnimationError> {
     /// use flui_animation::builder::AnimationControllerBuilder;
     /// use flui_scheduler::Scheduler;
-    /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let builder = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// )
     /// .bounds(10.0, 20.0)?;
     /// # Ok(())
@@ -148,13 +144,12 @@ impl AnimationControllerBuilder {
     /// ```
     /// use flui_animation::builder::AnimationControllerBuilder;
     /// use flui_scheduler::Scheduler;
-    /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let builder = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// )
     /// .reverse_duration(Duration::from_millis(500));
     /// ```
@@ -178,13 +173,12 @@ impl AnimationControllerBuilder {
     /// ```
     /// use flui_animation::builder::AnimationControllerBuilder;
     /// use flui_scheduler::Scheduler;
-    /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let builder = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// )
     /// .initial_value(0.5);
     /// ```
@@ -206,13 +200,12 @@ impl AnimationControllerBuilder {
     /// # fn main() -> Result<(), flui_animation::AnimationError> {
     /// use flui_animation::builder::AnimationControllerBuilder;
     /// use flui_scheduler::Scheduler;
-    /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let controller = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// )
     /// .build()?;
     /// # Ok(())
@@ -221,7 +214,7 @@ impl AnimationControllerBuilder {
     pub fn build(self) -> Result<AnimationController, AnimationError> {
         let controller = AnimationController::with_bounds(
             self.duration,
-            self.scheduler,
+            &self.scheduler,
             self.lower_bound,
             self.upper_bound,
         )?;
@@ -255,13 +248,12 @@ impl AnimationController {
     /// # fn main() -> Result<(), flui_animation::AnimationError> {
     /// use flui_animation::AnimationController;
     /// use flui_scheduler::Scheduler;
-    /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let controller = AnimationController::builder(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// )
     /// .reverse_duration(Duration::from_millis(500))
     /// .initial_value(0.5)
@@ -270,7 +262,7 @@ impl AnimationController {
     /// # }
     /// ```
     #[must_use]
-    pub fn builder(duration: Duration, scheduler: Arc<Scheduler>) -> AnimationControllerBuilder {
+    pub fn builder(duration: Duration, scheduler: &Scheduler) -> AnimationControllerBuilder {
         AnimationControllerBuilder::new(duration, scheduler)
     }
 }
@@ -282,8 +274,8 @@ mod tests {
 
     #[test]
     fn test_builder_default() {
-        let scheduler = Arc::new(Scheduler::new());
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), scheduler)
+        let scheduler = Scheduler::new();
+        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .build()
             .unwrap();
 
@@ -293,8 +285,8 @@ mod tests {
 
     #[test]
     fn test_builder_with_bounds() {
-        let scheduler = Arc::new(Scheduler::new());
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), scheduler)
+        let scheduler = Scheduler::new();
+        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .bounds(10.0, 20.0)
             .unwrap()
             .build()
@@ -306,8 +298,8 @@ mod tests {
 
     #[test]
     fn test_builder_with_initial_value() {
-        let scheduler = Arc::new(Scheduler::new());
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), scheduler)
+        let scheduler = Scheduler::new();
+        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .initial_value(0.5)
             .build()
             .unwrap();
@@ -318,8 +310,8 @@ mod tests {
 
     #[test]
     fn test_builder_invalid_bounds() {
-        let scheduler = Arc::new(Scheduler::new());
-        let result = AnimationControllerBuilder::new(Duration::from_millis(100), scheduler)
+        let scheduler = Scheduler::new();
+        let result = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .bounds(20.0, 10.0); // Invalid: lower > upper
 
         assert!(result.is_err());
@@ -327,8 +319,8 @@ mod tests {
 
     #[test]
     fn test_controller_builder_method() {
-        let scheduler = Arc::new(Scheduler::new());
-        let controller = AnimationController::builder(Duration::from_millis(100), scheduler)
+        let scheduler = Scheduler::new();
+        let controller = AnimationController::builder(Duration::from_millis(100), &scheduler)
             .initial_value(0.75)
             .build()
             .unwrap();
@@ -339,8 +331,8 @@ mod tests {
 
     #[test]
     fn test_builder_with_reverse_duration() {
-        let scheduler = Arc::new(Scheduler::new());
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), scheduler)
+        let scheduler = Scheduler::new();
+        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .reverse_duration(Duration::from_millis(200))
             .build()
             .unwrap();
@@ -351,8 +343,8 @@ mod tests {
 
     #[test]
     fn test_builder_full_configuration() {
-        let scheduler = Arc::new(Scheduler::new());
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(300), scheduler)
+        let scheduler = Scheduler::new();
+        let controller = AnimationControllerBuilder::new(Duration::from_millis(300), &scheduler)
             .bounds(0.0, 100.0)
             .unwrap()
             .reverse_duration(Duration::from_millis(500))

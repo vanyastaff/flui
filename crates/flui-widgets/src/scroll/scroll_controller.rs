@@ -801,9 +801,8 @@ mod tests {
     /// wide-open bounds so a driven value is never clamped by the controller
     /// itself, only by `animate_to`'s own pre-clamp of the target.
     fn fling_stub() -> AnimationController {
-        AnimationController::with_bounds(
+        AnimationController::without_ticker_bounds(
             Duration::from_millis(1),
-            Arc::new(flui_scheduler::Scheduler::new()),
             f32::NEG_INFINITY,
             f32::INFINITY,
         )

@@ -38,12 +38,10 @@
 //! ## Auto-scheduling Ticker Example (Flutter-like)
 //!
 //! ```rust
-//! use std::sync::Arc;
-//!
 //! use flui_scheduler::{Scheduler, Ticker};
 //!
-//! let scheduler = Arc::new(Scheduler::new());
-//! let mut ticker = Ticker::new_with_scheduler(Arc::clone(&scheduler));
+//! let scheduler = Scheduler::new();
+//! let mut ticker = Ticker::new_with_scheduler(&scheduler);
 //!
 //! // Start auto-registers a transient frame callback that fires every frame
 //! ticker.start(|elapsed| {
@@ -217,11 +215,21 @@ pub struct Ticker {
     ///   / [`mute`](Self::mute) / [`dispose`](Self::dispose) cancel the
     ///   pending callback via [`Scheduler::cancel_frame_callback`](crate::scheduler::Scheduler::cancel_frame_callback).
     ///
+    /// A [`WeakScheduler`](crate::scheduler::WeakScheduler), not a strong
+    /// `Scheduler` — a live ticker's re-scheduling closure sits inside the
+    /// scheduler's OWN transient-callback queue (`schedule_tick_if_active`),
+    /// so a strong capture here would form
+    /// `Scheduler → queue → closure → Scheduler`, a permanent leak the
+    /// instant a realm could otherwise drop its scheduler. Every
+    /// schedule/cancel site upgrades-or-returns: once the backing scheduler
+    /// is gone there is no queue left to register with or cancel from, so a
+    /// failed upgrade is silently done, matching [`Self::disposed`]'s own
+    /// short-circuit.
+    ///
     /// Flutter parity: `Ticker(this._onTick, ...)` ([`ticker.dart:80`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart))
     /// implicitly carries `SchedulerBinding.instance` (singleton); FLUI
-    /// stores the scheduler explicitly to keep the dependency typed and
-    /// avoid the singleton-acquisition cost on the hot path.
-    scheduler: Option<Arc<crate::scheduler::Scheduler>>,
+    /// stores the scheduler explicitly to keep the dependency typed.
+    scheduler: Option<crate::scheduler::WeakScheduler>,
 
     /// Disposed-state flag (lock-free).
     ///
@@ -268,7 +276,10 @@ impl Ticker {
     /// [`stop`](Self::stop) / [`mute`](Self::mute) / [`dispose`](Self::dispose)
     /// cancel the pending callback via
     /// [`Scheduler::cancel_frame_callback`](crate::scheduler::Scheduler::cancel_frame_callback).
-    pub fn new_with_scheduler(scheduler: Arc<crate::scheduler::Scheduler>) -> Self {
+    ///
+    /// Downgrades `scheduler` internally — this ticker never holds a strong
+    /// reference back to it (see the `scheduler` field's own doc for why).
+    pub fn new_with_scheduler(scheduler: &crate::scheduler::Scheduler) -> Self {
         Self {
             id: next_ticker_id(),
             inner: Arc::new(Mutex::new(TickerInner {
@@ -279,7 +290,7 @@ impl Ticker {
                 active_future: None,
                 scheduled_callback_id: None,
             })),
-            scheduler: Some(scheduler),
+            scheduler: Some(scheduler.downgrade()),
             disposed: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -338,7 +349,9 @@ impl Ticker {
         }
         // Cancel pending transient callback outside the inner lock to avoid
         // lock-during-callback hazard (scheduler may also take its own locks).
-        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref()) {
+        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
+            && let Some(scheduler) = scheduler.upgrade()
+        {
             scheduler.cancel_frame_callback(id);
         }
     }
@@ -464,7 +477,9 @@ impl Ticker {
         if let Some(future) = active_future {
             future.set_complete();
         }
-        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref()) {
+        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
+            && let Some(scheduler) = scheduler.upgrade()
+        {
             scheduler.cancel_frame_callback(id);
         }
     }
@@ -492,7 +507,9 @@ impl Ticker {
                 None
             }
         };
-        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref()) {
+        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
+            && let Some(scheduler) = scheduler.upgrade()
+        {
             scheduler.cancel_frame_callback(id);
         }
     }
@@ -638,7 +655,9 @@ impl Ticker {
         if let Some(future) = active_future {
             future.set_canceled();
         }
-        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref()) {
+        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
+            && let Some(scheduler) = scheduler.upgrade()
+        {
             scheduler.cancel_frame_callback(id);
         }
     }
@@ -650,7 +669,7 @@ impl Ticker {
     /// Flutter parity: [`ticker.dart:270`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
     /// `shouldScheduleTick = !muted && isActive && !scheduled`.
     fn schedule_tick_if_active(&self) {
-        let Some(scheduler) = self.scheduler.as_ref() else {
+        let Some(weak_scheduler) = self.scheduler.as_ref() else {
             return; // Manual ticker — no auto-schedule.
         };
         // Check `shouldScheduleTick` and reserve the slot under the inner
@@ -661,17 +680,22 @@ impl Ticker {
                 return;
             }
         }
-        // Capture only Arc clones in the closure — total capture size is
-        // 3 × 8 bytes (Arc<Mutex<TickerInner>> + Arc<Scheduler> + Arc<AtomicBool>),
-        // matching the audit-recommended hot-path shape. The Box<dyn FnOnce>
-        // wrapping is unavoidable with the current `OneShotFrameCallback`
-        // signature; full elimination of per-frame Box requires an AtomicU8
-        // state machine plus a persistent-callback model and is deferred.
+        // A dead backing scheduler has no queue left to register with —
+        // silently done, same as a disposed ticker.
+        let Some(scheduler) = weak_scheduler.upgrade() else {
+            return;
+        };
+        // The closure captures the WEAK handle, never a strong `Scheduler` —
+        // this is the queue entry that used to close the
+        // `Scheduler → queue → closure → Scheduler` cycle (see the
+        // `scheduler` field's doc). Capturing `Arc<Mutex<TickerInner>>` +
+        // `WeakScheduler` + `Arc<AtomicBool>` (still 3 pointer-sized fields)
+        // keeps the audit-recommended hot-path capture shape.
         let inner_arc = Arc::clone(&self.inner);
-        let scheduler_arc = Arc::clone(scheduler);
+        let weak_next = weak_scheduler.clone();
         let disposed_arc = Arc::clone(&self.disposed);
         let cb_id = scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
-            Self::tick_and_reschedule_static(inner_arc, scheduler_arc, disposed_arc);
+            Self::tick_and_reschedule_static(inner_arc, weak_next, disposed_arc);
         }));
         // Record the ID so stop/mute/dispose can cancel.
         self.inner.lock().scheduled_callback_id = Some(cb_id);
@@ -687,9 +711,16 @@ impl Ticker {
     /// This is a free associated function rather than a method so it can
     /// be invoked from inside the captured closure without retaining a
     /// `&self` borrow across the callback registration boundary.
+    ///
+    /// Takes `scheduler` as a [`WeakScheduler`], not a strong `Scheduler`:
+    /// this function itself runs FROM inside the scheduler it was
+    /// registered on, so it always has a live scheduler in hand at the top —
+    /// the weakness matters only for what gets captured in the
+    /// *re-registration* closure below, so the cycle never re-forms one
+    /// frame later.
     fn tick_and_reschedule_static(
         inner: Arc<Mutex<TickerInner>>,
-        scheduler: Arc<crate::scheduler::Scheduler>,
+        scheduler: crate::scheduler::WeakScheduler,
         disposed: Arc<AtomicBool>,
     ) {
         // Disposed ticker — short-circuit. The closure may have been queued
@@ -740,12 +771,17 @@ impl Ticker {
         if !should_reschedule {
             return;
         }
-        // Register the next frame's callback. Mirrors Flutter
-        // `scheduleTick(rescheduling: true)`.
+        // Upgrade to register the next frame's callback — mirrors Flutter
+        // `scheduleTick(rescheduling: true)`. A failed upgrade means the
+        // realm tore down between this tick firing and now; nothing is left
+        // to reschedule against.
+        let Some(strong) = scheduler.upgrade() else {
+            return;
+        };
         let inner_next = Arc::clone(&inner);
-        let scheduler_next = Arc::clone(&scheduler);
+        let scheduler_next = scheduler.clone();
         let disposed_next = Arc::clone(&disposed);
-        let cb_id = scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
+        let cb_id = strong.schedule_frame_callback(Box::new(move |_vsync_time| {
             Self::tick_and_reschedule_static(inner_next, scheduler_next, disposed_next);
         }));
         // Record the new ID — race-safe because we just cleared the slot at
@@ -1515,8 +1551,8 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_lifecycle() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
-        let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
+        let scheduler = crate::scheduler::Scheduler::new();
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
         assert_eq!(ticker.state(), TickerState::Idle);
         assert!(!ticker.is_active());
@@ -1531,10 +1567,10 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_fires_each_frame() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let scheduler = crate::scheduler::Scheduler::new();
         let counter = Arc::new(AtomicU32::new(0));
 
-        let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
         let c = Arc::clone(&counter);
         ticker.start(move |_elapsed| {
             c.fetch_add(1, Ordering::Relaxed);
@@ -1556,10 +1592,10 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_mute_unmute() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let scheduler = crate::scheduler::Scheduler::new();
         let counter = Arc::new(AtomicU32::new(0));
 
-        let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
         let c = Arc::clone(&counter);
         ticker.start(move |_elapsed| {
             c.fetch_add(1, Ordering::Relaxed);
@@ -1581,10 +1617,10 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_dispose_cancels_pending() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let scheduler = crate::scheduler::Scheduler::new();
         let counter = Arc::new(AtomicU32::new(0));
 
-        let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
         let c = Arc::clone(&counter);
         ticker.start(move |_elapsed| {
             c.fetch_add(1, Ordering::Relaxed);
@@ -1598,7 +1634,7 @@ mod tests {
 
     #[test]
     fn test_create_ticker_via_provider_auto_schedules() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let scheduler = crate::scheduler::Scheduler::new();
         let counter = Arc::new(AtomicU32::new(0));
 
         // Provider factory path: create_ticker preloads callback; start_default
@@ -1631,8 +1667,8 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_elapsed() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
-        let mut ticker = Ticker::new_with_scheduler(scheduler);
+        let scheduler = crate::scheduler::Scheduler::new();
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
         assert_eq!(ticker.elapsed(), Seconds::ZERO);
 
@@ -1643,5 +1679,50 @@ mod tests {
         let elapsed = ticker.elapsed();
         assert!(elapsed.value() > 0.0);
         assert!(elapsed.value() < 1.0);
+    }
+
+    /// Teardown pin: a retained ticker whose backing scheduler has
+    /// already been dropped must still resolve `or_cancel()` with
+    /// `Err(TickerCanceled)` once its owner disposes it — `dispose()`
+    /// cancels the active future unconditionally, before it ever tries (and,
+    /// with a dead scheduler, fails) to cancel the pending transient
+    /// callback. A surviving handle fails closed; it never panics and never
+    /// hangs a waiter.
+    #[test]
+    fn retained_tickers_future_resolves_canceled_after_owner_disposes_past_scheduler_drop() {
+        let scheduler = crate::scheduler::Scheduler::new();
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
+        let future = ticker.start(|_| {});
+        assert!(future.is_pending());
+
+        // The realm's scheduler is gone; the ticker is still retained by its
+        // owner (e.g. an `AnimationController` a widget hasn't disposed yet).
+        drop(scheduler);
+
+        ticker.dispose();
+
+        assert!(
+            future.is_canceled(),
+            "dispose() must cancel the active future even though the \
+             backing scheduler can no longer be upgraded"
+        );
+
+        // A single manual poll suffices: `future` is already `Canceled`, so
+        // `or_cancel()` resolves on its very first poll without ever
+        // registering a waker — no executor needed.
+        let mut or_cancel = std::pin::pin!(future.or_cancel());
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        match or_cancel.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(result) => assert_eq!(
+                result,
+                Err(TickerCanceled),
+                "or_cancel() must resolve Err(TickerCanceled), not Ok, once the \
+                 scheduler is gone and the owner has disposed"
+            ),
+            std::task::Poll::Pending => {
+                panic!("or_cancel() must resolve immediately: the future is already Canceled")
+            }
+        }
     }
 }

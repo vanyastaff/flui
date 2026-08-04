@@ -8,13 +8,11 @@ use std::time::Duration;
 
 use crate::common::{lay_out, size, tight};
 use flui_animation::{Animation, AnimationController};
-use flui_scheduler::Scheduler;
 use flui_widgets::{RotationTransition, SizedBox};
 
 #[test]
 fn rotation_transition_reads_animation_turns_on_each_tick() {
-    let scheduler = Arc::new(Scheduler::new());
-    let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    let controller = AnimationController::without_ticker(Duration::from_millis(300));
     // turns are in [0, 1] (one full revolution) — the default bounds fit.
     let turns: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
 
@@ -43,8 +41,7 @@ fn rotation_transition_reads_animation_turns_on_each_tick() {
 
 #[test]
 fn rotation_transition_lays_its_child_out_as_a_passthrough() {
-    let scheduler = Arc::new(Scheduler::new());
-    let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    let controller = AnimationController::without_ticker(Duration::from_millis(300));
     controller.set_value(0.5);
     let turns: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
 

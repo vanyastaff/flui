@@ -47,14 +47,13 @@
 //! # fn main() -> Result<(), flui_animation::AnimationError> {
 //! use flui_animation::{AnimationController, Animation};
 //! use flui_scheduler::Scheduler;
-//! use std::sync::Arc;
 //! use std::time::Duration;
 //!
 //! // Create scheduler and controller
-//! let scheduler = Arc::new(Scheduler::new());
+//! let scheduler = Scheduler::new();
 //! let controller = AnimationController::new(
 //!     Duration::from_millis(300),
-//!     scheduler,
+//!     &scheduler,
 //! );
 //!
 //! // Start animation

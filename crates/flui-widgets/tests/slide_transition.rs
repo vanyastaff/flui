@@ -14,7 +14,6 @@ use flui_animation::ext::AnimatableExt;
 use flui_animation::{Animation, AnimationController, Tween};
 use flui_interaction::events::PointerEventExt as _;
 use flui_objects::TranslationFraction;
-use flui_scheduler::Scheduler;
 use flui_types::Color;
 use flui_widgets::{ColoredBox, GestureDetector, Listener, SizedBox, SlideTransition};
 
@@ -22,8 +21,7 @@ fn position_animation(
     begin: TranslationFraction,
     end: TranslationFraction,
 ) -> (AnimationController, Arc<dyn Animation<TranslationFraction>>) {
-    let scheduler = Arc::new(Scheduler::new());
-    let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    let controller = AnimationController::without_ticker(Duration::from_millis(300));
     let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
     let animation: Arc<dyn Animation<TranslationFraction>> =
         Arc::new(Tween::new(begin, end).animate(parent));

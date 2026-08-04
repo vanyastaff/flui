@@ -1283,7 +1283,7 @@ mod tests {
     use flui_rendering::testing::sliver;
 
     fn controller(ms: u64) -> AnimationController {
-        AnimationController::new(Duration::from_millis(ms), Arc::new(Scheduler::new()))
+        AnimationController::new(Duration::from_millis(ms), &Scheduler::new())
     }
 
     fn vertical_constraints(scroll_offset: f32, remaining_paint_extent: f32) -> SliverConstraints {

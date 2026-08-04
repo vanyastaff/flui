@@ -110,7 +110,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus};
-use flui_scheduler::Scheduler;
 use flui_widgets::FadeTransition;
 use flui_widgets::prelude::*;
 
@@ -196,8 +195,7 @@ impl ViewState<CountingChild> for CountingChildState {
             CHILD's builds, so child-build memoization would turn this green \
             without the divergence being fixed"]
 fn ticking_the_opacity_animation_never_rebuilds_the_widget_tree() {
-    let scheduler = Arc::new(Scheduler::new());
-    let controller = AnimationController::new(Duration::from_secs(2), scheduler);
+    let controller = AnimationController::without_ticker(Duration::from_secs(2));
     let opacity: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
     let build_count = Arc::new(AtomicU32::new(0));
 

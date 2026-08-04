@@ -610,7 +610,17 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
              `NavigatorHandle::push` fills its `RouteBindingSlot` first"
         );
 
-        let controller = AnimationController::new(self.duration, Arc::new(Scheduler::new()));
+        // A real (but never-pumped) ticker, not `without_ticker`: this
+        // controller's `is_animating()` is read by `BackGestureController`
+        // and by tests (`transition_route_tests.rs`), and `is_animating` is
+        // intentionally ticker-based (Flutter parity: `Ticker.isActive`),
+        // not status-based — a ticker-less controller can never report
+        // `is_animating() == true`. The navigator's `Vsync` (registered
+        // below when present) drives the actual value ticks
+        // deterministically; this scheduler is never pumped and its ticker
+        // never fires on its own — it exists only so `start()`/`stop()`
+        // transition real ticker state.
+        let controller = AnimationController::new(self.duration, &Scheduler::new());
         if let Some(reverse) = self.reverse_duration {
             controller.set_reverse_duration(reverse);
         }
@@ -624,8 +634,10 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             }
         }));
 
-        // The navigator's clock — the FLUI shape of `vsync: navigator!`. Absent a
-        // `VsyncScope`, the controller keeps its own wall-clock ticker.
+        // The navigator's clock — the FLUI shape of `vsync: navigator!`.
+        // Absent a `VsyncScope`, there is no wall-clock fallback: the
+        // controller simply never advances (its ticker never fires; see the
+        // constructor's own doc above).
         if let Some(binding) = self.inner.binding.get()
             && let Some(vsync) = binding.vsync()
         {

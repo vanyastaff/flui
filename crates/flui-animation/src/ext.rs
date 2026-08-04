@@ -28,10 +28,10 @@ use std::sync::Arc;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Arc::new(Scheduler::new());
+/// let scheduler = Scheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     scheduler,
+///     &scheduler,
 /// ));
 ///
 /// // Fluent API using extension trait
@@ -64,10 +64,10 @@ where
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let controller = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// ));
     ///
     /// let animation = FloatTween::new(0.0, 100.0)
@@ -104,10 +104,10 @@ where
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Arc::new(Scheduler::new());
+/// let scheduler = Scheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     scheduler,
+///     &scheduler,
 /// ));
 ///
 /// // Apply a curve using the fluent API
@@ -133,10 +133,10 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let controller = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// ));
     ///
     /// let curved = controller.curved(Curves::EaseIn);
@@ -163,10 +163,10 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let controller = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// ));
     ///
     /// controller.set_value(0.25);
@@ -196,14 +196,14 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
+    /// let scheduler = Scheduler::new();
     /// let controller1 = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
-    ///     scheduler.clone(),
+    ///     &scheduler,
     /// ));
     /// let controller2 = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
-    ///     scheduler,
+    ///     &scheduler,
     /// ));
     ///
     /// controller1.set_value(0.5);
@@ -236,9 +236,9 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
-    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler.clone()));
-    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler));
+    /// let scheduler = Scheduler::new();
+    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
+    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     ///
     /// c1.set_value(0.5);
     /// c2.set_value(0.3);
@@ -263,9 +263,9 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
-    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler.clone()));
-    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler));
+    /// let scheduler = Scheduler::new();
+    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
+    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     ///
     /// c1.set_value(0.5);
     /// c2.set_value(0.4);
@@ -290,9 +290,9 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
-    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler.clone()));
-    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler));
+    /// let scheduler = Scheduler::new();
+    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
+    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     ///
     /// c1.set_value(0.8);
     /// c2.set_value(0.3);
@@ -319,9 +319,9 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Arc::new(Scheduler::new());
-    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler.clone()));
-    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler));
+    /// let scheduler = Scheduler::new();
+    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
+    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     ///
     /// c1.set_value(0.8);
     /// c2.set_value(0.4);
@@ -362,10 +362,10 @@ mod tests {
 
     #[test]
     fn test_animatable_ext() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let tween = FloatTween::new(0.0, 100.0);
@@ -379,10 +379,10 @@ mod tests {
 
     #[test]
     fn test_animation_ext_curved() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let curved = controller.clone().curved(Curves::EaseIn);
@@ -396,10 +396,10 @@ mod tests {
 
     #[test]
     fn test_animation_ext_reversed() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         controller.set_value(0.25);
@@ -411,14 +411,14 @@ mod tests {
 
     #[test]
     fn test_animation_ext_add() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let c1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler.clone(),
+            &scheduler,
         ));
         let c2 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         c1.set_value(0.5);
@@ -433,14 +433,14 @@ mod tests {
 
     #[test]
     fn test_animation_ext_multiply() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let c1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler.clone(),
+            &scheduler,
         ));
         let c2 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         c1.set_value(0.5);
@@ -455,14 +455,14 @@ mod tests {
 
     #[test]
     fn test_animation_ext_subtract() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let c1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler.clone(),
+            &scheduler,
         ));
         let c2 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         c1.set_value(0.8);
@@ -477,14 +477,14 @@ mod tests {
 
     #[test]
     fn test_animation_ext_divide() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let c1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler.clone(),
+            &scheduler,
         ));
         let c2 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         c1.set_value(0.8);

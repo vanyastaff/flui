@@ -211,7 +211,6 @@ mod tests {
     use std::time::Duration;
 
     use flui_animation::{Animation, AnimationController, Vsync};
-    use flui_scheduler::Scheduler;
     use flui_view::ViewExt;
     use parking_lot::Mutex;
 
@@ -282,7 +281,7 @@ mod tests {
     }
 
     fn controller() -> AnimationController {
-        AnimationController::new(Duration::from_secs(1), Arc::new(Scheduler::new()))
+        AnimationController::without_ticker(Duration::from_secs(1))
     }
 
     /// A **disabled** `TickerMode` freezes the animations in its subtree and an

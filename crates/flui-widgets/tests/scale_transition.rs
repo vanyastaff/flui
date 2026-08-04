@@ -8,16 +8,14 @@ use std::time::Duration;
 
 use crate::common::{lay_out, size, tight};
 use flui_animation::{Animation, AnimationController};
-use flui_scheduler::Scheduler;
 use flui_widgets::{ScaleTransition, SizedBox};
 
 #[test]
 fn scale_transition_reads_animation_scale_on_each_tick() {
-    let scheduler = Arc::new(Scheduler::new());
     // Bounds 0..2 so a scale-up past 1.0 is representable (the default
     // controller clamps to 0..1).
     let controller =
-        AnimationController::with_bounds(Duration::from_millis(300), scheduler, 0.0, 2.0)
+        AnimationController::without_ticker_bounds(Duration::from_millis(300), 0.0, 2.0)
             .expect("0.0 < 2.0 is valid bounds");
     controller.set_value(0.5);
     let scale: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
@@ -47,8 +45,7 @@ fn scale_transition_reads_animation_scale_on_each_tick() {
 
 #[test]
 fn scale_transition_lays_its_child_out_as_a_passthrough() {
-    let scheduler = Arc::new(Scheduler::new());
-    let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    let controller = AnimationController::without_ticker(Duration::from_millis(300));
     controller.set_value(1.0);
     let scale: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
 

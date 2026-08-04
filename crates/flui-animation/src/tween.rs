@@ -26,10 +26,10 @@ use std::sync::Arc;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Arc::new(Scheduler::new());
+/// let scheduler = Scheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     scheduler,
+///     &scheduler,
 /// ));
 ///
 /// let tween = FloatTween::new(0.0, 100.0);
@@ -170,10 +170,10 @@ mod tests {
 
     #[test]
     fn test_tween_animation() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let tween = FloatTween::new(0.0, 100.0);
@@ -193,10 +193,10 @@ mod tests {
 
     #[test]
     fn test_tween_animation_status() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let tween = FloatTween::new(0.0, 100.0);
@@ -218,10 +218,10 @@ mod tests {
         // TweenAnimation must fire when the parent's value changes; previously
         // the combinator never subscribed to its parent, so tween-driven
         // rebuilds silently never happened.
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         let tween = FloatTween::new(0.0, 100.0);
         let animation = TweenAnimation::new(tween, controller.clone() as Arc<dyn Animation<f32>>);
@@ -245,10 +245,10 @@ mod tests {
 
     #[test]
     fn dropping_tween_removes_parent_subscription() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
         let before = controller.debug_value_listener_count();
         {
@@ -272,10 +272,10 @@ mod tests {
 
     #[test]
     fn test_animate_helper() {
-        let scheduler = Arc::new(Scheduler::new());
+        let scheduler = Scheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            scheduler,
+            &scheduler,
         ));
 
         let tween = FloatTween::new(10.0, 20.0);

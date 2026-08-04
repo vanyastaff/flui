@@ -12,7 +12,7 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 
-use crate::{CallbackId, FrameTiming, PostFrameCallback, Scheduler};
+use crate::{CallbackId, FrameTiming, PostFrameCallback, Scheduler, WeakScheduler};
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -83,7 +83,7 @@ impl LocalPostFrameLane {
     #[must_use]
     pub fn post_frame_handle(&self) -> PostFrameHandle {
         PostFrameHandle {
-            scheduler: self.inner.scheduler.clone(),
+            scheduler: self.inner.scheduler.downgrade(),
             local_lane: Some(self.inner.ticket),
         }
     }
@@ -155,9 +155,14 @@ pub enum LocalPostFrameScheduleError {
 }
 
 /// Schedules work after a completed frame's layout and paint.
+///
+/// Holds a [`WeakScheduler`], not a strong `Scheduler`: this handle is
+/// `Clone + Send + Sync` and vended into widget capabilities (ADR-0021) that
+/// may legitimately outlive the realm that built them, so a surviving handle
+/// must fail closed instead of pinning a dead realm's scheduler alive.
 #[derive(Clone)]
 pub struct PostFrameHandle {
-    scheduler: Scheduler,
+    scheduler: WeakScheduler,
     local_lane: Option<LaneTicket>,
 }
 
@@ -166,15 +171,25 @@ impl PostFrameHandle {
     #[must_use]
     pub fn new(scheduler: &Scheduler) -> Self {
         Self {
-            scheduler: scheduler.clone(),
+            scheduler: scheduler.downgrade(),
             local_lane: None,
         }
     }
 
     /// Schedule a `Send` callback after the next completed frame.
+    ///
+    /// If the backing scheduler is already gone (its owning realm has torn
+    /// down), the callback is dropped without running and a `tracing::warn!`
+    /// is emitted — there is no frame left for it to observe.
     pub fn schedule(&self, callback: impl FnOnce(&FrameTiming) + Send + 'static) {
+        let Some(scheduler) = self.scheduler.upgrade() else {
+            tracing::warn!(
+                "PostFrameHandle::schedule: backing scheduler is gone; dropping callback"
+            );
+            return;
+        };
         let boxed: PostFrameCallback = Box::new(callback);
-        self.scheduler.add_post_frame_callback(boxed);
+        scheduler.add_post_frame_callback(boxed);
     }
 
     /// Schedule an owner-local callback after the next completed frame.
@@ -193,6 +208,9 @@ impl PostFrameHandle {
         if thread::current().id() != ticket.owner {
             return Err(LocalPostFrameScheduleError::WrongThread);
         }
+        let Some(scheduler) = self.scheduler.upgrade() else {
+            return Err(LocalPostFrameScheduleError::LaneClosed);
+        };
         let lane = LOCAL_LANES.with(|registry| {
             registry
                 .borrow()
@@ -206,7 +224,7 @@ impl PostFrameHandle {
         if !is_active {
             return Err(LocalPostFrameScheduleError::InactiveLane);
         }
-        self.scheduler.with_post_frame_registration(|id| {
+        scheduler.with_post_frame_registration(|id| {
             lane.queue.borrow_mut().push(LocalPostFrameEntry {
                 id,
                 callback: Box::new(callback),
@@ -218,7 +236,9 @@ impl PostFrameHandle {
     /// Whether this handle targets `other`.
     #[must_use]
     pub fn targets_same_scheduler(&self, other: &Scheduler) -> bool {
-        self.scheduler.is_same_instance(other)
+        self.scheduler
+            .upgrade()
+            .is_some_and(|scheduler| scheduler.is_same_instance(other))
     }
 }
 
