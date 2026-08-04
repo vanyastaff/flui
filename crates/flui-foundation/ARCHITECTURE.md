@@ -146,7 +146,7 @@ Concrete implementations:
 ```
 
 **FLUI:** FLUI never ported this hierarchy as a mixin/singleton stack. The
-concrete bindings under `flui_app/src/bindings/` (`RenderingFlutterBinding`)
+concrete bindings under `crates/flui-app/src/bindings/` (`RenderingFlutterBinding`)
 are plain, explicitly-constructed values owned by `UiRealm`/`AppRuntime` —
 each realm gets its own — not `BindingBase`-rooted process-wide singletons.
 `flui-foundation`'s own `BindingBase`/`HasInstance`/`impl_binding_singleton!`
