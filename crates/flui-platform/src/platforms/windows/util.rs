@@ -79,13 +79,35 @@ pub fn to_wide(s: &str) -> Vec<u16> {
 }
 
 /// Load a cursor by style
+///
+/// # Safety
+///
+/// `style` must be a value `LoadCursorW` accepts as its resource-name
+/// argument: either one of the predefined `IDC_*` constants (an integer
+/// resource ordinal packed into a pointer-sized value via
+/// `MAKEINTRESOURCEW`, which must never be dereferenced as an actual
+/// pointer) or a genuine NUL-terminated UTF-16 string pointer that stays
+/// valid for the duration of this call. Every call site in this crate
+/// passes a predefined `IDC_*` constant.
 pub unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR> {
+    // SAFETY: per the `# Safety` contract above; `None` for `hinstance` is
+    // required and documented for loading a predefined `IDC_*` cursor.
     unsafe { LoadCursorW(None, style).map_err(|e| anyhow!("Failed to load cursor: {e}")) }
 }
 
 /// Check if a key is pressed
+///
+/// # Safety
+///
+/// None, in the memory-safety sense: `GetAsyncKeyState` takes a plain `i32`
+/// virtual-key code and returns a bit-packed `SHORT` — an out-of-range
+/// `vkey` is documented to return an unspecified-but-defined value, not UB.
+/// This is `unsafe fn` for FFI-boundary consistency with the call it wraps,
+/// not because a caller must uphold an invariant to avoid unsoundness.
 #[inline]
 pub unsafe fn is_key_pressed(vkey: i32) -> bool {
+    // SAFETY: see the `# Safety` section above — no precondition to
+    // discharge beyond the ordinary FFI call.
     unsafe { (GetAsyncKeyState(vkey) as i32 & 0x8000) != 0 }
 }
 

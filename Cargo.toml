@@ -330,9 +330,11 @@ unwrap_used = "warn"
 # reverted, for two reasons worth recording so it is not re-adopted casually:
 #
 #   * It can only see what the Linux clippy job compiles. `cfg(windows)`'s
-#     flui-platform backend (Win32 window/platform FFI) is now fully
-#     SAFETY-documented — every unsafe block there carries an invariant
-#     comment, verified via `cargo clippy --target x86_64-pc-windows-msvc`.
+#     flui-platform backend — every file under `platforms::windows`
+#     (`window.rs`, `platform.rs`, `clipboard.rs`, `display.rs`, `events.rs`,
+#     `util.rs`) — is now fully SAFETY-documented: every unsafe block carries
+#     an invariant comment (or, for `unsafe fn`, a `# Safety` rustdoc
+#     section), verified via `cargo clippy --target x86_64-pc-windows-msvc`.
 #     `cfg(target_os = "macos")` and the Android/`wasm32` backends are not:
 #     as of the last full audit (docs/audits/2026-08-04-full-audit.md §2.1),
 #     macOS carried ~11 undocumented sites, Android ~14 (mostly outside the

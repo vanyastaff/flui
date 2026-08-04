@@ -50,6 +50,25 @@ impl Clipboard for WindowsClipboard {
     fn read_text(&self) -> Option<String> {
         let _guard = self.lock.lock();
 
+        // SAFETY: `OpenClipboard`/`IsClipboardFormatAvailable`/
+        // `GetClipboardData` are plain FFI calls with no pointer arguments
+        // of ours; every one of their results is checked before the next
+        // step runs (`is_err()`/`is_invalid()`), so `handle` is only
+        // converted to `HGLOBAL` once known valid. `GlobalLock` returning
+        // non-null is checked before `ptr` is dereferenced at all. The
+        // `while *wide_ptr.add(len) != 0` scan trusts that data placed
+        // under `CF_UNICODETEXT` is a NUL-terminated UTF-16 string, per the
+        // documented Win32 clipboard-format contract — this code does not
+        // itself bound `len` against the allocation size, so a clipboard
+        // owner that violates that format contract (places unterminated
+        // data under this format) would walk past the allocation; that is
+        // a trust boundary on external/OS-mediated data, not something this
+        // function can verify from its own inputs. `GlobalUnlock`'s result
+        // is discarded deliberately: its return value cannot distinguish
+        // "already unlocked, success" from "failed" without a further
+        // `GetLastError` check, and there is nothing actionable left to do
+        // with the lock at this point regardless — the string was already
+        // copied out of the locked memory before this call.
         unsafe {
             // Open clipboard (None = current thread's window)
             if OpenClipboard(None).is_err() {
@@ -110,6 +129,25 @@ impl Clipboard for WindowsClipboard {
     fn write_text(&self, text: String) {
         let _guard = self.lock.lock();
 
+        // SAFETY: `OpenClipboard`/`EmptyClipboard`/`GlobalAlloc` results are
+        // all checked before the next step runs. `size` is computed as
+        // `wide.len() * size_of::<u16>()`, the exact byte length of `wide`
+        // (a `Vec<u16>`, so `wide.as_ptr()` is valid for reads of `size`
+        // bytes) — the same `size` is passed to `GlobalAlloc`, so `ptr` from
+        // the matching `GlobalLock` is valid for writes of `size` bytes too;
+        // `copy_nonoverlapping` copies between two distinct allocations
+        // (the `Vec` and the newly allocated `HGLOBAL`), never the same
+        // memory. `GlobalUnlock`'s result is discarded for the same reason
+        // as in `read_text` (ambiguous success/fail without `GetLastError`,
+        // nothing actionable to do about it here). Ownership of `global`
+        // transfers to the clipboard only after `SetClipboardData` reports
+        // success — checked before `let _ = global;` is reached, so this
+        // code never frees memory the clipboard already owns, and every
+        // earlier `return` (failed alloc/lock/`SetClipboardData`) leaves
+        // `global` to be dropped normally, which is safe precisely because
+        // `HGLOBAL` has no automatic-free `Drop` impl of its own — an
+        // unconsumed allocation here is a leak on the failure paths, not a
+        // double-free.
         unsafe {
             // Open clipboard
             if OpenClipboard(None).is_err() {
@@ -167,6 +205,10 @@ impl Clipboard for WindowsClipboard {
     }
 
     fn has_text(&self) -> bool {
+        // SAFETY: `IsClipboardFormatAvailable` takes a plain format-id
+        // integer, no pointer arguments, and (per its own documented
+        // contract) is one of the few clipboard queries safe to call
+        // without an open/close pair around it.
         unsafe {
             // Check if Unicode text format is available without opening clipboard
             // IsClipboardFormatAvailable returns Result<()> in windows-rs 0.59
@@ -180,6 +222,13 @@ struct CloseClipboardGuard;
 
 impl Drop for CloseClipboardGuard {
     fn drop(&mut self) {
+        // SAFETY: `CloseClipboard` takes no arguments; every caller of this
+        // guard only constructs it after a successful `OpenClipboard`, so
+        // this always closes a clipboard this thread actually holds open.
+        // The result is discarded because `Drop::drop` cannot return a
+        // `Result` and there is no recovery action available regardless —
+        // an unbalanced close would surface as the *next* `OpenClipboard`
+        // failing, not as memory unsafety here.
         unsafe {
             let _ = CloseClipboard();
         }
