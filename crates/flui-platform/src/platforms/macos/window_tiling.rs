@@ -27,7 +27,7 @@ use flui_types::{
     geometry::{Rect, Size},
 };
 
-/// A [`TilingConfiguration`] combined a [`TilePosition`] and [`TilingLayout`]
+/// A [`TilingConfiguration`] combines a [`TilePosition`] and [`TilingLayout`]
 /// that are not compatible with each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("{position:?} is not a valid primary position for {layout:?}")]
