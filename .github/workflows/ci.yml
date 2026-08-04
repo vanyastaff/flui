@@ -296,14 +296,15 @@ jobs:
       # the real (if virtual) X11 connection the remaining 8 need. Combined,
       # all 171 pass, 8 more are legitimately `#[ignore]`d (manual-run
       # perf benchmarks and unimplemented placeholders) — 5x-verified
-      # stable, no filter needed. This step never runs on a Windows or
-      # macOS runner (H9 stays honored): the matrix above is ubuntu-only,
-      # and if that ever changes this step must gain an explicit
-      # `if: runner.os == 'Linux'` guard before Windows/macOS rejoin it.
+      # stable, no filter needed. The Linux guard keeps these steps off any
+      # Windows/macOS runner that later rejoins the matrix (H9 stays
+      # honored: the Windows crash means no platform tests there).
       - name: Ensure Xvfb is available (flui-platform winit-backend clipboard init)
+        if: runner.os == 'Linux'
         run: command -v xvfb-run >/dev/null || (sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb)
 
       - name: cargo nextest run (flui-platform, headless)
+        if: runner.os == 'Linux'
         env:
           FLUI_HEADLESS: "1"
         run: xvfb-run -a cargo nextest run -p flui-platform --all-features --locked --no-fail-fast
