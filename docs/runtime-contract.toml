@@ -284,7 +284,29 @@ renderer, scheduler, vsync, frame accounting, haptics). It is not yet the \
 target statement in full: it is one TLS-scoped instance per owner thread \
 (`APP_RUNTIME` in `runner.rs`), not one per process; and its realm storage \
 is a single slot behind a `RealmId`-keyed accessor, not real 1..N hosting -- \
-that needs the element forest to let a realm host multiple presentations.\
+that needs the element forest to let a realm host multiple presentations.
+
+`with_owner_platform`'s fence (c) (ADR-0039 §6, trigger #22's runtime \
+backstop) re-points onto this struct: `AppRuntime::installed_realm_phase` \
+reads the resident realm's own scheduler phase instead of the retired \
+`Scheduler::instance().phase()`. Its `None` case is truthfully vacuous only \
+for "no realm installed" -- bootstrap paths (`run_direct`, and any owner \
+thread before its first realm) never install one, so the fence holds \
+trivially there, which is a strict improvement over the singleton-era probe \
+(that one *constructed* a full `Scheduler` singleton just to read `Idle`). \
+But `dispatch_platform_realm` also checks the resident realm OUT of \
+`AppRuntime.realm` for the entire duration of every dispatched task \
+(including the frame pump that drives `PersistentCallbacks`), which would \
+make `installed_realm_phase` read `None` -- and the fence pass vacuously -- \
+for every real production frame, not merely at bootstrap. The dispatched-frame \
+marker closes that gap: `dispatch_platform_realm` stashes a clone of the \
+checked-out realm's scheduler into `AppRuntime.dispatched_scheduler` \
+(`Scheduler` is a single-`Arc` handle, so this is one cheap `Arc::clone`, \
+not a second scheduler) before running the queued task, and \
+`installed_realm_phase` falls back to it whenever `realm` itself is empty; \
+both the ordinary return path and the `catch_unwind`-guarded restore on an \
+unwinding dispatched task clear the field, so it never survives past the \
+dispatch it was stashed for.\
 """
 state = "partial"
 domain = "application"
@@ -294,6 +316,8 @@ mechanism = "symbol/test existence pinned here; later changes advance dispositio
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(crate) struct AppRuntime" },
     { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn app_runtime_owns_registry_and_realm_slot" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "dispatched_scheduler: Option<Scheduler>" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_accessor_fences_the_installed_realms_frame_transaction_through_dispatch" },
 ]
 
 [[contract]]
@@ -1523,10 +1547,11 @@ declared_in = "crates/flui-scheduler/src/post_frame.rs"
 contains = "pub struct PostFrameHandle"
 classification = "transitional"
 thread_affinity = "handle is Clone + Send + Sync; local lane is owner-affine; schedule_local accepts non-Send captures only in the active owner scope"
-owner = "post-frame callback lanes; the weak TLS ticket registry retires when the Scheduler becomes realm-owned"
+owner = "post-frame callback lanes"
 failure_semantics = "typed LocalPostFrameScheduleError outside the owner scope"
 consumers = ["flui-view", "flui-widgets", "UiRealm"]
 owner_issue = 556
+notes = "ADR-0027 §2a's retirement condition for the weak-TLS post-frame ticket registry (`LOCAL_LANES`/`ACTIVE_LANES`, crates/flui-scheduler/src/post_frame.rs) has TWO clauses, not one: the Scheduler becomes realm-owned AND the handle can point directly at realm-local storage. This PR (#553 PR-5) lands clause 1 only -- `Scheduler` is now a `UiRealm`-owned field, not a process-global singleton. Clause 2 is NOT satisfied: `PostFrameHandle` stays `Clone + Send + Sync` (flipped internally to hold a `WeakScheduler` rather than a strong `Scheduler` clone, so it fails closed after its realm drops, but its shape is unchanged), so `schedule_local` still cannot hold the lane's `Rc<LocalLaneInner>` directly on that Send handle -- that is the entire reason `LOCAL_LANES`/`ACTIVE_LANES` exist as a thread-local resolution registry in the first place, and realm-owning the scheduler alone does not remove the need for it. The residual is named, not silently dropped: retiring clause 2 requires splitting `schedule_local` off the Send `PostFrameHandle` onto a new, owner-affine, `!Send` `LocalPostFrameHandle { lane: Weak<LocalLaneInner> }` type, with drain-by-parameter into the frame drive instead of a TLS lookup. That split ripples past this slice into the `BuildContext` capability surface (a new capability type alongside `rebuild_handle()`/`post_frame_handle()`), the trigger-#22 frame-capability-scope scanner's token list (a second token alongside `post_frame_handle`), and flui-material's `scaffold_messenger.rs` (today's only production `schedule_local` consumer, which would move onto the new type) -- each a cross-crate change too large to fold into the scheduler-ownership move itself. `LOCAL_LANES` and `ACTIVE_LANES` therefore both remain exactly as they were pre-PR-5; the scanner token `post_frame_handle` is unaffected either way."
 
 [[surface]]
 path = "flui_foundation::{HasInstance, BindingBase} (+ flui_scheduler re-export)"

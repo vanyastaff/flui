@@ -168,11 +168,17 @@ pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
 ///     frame transaction. "Not inside a frame phase" per the ADR means
 ///     `TransientCallbacks`/`MidFrameMicrotasks`/`PersistentCallbacks` are
 ///     forbidden; `Idle` and `PostFrameCallbacks` are allowed (legitimate
-///     ADR-0021-style post-frame work); `None` (no realm installed) holds
-///     vacuously. This fence is **vacuous on binding-local frame paths**:
-///     headless/test bindings drive their own binding-local `Scheduler`,
-///     never a realm installed into `APP_RUNTIME`, so fences (a) and (b)
-///     are the load-bearing ones there — stated here, not hidden.
+///     ADR-0021-style post-frame work); `None` (truly no realm installed,
+///     and none currently dispatched — see `AppRuntime::dispatched_scheduler`)
+///     holds vacuously. `installed_realm_phase` reads through to the
+///     checked-out realm's scheduler for the entire extent of a
+///     `dispatch_platform_realm` call, not only the resident-realm case, so
+///     this fence is load-bearing during a real dispatched production frame,
+///     not merely when the realm sits untouched in the slot. This fence is
+///     still **vacuous on binding-local frame paths**: headless/test
+///     bindings drive their own binding-local `Scheduler`, never a realm
+///     installed into `APP_RUNTIME`, so fences (a) and (b) are the
+///     load-bearing ones there — stated here, not hidden.
 ///
 /// # `owner.shared()`'s method list is a compile-time fence too
 ///
@@ -1182,6 +1188,13 @@ fn install_platform_realm(
         state.owner_thread = Some(owner_thread);
         state.address = Some(address);
         state.draining = false;
+        // Defensive: a reinstall-without-teardown only reaches this path
+        // when the displaced incarnation's own dispatch never restored
+        // `realm` (the panic-recovery scenario this function's doc already
+        // documents) — `dispatched_scheduler`, if the displaced incarnation
+        // left one stashed, belongs to that dead incarnation and must not
+        // leak into the fresh one's fence-(c) reads.
+        state.dispatched_scheduler = None;
         // A second realm installed on this thread (hot-restart, or a
         // sequential test realm) must not inherit whatever `(visible,
         // focused)` the PREVIOUS realm's window last reported — every
@@ -1266,7 +1279,18 @@ fn dispatch_platform_realm(
             .pop_front()
             .expect("BUG: event was enqueued before starting realm dispatch");
         state.draining = true;
-        Ok(state.realm.take().map(|realm| (realm, first)))
+        let realm = state.realm.take();
+        // Stash a clone of the checked-out realm's scheduler BEFORE it leaves
+        // this slot: `installed_realm_phase` (with_owner_platform's fence
+        // (c)) reads `dispatched_scheduler` as its fallback whenever `realm`
+        // itself is empty, which is exactly the state this call is about to
+        // create for the entire duration of the dispatched task below —
+        // otherwise the fence goes blind for every real production frame,
+        // not merely when no realm is installed at all. `Scheduler::clone`
+        // is one `Arc::clone` (see `flui-scheduler`'s single-`Arc` handle
+        // shape), not a second scheduler.
+        state.dispatched_scheduler = realm.as_ref().map(|realm| realm.scheduler().clone());
+        Ok(realm.map(|realm| (realm, first)))
     })?;
     let Some((realm, first)) = realm else {
         return Ok(());
@@ -1285,6 +1309,12 @@ fn dispatch_platform_realm(
         let mut state = slot.borrow_mut();
         state.realm = Some(realm);
         state.draining = false;
+        // Cleared unconditionally in this same restore block, which runs
+        // whether or not the dispatched task above panicked (the panic, if
+        // any, is only resumed after this restore completes below) — the
+        // fence-(c) fallback must not survive past the dispatch it was
+        // stashed for.
+        state.dispatched_scheduler = None;
     });
     if let Err(payload) = result {
         std::panic::resume_unwind(payload);
@@ -1339,6 +1369,7 @@ fn teardown_platform_realm() {
         state.owner_thread = None;
         state.address = None;
         state.surface_applier = None;
+        state.dispatched_scheduler = None;
         (realm, queued)
     });
     // Destructors may re-enter platform/framework code. Drop only after the
@@ -4042,14 +4073,19 @@ mod tests {
     ///
     /// No test lock: this touches `APP_RUNTIME`, a `thread_local!`, and the
     /// standard library test harness runs each `#[test]` on its own freshly
-    /// spawned thread — the same reasoning `SCHEDULER_PHASE_TEST_LOCK`'s own
-    /// doc states for the sibling tests below that also touch thread-local
-    /// state. The retired `AppBinding`-era version of this test carried a
-    /// `SINGLETON_WINDOW_TEST_LOCK`; removed rather than ported forward, both
-    /// because the state it guarded (`AppBinding::instance()`'s active
-    /// window) is gone and because a per-test-thread thread-local needs no
-    /// cross-test lock in the first place — the same story this file's
-    /// other thread-local-only tests already tell.
+    /// spawned thread, so a fresh `AppRuntime` (no realm, no owner platform)
+    /// is what this test's thread starts from regardless of what any other
+    /// concurrently-running test does on ITS OWN thread — the same reasoning
+    /// this file's other thread-local-only tests below rely on. The retired
+    /// `AppBinding`-era version of this test carried a
+    /// `SINGLETON_WINDOW_TEST_LOCK`, and later, briefly, `Scheduler` carried
+    /// a sibling `SCHEDULER_PHASE_TEST_LOCK`; both are deleted now, not
+    /// ported forward, because the state each one guarded
+    /// (`AppBinding::instance()`'s active window, and the process-global
+    /// half of the `Scheduler` singleton respectively) no longer exists —
+    /// `AppBinding` is gone entirely and every `UiRealm` owns its own fresh
+    /// `Scheduler` value — and because a per-test-thread thread-local needs
+    /// no cross-test lock in the first place.
     #[test]
     fn desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it() {
         use std::sync::Arc;
@@ -4252,12 +4288,12 @@ mod tests {
 
         // A clone of the installed realm's OWN scheduler -- same underlying
         // `SchedulerInner` fence (c) reads through `installed_realm_phase`.
-        // Driven directly, not through `dispatch_platform_realm`: that
-        // function takes the realm OUT of `APP_RUNTIME` for the duration of
-        // any dispatch (see its own doc), so probing the slot from inside a
-        // *dispatched* frame would read `None` and never trip this fence --
-        // the fence only ever sees a realm that is actually resident in the
-        // slot, which this test keeps true throughout.
+        // Driven directly here, with the realm still resident in `realm`
+        // (not checked out via `dispatch_platform_realm`) -- the sibling
+        // test right below this one, `..._through_dispatch`, pins the other
+        // half: the realm checked OUT for a dispatched task, where
+        // `installed_realm_phase` must fall back to `dispatched_scheduler`
+        // instead of reading `realm` directly.
         let scheduler = APP_RUNTIME.with(|slot| {
             slot.borrow()
                 .realm
@@ -4275,6 +4311,63 @@ mod tests {
         scheduler.drive_frame(web_time::Instant::now(), || {
             let _ = with_owner_platform(|_owner| ());
         });
+    }
+
+    /// The through-dispatch half of the fence-(c) pin above: `with_owner_platform`
+    /// called from INSIDE a `RealmTask::Frame` running through
+    /// `dispatch_platform_realm` -- not driven directly against a resident
+    /// realm -- must still trip the debug_assert while a frame phase is
+    /// active.
+    ///
+    /// Red before the `dispatched_scheduler` fallback existed:
+    /// `dispatch_platform_realm` checks the realm OUT of `AppRuntime.realm`
+    /// for the entire extent of the dispatched task (see its own doc), so
+    /// `installed_realm_phase` reading only `realm` would observe `None` for
+    /// this call, not `PersistentCallbacks` -- vacuously "not mid-frame",
+    /// the debug_assert would pass, and this test would fail its
+    /// `#[should_panic]` expectation. Green now because
+    /// `dispatch_platform_realm` stashes a clone of the checked-out realm's
+    /// scheduler into `dispatched_scheduler` before running the queued task,
+    /// and `installed_realm_phase` falls back to it exactly when `realm`
+    /// itself is empty.
+    #[test]
+    #[should_panic(
+        expected = "with_owner_platform called while the installed realm's scheduler is inside"
+    )]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "the fence is a debug_assert!; release builds don't panic"
+    )]
+    fn owner_platform_accessor_fences_the_installed_realms_frame_transaction_through_dispatch() {
+        use flui_platform::headless_platform;
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let window = headless_platform()
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create a test window");
+        let dispatcher =
+            install_platform_realm(super::super::ui_realm::UiRealm::for_test(), &window);
+
+        // Unlike the sibling test above, this drives the frame from INSIDE a
+        // `RealmTask::Frame` dispatched through `dispatch_platform_realm` --
+        // the realm is checked out of `AppRuntime.realm` for the whole
+        // closure below, exactly the window `dispatched_scheduler` exists to
+        // cover. `drive_frame`'s `PersistentCallbacks` phase is active while
+        // `with_owner_platform` is called, so the fence must trip here
+        // exactly as it does when driven directly.
+        let dispatch_result = dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(|realm| {
+                realm.scheduler().drive_frame(web_time::Instant::now(), || {
+                    let _ = with_owner_platform(|_owner| ());
+                });
+            })),
+        );
+        // Unreachable on the fence-tripping path (the debug_assert panics
+        // first, unwinding out of `dispatch_platform_realm` before it can
+        // return) -- kept only so a build without debug assertions (where
+        // this test is `ignore`d) still type-checks the dispatch call.
+        let _ = dispatch_result;
     }
 
     /// Hot-restart survival (ADR-0039 §6): `owner_platform`

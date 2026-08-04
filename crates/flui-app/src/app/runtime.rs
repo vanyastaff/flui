@@ -322,6 +322,25 @@ pub(crate) struct AppRuntime {
     /// Deliberately *not* cleared by realm teardown — the loop may host
     /// another realm before it exits (hot-restart does exactly this).
     pub(super) owner_platform: Option<OwnerPlatform>,
+    /// A clone of the currently-dispatched realm's scheduler, held ONLY
+    /// while `dispatch_platform_realm` (in `runner.rs`) has taken that realm
+    /// out of `realm` above for the duration of a queued task. Without this,
+    /// [`Self::installed_realm_phase`] (`with_owner_platform`'s fence (c))
+    /// reads `None` for the realm's entire dispatched extent — not just when
+    /// no realm is installed at all — because `dispatch_platform_realm`
+    /// checks the realm OUT of this struct before running any task,
+    /// including the frame pump that drives the scheduler through
+    /// `PersistentCallbacks`. That makes the fence blind exactly when a
+    /// frame phase is actually running, which is the one case trigger #22
+    /// exists to catch. `Scheduler` is a single-`Arc` handle (see
+    /// `flui-scheduler`'s `Scheduler`/`SchedulerInner` split), so cloning it
+    /// here to survive the checkout is cheap — an `Arc::clone`, not a new
+    /// scheduler. Set at checkout, cleared at restore
+    /// (`dispatch_platform_realm`), in both cases inside the same
+    /// `catch_unwind`-guarded block that restores `realm` itself, so an
+    /// unwinding dispatched task leaves this `None` exactly as reliably as
+    /// it leaves `realm` restored.
+    pub(super) dispatched_scheduler: Option<Scheduler>,
     /// Process-level engine services. Deliberately **not** resolved in
     /// [`AppRuntime::new`] -- see [`AppRuntime::ensure_services`] for why.
     services: OnceCell<SharedEngineServices>,
@@ -387,6 +406,7 @@ impl AppRuntime {
             visible: true,
             focused: true,
             owner_platform: None,
+            dispatched_scheduler: None,
             services: OnceCell::new(),
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Arc::new(Mutex::new(None)),
@@ -452,16 +472,26 @@ impl AppRuntime {
     }
 
     /// The installed realm's scheduler phase, or `None` if no realm is
-    /// installed on this thread — the replacement for `with_owner_platform`'s
-    /// fence (c), formerly a bare `Scheduler::instance().phase()` read.
+    /// installed on this thread AND no realm is currently checked out for
+    /// dispatch either — the replacement for `with_owner_platform`'s fence
+    /// (c), formerly a bare `Scheduler::instance().phase()` read.
     ///
-    /// `None` is vacuous-but-truthful: no realm means no frame transaction
-    /// can be in flight on this thread, so the caller's "not mid-frame"
-    /// assertion holds trivially. Storage is the single slot until the
-    /// element forest lets a realm host multiple presentations; a future
-    /// multi-realm `AppRuntime` iterates its slot set here instead.
+    /// Falls back to [`Self::dispatched_scheduler`] when `realm` itself is
+    /// empty: `dispatch_platform_realm` takes the realm OUT of `realm` for
+    /// the entire extent of a queued task (including the frame pump that
+    /// drives `PersistentCallbacks`), so reading only `realm` here would
+    /// make this probe blind for every production frame, not merely when no
+    /// realm is installed at all. `None` (truly no realm, and none
+    /// dispatched) is vacuous-but-truthful: no realm means no frame
+    /// transaction can be in flight on this thread, so the caller's
+    /// "not mid-frame" assertion holds trivially. Storage is the single slot
+    /// until the element forest lets a realm host multiple presentations; a
+    /// future multi-realm `AppRuntime` iterates its slot set here instead.
     pub(super) fn installed_realm_phase(&self) -> Option<flui_scheduler::SchedulerPhase> {
-        self.realm.as_ref().map(|realm| realm.scheduler().phase())
+        self.realm
+            .as_ref()
+            .map(|realm| realm.scheduler().phase())
+            .or_else(|| self.dispatched_scheduler.as_ref().map(Scheduler::phase))
     }
 
     // ========================================================================
