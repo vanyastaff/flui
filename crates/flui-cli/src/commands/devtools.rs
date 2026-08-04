@@ -7,7 +7,9 @@
 //! ADR-0040 observation seam) plus opt-in `profiler`/`timeline`/`hot_reload`
 //! modules an embedder wires up manually. See `crates/flui-devtools/FEATURES.md`.
 
-use crate::error::{CliError, CliResult};
+#[cfg(feature = "devtools")]
+use crate::error::CliError;
+use crate::error::CliResult;
 use console::style;
 
 /// Execute the devtools command.
