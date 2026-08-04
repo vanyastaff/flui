@@ -466,17 +466,25 @@ impl RenderingFlutterBinding {
         SemanticsBinding::instance()
     }
 
-    /// Returns a fresh [`PaintingBinding`] value.
+    /// Returns a throwaway, unshared [`PaintingBinding`] value.
     ///
-    /// Forced ripple from singleton retirement PR-2 (#553):
-    /// `PaintingBinding`'s singleton-macro invocation is deleted, so
-    /// `PaintingBinding::instance()` no longer exists to return here. This
-    /// is a minimal, compile-preserving fix, not a `RenderingFlutterBinding`
-    /// redesign (PR-3's territory) — every other field/method on this type
-    /// is untouched. `PaintingBinding::new()` is cheap (an `ImageCache` plus
-    /// a `SystemFontsNotifier`, no heavy construction), and the only
-    /// caller, [`Self::handle_memory_pressure`], only needs `&self` access
-    /// for the duration of one call.
+    /// **Inert by construction, not just as a compile-preserving stopgap.**
+    /// `PaintingBinding` left the ambient-singleton graph as the remaining
+    /// singletons here move behind explicit owners: its real, long-lived
+    /// value now lives on `AppRuntime`'s `SharedEngineServices`
+    /// (`app/runtime.rs`), constructed once at realm install.
+    /// `RenderingFlutterBinding` has no field or accessor reaching that
+    /// runtime-owned value — it is itself still a process-wide singleton,
+    /// structurally unrelated to `AppRuntime` — and adding one here would
+    /// mean inventing a *new* ambient path from one singleton into another,
+    /// which is the opposite of what retiring these singletons is for.
+    /// Until `RenderingFlutterBinding` is re-homed to receive its painting
+    /// service from the owning runtime instead of constructing its own,
+    /// every call to this method returns a brand new, empty
+    /// `PaintingBinding` — its `ImageCache` starts and ends empty, and
+    /// nothing else in the process observes whatever you do with it.
+    /// Do not use this to configure or read the "real" image cache; there
+    /// isn't one reachable from here today.
     pub fn painting() -> PaintingBinding {
         PaintingBinding::new()
     }
@@ -485,12 +493,22 @@ impl RenderingFlutterBinding {
     // Memory Management
     // ========================================================================
 
-    /// Handles memory pressure by clearing caches.
+    /// Attempts to handle memory pressure by clearing the image cache.
     ///
-    /// Delegates to PaintingBinding to clear the image cache.
+    /// **Currently inert** — see [`Self::painting`]'s doc comment. This
+    /// clears the throwaway `PaintingBinding`'s own, always-empty
+    /// `ImageCache`, not whatever cache the application is actually using;
+    /// it becomes meaningful again once `RenderingFlutterBinding` is
+    /// re-homed to receive its painting service from the owning runtime.
+    /// Traced at `trace`, not `info`, so this does not read as a real
+    /// memory-pressure response in a production log.
     pub fn handle_memory_pressure(&self) {
         Self::painting().handle_memory_pressure();
-        tracing::info!("RenderingFlutterBinding: handled memory pressure");
+        tracing::trace!(
+            "RenderingFlutterBinding::handle_memory_pressure: inert no-op on a \
+             throwaway PaintingBinding -- see the doc comment on this method \
+             and on Self::painting"
+        );
     }
 }
 
@@ -514,10 +532,12 @@ impl BindingBase for RenderingFlutterBinding {
         tracing::debug!("SemanticsBinding initialized via RenderingFlutterBinding");
 
         // Painting no longer has a process-wide binding to eagerly
-        // initialize here: `PaintingBinding` stopped being a singleton in
-        // singleton retirement PR-2 (#553) — its owned value now lives on
-        // `AppRuntime`'s `SharedEngineServices`, constructed at realm
-        // install (`app/runtime.rs`).
+        // initialize here: `PaintingBinding` stopped being a singleton as
+        // the remaining singletons move behind explicit owners -- its owned
+        // value now lives on `AppRuntime`'s `SharedEngineServices`,
+        // constructed at realm install (`app/runtime.rs`). See
+        // `Self::painting`'s doc comment for why `RenderingFlutterBinding`
+        // cannot simply reach that value instead.
 
         tracing::info!("RenderingFlutterBinding initialized");
     }

@@ -25,7 +25,6 @@ use std::{
     },
 };
 
-use flui_foundation::BindingBase;
 use flui_types::{Size, geometry::Pixels};
 use parking_lot::RwLock;
 
@@ -382,13 +381,18 @@ impl Default for PaintingBinding {
 
 impl PaintingBinding {
     /// Creates a new painting binding.
+    ///
+    /// This is a plain value constructor, not a singleton bootstrap: since
+    /// `PaintingBinding` left the ambient-singleton graph, callers construct
+    /// one whenever they need one (once per owner thread in
+    /// `SharedEngineServices`, but also transiently wherever an accessor
+    /// only needs to reach through to `font_system()`) — there is no
+    /// process-wide "the first construction matters" moment left to log.
     pub fn new() -> Self {
-        let mut binding = Self {
+        Self {
             image_cache: ImageCache::new(),
             system_fonts: SystemFontsNotifier::new(),
-        };
-        binding.init_instances();
-        binding
+        }
     }
 
     /// Returns the image cache.
@@ -478,12 +482,6 @@ impl PaintingBinding {
             tracing::debug!("System fonts changed");
             self.system_fonts.notify_listeners();
         }
-    }
-}
-
-impl BindingBase for PaintingBinding {
-    fn init_instances(&mut self) {
-        tracing::info!("PaintingBinding initialized");
     }
 }
 
