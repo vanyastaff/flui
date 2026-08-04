@@ -10,14 +10,25 @@
 #
 # This is a RATCHET, not a ban, following the same shape as
 # scripts/check-runtime-conformance.sh's `ambient_reach` net: a per-file
-# allowlist (docs/panic-policy-allowlist.txt) records files that still carry
-# non-conforming production expect() sites. It shrinks only:
+# allowlist (docs/panic-policy-allowlist.txt, `relative/path.rs <count>` per
+# line) records files that still carry non-conforming production expect()
+# sites, AND how many. The count is load-bearing, not a label: comparing
+# only file-set membership (an earlier version of this gate did) lets an
+# already-listed file silently accumulate new bare expect() calls forever,
+# since staying "on the list" said nothing about whether its debt grew. It
+# shrinks only, per file:
 #
 #   * a file with a non-conforming site that is NOT on the allowlist fails
 #     (new debt must be declared, not silently introduced);
-#   * a file ON the allowlist that no longer has any non-conforming site
-#     fails too (a cleaned file must leave the list -- the allowlist is
-#     "today's known debt", not a permanent exemption).
+#   * a file ON the allowlist whose actual count no longer matches the
+#     listed count fails in EITHER direction: higher (new debt landed in an
+#     already-listed file -- a regression, not a free pass) or lower (the
+#     file improved but the list was not updated down -- also not a free
+#     pass, since a future regression back up to the stale higher number
+#     would then go unnoticed);
+#   * a file ON the allowlist with zero actual sites left fails too (a fully
+#     cleaned file must leave the list -- the allowlist is "today's known
+#     debt", not a permanent exemption).
 #
 # Scope: `crates/*/src/**/*.rs`, minus:
 #   * a whole module gated `#[cfg(test)]` / `#[cfg(any(test, feature =
@@ -56,6 +67,18 @@
 #     of a regex, so `all(test, not(target_os = "ios"))` and `any(test,
 #     feature = "testing")` are both recognized as test-only regardless of
 #     line breaks.
+#   * An OUT-OF-LINE `#[cfg(test)] mod NAME;` declaration (no body of its
+#     own -- the real body lives in a sibling file, e.g.
+#     `flui-engine/src/wgpu/mod.rs`'s `mod aa_oracle_tests;`) has no `{` to
+#     find. `find_cfg_test_gated_items` stops at the terminating `;` and
+#     blanks nothing for it -- correct, because the separate whole-module
+#     mechanism below (`find_test_support_modules`/
+#     `test_support_paths_for_crate`) excludes the DECLARED file entirely.
+#     Scanning forward past the `;` for some LATER `{` (an earlier version
+#     of this script did) finds the next brace-delimited item in the file
+#     instead -- the next `mod NAME;`'s cfg attribute, or worse, a real
+#     production `fn` -- and blanks that unrelated span, silently
+#     swallowing whatever violations it contained.
 #
 # Usage:
 #   scripts/check-panic-policy.sh              # scan; exit 1 on violation
@@ -278,8 +301,22 @@ def find_cfg_test_gated_items(lines: list[str]) -> list[tuple[int, int]]:
             continue
         # Find the item's opening brace: the first '{' seen once paren depth
         # returns to (or stays at) 0, scanning forward from the item line.
+        # A ';' hit first at that same depth means this is a body-less
+        # DECLARATION (`mod tests;` out-of-line, or a trait method
+        # signature) -- there is no body to blank, and critically, we must
+        # NOT keep scanning past it: an out-of-line `mod NAME;` has no `{`
+        # of its own, so without this stop the scan would run into whatever
+        # brace-delimited item comes next in the file (the next `mod
+        # NAME;`, or a real production `fn`) and blank ITS body instead,
+        # silently swallowing real violations. Out-of-line `mod NAME;`
+        # declarations are excluded correctly by the separate whole-module
+        # mechanism below (`find_test_support_modules`/
+        # `test_support_paths_for_crate`), which excludes the DECLARED
+        # file, not a byte range of this one -- so skipping here (blanking
+        # nothing) is the right outcome, not a gap.
         paren_depth = 0
         brace_line = None
+        terminated_without_body = False
         k = j
         while k < n:
             line = lines[k]
@@ -294,12 +331,15 @@ def find_cfg_test_gated_items(lines: list[str]) -> list[tuple[int, int]]:
                 elif c == "{" and paren_depth <= 0:
                     found = True
                     break
+                elif c == ";" and paren_depth <= 0:
+                    terminated_without_body = True
+                    break
                 col += 1
-            if found:
-                brace_line = k
+            if found or terminated_without_body:
+                brace_line = k if found else None
                 break
             k += 1
-        if brace_line is None:
+        if terminated_without_body or brace_line is None:
             i = attr_start + 1
             continue
         depth = 0
@@ -524,24 +564,50 @@ def nonconforming_sites(rs_file: Path) -> list[tuple[int, str]]:
 
 
 # =============================================================================
-# Allowlist I/O: one relative path per line, `#`-comments and blank lines
-# ignored.
+# Allowlist I/O: `relative/path.rs <count>` per line (whitespace-separated),
+# `#`-comments and blank lines ignored. The count is load-bearing, not a
+# label: it is compared against the file's ACTUAL current non-conforming
+# site count on every run (see run_check below) so an allowlisted file
+# cannot silently gain new bare expect() calls -- set membership alone was
+# insufficient (a file staying "on the list" said nothing about whether its
+# debt had grown).
 # =============================================================================
 
+_ALLOWLIST_LINE_RE = re.compile(r"^(\S+)\s+(\d+)$")
 
-def load_allowlist(path: Path) -> set[str]:
+
+def load_allowlist(path: Path) -> dict[str, int]:
     if not path.is_file():
-        return set()
-    entries: set[str] = set()
-    for line in path.read_text().splitlines():
-        line = line.split("#", 1)[0].strip()
-        if line:
-            entries.add(line)
+        return {}
+    entries: dict[str, int] = {}
+    for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        m = _ALLOWLIST_LINE_RE.match(line)
+        if not m:
+            raise ValueError(
+                f"{path}:{line_number}: expected `relative/path.rs <count>`, got {raw_line!r} "
+                "-- every allowlist entry must carry its current non-conforming site count"
+            )
+        entries[m.group(1)] = int(m.group(2))
     return entries
 
 
-def run_check(crates_dir: Path, allowlist: set[str]) -> tuple[list[str], dict[str, int]]:
-    """Returns (errors, nonconforming_counts_by_relpath)."""
+def run_check(crates_dir: Path, allowlist: dict[str, int]) -> tuple[list[str], dict[str, int]]:
+    """Returns (errors, nonconforming_counts_by_relpath).
+
+    Four outcomes per file, all of which must reconcile for a clean run:
+      * counted, not listed          -> new debt, must be declared (fail)
+      * listed, now zero sites       -> stale entry, must be removed (fail)
+      * listed count < actual count  -> REGRESSION: the file gained bare
+                                         expect() site(s) since it was listed
+                                         (fail) -- this is the ratchet's
+                                         whole point: a file does not stay
+                                         green just by staying on the list
+      * listed count > actual count  -> stale count: the file improved but
+                                         the list was not updated down (fail)
+    """
     errors: list[str] = []
     counts: dict[str, int] = {}
     for rs_file in production_files(crates_dir):
@@ -549,8 +615,11 @@ def run_check(crates_dir: Path, allowlist: set[str]) -> tuple[list[str], dict[st
         sites = nonconforming_sites(rs_file)
         if sites:
             counts[rel] = len(sites)
-    unlisted = sorted(set(counts) - allowlist)
-    stale = sorted(allowlist - set(counts))
+
+    unlisted = sorted(set(counts) - set(allowlist))
+    fully_stale = sorted(set(allowlist) - set(counts))
+    tracked = sorted(set(counts) & set(allowlist))
+
     for rel in unlisted:
         sites = nonconforming_sites(root / rel)
         preview = "; ".join(f"{n}: {msg[:60]!r}" for n, msg in sites[:3])
@@ -559,11 +628,28 @@ def run_check(crates_dir: Path, allowlist: set[str]) -> tuple[list[str], dict[st
             f"{rel} has {len(sites)} production expect() site(s) without the `BUG: ` prefix "
             f"and is not on docs/panic-policy-allowlist.txt: {preview}{more}"
         )
-    for rel in stale:
+    for rel in fully_stale:
         errors.append(
             f"{rel} is on docs/panic-policy-allowlist.txt but no longer has any non-conforming "
             "expect() site -- remove its entry (the allowlist is a shrink-only ratchet)"
         )
+    for rel in tracked:
+        actual = counts[rel]
+        listed = allowlist[rel]
+        if actual > listed:
+            sites = nonconforming_sites(root / rel)
+            preview = "; ".join(f"{n}: {msg[:60]!r}" for n, msg in sites[:3])
+            errors.append(
+                f"{rel} has {actual} non-conforming expect() site(s) now, but "
+                f"docs/panic-policy-allowlist.txt lists {listed} -- new debt was added to an "
+                f"already-listed file (fix the new site(s) or raise the listed count): {preview}"
+            )
+        elif actual < listed:
+            errors.append(
+                f"{rel} has {actual} non-conforming expect() site(s) now, but "
+                f"docs/panic-policy-allowlist.txt still lists {listed} -- lower the listed count "
+                "to match (the allowlist is a shrink-only ratchet per file, not just per file set)"
+            )
     return errors, counts
 
 
@@ -617,7 +703,7 @@ def self_test() -> int:
             rel_prefix = "crates/fixture_crate/src"
 
             print("self-test: ratchet direction 1 -- unlisted violation must fail")
-            errors, _ = run_check(crate_src.parent.parent, {f"{rel_prefix}/stale_allowlist_candidate.rs"})
+            errors, _ = run_check(crate_src.parent.parent, {f"{rel_prefix}/stale_allowlist_candidate.rs": 1})
             if any("unlisted_violation.rs" in e and "not on" in e for e in errors):
                 print("  ok: an unlisted file with a bare expect() is flagged")
             else:
@@ -627,7 +713,7 @@ def self_test() -> int:
             print("self-test: ratchet direction 2 -- cleaned file left on the allowlist must fail")
             errors, _ = run_check(
                 crate_src.parent.parent,
-                {f"{rel_prefix}/unlisted_violation.rs", f"{rel_prefix}/stale_allowlist_candidate.rs"},
+                {f"{rel_prefix}/unlisted_violation.rs": 1, f"{rel_prefix}/stale_allowlist_candidate.rs": 1},
             )
             if any("stale_allowlist_candidate.rs" in e and "stale" in e.lower() for e in errors):
                 print("  ok: a listed-but-now-clean file is flagged as stale")
@@ -638,12 +724,65 @@ def self_test() -> int:
             print("self-test: fully reconciled allowlist passes clean")
             errors, _ = run_check(
                 crate_src.parent.parent,
-                {f"{rel_prefix}/unlisted_violation.rs"},
+                {f"{rel_prefix}/unlisted_violation.rs": 1},
             )
             if not errors:
                 print("  ok: no violations when the allowlist matches reality exactly")
             else:
                 print(f"  FAIL: expected zero errors, got: {errors}")
+                status = 1
+
+            # -----------------------------------------------------------------
+            # Per-file COUNT ratchet (not just file-set membership): a listed
+            # file must fail when its actual site count diverges from the
+            # listed count in EITHER direction -- growing (a regression that
+            # must not stay green just because the file was already listed)
+            # or shrinking (a stale count that must be lowered). Lives under
+            # its own `regress_root/crates/`, NOT `tmp_root/crates/` --
+            # `production_files()` walks every crate dir under whatever
+            # `crates_dir` it is given, and `tmp_root/crates/` already holds
+            # `fixture_crate` (and, by the time this runs, `whole_module_
+            # crate`) from the checks above; sharing that directory would
+            # make THEIR violations count as "unlisted" against the
+            # narrower allowlist dict this block passes, which is a bug in
+            # the test, not the gate. Also uses its own throwaway copy so
+            # the mutation below cannot affect the checks above.
+            # -----------------------------------------------------------------
+            regress_root = tmp_root / "regress_root"
+            regress_crate_src = regress_root / "crates" / "regression_crate" / "src"
+            regress_crate_src.mkdir(parents=True)
+            regress_target = regress_crate_src / "unlisted_violation.rs"
+            shutil.copy(fixtures / "unlisted_violation.rs.fixture", regress_target)
+            regress_rel = "regress_root/crates/regression_crate/src/unlisted_violation.rs"
+
+            print("self-test: per-file count ratchet -- baseline (actual == listed) is clean")
+            errors, _ = run_check(regress_crate_src.parent.parent, {regress_rel: 1})
+            if not errors:
+                print("  ok: actual count matching the listed count passes clean")
+            else:
+                print(f"  FAIL: expected a clean baseline, got: {errors}")
+                status = 1
+
+            print("self-test: per-file count ratchet -- listed count too HIGH (stale) must fail")
+            errors, _ = run_check(regress_crate_src.parent.parent, {regress_rel: 3})
+            if any(regress_rel in e and "lower the listed count" in e for e in errors):
+                print("  ok: a listed count above the actual count is flagged as stale")
+            else:
+                print(f"  FAIL: expected a stale-count-too-high error; errors were: {errors}")
+                status = 1
+
+            print("self-test: per-file count ratchet -- new site in a listed file (regression) must fail")
+            regress_target.write_text(
+                regress_target.read_text()
+                + '\npub fn a_second_violation(x: Option<u32>) -> u32 {\n'
+                + '    x.expect("second bare expect landed without updating the allowlist count")\n'
+                + "}\n"
+            )
+            errors, _ = run_check(regress_crate_src.parent.parent, {regress_rel: 1})
+            if any(regress_rel in e and "new debt" in e for e in errors):
+                print("  ok: a listed file that gained a new bare expect() is flagged as a regression")
+            else:
+                print(f"  FAIL: expected a regression error; errors were: {errors}")
                 status = 1
 
             print("self-test: whole-module exclusion excludes exactly the gated sibling")
@@ -661,7 +800,7 @@ def self_test() -> int:
                 print(f"  FAIL: expected excluded == {expected_excluded}, got {excluded}")
                 status = 1
 
-            wm_errors, wm_counts = run_check(wm_crate_src.parent.parent, set())
+            wm_errors, wm_counts = run_check(wm_crate_src.parent.parent, {})
             wm_rel_prefix = "crates/whole_module_crate/src"
             if (
                 any(f"{wm_rel_prefix}/ungated_sibling_module.rs" in e and "not on" in e for e in wm_errors)
@@ -670,6 +809,34 @@ def self_test() -> int:
                 print("  ok: the ungated sibling's violation is flagged; the gated file's is not scanned at all")
             else:
                 print(f"  FAIL: expected only the ungated sibling flagged, got errors={wm_errors} counts={wm_counts}")
+                status = 1
+
+            print("self-test: out-of-line `#[cfg(test)] mod NAME;` does not swallow the next item")
+            ool_fixtures = fixtures / "out_of_line_test_mod"
+            ool_crate_src = tmp_root / "crates" / "out_of_line_crate" / "src"
+            ool_crate_src.mkdir(parents=True)
+            for f in ool_fixtures.glob("*.rs.fixture"):
+                shutil.copy(f, ool_crate_src / f.name.replace(".fixture", ""))
+            ool_rel_prefix = "crates/out_of_line_crate/src"
+
+            ool_excluded = test_support_paths_for_crate(ool_crate_src)
+            expected_ool_excluded = {Path(f"{ool_rel_prefix}/out_of_line_tests.rs")}
+            if ool_excluded == expected_ool_excluded:
+                print("  ok: the out-of-line-declared test module is excluded by the whole-module mechanism")
+            else:
+                print(f"  FAIL: expected excluded == {expected_ool_excluded}, got {ool_excluded}")
+                status = 1
+
+            ool_errors, ool_counts = run_check(ool_crate_src.parent.parent, {})
+            if any(
+                f"{ool_rel_prefix}/lib.rs" in e and "not on" in e for e in ool_errors
+            ) and not any("out_of_line_tests.rs" in e for e in ool_errors):
+                print(
+                    "  ok: the production fn after the out-of-line mod declaration is still "
+                    "scanned and flagged, not swallowed as if it were the mod's body"
+                )
+            else:
+                print(f"  FAIL: expected only lib.rs's violation flagged, got errors={ool_errors} counts={ool_counts}")
                 status = 1
         finally:
             root = real_root

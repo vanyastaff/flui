@@ -2,14 +2,22 @@
 # enforced by scripts/check-panic-policy.sh (wired into `just
 # panic-policy-check` and `just ci`).
 #
-# Each line below names a file under crates/*/src that still has at least
-# one production `expect()` call whose message does not start with `BUG: `.
-# This is a SHRINK-ONLY ratchet, not a permanent exemption list:
+# Format: `relative/path.rs <count>`, one entry per line. `<count>` is the
+# file's CURRENT number of production `expect()` sites whose message does
+# not start with `BUG: ` -- it is load-bearing, not a label: the checker
+# compares it against the file's actual count on every run. This is a
+# SHRINK-ONLY ratchet per file, not merely per file-set:
 #
 #   * a file with a non-conforming site that is NOT listed here fails the
 #     gate (new debt must be declared here, not introduced silently);
-#   * a file listed here that no longer has any non-conforming site ALSO
-#     fails the gate (a cleaned file must leave this list).
+#   * a file listed here whose actual count no longer matches the listed
+#     count fails in EITHER direction -- higher (new bare expect() calls
+#     landed in an already-listed file; staying "on the list" is not a free
+#     pass to keep adding debt) or lower (the file improved but the count
+#     was not updated down, which would let a later regression back up to
+#     the stale number go unnoticed);
+#   * a file listed here with zero actual sites left ALSO fails (a fully
+#     cleaned file must leave this list).
 #
 # Burn down by rewording a genuine internal invariant to
 # `expect("BUG: <invariant>")`, or converting a genuinely caller-triggerable/
@@ -40,68 +48,68 @@
 # Out of scope for an internal-only pass; recorded as a breaking-API item in
 # the panic-policy-gate PR notes instead of forced into either bucket.
 
-crates/flui-animation/src/controller.rs
-crates/flui-devtools/src/hot_reload.rs
-crates/flui-engine/src/wgpu/advanced_blend/pipeline.rs
-crates/flui-engine/src/wgpu/batches/images.rs
-crates/flui-engine/src/wgpu/headless.rs
-crates/flui-engine/src/wgpu/mode/pipeline.rs
-crates/flui-engine/src/wgpu/offscreen/blit.rs
-crates/flui-engine/src/wgpu/offscreen/blur.rs
-crates/flui-engine/src/wgpu/offscreen/mask.rs
-crates/flui-engine/src/wgpu/renderer.rs
-crates/flui-engine/src/wgpu/state_stack.rs
-crates/flui-engine/src/wgpu/texture_cache.rs
-crates/flui-engine/src/wgpu/texture_pool.rs
-crates/flui-foundation/src/id.rs
-crates/flui-foundation/src/key.rs
-crates/flui-hot-reload/src/dev/source_watch.rs
-crates/flui-hot-reload/src/driver.rs
-crates/flui-hot-reload/src/plugin.rs
-crates/flui-interaction/src/binding.rs
-crates/flui-interaction/src/ids.rs
-crates/flui-interaction/src/processing/resampler.rs
-crates/flui-interaction/src/processing/sampling_clock.rs
-crates/flui-interaction/src/processing/velocity.rs
-crates/flui-interaction/src/recognizers/multidrag.rs
-crates/flui-macros/src/derive_animatable.rs
-crates/flui-macros/src/derive_diagnosticable.rs
-crates/flui-material/src/ink_well.rs
-crates/flui-material/src/scaffold.rs
-crates/flui-material/src/scaffold_messenger.rs
-crates/flui-material/src/tab_bar_view.rs
-crates/flui-material/src/tab_controller.rs
-crates/flui-material/src/tabs.rs
-crates/flui-material/src/theme.rs
-crates/flui-painting/src/text_painter/measure.rs
-crates/flui-platform/src/executor.rs
-crates/flui-platform/src/platforms/android/memory.rs
-crates/flui-platform/src/platforms/macos/view.rs
-crates/flui-platform/src/platforms/macos/window.rs
-crates/flui-platform/src/platforms/web/display.rs
-crates/flui-platform/src/platforms/web/events.rs
-crates/flui-platform/src/platforms/web/platform.rs
-crates/flui-platform/src/platforms/web/window.rs
-crates/flui-platform/src/platforms/winit/clipboard.rs
-crates/flui-platform/src/task.rs
-crates/flui-rendering/src/pipeline/owner/paint.rs
-crates/flui-rendering/src/pipeline/scheduler.rs
-crates/flui-rendering/src/storage/node.rs
-crates/flui-rendering/src/storage/tree.rs
-crates/flui-rendering/src/view/render_view.rs
-crates/flui-rendering/src/virtualization/sumtree.rs
-crates/flui-scheduler/src/budget.rs
-crates/flui-scheduler/src/frame.rs
-crates/flui-scheduler/src/scheduler.rs
-crates/flui-scheduler/src/vsync.rs
-crates/flui-testing/src/lib.rs
-crates/flui-view/src/element/behavior.rs
-crates/flui-view/src/tree/element_tree.rs
-crates/flui-view/src/tree/id_reconcile.rs
-crates/flui-widgets/src/app/media_query.rs
-crates/flui-widgets/src/interaction/focus.rs
-crates/flui-widgets/src/interaction/gesture_detector.rs
-crates/flui-widgets/src/navigator/hero.rs
-crates/flui-widgets/src/navigator/transition_route.rs
-crates/flui-widgets/src/overlay/mod.rs
-crates/flui-widgets/src/scroll/scrollable.rs
+crates/flui-animation/src/controller.rs 4
+crates/flui-devtools/src/hot_reload.rs 1
+crates/flui-engine/src/wgpu/advanced_blend/pipeline.rs 1
+crates/flui-engine/src/wgpu/batches/images.rs 3
+crates/flui-engine/src/wgpu/headless.rs 1
+crates/flui-engine/src/wgpu/mode/pipeline.rs 1
+crates/flui-engine/src/wgpu/offscreen/blit.rs 1
+crates/flui-engine/src/wgpu/offscreen/blur.rs 3
+crates/flui-engine/src/wgpu/offscreen/mask.rs 2
+crates/flui-engine/src/wgpu/renderer.rs 2
+crates/flui-engine/src/wgpu/state_stack.rs 2
+crates/flui-engine/src/wgpu/texture_cache.rs 2
+crates/flui-engine/src/wgpu/texture_pool.rs 3
+crates/flui-foundation/src/id.rs 3
+crates/flui-foundation/src/key.rs 4
+crates/flui-hot-reload/src/dev/source_watch.rs 1
+crates/flui-hot-reload/src/driver.rs 1
+crates/flui-hot-reload/src/plugin.rs 1
+crates/flui-interaction/src/binding.rs 1
+crates/flui-interaction/src/ids.rs 2
+crates/flui-interaction/src/processing/resampler.rs 1
+crates/flui-interaction/src/processing/sampling_clock.rs 1
+crates/flui-interaction/src/processing/velocity.rs 2
+crates/flui-interaction/src/recognizers/multidrag.rs 1
+crates/flui-macros/src/derive_animatable.rs 1
+crates/flui-macros/src/derive_diagnosticable.rs 1
+crates/flui-material/src/ink_well.rs 2
+crates/flui-material/src/scaffold.rs 1
+crates/flui-material/src/scaffold_messenger.rs 1
+crates/flui-material/src/tab_bar_view.rs 2
+crates/flui-material/src/tab_controller.rs 1
+crates/flui-material/src/tabs.rs 5
+crates/flui-material/src/theme.rs 1
+crates/flui-painting/src/text_painter/measure.rs 5
+crates/flui-platform/src/executor.rs 1
+crates/flui-platform/src/platforms/android/memory.rs 2
+crates/flui-platform/src/platforms/macos/view.rs 2
+crates/flui-platform/src/platforms/macos/window.rs 2
+crates/flui-platform/src/platforms/web/display.rs 2
+crates/flui-platform/src/platforms/web/events.rs 1
+crates/flui-platform/src/platforms/web/platform.rs 1
+crates/flui-platform/src/platforms/web/window.rs 1
+crates/flui-platform/src/platforms/winit/clipboard.rs 1
+crates/flui-platform/src/task.rs 1
+crates/flui-rendering/src/pipeline/owner/paint.rs 2
+crates/flui-rendering/src/pipeline/scheduler.rs 2
+crates/flui-rendering/src/storage/node.rs 2
+crates/flui-rendering/src/storage/tree.rs 5
+crates/flui-rendering/src/view/render_view.rs 1
+crates/flui-rendering/src/virtualization/sumtree.rs 6
+crates/flui-scheduler/src/budget.rs 3
+crates/flui-scheduler/src/frame.rs 2
+crates/flui-scheduler/src/scheduler.rs 4
+crates/flui-scheduler/src/vsync.rs 1
+crates/flui-testing/src/lib.rs 3
+crates/flui-view/src/element/behavior.rs 2
+crates/flui-view/src/tree/element_tree.rs 5
+crates/flui-view/src/tree/id_reconcile.rs 2
+crates/flui-widgets/src/app/media_query.rs 1
+crates/flui-widgets/src/interaction/focus.rs 1
+crates/flui-widgets/src/interaction/gesture_detector.rs 1
+crates/flui-widgets/src/navigator/hero.rs 1
+crates/flui-widgets/src/navigator/transition_route.rs 1
+crates/flui-widgets/src/overlay/mod.rs 1
+crates/flui-widgets/src/scroll/scrollable.rs 1

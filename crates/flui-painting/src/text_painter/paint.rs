@@ -30,7 +30,7 @@ impl TextPainter {
         let cache = self
             .layout_cache
             .as_mut()
-            .expect("BUG: layout() must be called before get_offset_for_caret() — the paint pipeline runs perform_layout before paint");
+            .expect("BUG: TextPainter::layout() must be called before get_offset_for_caret() — it reads the cached layout that layout() populates");
 
         let offset = cache.layout.get_offset_for_caret(position);
 
@@ -49,7 +49,7 @@ impl TextPainter {
         let cache = self
             .layout_cache
             .as_ref()
-            .expect("BUG: layout() must be called before get_position_for_offset() — the paint pipeline runs perform_layout before paint");
+            .expect("BUG: TextPainter::layout() must be called before get_position_for_offset() — it reads the cached layout that layout() populates");
 
         let adjusted = offset - cache.paint_offset;
         cache.layout.get_position_for_offset(adjusted)
@@ -67,7 +67,7 @@ impl TextPainter {
         let cache = self
             .layout_cache
             .as_ref()
-            .expect("BUG: layout() must be called before get_line_metrics() — the paint pipeline runs perform_layout before paint");
+            .expect("BUG: TextPainter::layout() must be called before get_line_metrics() — it reads the cached layout that layout() populates");
 
         cache.layout.get_line_metrics()
     }
@@ -84,7 +84,7 @@ impl TextPainter {
         let cache = self
             .layout_cache
             .as_ref()
-            .expect("BUG: layout() must be called before get_boxes_for_selection() — the paint pipeline runs perform_layout before paint");
+            .expect("BUG: TextPainter::layout() must be called before get_boxes_for_selection() — it reads the cached layout that layout() populates");
 
         let mut boxes = cache.layout.get_boxes_for_range(TextRange::new(start, end));
 
@@ -107,7 +107,7 @@ impl TextPainter {
         let cache = self
             .layout_cache
             .as_ref()
-            .expect("BUG: layout() must be called before get_word_boundary() — the paint pipeline runs perform_layout before paint");
+            .expect("BUG: TextPainter::layout() must be called before get_word_boundary() — it reads the cached layout that layout() populates");
 
         cache.layout.get_word_boundary(position)
     }
@@ -129,12 +129,12 @@ impl TextPainter {
         let text = self
             .text
             .as_ref()
-            .expect("BUG: TextPainter.text must be set before paint() — layout() requires text, and the paint pipeline runs layout before paint");
+            .expect("BUG: TextPainter.text must be set before paint() — TextPainter::layout() requires text to be set, and paint() requires layout() to have run first");
 
         let cache = self
             .layout_cache
             .as_ref()
-            .expect("BUG: layout() must be called before paint() — the paint pipeline runs perform_layout before paint");
+            .expect("BUG: TextPainter::layout() must be called before paint() — it reads the cached layout that layout() populates");
 
         let paint_offset = offset + cache.paint_offset;
 
