@@ -14,7 +14,7 @@ PORT.md sits inside a four-document governance set:
 3. **`PORT.md` (this page)** — governance + operational translation manual.
 4. [`ROADMAP.md`](ROADMAP.md) — the construction plan (dependency-ordered phases from current to target).
 
-For the rule-by-rule architectural guide (workspace layers, anti-pattern code examples, dependency DAG), read [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md). This page does not restate the strategy or contract layers; it is the operational layer that hangs off them.
+For the rule-by-rule architectural guide (workspace layers, anti-pattern code examples, dependency DAG), read [`FOUNDATIONS.md`](FOUNDATIONS.md) (`.ai-factory/ARCHITECTURE.md` does not exist in this checkout). This page does not restate the strategy or contract layers; it is the operational layer that hangs off them.
 
 The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](https://github.com/oven-sh/bun/blob/main/docs/PORTING.md), with one principled inversion: **flui actively embraces the Rust ecosystem**. Where Bun bans `tokio`/`rayon`/`hyper`/`futures` and rolls its own primitives, flui adopts mature ecosystem crates (`parking_lot`, `dashmap`, `smallvec`, `ambassador`, `bon`, `thiserror`, `tracing`, `wgpu`, `moka`, `tokio` LTS). See [§Ecosystem-first principle](#ecosystem-first-principle) for the adoption table and the version policy.
 
@@ -51,7 +51,7 @@ Triggers are seeded from observed friction in the workspace. Forward-looking tri
 
 **Why:** the render hot path is strictly synchronous (see [`STRATEGY.md`](../STRATEGY.md) clause "sync hot path, async на краях"). A lock on a per-node storage type held across `perform_layout` or `paint` serialises the pipeline against itself and removes the "many readers OR one writer" guarantee the hot path depends on. Shared infrastructure locks (`PipelineOwner`, `WidgetsBinding`, route plumbing) are different — they sit one level above per-node mutation and are covered in [Lock decisions](#lock-decisions).
 
-**Back-references:** [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) v2.2.0 Anti-Patterns ("`Arc<Mutex<>>` for tree structures"); [`STRATEGY.md`](../STRATEGY.md) "sync hot path".
+**Back-references:** the project constitution's v2.2.0 Anti-Patterns entry ("`Arc<Mutex<>>` for tree structures") — historical citation; `.specify/memory/constitution.md` no longer exists in this checkout, see [`AGENTS.md`](../AGENTS.md) for the current rule; [`STRATEGY.md`](../STRATEGY.md) "sync hot path".
 
 **Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` (storage-shaped violations). Scope extended in Mythos Step 13 of the `flui-layer` chain to cover `crates/flui-layer/src/` and to match `dyn Layer` / `dyn ContainerLayer` shapes as well. Re-confirmed in Mythos Step 13 of the `flui-painting` chain to cover the post-split `crates/flui-painting/src/` subdirectories (`canvas/`, `display_list/`, `text_layout/`, `text_painter/`) as a forward-looking guard.
 
@@ -63,7 +63,7 @@ Trigger 1 catches the specific `RwLock` variant. Trigger 2 catches any other int
 
 The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) accept `Box<dyn RenderObject<_>>` as a transient parameter type and are not the target — the violation is the stored-and-wrapped shape.
 
-**Back-references:** [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) example "`RenderBad { children: Vec<Box<dyn RenderObject>> }` — forbidden"; [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) Principle IV.
+**Back-references:** historical `.ai-factory/ARCHITECTURE.md` example "`RenderBad { children: Vec<Box<dyn RenderObject>> }` — forbidden" and constitution Principle IV — neither file exists in this checkout; see [`FOUNDATIONS.md`](FOUNDATIONS.md) and [`AGENTS.md`](../AGENTS.md) for the current rule.
 
 **Regex:** `(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` constrained to render-storage modules, `crates/flui-layer/src/`, and `crates/flui-painting/src/`. Scope and trait-name set extended in Mythos Step 13 of the `flui-layer` chain; re-confirmed for the post-split `flui-painting` subdirectories in Mythos Step 13 of the `flui-painting` chain.
 
@@ -97,7 +97,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Why:** the unified element reconciler is built around generic dispatch (`Element<V, A, B>`); storing user-defined `Box<dyn View>` in child storage forces a runtime-typed boundary into the reconciliation hot path. Funnel parameters that accept `Box<dyn View>` at the boundary are acceptable; storing them as children is not.
 
-**Back-references:** [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) Principle IV ("Prefer generics and enum dispatch over `dyn` trait objects").
+**Back-references:** constitution Principle IV ("Prefer generics and enum dispatch over `dyn` trait objects") — historical citation; `.specify/memory/constitution.md` no longer exists in this checkout, see [`AGENTS.md`](../AGENTS.md) for the current rule.
 
 **Regex:** `:\s*Vec<\s*Box<\s*dyn\s+View|:\s*Box<\s*dyn\s+View` constrained to `crates/flui-view/src/element/child_storage.rs` and storage struct definitions in `crates/flui-view/src/element/**`.
 
@@ -1095,8 +1095,8 @@ Authoritative workspace state lives in [`AGENTS.md`](../AGENTS.md) and [`docs/cr
 
 External references this methodology builds on:
 
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — v2.2.0 anti-patterns and architectural rules.
-- [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full anti-pattern list with code examples.
+- [`AGENTS.md`](../AGENTS.md) — current anti-patterns and architectural rules. (`.specify/memory/constitution.md` v2.2.0 and `.ai-factory/ARCHITECTURE.md` were the historical originals; neither exists in this checkout.)
+- [`FOUNDATIONS.md`](FOUNDATIONS.md) — full anti-pattern list with code examples.
 - [`STRATEGY.md`](../STRATEGY.md) — port rationale, Bun precedent, three architectural clauses.
 - [`docs/plans/2026-03-31-core-crates-hardening.md`](plans/2026-03-31-core-crates-hardening.md) — `Weak<RwLock<PipelineOwner>>` precedent.
 - [`docs/plans/2026-03-31-platform-roadmap.md`](plans/2026-03-31-platform-roadmap.md) — `PlatformTextSystem` deletion precedent (source of the binding-deletion carve-out).

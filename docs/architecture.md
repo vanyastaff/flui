@@ -4,7 +4,7 @@
 
 FLUI combines two patterns: a **Layered Modular Workspace** (workspace structure) and a **Three-Tree Pipeline** (runtime data flow). The first tells you *what may depend on what*; the second tells you *how a frame is built, laid out, and painted*.
 
-For the deep, rule-by-rule guide (anti-patterns, code examples, dependency rules), read [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md). This page is the high-level orientation.
+For the deep, rule-by-rule guide (anti-patterns, code examples, dependency rules), read [`FOUNDATIONS.md`](FOUNDATIONS.md) (`.ai-factory/ARCHITECTURE.md` does not exist in this checkout). This page is the high-level orientation.
 
 ## Layered Modular Workspace
 
@@ -172,9 +172,8 @@ See [Hot Reload](hot-reload.md) for workflows, `ReloadStrategy`, and integration
 ## See Also
 
 - [Hot Reload](hot-reload.md) — two-layer dev model, plugin workflows
-- [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution v2.3.0
-- [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph
+- [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph, full anti-pattern list
+- [`AGENTS.md`](../AGENTS.md) — the current cross-tool rules (`.ai-factory/ARCHITECTURE.md` and `.specify/memory/constitution.md` were the historical originals; neither exists in this checkout)
 - [Roadmap](ROADMAP.md) — construction phases from current to target
 - [Crates Map](crates.md) — per-layer crate inventory
 - [Contributing](contributing.md) — workflow and conventions

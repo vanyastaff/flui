@@ -83,7 +83,7 @@ them there. What the manifest can't tell you:
 - **Platform:** native Win32, AppKit, and headless backends, with `winit` only as a fallback
 - **Diagnostics:** `tracing` only — **no `println!`, `eprintln!`, or `dbg!` in shipped code** (CI enforces this in foundation/tree/macros crates via port-check trigger #15). *Emitting* is universal; *installing a subscriber* is a composition-root decision that lives in `flui-log` and never in a library
 - **Errors:** `thiserror` (libraries), `anyhow` (applications); panics only per [`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md) — `expect("BUG: <invariant>")` for internal invariants, never bare `unwrap()` on production paths (`clippy::unwrap_used` gates this)
-Of the crate roots, `crates/flui-rendering/src/lib.rs` is by far the densest — budget accordingly.
+`crates/flui-rendering/src/lib.rs` itself is a thin 220-line root — density lives deeper in the tree: `pipeline/owner/subtree_arena.rs` (~2.5k lines), `protocol/sliver_protocol.rs` (~1.9k), `storage/tree.rs` (~1.8k), and `protocol/box_protocol.rs` (~1.8k) are the densest files; budget accordingly.
 
 ## Build & Development Commands
 

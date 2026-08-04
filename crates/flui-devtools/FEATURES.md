@@ -4,7 +4,7 @@
 
 ### 1. 🎯 Performance Profiler
 **Status**: ✅ Complete  
-**File**: `src/profiler.rs` (543 lines)
+**File**: `src/profiler.rs` (614 lines)
 
 **Capabilities**:
 - Frame-level performance tracking
@@ -31,35 +31,46 @@ let stats = profiler.frame_stats();
 
 ---
 
-### 2. 🔍 Widget Inspector  
-**Status**: ✅ Complete  
-**File**: `src/inspector.rs` (437 lines)
+### 2. 🔎 Inspector Counters
+**Status**: ✅ Complete — but not a tree inspector (see below)
+**File**: `src/inspector.rs` (181 lines)
+**Feature Flag**: `inspector`
+
+This is a counting/logging [`TreeObserver`] over the ADR-0040 observation
+seam, not a widget-tree inspector. It has no access to the widget, element,
+or render trees — only `flui-foundation` on its dependency list (dependency
+inversion) — and cannot select, highlight, or walk widgets.
 
 **Capabilities**:
-- Widget tree inspection
-- Element information extraction
-- Tree visualization (`WidgetTreeNode`)
-- Widget highlighting for debugging
-- Type-based widget search
-- Root-to-widget path calculation
-- Thread-safe with `Arc<RwLock<>>`
+- Tallies element mounts, moves, rebuilds (per [`RebuildReason`](https://docs.rs/flui-foundation) cause), and unmounts as a running realm mutates
+- Point-in-time [`InspectorSnapshot`] with per-counter monotonicity (no cross-counter consistency guarantee)
+- Detects stream end (`detached()`) so a snapshot can report whether the observation stream is final
+- Thread-safe via private atomics — no lock in the public surface (SP-6)
 
 **API**:
 ```rust
-let inspector = Inspector::new();
-inspector.attach_to_tree(tree);
-let info = inspector.select_widget(id);
-let tree = inspector.get_widget_tree();
-inspector.highlight_widget(id);
+use flui_devtools::inspector::InspectorCounters;
+
+let counters = InspectorCounters::new();
+// Install via WidgetsBinding::install_tree_observer(Arc::new(counters.clone()))
+// or hold `&counters` as a `&dyn TreeObserver` for direct dispatch.
+let snapshot = counters.snapshot();
+println!("mounts: {}, rebuilds: {}", snapshot.mounts, snapshot.rebuilds);
 ```
 
-**Tests**: 4 tests for creation, attachment, highlighting
+**Tests**: 1 test covering mount/move/rebuild/unmount tallying, per-reason
+counts, and the detached flag.
+
+**What this is NOT**: there is no `WidgetTreeNode`, no `select_widget`,
+`get_widget_tree`, `highlight_widget`, or `find_widgets_by_type` — those
+APIs never existed. Pull-shaped inspection (walking a live tree) waits on a
+future seam; see `src/lib.rs`'s crate-level docs for the current boundary.
 
 ---
 
 ### 3. ⏱️ Timeline View
 **Status**: ✅ Complete  
-**File**: `src/timeline.rs` (496 lines)
+**File**: `src/timeline.rs` (619 lines)
 
 **Capabilities**:
 - Timeline event recording
@@ -82,13 +93,13 @@ let json = timeline.export_chrome_trace();
 
 **Chrome Trace Format**: Compatible with `chrome://tracing` for visualization
 
-**Tests**: 7 tests for recording, categories, exports, thread safety
+**Tests**: 11 tests for recording, categories, exports, thread safety
 
 ---
 
 ### 4. 🔥 Hot Reload
 **Status**: ✅ Complete  
-**File**: `src/hot_reload.rs` (315 lines)  
+**File**: `src/hot_reload.rs` (202 lines)  
 **Feature Flag**: `hot-reload`
 
 **Capabilities**:
@@ -109,7 +120,7 @@ reloader.on_change(|path| {
 let _handle = reloader.watch_async();
 ```
 
-**Tests**: 5 tests for creation, watching, callbacks, async/blocking
+**Tests**: 4 tests for creation, watching, callbacks, stop
 
 ---
 
@@ -118,66 +129,27 @@ let _handle = reloader.watch_async();
 | Module | Lines of Code | Tests | Status |
 |--------|--------------|-------|--------|
 | **common.rs** | 91 | - | ✅ |
-| **profiler.rs** | 543 | 7 | ✅ |
-| **inspector.rs** | 437 | 4 | ✅ |
-| **timeline.rs** | 496 | 7 | ✅ |
-| **hot_reload.rs** | 315 | 5 | ✅ |
-| **lib.rs** | 182 | 1 | ✅ |
-| **Total** | **2,064 LOC** | **24 tests** | ✅ |
+| **profiler.rs** | 614 | 7 | ✅ |
+| **inspector.rs** | 181 | 1 | ✅ |
+| **timeline.rs** | 619 | 11 | ✅ |
+| **hot_reload.rs** | 202 | 4 | ✅ |
+| **lib.rs** | 139 | 1 | ✅ |
+| **Total** | **1,846 LOC** | **24 tests** | ✅ |
+
+Counted directly from `src/*.rs` (`wc -l`, `rg -c '#\[test\]'`) — re-run
+those if this table drifts again; nothing enforces it mechanically.
 
 ---
 
-## 🚀 Future Features (TODO)
+## 🚫 Not Implemented
 
-### 5. 🌐 Network Monitor
-**Feature Flag**: `network-monitor`  
-**Status**: TODO
-
-Planned capabilities:
-- HTTP request/response tracking
-- Request timing (DNS, Connect, TLS, Transfer)
-- Response size analysis
-- Header inspection
-- WebSocket monitoring
-
----
-
-### 6. 💾 Memory Profiler
-**Feature Flag**: `memory-profiler`  
-**Status**: TODO
-
-Planned capabilities:
-- Heap allocation tracking (using `dhat`)
-- Memory usage over time
-- Leak detection
-- Allocation flamegraphs
-- Widget memory footprint
-
----
-
-### 7. 🔌 Remote Debug Server
-**Feature Flag**: `remote-debug`  
-**Status**: TODO
-
-Planned capabilities:
-- WebSocket-based debugging protocol
-- Browser DevTools integration
-- Remote widget inspection
-- Live profiling data streaming
-- Command execution (rebuild, clear cache, etc.)
-
----
-
-### 8. 📝 Tracing Support
-**Feature Flag**: `tracing-support`  
-**Status**: TODO
-
-Planned capabilities:
-- Integration with `tracing` crate
-- Structured logging
-- Span-based profiling
-- Log level filtering
-- Custom subscribers
+Earlier revisions of this document (and the crate README) advertised a
+network monitor, memory profiler, remote-debug server, and a
+`tracing-support` feature. **None of these were ever implemented** — there
+is no corresponding module, no `Cargo.toml` feature flag, and no such
+capability behind `full`. `src/lib.rs`'s crate-level docs are the current
+source of truth for what exists; treat any capability not listed there as
+fictional until it has a module and a feature flag to match.
 
 ---
 
@@ -193,8 +165,11 @@ Planned capabilities:
    - No data races
 
 3. **Feature Gated**: Optional features don't bloat the binary
-   - Default features: `profiling`, `inspector`
-   - Optional: `timeline`, `hot-reload`, etc.
+   - Default features: none (`default = []`) — a release build with no
+     features enabled compiles zero devtools code, opens no port, and runs
+     no background work
+   - Opt in per-feature: `profiling`, `timeline`, `hot-reload`, `inspector`;
+     `full` enables all four
 
 4. **Ergonomic API**: Easy to use, hard to misuse
    - RAII guards (PhaseGuard, EventGuard, WatchHandle)
@@ -209,18 +184,21 @@ Planned capabilities:
 
 ## 📦 Dependencies
 
-### Core Dependencies
-- `flui_core` - Integration with FLUI framework
-- `instant` - Cross-platform timing
-- `serde`, `serde_json` - Serialization
-- `parking_lot` - Fast locks
-- `dashmap` - Concurrent HashMap
+Read straight from `Cargo.toml` — no fictional entries.
 
-### Feature Dependencies
-- `notify` - File watching (hot-reload)
-- `tokio`, `tokio-tungstenite` - Async runtime (network-monitor, remote-debug)
-- `dhat` - Memory profiling (memory-profiler)
-- `tracing`, `tracing-subscriber` - Logging (tracing-support)
+### Unconditional
+- `web-time` - Cross-platform timing (the maintained replacement for `instant`)
+- `serde`, `serde_json` - Serialization (devtools protocol payloads)
+- `parking_lot` - Fast locks
+- `windows-sys` (Windows only) - process/memory info
+
+### Feature-gated
+- `flui-hot-reload` (feature `hot-reload`, via its `source-watch` feature) - underlying file watcher (`SourceWatcher`)
+- `flui-foundation` + `tracing` (feature `inspector`) - `TreeObserver`/`RebuildReason` types and debug-level event logging
+
+There is no `flui_core` (that crate has never existed in this workspace —
+see `docs/crates.md`), no `dashmap`, and no `dhat`/`tokio-tungstenite`
+pulled in for features that were never built.
 
 ---
 
@@ -234,8 +212,8 @@ All modules have comprehensive test coverage:
 
 Run tests:
 ```bash
-cargo test -p flui_devtools
-cargo test -p flui_devtools --all-features
+cargo test -p flui-devtools
+cargo test -p flui-devtools --all-features
 ```
 
 ---
@@ -254,13 +232,14 @@ cargo test -p flui_devtools --all-features
 | Feature | Flutter DevTools | FLUI DevTools | Status |
 |---------|-----------------|---------------|--------|
 | Performance Profiler | ✅ | ✅ | Complete |
-| Widget Inspector | ✅ | ✅ | Complete |
+| Widget Inspector (tree walk/select/highlight) | ✅ | ❌ | Not implemented |
+| Inspector counters (mount/rebuild/unmount tallies) | — | ✅ | Complete |
 | Timeline View | ✅ | ✅ | Complete |
-| Memory Profiler | ✅ | ⏳ | TODO |
-| Network Monitor | ✅ | ⏳ | TODO |
-| Debugger | ✅ | ⏳ | TODO |
-| Logging | ✅ | ⏳ | TODO |
-| Hot Reload | ✅ | ✅ | Complete |
+| Memory Profiler | ✅ | ❌ | Not implemented, not planned |
+| Network Monitor | ✅ | ❌ | Not implemented, not planned |
+| Debugger | ✅ | ❌ | Not implemented, not planned |
+| Logging | ✅ | ❌ | Not implemented, not planned |
+| Hot Reload | ✅ | ✅ | Complete (file-watch only; no state preservation) |
 
 ---
 
@@ -277,11 +256,11 @@ cargo test -p flui_devtools --all-features
 ## 💡 Usage Examples
 
 See `examples/` directory:
-- `profiler_demo.rs` - Frame profiling
-- `inspector_demo.rs` - Widget inspection (TODO)
-- `timeline_demo.rs` - Timeline recording (TODO)
-- `hot_reload_demo.rs` - Hot reload setup (TODO)
+- `profiler_demo.rs` - Frame profiling (requires `--features profiling`)
+
+That is the only example in the crate today. There is no
+`inspector_demo.rs`, `timeline_demo.rs`, or `hot_reload_demo.rs`.
 
 ---
 
-Generated: 2025-10-27
+Last verified against `src/*.rs` and `Cargo.toml`: 2026-08-04.

@@ -35,7 +35,7 @@
 //! `ControlFlow::Wait` explicitly every iteration, even though `Wait` is
 //! winit's documented default when nothing sets it. This is deliberate,
 //! not decorative: `flui-app`'s frame loop is wake-driven (a redraw is
-//! requested only from `AppBinding::wake_frame`/`request_redraw`, never
+//! requested only from `UiRealm::wake_frame`/`request_redraw`, never
 //! polled), and steady-state pacing for a frame that DOES present comes
 //! entirely from the GPU-side blocking Fifo present in `flui-engine`'s
 //! `Renderer::render_scene` (see the frame-pacing ADR). If a future winit

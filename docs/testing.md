@@ -12,14 +12,17 @@ The local pre-review gate is:
 just ci
 ```
 
-Expanded, that currently runs:
+Expanded (see `ci:` in the `justfile` for the authoritative recipe list), that currently runs:
 
 ```bash
-cargo fmt --all -- --check          # formatter gate (rustfmt.toml is authoritative)
-bash scripts/check-workspace-inventory.sh # crate inventory drift guard
-bash scripts/port-check.sh           # architecture refusal triggers
-cargo clippy --workspace --all-targets -- -D warnings # lint gate — zero warnings
-cargo test --workspace               # full test suite
+cargo fmt --all -- --check                                # fmt-check: formatter gate (rustfmt.toml is authoritative)
+bash scripts/check-workspace-inventory.sh                  # inventory-check: crate inventory + layer-policy drift guard
+bash scripts/check-runtime-conformance.sh                  # runtime-conformance-check: docs/runtime-contract.toml vs. source tree
+bash scripts/port-check.sh                                 # port-check: architecture refusal triggers
+cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate — zero warnings
+cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast  # test-ci (flui-platform is excluded — see CI Expectations below)
+cargo test --workspace --exclude flui-platform --doc       # test-doc: doc-tests, same exclusion
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --document-private-items  # doc-strict
 ```
 
 ## Build
@@ -156,7 +159,7 @@ The constitution requires `///` doc comments on every public item and `//!` over
 - **Unit tests** live in the same file under `#[cfg(test)] mod tests { ... }`.
 - **Integration tests** live in `tests/` per crate. Cross-crate pipelines are tested in `flui-engine`.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
-- **Visual regression tests** (planned) will use snapshot-based comparison against the headless backend.
+- **Visual regression tests** exist: `tests/golden_screenshots.rs` (209 lines) renders each demo headless and compares against 6 committed PNGs in `tests/goldens/`. Needs a GPU; run with `just golden` (`--features golden`); regenerate with `UPDATE_GOLDENS=1`.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.
 
 ## Test Harnesses (`testing` feature)
@@ -206,16 +209,18 @@ cargo test -p flui-rendering --test render_object_harness
 
 ### Render-object harness catalog
 
-`crates/flui-rendering/tests/render_object_harness.rs` is the CI-facing
+`crates/flui-objects/tests/render_object_harness.rs` is the CI-facing
 catalog: every concrete `RenderBox` / `RenderSliver` type is mounted
 through `RenderTester`, laid out (or painted when hit-test / layer
 structure matters), and asserted via `Probe` + structured diagnostics
 queries. The file header lists a per-type coverage map; `RENDER_OBJECT_TYPES`
-is the manifest of all 37 exported render types; and
+is the manifest of all 81 exported render types (count it yourself —
+`RENDER_OBJECT_TYPES` in that file — if this drifts again); and
 `catalog_covers_every_render_object_name` fails CI if any type is missing
-from the harness file. Add a harness test when landing a new render object
-so layout, hit-test, and config/runtime diagnostics stay pinned without
-visual inspection.
+from the harness file, and `render_object_types_match_exports` fails CI if
+the catalog and this crate's `pub use` exports diverge. Add a harness test
+when landing a new render object so layout, hit-test, and config/runtime
+diagnostics stay pinned without visual inspection.
 
 Parent metadata that widgets normally write before layout (stack
 positioning, flex factors, future animation parent slots) can be expressed
@@ -272,8 +277,12 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-it
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
 cargo test --workspace --exclude flui-platform --locked --doc
 cargo check --workspace --all-targets --locked                # repeated on Rust 1.97 (MSRV job)
-cargo miri test -p flui-rendering --lib pipeline::owner::subtree_arena  # advisory; NARROW — 5 unit tests,
-                                                              # none enters the layout walk or derefs a real NodePtr
+cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena  # advisory (continue-on-error); NARROW —
+                                                              # covers two real-NodePtr walks driving layout_dirty_root
+                                                              # through every reborrow phase of layout_subtree_borrowed_impl
+                                                              # (one straight pass, one cyclic edge exercising the
+                                                              # baseline callback's in-flight gate). Sliver walks and
+                                                              # intrinsics queries are not interpreted.
 ```
 
 The `gpu-test` job additionally runs the full `enable-wgpu-tests` readback
@@ -293,4 +302,4 @@ A change cannot be merged if any of these fail. If you encounter a flaky test, f
 
 - [Getting Started](getting-started.md) — toolchain setup and first build
 - [Contributing](contributing.md) — workflow, commits, speckit
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitutional performance and testing requirements
+- [`AGENTS.md`](../AGENTS.md) — current performance and testing requirements (`.specify/memory/constitution.md` does not exist in this checkout)

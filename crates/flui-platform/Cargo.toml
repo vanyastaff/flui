@@ -150,6 +150,13 @@ desktop = ["dep:winit"]
 winit-backend = ["dep:winit", "dep:arboard", "dep:crossbeam-channel"]
 
 # Web platform
+# Honest note (verified 2026-08-04): no-op selector — zero
+# `feature = "web"` references in this crate's src. `platforms::web` is
+# gated by `#[cfg(target_arch = "wasm32")]` on the actual compile target
+# (`src/platforms/mod.rs`), not by this flag; enabling or disabling it
+# changes nothing observable. Kept as a forward-compatible name for
+# downstream `Cargo.toml`s, mirroring `desktop` (which — unlike this one —
+# really does gate `dep:winit`).
 web = []
 
 # Linux display server protocols

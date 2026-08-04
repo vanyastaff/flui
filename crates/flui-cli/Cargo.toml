@@ -23,9 +23,10 @@ path = "src/main.rs"
 flui-build = { path = "../flui-build", version = "0.2.0" }
 flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = ["source-watch"] }
 
-# Async runtime — `run` blocks on the async build/push pipeline via a
-# multi-thread `Runtime`; `signal` backs the devtools server's Ctrl+C wait.
-tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
+# Async runtime — `run` blocks on the async Android build/push pipeline via
+# a multi-thread `Runtime`. There is no `devtools` server (see
+# commands/devtools.rs), so no `signal` feature is needed here.
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 # Logging backend. The CLI chooses and installs its own subscriber policy and
 # reuses flui-log's backend construction; it is a composition root, so this

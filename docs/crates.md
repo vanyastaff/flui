@@ -4,7 +4,7 @@
 
 > **Scope.** This page describes the **current** workspace as it is built today. `flui-localizations`, `flui-material`, and `flui-cupertino` (Catalog.1) have landed; the remaining target crate decomposition — the formal `flui` facade — is defined in [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md); the migration is sequenced in [`ROADMAP.md`](ROADMAP.md).
 
-The FLUI workspace contains 20+ crates organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
+The FLUI workspace contains 28 crates plus the `flui` facade, organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
 
 > **Layer assignments here mirror [`workspace-layers.toml`](workspace-layers.toml), which is the authoritative policy.** `scripts/check-workspace-inventory.sh` (`just inventory-check`) validates every **normal** Cargo dependency edge against that file: strictly downward, with an ordered-pair allowlist for same-layer edges, named forbidden pairs, and an acyclicity check that includes projected future edges. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md) for the contract and [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md) for the target graph. Dev-dependencies are deliberately out of scope — they cross layers freely and Cargo permits cycles among them.
 
@@ -23,7 +23,7 @@ A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-foundation` | ✅ ACTIVE | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `BindingBase`, `Key`, the shared structured-field vocabulary in `diagnostics`, error helpers. Emits `tracing` events; owns no subscriber. |
+| `flui-foundation` | ✅ ACTIVE | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `Key`, the `observe` tree-observer seam (ADR-0040) + `RebuildReason`, the shared structured-field vocabulary in `diagnostics`, error helpers. There is no `BindingBase` — the ambient-singleton machinery it backed was retired workspace-wide. Emits `tracing` events; owns no subscriber. |
 | `flui-macros` | ✅ ACTIVE | Proc-macro crate for framework derives and generated boilerplate |
 
 ## Layer 2 — Substrate
@@ -138,7 +138,7 @@ A new crate is a topology change, so it starts with the contract, not the direct
 3. Add a `[[member]]` entry to `workspace-layers.toml` with its layer and disposition (`keep` / `rename` / `narrow` / `optionalize` / `deferred-extraction`).
 4. Add the directory under `crates/<flui-name>/` with a standard layout (`Cargo.toml`, `src/lib.rs`, `src/error.rs`).
 5. Add the path to `[workspace.members]` in the root `Cargo.toml`; add it to `default-members` unless the crate is intentionally excluded from default local builds.
-6. Update the constitution layer table in `.specify/memory/constitution.md` if it represents a new responsibility.
+6. There is no separate layer table to maintain: the checked authority is the `[[member]]` entry from step 3 (`workspace-layers.toml`), and the human-readable graph is [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md), updated in step 7. If the crate changes what an agent should read first, extend the decision tables in [`AGENTS.md`](../AGENTS.md).
 7. Update this page (`docs/crates.md`), [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md), and the `active_crates` / `build-layered` inventories in the `justfile`.
 
 ## See Also
@@ -149,5 +149,4 @@ A new crate is a topology change, so it starts with the contract, not the direct
 - [Roadmap](ROADMAP.md) — construction phases from current to target
 - [Architecture](architecture.md) — three-tree pipeline + layered DAG (current state)
 - [Getting Started](getting-started.md) — build and run instructions
-- [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution v2.3.0
+- [`AGENTS.md`](../AGENTS.md) — current cross-tool rules (`.ai-factory/ARCHITECTURE.md` and `.specify/memory/constitution.md` were the historical originals; neither exists in this checkout)

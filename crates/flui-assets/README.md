@@ -283,6 +283,5 @@ at your option.
 
 ## Related Crates
 
-- [`flui_types`](../flui_types) - Core types for FLUI
-- [`flui_core`](../flui_core) - FLUI framework core
-- [`flui_painting`](../flui_painting) - 2D graphics API
+- [`flui-types`](../flui-types) - Core types for FLUI
+- [`flui-painting`](../flui-painting) - 2D graphics API

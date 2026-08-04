@@ -15,11 +15,9 @@ Before opening a PR or even a planning issue, read:
 3. [`docs/ROADMAP.md`](ROADMAP.md) — **construction plan**: dependency-ordered phases that move the workspace from current state to the target.
 4. [`STRATEGY.md`](../STRATEGY.md) — product strategy and the three port rules ("behavior loyal, structure Rust-native").
 5. [`docs/PORT.md`](PORT.md) — port methodology, refusal triggers, per-crate `ARCHITECTURE.md` template.
-6. [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the project constitution (v2.3.0). Non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc.
-7. [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns.
-8. [`.ai-factory/rules/base.md`](../.ai-factory/rules/base.md) — project base rules (naming, modules, errors, logging, testing, unsafe).
-9. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
-10. [Architecture overview](architecture.md) and [Crates Map](crates.md) — high-level orientation (current-state).
+6. [`AGENTS.md`](../AGENTS.md) — the cross-tool agent guide and this workspace's non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc. `docs/FOUNDATIONS.md` (item 2 above) is the full architectural-rules-and-anti-patterns reference. Neither `.specify/memory/constitution.md`, `.ai-factory/ARCHITECTURE.md`, nor `.ai-factory/rules/base.md` exists in this checkout — those are stale paths this repo no longer carries.
+7. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
+8. [Architecture overview](architecture.md) and [Crates Map](crates.md) — high-level orientation (current-state).
 
 ## Quality Gates
 
@@ -109,7 +107,7 @@ parts of that contract. Do not copy a subset into a crate and let it drift.
 - **No `wgpu` types in widget or layout code.** GPU access flows through `flui-painting`'s abstract canvas API.
 - **No polling render loops.** Use `ControlFlow::Wait`. Constitution-mandated.
 
-For the full anti-pattern list see [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md).
+For the full anti-pattern list see [`docs/FOUNDATIONS.md`](FOUNDATIONS.md) (`.ai-factory/ARCHITECTURE.md` does not exist in this checkout).
 
 ## Reviewing a Change
 

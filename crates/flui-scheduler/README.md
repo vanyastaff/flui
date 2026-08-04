@@ -239,12 +239,19 @@ Tasks execute in strict priority order:
 
 ## Integration with FLUI
 
-### In flui_core Pipeline
+### In flui-rendering's `PipelineOwner`
 
-```rust
+`flui-rendering::pipeline::owner::PipelineOwner` is the real consumer —
+there is no `flui_core` crate in this workspace. The sketch below is
+illustrative shape, not the real struct (the actual `PipelineOwner` is
+typestate-generic over its pipeline phase and carries a `DirtyTracker`,
+not a bare `Scheduler` field — see `flui-rendering`'s own docs for the
+real definition):
+
+```rust,ignore
 use flui_scheduler::{Scheduler, FramePhase};
 
-pub struct PipelineOwner {
+struct PipelineOwner {
     scheduler: Scheduler,
 }
 
