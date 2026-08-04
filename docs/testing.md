@@ -20,8 +20,9 @@ bash scripts/check-workspace-inventory.sh                  # inventory-check: cr
 bash scripts/check-runtime-conformance.sh                  # runtime-conformance-check: docs/runtime-contract.toml vs. source tree
 bash scripts/port-check.sh                                 # port-check: architecture refusal triggers
 cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate — zero warnings
-cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast  # test-ci (flui-platform is excluded — see CI Expectations below)
-cargo test --workspace --exclude flui-platform --doc       # test-doc: doc-tests, same exclusion
+cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast  # test-ci (flui-platform gets its own invocation below — see CI Expectations)
+FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (requires xvfb-run — apt install xvfb)
+cargo test --workspace --doc                               # test-doc: doc-tests (flui-platform included — its doctests need neither device above)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --document-private-items  # doc-strict
 ```
 
@@ -275,7 +276,8 @@ cargo deny check                                              # advisories / ban
 cargo bench -p flui-rendering --no-run                        # bench-compile job
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items  # doc job
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
-cargo test --workspace --exclude flui-platform --locked --doc
+FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test job's dedicated flui-platform step
+cargo test --workspace --locked --doc
 cargo check --workspace --all-targets --locked                # repeated on Rust 1.97 (MSRV job)
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena  # advisory (continue-on-error); NARROW —
                                                               # covers two real-NodePtr walks driving layout_dirty_root
