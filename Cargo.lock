@@ -1619,7 +1619,6 @@ version = "0.2.0"
 dependencies = [
  "android_log-sys",
  "flui-foundation",
- "flui-hot-reload-lifecycle-fixture",
  "flui-layer",
  "flui-rendering",
  "flui-types",

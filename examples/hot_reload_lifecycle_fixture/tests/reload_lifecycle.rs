@@ -1,19 +1,28 @@
 //! Real `dlopen`/`dlclose`/reload coverage for `app_plugin!` — the lifecycle
-//! `tests/loader.rs` deliberately leaves untested ("environment-fragile...
-//! would violate the no-flaky-tests rule").
+//! `flui-hot-reload`'s own `tests/loader.rs` deliberately leaves untested
+//! ("environment-fragile... would violate the no-flaky-tests rule").
 //!
 //! That rule is about *nested `cargo build` from inside a test* — spawning a
 //! second cargo process, racing target-dir locks, non-deterministic compile
-//! times. This test avoids all of that: its plugin,
-//! `flui-hot-reload-lifecycle-fixture` (`examples/hot_reload_lifecycle_fixture`),
-//! is an ordinary `[dev-dependencies]` path entry of this crate (see
-//! `Cargo.toml`), so cargo's OWN build graph compiles it — and produces its
-//! `cdylib` artifact as a side effect — before this test binary ever runs. No
-//! nested cargo, no extra process, no lock contention: the artifact is just
-//! sitting in `target/<profile>/deps/` next to this test binary, found via
-//! [`std::env::current_exe`].
+//! times. This test avoids all of that by living where its plugin already
+//! is: `flui-hot-reload-lifecycle-fixture` is `crate-type = ["rlib",
+//! "cdylib"]` (see `Cargo.toml`), so building THIS test target — an ordinary
+//! integration test of the crate it ships in — necessarily also produces the
+//! crate's own `cdylib` artifact in the same rustc invocation, no separate
+//! dependency edge or nested cargo required.
 //!
-//! # What PR-0 fixed, and what this test proves about it
+//! (An earlier version of this test lived in `flui-hot-reload`'s own
+//! `tests/` directory, with the fixture wired in as a `[dev-dependencies]`
+//! path entry. That created a dev-dependency cycle back onto
+//! `flui-hot-reload` itself — the fixture's own normal dependency on
+//! `flui-hot-reload` with `features = ["app-plugin"]` unifies with the SAME
+//! resolved package `flui-hot-reload`'s own tests build against, confirmed
+//! via `cargo tree -e features`, so `app-plugin` was silently always-on for
+//! ANY `flui-hot-reload` test build, even a bare `cargo test -p
+//! flui-hot-reload` with no `--features` flag at all. Moving the test here,
+//! into the plugin crate itself, removes that dependency edge entirely.)
+//!
+//! # What the thread-affinity storage repair fixed, and what this test proves
 //!
 //! `app_plugin!` used to store its `PluginPipeline` behind a plain `static`
 //! (`OnceLock<Mutex<PluginPipeline>>`), which Rust never runs drop glue for.
@@ -32,7 +41,7 @@
 //! produces a non-functional pipeline across a real load → drive → dlclose →
 //! reload → drive cycle.
 //!
-//! # What this test ALSO found, that PR-0 does not fix
+//! # What this test ALSO found, that the storage repair does not fix
 //!
 //! `fixture_tick` — a counter independent of `app_plugin!`'s own symbols —
 //! lets a fresh mapping be told apart from a stale, reused one: a genuinely
@@ -54,12 +63,12 @@
 //! feature gate elides it). `PluginPipeline::mount`/`draw_frame` call
 //! `WidgetsBinding::with_global_key_registry`, which touches both on every
 //! `flui_app_build` call — so ANY `app_plugin!` image registers this TLS
-//! destructor, entirely independent of the storage this PR flipped. Fixing
-//! it means auditing/reshaping `flui-view`'s GlobalKey registry machinery
-//! (core view-tree infrastructure every consumer of the framework uses, not
-//! only hot-reload plugins) — squarely out of this PR's bounded scope
-//! ("PluginPipeline itself stays as-is this PR... PR-0 only removes the Send
-//! requirement imposed by the storage").
+//! destructor, entirely independent of the storage this repair flipped.
+//! Fixing it means auditing/reshaping `flui-view`'s GlobalKey registry
+//! machinery (core view-tree infrastructure every consumer of the framework
+//! uses, not only hot-reload plugins) — squarely out of this repair's bounded
+//! scope (the pipeline type itself was deliberately left as-is; only the
+//! `Send` requirement its storage imposed was removed).
 //! [`dlclose_then_reload_same_path_serves_a_fresh_image`] records this
 //! honestly: written, deterministic, currently `#[ignore]`d with this exact
 //! reason rather than deleted, weakened, or silently left passing on a false
@@ -103,32 +112,94 @@ impl Drop for TempPath {
     }
 }
 
-/// The `app_plugin!` fixture's built `cdylib`, as produced by cargo's own
-/// dev-dependency build graph — `target/<profile>/deps/<lib_prefix>
-/// flui_hot_reload_lifecycle_fixture<lib_suffix>`, sitting right next to
-/// this test binary itself.
+/// This crate's own `cdylib` build artifact, somewhere under
+/// `target/<profile>/` — [`std::env::current_exe`]'s directory is
+/// `target/<profile>/deps/`, right next to this test binary itself.
+/// Building this integration test target compiles the crate under test
+/// (`flui-hot-reload-lifecycle-fixture`) with all of its declared
+/// crate-types in one rustc invocation, so the `cdylib` output always
+/// exists by the time this function runs — no separate dependency edge, no
+/// nested cargo.
+///
+/// Resolution order (first hit wins), confirmed by direct probe under both
+/// `cargo nextest run -p flui-hot-reload-lifecycle-fixture` on its own and
+/// `just ci`'s workspace-wide build:
+///
+/// 1. `target/<profile>/<lib_prefix>flui_hot_reload_lifecycle_fixture<lib_suffix>`
+///    — cargo uplifts a package's `cdylib` here for a plain `cargo
+///    build`/`check` that treats the crate as a directly-built unit. Neither
+///    invocation above is that shape (both are `--tests`-driven, which only
+///    needs the `cdylib` as a link artifact, not a directly-built one), so
+///    this tier costs one extra `is_file` check and doesn't resolve for this
+///    test's own invocations today — kept for a build shape that IS a plain
+///    `cargo build`.
+/// 2. The same unhashed filename inside `target/<profile>/deps/` — the tier
+///    that actually resolves for this test's own invocations, confirmed by
+///    direct probe under both of the above.
+/// 3. The hash-suffixed candidates cargo always writes to `deps/`
+///    (`<stem>-<hash>.<ext>`), newest by mtime — a defensive fallback for a
+///    hypothetical cargo/platform combination where neither unhashed copy
+///    exists.
 fn fixture_artifact_path() -> PathBuf {
     let exe = std::env::current_exe().expect("BUG: a running test binary must have a path");
     let deps_dir = exe
         .parent()
-        .expect("BUG: a test binary always has a containing directory")
-        .to_path_buf();
+        .expect("BUG: a test binary always has a containing directory");
+    let profile_dir = deps_dir
+        .parent()
+        .expect("BUG: target/<profile>/deps/ always has a target/<profile>/ parent");
 
     #[cfg(target_os = "windows")]
-    let filename = "flui_hot_reload_lifecycle_fixture.dll";
+    let (lib_prefix, lib_ext) = ("", "dll");
     #[cfg(target_os = "macos")]
-    let filename = "libflui_hot_reload_lifecycle_fixture.dylib";
+    let (lib_prefix, lib_ext) = ("lib", "dylib");
     #[cfg(all(unix, not(target_os = "macos")))]
-    let filename = "libflui_hot_reload_lifecycle_fixture.so";
+    let (lib_prefix, lib_ext) = ("lib", "so");
 
-    let candidate = deps_dir.join(filename);
-    assert!(
-        candidate.is_file(),
-        "fixture artifact not found at {} — expected cargo's dev-dependency build graph \
-         to have produced it before this test ran (see this file's module doc)",
-        candidate.display()
-    );
-    candidate
+    let stem = format!("{lib_prefix}flui_hot_reload_lifecycle_fixture");
+    let unhashed_name = format!("{stem}.{lib_ext}");
+
+    // 1. Preferred: unhashed, uplifted to the profile root.
+    let top_level = profile_dir.join(&unhashed_name);
+    if top_level.is_file() {
+        return top_level;
+    }
+
+    // 2. Fallback: unhashed, still inside `deps/`.
+    let in_deps = deps_dir.join(&unhashed_name);
+    if in_deps.is_file() {
+        return in_deps;
+    }
+
+    // 3. Last resort: newest hash-suffixed candidate in `deps/`.
+    let hashed_prefix = format!("{stem}-");
+    let hashed_suffix = format!(".{lib_ext}");
+    let newest_hashed = std::fs::read_dir(deps_dir)
+        .expect("BUG: a test binary's own deps/ directory must be readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(&hashed_prefix) && name.ends_with(&hashed_suffix)
+                })
+        })
+        .max_by_key(|path| {
+            path.metadata()
+                .and_then(|meta| meta.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+
+    newest_hashed.unwrap_or_else(|| {
+        panic!(
+            "fixture artifact not found under {} (checked the unhashed name at the profile \
+             root, the unhashed name in deps/, and hash-suffixed candidates in deps/) — \
+             expected building this test target to have produced this crate's own cdylib \
+             before this test ran (see this file's module doc)",
+            profile_dir.display()
+        )
+    })
 }
 
 /// Resolve and call the fixture's `fixture_tick` symbol through a dedicated
@@ -178,11 +249,12 @@ fn load_drive_unload(path: &Path) {
     plugin.unload();
 }
 
-/// The mechanical half PR-0 actually changed: a real load → drive → dlclose
-/// → reload → drive cycle must not crash, panic, or leave a
-/// non-functional pipeline. This is what `ManuallyDrop` + the thread-affinity
-/// pin are for — see this file's module doc for the compile-time half of the
-/// proof and for what this test does NOT (yet) cover.
+/// The mechanical half of what this repair actually changed: a real
+/// load → drive → dlclose → reload → drive cycle must not crash, panic, or
+/// leave a non-functional pipeline. This is what `ManuallyDrop` + the
+/// thread-affinity pin are for — see this file's module doc for the
+/// compile-time half of the proof and for what this test does NOT (yet)
+/// cover.
 #[test]
 fn dlclose_then_reload_keeps_the_lifecycle_working() {
     let source = fixture_artifact_path();
@@ -198,16 +270,16 @@ fn dlclose_then_reload_keeps_the_lifecycle_working() {
 }
 
 /// Strict freshness check — see this file's module doc, "What this test ALSO
-/// found, that PR-0 does not fix". Written, deterministic, and currently
-/// failing for a real but out-of-scope reason: `flui-view`'s
+/// found, that the storage repair does not fix". Written, deterministic, and
+/// currently failing for a real but out-of-scope reason: `flui-view`'s
 /// `key::registry::{REGISTRY_STACK, TEST_REGISTRY}` thread-locals hold
 /// `Arc`-containing `GlobalKeyRegistryHandle`s and are touched by every
 /// `flui_app_build` call, registering their own TLS destructor independent
-/// of the `PluginPipeline` storage this PR flipped. Left `#[ignore]`d
+/// of the `PluginPipeline` storage this repair flipped. Left `#[ignore]`d
 /// rather than deleted, weakened, or silently passed: this is the exact
 /// test to re-enable once that separate gap closes.
 #[ignore = "blocked on flui-view's key::registry thread-locals (REGISTRY_STACK/TEST_REGISTRY) \
-            also carrying drop glue, independent of this PR's PluginPipeline storage fix — \
+            also carrying drop glue, independent of the PluginPipeline storage fix here — \
             see this file's module doc"]
 #[test]
 fn dlclose_then_reload_same_path_serves_a_fresh_image() {
