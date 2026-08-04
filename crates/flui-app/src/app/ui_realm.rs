@@ -2143,6 +2143,19 @@ mod tests {
             "two live realms must never compare equal"
         );
 
+        // Disjoint focus tree and disjoint PipelineOwner (the container a
+        // SemanticsOwner is set on, `pipeline.write().set_semantics_owner`)
+        // -- neither realm's focus dispatch nor its semantics state can be
+        // the other's Rc/Arc.
+        assert!(
+            !Rc::ptr_eq(&realm_a.focus_manager(), &realm_b.focus_manager()),
+            "two realms must never share one focus tree"
+        );
+        assert!(
+            !Arc::ptr_eq(&realm_a.pipeline_for_test(), &realm_b.pipeline_for_test()),
+            "two realms must never share one PipelineOwner (and therefore never one SemanticsOwner)"
+        );
+
         // Independent widget mounts: A gets a root; B stays unattached, so
         // A's mount must not leak into B's own WidgetsBinding.
         realm_a
@@ -2217,29 +2230,48 @@ mod tests {
     /// `UiRealm` stays `!Send` throughout: `realm_b` never crosses the
     /// thread boundary, only its `Send + Sync` wake counter and plain
     /// `RealmId` do, via the join return value.
+    ///
+    /// A [`std::sync::Barrier`] of 2 makes the concurrency claim true rather
+    /// than merely plausible: both threads construct their own realm, then
+    /// rendezvous at the barrier before either drives/drains/paints it, so
+    /// realm A's own frame work below provably runs WHILE realm B's thread
+    /// is live and doing its own frame work too — not sequentially before
+    /// or after `join()` (the original shape: realm A never touched
+    /// anything until after `join()` returned, which only proved
+    /// construction could happen on two threads, not that operation could).
     #[test]
     fn two_realms_two_threads_no_shared_state() {
+        let barrier = std::sync::Barrier::new(2);
+
         let (wake_a, wakes_a) = counting_wake();
         let realm_a = new_runtime(wake_a).expect("realm A claims cleanly on this thread");
+        let sender_a = realm_a.command_sender();
 
         let (wakes_b, realm_b_id) = std::thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    let (wake_b, wakes_b) = counting_wake();
-                    let realm_b = new_runtime(wake_b)
-                        .expect("realm B claims cleanly on its OWN thread, concurrently with A");
-                    let sender_b = realm_b.command_sender();
-                    sender_b.request_redraw();
-                    let _ = realm_b.drain_commands();
-                    (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
-                })
-                .join()
-                .expect("realm B's thread did not panic")
-        });
+            let handle = scope.spawn(|| {
+                let (wake_b, wakes_b) = counting_wake();
+                let realm_b = new_runtime(wake_b)
+                    .expect("realm B claims cleanly on its OWN thread, concurrently with A");
+                let sender_b = realm_b.command_sender();
 
-        let sender_a = realm_a.command_sender();
-        sender_a.request_redraw();
-        let _ = realm_a.drain_commands();
+                // Rendezvous: realm A's operation below is guaranteed to
+                // overlap this thread's operation, not merely precede or
+                // follow it.
+                barrier.wait();
+
+                sender_b.request_redraw();
+                let _ = realm_b.drain_commands();
+                let _ = realm_b.draw_frame(coexistence_constraints());
+                (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
+            });
+
+            barrier.wait();
+            sender_a.request_redraw();
+            let _ = realm_a.drain_commands();
+            let _ = realm_a.draw_frame(coexistence_constraints());
+
+            handle.join().expect("realm B's thread did not panic")
+        });
 
         assert_eq!(
             wakes_a.load(Ordering::Relaxed),
@@ -2262,11 +2294,19 @@ mod tests {
     /// Also bounds the blast radius of `global_timer_service()` (a NAMED
     /// ambient-reach residual — `docs/runtime-contract.toml`'s ratchet;
     /// unlike the realm construction guard or the retired `Scheduler`
-    /// singleton, this one is process-global BY DESIGN, not by omission):
-    /// scheduling a callback through it and then
-    /// dropping realm A proves the callback can only ever touch whatever it
-    /// explicitly captured — there is no ambient path from the global timer
-    /// service into a live, coexisting realm's state.
+    /// singleton, this one is process-global BY DESIGN, not by omission).
+    /// Stated precisely, not aspirationally: `global_timer_service()` has
+    /// **zero production callers** today (verified by grep) — FLUI's actual
+    /// long-press/double-tap deadlines are driven through each realm's OWN
+    /// gesture arena (`tick_deadlines()`/`has_pending_deadlines()`, polled
+    /// every frame; see `long_press_fires_at_its_deadline_with_no_further_input`),
+    /// never through this ambient service. The residual's real bound,
+    /// PROVEN here rather than merely asserted: a callback that captures
+    /// LIVE realm-A state (its own `UiCommandSender`, cloned before the
+    /// drop) and fires from this process-global service AFTER realm A is
+    /// gone reaches only the typed `OwnerGone` failure path — never a
+    /// crash, never realm B — even though nothing in production wires this
+    /// service to any realm at all.
     #[test]
     fn dropping_realm_a_cannot_wake_realm_b() {
         // Realm A's own wake counter has nothing left to assert once A is
@@ -2314,29 +2354,45 @@ mod tests {
         assert_eq!(report.invoked, 1);
         assert_eq!(report.dropped_stale, 0);
 
-        // Pending-gesture-timer probe: schedule a callback through the
-        // process-global timer service (as a long-press recognizer would
-        // arm one), conceptually "belonging" to the now-dropped realm A.
-        // The service has no idea realm A ever existed — proving its blast
-        // radius is bounded to exactly what the closure captured, never an
-        // ambient reach into realm B. `wakes_b` already sits at 1 from the
-        // legitimate send above; the probe asserts it stays EXACTLY there
-        // (unchanged), not that it is zero.
-        let wakes_b_before_timer = wakes_b.load(Ordering::Relaxed);
-        let fired = Arc::new(AtomicBool::new(false));
-        let fired_marker = Arc::clone(&fired);
+        // Pending-gesture-timer probe, strengthened: `global_timer_service()`
+        // has no production caller and no realm ever registers with it (see
+        // this test's own doc comment) -- so instead of pretending a realm
+        // "armed" a timer, capture realm A's OWN sender (cloned before the
+        // drop above) directly into the fired closure, and observe what
+        // happens when this unrelated ambient service invokes it well after
+        // realm A is gone.
+        let sender_a_for_timer = sender_a.clone();
+        let navigator_for_timer = NavigatorHandle::new();
+        navigator_for_timer.seed_initial(test_route("/"));
+        let target_for_timer = navigator_for_timer.command_target();
+        let observed_owner_gone = Arc::new(AtomicBool::new(false));
+        let observed_owner_gone_marker = Arc::clone(&observed_owner_gone);
         let _timer = flui_interaction::global_timer_service().schedule(
             std::time::Duration::ZERO,
             move || {
-                fired_marker.store(true, Ordering::SeqCst);
+                let result = sender_a_for_timer
+                    .send_navigation(NavigatorCommand::maybe_pop(target_for_timer));
+                observed_owner_gone_marker.store(
+                    matches!(result, Err(CommandSendError::OwnerGone { .. })),
+                    Ordering::SeqCst,
+                );
             },
         );
+        // `wakes_b` already sits at 1 from the legitimate send above; the
+        // probe asserts it stays EXACTLY there (unchanged), not that it is
+        // zero.
+        let wakes_b_before_timer = wakes_b.load(Ordering::Relaxed);
         let fired_count = flui_interaction::global_timer_service().check_timers();
         assert!(
             fired_count >= 1,
             "the scheduled timer must still fire after realm A dropped"
         );
-        assert!(fired.load(Ordering::SeqCst));
+        assert!(
+            observed_owner_gone.load(Ordering::SeqCst),
+            "a callback capturing realm A's own sender, fired from this ambient \
+             service after realm A is gone, must reach the typed OwnerGone \
+             failure path -- never a crash, never realm B"
+        );
         assert_eq!(
             wakes_b.load(Ordering::Relaxed),
             wakes_b_before_timer,
@@ -2411,11 +2467,19 @@ mod tests {
             .expect("realm A mounts the keyed root");
         let _ = realm_a.draw_frame(coexistence_constraints());
 
+        // Realm B wraps the SAME keyed view one layer deeper (a `SizedBox`
+        // ancestor realm A's mount doesn't have) -- deliberately, so the two
+        // trees are NOT structurally identical. A bare identical-shape mount
+        // in both realms would legitimately allocate the same local slab
+        // index in each realm's independent `ElementTree`, which would make
+        // an `ElementId` equality/inequality assertion below pure
+        // coincidence either way, discriminating nothing. With the shapes
+        // different, a numeric match WOULD be suspicious.
         realm_b
             .attach_root_widget_with_size(
-                &GlobalKeyedRootView {
+                &SizedBox::new(10.0, 10.0).child(GlobalKeyedRootView {
                     key: shared_key.clone(),
-                },
+                }),
                 10.0,
                 10.0,
             )
@@ -2431,15 +2495,18 @@ mod tests {
 
         assert!(element_in_a.is_some(), "realm A resolves its own mount");
         assert!(element_in_b.is_some(), "realm B resolves its own mount");
+        assert_ne!(
+            element_in_a, element_in_b,
+            "each realm mounted its OWN distinct element under the same key value -- \
+             structurally guaranteed distinct here (B's tree has one extra ancestor \
+             element A's doesn't), not a coincidence of matching slab layouts"
+        );
 
-        // Numeric `ElementId` equality between the two is NOT evidence of
-        // sharing -- each realm's `ElementTree` is its own independent slab,
-        // so identical-shaped mounts (the same wrapper chain around the same
-        // keyed view) legitimately allocate the same slab index in both.
-        // The real isolation proof is behavioral: tear realm A down
-        // entirely and confirm realm B's registration is completely
-        // unaffected -- if the registries were secretly shared, dropping
-        // A's `ElementOwner` would clear or corrupt B's entry too.
+        // The distinctness above is a snapshot; the deeper isolation proof
+        // is behavioral: tear realm A down entirely and confirm realm B's
+        // registration is completely unaffected -- if the registries were
+        // secretly shared, dropping A's `ElementOwner` would clear or
+        // corrupt B's entry too.
         drop(realm_a);
         let element_in_b_after_a_dropped = realm_b.enter(|_| shared_key.current_element());
         assert_eq!(
