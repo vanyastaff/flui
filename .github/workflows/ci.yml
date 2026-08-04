@@ -281,9 +281,9 @@ jobs:
           --locked
           --no-fail-fast
 
-      # Re-enters flui-platform's suite (audit 2026-08-04 §2.1): the crate
-      # carries 70% of the workspace's unsafe code and previously had zero
-      # executing tests in CI. Ground truth on ubuntu-latest (verified
+      # Re-enters flui-platform's suite: the crate carries 70% of the
+      # workspace's unsafe code and previously had zero executing tests
+      # in CI. Ground truth on ubuntu-latest (verified
       # locally, 5x stable): `--all-features` is required just to compile
       # the winit backend; of the 171 tests that then run, 11 fail without
       # help (three integration-test files call `Platform::open_window`
@@ -799,10 +799,10 @@ jobs:
   # invisible to every other lint gate, and running only `cargo check` here
   # let ~80 deny-level lint violations accumulate unseen (found the day this
   # switched). It still does NOT link and runs NO tests. The `test` job's
-  # dedicated flui-platform step (added for audit 2026-08-04 §2.1) only runs
-  # the Linux-buildable backends (headless + winit-on-X11); the Windows and
-  # macOS backends this job lints are never linked or executed by anything,
-  # so this remains the only gate touching that source at all. Green here
+  # dedicated flui-platform step only runs the Linux-buildable backends
+  # (headless + winit-on-X11); the Windows and macOS backends this job
+  # lints are never linked or executed by anything, so this remains the
+  # only gate touching that source at all. Green here
   # means "compiles clean under the workspace lints", nothing more.
   # Triples are the shipped ones — MSVC (what `gpu-test` uses) and aarch64
   # macOS — with `--all-targets` so per-OS test targets compile too.

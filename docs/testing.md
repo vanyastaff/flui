@@ -21,8 +21,8 @@ bash scripts/check-runtime-conformance.sh                  # runtime-conformance
 bash scripts/port-check.sh                                 # port-check: architecture refusal triggers
 cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate — zero warnings
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast  # test-ci (flui-platform gets its own invocation below — see CI Expectations)
-FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (requires xvfb-run — apt install xvfb)
-cargo test --workspace --doc                               # test-doc: doc-tests (flui-platform included — its doctests need neither device above)
+FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (Linux only — apt install xvfb; skipped with a message on other hosts, see justfile)
+cargo test --workspace --locked --doc                      # test-doc: doc-tests (flui-platform included — its doctests need neither device above)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --document-private-items  # doc-strict
 ```
 

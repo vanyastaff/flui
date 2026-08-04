@@ -126,9 +126,9 @@ These are written into ROADMAP.md and are non-negotiable — violating them crea
 > re-proves compile-time health (`cargo check --workspace --all-targets`); the
 > Windows `STATUS_HEAP_CORRUPTION` failure tracked at H9 keeps flui-platform's
 > Windows and macOS backends untested (lint-only, via `cross-typecheck`);
-> flui-platform's Linux-runnable suite runs in CI's `test` job as of the
-> 2026-08-04 audit re-entry. Native mobile backends / platform service traits
-> remain future work.
+> flui-platform's Linux-runnable suite runs in CI's `test` job as of
+> 2026-08-04. Native mobile backends / platform service traits remain
+> future work.
 
 | # | Deliverable | Status | Owner | Exit |
 |---|---|---|---|---|

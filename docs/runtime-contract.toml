@@ -925,10 +925,10 @@ key = "control-flow-wait-pinned"
 statement = """
 `WinitApp::about_to_wait` sets `ControlFlow::Wait` explicitly every \
 iteration as a defensive pin against a future winit default change. \
-flui-platform's Linux-runnable suite runs in CI (audit 2026-08-04 §2.1 \
-re-entry), but no test in that suite drives a real winit event loop through \
-`about_to_wait` and asserts the resulting control flow — the pin is still \
-source-level only.\
+flui-platform's Linux-runnable suite runs in CI, but no test in that \
+suite drives a real winit event loop through `about_to_wait` and \
+asserts the resulting control flow — the pin is still source-level \
+only.\
 """
 state = "implemented"
 domain = "platform"
@@ -1038,8 +1038,7 @@ Windows backends assert on `open_window`/`quit`/`active_window` (+ displays \
 on macOS). Honest scope: those two backends' files don't compile on the \
 ubuntu-latest runners CI's `test` job uses, so this specific wiring is \
 verified by `cross-typecheck` only (clippy, no link, no run) — unlike \
-flui-platform's Linux-runnable suite as a whole, which runs in CI (audit \
-2026-08-04 §2.1 re-entry).\
+flui-platform's Linux-runnable suite as a whole, which runs in CI.\
 """
 state = "implemented"
 domain = "platform"
