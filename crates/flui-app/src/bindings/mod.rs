@@ -25,8 +25,8 @@
 //! FLUI does not compose a matching struct. The frame loop, render pipeline,
 //! and input dispatch live directly on `UiRealm` (`crate::app::ui_realm`,
 //! owner-affine, one per window) — there is no separate process-scoped
-//! service host; the retired `AppBinding`/`WidgetsFlutterBinding` type alias
-//! dissolved into `UiRealm` and the loop-scoped `AppRuntime`
+//! service host; the retired `AppBinding` and its combined-binding type
+//! alias dissolved into `UiRealm` and the loop-scoped `AppRuntime`
 //! (`crate::app::runtime`).
 
 mod renderer_binding;

@@ -192,7 +192,6 @@ file = "crates/flui-foundation/src/lib.rs"
 declarations = [
     "pub mod affinity;",
     "pub mod async_snapshot;",
-    "pub mod binding;",
     "pub mod callbacks;",
     "pub mod claim_slot;",
     "pub mod clock;",
@@ -210,7 +209,6 @@ declarations = [
     "pub mod debug;",
     "pub use affinity::OwnerAffinity;",
     "pub use async_snapshot::{AsyncSnapshot, ConnectionState};",
-    "pub use binding::{BindingBase, HasInstance, check_instance};",
     "pub use callbacks::{ FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer, VoidCallback, };",
     "pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};",
     "pub use clock::{ManualClock, MonotonicClock, SystemClock};",
@@ -306,7 +304,22 @@ not a second scheduler) before running the queued task, and \
 `installed_realm_phase` falls back to it whenever `realm` itself is empty; \
 both the ordinary return path and the `catch_unwind`-guarded restore on an \
 unwinding dispatched task clear the field, so it never survives past the \
-dispatch it was stashed for.\
+dispatch it was stashed for.
+
+Singleton retirement itself is now COMPLETE (issue #553's own scope): the \
+transitional `REALM_CLAIMED` at-most-one guard and `UiRealmError::AlreadyExists` \
+are deleted, `flui_foundation::{BindingBase, HasInstance, impl_binding_singleton!}` \
+no longer exist at all, and `two_realms_coexist_same_thread` / \
+`two_realms_two_threads_no_shared_state` / `dropping_realm_a_cannot_wake_realm_b` / \
+`cross_realm_duplicate_global_key_mounts_succeed_in_both` prove two \
+directly-constructed `UiRealm`s share no widget/focus/gesture-arena/scheduler \
+state, on one thread or two. This state stays "partial", not "implemented", \
+because the earlier single-slot/single-TLS-instance caveat in this \
+statement is still true and is a SEPARATE claim from singleton retirement: \
+the coexistence tests construct realms directly, never through an \
+`AppRuntime` hosting two of them at once (that needs the element forest, \
+tracked under #555) -- marking this contract fully "implemented" would \
+overclaim exactly the gap issue #555 exists to close.\
 """
 state = "partial"
 domain = "application"
@@ -318,6 +331,10 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn app_runtime_owns_registry_and_realm_slot" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "dispatched_scheduler: Option<Scheduler>" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_accessor_fences_the_installed_realms_frame_transaction_through_dispatch" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn two_realms_coexist_same_thread" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn two_realms_two_threads_no_shared_state" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropping_realm_a_cannot_wake_realm_b" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_realm_duplicate_global_key_mounts_succeed_in_both" },
 ]
 
 [[contract]]
@@ -333,24 +350,6 @@ state = "planned"
 domain = "realm"
 owner_issue = 556
 mechanical = false
-
-[[contract]]
-key = "transitional-realm-guard-at-most-one"
-statement = """
-Until singleton retirement, constructing a second `UiRealm` fails with a \
-typed error — a per-realm API over process-global internals would be a lying \
-API. `REALM_CLAIMED` and `UiRealmError::AlreadyExists` retire with the \
-singletons under the owning issue.\
-"""
-state = "implemented"
-domain = "realm"
-owner_issue = 553
-mechanical = true
-mechanism = "process_global_guard entry below pins the guard; its deletion fails this gate until the registry is updated"
-evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "static REALM_CLAIMED" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn at_most_one_runtime_second_construction_fails_typed" },
-]
 
 [[contract]]
 key = "idle-only-commit-points"
@@ -1480,9 +1479,9 @@ kind = "type"
 declared_in = "crates/flui-scheduler/src/scheduler.rs"
 contains = "pub struct Scheduler"
 classification = "transitional"
-thread_affinity = "thread-local HasInstance singleton; cross-thread wake via Send + Sync callbacks"
-owner = "process-global (per-thread) scheduling authority — splits into realm UpdateScheduler + presentation FrameClock"
-failure_semantics = "singleton accessor constructs lazily; phase machine asserts on misuse"
+thread_affinity = "realm-owned value (a `UiRealm` field, one fresh instance per realm, built by `RealmServices::construct()`); cross-thread wake and ticker cancellation via a `WeakScheduler` handle over its single internal `Arc`, never a `'static` singleton reach"
+owner = "per-realm scheduling authority — splits into realm UpdateScheduler + presentation FrameClock"
+failure_semantics = "construction is infallible; phase machine asserts on misuse; a `WeakScheduler` upgrade fails closed once its owning realm drops"
 consumers = ["AppRuntime", "UiRealm", "flui-animation tickers", "flui-view"]
 owner_issue = 556
 
@@ -1552,20 +1551,6 @@ failure_semantics = "typed LocalPostFrameScheduleError outside the owner scope"
 consumers = ["flui-view", "flui-widgets", "UiRealm"]
 owner_issue = 556
 notes = "ADR-0027 §2a's retirement condition for the weak-TLS post-frame ticket registry (`LOCAL_LANES`/`ACTIVE_LANES`, crates/flui-scheduler/src/post_frame.rs) has TWO clauses, not one: the Scheduler becomes realm-owned AND the handle can point directly at realm-local storage. This PR (#553 PR-5) lands clause 1 only -- `Scheduler` is now a `UiRealm`-owned field, not a process-global singleton. Clause 2 is NOT satisfied: `PostFrameHandle` stays `Clone + Send + Sync` (flipped internally to hold a `WeakScheduler` rather than a strong `Scheduler` clone, so it fails closed after its realm drops, but its shape is unchanged), so `schedule_local` still cannot hold the lane's `Rc<LocalLaneInner>` directly on that Send handle -- that is the entire reason `LOCAL_LANES`/`ACTIVE_LANES` exist as a thread-local resolution registry in the first place, and realm-owning the scheduler alone does not remove the need for it. The residual is named, not silently dropped: retiring clause 2 requires splitting `schedule_local` off the Send `PostFrameHandle` onto a new, owner-affine, `!Send` `LocalPostFrameHandle { lane: Weak<LocalLaneInner> }` type, with drain-by-parameter into the frame drive instead of a TLS lookup. That split ripples past this slice into the `BuildContext` capability surface (a new capability type alongside `rebuild_handle()`/`post_frame_handle()`), the trigger-#22 frame-capability-scope scanner's token list (a second token alongside `post_frame_handle`), and flui-material's `scaffold_messenger.rs` (today's only production `schedule_local` consumer, which would move onto the new type) -- each a cross-crate change too large to fold into the scheduler-ownership move itself. `LOCAL_LANES` and `ACTIVE_LANES` therefore both remain exactly as they were pre-PR-5; the scanner token `post_frame_handle` is unaffected either way."
-
-[[surface]]
-path = "flui_foundation::{HasInstance, BindingBase} (+ flui_scheduler re-export)"
-crate = "flui-foundation"
-kind = "trait"
-declared_in = "crates/flui-foundation/src/binding.rs"
-contains = "pub trait HasInstance: BindingBase"
-classification = "removal-target"
-thread_affinity = "thread-local singleton storage per implementor"
-owner = "the ambient singleton pattern itself — deleted from runtime paths under the owning issue"
-failure_semantics = "lazily constructs a per-thread instance; cannot fail, which is the problem"
-consumers = ["Scheduler"]
-owner_issue = 553
-notes = "PaintingBinding no longer implements HasInstance -- its singleton-macro invocation is deleted; the type is now a plain owned value (SharedEngineServices.painting on AppRuntime). RenderingFlutterBinding no longer implements HasInstance either -- its impl_binding_singleton! invocation and instance()/ensure_initialized() are deleted; construction stays explicit (new()/new_with_pipeline()). SemanticsBinding is gone entirely -- deleted, not slimmed. AppBinding is likewise gone entirely: it never implemented HasInstance itself (a hand-rolled thread_local! + Box::leak, not the macro), but its manual instance()/Box::leak TLS initializer is deleted along with the type; see the bindings re-export bundle surface entry for where both retired types' state re-homed."
 
 [[surface]]
 path = "flui_engine::wgpu::Renderer"
@@ -1757,12 +1742,29 @@ notes = "Overlay renders, but the renderer ignores the frame counter and the Per
 # invocation and the `pub use flui_foundation::{BindingBase, HasInstance};`
 # re-export are both deleted), so the singleton-macro scan above and this
 # ratchet both stay honest about zero remaining ambient singletons.
+#
+# `ambient-static`'s grammar stays a curated marker list
+# (`AMBIENT_STATIC_MARKERS` in the checker), not a generic "any
+# `OnceLock`/`LazyLock`-backed zero-arg accessor" detector, by deliberate
+# choice, recorded here rather than left implicit: this crate's own
+# `Notifier`/`ListenerRegistry`/config-default machinery and other
+# workspace crates use `OnceLock`/`LazyLock` for ordinary lazy-initialized
+# constants and caches that are never reached AMBIENTLY (they're fields,
+# not zero-arg free functions callable from anywhere) — a signature-blind
+# scan for the primitive alone would flag those as false positives faster
+# than it would catch a new ambient accessor, and the three residuals this
+# migration actually needs tracked (`global_timer_service`,
+# `AssetRegistry::global`, `shared_font_system`) are already fully
+# enumerated by name. A generic detector is worth building once a FOURTH
+# ambient accessor shape appears that the curated list doesn't already
+# name; until then the curated list is the honest, low-false-positive
+# choice, not an oversight.
 
 [[ambient_reach]]
 file = "crates/flui-interaction/src/timer.rs"
 grammar = "ambient-static"
 owner_issue = 553
-note = "global_timer_service(): named residual, unresolved by this migration -- a pending-gesture-timer drop-isolation probe bounds its cross-realm blast radius, but the service itself stays process-global"
+note = "global_timer_service(): named residual, unresolved by this migration -- the pending-gesture-timer drop-isolation probe inside `dropping_realm_a_cannot_wake_realm_b` (crates/flui-app/src/app/ui_realm.rs) bounds its cross-realm blast radius (a callback scheduled through it after one realm drops can only ever touch whatever the closure explicitly captured, never the other live realm's wake/gesture state), but the service itself stays process-global"
 
 [[ambient_reach]]
 file = "crates/flui-assets/src/registry/mod.rs"
@@ -1822,12 +1824,12 @@ markers = [
 # Existence-pinned: deleting a guard without updating the registry fails the
 # gate, so retirement (the owning issue's deliverable) must update this file
 # in the same change — which is exactly when the entry should disappear.
-
-[[process_global_guard]]
-symbol = "REALM_CLAIMED"
-file = "crates/flui-app/src/app/ui_realm.rs"
-contains = "static REALM_CLAIMED"
-owner_issue = 553
+#
+# Empty: `REALM_CLAIMED` / `UiRealmError::AlreadyExists` (the last entry
+# here) retired under #553 — no process-global graph is left to guard
+# against aliasing, so no per-realm construction guard exists any more. Its
+# retirement is enforced going forward by the `REALM_CLAIMED` forbidden_pattern
+# below, not by an entry in this table.
 
 # =============================================================================
 # Forbidden patterns and paths
@@ -2007,6 +2009,54 @@ allow_files = [
     "crates/flui-app/src/app/runtime.rs",
     "crates/flui-app/src/app/presentation.rs",
 ]
+
+[[forbidden_pattern]]
+pattern = "impl_binding_singleton"
+why = "the ambient-singleton contract: the macro that backed every process-wide binding singleton is deleted from flui-foundation entirely, together with the HasInstance/BindingBase trait pair it implemented -- regression is made uncompilable, not merely undesirable"
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "HasInstance"
+why = "companion to the impl_binding_singleton entry above: the marker trait itself is deleted from flui-foundation, and its flui-scheduler re-export died with the scheduler's own singleton retirement"
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "REALM_CLAIMED"
+why = "the realm-coexistence contract: the transitional at-most-one-instance guard (and UiRealmError::AlreadyExists, its typed error) is deleted -- any number of UiRealms may now be constructed and driven concurrently, on one thread or several"
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "WidgetsFlutterBinding"
+why = """
+the ambient-singleton contract: FLUI's combined-binding type alias (the \
+retired `AppBinding`'s Flutter-mixin-shaped counterpart) is deleted and \
+stays deleted -- the frame loop, render pipeline, and input dispatch live \
+directly on `UiRealm`, not a process-scoped service host. The two \
+allowlisted files cite Flutter's OWN Dart `WidgetsFlutterBinding`/\
+`TestWidgetsFlutterBinding` classes verbatim, in fenced ```dart blocks or \
+parenthetical Flutter-parity asides, for architectural-contrast \
+documentation -- that is citing an external API for comparison, not \
+reintroducing FLUI's deleted type.\
+"""
+allow_files = [
+    "crates/flui-app/src/bindings/mod.rs",
+    "crates/flui-testing/src/lib.rs",
+]
+
+[[forbidden_pattern]]
+pattern = "SEMANTICS_TEST_LOCK"
+why = "the ambient-singleton contract: retired alongside SemanticsBinding/RenderingFlutterBinding's shared-singleton state -- each test now constructs its own independent binding instance, so there is nothing left for a lock to serialize"
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "SINGLETON_WINDOW_TEST_LOCK"
+why = "the ambient-singleton contract: retired alongside AppBinding::instance()'s active-window state -- never registered in this file's process_global_guard table to begin with, since AppBinding's dissolution deleted the state it guarded in the same change"
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "SCHEDULER_PHASE_TEST_LOCK"
+why = "the ambient-singleton contract: retired alongside the process-global half of the Scheduler singleton -- every UiRealm now owns its own fresh Scheduler value, so there is no shared phase state left to guard"
+allow_files = []
 
 [[forbidden_path]]
 path = "crates/flui-presentation"

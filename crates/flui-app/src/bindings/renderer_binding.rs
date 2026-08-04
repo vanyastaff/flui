@@ -28,9 +28,10 @@
 //!
 //! # Usage
 //!
-//! For most applications, use `WidgetsFlutterBinding` instead, which
-//! includes this binding plus widgets support. Use `RenderingFlutterBinding`
-//! directly only when working with the rendering layer without widgets.
+//! For most applications, use `UiRealm` instead (`crate::app::ui_realm`),
+//! which owns this binding plus widgets support per window. Use
+//! `RenderingFlutterBinding` directly only when working with the rendering
+//! layer without widgets.
 
 use std::{
     collections::HashMap,
@@ -93,7 +94,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &RwLock<PipelineOwner>) {
 /// Concrete binding for applications using the Rendering framework directly.
 ///
 /// This is the glue that binds the framework to the FLUI engine.
-/// For widget-based applications, use `WidgetsFlutterBinding` instead.
+/// For widget-based applications, use `UiRealm` instead.
 ///
 /// # Responsibilities
 ///
@@ -685,8 +686,8 @@ mod tests {
     // `RenderingFlutterBinding` is no longer singleton-backed — each test
     // below constructs its own, independent instance instead of sharing a
     // process-wide one, so there is nothing left for a test lock to
-    // serialize (the retired `SEMANTICS_TEST_LOCK` guarded exactly this
-    // shared-singleton hazard; see AGENTS.md's "Testing quirks").
+    // serialize (the retired semantics-binding test lock guarded exactly
+    // this shared-singleton hazard; see AGENTS.md's "Testing quirks").
 
     /// Red before the fix: `RenderingFlutterBinding::new()` used to pass a
     /// bare `&Scheduler::new()` temporary into `new_with_pipeline`, which
