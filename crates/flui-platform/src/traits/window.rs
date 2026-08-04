@@ -376,7 +376,7 @@ pub trait PlatformWindow: Send + Sync {
     /// No default body: a panicking default here would only be discovered
     /// the first time some caller downcasts a backend that forgot to
     /// override it — every implementor must supply its own (invariably
-    /// `{ self }`), the same shape [`PlatformHaptics::as_any`](super::PlatformHaptics::as_any)
+    /// `{ self }`), the same shape [`super::PlatformHaptics::as_any`]
     /// already requires.
     fn as_any(&self) -> &dyn Any;
 }
