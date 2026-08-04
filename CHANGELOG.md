@@ -14,7 +14,7 @@ file records the repo-consumer-visible summary.
 ### Added
 
 - **Runtime.1 conformance registry and public-API freeze gate** (#576):
-  `docs/runtime-conformance.toml` is the machine-readable inventory of every
+  `docs/runtime-contract.toml` is the machine-readable inventory of every
   normative ADR-0027/0037/0029/0039 clause (state verified against current
   code, evidence or an owning issue) and of every public runtime/platform/
   scheduler/raster surface, with a stability classification (stable-candidate

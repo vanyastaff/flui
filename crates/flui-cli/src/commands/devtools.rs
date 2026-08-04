@@ -4,7 +4,7 @@
 //! one, regardless of the `devtools` feature. Both paths below say so
 //! honestly and name what `flui-devtools` actually offers as a library
 //! today: `InspectorCounters` (mount/rebuild/unmount tallies over the
-//! ADR-0040 observation seam) plus opt-in `profiler`/`timeline`/`hot_reload`
+//! framework's observation seam) plus opt-in `profiler`/`timeline`/`hot_reload`
 //! modules an embedder wires up manually. See `crates/flui-devtools/FEATURES.md`.
 
 #[cfg(feature = "devtools")]
@@ -46,7 +46,7 @@ fn report_not_implemented(port: u16) -> CliResult<()> {
         "`flui-devtools` exists as a library with feature-gated subsystems \
          the CLI does not wire up:",
         "- inspector: InspectorCounters — mount/rebuild/unmount tallies \
-         over the ADR-0040 observation seam",
+         over the framework observation seam",
         "- profiling: Profiler — frame/phase timing, jank detection",
         "- timeline: Timeline — Chrome-trace event export",
         "- hot-reload: HotReloader — file-watch callbacks",
@@ -77,10 +77,11 @@ fn show_unavailable_message(_port: u16) -> CliResult<()> {
     let instructions = format!(
         "{}\n\n  {}\n\n{}",
         "To use `flui-devtools`' library subsystems (inspector counters, \
-         profiler, timeline, hot-reload), rebuild flui-cli with the \
-         devtools feature — note this does not add a DevTools server:",
-        style("cargo install flui-cli --features devtools").cyan(),
-        style("DevTools requires the flui-devtools crate.").dim(),
+         profiler, timeline, hot-reload), add the crate to your app and \
+         wire the subsystems you need — the CLI's `devtools` feature only \
+         links the library and adds no server or wiring:",
+        style("cargo add flui-devtools --features profiling,timeline").cyan(),
+        style("See crates/flui-devtools/FEATURES.md for the real API.").dim(),
     );
 
     cliclack::note("Setup Instructions", instructions)?;

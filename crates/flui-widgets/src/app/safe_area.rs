@@ -33,11 +33,10 @@ use crate::layout::Padding;
 ///
 /// # Panics
 ///
-/// Panics in `build` if there is no [`MediaQuery`] ancestor. Place a
-/// `MediaQuery` near the root — construct it directly with
-/// `flui_widgets::MediaQueryData` (there is no `AppBinding` that installs
-/// one automatically; that type was retired in the singleton-binding
-/// removal).
+/// Panics in `build` if there is no [`MediaQuery`] ancestor. Wrap the
+/// subtree in a [`MediaQuery`] near the root —
+/// `MediaQuery::new(MediaQueryData { .. }, child)` — since nothing installs
+/// one automatically.
 // Four independent per-edge toggle bools mirror Flutter's `SafeArea` API
 // (left/top/right/bottom as separate constructor params). There is no semantic
 // grouping that warrants a state machine or enum — each edge is truly
