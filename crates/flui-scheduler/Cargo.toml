@@ -11,7 +11,7 @@ keywords = ["scheduler", "vsync", "animation", "frame", "ticker"]
 categories = ["gui", "game-development", "rendering"]
 
 [dependencies]
-# Flui foundation (for BindingBase)
+# Flui foundation (for the generic Id<T: Marker> system: FrameId, TaskId, TickerId)
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 # Cross-platform time (web-time is the maintained replacement for instant)

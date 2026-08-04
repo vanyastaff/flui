@@ -145,7 +145,13 @@ Concrete implementations:
 └── WidgetsFlutterBinding = RenderingFlutterBinding + WidgetsBinding
 ```
 
-**FLUI:** See `flui_app/src/bindings/` for implementation.
+**FLUI:** FLUI never ported this hierarchy as a mixin/singleton stack. The
+concrete bindings under `flui_app/src/bindings/` (`RenderingFlutterBinding`)
+are plain, explicitly-constructed values owned by `UiRealm`/`AppRuntime` —
+each realm gets its own — not `BindingBase`-rooted process-wide singletons.
+`flui-foundation`'s own `BindingBase`/`HasInstance`/`impl_binding_singleton!`
+scaffolding that used to back that pattern was deleted once the last
+consumer (`flui-scheduler`'s `Scheduler`) moved to realm ownership.
 
 ---
 
@@ -621,7 +627,6 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 | `ChangeNotifier` | Low | Use signals instead |
 | `Diagnosticable` | Medium | Use `Debug` + custom traits |
 | `FlutterError` | High | Use `thiserror` |
-| `BindingBase` | High | Already in `flui_app` |
 | `ObserverList` | Low | Use `Vec` or `IndexSet` |
 | `WriteBuffer/ReadBuffer` | Medium | Use `bytes` crate |
 
@@ -635,6 +640,7 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 | `SynchronousFuture` | Rust async works differently |
 | `PersistentHashMap` | Use `im` crate if needed |
 | `LicenseEntry` | Implement when needed |
+| `BindingBase` (mixin-singleton hierarchy) | FLUI briefly had an equivalent (`BindingBase`/`HasInstance`/`impl_binding_singleton!`, this crate's now-deleted `binding.rs`), but the whole singleton-binding pattern was retired: every binding-shaped value (`RenderingFlutterBinding`, the painting/semantics state) is now explicitly constructed and owned per `UiRealm`/`AppRuntime` instead of process-global |
 
 ---
 
@@ -659,7 +665,6 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 
 | Site | Primitive | Where | Why |
 |------|-----------|-------|-----|
-| `BindingBase::INITIALIZED` flag | `&'static AtomicBool` | `binding.rs:135, 180-182` | One-shot initialisation guard for a binding singleton. Set-once, then read-only. Off any hot path. |
 | `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
 | `Notifier::listeners` | `Arc<parking_lot::Mutex<HashMap<ListenerId, ListenerCallback>>>` | `notifier.rs:116, 140` | Listener registry held during register/unregister/notify. Notifier callbacks are invoked outside the lock (clone-then-iterate pattern from [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 3). Not on the render hot path; consumed by the build phase. |
 | `Notifier::next_id` | `Arc<AtomicUsize>` | `notifier.rs:117, 141` | Listener-ID allocator. `fetch_add` only. |
