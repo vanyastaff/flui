@@ -59,8 +59,8 @@ file records the repo-consumer-visible summary.
   feature is off is absent from the graph, not an empty stub. `flui-hot-reload`
   leaves the production graph — optional in `flui-app` behind `hot-reload`,
   asserted absent from `flui-app`'s default `cargo tree` rather than assumed.
-  `flui-binding` is renamed to `flui-testing` (directory moved with history;
-  `HeadlessBinding` keeps its name). `flui-app::theme` (`AppTheme`/
+  The workspace's test-support crate is renamed to `flui-testing` (directory
+  moved with history; `HeadlessBinding` keeps its name). `flui-app::theme` (`AppTheme`/
   `AppColorScheme`) is deleted outright per ADR-0042 — theming belongs to the
   design system (`ThemeMode` on `flui-material`'s `MaterialApp`), not the app
   framework. `just facade-combos` compiles each supported facade combination
