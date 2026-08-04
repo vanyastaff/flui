@@ -61,8 +61,15 @@ pub(super) struct WindowContext {
     pub handlers: Arc<Mutex<PlatformHandlers>>, // PORT-CHECK-OK-SP6: WindowsPlatform handlers Arc<Mutex<>>; mirrors PlatformHandlers callback storage; pre-existing SP-6
     /// Per-window callbacks for event delivery
     pub callbacks: Arc<WindowCallbacks>,
-    /// Scale factor for coordinate conversion
-    pub scale_factor: f32,
+    /// Scale factor for coordinate conversion.
+    ///
+    /// `Cell`, not a plain `f32`: `window_proc` only ever holds a shared
+    /// `&WindowContext` (see its `# Safety` section), and `WM_DPICHANGED` is
+    /// the one message that updates this field — `Cell::set` lets it do so
+    /// through that shared reference instead of forging a second, aliasing
+    /// `&mut WindowContext` from the raw `GWLP_USERDATA` pointer while the
+    /// shared one is still live.
+    pub scale_factor: std::cell::Cell<f32>,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<WindowMode>,
     /// Last known size (before minimization) for restore detection
@@ -195,6 +202,12 @@ impl WindowsPlatform {
     /// let platform = WindowsPlatform::with_config(config)?;
     /// ```
     pub fn with_config(config: WindowConfiguration) -> Result<Self> {
+        // SAFETY: `CoInitializeEx` takes no pointer arguments (`None` for
+        // the reserved parameter) and its `HRESULT` is checked before
+        // anything downstream assumes COM is initialized on this thread —
+        // this call establishes the calling thread as an STA, which is also
+        // the thread this platform's `affinity` binds to a few lines below.
+        //
         // Initialize COM for drag-and-drop, clipboard, etc.
         unsafe {
             use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
@@ -204,17 +217,33 @@ impl WindowsPlatform {
             }
         }
 
+        // SAFETY: `SetProcessDpiAwarenessContext` takes a constant by value,
+        // no pointer arguments; failure (already set, or an OS predating
+        // per-monitor-v2 awareness) is expected and non-fatal, hence the
+        // discarded result.
+        //
         // Set DPI awareness to per-monitor v2 (best quality)
         // Ignore errors - this can fail if already set or on older Windows
         unsafe {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
 
+        // SAFETY: `register_window_class`'s own `# Safety` contract (below)
+        // is discharged by `REGISTER_WINDOW_CLASS: Once` making the call
+        // race-free and idempotent regardless of caller thread.
+        //
         // Register window class
         unsafe {
             Self::register_window_class()?;
         }
 
+        // SAFETY: `GetModuleHandleW(None)` queries the current process
+        // image, no pointer arguments. `CreateWindowExW` here creates the
+        // message-only window with `HWND_MESSAGE` as parent and constant
+        // Win32 arguments (no caller-supplied buffers); its class was just
+        // registered above on this same thread, satisfying the ordering
+        // Win32 requires (register-before-create).
+        //
         // Create message-only window for platform messages
         let message_window = unsafe {
             let hinstance = GetModuleHandleW(None)
@@ -260,7 +289,26 @@ impl WindowsPlatform {
     }
 
     /// Register the window class for all FLUI windows (idempotent via `Once`).
+    ///
+    /// # Safety
+    ///
+    /// `Self::window_proc` is registered as the class's `WNDPROC` — its
+    /// `extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT` signature
+    /// must exactly match what Win32 calls through that slot, or every
+    /// dispatch to a window of this class is an ABI-mismatched call. The
+    /// caller must not register a different, incompatible callback under
+    /// the same `WINDOW_CLASS_NAME` afterward — `REGISTER_WINDOW_CLASS: Once`
+    /// enforces that this body runs at most once per process, so subsequent
+    /// calls are no-ops rather than a re-registration race.
     unsafe fn register_window_class() -> Result<()> {
+        // SAFETY: per the `# Safety` contract above, `Self::window_proc`'s
+        // signature matches `WNDPROC`. `GetModuleHandleW(None)` takes no
+        // pointer arguments. `wc.lpszClassName`/`wc.hCursor` reference
+        // process-lifetime statics (`WINDOW_CLASS_NAME`, the loaded cursor
+        // resource); `&raw const wc` gives `RegisterClassW` a valid pointer
+        // to the fully-initialized, stack-local `WNDCLASSW`. `call_once`
+        // guarantees this body executes at most once, so there is no
+        // concurrent registration to race.
         unsafe {
             let mut result: Result<()> = Ok(());
 
@@ -301,12 +349,43 @@ impl WindowsPlatform {
     }
 
     /// Main window procedure for all FLUI windows
+    ///
+    /// # Safety
+    ///
+    /// Called by Win32 as a `WNDPROC` for windows of `WINDOW_CLASS_NAME`,
+    /// registered as this exact function in `register_window_class`. Win32
+    /// guarantees `hwnd`/`msg`/`wparam`/`lparam` are well-formed for the
+    /// message being delivered, and always dispatches on the thread that
+    /// owns the window's message queue — the `GWLP_USERDATA` read below does
+    /// not race `WM_DESTROY`'s clear+free precisely because both run here,
+    /// serialized by that same-thread dispatch guarantee.
+    ///
+    /// Known gap (not fixed by this comment, not UB — flagged for the
+    /// audit): none of the callback dispatches below (`ctx.callbacks.*`,
+    /// `ctx.dispatch_event`) are wrapped in `catch_unwind`. A panic inside a
+    /// framework-supplied callback unwinds into this `extern "system"`
+    /// frame; stable Rust aborts the process rather than invoking UB when
+    /// that happens (FFI boundaries are implicitly `nounwind`), but that is
+    /// still whole-process termination from a single window's callback,
+    /// unlike the `winit` backend's `window_proc`-equivalent path, which
+    /// does guard its callback boundary with `catch_unwind`.
     unsafe extern "system" fn window_proc(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        // SAFETY: see the `# Safety` section above for the `GWLP_USERDATA`
+        // contract this read relies on. The rest of this single `unsafe`
+        // block covers every Win32 call in the `match` below: `GetWindowLongPtrW`/
+        // `SetWindowLongPtrW` take `hwnd` and plain integers, no pointers;
+        // `TrackMouseEvent` (`WM_MOUSEMOVE`) and `BeginPaint`/`EndPaint`
+        // (`WM_PAINT`, its own SAFETY note below) take `&raw` pointers to
+        // stack-local, correctly-sized structs; `DestroyWindow` calls are
+        // individually commented where they appear; `Box::from_raw(ctx_ptr)`
+        // (`WM_DESTROY`) has its own SAFETY note where it appears;
+        // `DefWindowProcW` forwards unhandled messages verbatim with no
+        // pointer arguments of its own.
         unsafe {
             // Get window context from GWLP_USERDATA
             let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowContext;
@@ -334,11 +413,17 @@ impl WindowsPlatform {
                             ctx.dispatch_event(WindowEvent::CloseRequested {
                                 window_id: ctx.window_id,
                             });
-                            DestroyWindow(hwnd).ok();
+                            if let Err(error) = DestroyWindow(hwnd) {
+                                tracing::warn!(?hwnd, ?error, "DestroyWindow failed on WM_CLOSE");
+                            }
                         }
                         // If !should_close, the close is vetoed
-                    } else {
-                        DestroyWindow(hwnd).ok();
+                    } else if let Err(error) = DestroyWindow(hwnd) {
+                        tracing::warn!(
+                            ?hwnd,
+                            ?error,
+                            "DestroyWindow failed on WM_CLOSE (no WindowContext)"
+                        );
                     }
 
                     LRESULT(0)
@@ -356,6 +441,20 @@ impl WindowsPlatform {
 
                         // Clean up context - IMPORTANT: Clear pointer BEFORE dropping to avoid
                         // dangling pointer
+                        //
+                        // SAFETY: `ctx_ptr` is the same pointer `WindowsWindow::new`
+                        // produced via `Box::into_raw` and stored in this HWND's
+                        // `GWLP_USERDATA` — `ctx` (the shared reference used just
+                        // above) is derived from that same allocation, and its
+                        // last use is the `dispatch_event` call above, so no
+                        // reference into the box outlives this reclaim. The slot
+                        // is zeroed with `SetWindowLongPtrW` *before* `Box::from_raw`
+                        // runs, so if `dispatch_close`/`dispatch_event` above had
+                        // re-entrantly queried `GWLP_USERDATA` (they don't), they
+                        // would see null rather than a pointer about to be freed.
+                        // `window_proc` never runs concurrently with itself for
+                        // the same `hwnd` (Win32 serializes message dispatch per
+                        // queue), so this is the only path that can free `ctx_ptr`.
                         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                         drop(Box::from_raw(ctx_ptr));
                     }
@@ -371,6 +470,13 @@ impl WindowsPlatform {
                 }
 
                 WM_PAINT => {
+                    // SAFETY: `ps` is a stack-local `PAINTSTRUCT`; `&raw mut
+                    // ps` gives `BeginPaint` a valid, correctly-sized
+                    // out-parameter, and `&raw const ps` below hands the
+                    // same (by now filled-in) struct back to the matching
+                    // `EndPaint` — every `WM_PAINT` arm here calls
+                    // `BeginPaint`/`EndPaint` exactly once, satisfying
+                    // Win32's required pairing.
                     let mut ps = PAINTSTRUCT::default();
                     let hdc = BeginPaint(hwnd, &raw mut ps);
                     if !hdc.is_invalid() {
@@ -519,15 +625,15 @@ impl WindowsPlatform {
                             let logical_size = Size::new(
                                 flui_types::geometry::px(super::util::device_to_logical(
                                     width,
-                                    ctx.scale_factor,
+                                    ctx.scale_factor.get(),
                                 )),
                                 flui_types::geometry::px(super::util::device_to_logical(
                                     height,
-                                    ctx.scale_factor,
+                                    ctx.scale_factor.get(),
                                 )),
                             );
                             ctx.callbacks
-                                .dispatch_resize(logical_size, ctx.scale_factor);
+                                .dispatch_resize(logical_size, ctx.scale_factor.get());
                         }
 
                         // Dispatch event to global handlers if any
@@ -570,8 +676,8 @@ impl WindowsPlatform {
                         // Dispatch Moved event to global handlers
                         use flui_types::geometry::{Point, px};
                         let position = Point::new(
-                            px(x as f32 / ctx.scale_factor),
-                            px(y as f32 / ctx.scale_factor),
+                            px(x as f32 / ctx.scale_factor.get()),
+                            px(y as f32 / ctx.scale_factor.get()),
                         );
                         ctx.dispatch_event(WindowEvent::Moved {
                             window_id: ctx.window_id,
@@ -595,15 +701,25 @@ impl WindowsPlatform {
                             scale_factor: new_scale as f64,
                         });
 
-                        // Update context scale factor
-                        let ctx_mut = &mut *(ctx_ptr);
-                        ctx_mut.scale_factor = new_scale;
+                        // Update context scale factor through the shared
+                        // reference already held above — see the field doc
+                        // on `WindowContext::scale_factor` for why this must
+                        // not go through a second `&mut` reborrow of
+                        // `ctx_ptr`.
+                        ctx.scale_factor.set(new_scale);
 
                         // Suggested rect for new DPI
+                        //
+                        // SAFETY: `lparam` carries a pointer to a `RECT`
+                        // supplied by Win32 for `WM_DPICHANGED` specifically
+                        // (documented behavior of this message); the
+                        // null-check guards a caller that violates that
+                        // documented contract, and `rect` is copied out
+                        // (`RECT: Copy`) rather than referenced further.
                         let suggested_rect = lparam.0 as *const RECT;
                         if !suggested_rect.is_null() {
                             let rect = *suggested_rect;
-                            SetWindowPos(
+                            if let Err(error) = SetWindowPos(
                                 hwnd,
                                 None,
                                 rect.left,
@@ -611,8 +727,13 @@ impl WindowsPlatform {
                                 rect.right - rect.left,
                                 rect.bottom - rect.top,
                                 SWP_NOZORDER | SWP_NOACTIVATE,
-                            )
-                            .ok();
+                            ) {
+                                tracing::warn!(
+                                    ?hwnd,
+                                    ?error,
+                                    "SetWindowPos (DPI-change suggested rect) failed"
+                                );
+                            }
                         }
                     }
 
@@ -637,7 +758,7 @@ impl WindowsPlatform {
                         ctx.callbacks.dispatch_hover_status_change(true);
 
                         use super::events::mouse_move_event;
-                        let event = mouse_move_event(lparam, ctx.scale_factor);
+                        let event = mouse_move_event(lparam, ctx.scale_factor.get());
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
@@ -670,7 +791,7 @@ impl WindowsPlatform {
                             PointerButton::Primary,
                             true,
                             lparam,
-                            ctx.scale_factor,
+                            ctx.scale_factor.get(),
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -686,7 +807,7 @@ impl WindowsPlatform {
                             PointerButton::Secondary,
                             true,
                             lparam,
-                            ctx.scale_factor,
+                            ctx.scale_factor.get(),
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -702,7 +823,7 @@ impl WindowsPlatform {
                             PointerButton::Auxiliary,
                             true,
                             lparam,
-                            ctx.scale_factor,
+                            ctx.scale_factor.get(),
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -718,7 +839,7 @@ impl WindowsPlatform {
                             PointerButton::Primary,
                             false,
                             lparam,
-                            ctx.scale_factor,
+                            ctx.scale_factor.get(),
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -734,7 +855,7 @@ impl WindowsPlatform {
                             PointerButton::Secondary,
                             false,
                             lparam,
-                            ctx.scale_factor,
+                            ctx.scale_factor.get(),
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -750,7 +871,7 @@ impl WindowsPlatform {
                             PointerButton::Auxiliary,
                             false,
                             lparam,
-                            ctx.scale_factor,
+                            ctx.scale_factor.get(),
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -760,7 +881,7 @@ impl WindowsPlatform {
                 WM_MOUSEWHEEL => {
                     if let Some(ctx) = ctx {
                         use super::events::mouse_wheel_event;
-                        let event = mouse_wheel_event(wparam, lparam, ctx.scale_factor);
+                        let event = mouse_wheel_event(wparam, lparam, ctx.scale_factor.get());
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
@@ -888,6 +1009,12 @@ impl WindowsPlatform {
     fn run_message_loop() {
         tracing::info!("Starting Windows message loop");
 
+        // SAFETY: `msg` is a stack-local `MSG`; `&raw mut msg`/`&raw const
+        // msg` give `GetMessageW`/`TranslateMessage`/`DispatchMessageW`
+        // valid, correctly-sized pointers to it, and `GetMessageW` only
+        // returns `TRUE` after filling `msg` in, so it is never read
+        // uninitialized. `DispatchMessageW` is what invokes `window_proc`
+        // (registered per-class in `register_window_class`) on this thread.
         unsafe {
             let mut msg = MSG::default();
 
@@ -938,6 +1065,11 @@ impl Platform for WindowsPlatform {
         // the owner thread it silently quits nothing (ADR-0039).
         self.affinity.debug_assert_owner("WindowsPlatform::quit");
         tracing::info!("Quitting Windows platform");
+        // SAFETY: `PostQuitMessage` takes a plain `i32` exit code, no
+        // pointer arguments; the `debug_assert_owner` above documents (in
+        // debug builds) that this runs on the thread whose queue it posts
+        // to — posting from elsewhere is a logic bug (silently posts to the
+        // wrong queue), not memory-unsafety.
         unsafe {
             PostQuitMessage(0);
         }
@@ -948,6 +1080,8 @@ impl Platform for WindowsPlatform {
     fn active_window(&self) -> Option<WindowId> {
         self.affinity
             .debug_assert_owner("WindowsPlatform::active_window");
+        // SAFETY: `GetForegroundWindow` takes no arguments; `hwnd` is just
+        // an opaque value compared/wrapped, never dereferenced.
         unsafe {
             let hwnd = GetForegroundWindow();
             if hwnd.is_invalid() {
@@ -1029,6 +1163,8 @@ impl Platform for WindowsPlatform {
     // ==================== App Activation (US3 T038) ====================
 
     fn activate(&self, _ignoring_other_apps: bool) {
+        // SAFETY: `GetForegroundWindow`/`SetForegroundWindow` take no
+        // pointer arguments — `hwnd` is an opaque value, never dereferenced.
         unsafe {
             // Bring the foreground window to front
             let hwnd = GetForegroundWindow();
@@ -1045,6 +1181,17 @@ impl Platform for WindowsPlatform {
         use windows::Win32::System::Registry::{
             HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
         };
+        // SAFETY: `subkey`/`value_name` are `Vec<u16>` explicitly
+        // NUL-terminated (`"...\0".encode_utf16()`), matching what
+        // `PCWSTR` requires, and kept alive across the calls that borrow
+        // their pointers. `hkey` is a stack-local `HKEY` written through
+        // `&raw mut hkey`; `RegQueryValueExW` only reads through
+        // `&raw mut data` after `status.is_err()` returned early on
+        // failure to open the key, and `data_size` is seeded to
+        // `size_of::<u32>()` so the registry API cannot write past `data`.
+        // `RegCloseKey` runs unconditionally once `hkey` was successfully
+        // opened, on every return path below (both the early `is_err()`
+        // return and the final value).
         unsafe {
             let mut hkey = HKEY::default();
             let subkey: Vec<u16> =
@@ -1093,6 +1240,10 @@ impl Platform for WindowsPlatform {
     fn open_url(&self, url: &str) {
         use windows::Win32::UI::Shell::ShellExecuteW;
         let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: `wide_url` is explicitly NUL-terminated
+        // (`.chain(std::iter::once(0))`), matching what `PCWSTR` requires,
+        // and stays alive for the duration of this call (it is not dropped
+        // or reallocated between `.as_ptr()` and the call).
         unsafe {
             ShellExecuteW(
                 None,
@@ -1112,6 +1263,8 @@ impl Platform for WindowsPlatform {
         let arg = format!("/select,{path_str}");
         let wide_arg: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
         let explorer: Vec<u16> = "explorer\0".encode_utf16().collect();
+        // SAFETY: see `open_url` above — both `wide_arg` and `explorer` are
+        // explicitly NUL-terminated and kept alive across the call.
         unsafe {
             ShellExecuteW(
                 None,
@@ -1131,6 +1284,8 @@ impl Platform for WindowsPlatform {
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
+        // SAFETY: see `open_url` above — `wide_path` is explicitly
+        // NUL-terminated and kept alive across the call.
         unsafe {
             ShellExecuteW(
                 None,
@@ -1153,6 +1308,18 @@ impl Platform for WindowsPlatform {
         executor.spawn(async move {
             // COM file dialogs must run on an STA thread
             let result = std::thread::spawn(move || -> Result<Option<Vec<std::path::PathBuf>>> {
+                // SAFETY: this whole body runs on the freshly `std::thread::spawn`ed
+                // thread, which owns no other window state — `CoInitializeEx`
+                // makes it an STA for the `IFileOpenDialog` COM object, as
+                // that interface requires. Every `windows-rs` COM call
+                // (`CoCreateInstance`, `dialog.Show`/`SetOptions`, `results.*`,
+                // `item.GetDisplayName`) is a checked, typed FFI wrapper with
+                // no raw pointer of ours to validate. `CoTaskMemFree` below
+                // frees the `PWSTR` `name` owns from COM — it is only used
+                // (via `name.to_string()`, which copies the string out) before
+                // this free, and each loop iteration gets its own `name` from
+                // `GetDisplayName`, so there is no double-free or use-after-free
+                // across iterations.
                 unsafe {
                     use windows::Win32::{
                         System::Com::{
@@ -1219,6 +1386,14 @@ impl Platform for WindowsPlatform {
         let executor = self.background_executor.clone();
         executor.spawn(async move {
             let result = std::thread::spawn(move || -> Result<Option<std::path::PathBuf>> {
+                // SAFETY: see `prompt_for_paths` above — same
+                // dedicated-STA-thread, checked-COM-wrapper reasoning.
+                // `dir_wide` is explicitly NUL-terminated and outlives the
+                // `SHCreateItemFromParsingName` call that borrows its
+                // pointer; the single `CoTaskMemFree` below frees the one
+                // `name` this function's single `IFileSaveDialog::GetResult`
+                // path produces, after `name.to_string()` has already copied
+                // the string out.
                 unsafe {
                     use windows::Win32::{
                         System::Com::{
@@ -1289,6 +1464,10 @@ impl Platform for WindowsPlatform {
 
     fn keyboard_layout(&self) -> String {
         use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayoutNameW;
+        // SAFETY: `buffer` is a stack-local, zero-initialized `[u16; 9]`
+        // sized to `KL_NAMELENGTH`, the exact size this API requires;
+        // `&mut buffer` gives it a valid, correctly-sized out-parameter, and
+        // it is only read (`is_ok()` branch) after the call reports success.
         unsafe {
             let mut buffer = [0u16; 9]; // KL_NAMELENGTH = 9
             if GetKeyboardLayoutNameW(&mut buffer).is_ok() {
@@ -1304,6 +1483,10 @@ impl Platform for WindowsPlatform {
     // ==================== File System Integration ====================
 
     fn app_path(&self) -> Result<std::path::PathBuf> {
+        // SAFETY: `buffer` is a stack-local `[u16; MAX_PATH]`; `&mut buffer`
+        // gives `GetModuleFileNameW` a valid, correctly-sized out-parameter,
+        // and only the first `len` code units it reports writing are read
+        // below — a `len == 0` failure returns before any read.
         unsafe {
             let mut buffer = [0u16; 260]; // MAX_PATH, stack-allocated
             let len = GetModuleFileNameW(None, &mut buffer);
@@ -1322,12 +1505,29 @@ impl Drop for WindowsPlatform {
         tracing::debug!("Dropping WindowsPlatform");
 
         // Destroy message window
+        //
+        // SAFETY: `DestroyWindow` takes `self.message_window` by value; the
+        // `is_invalid()` guard skips the call for a handle that was never
+        // successfully created. This window carries no `GWLP_USERDATA`
+        // context (it is message-only and never routed through
+        // `WindowsWindow::new`), so there is no allocation to reclaim here.
         if !self.message_window.is_invalid() {
             unsafe {
-                DestroyWindow(self.message_window).ok();
+                if let Err(error) = DestroyWindow(self.message_window) {
+                    tracing::warn!(
+                        hwnd = ?self.message_window,
+                        ?error,
+                        "DestroyWindow failed for the message-only window"
+                    );
+                }
             }
         }
 
+        // SAFETY: `CoUninitialize` takes no arguments; it pairs with the
+        // `CoInitializeEx` call in `with_config` on the same thread — COM's
+        // own reference counting (not memory safety) governs whether this
+        // is the initializing call's matching uninitialize.
+        //
         // Uninitialize COM
         unsafe {
             use windows::Win32::System::Com::CoUninitialize;
@@ -1346,6 +1546,9 @@ fn current_modifiers() -> keyboard_types::Modifiers {
         GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
     };
 
+    // SAFETY: `GetKeyState` takes a plain `i32` virtual-key code and returns
+    // a plain `i16`/`u16` bit pattern — no pointer arguments, no invariant
+    // beyond the ordinary FFI call.
     unsafe {
         let mut mods = keyboard_types::Modifiers::empty();
         if (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0 {

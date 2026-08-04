@@ -231,7 +231,7 @@ impl WindowsWindow {
                 window_id,
                 handlers: handlers.clone(),
                 callbacks,
-                scale_factor,
+                scale_factor: std::cell::Cell::new(scale_factor),
                 mode: std::cell::Cell::new(WindowMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
