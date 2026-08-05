@@ -609,7 +609,7 @@ Logical update scheduling (realm `UpdateScheduler`), physical pacing \
 (presentation `FrameClock`), and raster backpressure are separate owners. \
 `Scheduler` was hard-renamed to `UpdateScheduler` and reshaped (#556): \
 its constructor no longer defaults to a fixed 60fps target (`FrameDuration::\
-FPS_60` is deleted), `drive_frame` takes an explicit `deadline: Instant` that \
+FPS_60` is deleted), `drive_frame` takes an explicit `deadline: IdleDeadline` that \
 bounds `Priority::Idle` task execution ONLY (`Priority::Animation`/`Build` \
 always run, regardless of the deadline), `budget()`'s `MutexGuard` accessor \
 is replaced by the owned-value `budget_snapshot()`, and the fixed-rate \
