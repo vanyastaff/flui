@@ -77,7 +77,7 @@ use crate::{
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
-    post_frame::{LocalPostFrameEntry, OwnerPostFrameCallback, drain_active_lane},
+    post_frame::{LocalPostFrameEntry, OwnerPostFrameCallback},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
 };
@@ -99,17 +99,6 @@ use crate::{
 /// itself every single pass, which is a task bug this cap turns into a
 /// diagnosable trace rather than an unbounded loop.
 const MAX_BUILD_REENTRY_PASSES: usize = 32;
-
-fn next_scheduler_identity() -> u64 {
-    static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
-    // Relaxed: pure ID allocation — uniqueness comes from the RMW's own
-    // atomicity; no data is published through this counter.
-    NEXT_IDENTITY
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-            next.checked_add(1)
-        })
-        .expect("BUG: UpdateScheduler identity space exhausted")
-}
 
 /// Cancellable transient callback with ID
 struct CancellableTransientCallback {
@@ -302,8 +291,6 @@ struct FrameState {
 
 /// Callback registration and cancellation state
 struct CallbackState {
-    /// Globally unique identity for owner-local lane tickets.
-    identity: u64,
     /// Linearizes shared/local post-frame registration with frame snapshots.
     post_frame_registration: Mutex<()>,
     /// Transient callbacks - animation tickers
@@ -545,7 +532,6 @@ impl UpdateScheduler {
                 completion_waiters: Mutex::new(Vec::new()),
             },
             callbacks: CallbackState {
-                identity: next_scheduler_identity(),
                 post_frame_registration: Mutex::new(()),
                 transient: Mutex::new(Vec::new()),
                 cancelled: DashMap::new(),
@@ -628,10 +614,6 @@ impl UpdateScheduler {
     #[must_use]
     pub fn is_same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
-    }
-
-    pub(crate) fn identity(&self) -> u64 {
-        self.inner.callbacks.identity
     }
 
     pub(crate) fn with_post_frame_registration<R>(
@@ -871,6 +853,12 @@ impl UpdateScheduler {
     ///
     /// Each callback runs **exactly once** — the queue is drained, not iterated.
     ///
+    /// This drains the **shared** post-frame queue only. A caller that also owns
+    /// a [`crate::LocalPostFrameLane`] must use
+    /// [`end_frame_with_lane`](Self::end_frame_with_lane) instead, or that lane's
+    /// callbacks never run — there is no ambient lookup that finds it for you
+    /// (see the `post_frame` module docs for why).
+    ///
     /// # Panics
     ///
     /// Debug-asserts an illegal phase transition unless the scheduler is in
@@ -879,6 +867,21 @@ impl UpdateScheduler {
     /// [`abort_frame`](Self::abort_frame).
     #[tracing::instrument(skip(self))]
     pub fn end_frame(&self) {
+        self.end_frame_impl(Vec::new());
+    }
+
+    /// [`end_frame`](Self::end_frame), additionally draining `lane`'s owner-local
+    /// queue into the **same** total order as the shared queue — one
+    /// `CallbackId` sequence, interleaving well-defined: both queues are
+    /// combined into one snapshot and sorted by registration order before any
+    /// callback runs, so it does not matter which queue a given callback landed
+    /// in, only when it was registered.
+    #[tracing::instrument(skip(self, lane))]
+    pub fn end_frame_with_lane(&self, lane: &crate::LocalPostFrameLane) {
+        self.end_frame_impl(lane.take_queue());
+    }
+
+    fn end_frame_impl(&self, local_entries: Vec<LocalPostFrameEntry>) {
         // Phase 4: PostFrameCallbacks
         self.set_scheduler_phase(SchedulerPhase::PostFrameCallbacks);
 
@@ -904,7 +907,11 @@ impl UpdateScheduler {
             self.inner.binding.pending_timings.lock().push(timing);
 
             // Drain BEFORE invoking: a post-frame callback that registers another
-            // one must not have it run in this same frame.
+            // one must not have it run in this same frame. `local_entries` was
+            // already taken from the lane (if any) by the caller, before this
+            // impl acquired the shared-queue lock below — so a callback that
+            // re-registers locally during the loop below lands in the lane's
+            // now-empty queue, exactly like the shared queue's own drain.
             let mut callbacks: Vec<LocalPostFrameEntry> = {
                 let _registration = self.inner.callbacks.post_frame_registration.lock();
                 let mut cbs = self.inner.callbacks.post_frame.lock();
@@ -915,7 +922,7 @@ impl UpdateScheduler {
                         callback: entry.callback as OwnerPostFrameCallback,
                     })
                     .collect();
-                snapshot.extend(drain_active_lane(self.identity()));
+                snapshot.extend(local_entries);
                 snapshot
             };
 
@@ -1077,6 +1084,30 @@ impl UpdateScheduler {
         deadline: IdleDeadline,
         pipeline: impl FnOnce() -> R,
     ) -> R {
+        self.drive_frame_impl(vsync_time, deadline, pipeline, None)
+    }
+
+    /// [`drive_frame`](Self::drive_frame), additionally draining `lane`'s
+    /// owner-local queue into the same total order as the shared queue when the
+    /// frame completes. See [`end_frame_with_lane`](Self::end_frame_with_lane)
+    /// for the ordering guarantee.
+    pub fn drive_frame_with_lane<R>(
+        &self,
+        vsync_time: Instant,
+        deadline: IdleDeadline,
+        pipeline: impl FnOnce() -> R,
+        lane: &crate::LocalPostFrameLane,
+    ) -> R {
+        self.drive_frame_impl(vsync_time, deadline, pipeline, Some(lane))
+    }
+
+    fn drive_frame_impl<R>(
+        &self,
+        vsync_time: Instant,
+        deadline: IdleDeadline,
+        pipeline: impl FnOnce() -> R,
+        lane: Option<&crate::LocalPostFrameLane>,
+    ) -> R {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
         *self.inner.frame.idle_deadline.lock() = Some(deadline.0);
@@ -1098,7 +1129,10 @@ impl UpdateScheduler {
 
         match catch_unwind(AssertUnwindSafe(pipeline)) {
             Ok(result) => {
-                self.end_frame();
+                match lane {
+                    Some(lane) => self.end_frame_with_lane(lane),
+                    None => self.end_frame(),
+                }
                 result
             }
             Err(payload) => {
@@ -1123,6 +1157,17 @@ impl UpdateScheduler {
         let frame_id = self.handle_begin_frame(vsync_time);
         self.handle_draw_frame();
         self.end_frame();
+        frame_id
+    }
+
+    /// [`execute_frame`](Self::execute_frame), additionally draining `lane`'s
+    /// owner-local queue in the same total order as the shared queue.
+    #[tracing::instrument(skip(self, lane))]
+    pub fn execute_frame_with_lane(&self, lane: &crate::LocalPostFrameLane) -> FrameId {
+        let vsync_time = Instant::now();
+        let frame_id = self.handle_begin_frame(vsync_time);
+        self.handle_draw_frame();
+        self.end_frame_with_lane(lane);
         frame_id
     }
 
