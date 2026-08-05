@@ -275,66 +275,118 @@ evidence = [
 key = "app-runtime-composition-host"
 statement = """
 `AppRuntime`, a loop-scoped composition root, now exists: it owns platform \
-event-loop demux, the single realm slot, `SharedEngineServices` \
-(painting/semantics -- the scheduler moved to a per-realm owned field, see \
-`idle-only-commit-points` and the deleted `SchedulerRef` seam), the \
-loop-scoped frame-wake mechanism, and the platform clipboard, \
-resolved/installed once, when a realm is actually installed. The \
-transitional process-service host (`AppBinding`) it used to coexist with is \
-retired: its fields dissolved into `AppRuntime` (loop-scoped: wake, \
-clipboard) and `UiRealm`/`PresentationState` (realm/presentation-scoped: \
-renderer, scheduler, vsync, frame accounting, haptics). It is not yet the \
-target statement in full: it is one TLS-scoped instance per owner thread \
-(`APP_RUNTIME` in `runner.rs`), not one per process; and its realm storage \
-is a single slot behind a `RealmId`-keyed accessor, not real 1..N hosting -- \
-that needs the element forest to let a realm host multiple presentations.
+event-loop demux, `SharedEngineServices` (painting/semantics -- the \
+scheduler moved to a per-realm owned field, see `idle-only-commit-points` \
+and the deleted `SchedulerRef` seam), the loop-scoped frame-wake mechanism, \
+and the platform clipboard, resolved/installed once, when a realm is \
+actually installed. The transitional process-service host (`AppBinding`) it \
+used to coexist with is retired: its fields dissolved into `AppRuntime` \
+(loop-scoped: wake, clipboard) and `UiRealm`/`PresentationState` \
+(realm/presentation-scoped: renderer, scheduler, vsync, frame accounting, \
+haptics).
+
+**The single-slot caveat this contract used to carry is now cleared:** \
+`AppRuntime`'s realm storage is `RealmRegistry`, a `RealmId`-keyed, \
+insertion-ordered registry of any number of simultaneously hosted realms \
+(`crates/flui-app/src/app/runtime.rs`), not a single `Option<UiRealm>` slot. \
+Each hosted realm's dispatch-adjacent state (`RealmSlot`: its `UiRealm`, its \
+own owner-thread queue, its own reentrancy-guard flag, its own routable \
+address, its own resize applier) is bundled per entry, so two realms hosted \
+by the SAME `AppRuntime` share none of it -- proven THROUGH `AppRuntime` \
+itself (not merely via directly-held `UiRealm` values) by \
+`two_window_realms_share_no_ui_state_through_app_runtime`. A realm tearing \
+itself down mid-dispatch leaves a sibling realm fully able to keep \
+dispatching and presenting frames \
+(`teardown_realm_a_mid_dispatch_leaves_realm_b_frame_producing`). \
+`#[non_exhaustive] pub enum ExitPolicy` (default `OnLastWindowClosed`) plus \
+`AppRuntime::should_exit` decide loop exit only after draining any realm-map \
+mutation deferred while a dispatch or an all-realms visit was in flight (the \
+drain-before-decide rule) -- a queued "open the main window" install vetoes \
+exit even in the same batch as the closing realm's own uninstall \
+(`close_splash_then_open_main_does_not_exit`), and closing one of several \
+hosted realms never exits the loop while a sibling survives \
+(`closing_one_of_two_windows_does_not_exit_the_loop`). A realm-map mutation \
+requested from inside a dispatched frame callback, or from inside \
+`for_each_installed_realm`'s (hot-restart's own primitive) visit over every \
+hosted realm, always defers to loop idle rather than nesting into a second, \
+concurrent dispatch or shifting the set of realms still being walked \
+(`frame_callback_opening_a_window_installs_second_realm_without_nested_dispatch`, \
+`hot_restart_while_callback_mutates_realm_map_defers_mutation`) -- backed by \
+a `dispatch_platform_realm` debug_assert against nested cross-realm \
+dispatch, which the registry's defer-to-idle discipline makes structurally \
+unreachable in production.
+
+It is still not yet the target statement in full, for reasons unrelated to \
+the single-slot caveat: it remains one TLS-scoped instance per owner thread \
+(`APP_RUNTIME` in `runner.rs`), not one per process; no production embedder \
+call site opens a genuinely second native window through \
+`install_realm_alongside`/`uninstall_platform_realm` yet (today's \
+`run_desktop`/`run_android`/`run_web` bootstraps still each open exactly \
+one, through the legacy displacing `install_platform_realm`) -- that native \
+wiring, plus `ExitPolicy` actually gating a live winit loop's exit instead \
+of the platform backend's own unconditional "last window closed" signal, is \
+this issue's native-lifecycle follow-up; and a REALM hosting more than one \
+PRESENTATION (the element forest) is a separate, still-unstarted claim this \
+contract does not yet make.
 
 `with_owner_platform`'s fence (c) (ADR-0039 §6, trigger #22's runtime \
 backstop) re-points onto this struct: `AppRuntime::installed_realm_phase` \
-reads the resident realm's own scheduler phase instead of the retired \
+reads every resident realm's own scheduler phase instead of the retired \
 `Scheduler::instance().phase()`. Its `None` case is truthfully vacuous only \
 for "no realm installed" -- bootstrap paths (`run_direct`, and any owner \
 thread before its first realm) never install one, so the fence holds \
 trivially there, which is a strict improvement over the singleton-era probe \
 (that one *constructed* a full `Scheduler` singleton just to read `Idle`). \
-But `dispatch_platform_realm` also checks the resident realm OUT of \
-`AppRuntime.realm` for the entire duration of every dispatched task \
+But `dispatch_platform_realm` also checks the dispatched realm's `UiRealm` \
+OUT of its registry slot for the entire duration of every dispatched task \
 (including the frame pump that drives `PersistentCallbacks`), which would \
 make `installed_realm_phase` read `None` -- and the fence pass vacuously -- \
-for every real production frame, not merely at bootstrap. The dispatched-frame \
-marker closes that gap: `dispatch_platform_realm` stashes a clone of the \
-checked-out realm's scheduler into `AppRuntime.dispatched_scheduler` \
-(`Scheduler` is a single-`Arc` handle, so this is one cheap `Arc::clone`, \
-not a second scheduler) before running the queued task, and \
-`installed_realm_phase` falls back to it whenever `realm` itself is empty; \
-both the ordinary return path and the `catch_unwind`-guarded restore on an \
-unwinding dispatched task clear the field, so it never survives past the \
-dispatch it was stashed for.
+for every real production frame, not merely at bootstrap. The \
+dispatched-frame marker closes that gap: `dispatch_platform_realm` stashes \
+a clone of the checked-out realm's scheduler into \
+`AppRuntime.dispatched_scheduler` (`Scheduler` is a single-`Arc` handle, so \
+this is one cheap `Arc::clone`, not a second scheduler) before running the \
+queued task, and `installed_realm_phase` falls back to it whenever nothing \
+resident matches; both the ordinary return path and the \
+`catch_unwind`-guarded restore on an unwinding dispatched task clear the \
+field, so it never survives past the dispatch it was stashed for. A \
+two-realm fence probe -- one realm mid-`PersistentCallbacks`, a fully idle \
+sibling also resident -- proves this is not an "OR of all Idle" check a lone \
+idle sibling could vacuously satisfy \
+(`owner_platform_accessor_fences_correctly_with_a_second_idle_realm_present`).
 
-Singleton retirement itself is now COMPLETE (issue #553's own scope): the \
-transitional `REALM_CLAIMED` at-most-one guard and `UiRealmError::AlreadyExists` \
-are deleted, `flui_foundation::{BindingBase, HasInstance, impl_binding_singleton!}` \
-no longer exist at all, and `two_realms_coexist_same_thread` / \
+Singleton retirement itself is COMPLETE (issue #553's own scope, now \
+closed): the transitional `REALM_CLAIMED` at-most-one guard and \
+`UiRealmError::AlreadyExists` are deleted, \
+`flui_foundation::{BindingBase, HasInstance, impl_binding_singleton!}` no \
+longer exist at all, and `two_realms_coexist_same_thread` / \
 `two_realms_two_threads_no_shared_state` / `dropping_realm_a_cannot_wake_realm_b` / \
 `cross_realm_duplicate_global_key_mounts_succeed_in_both` prove two \
 directly-constructed `UiRealm`s share no widget/focus/gesture-arena/scheduler \
 state, on one thread or two. This state stays "partial", not "implemented", \
-because the earlier single-slot/single-TLS-instance caveat in this \
-statement is still true and is a SEPARATE claim from singleton retirement: \
-the coexistence tests construct realms directly, never through an \
-`AppRuntime` hosting two of them at once (that needs the element forest, \
-tracked under #555) -- marking this contract fully "implemented" would \
-overclaim exactly the gap issue #555 exists to close.\
+because the remaining gaps stated above (native second-window wiring, a \
+realm hosting more than one presentation) are real and unclosed -- marking \
+this contract fully "implemented" would overclaim past what has actually \
+landed.\
 """
 state = "partial"
 domain = "application"
-owner_issue = 553
+owner_issue = 555
 mechanical = true
 mechanism = "symbol/test existence pinned here; later changes advance disposition further"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(crate) struct AppRuntime" },
-    { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn app_runtime_owns_registry_and_realm_slot" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(super) struct RealmRegistry" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(super) struct RealmSlot" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub enum ExitPolicy" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "dispatched_scheduler: Option<Scheduler>" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn two_window_realms_share_no_ui_state_through_app_runtime" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn teardown_realm_a_mid_dispatch_leaves_realm_b_frame_producing" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_one_of_two_windows_does_not_exit_the_loop" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn close_splash_then_open_main_does_not_exit" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn frame_callback_opening_a_window_installs_second_realm_without_nested_dispatch" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn hot_restart_while_callback_mutates_realm_map_defers_mutation" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_accessor_fences_correctly_with_a_second_idle_realm_present" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_accessor_fences_the_installed_realms_frame_transaction_through_dispatch" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn two_realms_coexist_same_thread" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn two_realms_two_threads_no_shared_state" },
