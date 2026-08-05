@@ -785,6 +785,20 @@ impl UiRealm {
         self.presentations.primary().id()
     }
 
+    /// True if `id` names this realm's ONLY currently-hosted presentation.
+    ///
+    /// `runner.rs`'s `RealmTask::ClosePresentation` handling reads this
+    /// BEFORE calling [`Self::close_presentation_entered`]: closing the
+    /// realm's sole presentation would leave the forest empty, and every
+    /// other method on this realm (`widgets()`, `presentation_id()`, a
+    /// future frame pump) assumes `PresentationForest::primary()` always
+    /// resolves — closing the last presentation is closing the REALM, and
+    /// must route there instead (see that match arm's own doc).
+    #[must_use]
+    pub(crate) fn is_sole_presentation(&self, id: PresentationId) -> bool {
+        self.presentations.len() == 1 && self.presentations.get(id).is_some()
+    }
+
     /// This realm's shared cross-tree `GlobalKey` uniqueness domain
     /// (ADR-0043 §1) — for the isolation test suite, which uses it to
     /// assemble a second presentation sharing this realm's exact scope,
@@ -1930,14 +1944,23 @@ impl UiRealm {
     ///
     /// # Contract — six steps, in order
     ///
-    /// 1. **Unregistering this presentation's window mappings from the
+    /// 1. **Unregistering this presentation's window mapping from the
     ///    process-wide `WindowRegistry` is NOT this method's job.**
     ///    `UiRealm` has no access to that registry (`AppRuntime`-owned,
     ///    ADR-0037 §2's single authority) — the caller must have already
-    ///    removed the registry entry before calling this. Today's only
-    ///    caller is `AppRuntime`'s realm teardown (closing a realm's SOLE
-    ///    presentation closes the realm), which already does registry
-    ///    removal first (`apply_uninstall`/`teardown_platform_realm`).
+    ///    removed the registry entry before calling this. The real (and
+    ///    today's only) caller is `dispatch_platform_realm`'s
+    ///    `RealmTask::ClosePresentation` handling in `runner.rs`, NOT
+    ///    `AppRuntime`'s realm-teardown path (`apply_uninstall`/
+    ///    `teardown_platform_realm` close a WHOLE realm and never call this
+    ///    method at all — a realm's own `Drop` closes every remaining
+    ///    presentation directly). That dispatch handling unregisters this
+    ///    exact presentation's own window mapping first when a SIBLING
+    ///    presentation is staying open, and routes to a full realm
+    ///    uninstall instead of calling this method at all when `id` names
+    ///    the realm's only presentation (seeing [`Self::is_sole_presentation`]
+    ///    return `true`) — this method's own contract never has to reason
+    ///    about leaving the forest empty.
     /// 2. IME detach + focus deactivate — [`PresentationState::close`]'s
     ///    first half.
     /// 3. `detach_root_widget` through this exact presentation's own
@@ -4863,47 +4886,130 @@ mod tests {
             });
         }
 
+        /// `PresentationState::new` wires `RealmCapabilities::
+        /// global_key_scope` into `BuildOwner::set_global_key_scope` FIRST —
+        /// before this presentation's own focus/IME wiring, before
+        /// attach/mount (see that constructor's own doc comment). The pin:
+        /// two presentations of ONE realm, sharing that exact scope,
+        /// mounting the IDENTICAL `GlobalKey` must conflict eagerly —
+        /// `GlobalKeyScope`'s cross-owner uniqueness domain — naming both
+        /// owner tags in the panic (`global_key_scope.rs::claim_and_register`'s
+        /// sole conflict branch).
+        ///
+        /// Unpinned before this test: deleting the `set_global_key_scope`
+        /// call from `PresentationState::new` leaves both the flui-view and
+        /// flui-app suites green, because each presentation's `BuildOwner`
+        /// then lazily creates its OWN private, single-tenant scope on first
+        /// use (`claim_and_register`'s `get_or_insert_with` fallback) — the
+        /// two owners never actually share one scope, so mounting the same
+        /// key in both silently succeeds in each instead of conflicting.
+        /// Mutant-verified: removing that one setter call from
+        /// `PresentationState::new` makes this test fail (no panic);
+        /// restoring it makes the eager panic fire again.
+        #[test]
+        #[should_panic(expected = "is already claimed by")]
+        fn duplicate_global_key_across_presentations_panics_eagerly_naming_both_owners() {
+            let mut realm = UiRealm::for_test();
+            let b_id = realm.install_second_presentation_for_test();
+
+            let key = flui_view::GlobalKey::<()>::new();
+            let element_in_a = flui_foundation::ElementId::new(1);
+            let element_in_b = flui_foundation::ElementId::new(2);
+
+            realm.widgets().with_build_owner_mut(|owner| {
+                owner.register_global_key(key.id(), element_in_a);
+            });
+
+            // B shares A's realm's exact GlobalKeyScope
+            // (install_second_presentation_for_test wires it that way, the
+            // same capability-threading order PresentationState::new uses
+            // in production) -- mounting the SAME key here must conflict
+            // eagerly, never silently succeed in a second, private scope.
+            realm
+                .presentation_widgets_for_test(b_id)
+                .with_build_owner_mut(|owner| {
+                    owner.register_global_key(key.id(), element_in_b);
+                });
+        }
+
         /// `UiRealm::apply_hot_reload` must reassemble EVERY presentation in
         /// mount order, not just the primary one.
+        ///
+        /// Oracle: `has_pending_builds()` on EACH presentation's own
+        /// `WidgetsBinding` after `apply_hot_reload` — `perform_reassemble`
+        /// (`BuildOwner::reassemble`) marks every MOUNTED element dirty, so a
+        /// presentation that was actually reassembled reports a pending
+        /// build; one that fan-out skipped does not. A membership check
+        /// alone (does the forest still contain both ids) is vacuous here:
+        /// it stays green even if fan-out silently reverted to
+        /// primary-only, since nothing removes a presentation from the
+        /// forest just because reassemble skipped it. Mutant-verified:
+        /// reverting `UiRealm::apply_hot_reload`'s loop to call
+        /// `self.presentations.primary().apply_hot_reload(tier)` alone (no
+        /// loop over the whole forest) makes this test fail on B's
+        /// `has_pending_builds()` assertion; restoring the loop makes it
+        /// pass again.
         #[test]
         #[cfg(feature = "hot-reload")]
         fn reassemble_fans_out_to_all_presentations_in_mount_order() {
             use flui_hot_reload::HotReloadTier;
 
             let mut realm = UiRealm::for_test();
-            realm.install_second_presentation_for_test();
+            let b_id = realm.install_second_presentation_for_test();
 
-            // Both presentations start with no root attached; `apply_hot_reload`
-            // still calls `perform_reassemble`/`PipelineOwner::reassemble` on
-            // each regardless of whether a root is mounted, so this proves the
-            // fan-out reaches both without asserting on any particular return
-            // value from an unmounted reassemble.
-            let mounted_order: std::cell::RefCell<Vec<flui_foundation::PresentationId>> =
-                std::cell::RefCell::new(Vec::new());
-            for presentation in realm.presentations.iter() {
-                mounted_order.borrow_mut().push(presentation.id());
-            }
-            let expected_order = mounted_order.into_inner();
-            assert_eq!(
-                expected_order.len(),
-                2,
-                "the forest must hold both presentations before reassembling"
+            // Mount independent content on BOTH presentations -- reassemble
+            // has nothing to mark dirty on an empty tree, so the oracle
+            // below needs a real mounted root on each.
+            realm
+                .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+                .expect("A mounts");
+            realm
+                .enter(|realm| {
+                    realm
+                        .presentations
+                        .get(b_id)
+                        .expect("B installed")
+                        .widgets()
+                        .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
+                })
+                .expect("B mounts");
+
+            // A fresh mount always starts with a pending initial build --
+            // drain both before reassembling, or the oracle below cannot
+            // tell "still pending from mount" apart from "reassemble
+            // actually re-marked it dirty".
+            let constraints = BoxConstraints::tight(flui_types::Size::new(px(50.0), px(50.0)));
+            let _ = realm.draw_frame(constraints);
+            assert!(
+                !realm.widgets().has_pending_builds(),
+                "precondition: A's initial build must be drained before reassembling"
+            );
+            assert!(
+                !realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .widgets()
+                    .has_pending_builds(),
+                "precondition: B's initial build must be drained before reassembling"
             );
 
-            // `apply_hot_reload` itself does not report per-presentation
-            // identity, so the oracle here is structural: it must not panic
-            // or skip a presentation, and every presentation's own pipeline
-            // must have run `PipelineOwner::reassemble` — observable via each
-            // presentation's pipeline still being usable afterward (a panic
-            // or an unreachable presentation would fail this test outright).
             let _ = realm.apply_hot_reload(HotReloadTier::HotReload);
 
-            for presentation in realm.presentations.iter() {
-                assert!(
-                    expected_order.contains(&presentation.id()),
-                    "reassemble must not have dropped or skipped a presentation"
-                );
-            }
+            assert!(
+                realm.widgets().has_pending_builds(),
+                "reassemble must mark A's mounted root dirty"
+            );
+            assert!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .widgets()
+                    .has_pending_builds(),
+                "reassemble must mark B's mounted root dirty too -- fan-out must not skip \
+                 or stop at the primary presentation"
+            );
         }
 
         /// Dropping the realm closes EVERY presentation it hosts, not just

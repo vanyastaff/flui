@@ -1595,7 +1595,70 @@ fn dispatch_platform_realm(
             // needing interior mutability on the forest itself.
             match event {
                 RealmTask::ClosePresentation(id) => {
-                    realm.close_presentation_entered(id);
+                    if realm.is_sole_presentation(id) {
+                        // Closing the realm's ONLY presentation IS closing
+                        // the realm -- routing it through
+                        // close_presentation_entered would leave an empty
+                        // forest behind (every other method on this realm,
+                        // starting with `primary()`, assumes one always
+                        // exists). Request a full realm uninstall through
+                        // the SAME deferral machinery every other
+                        // realm-map mutation already uses:
+                        // `dispatched_realm_id` is `Some` for this whole
+                        // checkout, so this defers to `dispatch_platform_
+                        // realm`'s own tail (below), which runs
+                        // `apply_uninstall` only after `realm` is restored
+                        // to its slot -- `apply_uninstall` already removes
+                        // every one of this realm's `WindowRegistry`
+                        // entries before dropping the `RealmSlot` (see its
+                        // own doc), so step 1 is covered by the SAME path
+                        // a whole-realm close always used.
+                        let displaced = APP_RUNTIME
+                            .with(|slot| slot.borrow_mut().request_realm_uninstall(realm_id));
+                        drop(displaced);
+                    } else {
+                        // Step 1: unregister exactly THIS presentation's own
+                        // window mapping -- never a sibling's, and never
+                        // every window this realm owns (`WindowRegistry::
+                        // remove_realm` would be wrong here). `UiRealm`
+                        // itself has no access to the registry (AppRuntime
+                        // is its single authority, ADR-0037 §2), so this
+                        // runs here, in the one caller that does, before
+                        // handing off to close_presentation_entered's
+                        // steps 2-6. Without this, a stale platform event
+                        // for the closed presentation's original window
+                        // would still resolve to its now-dead
+                        // PresentationId instead of being refused.
+                        let address = flui_foundation::PresentationAddress {
+                            realm_id,
+                            presentation_id: id,
+                        };
+                        let unregistered = APP_RUNTIME
+                            .with(|slot| slot.borrow_mut().registry.remove_presentation(address));
+                        drop(unregistered);
+                        realm.close_presentation_entered(id);
+                        // Re-stamp this realm's tracked routable address
+                        // (`RealmSlot::address`) to the new primary that
+                        // survives the close. Without this, a dispatcher a
+                        // caller minted while `id` was still live would keep
+                        // comparing equal against the slot's now-stale
+                        // `presentation_id` at the top of this very
+                        // function, and a task dispatched through it would
+                        // run against `self.presentations.primary()` --
+                        // which is now the SIBLING, not the closed
+                        // presentation the caller thinks it addressed.
+                        // Re-stamping makes that exact dispatcher fail the
+                        // `StalePresentation` check instead, through the
+                        // SAME comparison every other stale-dispatcher case
+                        // already goes through -- no new gating mechanism,
+                        // just keeping this one fact current.
+                        let new_primary_id = realm.presentation_id();
+                        APP_RUNTIME.with(|slot| {
+                            if let Some(realm_slot) = slot.borrow_mut().realms.get_mut(&realm_id) {
+                                realm_slot.address.presentation_id = new_primary_id;
+                            }
+                        });
+                    }
                 }
                 other => realm.enter(|realm| other.run(realm)),
             }
@@ -3682,6 +3745,125 @@ mod realm_dispatch_tests {
             "the deferred install must land once A's close dispatch restores"
         );
 
+        // No `teardown_platform_realm()` here, deliberately -- same reason
+        // as `closing_a_presentation_unregisters_its_window_mapping`: this
+        // test's own `install_second_presentation_for_test` fixture bypasses
+        // the production ratchet to give B no window mapping of its own, so
+        // after A closes and the surviving realm's tracked address re-stamps
+        // to B, teardown's own self-check (every live realm's tracked
+        // address must resolve to at least one registered window) no
+        // longer holds -- a still-open design-for-N gap, not something this
+        // test can paper over. Each nextest test runs in its own process,
+        // so skipping teardown here leaks nothing another test could
+        // observe.
+    }
+
+    /// Closing presentation A (a sibling, B, stays open) must unregister
+    /// EXACTLY A's own window mapping -- and a caller still holding a
+    /// `RealmDispatcher` minted while A was live must be refused, never
+    /// silently delivered to B (the surviving primary) instead. Before the
+    /// `ClosePresentation` handling did both the window-registry removal
+    /// AND the `RealmSlot::address` re-stamp, a stale dispatcher would still
+    /// compare equal at the top of `dispatch_platform_realm` (the slot's
+    /// tracked `presentation_id` was never updated past A's original
+    /// install-time value) and the task would run against `self.
+    /// presentations.primary()` -- B, after A's removal shifts it into that
+    /// slot -- exactly the sibling-reach bug this test guards.
+    #[test]
+    fn closing_a_presentation_unregisters_its_window_mapping() {
+        let platform = flui_platform::headless_platform();
+        let window_a = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window a");
+
+        let mut realm = super::super::ui_realm::UiRealm::for_test();
+        let a_id = realm.presentation_id();
+        let _b_id = realm.install_second_presentation_for_test();
+
+        let dispatcher = install_platform_realm(realm, &window_a);
+        let realm_id = dispatcher.address.realm_id;
+
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot.borrow().registry.resolve(window_a.id())),
+            Some(flui_foundation::PresentationAddress {
+                realm_id,
+                presentation_id: a_id,
+            }),
+            "precondition: A's window starts mapped to A's own address"
+        );
+
+        close_presentation(dispatcher, a_id).expect("A closes through the real dispatch seam");
+
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot.borrow().registry.resolve(window_a.id())),
+            None,
+            "closing A must unregister its own window mapping -- leaving it mapped would let \
+             a stale platform event for that exact window keep resolving to A's now-dead \
+             PresentationId"
+        );
+
+        let delivered = Rc::new(Cell::new(false));
+        let delivered_in_task = Rc::clone(&delivered);
+        let result = dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_realm| {
+                delivered_in_task.set(true);
+            })),
+        );
+        assert!(
+            matches!(result, Err(RealmDispatchError::StalePresentation)),
+            "a dispatcher minted for the now-closed presentation must be refused as stale, \
+             got {result:?}"
+        );
+        assert!(
+            !delivered.get(),
+            "the stale task must never run -- delivering it would land on B (the surviving \
+             primary), exactly the sibling-reach bug this test guards"
+        );
+
+        // No `teardown_platform_realm()` here, deliberately: this test's own
+        // fixture (`install_second_presentation_for_test`) bypasses the
+        // production ratchet to give B no window mapping of its own -- the
+        // real, still-open design-for-N gap this whole test exists to probe
+        // one corner of, not something this test can paper over. Calling
+        // teardown would trip ITS OWN debug-only self-check (every live
+        // realm's tracked address must resolve to at least one registered
+        // window), which no longer holds once B, unregistered, becomes the
+        // realm's tracked primary. Each nextest test runs in its own
+        // process (see this crate's own `AGENTS.md`), so skipping teardown
+        // here leaks nothing another test could observe -- the process
+        // exit itself drops `APP_RUNTIME`, running `UiRealm::Drop`'s
+        // best-effort close loop for B as the natural fallback.
+    }
+
+    /// Closing a realm's SOLE presentation must not leave a live realm with
+    /// an empty `PresentationForest` (the next `primary()` call would panic
+    /// `"BUG: PresentationForest is never empty"`). `RealmTask::
+    /// ClosePresentation`'s handling routes this case into a full realm
+    /// uninstall instead of ever calling `close_presentation_entered` --
+    /// proven here by asserting the WHOLE realm disappears from the
+    /// registry, not just the one presentation.
+    #[test]
+    fn closing_the_sole_presentation_uninstalls_the_whole_realm() {
+        let dispatcher = install_test_realm();
+        let realm_id = dispatcher.address.realm_id;
+        let a_id = dispatcher.address.presentation_id;
+
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().realms.get(&realm_id).is_some()),
+            "precondition: the realm is installed before closing its sole presentation"
+        );
+
+        close_presentation(dispatcher, a_id).expect("the close request is accepted");
+
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().realms.get(&realm_id).is_none()),
+            "closing the realm's only presentation must uninstall the WHOLE realm -- a \
+             live realm with an empty forest is not a reachable state this codebase permits"
+        );
+
+        // Harmless no-op cleanup (the realm is already gone) -- matches
+        // every other test in this module for the same TLS-state hygiene.
         teardown_platform_realm();
     }
 }
