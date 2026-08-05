@@ -174,11 +174,15 @@ workflow file does *not* tell you, and what you will misjudge without it:
   not link — no link, no tests, and `flui-platform` is excluded from the `test` job. Green means
   "compiles", nothing more. Before this job existed those backends were only ever compiled by
   whoever happened to develop on that OS, and the Windows one did not compile at all.
-- **miri covers `pipeline::owner::subtree_arena` only** — but that now includes two real-`NodePtr`
-  walks driving `layout_dirty_root` through every reborrow phase of `layout_subtree_borrowed_impl`
-  (one straight pass, one cyclic edge exercising the baseline callback's in-flight gate — removing
-  that gate fails miri). Sliver walks and intrinsics queries are still not interpreted. Advisory
-  while stabilizing.
+- **miri covers `pipeline::owner` (widened from `pipeline::owner::subtree_arena` in #554 PR-2)** —
+  this now runs every unit test under that module, including `cell.rs`'s `PipelineCell` checkout
+  tests and two real-`NodePtr` walks driving `layout_dirty_root` through every reborrow phase of
+  `layout_subtree_borrowed_impl` (one straight pass, one cyclic edge exercising the baseline
+  callback's in-flight gate — removing that gate fails miri; both predate the widening and are
+  unchanged by it). Also new: an owner-local traversal (a full `run_frame` over a real 3-node tree,
+  driven through `PipelineCell::with_mut`) and a reentrant-layout walk (a Sliver child that issues
+  a mid-layout child-build request against the checked-out owner). Deeper sliver walks and
+  intrinsics queries are still not interpreted. Advisory while stabilizing.
 - **feature-matrix exists because workspace feature unification hides broken per-crate wiring.** A
   crate whose features only resolve thanks to a sibling's dependency passes a normal build and
   fails here. The same job also runs `just facade-combos`, which compiles every supported `flui`
