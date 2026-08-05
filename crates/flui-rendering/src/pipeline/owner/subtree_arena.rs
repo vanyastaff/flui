@@ -16,11 +16,13 @@
 //!
 //! The aliasing invariant (distinct slots, one live `&mut` per slot at a
 //! time) is enforced by:
-//! 1. [`NodePtr`]'s `unsafe impl Send/Sync` satisfying the
-//!    [`crate::protocol::box_protocol::LayoutChildCallback`] `Send+Sync`
-//!    bound without making the type actually thread-safe for raw deref —
-//!    thread-safety for deref is instead enforced by
-//!    [`SubtreeArena::check_thread`] at every [`SubtreeArena::get`] call.
+//! 1. [`NodePtr`] staying a plain raw-pointer newtype — `!Send + !Sync` by
+//!    the language default, same as any other `*mut T`. Confinement to the
+//!    constructing thread is structural: [`SubtreeArena`] is itself
+//!    `!Send + !Sync` (transitively, via `ParentData`'s dropped `Sync`
+//!    supertrait and `PipelineCell`'s `Rc<RefCell<_>>`), so no safe code can
+//!    move an arena — or a `NodePtr` borrowed from one — to another thread
+//!    in the first place. There is no runtime thread check to bypass.
 //! 2. [`LayoutCycleGuard`] detecting and rejecting re-entry into a slot
 //!    whose `&mut` is already live up the call stack.
 //! 3. [`SubtreeArena`]'s `PhantomData<&'tree mut ()>` tying the arena's
@@ -29,7 +31,7 @@
 //!
 //! ## Safety-gate note
 //!
-//! All three `unsafe fn` bodies in this file must be reviewed by
+//! All seven `unsafe fn` bodies in this file must be reviewed by
 //! `unsafe-auditor` before the SAFETY-GATE passes.  The SAFETY comments
 //! attached to each `unsafe` block document the invariant that makes the
 //! operation sound; they are the primary artefact for the audit.
@@ -37,7 +39,9 @@
 // The sanctioned `unsafe` island for the layout walk (see module docs above).
 // The opt-out is scoped to this file; every block carries a `// SAFETY:`
 // comment, and the invariants are machine-checked by the miri CI job /
-// `just miri`, which runs exactly this module's tests.
+// `just miri`, which runs this module's tests as part of a wider
+// `pipeline::owner` sweep (cell.rs's PipelineCell checkout tests and the
+// rest of the owner module's unit tests ride along in the same filter).
 #![allow(unsafe_code)]
 
 use std::collections::HashMap;
@@ -70,11 +74,11 @@ use crate::{
 use super::poison::{FailedAttempt, LayoutFailureKind, LayoutPoison};
 
 // ============================================================================
-// NodePtr — Send+Sync raw-pointer alias of a single &mut RenderNode borrow
+// NodePtr — raw-pointer alias of a single &mut RenderNode borrow
 // ============================================================================
 
-/// `Send + Sync` raw-pointer alias of a single `&mut RenderNode` borrow
-/// held in [`SubtreeArena`].
+/// Raw-pointer alias of a single `&mut RenderNode` borrow held in
+/// [`SubtreeArena`].
 ///
 /// Each `NodePtr` in [`SubtreeArena::by_id`] is derived from one of
 /// the N disjoint `&mut RenderNode` references returned by
@@ -85,21 +89,16 @@ use super::poison::{FailedAttempt, LayoutFailureKind, LayoutPoison};
 /// position-stable (no moves during the borrow window).
 ///
 /// The wrapper is `Copy` so the layout-child closure can capture the
-/// pointer by value without `Arc` ceremony.  `Send + Sync` is declared
-/// because [`LayoutChildCallback`] inherits those bounds from
-/// `BoxLayoutCtxErased: Send + Sync`.  Single-thread
-/// access is enforced at the [`SubtreeArena::check_thread`] entry.
+/// pointer by value without `Arc` ceremony. `NodePtr` carries no manual
+/// `Send`/`Sync` impl — a bare `*mut RenderNode` is `!Send + !Sync` by the
+/// language default, and that default is exactly right here: nothing
+/// about this type is safe to move or share across threads, so nothing
+/// should assert otherwise. The load-bearing invariant this type exists
+/// to uphold is aliasing discipline (one live `&mut` per slot at a time,
+/// enforced by [`LayoutCycleGuard`]), not thread identity — see the
+/// module-level docs.
 #[derive(Clone, Copy)]
 struct NodePtr(*mut RenderNode);
-
-// SAFETY: the raw pointer is just an address; the load-bearing borrow
-// is the `&mut RenderNode` returned by `get_subtree_mut` that this
-// pointer aliases.  Cross-thread reborrow is rejected by
-// [`SubtreeArena::check_thread`] before any deref.
-unsafe impl Send for NodePtr {}
-// SAFETY: same as Send — the cross-thread deref guard lives in
-// `SubtreeArena::check_thread`, not in the type itself.
-unsafe impl Sync for NodePtr {}
 
 // ============================================================================
 // SubtreeArena — pre-acquired borrow pool (was SubtreeBorrows)
@@ -128,14 +127,16 @@ unsafe impl Sync for NodePtr {}
 ///
 /// # Thread affinity
 ///
-/// `SubtreeArena` records the constructing thread's `ThreadId` and
-/// checks it on every [`Self::get`] call.  The check survives even
-/// though [`NodePtr`] declares `Send + Sync` — the auto-trait bound
-/// is mechanically required to satisfy
-/// `LayoutChildCallback: Send + Sync` (inherited from
-/// `BoxLayoutCtxErased`), but at the call site we panic loudly on
-/// cross-thread access instead of corrupting the slab silently.
-/// Cheap: one `ThreadId::eq` per lookup.
+/// `SubtreeArena` is `!Send + !Sync` (pinned by
+/// `static_assertions::assert_not_impl_any!` in `tests`, below) — confinement
+/// to its constructing thread is structural, not runtime-checked. There is
+/// no `ThreadId` field and no per-access check: [`NodePtr`] carries no
+/// manual `Send`/`Sync` impl (a bare `*mut RenderNode` is `!Send + !Sync` by
+/// default), and every other field transitively blocks the auto-traits too
+/// (`ParentData` dropped its `Sync` supertrait; the arena's own borrow
+/// lifetime ties it to a `&mut RenderTree`). Safe code simply cannot move an
+/// arena, or any `NodePtr` it hands out, to another thread — the compiler
+/// rejects it before any `unsafe` code would run.
 pub(super) struct SubtreeArena<'tree> {
     /// Per-node raw-pointer index with a side in-flight flag.
     ///
@@ -152,11 +153,11 @@ pub(super) struct SubtreeArena<'tree> {
     ///
     /// `AtomicBool` is `Sync` and needs no new `unsafe impl` of its own
     /// here -- `SubtreeArena` as a whole is `!Send + !Sync` regardless
-    /// (see the interim pin in `tests`), transitively via
-    /// `pending_builds`'s `Box<dyn ParentData>`, not via this field.
-    /// `Relaxed` ordering suffices because [`Self::check_thread`] already
-    /// enforces single-thread access; no cross-thread synchronisation is
-    /// needed.
+    /// (see the pin in `tests`), transitively via `pending_builds`'s
+    /// `Box<dyn ParentData>`, not via this field. `Relaxed` ordering
+    /// suffices because the arena's structural `!Send + !Sync` already
+    /// confines every access to one thread; no cross-thread
+    /// synchronisation is needed.
     by_id: HashMap<RenderId, (NodePtr, AtomicBool)>,
     #[cfg(any(test, feature = "testing"))]
     parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
@@ -169,7 +170,7 @@ pub(super) struct SubtreeArena<'tree> {
     /// `&SubtreeArena: Send + Sync` (no longer true after the `PipelineCell`
     /// port dropped that bound -- `SubtreeArena` itself is `!Send + !Sync`
     /// now, transitively via this very field's `Box<dyn ParentData>`; see
-    /// the interim pin in `tests`). Downgrading to `RefCell` now that
+    /// the pin in `tests`). Downgrading to `RefCell` now that
     /// nothing requires the lock is a follow-up, not done here. Empty
     /// unless a lazy sliver requests a not-yet-built child.
     pending_builds: Mutex<Vec<crate::protocol::sliver_protocol::PendingBuild>>,
@@ -247,7 +248,6 @@ pub(super) struct SubtreeArena<'tree> {
     /// success clears the record).  Filtered at record time so the sink
     /// stays empty in the common all-healthy case.
     layout_successes: Mutex<Vec<flui_foundation::RenderId>>,
-    owner_thread: std::thread::ThreadId,
     _lifetime: PhantomData<&'tree mut ()>,
 }
 
@@ -273,7 +273,6 @@ impl<'tree> SubtreeArena<'tree> {
             "SubtreeArena::new precondition violated: ids and refs \
              must have the same length",
         );
-        let owner_thread = std::thread::current().id();
         let mut by_id = HashMap::with_capacity(ids.len());
         for (&id, r) in ids.iter().zip(refs) {
             // `AtomicBool::new(false)` — not in-flight at construction.
@@ -302,7 +301,6 @@ impl<'tree> SubtreeArena<'tree> {
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),
-            owner_thread,
             _lifetime: PhantomData,
         }
     }
@@ -318,31 +316,13 @@ impl<'tree> SubtreeArena<'tree> {
         }
     }
 
-    /// Panics if the calling thread is not the constructing thread.
-    /// Called by [`Self::get`] before returning any [`NodePtr`].
-    #[inline]
-    fn check_thread(&self) {
-        let current = std::thread::current().id();
-        assert!(
-            current == self.owner_thread,
-            "SubtreeArena accessed from non-owner thread: \
-             owner = {:?}, current = {:?}. The layout walk \
-             requires the layout_child callback to fire on the \
-             same thread as PipelineOwner::layout_dirty_root \
-             (the pipeline phase holds &mut self synchronously). \
-             User RenderBox::perform_layout body must not spawn \
-             ctx.layout_child(...) calls to other threads — the \
-             underlying RenderTree slab is not Sync.",
-            self.owner_thread,
-            current,
-        );
-    }
-
-    /// Returns the [`NodePtr`] for `id` if present, panicking
-    /// (via [`Self::check_thread`]) on cross-thread access.
+    /// Returns the [`NodePtr`] for `id` if present.
+    ///
+    /// No runtime thread check: confinement is structural (`SubtreeArena`
+    /// is `!Send + !Sync`, see the module and type docs), so there is no
+    /// cross-thread case left to detect at this call site.
     #[inline]
     fn get(&self, id: RenderId) -> Option<NodePtr> {
-        self.check_thread();
         self.by_id.get(&id).map(|(ptr, _)| *ptr)
     }
 
@@ -358,8 +338,9 @@ impl<'tree> SubtreeArena<'tree> {
     /// The check is only meaningful on the layout thread (same atomic flag
     /// set/cleared by [`LayoutCycleGuard`]).  Lock-free: reads the
     /// `AtomicBool` in the arena's `by_id` map — a *side* structure that
-    /// never aliases any `NodePtr` slot.  `Relaxed` suffices because
-    /// [`Self::check_thread`] enforces single-thread access.
+    /// never aliases any `NodePtr` slot.  `Relaxed` suffices because the
+    /// arena's structural `!Send + !Sync` confines every access to one
+    /// thread already.
     #[inline]
     fn is_in_flight(&self, id: RenderId) -> bool {
         self.by_id
@@ -603,9 +584,9 @@ impl<'arena, 'tree> LayoutCycleGuard<'arena, 'tree> {
     /// Semantics are identical to the former `set.insert(id)` check —
     /// re-entry is rejected, first entry proceeds.  No lock is taken.
     fn enter(arena: &'arena SubtreeArena<'tree>, id: RenderId) -> crate::error::RenderResult<Self> {
-        // check_thread here so the diagnostic surfaces at the cycle-
-        // guard layer too (covers callers that bypass `get`).
-        arena.check_thread();
+        // No thread check here (or anywhere in this file): confinement is
+        // structural, enforced by `SubtreeArena: !Send + !Sync` at the type
+        // level, not by a runtime assert callers could bypass.
         // Look up the side flag for `id`.  An id that is not in `by_id`
         // cannot be in-flight (it was never seeded into the arena), so
         // we treat it as not-in-flight and let the subsequent `get` call
@@ -706,8 +687,9 @@ pub(super) fn ensure_stack<R>(f: impl FnOnce() -> R) -> R {
 /// this function gates every deref on [`SubtreeArena::is_in_flight`] and yields
 /// `None` for any in-flight slot, exactly like the canonical position/offset
 /// sites in this file (the `set_offset` loop). The remaining preconditions:
-/// - No other arena walk may run concurrently; `arena.get()` enforces the
-///   single-thread check (`check_thread`) at every call.
+/// - No other arena walk may run concurrently; this is structural (the
+///   arena is `!Send + !Sync`, confined to the one thread that constructed
+///   it), not a runtime check `arena.get()` performs.
 /// - The arena pointer is allocation-stable for the arena's lifetime
 ///   (pre-acquired slab; slots are not moved during the borrow window).
 /// - This must be called BEFORE the child-recursion closure is created, so no
@@ -762,9 +744,10 @@ unsafe fn build_intrinsic_child_parent_data(
 /// Reborrows one [`NodePtr`] from the pre-acquired [`SubtreeArena`]
 /// at each call level, drives `perform_layout_raw` against a typed
 /// `BoxLayoutCtx`, and recurses via a closure that captures
-/// `&SubtreeArena` (Sync via [`NodePtr`]'s `unsafe impl`).  Distinct
-/// call levels reborrow distinct slab slots (parent ≠ child) — no
-/// aliasing.
+/// `&SubtreeArena` — no `Send`/`Sync` needed; the closure runs to
+/// completion on the constructing thread, synchronously, and never
+/// crosses a thread boundary. Distinct call levels reborrow distinct
+/// slab slots (parent ≠ child) — no aliasing.
 ///
 /// # Safety
 ///
@@ -815,7 +798,9 @@ unsafe fn layout_subtree_borrowed_impl(
     // Rust's drop-on-unwind discipline.
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
-    // Resolve id → NodePtr.  Cross-thread access panics inside `get`.
+    // Resolve id → NodePtr. Confinement to the constructing thread is
+    // structural (`SubtreeArena: !Send + !Sync`) — there is no cross-thread
+    // case for `get` to reject at runtime.
     let Some(NodePtr(node_ptr)) = arena.get(id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
@@ -1047,18 +1032,26 @@ unsafe fn layout_subtree_borrowed_impl(
         // Descendant-error tracking flag.  Closure flips to `true` on any
         // descendant `RenderError`; stage 6 below skips `clear_needs_layout`
         // when set so the parent stays dirty for next-frame retry.  Shared
-        // via `Arc<AtomicBool>` because the closure is `Send + Sync`
-        // (inherited from `LayoutChildCallback`'s bound).
+        // via `Arc<AtomicBool>` even though the closure never leaves this
+        // thread: `Arc` gives a cheap `Clone` for the recursive callback to
+        // carry alongside `arena_for_cb` without fighting the closure's own
+        // borrow of `arena`; a `Rc<Cell<bool>>` would work just as well
+        // soundness-wise but `Arc<AtomicBool>` was already the established
+        // idiom elsewhere in this walk (see the `layout_failures`/
+        // `layout_successes` sinks) before this callback existed.
         let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
 
-        // Capture `&SubtreeArena` for the recursive callback.  `&T` is
-        // `Send` iff `T: Sync`; `SubtreeArena: Sync` because its
-        // `HashMap<RenderId, NodePtr>` is Sync (NodePtr declares Sync via
-        // unsafe impl + RenderId is Sync) and the `PhantomData<&'tree mut ()>`
-        // is Sync too.  So `&SubtreeArena: Send + Sync`, satisfying
-        // `LayoutChildCallback: Send + Sync`.
+        // Capture `&SubtreeArena` for the recursive callback. Neither the
+        // capture nor the closure it is captured into needs `Send`/`Sync`:
+        // `LayoutChildCallback` carries no such bound (dropped along with
+        // `BoxLayoutCtxErased`'s own `Send + Sync` supertrait), and
+        // `SubtreeArena` is `!Send + !Sync` regardless (pinned by
+        // `assert_not_impl_any!` in this module's tests) — this closure
+        // simply never crosses a thread boundary; it runs to completion on
+        // the same thread that called `layout_dirty_root`, synchronously,
+        // before this stack frame returns.
         let arena_for_cb: &SubtreeArena<'_> = arena;
         let descendant_error_for_sliver_cb = std::sync::Arc::clone(&descendant_error_flag);
         let cb_owned = move |child_id: RenderId,
@@ -1464,7 +1457,9 @@ unsafe fn box_intrinsic_query_borrowed_impl(
     // `build_intrinsic_child_parent_data` gates each deref on `is_in_flight`
     // and skips any in-flight slot (see its `# Safety`). This call precedes the
     // child-query closure, so no non-cyclic child slot has been entered yet, and
-    // `arena.get` enforces single-thread access. All its preconditions hold.
+    // no other arena walk can run concurrently: that is structural
+    // (`SubtreeArena: !Send + !Sync`), not a runtime check `arena.get()`
+    // performs. All its preconditions hold.
     let child_parent_data_owned: Vec<Option<Box<dyn ParentData>>> = unsafe {
         build_intrinsic_child_parent_data(
             arena,
@@ -1590,7 +1585,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // Drop runs on every exit including unwind so the flag stays consistent.
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
-    // Resolve id → NodePtr.  Cross-thread access panics inside `get`.
+    // Resolve id → NodePtr. Confinement to the constructing thread is
+    // structural (`SubtreeArena: !Send + !Sync`) — there is no cross-thread
+    // case for `get` to reject at runtime.
     let Some(NodePtr(node_ptr)) = arena.get(id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
@@ -1963,12 +1960,11 @@ mod tests {
     /// Concrete adversarial tests (re-entrant layout_child, LayoutCycleGuard
     /// rejection, pending-sink ordering) live in the integration test files
     /// under `tests/` where a full `PipelineOwner` is available:
-    /// `tests/layout_dirty_root.rs` and `tests/layout_cycle_guard.rs`. The
-    /// cross-thread-panic test this comment used to cite
-    /// (`check_thread_panics_on_wrong_thread`, this module) no longer
-    /// compiles and is not replaced by an equivalent runtime test -- see the
-    /// comment above the interim `assert_not_impl_any!` pin further down in
-    /// this file's test module.
+    /// `tests/layout_dirty_root.rs` and `tests/layout_cycle_guard.rs`. There
+    /// is no cross-thread-panic test for this module: thread confinement is
+    /// structural (`SubtreeArena: !Send + !Sync`, pinned further down in
+    /// this file's test module) with no runtime check to exercise -- see
+    /// the comment above the pin.
     #[test]
     fn new_with_zero_ids_produces_empty_arena() {
         // Exercise `SubtreeArena::new` with the matched-length empty case
@@ -2015,24 +2011,31 @@ mod tests {
         );
     }
 
-    // `check_thread_panics_on_wrong_thread` used to prove `check_thread`'s
-    // runtime assert fires when `SubtreeArena` is moved to another thread
-    // via `std::thread::scope`. It no longer compiles, and that is the
-    // point: `pending_builds: Mutex<Vec<PendingBuild>>` holds
-    // `PendingBuild::initial_parent_data: Option<Box<dyn ParentData>>`, and
-    // `ParentData` no longer requires `Send + Sync` (the pipeline owner this
-    // arena serves is confined to one thread by construction, not by a
-    // runtime check) -- so `SubtreeArena` itself is `!Send + !Sync` now,
-    // pinned below. `Scope::spawn` requires its closure to be `Send`, so the
-    // exact cross-thread misuse this test constructed is now a compile error
-    // one layer earlier than `check_thread`'s assert -- the same class of
-    // improvement as `PipelineCell::with_mut`'s reentry panic: a documented
-    // strengthening, not a parity break. `check_thread` itself stays as
-    // defense-in-depth: the interim pin below only proves today's field set
-    // is not `Send`/`Sync`, not that no future field addition could
-    // reintroduce the hazard, and a raw-pointer misuse inside `NodePtr`
-    // would bypass type-level `Send`/`Sync` checking entirely.
+    // There used to be a `check_thread_panics_on_wrong_thread` test proving
+    // a runtime assert fired when `SubtreeArena` was moved to another
+    // thread via `std::thread::scope`. Both the assert (`check_thread`) and
+    // `NodePtr`'s manual `unsafe impl Send/Sync` are gone now: the pipeline
+    // owner this arena serves was already confined to one thread by
+    // construction (`PipelineCell` wraps `Rc<RefCell<_>>`), and
+    // `ParentData` no longer requires `Send + Sync`, so `SubtreeArena` is
+    // `!Send + !Sync` by ordinary type-level inference -- no manual impl,
+    // no runtime check, nothing to bypass. `Scope::spawn` requires its
+    // closure to be `Send`, so the exact cross-thread misuse the old test
+    // constructed is now a compile error, one layer earlier than
+    // `check_thread`'s former assert -- the same class of improvement as
+    // `PipelineCell::with_mut`'s reentry panic: a documented strengthening,
+    // not a parity break. The two pins below are the primary evidence for
+    // this: `SubtreeArena` for the aggregate (every field, including the
+    // `Mutex` sinks), `NodePtr` for the raw pointer itself (so a future
+    // field addition that tried to re-derive `Send`/`Sync` some other way
+    // would be caught at the type it actually touches). Both types are
+    // private to this crate, so the externally observable half of this
+    // same fact is a `compile_fail` doctest on `LayoutChildCallback`'s own
+    // doc comment in `protocol/box_protocol.rs` (the nearest public type
+    // with the identical never-`Send` shape) -- cross-linked so neither
+    // half is deleted as "redundant" without checking the other.
     static_assertions::assert_not_impl_any!(SubtreeArena<'_>: Send, Sync);
+    static_assertions::assert_not_impl_any!(NodePtr: Send, Sync);
 
     /// Verify that `LayoutCycleGuard` rejects re-entry and that `Drop`
     /// clears the id so a second entry attempt on a fresh guard succeeds.
@@ -2046,8 +2049,8 @@ mod tests {
         let mut by_id: HashMap<RenderId, (NodePtr, AtomicBool)> = HashMap::new();
         // NodePtr is never dereferenced in this test — we only exercise the
         // AtomicBool side flag.  Use a dangling non-null pointer as the
-        // address; the `unsafe impl Send/Sync` on NodePtr and `check_thread`
-        // mean no deref occurs during LayoutCycleGuard operations.
+        // address; `LayoutCycleGuard::enter` never derefs the pointer, only
+        // the side `AtomicBool`, so the dangling address is never touched.
         by_id.insert(
             id,
             (
@@ -2068,7 +2071,6 @@ mod tests {
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),
-            owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
 
@@ -2109,7 +2111,6 @@ mod tests {
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),
-            owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
 
@@ -2449,6 +2450,185 @@ mod tests {
             Some(None),
             "the baseline query must run and answer None for the in-flight \
              slot (its &mut is live on the ancestor frame)",
+        );
+    }
+
+    // ========================================================================
+    // Reentrant layout — a mid-layout child-request against the checked-out
+    // owner (miri coverage widened alongside the two walks above; see root
+    // `AGENTS.md`'s miri-scope line and the justfile `miri` recipe
+    // doc-comment).
+    // ========================================================================
+    //
+    // `RenderSliverList`'s request-strategy seam
+    // (`SliverLayoutContext::request_child_build`) records a child-build
+    // request into the arena's `pending_child_requests` sink WHILE a real
+    // `NodePtr` for the requesting sliver is live -- the walk has not
+    // returned, so the request is issued strictly mid-layout. The walk
+    // itself runs through a `PipelineCell` checkout (the production
+    // `with_mut { mem::take -> into_layout -> ... -> into_idle }` pattern
+    // from `flui-view/src/owner/layout_builder.rs`), and after
+    // `layout_dirty_root` returns, `mark_needs_layout` is called on the
+    // requesting sliver's id -- still inside the same checkout -- to prove
+    // the checked-out owner accepts an invalidation immediately after a
+    // walk that queued a request against it, with no aliasing hazard
+    // between the two.
+
+    use flui_types::layout::AxisDirection;
+
+    use crate::{
+        constraints::GrowthDirection,
+        context::{SliverHitTestContext, SliverLayoutContext},
+        parent_data::SliverParentData,
+        pipeline::PipelineCell,
+        protocol::SliverProtocol,
+        traits::{RenderObject, RenderSliver},
+        view::ScrollDirection,
+    };
+
+    /// Sliver constraints for a 300x600 vertical viewport at scroll offset 0.
+    fn mid_layout_sliver_constraints() -> SliverConstraints {
+        SliverConstraints {
+            axis_direction: AxisDirection::TopToBottom,
+            cross_axis_direction: AxisDirection::LeftToRight,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
+            scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
+            remaining_paint_extent: 400.0,
+            cross_axis_extent: 300.0,
+            viewport_main_axis_extent: 600.0,
+            remaining_cache_extent: 450.0,
+            cache_origin: 0.0,
+        }
+    }
+
+    /// Leaf sliver whose `perform_layout` issues a child-build request
+    /// (the `RenderSliverList` request-strategy seam) while its own
+    /// `NodePtr` is live on the walk's call stack -- the mid-layout hazard
+    /// this test exists to exercise under miri.
+    #[derive(Debug, Default)]
+    struct RequestingSliver;
+
+    impl Diagnosticable for RequestingSliver {}
+
+    impl RenderSliver for RequestingSliver {
+        type Arity = Leaf;
+        type ParentData = SliverParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut SliverLayoutContext<'_, Leaf, SliverParentData>,
+        ) -> SliverGeometry {
+            // Recorded into `SubtreeArena::pending_child_requests` (a
+            // `Mutex`, written through `&self`) while `self`'s own
+            // `NodePtr` is the live `&mut RenderNode` this call is
+            // borrowed from -- a different allocation entirely, but the
+            // property under test is that miri sees no UB in the
+            // interleaving.
+            let _ = ctx.request_child_build(7);
+            SliverGeometry {
+                scroll_extent: 0.0,
+                paint_extent: 0.0,
+                layout_extent: 0.0,
+                max_paint_extent: 0.0,
+                hit_test_extent: 0.0,
+                visible: false,
+                ..SliverGeometry::ZERO
+            }
+        }
+
+        fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, SliverParentData>) -> bool {
+            false
+        }
+    }
+
+    /// Box parent (`Single` arity) that drives its one Sliver child through
+    /// `ctx.layout_sliver_child`. Root + sliver leaf = 2 real `NodePtr`s.
+    #[derive(Debug)]
+    struct SliverHost {
+        sliver_constraints: SliverConstraints,
+    }
+
+    impl Diagnosticable for SliverHost {}
+
+    impl RenderBox for SliverHost {
+        type Arity = Single;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+        ) -> Size {
+            ctx.layout_sliver_child(0, self.sliver_constraints);
+            ctx.constraints().biggest()
+        }
+
+        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
+            false
+        }
+        fn hit_test_behavior(&self) -> HitTestBehavior {
+            HitTestBehavior::Opaque
+        }
+    }
+
+    #[test]
+    fn child_request_mid_layout_surfaces_on_the_checked_out_owner() {
+        let mut owner = PipelineOwner::new();
+        let root = owner.insert(Box::new(SliverHost {
+            sliver_constraints: mid_layout_sliver_constraints(),
+        }) as Box<dyn RenderObject<BoxProtocol>>);
+        let sliver_id = owner
+            .insert_sliver_child_render_object(
+                root,
+                Box::new(RequestingSliver) as Box<dyn RenderObject<SliverProtocol>>,
+            )
+            .expect("sliver child insert");
+        owner.set_root_id(Some(root));
+        owner.set_root_constraints(Some(BoxConstraints::new(
+            px(0.0),
+            px(800.0),
+            px(0.0),
+            px(600.0),
+        )));
+
+        let cell = PipelineCell::new(owner);
+
+        let (layout_result, requests) = cell.with_mut(|pipeline_owner| {
+            let mut layout = std::mem::take(pipeline_owner).into_layout();
+            let result = layout.layout_dirty_root(
+                root,
+                layout
+                    .root_constraints()
+                    .expect("root constraints were set before the checkout"),
+            );
+            // Still inside the same checkout: the request queued mid-walk
+            // must already be visible on the checked-out owner.
+            let requests = layout.take_pending_child_requests();
+            // And the owner must accept a fresh invalidation immediately
+            // after the walk that queued the request -- no aliasing
+            // hazard between the two under miri.
+            layout.mark_needs_layout(sliver_id);
+            *pipeline_owner = layout.into_idle();
+            (result, requests)
+        });
+
+        layout_result.expect(
+            "a Box host driving a Sliver child that requests mid-layout must \
+             still complete the walk",
+        );
+        assert_eq!(
+            requests,
+            vec![(sliver_id, 7)],
+            "the mid-layout child-build request must surface on the \
+             checked-out owner after the walk, tagged with the requesting \
+             sliver's own id",
+        );
+        assert!(
+            cell.with(PipelineOwner::has_dirty_nodes),
+            "mark_needs_layout called on the checked-out owner right after \
+             the walk must register a dirty node for the next frame",
         );
     }
 }

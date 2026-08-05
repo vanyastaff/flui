@@ -121,7 +121,7 @@ Strategy clause "Behavior loyal, structure Rust-native" treats Flutter as the **
 | Mouse tracker maps (`src/input/mouse_tracker.rs:294-303`) | `RwLock<HashMap<…>>` | Tracker state | Off layout/paint hot path. |
 | Render view error builder (`src/view/error.rs`, via `flui-view` integration) | `static RwLock<Option<...>>` | Process-wide singleton | Off any hot path. |
 
-`NodePtr` in `src/pipeline/owner/subtree_arena.rs` carries `unsafe impl Send` and `unsafe impl Sync` — the raw pointer is an address for the disjoint-subtree-borrow substrate ([`SubtreeArena`]); cross-thread deref is rejected by `SubtreeArena::check_thread` before any access. Re-entrancy primitives `RenderTree::get_two_mut` (`src/storage/tree.rs:337`) and `get_parent_and_children_mut` (`src/storage/tree.rs:365`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
+`NodePtr` in `src/pipeline/owner/subtree_arena.rs` is a plain raw-pointer newtype for the disjoint-subtree-borrow substrate ([`SubtreeArena`]) — `!Send + !Sync` by the language default, no manual impl. Confinement to the constructing thread is structural (`SubtreeArena` itself is `!Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!`); there is no runtime thread check (`check_thread` and the pointer's former `unsafe impl Send/Sync` were both deleted once `PipelineCell`/dropped `Send + Sync` bounds made confinement type-enforced). Re-entrancy primitives `RenderTree::get_two_mut` (`src/storage/tree.rs:337`) and `get_parent_and_children_mut` (`src/storage/tree.rs:365`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
 
 ---
 

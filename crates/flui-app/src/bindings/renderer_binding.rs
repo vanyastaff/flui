@@ -935,22 +935,48 @@ mod tests {
     /// `Arc<dyn Fn(bool) + Send + Sync>` because *some* bindings fan out to
     /// genuinely cross-thread platform-accessibility callers. This test's
     /// `RenderingFlutterBinding`, though, is owner-thread-confined
-    /// (`!Send`/`!Sync`, transitively via `PipelineCell`) and every closure
-    /// built from a `BindingPtr` is invoked synchronously, inline, from
-    /// `set_semantics_enabled` on the same thread and within the lifetime
-    /// of the local `binding` these pointers are taken from — never stored
-    /// past that call, never actually sent anywhere. The `unsafe impl`
-    /// therefore satisfies the trait's *type-level* requirement without
-    /// violating what it protects against in any binding that is genuinely
-    /// shared across threads.
+    /// (`!Send`/`!Sync`, transitively via `PipelineCell`).
+    ///
+    /// What is transient is the *deref*, not the pointer's storage
+    /// lifetime: the reentrant listener closure that captures a
+    /// `BindingPtr` by value is itself wrapped in an `Arc` and handed to
+    /// `binding.add_semantics_enabled_listener`, which stores it in
+    /// `binding`'s own `semantics_listeners` list — so the pointer lives
+    /// inside `binding`, self-referentially, for `binding`'s entire
+    /// lifetime, not just for one call. Every actual `unsafe { .get() }`
+    /// deref, though, fires synchronously, inline, from
+    /// `set_semantics_enabled` on the same thread and only while `binding`
+    /// is still alive — never after, never from another thread.
+    ///
+    /// **Unstated-until-now invariant this relies on:** `binding` (the local
+    /// this pointer is taken from via `&raw const binding`) must never be
+    /// moved for as long as any `BindingPtr` derived from it can still be
+    /// dereferenced — moving it would relocate the pointee and leave every
+    /// stored `BindingPtr` dangling with no compiler-visible signal. The
+    /// test below satisfies this by construction: `binding` is a `let`
+    /// local used only through `&`/method-call receivers afterward, never
+    /// passed by value, so its address is fixed for the rest of the test.
+    ///
+    /// The `unsafe impl` therefore satisfies the trait's *type-level*
+    /// requirement without violating what it protects against in any
+    /// binding that is genuinely shared across threads.
     struct BindingPtr(*const RenderingFlutterBinding);
+    // SAFETY: see the struct doc above — every deref through a `BindingPtr`
+    // fires synchronously, inline, on the same thread and only while the
+    // `binding` local it was taken from is still alive and unmoved; the
+    // pointer's *storage* outlives any one call (it lives inside `binding`
+    // itself, in the listener list), but it never actually crosses a
+    // thread, so the type-level `Send` this test's `Arc<dyn Fn + Send +
+    // Sync>` listener signature demands is never exercised for real.
     #[allow(unsafe_code)]
     unsafe impl Send for BindingPtr {}
+    // SAFETY: same as `Send` above — no genuine cross-thread share occurs.
     #[allow(unsafe_code)]
     unsafe impl Sync for BindingPtr {}
     impl BindingPtr {
-        // SAFETY: see the struct's doc — valid only for the duration of the
-        // local `binding` this test constructs it from.
+        // SAFETY: see the struct's doc — valid only while the `binding`
+        // local this test constructs it from is still alive and has not
+        // been moved since `&raw const binding` was taken.
         #[allow(unsafe_code)]
         unsafe fn get(&self) -> &RenderingFlutterBinding {
             unsafe { &*self.0 }

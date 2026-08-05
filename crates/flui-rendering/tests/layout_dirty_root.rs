@@ -562,11 +562,13 @@ fn sliver_node_surfaces_as_protocol_mismatch() {
 // `Send` (a render object may now hold non-`Send` state). Moving a
 // `PipelineOwner` -- by value, not just by shared reference -- to any
 // thread other than the one it was created on is a compile error, full
-// stop; "single-owner, single-thread" is no longer a convention
-// `SubtreeArena::check_thread` merely encourages, it is the only shape
-// the type system allows. There is no successor test: the capability
-// this test exercised (worker-thread layout of an unshared owner) is
-// gone by design, not replaced.
+// stop; "single-owner, single-thread" is no longer a convention a runtime
+// check (`SubtreeArena::check_thread`, since deleted along with `NodePtr`'s
+// manual `unsafe impl Send/Sync` -- confinement needs no runtime check
+// when the type system already refuses to compile the violation) merely
+// encouraged, it is the only shape the type system allows. There is no
+// successor test: the capability this test exercised (worker-thread
+// layout of an unshared owner) is gone by design, not replaced.
 
 // ============================================================================
 // 4-level deep recursion (verifies pre-acquired subtree borrows

@@ -220,17 +220,26 @@ test-assets:
 deny:
     cargo deny check
 
-# SCOPE: the `subtree_arena` unit tests include two real-NodePtr walks that
-# drive `layout_dirty_root` through every reborrow phase of
+# SCOPE: widened from `pipeline::owner::subtree_arena` to `pipeline::owner`
+# to pick up `cell.rs`'s PipelineCell checkout tests and two new
+# real-NodePtr walks alongside the original subtree_arena suite. The
+# `subtree_arena` unit tests still include the two pre-existing real-NodePtr
+# walks that drive `layout_dirty_root` through every reborrow phase of
 # `layout_subtree_borrowed_impl` — one straight parent→leaf pass, one cyclic
 # `children()` edge that exercises the in-flight gate on the baseline
-# callback (removing that gate makes miri fail this suite). Still narrow:
-# only this module, only box layout — sliver walks and intrinsics queries
-# are not interpreted here.
+# callback (removing that gate makes miri fail this suite) — untouched by
+# the widening. New alongside them: an owner-local traversal (a full
+# run_frame over a real 3-node tree, driven through PipelineCell::with_mut)
+# and a reentrant-layout walk (a Sliver child that issues a mid-layout
+# child-build request against the checked-out owner, then mark_needs_layout
+# right after). Measured at 55 tests / ~21s wall, in budget. Still narrow:
+# only `pipeline::owner`, only box + leaf-sliver
+# layout — deeper sliver walks and intrinsics queries are not interpreted
+# here.
 [group("test")]
-[doc("Run miri on flui-rendering's subtree-arena tests, incl. real layout walks (requires nightly + miri)")]
+[doc("Run miri on flui-rendering's pipeline::owner tests, incl. real layout walks + PipelineCell checkouts (requires nightly + miri)")]
 miri:
-    cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena
+    cargo +nightly miri test -p flui-rendering --lib pipeline::owner
 
 [group("test")]
 [doc("Generate an HTML coverage report (requires cargo-llvm-cov)")]
