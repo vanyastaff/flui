@@ -52,7 +52,7 @@ use std::time::Duration;
 use flui_animation::ext::AnimatableExt;
 use flui_animation::ext::AnimationExt;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, FloatTween, Scheduler, Vsync,
+    Animation, AnimationController, AnimationStatus, Curves, FloatTween, UpdateScheduler, Vsync,
     VsyncRegistration,
 };
 use flui_types::geometry::{EdgeInsets, Pixels, px};
@@ -504,7 +504,8 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             return;
         };
 
-        let controller = AnimationController::new(Duration::from_millis(200), &Scheduler::new());
+        let controller =
+            AnimationController::new(Duration::from_millis(200), &UpdateScheduler::new());
         let registration = vsync.register(controller.clone());
 
         // Oracle: `_animate()`'s `ticker.then(...)` re-invokes `_animate` if
@@ -753,7 +754,7 @@ mod tests {
     // ---- start_press_fade (pressed_opacity(None) truly starts no run) ----
 
     fn fresh_controller() -> AnimationController {
-        AnimationController::new(Duration::from_millis(200), &Scheduler::new())
+        AnimationController::new(Duration::from_millis(200), &UpdateScheduler::new())
     }
 
     /// Red-check: delete the `pressed_opacity.is_none()` guard in

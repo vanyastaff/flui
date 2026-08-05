@@ -12,7 +12,7 @@
 //! # The divergence this file documents, and does not claim away
 //!
 //! In Flutter the pipeline **is** a persistent callback. In FLUI the pipeline is
-//! a closure passed to `Scheduler::drive_frame`, so a *registered* persistent
+//! a closure passed to `UpdateScheduler::drive_frame`, so a *registered* persistent
 //! callback runs **before** it. Post-frame ordering — the only thing
 //! `HeroController` needs — matches. Persistent-phase ordering does not, and
 //! `persistent_callbacks_run_before_the_pipeline` pins that honestly.
@@ -21,8 +21,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_scheduler::{Instant, Scheduler, SchedulerPhase};
+use flui_scheduler::{IdleDeadline, Instant, SchedulerPhase, UpdateScheduler};
 use parking_lot::Mutex;
+
+/// An Idle-slice deadline far enough in the future that it never passes
+/// during a test — these tests exercise post-frame ordering, not the
+/// deadline gate itself, so Idle-priority work must never be deferred here.
+fn far_deadline() -> IdleDeadline {
+    IdleDeadline::far_future(Instant::now())
+}
 
 /// Append-only log of the order things happened in.
 #[derive(Clone, Default)]
@@ -42,7 +49,7 @@ impl Log {
 /// slot, so a post-frame callback must observe everything it did.
 #[test]
 fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let log = Log::default();
 
     let log_cb = log.clone();
@@ -51,7 +58,7 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     }));
 
     let log_pipe = log.clone();
-    scheduler.drive_frame(Instant::now(), || {
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {
         log_pipe.push("pipeline");
     });
 
@@ -63,7 +70,7 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
 /// this is the exact regression under guard.
 #[test]
 fn post_frame_callback_does_not_run_before_the_pipeline() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let fired = Arc::new(AtomicUsize::new(0));
 
     let fired_cb = Arc::clone(&fired);
@@ -72,9 +79,9 @@ fn post_frame_callback_does_not_run_before_the_pipeline() {
     }));
 
     let fired_pipe = Arc::clone(&fired);
-    let seen_during_pipeline = scheduler.drive_frame(Instant::now(), || {
+    let seen_during_pipeline = scheduler.drive_frame(Instant::now(), far_deadline(), || {
         assert_eq!(
-            Scheduler::new().phase(),
+            UpdateScheduler::new().phase(),
             SchedulerPhase::Idle,
             "sanity: a fresh scheduler is idle"
         );
@@ -92,16 +99,16 @@ fn post_frame_callback_does_not_run_before_the_pipeline() {
 /// `drawFrame` occupies as a persistent callback.
 #[test]
 fn the_pipeline_runs_in_the_persistent_callbacks_phase() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let probe = scheduler.clone();
-    let phase = scheduler.drive_frame(Instant::now(), || probe.phase());
+    let phase = scheduler.drive_frame(Instant::now(), far_deadline(), || probe.phase());
     assert_eq!(phase, SchedulerPhase::PersistentCallbacks);
 }
 
 /// `_postFrameCallbacks` are "called exactly once" (`binding.dart:802`).
 #[test]
 fn post_frame_callback_runs_exactly_once_across_two_frames() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let calls = Arc::new(AtomicUsize::new(0));
 
     let calls_cb = Arc::clone(&calls);
@@ -109,8 +116,8 @@ fn post_frame_callback_runs_exactly_once_across_two_frames() {
         calls_cb.fetch_add(1, Ordering::SeqCst);
     }));
 
-    scheduler.drive_frame(Instant::now(), || {});
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -120,7 +127,7 @@ fn post_frame_callback_runs_exactly_once_across_two_frames() {
 /// post-frame callback lands on the next frame, not this one.
 #[test]
 fn a_post_frame_callback_registered_from_a_post_frame_callback_defers_to_the_next_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let log = Log::default();
 
     let inner_scheduler = scheduler.clone();
@@ -133,19 +140,19 @@ fn a_post_frame_callback_registered_from_a_post_frame_callback_defers_to_the_nex
         }));
     }));
 
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(log.get(), vec!["outer"], "the inner callback must defer");
 
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(log.get(), vec!["outer", "inner"]);
 }
 
 /// The frame closes cleanly.
 #[test]
 fn phase_is_idle_after_a_successful_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
 
@@ -153,14 +160,15 @@ fn phase_is_idle_after_a_successful_frame() {
 /// callbacks fire, exactly once, and the phase settles.
 #[test]
 fn a_pipeline_returning_an_error_still_completes_the_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let fired_cb = Arc::clone(&fired);
     scheduler.add_post_frame_callback(Box::new(move |_| {
         fired_cb.fetch_add(1, Ordering::SeqCst);
     }));
 
-    let result: Result<(), &str> = scheduler.drive_frame(Instant::now(), || Err("render failed"));
+    let result: Result<(), &str> =
+        scheduler.drive_frame(Instant::now(), far_deadline(), || Err("render failed"));
 
     assert_eq!(result, Err("render failed"));
     assert_eq!(fired.load(Ordering::SeqCst), 1, "an error is not an abort");
@@ -180,7 +188,7 @@ fn a_pipeline_returning_an_error_still_completes_the_frame() {
 /// this a `Drop` guard running during unwind — double-panic into `abort`.
 #[test]
 fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let fired_cb = Arc::clone(&fired);
     scheduler.add_post_frame_callback(Box::new(move |_| {
@@ -188,7 +196,9 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     }));
 
     let panicked = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(Instant::now(), || panic!("pipeline exploded"));
+        scheduler.drive_frame(Instant::now(), far_deadline(), || {
+            panic!("pipeline exploded")
+        });
     }))
     .is_err();
     assert!(panicked, "the panic must propagate, not be swallowed");
@@ -205,7 +215,7 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     );
 
     // The recovered scheduler drives a clean frame, and the queued callback runs.
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(fired.load(Ordering::SeqCst), 1);
 }
 
@@ -214,9 +224,9 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 /// illegal `PersistentCallbacks -> TransientCallbacks` transition.
 #[test]
 fn a_frame_after_a_panicking_frame_starts_cleanly() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(Instant::now(), || panic!("boom"));
+        scheduler.drive_frame(Instant::now(), far_deadline(), || panic!("boom"));
     }));
 
     let ran = Arc::new(AtomicUsize::new(0));
@@ -226,7 +236,7 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     }));
 
     // Would `debug_assert!` on the illegal transition if the frame were still open.
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(ran.load(Ordering::SeqCst), 1);
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
@@ -234,10 +244,10 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
 /// `abort_frame` is idempotent and a no-op outside a frame.
 #[test]
 fn abort_frame_is_a_no_op_when_no_frame_is_open() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     scheduler.abort_frame();
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     scheduler.abort_frame();
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
@@ -246,7 +256,7 @@ fn abort_frame_is_a_no_op_when_no_frame_is_open() {
 /// callbacks run. It is `begin → persistent → end` with no pipeline.
 #[test]
 fn execute_frame_is_begin_persistent_end_and_still_drains_post_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let fired_cb = Arc::clone(&fired);
     scheduler.add_post_frame_callback(Box::new(move |_| {
@@ -263,7 +273,7 @@ fn execute_frame_is_begin_persistent_end_and_still_drains_post_frame() {
 /// persistent slot to the caller. Characterizes the split.
 #[test]
 fn handle_draw_frame_alone_no_longer_drains_post_frame_callbacks() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let fired_cb = Arc::clone(&fired);
     scheduler.add_post_frame_callback(Box::new(move |_| {
@@ -290,7 +300,7 @@ fn handle_draw_frame_alone_no_longer_drains_post_frame_callbacks() {
 /// registers one today.
 #[test]
 fn persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let log = Log::default();
 
     let log_persistent = log.clone();
@@ -303,7 +313,7 @@ fn persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter() {
     scheduler.add_post_frame_callback(Box::new(move |_| {
         log_post.push("post_frame");
     }));
-    scheduler.drive_frame(Instant::now(), || {
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {
         log_pipe.push("pipeline");
     });
 
@@ -317,7 +327,7 @@ fn persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter() {
 /// Timing is recorded and completion waiters notified exactly once per frame.
 #[test]
 fn frame_timing_is_recorded_once_per_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let timings = Arc::new(AtomicUsize::new(0));
     let timings_cb = Arc::clone(&timings);
     scheduler.add_post_frame_callback(Box::new(move |_timing| {
@@ -325,7 +335,7 @@ fn frame_timing_is_recorded_once_per_frame() {
     }));
 
     let before = scheduler.frame_count();
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(scheduler.frame_count(), before + 1);
     assert_eq!(timings.load(Ordering::SeqCst), 1);
 }

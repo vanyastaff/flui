@@ -21,15 +21,15 @@
 //! use flui_scheduler::duration::{FrameDuration, Milliseconds, Seconds};
 //!
 //! // Type-safe - can't accidentally mix units
-//! let ms = Milliseconds::new(16.67);
-//! let secs = Seconds::new(0.01667);
+//! let ms = Milliseconds::new(12.5);
+//! let secs = Seconds::new(0.0125);
 //!
 //! // Easy conversion
 //! let ms_from_secs: Milliseconds = secs.into();
 //!
 //! // FrameDuration for budget calculations
 //! let budget = FrameDuration::try_from_fps(60).expect("60 fps valid");
-//! assert!(budget.as_ms().value() - 16.67 < 0.01);
+//! assert!((budget.as_ms().value() - 1000.0 / 60.0).abs() < 0.001);
 //! ```
 
 use std::{
@@ -62,12 +62,12 @@ pub enum InvalidDurationConfig {
 /// ```
 /// use flui_scheduler::duration::Milliseconds;
 ///
-/// let ms = Milliseconds::new(16.67);
-/// assert_eq!(ms.value(), 16.67);
+/// let ms = Milliseconds::new(12.5);
+/// assert_eq!(ms.value(), 12.5);
 ///
 /// // Arithmetic operations
 /// let total = ms + Milliseconds::new(10.0);
-/// assert!((total.value() - 26.67).abs() < 0.01);
+/// assert!((total.value() - 22.5).abs() < 0.01);
 ///
 /// // Convert to std::time::Duration
 /// let std_duration: std::time::Duration = ms.into();
@@ -481,11 +481,6 @@ impl FrameDuration {
         target_ms: Milliseconds::new(33.333),
     };
 
-    /// Frame duration for 60 FPS (~16.67ms) - standard target
-    pub const FPS_60: Self = Self {
-        target_ms: Milliseconds::new(16.667),
-    };
-
     /// Frame duration for 120 FPS (~8.33ms) - high refresh rate
     pub const FPS_120: Self = Self {
         target_ms: Milliseconds::new(8.333),
@@ -555,17 +550,11 @@ impl FrameDuration {
 
     /// Check if elapsed time indicates a janky frame.
     ///
-    /// A frame is considered janky if it exceeds the target frame duration.
-    /// For 60 FPS, any frame taking longer than ~16.67ms is janky.
+    /// A frame is considered janky if it exceeds the target frame duration
+    /// this value represents.
     #[inline]
     pub fn is_janky(self, elapsed: Milliseconds) -> bool {
         elapsed.value() > self.target_ms.value()
-    }
-}
-
-impl Default for FrameDuration {
-    fn default() -> Self {
-        Self::FPS_60
     }
 }
 
@@ -695,7 +684,6 @@ mod tests {
     #[test]
     fn test_frame_duration_constants() {
         assert!((FrameDuration::FPS_30.fps() - 30.0).abs() < 0.1);
-        assert!((FrameDuration::FPS_60.fps() - 60.0).abs() < 0.1);
         assert!((FrameDuration::FPS_120.fps() - 120.0).abs() < 0.1);
         assert!((FrameDuration::FPS_144.fps() - 144.0).abs() < 0.1);
     }
@@ -712,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_display() {
-        assert_eq!(format!("{}", Milliseconds::new(16.67)), "16.67ms");
+        assert_eq!(format!("{}", Milliseconds::new(12.34)), "12.34ms");
         assert_eq!(format!("{}", Seconds::new(1.234)), "1.234s");
         assert_eq!(format!("{}", Microseconds::new(1000)), "1000μs");
         assert_eq!(format!("{}", Percentage::new(75.5)), "75.5%");

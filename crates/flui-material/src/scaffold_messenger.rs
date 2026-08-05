@@ -206,7 +206,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Scheduler, Vsync, VsyncRegistration,
+    Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
 };
 use flui_foundation::ElementId;
 use flui_scheduler::PostFrameHandle;
@@ -486,8 +486,10 @@ impl MessengerCore {
         let Some(front) = self.queue.borrow().front().cloned() else {
             return;
         };
-        let controller =
-            AnimationController::new(front.snack_bar.configured_duration(), &Scheduler::new());
+        let controller = AnimationController::new(
+            front.snack_bar.configured_duration(),
+            &UpdateScheduler::new(),
+        );
         if let Some(vsync) = self.vsync.borrow().as_ref() {
             let registration = vsync.register(controller.clone());
             *self.duration_vsync_registration.borrow_mut() = Some(registration);
@@ -605,7 +607,7 @@ impl ScaffoldMessengerHandle {
     /// that.
     fn new() -> Self {
         let entry_controller =
-            AnimationController::new(ENTRY_TRANSITION_DURATION, &Scheduler::new());
+            AnimationController::new(ENTRY_TRANSITION_DURATION, &UpdateScheduler::new());
         let shared = Rc::new(MessengerCore {
             entry_controller,
             duration_controller: RefCell::new(None),

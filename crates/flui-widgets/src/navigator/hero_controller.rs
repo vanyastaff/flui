@@ -51,7 +51,7 @@
 //! | `didChangeTop` (`navigator.dart:4590-4596`) | `Notification::TopChanged`, delivered outside the history lock |
 //! | offstage ⇒ `animation.value == 1.0` (`routes.dart:1958`) | the `ModalRoute` animation proxies |
 //! | `addPostFrameCallback` (`:968`) | [`PostFrameHandle`] |
-//! | the callback runs *after* layout commits | `Scheduler::drive_frame` |
+//! | the callback runs *after* layout commits | `UpdateScheduler::drive_frame` |
 //! | `to.subtreeContext` (`:1014`) | [`RouteSubtree`] |
 //! | `subtreeContext.findRenderObject()!.size` (`:952`) | `PipelineOwner::box_size` |
 //! | `getTransformTo(navigatorRenderObject)` (`:1029`) | `PipelineOwner::transform_to` |

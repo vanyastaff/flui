@@ -27,7 +27,7 @@ below.
                        │ uses
 ┌──────────────────────▼──────────────────────────────────┐
 │              flui-scheduler                             │
-│  Scheduler, Ticker, FrameBudget, Priority               │
+│  UpdateScheduler, Ticker, FrameBudget, Priority         │
 └─────────────────────────────────────────────────────────┘
 ```
 

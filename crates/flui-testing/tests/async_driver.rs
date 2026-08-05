@@ -1,7 +1,7 @@
 //! `HeadlessBinding::pump_frame` runs the shared async-driver step.
 //!
 //! `flui-app` carries the mirror-image test for `AppBinding::draw_frame`. Both
-//! call `Scheduler::drive_async_tasks`; if either stopped, exactly one of the two
+//! call `UpdateScheduler::drive_async_tasks`; if either stopped, exactly one of the two
 //! would fail — which is the headless↔production divergence this pair exists to
 //! catch.
 

@@ -562,7 +562,7 @@ mod tests {
     // `BackGestureController` reads `self.controller.is_animating()`
     // throughout, which is intentionally ticker-based (Flutter parity:
     // `Ticker.isActive`) — see `transition_route.rs::install`'s doc for the
-    // full rationale. `with_detached_ticker` needs no `Scheduler` at all.
+    // full rationale. `with_detached_ticker` needs no `UpdateScheduler` at all.
     fn controller(ms: u64) -> AnimationController {
         AnimationController::with_detached_ticker(Duration::from_millis(ms))
     }

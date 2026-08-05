@@ -71,7 +71,7 @@ fn offstage_nodes(owner: &PipelineOwner) -> Vec<RenderId> {
 /// laid out, and its geometry committed — all before the post-frame callback of the
 /// very next `pump_frame` runs.
 ///
-/// Red-check: reorder `Scheduler::drive_frame` to `end_frame()` before `pipeline()`
+/// Red-check: reorder `UpdateScheduler::drive_frame` to `end_frame()` before `pipeline()`
 /// (the earlier production order, before the post-frame queue was drained here).
 /// The callback then observes zero offstage nodes and this test fails.
 #[test]

@@ -5,7 +5,7 @@
 
 use crate::controller::AnimationController;
 use crate::error::AnimationError;
-use flui_scheduler::Scheduler;
+use flui_scheduler::UpdateScheduler;
 use std::time::Duration;
 
 /// Builder for creating [`AnimationController`] instances.
@@ -19,10 +19,10 @@ use std::time::Duration;
 /// # fn main() -> Result<(), flui_animation::AnimationError> {
 /// use flui_animation::builder::AnimationControllerBuilder;
 /// use flui_animation::Animation;
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 ///
 /// let controller = AnimationControllerBuilder::new(
 ///     Duration::from_millis(300),
@@ -40,7 +40,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct AnimationControllerBuilder {
     duration: Duration,
-    scheduler: Scheduler,
+    scheduler: UpdateScheduler,
     lower_bound: f32,
     upper_bound: f32,
     reverse_duration: Option<Duration>,
@@ -65,23 +65,23 @@ impl AnimationControllerBuilder {
     /// # Arguments
     ///
     /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - Scheduler for frame coordination
+    /// * `scheduler` - UpdateScheduler for frame coordination
     ///
     /// # Examples
     ///
     /// ```
     /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let builder = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
     /// );
     /// ```
     #[must_use]
-    pub fn new(duration: Duration, scheduler: &Scheduler) -> Self {
+    pub fn new(duration: Duration, scheduler: &UpdateScheduler) -> Self {
         Self {
             duration,
             scheduler: scheduler.clone(),
@@ -108,10 +108,10 @@ impl AnimationControllerBuilder {
     /// ```
     /// # fn main() -> Result<(), flui_animation::AnimationError> {
     /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let builder = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -143,10 +143,10 @@ impl AnimationControllerBuilder {
     ///
     /// ```
     /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let builder = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -172,10 +172,10 @@ impl AnimationControllerBuilder {
     ///
     /// ```
     /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let builder = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -199,10 +199,10 @@ impl AnimationControllerBuilder {
     /// ```
     /// # fn main() -> Result<(), flui_animation::AnimationError> {
     /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let controller = AnimationControllerBuilder::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -240,17 +240,17 @@ impl AnimationController {
     /// # Arguments
     ///
     /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - Scheduler for frame coordination
+    /// * `scheduler` - UpdateScheduler for frame coordination
     ///
     /// # Examples
     ///
     /// ```
     /// # fn main() -> Result<(), flui_animation::AnimationError> {
     /// use flui_animation::AnimationController;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let controller = AnimationController::builder(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -262,7 +262,7 @@ impl AnimationController {
     /// # }
     /// ```
     #[must_use]
-    pub fn builder(duration: Duration, scheduler: &Scheduler) -> AnimationControllerBuilder {
+    pub fn builder(duration: Duration, scheduler: &UpdateScheduler) -> AnimationControllerBuilder {
         AnimationControllerBuilder::new(duration, scheduler)
     }
 }
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_builder_default() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .build()
             .unwrap();
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_builder_with_bounds() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .bounds(10.0, 20.0)
             .unwrap()
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_builder_with_initial_value() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .initial_value(0.5)
             .build()
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_builder_invalid_bounds() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let result = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .bounds(20.0, 10.0); // Invalid: lower > upper
 
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_controller_builder_method() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = AnimationController::builder(Duration::from_millis(100), &scheduler)
             .initial_value(0.75)
             .build()
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_builder_with_reverse_duration() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
             .reverse_duration(Duration::from_millis(200))
             .build()
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_builder_full_configuration() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = AnimationControllerBuilder::new(Duration::from_millis(300), &scheduler)
             .bounds(0.0, 100.0)
             .unwrap()

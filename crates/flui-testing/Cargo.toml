@@ -34,7 +34,7 @@ flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # restart-aware via the controller's `run_generation` counter.
 flui-animation = { path = "../flui-animation", version = "0.2.0" }
 # The frame-driven async task driver. `pump_frame` runs the SAME
-# `Scheduler::drive_async_tasks` step `AppBinding::draw_frame` runs, in the same
+# `UpdateScheduler::drive_async_tasks` step `AppBinding::draw_frame` runs, in the same
 # slot — between the vsync tick and `build_scope`.
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # Names the shared `Arc<RwLock<PipelineOwner>>` the element tree and the binding

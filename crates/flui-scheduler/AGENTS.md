@@ -4,12 +4,18 @@ Frame scheduling, task prioritization, and animation coordination.
 
 ## What lives here
 
-- `Scheduler` — orchestrates frames (vsync → begin → tasks → end → present)
-- `FrameScheduler` — vsync coordination
+- `UpdateScheduler` — orchestrates *logical* time only: the phase machine
+  (begin → tasks → end), callback queues, and the priority task queue. It
+  makes no refresh-rate, display, or surface assumption of its own —
+  `drive_frame(vsync_time, deadline, pipeline)` takes both timestamps from
+  its caller. `deadline` bounds `Priority::Idle` work alone; `Animation` and
+  `Build` always run to completion (physical pacing / vsync coordination is
+  a presentation-owned concern that lives outside this crate).
 - `TaskQueue` — priority-based execution (UserInput > Animation > Build > Idle)
 - `Ticker` — drives animations with frame-perfect timing
 - `LocalPostFrameLane` — owner-affine non-`Send` callback storage; runtime-internal, non-prelude
-- `FrameBudget` — enforces frame time limits (16.67ms for 60fps)
+- `FrameBudget` — per-phase timing statistics (jank, over-budget) against a
+  caller-chosen target framerate; stats only, does not gate anything
 - Duration wrappers: `FrameDuration`, `Milliseconds`
 
 ## Key constraints

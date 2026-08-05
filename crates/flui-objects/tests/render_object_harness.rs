@@ -100,7 +100,7 @@ mod harness_snapshot;
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::curve::ArcCurve;
-use flui_animation::{Animation, AnimationController, Curves, ProxyAnimation, Scheduler};
+use flui_animation::{Animation, AnimationController, Curves, ProxyAnimation, UpdateScheduler};
 use flui_interaction::InteractionLane;
 use flui_interaction::routing::{MouseTracker, PointerMotionKind};
 use flui_objects::*;
@@ -3242,7 +3242,7 @@ fn harness_opacity_paints_with_alpha_layer() {
 // ── RenderAnimatedOpacity ────────────────────────────────────────────────
 
 fn ticking_controller(ms: u64, value: f32) -> AnimationController {
-    let controller = AnimationController::new(Duration::from_millis(ms), &Scheduler::new());
+    let controller = AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new());
     controller.set_value(value);
     controller
 }
@@ -10216,7 +10216,7 @@ fn harness_table_unset_cell_alignment_follows_a_later_default_change_but_an_expl
 // ============================================================================
 //
 // Every test below constructs its own `AnimationController` (a fresh,
-// never-pumped `Scheduler`) and, where the test needs to
+// never-pumped `UpdateScheduler`) and, where the test needs to
 // drive the retarget animation across frames, keeps a `Clone` of it (`driver`)
 // to call `tick_at(seconds_since_the_current_run_started)` directly —
 // mirroring how `flui-animation`'s own controller tests and `Vsync::tick_all`
@@ -10226,7 +10226,7 @@ fn harness_table_unset_cell_alignment_follows_a_later_default_change_but_an_expl
 // `attach`) is drained on the very next `pump()`/`run_frame()` after a tick.
 
 fn animated_size_controller(ms: u64) -> (AnimationController, AnimationController) {
-    let controller = AnimationController::new(Duration::from_millis(ms), &Scheduler::new());
+    let controller = AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new());
     let driver = controller.clone();
     (controller, driver)
 }
@@ -11022,7 +11022,7 @@ fn harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_c
 #[test]
 fn harness_sliver_persistent_header_floating_snap_animation_drives_effective_scroll_offset_across_ticks()
  {
-    let ctl = AnimationController::new(Duration::from_millis(100), &Scheduler::new());
+    let ctl = AnimationController::new(Duration::from_millis(100), &UpdateScheduler::new());
     let driver = ctl.clone();
     let header: RenderSliverFloatingPersistentHeader =
         RenderSliverFloatingPersistentHeader::new(40.0, 120.0, Some(ctl)).with_snap_configuration(

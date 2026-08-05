@@ -43,7 +43,7 @@ use flui_platform::traits::{DragDropEvent, PlatformInput, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, Scheduler, SchedulerPhase};
+use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, SchedulerPhase, UpdateScheduler};
 use flui_semantics::SemanticsActionRequest;
 use flui_types::{HapticFeedback, Size, geometry::px};
 use flui_view::{GlobalKeyRegistryComposite, GlobalKeyScope, WidgetsBinding};
@@ -520,7 +520,7 @@ pub(crate) struct UiRealm {
     )]
     sender_prototype: UiCommandSender,
     redraw_pending: Arc<AtomicBool>,
-    /// This realm's OWN scheduler — the strong root every `WeakScheduler`
+    /// This realm's OWN scheduler — the strong root every `WeakUpdateScheduler`
     /// this realm vends (tickers, `PostFrameHandle`s) upgrades against.
     /// Built fresh per realm by [`RealmServices::construct`], never a
     /// process-global singleton: when this realm drops, this field drops
@@ -528,7 +528,7 @@ pub(crate) struct UiRealm {
     /// Read directly for the idle-only commit-gate phase probe in
     /// [`Self::drain_commands`] and vended to `runner.rs`'s lifecycle sites
     /// via [`Self::scheduler`].
-    scheduler: Scheduler,
+    scheduler: UpdateScheduler,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
     /// so at zero cost (thread-affinity marker).
     _owner_affine: PhantomData<*const ()>,
@@ -706,7 +706,7 @@ impl UiRealm {
 
     /// Builds the realm from already-resolved pieces: identity, the
     /// presentation's window, and `services: RealmServices` — a fresh
-    /// `Scheduler` plus the `local_post_frame_lane()`/`async_driver()`
+    /// `UpdateScheduler` plus the `local_post_frame_lane()`/`async_driver()`
     /// handles derived from it, built by the caller (`RealmServices::
     /// construct`, in `runtime.rs`), which is what makes `UiRealm` perform
     /// zero `::instance()` calls and gives every realm its own scheduler
@@ -1063,7 +1063,7 @@ impl UiRealm {
     /// singleton; see [`Self::scheduler`]'s field doc for the ownership
     /// story.
     #[must_use]
-    pub(crate) fn scheduler(&self) -> &flui_scheduler::Scheduler {
+    pub(crate) fn scheduler(&self) -> &flui_scheduler::UpdateScheduler {
         &self.scheduler
     }
 
@@ -1260,7 +1260,7 @@ impl UiRealm {
     /// content instead of finding nothing to do — called directly from
     /// `runner.rs`'s `emit_lifecycle_transition` on the frames-disabled->
     /// enabled edge (that call site already has this realm in scope; see
-    /// its own doc for why the redirty lives there and not in a `Scheduler`
+    /// its own doc for why the redirty lives there and not in an `UpdateScheduler`
     /// lifecycle listener). FLUI has no retained-scene layer to fall back
     /// on, so a `Hidden`/`Paused` -> `Resumed`/`Inactive` transition needs
     /// the same explicit re-dirty `allow_first_frame` needs after a
@@ -1726,12 +1726,12 @@ impl UiRealm {
             }
         }
 
-        // The async-driver step lives in `Scheduler::handle_begin_frame`'s
+        // The async-driver step lives in `UpdateScheduler::handle_begin_frame`'s
         // mid-frame slot, not here: this pipeline runs in
         // `PersistentCallbacks`, where `drive_async_tasks` debug-asserts it
         // must never poll (polling here could re-enter a frame-phase-only
         // capability from inside a woken future). One mid-frame poll per
-        // frame, on the right `Scheduler` instance, is enforced by the
+        // frame, on the right `UpdateScheduler` instance, is enforced by the
         // scheduler itself.
 
         let mut last_outcome = FramePaintOutcome::Idle;
@@ -2909,7 +2909,7 @@ mod tests {
     // ========================================================================
     // Realm coexistence — the criterion-1/2 evidence for singleton retirement.
     // Every process-global graph `UiRealm` used to front (the transitional
-    // at-most-one-instance construction guard, `AppBinding`, the `Scheduler`
+    // at-most-one-instance construction guard, `AppBinding`, the `UpdateScheduler`
     // singleton) is gone: these tests prove what that actually buys, rather
     // than asserting the absence of code that no longer exists.
     // ========================================================================
@@ -2929,7 +2929,7 @@ mod tests {
     /// error instead of a live realm — this test would fail immediately.
     /// What made that guard load-bearing at the old HEAD is also gone:
     /// `UiRealm::construct` resolves its own
-    /// `RealmServices` (a fresh `Scheduler` strong root) instead of reaching
+    /// `RealmServices` (a fresh `UpdateScheduler` strong root) instead of reaching
     /// a process-global one, so two realms on one thread no longer alias
     /// anything to guard against.
     #[test]
@@ -2980,13 +2980,15 @@ mod tests {
         // and observe realm B's scheduler from inside it, mid-frame.
         let phase_a_mid_frame = Cell::new(None);
         let phase_b_mid_frame = Cell::new(None);
-        realm_a
-            .scheduler()
-            .drive_frame(flui_scheduler::Instant::now(), || {
+        realm_a.scheduler().drive_frame(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {
                 phase_a_mid_frame.set(Some(realm_a.scheduler().phase()));
                 phase_b_mid_frame.set(Some(realm_b.scheduler().phase()));
                 let _ = realm_a.draw_frame(coexistence_constraints());
-            });
+            },
+        );
         assert_ne!(
             phase_a_mid_frame.get(),
             Some(SchedulerPhase::Idle),
@@ -3043,7 +3045,7 @@ mod tests {
     /// even resumes, so the frame TRANSACTIONS themselves might never
     /// actually overlap. The rendezvous below fixes that by sitting INSIDE
     /// each realm's own `drive_frame` pipeline closure — which
-    /// `Scheduler::handle_draw_frame` guarantees runs during
+    /// `UpdateScheduler::handle_draw_frame` guarantees runs during
     /// `SchedulerPhase::PersistentCallbacks` (see
     /// `the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline`)
     /// — so neither closure can proceed past the rendezvous until BOTH
@@ -3081,26 +3083,30 @@ mod tests {
 
                 sender_b.request_redraw();
                 let _ = realm_b.drain_commands();
-                realm_b
-                    .scheduler()
-                    .drive_frame(flui_scheduler::Instant::now(), || {
+                realm_b.scheduler().drive_frame(
+                    flui_scheduler::Instant::now(),
+                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                    || {
                         // Mid-PersistentCallbacks rendezvous: cannot return
                         // until realm A's own closure below has ALSO
                         // reached this point.
                         rendezvous_or_timeout("realm B");
                         let _ = realm_b.draw_frame(coexistence_constraints());
-                    });
+                    },
+                );
                 (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
             });
 
             sender_a.request_redraw();
             let _ = realm_a.drain_commands();
-            realm_a
-                .scheduler()
-                .drive_frame(flui_scheduler::Instant::now(), || {
+            realm_a.scheduler().drive_frame(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                || {
                     rendezvous_or_timeout("realm A");
                     let _ = realm_a.draw_frame(coexistence_constraints());
-                });
+                },
+            );
 
             handle.join().expect("realm B's thread did not panic")
         });
@@ -3125,7 +3131,7 @@ mod tests {
     ///
     /// Also bounds the blast radius of `global_timer_service()` (a NAMED
     /// ambient-reach residual — `docs/runtime-contract.toml`'s ratchet;
-    /// unlike the realm construction guard or the retired `Scheduler`
+    /// unlike the realm construction guard or the retired `UpdateScheduler`
     /// singleton, this one is process-global BY DESIGN, not by omission).
     /// Stated precisely, not aspirationally: `global_timer_service()` has
     /// **zero production callers** today (verified by grep) — FLUI's actual
@@ -3683,10 +3689,14 @@ mod tests {
             let flag = Arc::clone(&polled_before_pipeline);
             let polls_probe = Arc::clone(&polls);
 
-            scheduler.drive_frame(flui_scheduler::Instant::now(), || {
-                flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
-                let _ = realm.draw_frame(test_constraints());
-            });
+            scheduler.drive_frame(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                || {
+                    flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
+                    let _ = realm.draw_frame(test_constraints());
+                },
+            );
 
             assert!(
                 polled_before_pipeline.load(Ordering::Acquire),
@@ -3713,7 +3723,7 @@ mod tests {
 
             assert!(
                 !ran.load(Ordering::Acquire),
-                "the driver step belongs to Scheduler::handle_begin_frame, not to the pipeline"
+                "the driver step belongs to UpdateScheduler::handle_begin_frame, not to the pipeline"
             );
         }
 
@@ -3793,14 +3803,18 @@ mod tests {
                     })
                     .expect("schedule_local must succeed on the owner thread");
 
-                scheduler.drive_frame(flui_scheduler::Instant::now(), || {
-                    let _ = realm.draw_frame(BoxConstraints::new(
-                        px(0.0),
-                        px(200.0),
-                        px(0.0),
-                        px(200.0),
-                    ));
-                });
+                scheduler.drive_frame(
+                    flui_scheduler::Instant::now(),
+                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                    || {
+                        let _ = realm.draw_frame(BoxConstraints::new(
+                            px(0.0),
+                            px(200.0),
+                            px(0.0),
+                            px(200.0),
+                        ));
+                    },
+                );
             });
 
             assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -4454,7 +4468,7 @@ mod tests {
             use std::time::Duration;
             flui_animation::AnimationController::new(
                 Duration::from_millis(duration_ms),
-                &flui_scheduler::Scheduler::new(),
+                &flui_scheduler::UpdateScheduler::new(),
             )
         }
 
@@ -4628,7 +4642,7 @@ mod tests {
             use std::time::Duration;
             let controller = flui_animation::AnimationController::new(
                 Duration::from_millis(200),
-                &flui_scheduler::Scheduler::new(),
+                &flui_scheduler::UpdateScheduler::new(),
             );
             let view = VsyncProbeView {
                 controller_to_register: controller.clone(),
@@ -6361,9 +6375,11 @@ mod tests {
             // Poll the driver to completion — A's task runs, its captured
             // `RebuildHandle` schedules against A's own (now-orphaned)
             // inbox.
-            realm
-                .scheduler()
-                .drive_frame(flui_scheduler::Instant::now(), || {});
+            realm.scheduler().drive_frame(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                || {},
+            );
             assert!(
                 ran.load(Ordering::Relaxed),
                 "A's stale task must still run to completion"

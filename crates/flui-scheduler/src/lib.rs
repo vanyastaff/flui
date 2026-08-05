@@ -1,29 +1,35 @@
-//! # FLUI Scheduler
+//! # FLUI UpdateScheduler
 //!
 //! Frame scheduling, task prioritization, and animation coordination for FLUI.
+//!
+//! `UpdateScheduler` owns *logical* time only — the phase machine, callback
+//! queues, and the priority task queue — and makes no refresh-rate, display,
+//! or surface assumption of its own; a caller supplies the frame's vsync
+//! timestamp and an Idle-slice deadline to [`UpdateScheduler::drive_frame`]
+//! (physical pacing is a presentation-owned concern, split out from this
+//! crate).
 //!
 //! ## Architecture
 //!
 //! ```text
 //! Application
 //!     ↓
-//! Scheduler (orchestrates frames)
-//!     ├─ FrameScheduler (vsync coordination)
+//! UpdateScheduler (orchestrates frames)
 //!     ├─ TaskQueue (priority-based execution)
 //!     ├─ TickerProvider (animation tickers)
-//!     └─ FrameBudget (time management)
+//!     └─ FrameBudget (phase-duration stats)
 //!
 //! Frame Timeline:
-//! VSync → BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
+//! BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
 //! ```
 //!
 //! ## Key Components
 //!
-//! ### FrameScheduler
-//! Manages frame lifecycle and vsync coordination:
+//! ### UpdateScheduler
+//! Manages the frame lifecycle's phase machine:
 //! - Schedule frame callbacks
 //! - Post-frame callbacks
-//! - VSync integration
+//! - Deadline-bounded Idle-priority task slice (Animation/Build always run)
 //!
 //! ### TaskQueue
 //! Priority-based task execution:
@@ -44,9 +50,9 @@
 //! ```
 //!
 //! ### FrameBudget
-//! Enforces frame time limits (16.67ms for 60fps):
+//! Per-phase timing statistics against a caller-chosen target framerate:
 //! - Tracks time spent in each phase
-//! - Cancels low-priority work if over budget
+//! - Reports jank / over-budget statistics
 //! - Provides frame skip policies
 //!
 //! ## Type-Safe Duration Wrappers
@@ -55,7 +61,7 @@
 //! use flui_scheduler::duration::{FrameDuration, Milliseconds};
 //!
 //! let elapsed = Milliseconds::new(10.0); // 10ms elapsed
-//! let budget = FrameDuration::try_from_fps(60).expect("fps > 0"); // ~16.67ms budget
+//! let budget = FrameDuration::try_from_fps(60).expect("fps > 0"); // ~60fps budget
 //! assert!(!budget.is_over_budget(elapsed)); // Still under budget!
 //! ```
 //!
@@ -76,9 +82,9 @@
 //! ## Example Usage
 //!
 //! ```rust
-//! use flui_scheduler::{FrameBudget, Priority, Scheduler};
+//! use flui_scheduler::{FrameBudget, Priority, UpdateScheduler};
 //!
-//! let scheduler = Scheduler::new();
+//! let scheduler = UpdateScheduler::new();
 //!
 //! // Schedule a frame
 //! scheduler.schedule_frame(Box::new(|frame_time| {
@@ -119,7 +125,7 @@
 //! ```rust
 //! use flui_scheduler::prelude::*;
 //!
-//! let scheduler = Scheduler::new();
+//! let scheduler = UpdateScheduler::new();
 //! let budget = FrameBudget::new(60); // 60 FPS target
 //! ```
 //!
@@ -136,7 +142,6 @@ pub mod frame;
 pub mod scheduler;
 pub mod task;
 pub mod ticker;
-pub mod vsync;
 
 // Type-safe primitives
 pub mod async_driver;
@@ -149,13 +154,13 @@ pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
 pub use config::{
-    PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, SchedulingStrategy,
-    TimingsCallback, default_scheduling_strategy, set_time_dilation, time_dilation,
+    PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, TimingsCallback,
+    set_time_dilation, time_dilation,
 };
 pub use post_frame::{LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle};
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
-/// name `Scheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
+/// name `UpdateScheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
 mod post_frame;
 
 pub use web_time::Instant;
@@ -169,21 +174,20 @@ pub use frame::{
 // Re-exports - ID types (unified with flui-foundation)
 pub use id::{CallbackId, Id, IdGenerator, Marker, markers};
 pub use scheduler::{
-    FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder, WeakScheduler,
+    FrameCompletionFuture, IdleDeadline, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler,
 };
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 pub use ticker::{
     Ticker, TickerCallback, TickerCanceled, TickerFuture, TickerFutureOrCancel, TickerGroup,
     TickerId, TickerProvider, TickerState,
 };
-pub use vsync::{VsyncCallback, VsyncMode, VsyncScheduler, VsyncStats};
 
 /// Prelude for common scheduler types
 pub mod prelude {
     pub use crate::{
         BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
-        Priority, Scheduler, SchedulerPhase, Task, TaskId, TaskQueue, Ticker, TickerProvider,
-        TickerState,
+        Priority, SchedulerPhase, Task, TaskId, TaskQueue, Ticker, TickerProvider, TickerState,
+        UpdateScheduler,
         duration::{FrameDuration, Milliseconds, Percentage, Seconds},
     };
 }

@@ -13,18 +13,18 @@
 //!   [`Ticker::tick`] each frame. Used by tests, custom render loops, and
 //!   embedders that own their own frame scheduler.
 //! - **Auto-schedule** ([`Ticker::new_with_scheduler`] / vended via
-//!   [`TickerProvider::create_ticker`] on a [`Scheduler`](crate::scheduler::Scheduler)): the ticker
+//!   [`TickerProvider::create_ticker`] on a [`UpdateScheduler`](crate::scheduler::UpdateScheduler)): the ticker
 //!   self-registers a transient frame callback on every start/unmute,
 //!   matching Flutter [`ticker.dart:283`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
 //!   `scheduleTick(rescheduling: true)`. `stop`/`mute`/`dispose` cancel the
-//!   pending callback via [`Scheduler::cancel_frame_callback`](crate::scheduler::Scheduler::cancel_frame_callback).
+//!   pending callback via [`UpdateScheduler::cancel_frame_callback`](crate::scheduler::UpdateScheduler::cancel_frame_callback).
 //!
 //! ## Manual Ticker Example
 //!
 //! ```rust
-//! use flui_scheduler::{Scheduler, Ticker, TickerProvider};
+//! use flui_scheduler::{UpdateScheduler, Ticker, TickerProvider};
 //!
-//! let scheduler = Scheduler::new();
+//! let scheduler = UpdateScheduler::new();
 //! let mut ticker = Ticker::new();
 //!
 //! ticker.start(|elapsed| {
@@ -38,9 +38,9 @@
 //! ## Auto-scheduling Ticker Example (Flutter-like)
 //!
 //! ```rust
-//! use flui_scheduler::{Scheduler, Ticker};
+//! use flui_scheduler::{UpdateScheduler, Ticker};
 //!
-//! let scheduler = Scheduler::new();
+//! let scheduler = UpdateScheduler::new();
 //! let mut ticker = Ticker::new_with_scheduler(&scheduler);
 //!
 //! // Start auto-registers a transient frame callback that fires every frame
@@ -88,8 +88,8 @@ pub type TickerCallback = Box<dyn FnMut(f64) + Send>;
 /// functionality without tight coupling to the scheduler.
 ///
 /// The default impl produces a manually-driven [`Ticker`] (no auto-schedule).
-/// Implementors that own a [`Scheduler`](crate::scheduler::Scheduler) (e.g. `impl TickerProvider for
-/// Scheduler`) override [`create_ticker`](Self::create_ticker) to vend an
+/// Implementors that own a [`UpdateScheduler`](crate::scheduler::UpdateScheduler) (e.g. `impl TickerProvider for
+/// UpdateScheduler`) override [`create_ticker`](Self::create_ticker) to vend an
 /// auto-scheduling ticker via [`Ticker::new_with_scheduler`].
 pub trait TickerProvider: Send + Sync {
     /// Create a fresh ticker preloaded with the given callback.
@@ -161,7 +161,7 @@ struct TickerInner {
     /// ticker has registered itself with the scheduler for the next frame,
     /// cleared on `stop`/`mute`/`dispose` or when the callback fires.
     ///
-    /// `None` for manually-driven tickers (no [`Scheduler`](crate::scheduler::Scheduler) attached) and
+    /// `None` for manually-driven tickers (no [`UpdateScheduler`](crate::scheduler::UpdateScheduler) attached) and
     /// auto-scheduling tickers that are not currently registered.
     ///
     /// Flutter parity: `ticker.dart:254 _animationId` (sentinel for
@@ -213,13 +213,13 @@ pub struct Ticker {
     ///   [`unmute`](Self::unmute) register a transient frame callback that
     ///   fires the user callback and re-schedules itself; [`stop`](Self::stop)
     ///   / [`mute`](Self::mute) / [`dispose`](Self::dispose) cancel the
-    ///   pending callback via [`Scheduler::cancel_frame_callback`](crate::scheduler::Scheduler::cancel_frame_callback).
+    ///   pending callback via [`UpdateScheduler::cancel_frame_callback`](crate::scheduler::UpdateScheduler::cancel_frame_callback).
     ///
-    /// A [`WeakScheduler`](crate::scheduler::WeakScheduler), not a strong
-    /// `Scheduler` — a live ticker's re-scheduling closure sits inside the
+    /// A [`WeakUpdateScheduler`](crate::scheduler::WeakUpdateScheduler), not a strong
+    /// `UpdateScheduler` — a live ticker's re-scheduling closure sits inside the
     /// scheduler's OWN transient-callback queue (`schedule_tick_if_active`),
     /// so a strong capture here would form
-    /// `Scheduler → queue → closure → Scheduler`, a permanent leak the
+    /// `UpdateScheduler → queue → closure → UpdateScheduler`, a permanent leak the
     /// instant a realm could otherwise drop its scheduler. Every
     /// schedule/cancel site upgrades-or-returns: once the backing scheduler
     /// is gone there is no queue left to register with or cancel from, so a
@@ -229,7 +229,7 @@ pub struct Ticker {
     /// Flutter parity: `Ticker(this._onTick, ...)` ([`ticker.dart:80`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart))
     /// implicitly carries `SchedulerBinding.instance` (singleton); FLUI
     /// stores the scheduler explicitly to keep the dependency typed.
-    scheduler: Option<crate::scheduler::WeakScheduler>,
+    scheduler: Option<crate::scheduler::WeakUpdateScheduler>,
 
     /// Disposed-state flag (lock-free).
     ///
@@ -248,7 +248,7 @@ impl Ticker {
     /// callback. For an auto-scheduling ticker, use
     /// [`Ticker::new_with_scheduler`] or call
     /// [`TickerProvider::create_ticker`] on a
-    /// [`Scheduler`](crate::scheduler::Scheduler).
+    /// [`UpdateScheduler`](crate::scheduler::UpdateScheduler).
     pub fn new() -> Self {
         Self {
             id: next_ticker_id(),
@@ -275,11 +275,11 @@ impl Ticker {
     ///
     /// [`stop`](Self::stop) / [`mute`](Self::mute) / [`dispose`](Self::dispose)
     /// cancel the pending callback via
-    /// [`Scheduler::cancel_frame_callback`](crate::scheduler::Scheduler::cancel_frame_callback).
+    /// [`UpdateScheduler::cancel_frame_callback`](crate::scheduler::UpdateScheduler::cancel_frame_callback).
     ///
     /// Downgrades `scheduler` internally — this ticker never holds a strong
     /// reference back to it (see the `scheduler` field's own doc for why).
-    pub fn new_with_scheduler(scheduler: &crate::scheduler::Scheduler) -> Self {
+    pub fn new_with_scheduler(scheduler: &crate::scheduler::UpdateScheduler) -> Self {
         Self {
             id: next_ticker_id(),
             inner: Arc::new(Mutex::new(TickerInner {
@@ -685,11 +685,11 @@ impl Ticker {
         let Some(scheduler) = weak_scheduler.upgrade() else {
             return;
         };
-        // The closure captures the WEAK handle, never a strong `Scheduler` —
+        // The closure captures the WEAK handle, never a strong `UpdateScheduler` —
         // this is the queue entry that used to close the
-        // `Scheduler → queue → closure → Scheduler` cycle (see the
+        // `UpdateScheduler → queue → closure → UpdateScheduler` cycle (see the
         // `scheduler` field's doc). Capturing `Arc<Mutex<TickerInner>>` +
-        // `WeakScheduler` + `Arc<AtomicBool>` (still 3 pointer-sized fields)
+        // `WeakUpdateScheduler` + `Arc<AtomicBool>` (still 3 pointer-sized fields)
         // keeps the audit-recommended hot-path capture shape.
         let inner_arc = Arc::clone(&self.inner);
         let weak_next = weak_scheduler.clone();
@@ -712,7 +712,7 @@ impl Ticker {
     /// be invoked from inside the captured closure without retaining a
     /// `&self` borrow across the callback registration boundary.
     ///
-    /// Takes `scheduler` as a [`WeakScheduler`](crate::scheduler::WeakScheduler), not a strong `Scheduler`:
+    /// Takes `scheduler` as a [`WeakUpdateScheduler`](crate::scheduler::WeakUpdateScheduler), not a strong `UpdateScheduler`:
     /// this function itself runs FROM inside the scheduler it was
     /// registered on, so it always has a live scheduler in hand at the top —
     /// the weakness matters only for what gets captured in the
@@ -720,7 +720,7 @@ impl Ticker {
     /// frame later.
     fn tick_and_reschedule_static(
         inner: Arc<Mutex<TickerInner>>,
-        scheduler: crate::scheduler::WeakScheduler,
+        scheduler: crate::scheduler::WeakUpdateScheduler,
         disposed: Arc<AtomicBool>,
     ) {
         // Disposed ticker — short-circuit. The closure may have been queued
@@ -1551,7 +1551,7 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_lifecycle() {
-        let scheduler = crate::scheduler::Scheduler::new();
+        let scheduler = crate::scheduler::UpdateScheduler::new();
         let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
         assert_eq!(ticker.state(), TickerState::Idle);
@@ -1567,7 +1567,7 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_fires_each_frame() {
-        let scheduler = crate::scheduler::Scheduler::new();
+        let scheduler = crate::scheduler::UpdateScheduler::new();
         let counter = Arc::new(AtomicU32::new(0));
 
         let mut ticker = Ticker::new_with_scheduler(&scheduler);
@@ -1592,7 +1592,7 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_mute_unmute() {
-        let scheduler = crate::scheduler::Scheduler::new();
+        let scheduler = crate::scheduler::UpdateScheduler::new();
         let counter = Arc::new(AtomicU32::new(0));
 
         let mut ticker = Ticker::new_with_scheduler(&scheduler);
@@ -1617,7 +1617,7 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_dispose_cancels_pending() {
-        let scheduler = crate::scheduler::Scheduler::new();
+        let scheduler = crate::scheduler::UpdateScheduler::new();
         let counter = Arc::new(AtomicU32::new(0));
 
         let mut ticker = Ticker::new_with_scheduler(&scheduler);
@@ -1634,7 +1634,7 @@ mod tests {
 
     #[test]
     fn test_create_ticker_via_provider_auto_schedules() {
-        let scheduler = crate::scheduler::Scheduler::new();
+        let scheduler = crate::scheduler::UpdateScheduler::new();
         let counter = Arc::new(AtomicU32::new(0));
 
         // Provider factory path: create_ticker preloads callback; start_default
@@ -1667,7 +1667,7 @@ mod tests {
 
     #[test]
     fn test_auto_scheduling_ticker_elapsed() {
-        let scheduler = crate::scheduler::Scheduler::new();
+        let scheduler = crate::scheduler::UpdateScheduler::new();
         let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
         assert_eq!(ticker.elapsed(), Seconds::ZERO);
@@ -1690,7 +1690,7 @@ mod tests {
     /// hangs a waiter.
     #[test]
     fn retained_tickers_future_resolves_canceled_after_owner_disposes_past_scheduler_drop() {
-        let scheduler = crate::scheduler::Scheduler::new();
+        let scheduler = crate::scheduler::UpdateScheduler::new();
         let mut ticker = Ticker::new_with_scheduler(&scheduler);
         let future = ticker.start(|_| {});
         assert!(future.is_pending());

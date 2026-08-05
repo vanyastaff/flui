@@ -106,6 +106,22 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **`flui-scheduler`'s `Scheduler` hard-renamed `UpdateScheduler`, and
+  reshaped around a deadline-bounded Idle slice** (#556): `WeakScheduler` →
+  `WeakUpdateScheduler` too, no alias, workspace-wide (61 files outside
+  `flui-scheduler` itself). `drive_frame` gained a `deadline: IdleDeadline`
+  parameter (a newtype over `Instant`, closing off a same-typed-parameter
+  swap hazard) that bounds `Priority::Idle` task execution only —
+  `Priority::Animation`/`Build` always run, and a panicking task can no
+  longer leak a stale deadline into a later frame. `UpdateScheduler` now
+  carries no `frame_duration`/`target_fps` field or accessor, no fixed
+  `FrameDuration::FPS_60` default, and no `FrameSkipPolicy`/
+  `SchedulingStrategy` machinery (all dead surface with zero production
+  consumers); the `budget()` `MutexGuard` accessor is replaced by an owned-
+  value `budget_snapshot()`. The `VsyncScheduler` fixed-rate vsync simulator
+  family is deleted outright (zero production consumers; real pacing lives
+  in the blocking Fifo present, ADR-0029). See `crates/flui-scheduler/
+  CHANGELOG.md` for the full per-symbol breakdown.
 - **Four miri-confirmed UB paths closed in the Android page-aligned
   allocator** (#584): `Drop` recomputed the dealloc layout as
   `capacity * size_of::<T>()`, which undershoots the real page-rounded

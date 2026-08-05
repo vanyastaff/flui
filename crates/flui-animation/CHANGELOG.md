@@ -23,6 +23,16 @@ Versioning: per `docs/release.md` policy.
   the Material 3 `EaseInOutCubicEmphasized` and `FastEaseInToSlowEaseOut`
   constants, and the `Split` curve (track-finger-then-fling transitions).
 
+### Breaking (issue #556 — `flui-scheduler`'s `UpdateScheduler` reshape)
+
+- This crate's re-export of `flui_scheduler::Scheduler` is renamed
+  `UpdateScheduler` (hard rename, no alias, matching the rename in
+  `flui-scheduler` itself).
+- `VsyncCallback` and `VsyncScheduler` are no longer re-exported here —
+  `flui-scheduler` deleted that fixed-rate vsync simulator outright (zero
+  production consumers; not to be confused with this crate's own,
+  unrelated `Vsync` per-presentation tick registry, which is unaffected).
+
 ### Changed
 
 - `forward()`/`reverse()`/`forward_from`/`reverse_from` and

@@ -11,11 +11,11 @@ use flui_rendering::{
     constraints::BoxConstraints,
     testing::{Probe, RenderTester, box_node},
 };
-use flui_scheduler::Scheduler;
+use flui_scheduler::UpdateScheduler;
 use flui_types::{EdgeInsets, Offset, Rect, geometry::px};
 
 fn controller() -> AnimationController {
-    AnimationController::new(Duration::from_secs(1), &Scheduler::new())
+    AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new())
 }
 
 #[test]

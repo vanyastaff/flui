@@ -173,9 +173,9 @@ impl Drop for TaskToken {
 /// A frame-driven task driver.
 ///
 /// Cheap to clone; every clone refers to the same task set. Owned by
-/// [`Scheduler`](crate::Scheduler), which exposes
-/// [`spawn_local`](crate::Scheduler::spawn_local) and
-/// [`drive_async_tasks`](crate::Scheduler::drive_async_tasks).
+/// [`UpdateScheduler`](crate::UpdateScheduler), which exposes
+/// [`spawn_local`](crate::UpdateScheduler::spawn_local) and
+/// [`drive_async_tasks`](crate::UpdateScheduler::drive_async_tasks).
 #[derive(Clone)]
 pub struct AsyncDriver {
     inner: Arc<Inner>,
@@ -266,7 +266,7 @@ impl AsyncDriver {
     ///
     /// The inline poll runs user code during the build phase — exactly as Dart's
     /// synchronous `.then` does. It does **not** go through
-    /// [`Scheduler::drive_async_tasks`](crate::Scheduler::drive_async_tasks), and
+    /// [`UpdateScheduler::drive_async_tasks`](crate::UpdateScheduler::drive_async_tasks), and
     /// so does not trip that method's "never poll during persistent callbacks"
     /// guard: this is a single task polled at its own subscription point, not the
     /// frame's driver step.
@@ -318,7 +318,7 @@ impl AsyncDriver {
     /// Poll every task whose waker fired since the last frame.
     ///
     /// Called exactly once per frame, from the binding's async-driver step
-    /// ([`Scheduler::drive_async_tasks`](crate::Scheduler::drive_async_tasks)).
+    /// ([`UpdateScheduler::drive_async_tasks`](crate::UpdateScheduler::drive_async_tasks)).
     /// Never call it from build, layout, or paint.
     ///
     /// Returns the number of tasks polled. Tasks are polled in ascending id

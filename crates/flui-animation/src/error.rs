@@ -9,10 +9,10 @@
 ///
 /// ```
 /// use flui_animation::{AnimationController, AnimationError};
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 /// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 ///
 /// // Dispose the controller

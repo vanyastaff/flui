@@ -53,11 +53,11 @@ fn fan_out_status(listeners: &Mutex<StatusListeners>, status: AnimationStatus) {
 ///
 /// ```
 /// use flui_animation::{ProxyAnimation, AnimationController, Animation};
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 /// let controller1 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
@@ -228,13 +228,13 @@ where
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     #[test]
     fn test_proxy_animation() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_proxy_animation_status() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -282,7 +282,7 @@ mod tests {
         // Status listeners registered on the proxy must keep firing after a
         // hot-swap; previously they stayed registered on the old parent and
         // never saw the new parent's transitions.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn swap_with_status_change_fires_listeners() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn remove_status_listener_after_swap() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,

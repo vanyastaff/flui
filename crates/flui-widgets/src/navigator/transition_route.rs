@@ -619,7 +619,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         // below when present) drives the actual value ticks
         // deterministically; `with_detached_ticker` gives this controller a
         // ticker whose `start()`/`stop()` transition real ticker state
-        // without needing a `Scheduler` at all.
+        // without needing an `UpdateScheduler` at all.
         let controller = AnimationController::with_detached_ticker(self.duration);
         if let Some(reverse) = self.reverse_duration {
             controller.set_reverse_duration(reverse);

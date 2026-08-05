@@ -14,7 +14,7 @@ Animations are long-lived objects with explicit lifecycle:
 
 ```rust
 // Created once
-let controller = AnimationController::new(duration, scheduler);
+let controller = AnimationController::new(duration, &scheduler);
 
 // Used across rebuilds
 controller.forward()?;
@@ -102,10 +102,10 @@ Many optional configuration parameters. Multiple constructors become unwieldy.
 Builder with validation at each step:
 
 ```rust
-let controller = AnimationController::builder(duration, scheduler)
+let controller = AnimationController::builder(duration, &scheduler)
     .bounds(0.0, 100.0)?      // Validates immediately
     .reverse_duration(Duration::from_millis(500))
-    .initial_value(50.0)?
+    .initial_value(50.0)
     .build()?;
 ```
 

@@ -634,7 +634,7 @@ mod tests {
     /// when the frame completed and the flush ran.
     #[test]
     fn update_dimensions_with_a_flush_handle_installed_notifies_exactly_once() {
-        let scheduler = flui_scheduler::Scheduler::new();
+        let scheduler = flui_scheduler::UpdateScheduler::new();
         let handle = flui_scheduler::PostFrameHandle::new(&scheduler);
 
         let controller = ScrollController::new();

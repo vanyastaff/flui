@@ -14,7 +14,7 @@ Flutter's tree behavior without copying its process/runtime topology:
 | `run_app` / `run_app_with_config` | `runApp` |
 | `WidgetsBinding` | `WidgetsBinding` |
 | `RenderingFlutterBinding` + `PipelineOwner` | `RendererBinding` |
-| `GestureBinding` / `PaintingBinding` / `Scheduler` | `GestureBinding` / `PaintingBinding` / `SchedulerBinding` |
+| `GestureBinding` / `PaintingBinding` / `UpdateScheduler` | `GestureBinding` / `PaintingBinding` / `SchedulerBinding` |
 | per-presentation `SemanticsHost` | `SemanticsBinding` |
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
@@ -30,8 +30,8 @@ UiRealm (owner-affine, !Send + !Sync)
     ├── WidgetsBinding              — View → Element, BuildOwner, GlobalKey scope
     ├── GestureBinding              — single-presentation pointer state
     ├── RenderingFlutterBinding     — render-view registry, first-frame gate
-    └── Scheduler                   — frame callbacks, animation tickers (flui-scheduler);
-                                       one fresh instance per realm, never shared
+    └── UpdateScheduler             — frame callbacks, animation tickers (flui-scheduler);
+                                      one fresh instance per realm, never shared
 
 PresentationState (per-window, private to flui-app)
     ├── FocusManager                — keyboard event dispatch
@@ -56,11 +56,12 @@ AppRuntime (loop-scoped composition root)
   and does no damage tracking.
 - **Lifecycle** — `flui_scheduler::AppLifecycleState` (resumed, inactive,
   hidden, paused, detached) is the canonical Flutter-parity state; the
-  runner drives `Scheduler::handle_app_lifecycle_state_change` directly at
+  runner drives `UpdateScheduler::handle_app_lifecycle_state_change` directly at
   bootstrap/shutdown (ADR-0035).
 - **Frame loop** — on-demand rendering: a frame runs only when the tree is
-  dirty or the scheduler has pending work, and pure ticker-driven frames are
-  paced to the configured target FPS.
+  dirty or the scheduler has pending work; physical pacing between frames
+  comes from the blocking Fifo present (ADR-0029), not from the scheduler
+  itself — `UpdateScheduler` makes no refresh-rate assumption of its own.
 - **Embedder** (`embedder`) — adapter types connecting the framework to
   windowing, GPU, and input on desktop (Win32/AppKit/headless via
   flui-platform + wgpu); Android/iOS/Web entry points are feature-gated.
@@ -75,15 +76,16 @@ that implement it are tracked in issue #573.
 ## Known architectural debt
 
 Singleton retirement is complete: `WidgetsBinding`, `GestureBinding`,
-`RenderingFlutterBinding`, `Scheduler`, and GlobalKey identity are all
+`RenderingFlutterBinding`, `UpdateScheduler`, and GlobalKey identity are all
 realm-owned now — `AppBinding` is deleted, not slimmed, and no test needs a
 serialization guard against shared binding state any more (each test
 constructs its own independent realm). What remains is *hosting* debt, not
 singleton debt: `AppRuntime` hosts exactly one realm per owner thread behind
 a `RealmId`-keyed accessor (issue #555 grows that into real 1..N hosting once
-the element forest lets a realm host multiple presentations); `Scheduler`
-still combines logical/physical/raster scheduling concerns that issue #556
-splits apart; and the production runners don't yet adopt the `RasterOwner`
+the element forest lets a realm host multiple presentations); logical
+scheduling (`UpdateScheduler`), physical pacing (a future per-presentation
+`FrameClock`), and raster scheduling still split apart across issue #556's
+remaining slices; and the production runners don't yet adopt the `RasterOwner`
 mailbox protocol (issue #559). Gesture state is realm-owned but intentionally
 models one presentation per realm; it moves to `PresentationRuntime` only
 when a second real presentation consumer exists.

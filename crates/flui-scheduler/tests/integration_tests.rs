@@ -25,20 +25,19 @@ use flui_scheduler::{
     config::PerformanceMode,
     duration::{FrameDuration, Milliseconds},
     frame::{AppLifecycleState, SchedulerPhase},
-    scheduler::{FrameSkipPolicy, Scheduler, SchedulerBuilder},
+    scheduler::{SchedulerBuilder, UpdateScheduler},
     task::{Priority, TaskQueue},
     ticker::{Ticker, TickerCanceled, TickerFuture, TickerState},
-    vsync::{VsyncMode, VsyncScheduler},
 };
 
 // ============================================================================
-// Scheduler Integration Tests
+// UpdateScheduler Integration Tests
 // ============================================================================
 
 #[test]
 fn test_full_frame_lifecycle() {
     // Test complete frame lifecycle: schedule -> begin -> callbacks -> end
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let transient_called = Arc::new(AtomicU32::new(0));
     let persistent_called = Arc::new(AtomicU32::new(0));
@@ -78,7 +77,7 @@ fn test_full_frame_lifecycle() {
 
 #[test]
 fn test_scheduler_phase_transitions() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Initially idle
     assert_eq!(scheduler.scheduler_phase(), SchedulerPhase::Idle);
@@ -120,7 +119,7 @@ fn test_scheduler_phase_transitions() {
 
 #[test]
 fn test_callback_cancellation() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let called = Arc::new(AtomicU32::new(0));
 
@@ -140,7 +139,7 @@ fn test_callback_cancellation() {
 
 #[test]
 fn test_multiple_frames_with_persistent_callbacks() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let call_count = Arc::new(AtomicU32::new(0));
 
@@ -160,7 +159,7 @@ fn test_multiple_frames_with_persistent_callbacks() {
 
 #[test]
 fn test_app_lifecycle_state_changes() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let states_seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
 
@@ -187,7 +186,7 @@ fn test_app_lifecycle_state_changes() {
 
 #[test]
 fn test_ticker_with_scheduler() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     let tick_count = Arc::new(AtomicU32::new(0));
@@ -208,7 +207,7 @@ fn test_ticker_with_scheduler() {
 
 #[test]
 fn test_ticker_mute_unmute() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     let tick_count = Arc::new(AtomicU32::new(0));
@@ -260,38 +259,6 @@ fn test_ticker_canceled_error() {
 
     // Test that it implements Error trait
     let _: &dyn std::error::Error = &error;
-}
-
-// ============================================================================
-// VSync Integration Tests
-// ============================================================================
-
-#[test]
-fn test_vsync_scheduler_basic() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    assert_eq!(vsync.refresh_rate(), 60);
-    assert!(!vsync.is_active());
-
-    // Frame interval should be ~16.67ms for 60Hz
-    let interval_ms = vsync.frame_interval_ms();
-    assert!(interval_ms.value() > 16.0);
-    assert!(interval_ms.value() < 17.0);
-}
-
-#[test]
-fn test_vsync_modes() {
-    let vsync = VsyncScheduler::try_with_mode(60, VsyncMode::Adaptive).expect("refresh > 0");
-    assert_eq!(vsync.mode(), VsyncMode::Adaptive);
-
-    vsync.set_mode(VsyncMode::On);
-    assert_eq!(vsync.mode(), VsyncMode::On);
-
-    vsync.set_mode(VsyncMode::Off);
-    assert_eq!(vsync.mode(), VsyncMode::Off);
-
-    vsync.set_mode(VsyncMode::TripleBuffer);
-    assert_eq!(vsync.mode(), VsyncMode::TripleBuffer);
 }
 
 // ============================================================================
@@ -407,27 +374,27 @@ fn test_frame_budget_tracking() {
 fn test_frame_budget_jank_detection() {
     let mut budget = FrameBudget::new(60);
 
-    // Record a fast frame (under 16.67ms budget)
+    // Record a fast frame (under the 60fps target duration)
     budget.record_frame_duration(Milliseconds::new(10.0));
-    assert!(!budget.is_janky()); // 10ms < 16.67ms, not janky
+    assert!(!budget.is_janky()); // 10ms is under the target, not janky
 
-    // Record a janky frame (> 16.67ms for 60fps)
+    // Record a janky frame (over the 60fps target duration)
     budget.record_frame_duration(Milliseconds::new(25.0));
-    assert!(budget.is_janky()); // 25ms > 16.67ms, janky
+    assert!(budget.is_janky()); // 25ms exceeds the target, janky
 
     // Jank count should reflect the janky frame
     assert_eq!(budget.jank_count(), 1);
 }
 
 // ============================================================================
-// Scheduler Binding Integration Tests
+// UpdateScheduler Binding Integration Tests
 // ============================================================================
 
 #[test]
 fn test_scheduler_binding_trait() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
-    // Test scheduler binding methods (now inherent on Scheduler)
+    // Test scheduler binding methods (now inherent on UpdateScheduler)
     assert_eq!(scheduler.scheduler_phase(), SchedulerPhase::Idle);
     assert!(!scheduler.has_scheduled_frame());
 
@@ -438,7 +405,7 @@ fn test_scheduler_binding_trait() {
 
 #[test]
 fn test_performance_mode_request() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Request performance mode
     let handle = scheduler.request_performance_mode(PerformanceMode::Latency);
@@ -492,7 +459,7 @@ fn test_frame_duration_budget_check() {
 
 #[test]
 fn test_scheduler_thread_safety() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let handles: Vec<_> = (0..4)
         .map(|i| {
@@ -538,7 +505,7 @@ fn test_ticker_future_thread_safety() {
 
 #[test]
 fn test_empty_frame_execution() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Execute frame with no callbacks - should not panic
     scheduler.execute_frame();
@@ -550,7 +517,7 @@ fn test_empty_frame_execution() {
 
 #[test]
 fn test_cancel_nonexistent_callback() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Schedule a real callback first
     let id = scheduler.schedule_frame_callback(Box::new(|_| {}));
@@ -589,7 +556,7 @@ fn test_scheduler_builder_configuration() {
         .frame_duration(FrameDuration::try_from_fps(30).expect("fps > 0"))
         .build();
 
-    // Scheduler should be created successfully
+    // UpdateScheduler should be created successfully
     assert_eq!(scheduler.frame_count(), 0);
 }
 
@@ -599,7 +566,7 @@ fn test_scheduler_builder_configuration() {
 
 #[test]
 fn test_warm_up_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let warm_up_called = Arc::new(AtomicU32::new(0));
 
@@ -628,7 +595,7 @@ fn test_warm_up_frame() {
 
 #[test]
 fn test_microtask_execution() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let microtask_called = Arc::new(AtomicU32::new(0));
 
@@ -649,7 +616,7 @@ fn test_microtask_execution() {
 
 #[test]
 fn test_end_of_frame_future() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Get end of frame future
     let _future = scheduler.end_of_frame();
@@ -661,37 +628,12 @@ fn test_end_of_frame_future() {
 }
 
 // ============================================================================
-// Frame Skip Policy Tests
-// ============================================================================
-
-#[test]
-fn test_frame_skip_policies() {
-    let scheduler = Scheduler::new();
-
-    // Test default policy
-    let default_policy = scheduler.frame_skip_policy();
-
-    // Test setting different policies
-    scheduler.set_frame_skip_policy(FrameSkipPolicy::Never);
-    assert_eq!(scheduler.frame_skip_policy(), FrameSkipPolicy::Never);
-
-    scheduler.set_frame_skip_policy(FrameSkipPolicy::SkipToLatest);
-    assert_eq!(scheduler.frame_skip_policy(), FrameSkipPolicy::SkipToLatest);
-
-    scheduler.set_frame_skip_policy(FrameSkipPolicy::CatchUp);
-    assert_eq!(scheduler.frame_skip_policy(), FrameSkipPolicy::CatchUp);
-
-    // Restore default
-    scheduler.set_frame_skip_policy(default_policy);
-}
-
-// ============================================================================
 // Extended Binding Tests (for coverage)
 // ============================================================================
 
 #[test]
 fn test_scheduler_binding_frames_enabled() {
-    let mut scheduler = Scheduler::new();
+    let mut scheduler = UpdateScheduler::new();
 
     // Default should be enabled
     assert!(scheduler.frames_enabled());
@@ -707,7 +649,7 @@ fn test_scheduler_binding_frames_enabled() {
 
 #[test]
 fn test_scheduler_binding_schedule_methods() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Test schedule_frame
     scheduler.schedule_frame_if_enabled();
@@ -727,7 +669,7 @@ fn test_scheduler_binding_schedule_methods() {
 
 #[test]
 fn test_scheduler_frame_callback_cancel() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let called = Arc::new(AtomicU32::new(0));
 
     let c = Arc::clone(&called);
@@ -747,7 +689,7 @@ fn test_scheduler_frame_callback_cancel() {
 
 #[test]
 fn test_scheduler_post_frame_callback() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let called = Arc::new(AtomicU32::new(0));
 
     let c = Arc::clone(&called);
@@ -761,7 +703,7 @@ fn test_scheduler_post_frame_callback() {
 
 #[test]
 fn test_scheduler_binding_schedule_task() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let executed = Arc::new(AtomicU32::new(0));
 
     let e = Arc::clone(&executed);
@@ -775,7 +717,7 @@ fn test_scheduler_binding_schedule_task() {
 
 #[test]
 fn test_scheduler_binding_handle_begin_draw_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let called = Arc::new(AtomicU32::new(0));
 
     let c = Arc::clone(&called);
@@ -793,7 +735,7 @@ fn test_scheduler_binding_handle_begin_draw_frame() {
 
 #[test]
 fn test_scheduler_binding_timings_callback() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let timings_received = Arc::new(AtomicU32::new(0));
 
     let t = Arc::clone(&timings_received);
@@ -814,7 +756,7 @@ fn test_scheduler_binding_timings_callback() {
 
 #[test]
 fn test_scheduler_binding_lifecycle_change() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Use scheduler methods directly
     scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Paused);
@@ -826,7 +768,7 @@ fn test_scheduler_binding_lifecycle_change() {
 
 #[test]
 fn test_scheduler_binding_current_timestamps() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Before frame, timestamp should be zero or default
     let ts = scheduler.current_frame_time_stamp();
@@ -840,7 +782,7 @@ fn test_scheduler_binding_current_timestamps() {
 
 #[test]
 fn test_scheduler_binding_reset_epoch() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Reset epoch
     scheduler.reset_epoch();
@@ -851,7 +793,7 @@ fn test_scheduler_binding_reset_epoch() {
 
 #[test]
 fn test_scheduler_binding_debug_asserts() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // No transient callbacks
     assert!(scheduler.debug_assert_no_transient_callbacks("test"));
@@ -871,7 +813,7 @@ fn test_scheduler_binding_debug_asserts() {
 
 #[test]
 fn test_scheduler_binding_debug_assert_no_performance_requests() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // No requests initially
     assert!(scheduler.debug_assert_no_pending_performance_mode_requests("test"));
@@ -893,7 +835,7 @@ fn test_scheduler_binding_debug_assert_no_performance_requests() {
 fn test_scheduler_binding_debug_assert_no_time_dilation() {
     use flui_scheduler::config::set_time_dilation;
 
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Ensure default
     set_time_dilation(1.0).expect("positive finite time dilation");
@@ -914,7 +856,7 @@ fn test_scheduler_binding_debug_assert_no_time_dilation() {
 
 #[test]
 fn test_multiple_performance_mode_requests() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Request multiple modes
     let handle1 = scheduler.request_performance_mode(PerformanceMode::Latency);
@@ -937,7 +879,7 @@ fn test_multiple_performance_mode_requests() {
 
 #[test]
 fn test_performance_mode_handle_dispose() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let handle = scheduler.request_performance_mode(PerformanceMode::Latency);
     assert!(!scheduler.debug_assert_no_pending_performance_mode_requests("test"));
@@ -1122,189 +1064,6 @@ fn test_app_lifecycle_state_all_variants() {
         // Test should_render
         let _ = state.should_render();
     }
-}
-
-// ============================================================================
-// Extended VSync Tests (55% -> 80%+)
-// ============================================================================
-
-#[test]
-fn test_vsync_mode_properties() {
-    // Test waits_for_vsync
-    assert!(VsyncMode::On.waits_for_vsync());
-    assert!(!VsyncMode::Off.waits_for_vsync());
-    assert!(VsyncMode::Adaptive.waits_for_vsync());
-    assert!(VsyncMode::TripleBuffer.waits_for_vsync());
-
-    // Test can_tear
-    assert!(!VsyncMode::On.can_tear());
-    assert!(VsyncMode::Off.can_tear());
-    assert!(!VsyncMode::Adaptive.can_tear());
-    assert!(!VsyncMode::TripleBuffer.can_tear());
-
-    // Test description
-    let _ = VsyncMode::On.description();
-    let _ = VsyncMode::Off.description();
-    let _ = VsyncMode::Adaptive.description();
-    let _ = VsyncMode::TripleBuffer.description();
-}
-
-#[test]
-fn test_vsync_scheduler_start_stop() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    assert!(!vsync.is_active());
-    vsync.start();
-    assert!(vsync.is_active());
-    vsync.stop();
-    assert!(!vsync.is_active());
-}
-
-#[test]
-fn test_vsync_scheduler_callback() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-    let called = Arc::new(AtomicU32::new(0));
-
-    let c = Arc::clone(&called);
-    vsync.set_callback(move |_instant| {
-        c.fetch_add(1, Ordering::SeqCst);
-    });
-
-    vsync.signal_vsync();
-    assert_eq!(called.load(Ordering::SeqCst), 1);
-
-    vsync.signal_vsync();
-    assert_eq!(called.load(Ordering::SeqCst), 2);
-
-    vsync.clear_callback();
-    vsync.signal_vsync();
-    assert_eq!(called.load(Ordering::SeqCst), 2); // Still 2, callback cleared
-}
-
-#[test]
-fn test_vsync_scheduler_time_tracking() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    // No vsync yet
-    assert!(vsync.time_since_vsync().is_none());
-    assert!(vsync.time_since_vsync_ms().is_none());
-    assert!(vsync.predict_next_vsync().is_none());
-
-    // Signal vsync
-    vsync.signal_vsync();
-
-    // Now should have values
-    assert!(vsync.time_since_vsync().is_some());
-    assert!(vsync.time_since_vsync_ms().is_some());
-    assert!(vsync.predict_next_vsync().is_some());
-}
-
-#[test]
-fn test_vsync_stats() {
-    use flui_scheduler::vsync::VsyncStats;
-
-    // Default stats
-    let stats = VsyncStats::default();
-    assert_eq!(stats.signal_count, 0);
-    assert_eq!(stats.missed_count, 0);
-
-    // Miss rate with zero signals
-    assert_eq!(stats.miss_rate(), 0.0);
-
-    // Effective FPS with zero interval
-    assert_eq!(stats.effective_fps(), 0.0);
-}
-
-#[test]
-fn test_vsync_scheduler_stats() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    // Initial stats
-    let stats = vsync.stats();
-    assert_eq!(stats.signal_count, 0);
-
-    // Signal multiple times
-    vsync.signal_vsync();
-    std::thread::sleep(Duration::from_millis(16));
-    vsync.signal_vsync();
-    std::thread::sleep(Duration::from_millis(16));
-    vsync.signal_vsync();
-
-    // Check stats updated
-    let stats = vsync.stats();
-    assert!(stats.signal_count >= 2);
-    assert!(stats.avg_interval.value() > 0);
-
-    // Reset stats
-    vsync.reset_stats();
-    let stats = vsync.stats();
-    assert_eq!(stats.signal_count, 0);
-}
-
-#[test]
-fn test_vsync_scheduler_is_at_target_rate() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    // No data - should return true
-    assert!(vsync.is_at_target_rate());
-
-    // Signal at approximately correct rate
-    vsync.signal_vsync();
-    std::thread::sleep(Duration::from_millis(16));
-    vsync.signal_vsync();
-    std::thread::sleep(Duration::from_millis(16));
-    vsync.signal_vsync();
-
-    // Should be close to target rate
-    // This is a soft test - timing may vary on CI
-    let _ = vsync.is_at_target_rate();
-}
-
-#[test]
-fn test_vsync_scheduler_frame_intervals() {
-    // Test different refresh rates
-    let vsync_60 = VsyncScheduler::try_new(60).expect("refresh > 0");
-    let interval_60 = vsync_60.frame_interval();
-    assert!(interval_60.value().abs_diff(16_666) < 100);
-
-    let vsync_120 = VsyncScheduler::try_new(120).expect("refresh > 0");
-    let interval_120 = vsync_120.frame_interval();
-    assert!(interval_120.value().abs_diff(8_333) < 100);
-
-    // Test frame_interval_duration
-    let duration = vsync_60.frame_interval_duration();
-    assert!(duration.as_millis() >= 16);
-    assert!(duration.as_millis() <= 17);
-}
-
-#[test]
-fn test_vsync_scheduler_wait_for_vsync() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    // Off mode - no waiting
-    vsync.set_mode(VsyncMode::Off);
-    let start = std::time::Instant::now();
-    let _ = vsync.wait_for_vsync();
-    let elapsed = start.elapsed();
-    assert!(elapsed.as_millis() < 5); // Should return immediately
-
-    // On mode - may wait (depends on previous vsync)
-    vsync.set_mode(VsyncMode::On);
-    let _ = vsync.wait_for_vsync();
-}
-
-#[test]
-fn test_vsync_scheduler_default() {
-    let vsync = VsyncScheduler::default();
-    assert_eq!(vsync.refresh_rate(), 60);
-}
-
-#[test]
-fn test_vsync_scheduler_debug() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-    let debug_str = format!("{vsync:?}");
-    assert!(debug_str.contains("VsyncScheduler"));
-    assert!(debug_str.contains("refresh_rate"));
 }
 
 // ============================================================================
@@ -1531,8 +1290,8 @@ fn test_milliseconds_from_microseconds() {
 
 #[test]
 fn test_milliseconds_from_f64() {
-    let ms: Milliseconds = 16.67.into();
-    assert_eq!(ms.value(), 16.67);
+    let ms: Milliseconds = 12.34.into();
+    assert_eq!(ms.value(), 12.34);
 }
 
 #[test]
@@ -1648,9 +1407,10 @@ fn test_microseconds_from_duration() {
 
 #[test]
 fn test_frame_duration_constants() {
-    // Test predefined constants
+    // Test predefined constants. `FrameDuration` intentionally has no
+    // `FPS_60` constant — flui-scheduler ships no fixed frame-rate default;
+    // 60fps durations are constructed via `try_from_fps(60)`.
     assert!((FrameDuration::FPS_30.fps() - 30.0).abs() < 0.1);
-    assert!((FrameDuration::FPS_60.fps() - 60.0).abs() < 0.1);
     assert!((FrameDuration::FPS_120.fps() - 120.0).abs() < 0.1);
     assert!((FrameDuration::FPS_144.fps() - 144.0).abs() < 0.1);
 }
@@ -1667,7 +1427,7 @@ fn test_frame_duration_as_seconds() {
 fn test_frame_duration_utilization() {
     let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
 
-    let elapsed = Milliseconds::new(8.333); // 50% of 16.67ms
+    let elapsed = Milliseconds::new(8.333); // 50% of the 60fps target duration
     let util = fd.utilization(elapsed);
 
     assert!((util - 0.5).abs() < 0.1);
@@ -1693,12 +1453,6 @@ fn test_frame_duration_is_janky() {
 
     // Over budget - janky
     assert!(fd.is_janky(Milliseconds::new(20.0)));
-}
-
-#[test]
-fn test_frame_duration_default() {
-    let fd = FrameDuration::default();
-    assert!((fd.fps() - 60.0).abs() < 0.1);
 }
 
 #[test]
@@ -1970,7 +1724,7 @@ fn test_ticker_group_extend() {
 
 #[test]
 fn test_auto_scheduling_ticker_debug() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let ticker = Ticker::new_with_scheduler(&scheduler);
 
     let debug = format!("{ticker:?}");
@@ -2532,12 +2286,12 @@ fn test_frame_timing_builder_with_frame_duration() {
 }
 
 // ============================================================================
-// Extended Scheduler Tests (73% -> 80%+)
+// Extended UpdateScheduler Tests (73% -> 80%+)
 // ============================================================================
 
 #[test]
 fn test_scheduler_clone() {
-    let scheduler1 = Scheduler::new();
+    let scheduler1 = UpdateScheduler::new();
     let scheduler2 = scheduler1.clone();
 
     // Both schedulers share state
@@ -2547,7 +2301,7 @@ fn test_scheduler_clone() {
 
 #[test]
 fn test_scheduler_current_vsync_time() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Before frame - might be None
     let _ = scheduler.current_vsync_time();
@@ -2561,7 +2315,7 @@ fn test_scheduler_current_vsync_time() {
 
 #[test]
 fn test_scheduler_should_schedule_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Initially true
     assert!(scheduler.should_schedule_frame());
@@ -2617,7 +2371,7 @@ fn test_performance_mode_all_variants() {
 fn test_scheduler_adjust_for_epoch() {
     use flui_scheduler::config::set_time_dilation;
 
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Without dilation
     set_time_dilation(1.0).expect("positive finite time dilation");
@@ -2813,7 +2567,7 @@ fn test_auto_scheduling_ticker_start_typed_works() {
 
     use flui_scheduler::duration::Seconds;
 
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     let called = Arc::new(AtomicBool::new(false));

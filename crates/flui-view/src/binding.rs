@@ -371,7 +371,7 @@ pub trait WidgetsBindingObserver {
 /// Application lifecycle states.
 ///
 /// Re-exported from [`flui_scheduler::AppLifecycleState`] — the canonical
-/// Flutter-parity lifecycle enum (`Scheduler::handle_app_lifecycle_state_change`,
+/// Flutter-parity lifecycle enum (`UpdateScheduler::handle_app_lifecycle_state_change`,
 /// binding.dart:414-441). `flui-view` previously defined its own parallel
 /// `Resumed`/`Inactive`/`Hidden`/`Paused`/`Detached` enum; the two were
 /// consolidated onto the scheduler's copy (ADR-0035) since it is the one

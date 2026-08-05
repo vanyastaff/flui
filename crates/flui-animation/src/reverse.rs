@@ -23,11 +23,11 @@ use std::sync::Arc;
 ///
 /// ```
 /// use flui_animation::{ReverseAnimation, AnimationController, Animation};
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
@@ -135,12 +135,12 @@ impl fmt::Debug for ReverseAnimation {
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
     use std::time::Duration;
 
     #[test]
     fn test_reverse_animation_value() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_reverse_animation_status() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_reverse_animation_at_extremes() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,

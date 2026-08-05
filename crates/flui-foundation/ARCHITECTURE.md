@@ -151,7 +151,7 @@ are plain, explicitly-constructed values owned by `UiRealm`/`AppRuntime` —
 each realm gets its own — not `BindingBase`-rooted process-wide singletons.
 `flui-foundation`'s own `BindingBase`/`HasInstance`/`impl_binding_singleton!`
 scaffolding that used to back that pattern was deleted once the last
-consumer (`flui-scheduler`'s `Scheduler`) moved to realm ownership.
+consumer (`flui-scheduler`'s `UpdateScheduler`) moved to realm ownership.
 
 ---
 

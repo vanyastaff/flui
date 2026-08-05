@@ -20,7 +20,7 @@ use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_material::{
     DefaultTabController, Tab, TabBar, TabBarView, TabController, Theme, ThemeData,
 };
-use flui_scheduler::Scheduler;
+use flui_scheduler::UpdateScheduler;
 use flui_view::ErrorView;
 use flui_view::prelude::*;
 use flui_widgets::{
@@ -212,7 +212,7 @@ impl ViewState<AnimationProbe> for AnimationProbeState {
 #[test]
 fn an_inactive_tabs_animation_is_muted_by_ticker_mode() {
     let vsync = Vsync::new();
-    let animation = AnimationController::new(Duration::from_secs(1), &Scheduler::new());
+    let animation = AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new());
     let tab_controller = TabController::new(2, 0);
 
     let probe_controller = animation.clone();

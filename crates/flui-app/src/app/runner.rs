@@ -223,7 +223,7 @@ fn install_exit_policy_hook(policy: ExitPolicy) {
 ///     this fence is load-bearing during a real dispatched production frame,
 ///     not merely when the realm sits untouched in the slot. This fence is
 ///     still **vacuous on binding-local frame paths**: headless/test
-///     bindings drive their own binding-local `Scheduler`, never a realm
+///     bindings drive their own binding-local `UpdateScheduler`, never a realm
 ///     installed into `APP_RUNTIME`, so fences (a) and (b) are the
 ///     load-bearing ones there — stated here, not hidden.
 ///
@@ -756,7 +756,7 @@ fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecycleState {
 /// `Detached` to anything else always takes the forward branch: `Detached
 /// -> Resumed` is the single step `[Resumed]`, not a crawl through
 /// `Paused`/`Hidden`/`Inactive` first — reachable via Android's Pause/Resume
-/// reroute if `Scheduler::lifecycle_state()`'s corrupt-byte fallback
+/// reroute if `UpdateScheduler::lifecycle_state()`'s corrupt-byte fallback
 /// (`try_from_u8`'s `unwrap_or(AppLifecycleState::Detached)`) is ever hit.
 ///
 /// Returns an empty `Vec` when `old == new` — this is where change-detection
@@ -791,13 +791,13 @@ fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLi
 }
 
 /// Emits the full ladder from `old` to `new` (see [`lifecycle_ladder`]), one
-/// step at a time, to both the realm's own `Scheduler` and its
+/// step at a time, to both the realm's own `UpdateScheduler` and its
 /// `WidgetsBinding` observers — mirroring Flutter's single platform-message
 /// stream driving both `SchedulerBinding` and `WidgetsBinding` from the same
 /// synthesized sequence of states.
 ///
-/// Installed as a direct call in the same `PlatformToUi` handler (never a
-/// `Scheduler`-listener closure): a listener captured at bootstrap time
+/// Installed as a direct call in the same `PlatformToUi` handler (never an
+/// `UpdateScheduler`-listener closure): a listener captured at bootstrap time
 /// would have to resolve `realm`/`WidgetsBinding` lazily at fire time,
 /// which is unsound here specifically because every production caller of
 /// this function runs from inside `dispatch_platform_realm`'s dispatch
@@ -807,7 +807,7 @@ fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLi
 /// real transition and silently no-op (this shipped once and was caught by
 /// `frames_reenable_redirties_root_when_dispatched_through_the_realm_queue`
 /// in `realm_dispatch_tests`, which reproduces via a real dispatched
-/// `PlatformToUi::Lifecycle` sequence rather than driving `Scheduler`
+/// `PlatformToUi::Lifecycle` sequence rather than driving `UpdateScheduler`
 /// directly). `realm` is already in scope here (`PlatformToUi::run`'s
 /// parameter), so no such resolution is ever needed — the frames-reenable
 /// redirty below reads and writes it directly, in the same stack frame
@@ -1123,7 +1123,7 @@ mod lifecycle_derivation_tests {
     /// oracle's dedicated `state == detached` branch only fires when
     /// `Detached` is the TARGET, not the source.
     ///
-    /// Reachable via Android's Pause/Resume reroute if `Scheduler::
+    /// Reachable via Android's Pause/Resume reroute if `UpdateScheduler::
     /// lifecycle_state()`'s corrupt-byte fallback (`try_from_u8`'s
     /// `unwrap_or(AppLifecycleState::Detached)`) is ever hit as "old".
     #[test]
@@ -1895,7 +1895,7 @@ fn dispatch_platform_realm(
         // is exactly the state this call is about to create for the entire
         // duration of the dispatched task below — otherwise the fence goes
         // blind for every real production frame, not merely when no realm is
-        // installed at all. `Scheduler::clone` is one `Arc::clone` (see
+        // installed at all. `UpdateScheduler::clone` is one `Arc::clone` (see
         // `flui-scheduler`'s single-`Arc` handle shape), not a second
         // scheduler.
         state.dispatched_scheduler = realm.as_ref().map(|realm| realm.scheduler().clone());
@@ -1927,7 +1927,7 @@ fn dispatch_platform_realm(
                         // shutdown must cancel any in-flight pointer
                         // sequence whose platform Up/Cancel will never
                         // arrive, and must notify lifecycle observers,
-                        // before the realm and its `Scheduler` are gone.
+                        // before the realm and its `UpdateScheduler` are gone.
                         // This is the same reason `on_quit`'s own Detached
                         // dispatch exists (`run_desktop`'s bootstrap),
                         // generalized to per-realm teardown instead of only
@@ -2204,7 +2204,7 @@ fn for_each_installed_realm(mut f: impl FnMut(&super::ui_realm::UiRealm)) {
     drop(removed);
     // Same rationale as `dispatch_platform_realm`'s own tail: a visited
     // realm's frame callback may have resolved an `open_secondary_window`
-    // Pending completion via `Scheduler::drive_async_tasks`, which cannot
+    // Pending completion via `UpdateScheduler::drive_async_tasks`, which cannot
     // complete mid-visit for the same reason it cannot complete
     // mid-dispatch (`iterating_all_realms` holds this thread's checkout
     // state just as `dispatched_realm_id` does). This function itself
@@ -3083,9 +3083,9 @@ mod realm_dispatch_tests {
     /// `PlatformToUi::Lifecycle` event through `dispatch_platform_realm`,
     /// which takes the realm OUT of `APP_RUNTIME` for the duration of the
     /// dispatch and only restores it after `emit_lifecycle_transition`
-    /// returns. A fire-time `APP_RUNTIME` lookup (a `Scheduler` lifecycle
+    /// returns. A fire-time `APP_RUNTIME` lookup (an `UpdateScheduler` lifecycle
     /// listener, the previous shape of this fix) can never see the realm
-    /// during that exact window — driving a throwaway `Scheduler` directly,
+    /// during that exact window — driving a throwaway `UpdateScheduler` directly,
     /// the previous version of this test's approach, never exercises that
     /// window at all, which is why it never caught the bug.
     #[test]
@@ -4337,7 +4337,7 @@ mod realm_dispatch_tests {
     /// ALSO complete through the Pending arm, not just `SeparateRealms`
     /// above — the harder case. `finish_open_secondary_window`'s
     /// `SharedRealm` branch installs a PRESENTATION into the driver realm
-    /// itself, the exact realm `Scheduler::drive_async_tasks` is called
+    /// itself, the exact realm `UpdateScheduler::drive_async_tasks` is called
     /// from INSIDE a dispatch of (`dispatched_realm_id` is `Some` for the
     /// whole poll) — and `install_presentation_alongside` has no
     /// defer-to-idle queue of its own; it hard-refuses with
@@ -4529,7 +4529,7 @@ mod realm_dispatch_tests {
     /// driver realm dies BEFORE its own `open_secondary_window` `Pending`
     /// request ever resolves, the fail-closed path must run cleanly. The
     /// spawned completion future is owned by the driver realm's own
-    /// `Scheduler`/`AsyncDriver`; tearing that realm down (its sole
+    /// `UpdateScheduler`/`AsyncDriver`; tearing that realm down (its sole
     /// presentation closing) drops the `AsyncDriver`'s task map, which drops
     /// the future, which drops the `PendingWindow` it captured --
     /// `ClaimHandle`'s own disclaim-on-drop transitions the request to
@@ -4586,7 +4586,7 @@ mod realm_dispatch_tests {
 
             // Kill the driver realm BEFORE window B's open ever resolves --
             // `window_a` is the realm's sole presentation, so this
-            // uninstalls the whole realm, dropping its Scheduler/
+            // uninstalls the whole realm, dropping its UpdateScheduler/
             // AsyncDriver and, with it, the still-pending completion
             // future.
             window_a.close();
@@ -4626,10 +4626,10 @@ mod realm_dispatch_tests {
     /// Closing a realm's SOLE presentation must dispatch `AppLifecycleState::
     /// Detached` through it BEFORE the realm is uninstalled — shutdown must
     /// cancel any in-flight pointer sequence and notify lifecycle observers
-    /// before the realm and its `Scheduler` are gone (the same reason
+    /// before the realm and its `UpdateScheduler` are gone (the same reason
     /// `on_quit`'s own Detached dispatch exists, generalized to per-realm
     /// teardown so it fires from an ordinary window close too, not only a
-    /// process-wide quit). Observed via a `Scheduler` lifecycle listener
+    /// process-wide quit). Observed via an `UpdateScheduler` lifecycle listener
     /// registered BEFORE the close: the listener's own `Arc` survives the
     /// realm's eventual drop, so it remains checkable after `close_this_
     /// window` returns even though the realm itself is gone by then.
@@ -5069,7 +5069,8 @@ mod realm_dispatch_tests {
                 .clone()
         });
 
-        scheduler_a.drive_frame(web_time::Instant::now(), || {
+        let now = web_time::Instant::now();
+        scheduler_a.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
             let _ = with_owner_platform(|_owner| ());
         });
     }
@@ -5836,7 +5837,7 @@ enum WakeAction {
     /// frames are enabled and there is real work or a scheduled ticker.
     Render,
     /// Frames are disabled (`AppLifecycleState::Hidden`/`Paused`/
-    /// `Detached`): poll only [`Scheduler::drive_async_tasks`](flui_scheduler::Scheduler::drive_async_tasks) — never
+    /// `Detached`): poll only [`UpdateScheduler::drive_async_tasks`](flui_scheduler::UpdateScheduler::drive_async_tasks) — never
     /// begin/draw a frame, tick, run the pipeline, or present. Dirty work
     /// is left untouched; it accumulates until frames re-enable.
     PumpAsync,
@@ -5846,7 +5847,7 @@ enum WakeAction {
 }
 
 /// Decides what a platform wake should do, given the scheduler's
-/// [`Scheduler::frames_enabled`](flui_scheduler::Scheduler::frames_enabled) fact (ADR-0035) alongside the pre-existing
+/// [`UpdateScheduler::frames_enabled`](flui_scheduler::UpdateScheduler::frames_enabled) fact (ADR-0035) alongside the pre-existing
 /// dirty/scheduled-ticker signals.
 ///
 /// `frames_enabled == false` takes priority over everything else — even
@@ -5860,7 +5861,7 @@ enum WakeAction {
 ///
 /// `dirty` is true when there is real work (an inbox redraw request,
 /// `needs_redraw`, or dirty pipeline nodes); `frame_scheduled` is true when
-/// the global `Scheduler` has a pending ticker callback (a running
+/// the global `UpdateScheduler` has a pending ticker callback (a running
 /// `AnimationController` with no other dirty state).
 fn wake_action(frames_enabled: bool, dirty: bool, frame_scheduled: bool) -> WakeAction {
     if !frames_enabled {
@@ -5914,7 +5915,7 @@ fn keeps_frame_gate_open(
 ///
 /// Not `cfg`-gated to desktop-only: Android's `PumpAsync` arm (`run_android`)
 /// reuses this same bound unconditionally — a self-re-arming task
-/// `Scheduler::finish_async_pump` lets keep waking the loop has no
+/// `UpdateScheduler::finish_async_pump` lets keep waking the loop has no
 /// vsync/present call to bound it there either, and that arm has no
 /// `keeps_frame_gate_open`-style signal desktop's conditional
 /// `no_present_fallback_pace` uses — so its throttle is unconditional
@@ -6027,11 +6028,11 @@ mod desktop_pacing_tests {
     }
 
     /// A spawned future must keep progressing through `PumpAsync`'s
-    /// `Scheduler::drive_async_tasks` call while frames are disabled, with
+    /// `UpdateScheduler::drive_async_tasks` call while frames are disabled, with
     /// no frame ever advancing — and a `Resumed` transition afterward must
     /// produce exactly one frame.
     ///
-    /// Standalone `Scheduler::new()`, not the process singleton: this test
+    /// Standalone `UpdateScheduler::new()`, not the process singleton: this test
     /// mirrors what `run_desktop`'s frame callback does on a `PumpAsync`
     /// wake, without needing a live window/event loop.
     ///
@@ -6043,9 +6044,9 @@ mod desktop_pacing_tests {
     fn frames_disabled_pump_async_keeps_futures_running_without_advancing_frames() {
         use std::sync::atomic::{AtomicBool, AtomicUsize};
 
-        use flui_scheduler::{AppLifecycleState, Scheduler};
+        use flui_scheduler::{AppLifecycleState, UpdateScheduler};
 
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let polls = std::sync::Arc::new(AtomicUsize::new(0));
         let completed = std::sync::Arc::new(AtomicBool::new(false));
         let polls_for_task = std::sync::Arc::clone(&polls);
@@ -6104,7 +6105,8 @@ mod desktop_pacing_tests {
             ),
             WakeAction::Render
         );
-        scheduler.drive_frame(web_time::Instant::now(), || {});
+        let now = web_time::Instant::now();
+        scheduler.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {});
         assert_eq!(
             scheduler.frame_count(),
             frame_count_before + 1,
@@ -6510,7 +6512,7 @@ where
                     // arriving after this pump cycle returns) would find the
                     // latch already set, never re-fire `on_frame_scheduled`,
                     // and never wake this loop again — see
-                    // `Scheduler::finish_async_pump`'s doc for the full
+                    // `UpdateScheduler::finish_async_pump`'s doc for the full
                     // starvation hazard and why the ordering matters.
                     scheduler.finish_async_pump();
                     scheduler.drive_async_tasks();
@@ -6534,18 +6536,18 @@ where
 
             let now = web_time::Instant::now();
 
-        // Scheduler callbacks (animations). NOTE: the global `Scheduler` is driven
+        // UpdateScheduler callbacks (animations). NOTE: the global `UpdateScheduler` is driven
         // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
         // (`UiRealm::draw_frame`) ticks off the realm's own `start` origin —
         // two separate clocks ON PURPOSE: the controller sets are disjoint (implicit
         // animations register with `Vsync`; plain controllers carry a private
-        // `Scheduler` ticker, never the global one), so the origins never need to
+        // `UpdateScheduler` ticker, never the global one), so the origins never need to
         // agree and no controller is advanced twice.
         // The ONE shared frame ordering — begin (transient +
         // microtasks + the single async-driver poll) -> persistent callbacks ->
         // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
         // drives the same helper on its binding-local scheduler.
-            let presented = scheduler.drive_frame(now, || {
+            let presented = scheduler.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
             // Render frame via the realm
             let mut r = renderer_frame.lock();
                 let did_present = realm.render_frame_entered(&mut *r);
@@ -6794,7 +6796,7 @@ where
 /// # [`WindowPolicy::SeparateRealms`]
 ///
 /// Opens a fully independent second realm: its own `UiRealm`, its own
-/// `GlobalKeyScope`, its own `Scheduler` — installed via
+/// `GlobalKeyScope`, its own `UpdateScheduler` — installed via
 /// `install_realm_alongside`, never `install_platform_realm`'s displacing
 /// legacy path. `two_realms_via_separate_windows_policy_share_nothing` pins
 /// the "share nothing but `SharedEngineServices`" guarantee this policy
@@ -6828,7 +6830,7 @@ where
 /// (`drain_pending_secondary_window_completions`), not silently dropped.
 ///
 /// The completion itself never runs from inside the spawned future's own
-/// poll: `Scheduler::drive_async_tasks` (which polls that future) always
+/// poll: `UpdateScheduler::drive_async_tasks` (which polls that future) always
 /// runs from INSIDE a dispatched `RealmTask::Frame`, and `WindowPolicy::
 /// SharedRealm`'s own `install_presentation_alongside` has no defer-to-idle
 /// queue of its own — it hard-refuses (`InstallPresentationError::
@@ -6875,7 +6877,7 @@ where
 ///   per-window.** `runner_frame_ordering.rs`'s own mechanical guards
 ///   (`every_runner_frame_site_uses_the_shared_drive_frame_helper`,
 ///   `every_pump_async_arm_calls_finish_then_drive_async_tasks`) pin
-///   exactly three production `Scheduler::drive_frame`/`finish_async_pump`/
+///   exactly three production `UpdateScheduler::drive_frame`/`finish_async_pump`/
 ///   `drive_async_tasks` call sites — desktop, Android, web — precisely to
 ///   catch a hand-rolled fourth copy drifting from the canonical ordering.
 ///   Adding a real, independently-rendering second window means
@@ -6947,7 +6949,7 @@ thread_local! {
     /// dispatch/hot-restart-visit checkout state is clear (see
     /// [`drain_pending_secondary_window_completions`]). Never drained
     /// in-place inside the spawned future itself: that future is polled by
-    /// `Scheduler::drive_async_tasks`, which always runs INSIDE a dispatched
+    /// `UpdateScheduler::drive_async_tasks`, which always runs INSIDE a dispatched
     /// `RealmTask::Frame` (`dispatched_realm_id` is `Some` for the whole
     /// checkout) — `install_presentation_alongside`'s own
     /// `DispatchInFlight` refusal (it has no defer-to-idle queue of its own)
@@ -7064,17 +7066,17 @@ fn open_secondary_window_impl(
 /// this thread, independent of which policy governs the NEW window (the
 /// same lookup [`WindowPolicy::SharedRealm`]'s own `shared_with` uses in
 /// [`open_secondary_window_impl`]) — because completing the install needs a
-/// live [`flui_scheduler::Scheduler`] to poll the awaited `PendingWindow` on
+/// live [`flui_scheduler::UpdateScheduler`] to poll the awaited `PendingWindow` on
 /// the framework's own frame-cycle-integrated async driver
 /// (`AsyncDriver::spawn_local`), never a hand-rolled busy-loop: the
 /// `PendingWindow`'s own wake (fired when the owner lane delivers) requests
-/// a fresh frame, and that frame's `Scheduler::drive_async_tasks` polls the
+/// a fresh frame, and that frame's `UpdateScheduler::drive_async_tasks` polls the
 /// task to completion — the same mechanism any other framework-spawned
 /// async task completes through.
 ///
 /// The spawned future itself never calls [`finish_open_secondary_window`]
 /// directly on success — it only enqueues `(policy, window)` onto
-/// [`PENDING_SECONDARY_WINDOW_COMPLETIONS`]. `Scheduler::drive_async_tasks`
+/// [`PENDING_SECONDARY_WINDOW_COMPLETIONS`]. `UpdateScheduler::drive_async_tasks`
 /// (which polls this future to completion) always runs from INSIDE a
 /// dispatched `RealmTask::Frame`, so `dispatched_realm_id` is `Some` for the
 /// poll's entire duration; `WindowPolicy::SharedRealm`'s own
@@ -7538,7 +7540,7 @@ where
                             // progressing while backgrounded.
                             //
                             // `finish_async_pump` MUST run first, not after —
-                            // see `Scheduler::finish_async_pump`'s doc for the
+                            // see `UpdateScheduler::finish_async_pump`'s doc for the
                             // starvation hazard this ordering avoids.
                             scheduler.finish_async_pump();
                             scheduler.drive_async_tasks();
@@ -7554,10 +7556,10 @@ where
                     }
 
                     let now = web_time::Instant::now();
-                    // Scheduler callbacks and rendering share ONE `UiRealm::enter`
+                    // UpdateScheduler callbacks and rendering share ONE `UiRealm::enter`
                     // dynamic extent; callbacks may legally resolve realm-local
                     // capabilities throughout the complete frame transaction.
-                    scheduler.drive_frame(now, || {
+                    scheduler.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
                         let mut r = renderer_frame.lock();
                         realm.render_frame_entered(&mut *r);
 
@@ -7885,7 +7887,7 @@ where
                             // backgrounded.
                             //
                             // `finish_async_pump` MUST run first, not after —
-                            // see `Scheduler::finish_async_pump`'s doc for the
+                            // see `UpdateScheduler::finish_async_pump`'s doc for the
                             // starvation hazard this ordering avoids.
                             //
                             // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
@@ -7909,8 +7911,8 @@ where
                     }
 
                     let now = web_time::Instant::now();
-                    // Scheduler callbacks and rendering share one realm entry.
-                    scheduler.drive_frame(now, || {
+                    // UpdateScheduler callbacks and rendering share one realm entry.
+                    scheduler.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
                         let mut slot = renderer_frame.lock();
                         let Some(r) = slot.as_mut() else {
                             return;
@@ -8142,13 +8144,13 @@ mod tests {
     /// concurrently-running test does on ITS OWN thread — the same reasoning
     /// this file's other thread-local-only tests below rely on. The retired
     /// `AppBinding`-era version of this test carried a dedicated per-test
-    /// window-identity lock, and later, briefly, `Scheduler` carried a
+    /// window-identity lock, and later, briefly, `UpdateScheduler` carried a
     /// sibling per-test scheduler-phase lock; both are deleted now, not
     /// ported forward, because the state each one guarded
     /// (`AppBinding::instance()`'s active window, and the process-global
-    /// half of the `Scheduler` singleton respectively) no longer exists —
+    /// half of the `UpdateScheduler` singleton respectively) no longer exists —
     /// `AppBinding` is gone entirely and every `UiRealm` owns its own fresh
-    /// `Scheduler` value — and because a per-test-thread thread-local needs
+    /// `UpdateScheduler` value — and because a per-test-thread thread-local needs
     /// no cross-test lock in the first place.
     #[test]
     fn desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it() {
@@ -8374,7 +8376,8 @@ mod tests {
         // (c). A panicking pipeline is caught internally and resolved back
         // to `Idle` via `abort_frame()` before the panic resumes, so this
         // test's own `#[should_panic]` unwind leaves the scheduler clean.
-        scheduler.drive_frame(web_time::Instant::now(), || {
+        let now = web_time::Instant::now();
+        scheduler.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
             let _ = with_owner_platform(|_owner| ());
         });
     }
@@ -8425,9 +8428,14 @@ mod tests {
         let dispatch_result = dispatch_platform_realm(
             dispatcher,
             RealmTask::Frame(Box::new(|realm| {
-                realm.scheduler().drive_frame(web_time::Instant::now(), || {
-                    let _ = with_owner_platform(|_owner| ());
-                });
+                let now = web_time::Instant::now();
+                realm.scheduler().drive_frame(
+                    now,
+                    flui_scheduler::IdleDeadline::far_future(now),
+                    || {
+                        let _ = with_owner_platform(|_owner| ());
+                    },
+                );
             })),
         );
         // Unreachable on the fence-tripping path (the debug_assert panics

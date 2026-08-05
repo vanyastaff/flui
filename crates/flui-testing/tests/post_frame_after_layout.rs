@@ -182,7 +182,7 @@ fn the_post_frame_callback_has_not_run_while_layout_is_still_uncommitted() {
 
 /// The real invariant, preserved: exactly one async-driver poll per frame,
 /// on the binding's **own** scheduler, before `build_scope`. The poll moved from
-/// `pump_frame` into `Scheduler::handle_begin_frame` — it must
+/// `pump_frame` into `UpdateScheduler::handle_begin_frame` — it must
 /// still happen, and still happen once.
 #[test]
 fn pump_frame_still_polls_the_async_driver_exactly_once_per_frame() {
@@ -213,7 +213,7 @@ fn pump_frame_still_polls_the_async_driver_exactly_once_per_frame() {
 fn pump_frame_drives_the_binding_local_scheduler_not_an_unrelated_one() {
     let (mut binding, _pipeline, _root) = binding_with_one_box();
 
-    let unrelated_scheduler = flui_scheduler::Scheduler::new();
+    let unrelated_scheduler = flui_scheduler::UpdateScheduler::new();
     let unrelated_fired = Arc::new(AtomicBool::new(false));
     let unrelated_cb = Arc::clone(&unrelated_fired);
     unrelated_scheduler.add_post_frame_callback(Box::new(move |_| {

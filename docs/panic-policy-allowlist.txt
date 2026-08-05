@@ -99,8 +99,7 @@ crates/flui-rendering/src/view/render_view.rs 1
 crates/flui-rendering/src/virtualization/sumtree.rs 6
 crates/flui-scheduler/src/budget.rs 3
 crates/flui-scheduler/src/frame.rs 2
-crates/flui-scheduler/src/scheduler.rs 4
-crates/flui-scheduler/src/vsync.rs 1
+crates/flui-scheduler/src/scheduler.rs 1
 crates/flui-testing/src/lib.rs 3
 crates/flui-view/src/element/behavior.rs 2
 crates/flui-view/src/tree/element_tree.rs 5

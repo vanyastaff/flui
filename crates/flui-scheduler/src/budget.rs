@@ -1,7 +1,9 @@
 //! Frame budget management - enforce frame time limits
 //!
 //! Tracks time spent in each phase and enforces budget limits to maintain
-//! target framerate (e.g., 16.67ms for 60fps).
+//! a caller-chosen target framerate (e.g., ~16.7ms for a 60fps target).
+//! `FrameBudget` carries no built-in default rate — callers state one
+//! explicitly via [`FrameBudget::new`] or [`FrameBudgetBuilder`].
 //!
 //! ## Type-Safe Budget Management
 //!
@@ -170,7 +172,7 @@ impl PhaseTiming {
 /// let stats = budget.build_stats();
 /// assert_eq!(stats.duration.value(), 5.0);
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FrameBudget {
     /// Frame duration configuration
     frame_duration: FrameDuration,
@@ -494,8 +496,8 @@ impl FrameBudget {
 
     /// Get jank count (frames that exceeded the target frame duration)
     ///
-    /// A frame is considered "janky" if it took longer than the target
-    /// frame duration (e.g., >16.67ms for 60 FPS).
+    /// A frame is considered "janky" if it took longer than the configured
+    /// target frame duration.
     pub fn jank_count(&self) -> usize {
         let threshold = self.frame_duration.as_ms().value();
         self.frame_times
@@ -593,6 +595,11 @@ impl FrameBudgetBuilder {
     }
 
     /// Build the frame budget
+    ///
+    /// A caller that specifies neither [`Self::target_fps`] nor
+    /// [`Self::frame_duration`] gets a 60fps fallback — an ordinary builder
+    /// default, not a scheduler-wide assumption: `flui-scheduler` itself
+    /// makes no frame-rate assumption anywhere (see `UpdateScheduler::new`).
     pub fn build(self) -> FrameBudget {
         let frame_duration = self
             .frame_duration
@@ -600,7 +607,9 @@ impl FrameBudgetBuilder {
                 self.target_fps
                     .map(|fps| FrameDuration::try_from_fps(fps).expect("fps > 0"))
             })
-            .unwrap_or(FrameDuration::FPS_60);
+            .unwrap_or_else(|| {
+                FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid")
+            });
 
         let mut budget = FrameBudget::with_duration(frame_duration);
 
@@ -642,12 +651,12 @@ mod tests {
 
         let build_stats = budget.build_stats();
         assert_eq!(build_stats.duration.value(), 5.0);
-        assert!((build_stats.budget_percent.value() - 30.0).abs() < 1.0); // ~30% of 16.67ms
+        assert!((build_stats.budget_percent.value() - 30.0).abs() < 1.0); // ~30% of the 60fps target duration
     }
 
     #[test]
     fn test_over_budget_detection() {
-        let mut budget = FrameBudget::new(60); // 16.67ms target
+        let mut budget = FrameBudget::new(60); // 60fps target duration
         budget.reset();
 
         // Simulate work
@@ -672,7 +681,7 @@ mod tests {
 
     #[test]
     fn test_janky_frame_detection() {
-        let mut budget = FrameBudget::new(60); // 16.67ms target
+        let mut budget = FrameBudget::new(60); // 60fps target duration
 
         budget.record_frame_duration(Milliseconds::new(15.0));
         assert!(!budget.is_janky());
@@ -750,13 +759,13 @@ mod tests {
 
     #[test]
     fn test_jank_statistics() {
-        let mut budget = FrameBudget::new(60); // 16.67ms target
+        let mut budget = FrameBudget::new(60); // 60fps target duration
 
         // Add some normal frames
         for _ in 0..8 {
             budget.record_frame_duration(Milliseconds::new(15.0));
         }
-        // Add some janky frames (>25ms = >150% of 16.67ms)
+        // Add some janky frames (>25ms = >150% of the 60fps target duration)
         for _ in 0..2 {
             budget.record_frame_duration(Milliseconds::new(30.0));
         }

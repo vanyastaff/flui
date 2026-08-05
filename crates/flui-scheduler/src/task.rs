@@ -255,7 +255,7 @@ pub struct TaskQueue {
     /// Lock-free mirror of the BinaryHeap length.
     ///
     /// Write-through on push / pop / drain operations. Allows callers like
-    /// `Scheduler::is_over_budget` to check queue depth without acquiring
+    /// `UpdateScheduler::is_over_budget` to check queue depth without acquiring
     /// the queue lock. Per Gjengset *Rust Atomics and Locks* Ch 3:
     /// Acquire/Release ordering is sufficient because readers don't need
     /// total ordering across multiple atomics — they only care about a

@@ -24,7 +24,7 @@ use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
     Curves, FloatTween, OklabColorTween, Simulation, SpringDescription, SpringSimulation, Tween,
 };
-use flui_scheduler::Scheduler;
+use flui_scheduler::UpdateScheduler;
 use flui_types::geometry::{Offset, px};
 use flui_types::styling::Color;
 
@@ -137,7 +137,7 @@ fn spring_step(c: &mut Criterion) {
 fn controller_tick(c: &mut Criterion) {
     let mut group = c.benchmark_group("controller");
 
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
     controller.forward().unwrap();
     let mut t = 0.0_f64;

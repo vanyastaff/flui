@@ -55,7 +55,7 @@ tracing = { workspace = true }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
 flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
 flui-testing = { path = "../flui-testing", version = "0.2.0" }
-# `Scheduler` — a bare `AnimationController` fixture in
+# `UpdateScheduler` — a bare `AnimationController` fixture in
 # `tests/tab_scaffold.rs`'s `TickerMode`-muting test needs one to construct,
 # matching `flui-widgets/tests/visibility.rs`'s identical animation-probe
 # fixture.

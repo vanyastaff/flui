@@ -1,11 +1,11 @@
-//! Scheduler configuration types and utilities.
+//! UpdateScheduler configuration types and utilities.
 //!
-//! This module provides standalone types used by the [`Scheduler`]:
+//! This module provides standalone types used by the
+//! [`UpdateScheduler`](crate::scheduler::UpdateScheduler):
 //!
 //! - **Time dilation**: Slow down animations for debugging
 //! - **Performance mode**: Hint to the runtime about expected workload
 //! - **Service extensions**: Debug/dev tool integration points
-//! - **Scheduling strategy**: Customizable task execution policy
 //! - **Timings callbacks**: Frame performance reporting
 
 use std::sync::{
@@ -16,7 +16,7 @@ use std::sync::{
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use crate::{frame::FrameTiming, scheduler::Scheduler};
+use crate::frame::FrameTiming;
 
 // ============================================================================
 // Callback Type Aliases
@@ -27,23 +27,6 @@ use crate::{frame::FrameTiming, scheduler::Scheduler};
 /// Callbacks receive batched `FrameTiming` data approximately once per second
 /// in release mode, or every ~100ms in debug/profile builds.
 pub type TimingsCallback = Arc<dyn Fn(&[FrameTiming]) + Send + Sync>;
-
-/// Scheduling strategy callback.
-///
-/// Called to determine whether a task at a given priority should run.
-/// Returns `true` if the task should execute, `false` to defer.
-pub type SchedulingStrategy = Box<dyn Fn(crate::task::Priority, &Scheduler) -> bool + Send + Sync>;
-
-/// Default scheduling strategy — runs tasks when not over budget.
-pub fn default_scheduling_strategy(priority: crate::task::Priority, scheduler: &Scheduler) -> bool {
-    // Always run high priority tasks (Animation, UserInput)
-    if priority >= crate::task::Priority::Animation {
-        return true;
-    }
-
-    // Run lower priority tasks only if we have budget remaining
-    !scheduler.is_over_budget()
-}
 
 // ============================================================================
 // Time Dilation
@@ -90,10 +73,11 @@ pub enum InvalidTimeDilation {
 /// `binding.dart::timeDilation`).
 ///
 /// Validates and stores the process-wide dilation factor only — it has no
-/// reach into any particular [`Scheduler`]'s epoch. A caller that also holds
-/// a live scheduler and wants its epoch reset on a dilation change should use
-/// [`Scheduler::set_time_dilation`] instead, which delegates here and then
-/// resets its own epoch.
+/// reach into any particular [`UpdateScheduler`](crate::scheduler::UpdateScheduler)'s
+/// epoch. A caller that also holds a live scheduler and wants its epoch
+/// reset on a dilation change should use
+/// [`UpdateScheduler::set_time_dilation`](crate::scheduler::UpdateScheduler::set_time_dilation)
+/// instead, which delegates here and then resets its own epoch.
 ///
 /// # Errors
 ///
@@ -153,11 +137,11 @@ pub enum PerformanceMode {
 ///
 /// ```rust
 /// use flui_scheduler::{
-///     Scheduler,
+///     UpdateScheduler,
 ///     config::{PerformanceMode, PerformanceModeRequestHandle},
 /// };
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 ///
 /// // Request latency mode for an interactive operation
 /// let handle = scheduler.request_performance_mode(PerformanceMode::Latency);
@@ -250,6 +234,7 @@ pub(crate) fn adjust_duration_for_epoch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheduler::UpdateScheduler;
 
     #[test]
     fn test_time_dilation() {
@@ -285,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_performance_mode_handle() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         // Request latency mode
         let handle = scheduler.request_performance_mode(PerformanceMode::Latency);
@@ -303,8 +288,8 @@ mod tests {
     #[test]
     fn test_binding_state_isolation() {
         // Test that each scheduler has its own state
-        let scheduler1 = Scheduler::new();
-        let scheduler2 = Scheduler::new();
+        let scheduler1 = UpdateScheduler::new();
+        let scheduler2 = UpdateScheduler::new();
 
         // Request performance mode on scheduler1
         let _handle = scheduler1.request_performance_mode(PerformanceMode::Latency);
@@ -314,20 +299,6 @@ mod tests {
 
         // Verify scheduler2 is unaffected (proper isolation)
         assert_eq!(scheduler2.performance_mode_request_count(), 0);
-    }
-
-    #[test]
-    fn test_default_scheduling_strategy() {
-        use crate::task::Priority;
-
-        let scheduler = Scheduler::new();
-
-        // High priority should always run
-        assert!(default_scheduling_strategy(Priority::Animation, &scheduler));
-        assert!(default_scheduling_strategy(Priority::UserInput, &scheduler));
-
-        // Lower priority depends on budget
-        assert!(default_scheduling_strategy(Priority::Idle, &scheduler));
     }
 
     #[test]

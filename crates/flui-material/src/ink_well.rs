@@ -103,7 +103,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Scheduler, Vsync, VsyncRegistration,
+    Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
 };
 use flui_foundation::Listenable;
 use flui_interaction::routing::FocusNode;
@@ -505,7 +505,7 @@ fn begin_press_deactivation(
         return;
     };
 
-    let controller = AnimationController::new(PRESS_DEACTIVATION_DELAY, &Scheduler::new());
+    let controller = AnimationController::new(PRESS_DEACTIVATION_DELAY, &UpdateScheduler::new());
     let registration = vsync.register(controller.clone());
 
     // The status listener only needs to be `Send + Sync` (its bound), so it

@@ -25,7 +25,7 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineOwner;
-use flui_scheduler::{AsyncDriver, PostFrameHandle, Scheduler};
+use flui_scheduler::{AsyncDriver, PostFrameHandle, UpdateScheduler};
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding};
@@ -53,8 +53,8 @@ pub(crate) struct RealmCapabilities<'a> {
     pub(crate) interaction_dispatch_handle: InteractionDispatchHandle,
     /// The realm's own scheduler — borrowed only for the duration of
     /// assembly; the constructed [`RenderingFlutterBinding`] keeps just a
-    /// `WeakScheduler` derived from it.
-    pub(crate) scheduler: &'a Scheduler,
+    /// `WeakUpdateScheduler` derived from it.
+    pub(crate) scheduler: &'a UpdateScheduler,
     /// The realm's platform wake capability, cloned into this
     /// presentation's pipeline as its `on_need_visual_update` callback.
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
@@ -361,7 +361,7 @@ impl PresentationState {
     /// `WidgetsBinding` lazily self-owns a private `GlobalKeyScope` on first
     /// `GlobalKey` registration (never shared, so it never conflicts with
     /// anything), and its `RenderingFlutterBinding` owns its own throwaway
-    /// `Scheduler` (see [`RenderingFlutterBinding::new_for_test_with_pipeline`]).
+    /// `UpdateScheduler` (see [`RenderingFlutterBinding::new_for_test_with_pipeline`]).
     /// Used only by this module's own unit tests, which exercise
     /// presentation-local behavior (gestures/focus/haptics/overlay) in
     /// isolation; realm-backed tests use [`Self::new`] through

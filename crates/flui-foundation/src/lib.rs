@@ -213,7 +213,7 @@ pub use id::{
     DataTransferId,
     // Core tree IDs (5-tree architecture)
     ElementId,
-    // Scheduler IDs (consumed by flui-scheduler)
+    // UpdateScheduler IDs (consumed by flui-scheduler)
     FrameCallbackId,
     FrameId,
     // Generic ID system

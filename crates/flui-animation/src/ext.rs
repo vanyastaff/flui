@@ -24,11 +24,11 @@ use std::sync::Arc;
 /// use flui_animation::{AnimationController, Animation};
 /// use flui_animation::ext::AnimatableExt;
 /// use flui_animation::FloatTween;
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
@@ -60,11 +60,11 @@ where
     /// use flui_animation::{AnimationController, Animation};
     /// use flui_animation::ext::AnimatableExt;
     /// use flui_animation::FloatTween;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let controller = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -100,11 +100,11 @@ where
 /// use flui_animation::{AnimationController, Animation};
 /// use flui_animation::ext::AnimationExt;
 /// use flui_animation::Curves;
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
@@ -129,11 +129,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// use flui_animation::{AnimationController, Animation};
     /// use flui_animation::ext::AnimationExt;
     /// use flui_animation::Curves;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let controller = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -159,11 +159,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// ```
     /// use flui_animation::{AnimationController, Animation};
     /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let controller = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -192,11 +192,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// ```
     /// use flui_animation::{AnimationController, Animation, AnimationOperator};
     /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let controller1 = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -232,11 +232,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// ```
     /// use flui_animation::{AnimationController, Animation};
     /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     ///
@@ -259,11 +259,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// ```
     /// use flui_animation::{AnimationController, Animation};
     /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     ///
@@ -286,11 +286,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// ```
     /// use flui_animation::{AnimationController, Animation};
     /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     ///
@@ -315,11 +315,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// ```
     /// use flui_animation::{AnimationController, Animation};
     /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
     ///
@@ -357,12 +357,12 @@ mod tests {
     use crate::AnimationController;
     use crate::curve::Curves;
     use crate::tween_types::FloatTween;
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
     use std::time::Duration;
 
     #[test]
     fn test_animatable_ext() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_animation_ext_curved() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn test_animation_ext_reversed() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_animation_ext_add() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let c1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_animation_ext_multiply() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let c1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_animation_ext_subtract() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let c1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_animation_ext_divide() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let c1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
