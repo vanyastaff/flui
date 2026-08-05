@@ -615,7 +615,8 @@ mod tests {
 
     /// The tripwire that keeps the deadlock-turned-panic above from ever
     /// regressing silently: calling the service under a held checkout fails
-    /// loudly in debug rather than hanging (or, pre-#554, deadlocking).
+    /// loudly in debug rather than hanging (or, before the `PipelineCell`
+    /// port, deadlocking).
     #[test]
     #[cfg(debug_assertions)]
     #[should_panic(

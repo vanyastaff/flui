@@ -1863,7 +1863,8 @@ mod tests {
     /// handle derived from it can be captured in that closure any more. The
     /// invariant itself did not disappear — it moved into production as the
     /// `debug_assert!(is_free())` in `PresentationState::dispatch_semantics_
-    /// action` (registry: `runtime-contract.toml:781`), which this test's
+    /// action` (registry: `runtime-contract.toml`'s `semantics-two-phase-borrow`
+    /// contract), which this test's
     /// normal pass/fail already exercises (the assert would panic the test
     /// if it ever fired). What remains directly assertable here — and what
     /// this test still proves — is the *observable* contract: dispatch

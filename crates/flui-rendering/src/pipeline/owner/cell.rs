@@ -61,6 +61,20 @@ impl PipelineCell {
     /// May be called from inside another `with` on the same cell (nesting
     /// is guaranteed); see the type-level docs for the `with_mut`
     /// reentrancy contract.
+    ///
+    /// ```
+    /// use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+    ///
+    /// let cell = PipelineCell::new(PipelineOwner::new());
+    /// let dpr = cell.with(PipelineOwner::device_pixel_ratio);
+    /// assert_eq!(dpr, 1.0, "a fresh PipelineOwner defaults to 1x");
+    ///
+    /// // Nesting is fine -- two coexisting shared borrows never panic.
+    /// cell.with(|outer| {
+    ///     let root = cell.with(|inner| inner.root_id());
+    ///     assert_eq!(outer.root_id(), root);
+    /// });
+    /// ```
     pub fn with<R>(&self, f: impl FnOnce(&PipelineOwner) -> R) -> R {
         let owner = self.0.borrow();
         f(&owner)
@@ -90,6 +104,19 @@ impl PipelineCell {
     /// child via `with_mut`") is "the owner is free for exclusive access",
     /// and under closure-scoped access no `with` borrow can legally still
     /// be live at any call site that would ask this question.
+    ///
+    /// ```
+    /// use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+    ///
+    /// let cell = PipelineCell::new(PipelineOwner::new());
+    /// assert!(cell.is_free());
+    ///
+    /// cell.with_mut(|_owner| {
+    ///     assert!(!cell.is_free(), "checked out for the duration of with_mut");
+    /// });
+    ///
+    /// assert!(cell.is_free(), "free again once with_mut returns");
+    /// ```
     pub fn is_free(&self) -> bool {
         self.0.try_borrow_mut().is_ok()
     }

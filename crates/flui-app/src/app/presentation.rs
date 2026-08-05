@@ -411,7 +411,7 @@ impl PresentationState {
     /// `UiRealm::drain_commands` (the sole caller) only runs at a frame
     /// boundary, so nothing should still hold the pipeline checked out by
     /// the time a semantics-action handler runs. Registry:
-    /// `runtime-contract.toml:781`.
+    /// `runtime-contract.toml`'s `semantics-two-phase-borrow` contract.
     pub(crate) fn dispatch_semantics_action(
         &self,
         request: SemanticsActionRequest,

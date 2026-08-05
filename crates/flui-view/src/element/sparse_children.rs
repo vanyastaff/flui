@@ -635,7 +635,7 @@ mod tests {
         let grandchild_render_id = tree.get(grandchild).and_then(|n| n.element().render_id());
 
         // Both render nodes must exist (pipeline is threaded through the parent
-        // element into `tree.insert` via `pipeline_owner_any` propagation).
+        // element into `tree.insert` via `PipelineCell` propagation).
         assert!(
             child_render_id.is_some(),
             "child element must have a render node before evict"
