@@ -295,14 +295,29 @@ pub trait BuildContext {
     /// (`heroes.dart:952`, `:999`, `:1014-1018`). This is that reference,
     /// reified.
     ///
-    /// # This is not a frame capability
+    /// The returned [`PipelineCell`](flui_rendering::pipeline::PipelineCell) is an
+    /// owner-local, closure-scoped handle to the whole render tree's owner
+    /// (`!Send + !Sync`, shallow-shares the same underlying `PipelineOwner` on
+    /// `clone`): `with`/`with_mut` run a closure against it, and `with_mut`
+    /// panics if called while any `with`/`with_mut` borrow from the same cell
+    /// is already live on the call stack (see `PipelineCell`'s own docs for the
+    /// full reentrancy contract).
     ///
-    /// It schedules nothing, so port-check trigger #22 does not guard it and
-    /// acquiring it inside `build` is harmless — a `PipelineOwner` read during build
-    /// simply answers `None` for every un-laid-out node. What it is
-    /// *for* is the opposite direction: code outside the tree (a routing observer, a
-    /// `HeroController`) holding an owned handle so it can resolve a `RenderId` to
-    /// geometry from a post-frame callback, after layout commits.
+    /// # This IS a frame capability (port-check trigger #22)
+    ///
+    /// Acquire it in `ViewState::init_state`/`did_change_dependencies`, store
+    /// it, and use it later from a callback — never call this method from
+    /// `build`/`layout`/`paint`; the capability-scope scanner
+    /// (`scripts/check-frame-capability-scope.sh`) enforces this mechanically.
+    /// The hazard isn't the acquisition itself (a bare handle is inert) —
+    /// it's that a `build`/`layout`/`paint` body calling `.with_mut()`
+    /// synchronously on it would reenter the pipeline mid-transaction, which
+    /// `PipelineCell::with_mut`'s own reentrancy guard turns into an
+    /// immediate panic rather than a silent, ill-timed mid-build mutation.
+    /// What this method is *for* is the opposite direction: code outside the
+    /// tree (a routing observer, a `HeroController`) holding an owned handle
+    /// so it can resolve a `RenderId` to geometry from a post-frame callback,
+    /// after layout commits — not a synchronous read mid-build.
     ///
     /// `None` before the element is mounted under a pipeline owner.
     fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell>;

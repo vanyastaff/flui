@@ -173,7 +173,10 @@ pub(super) struct SubtreeArena<'tree> {
     /// nothing requires the lock is a follow-up, not done here. Empty
     /// unless a lazy sliver requests a not-yet-built child.
     pending_builds: Mutex<Vec<crate::protocol::sliver_protocol::PendingBuild>>,
-    /// Symmetric remove sink (U3c D2): `(parent, child)` pairs of children
+    /// Symmetric remove sink pairing the deferred-build queue above with a
+    /// deferred-dispose path (ADR-0003 Decision 2's re-entrant build contract
+    /// needed both halves to keep a lazy sliver's child band bounded, not
+    /// just growing on build): `(parent, child)` pairs of children
     /// the consumer wants evicted from the tree.  The `parent` is the
     /// sliver's own `node_id` — **not** the walk root `id` passed to
     /// `layout_dirty_root`.  For a real `viewport → sliver → lazy →
@@ -181,8 +184,9 @@ pub(super) struct SubtreeArena<'tree> {
     /// `mark_needs_layout` must target the lazy sliver so it reflows after
     /// its child list changes.
     ///
-    /// Drained before `pending_builds` in `layout_dirty_root`
-    /// (Remove → Insert ordering, D3), post-drop of the subtree borrows,
+    /// Drained before `pending_builds` in `layout_dirty_root` (dispose
+    /// before build, matching ADR-0003 Decision 3's recycling policy),
+    /// post-drop of the subtree borrows,
     /// so no aliased `NodePtr` is live when the `defer_remove` calls touch
     /// `&mut self`.  `Mutex` for the same historical reason as
     /// `pending_builds` (see its doc) -- no longer load-bearing for
@@ -379,8 +383,9 @@ impl<'tree> SubtreeArena<'tree> {
     /// Returns `(parent, child)` pairs — the parent is the sliver's
     /// `node_id`, not the walk root — so `defer_remove` targets the correct
     /// ancestor.  Symmetric to [`Self::take_pending_builds`]; called in
-    /// `layout_dirty_root` BEFORE `take_pending_builds` (Remove → Insert
-    /// ordering, D3) and AFTER `drop(arena)` so no `NodePtr` alias is live
+    /// `layout_dirty_root` BEFORE `take_pending_builds` (dispose before
+    /// build, matching ADR-0003 Decision 3's recycling policy) and AFTER
+    /// `drop(arena)` so no `NodePtr` alias is live
     /// when the removes are applied.
     pub(super) fn take_pending_removes(
         &self,
