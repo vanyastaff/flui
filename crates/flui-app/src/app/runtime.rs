@@ -407,6 +407,14 @@ enum RealmMapMutation {
     /// `RealmId` -- boxing keeps this enum (and every `Vec<RealmMapMutation>`
     /// queueing it) from paying that size for every entry regardless of
     /// variant.
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "constructed only by request_realm_install, whose one production caller \
+                      (runner.rs::install_realm_alongside) is desktop-only"
+        )
+    )]
     Install(RealmId, Box<RealmSlot>, Arc<dyn PlatformWindow>),
     /// Remove one realm from the registry (a window closing while siblings
     /// stay open — see `uninstall_platform_realm` in `super::runner`).
@@ -418,7 +426,7 @@ enum RealmMapMutation {
 /// independent desktop window ⇒ new realm" production policy (ADR-0027 step
 /// 5's multi-window follow-up, issue #555).
 ///
-/// Consulted through [`AppRuntime::should_exit`], which drains any deferred
+/// Consulted through `AppRuntime::should_exit`, which drains any deferred
 /// realm-map mutation FIRST (the drain-before-decide rule): a
 /// queued "open another window" install — e.g. a splash screen's dispose
 /// callback requesting the main window — is applied before the
@@ -432,29 +440,75 @@ enum RealmMapMutation {
 /// caller that already matches exhaustively — the same precedent
 /// `AttachError` set (`binding.rs`).
 ///
-/// Not yet wired into a live platform loop: `run_desktop`/`run_android`/
-/// `run_web` still let each backend's own window-close handling
-/// (`flui-platform`'s per-backend `CloseRequested`/`on_should_close`
-/// handling) decide exit unconditionally. This type and
-/// `AppRuntime::should_exit` are the decision *mechanism* — the policy shape
-/// is the deliverable now, wiring a real winit multi-window loop through it
-/// is a follow-up (tracked as this issue's native-lifecycle slice).
+/// **Live-wired** (issue #555's native-lifecycle follow-up): `AppConfig::
+/// exit_policy` carries this to `run_desktop`'s bootstrap, which installs a
+/// hook (`runner.rs`'s `install_exit_policy_hook`) into
+/// `flui_platform::traits::Platform::set_exit_policy_hook`. The winit
+/// backend's `CloseRequested` handling and the headless backend's window
+/// `close()`/`simulate_close()` both consult that hook — via the shared
+/// `flui_platform::shared::PlatformHandlers::exit_policy` slot — instead of
+/// deciding from their own native window count alone; see
+/// `closing_one_of_two_windows_does_not_exit_through_the_real_platform_hook_closing_both_does`
+/// (`runner.rs`) for the live-loop counterpart of this module's own
+/// mechanism-level tests. Android/web bootstraps do not install this hook
+/// today (their platforms don't override `set_exit_policy_hook` either, so
+/// doing so would be inert) — stated, not silently assumed.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the exit-policy mechanism has no production embedder call site yet -- \
-                  wiring a real winit multi-window loop through it is this issue's \
-                  native-lifecycle follow-up; exercised by this crate's own tests"
-    )
-)]
 pub enum ExitPolicy {
     /// Exit once every hosted realm has closed and none is queued to open.
     /// The default policy.
     #[default]
     OnLastWindowClosed,
+}
+
+/// Governs what a SECOND top-level window becomes, relative to the realm(s)
+/// already hosted on this thread — the embedder-facing knob issue #555 adds
+/// alongside `ExitPolicy`. Consulted only at
+/// [`super::runner::open_secondary_window`], the install-time seam: once a
+/// window is opened under one policy, nothing about its tree, its
+/// `BuildContext`, or any widget/state layer ever names this type again.
+///
+/// This is not behavior-neutral — the choice flips whether a `GlobalKey`
+/// collision between the primary window's tree and the second window's tree
+/// is even POSSIBLE:
+///
+/// - [`WindowPolicy::SeparateRealms`] (the default): the new window gets its
+///   own `UiRealm`, its own `GlobalKeyScope`, its own
+///   `Scheduler`. The same `GlobalKey` mounted in both windows' trees is
+///   fine — N×1, N independent uniqueness domains — because a `UiRealm`'s
+///   scope is exactly as leak-proof as any two independently-run
+///   applications: nothing links them but the injected
+///   `SharedEngineServices`.
+/// - [`WindowPolicy::SharedRealm`]: the new window becomes a second
+///   `PresentationState` inside the FIRST realm hosted on this thread —
+///   1×N, one `GlobalKeyScope`. The same `GlobalKey` mounted in both
+///   windows' trees is the realm's ordinary cross-tree duplicate: the
+///   second mount fails eagerly (ADR-0043's ruling — ADR-0043's
+///   `GlobalKeyScope` protocol section documents the claim-at-mount /
+///   release-at-unmount lifetime this collision is checked against). Both
+///   windows also then share one `Scheduler` and one async driver, so a
+///   slow frame in either window can delay the other's next pump (ADR-0043
+///   risk 5) — this policy trades isolation for the cases that genuinely
+///   want a single logical session split across two presentations (e.g. a
+///   detached inspector panel).
+///
+/// `#[non_exhaustive]`: the same `AttachError`/`ExitPolicy` precedent — a
+/// future variant (e.g. "join an explicitly-named existing realm" once
+/// `RealmId` grows a public handle) must not break an exhaustive match.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WindowPolicy {
+    /// The new window becomes its own realm — independent `GlobalKeyScope`,
+    /// independent `Scheduler`, sharing nothing but injected
+    /// `SharedEngineServices`. The default: a stalled/slow window can never
+    /// delay a sibling's frame pump.
+    #[default]
+    SeparateRealms,
+    /// The new window becomes a second presentation inside the first realm
+    /// already hosted on this thread — one `GlobalKeyScope`, one
+    /// `Scheduler` shared between both windows.
+    SharedRealm,
 }
 
 /// Cross-thread wake capability for the platform event loop.
@@ -853,11 +907,11 @@ impl AppRuntime {
     /// itself inside a live `APP_RUNTIME` borrow) must drop it only after
     /// that borrow releases.
     #[cfg_attr(
-        not(test),
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
         expect(
             dead_code,
-            reason = "install_realm_alongside is design-for-N mechanism with no production \
-                      embedder call site yet -- exercised by this crate's own tests"
+            reason = "runner.rs::install_realm_alongside (its one production caller) is \
+                      desktop-only -- android/wasm32 have no caller outside this crate's own tests"
         )
     )]
     pub(super) fn request_realm_install(
@@ -997,11 +1051,11 @@ impl AppRuntime {
     /// main-window-open landing in the same idle tick could observe "no
     /// realms installed" and exit before the queued install ever lands.
     #[cfg_attr(
-        not(test),
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
         expect(
             dead_code,
-            reason = "the exit-policy mechanism has no production embedder call site yet -- \
-                      exercised by this crate's own tests"
+            reason = "runner.rs::install_exit_policy_hook (its one production caller) is \
+                      desktop-only -- android/wasm32 have no caller outside this crate's own tests"
         )
     )]
     pub(super) fn should_exit(&mut self, policy: ExitPolicy) -> (bool, Vec<RealmSlot>) {

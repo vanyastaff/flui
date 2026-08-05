@@ -94,6 +94,8 @@ declarations = [
     "pub mod bindings;",
     "pub mod embedder;",
     "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, run_direct, };",
+    "pub use app::{ExitPolicy, WindowPolicy};",
+    "pub use app::open_secondary_window;",
     "pub use app::{run_app_android, run_app_android_with_config};",
     "pub use bindings::{ GestureBinding, PaintingBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding, Scheduler, WidgetsBinding, };",
     "pub use flui_log::{AppIdentity, AppleBundleId};",
@@ -109,7 +111,9 @@ declarations = [
     "pub use config::{AppConfig, DiagnosticsProfile};",
     "pub use direct::run_direct;",
     "pub use runner::{run_app_android, run_app_android_with_config};",
+    "pub use runner::open_secondary_window;",
     "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
+    "pub use runtime::{ExitPolicy, WindowPolicy};",
     "pub use flui_view::{RootRenderElement, RootRenderView};",
 ]
 
@@ -132,7 +136,7 @@ declarations = [
     "pub use platforms::IOSPlatform;",
     "pub use platforms::LinuxPlatform;",
     "pub use platforms::MacOSPlatform;",
-    "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessPlatform};",
+    "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform};",
     "pub use platforms::WebPlatform;",
     "pub use platforms::WindowsPlatform;",
     "pub use platforms::WinitPlatform;",
@@ -316,26 +320,193 @@ a `dispatch_platform_realm` debug_assert against nested cross-realm \
 dispatch, which the registry's defer-to-idle discipline makes structurally \
 unreachable in production.
 
-It is still not yet the target statement in full, for reasons unrelated to \
-the single-slot caveat: it remains one TLS-scoped instance per owner thread \
-(`APP_RUNTIME` in `runner.rs`), not one per process; no production embedder \
-call site opens a genuinely second native window through \
-`install_realm_alongside`/`uninstall_platform_realm` yet (today's \
-`run_desktop`/`run_android`/`run_web` bootstraps still each open exactly \
-one, through the legacy displacing `install_platform_realm`) -- that native \
-wiring, plus `ExitPolicy` actually gating a live winit loop's exit instead \
-of the platform backend's own unconditional "last window closed" signal, is \
-this issue's native-lifecycle follow-up. A REALM hosting more than one \
+**The native-lifecycle gap this contract used to carry is now closed.** \
+`#[non_exhaustive] pub enum WindowPolicy` (default `SeparateRealms`) is the \
+embedder-facing knob at the install seam: `runner.rs::open_secondary_window` \
+is the production entry point that opens a genuine second native window and \
+installs it under the caller's policy -- `SeparateRealms` through \
+`install_realm_alongside` (its own independent realm, sharing nothing but \
+`SharedEngineServices`; `two_realms_via_separate_windows_policy_share_ \
+nothing`), `SharedRealm` through `install_presentation_alongside` (a second \
+presentation of the FIRST realm hosted on this thread, real forest \
+membership and a real `WindowRegistry` mapping; \
+`one_realm_two_windows_policy_routes_by_presentation`). `ExitPolicy` is \
+LIVE-WIRED, not merely mechanism: `flui_platform::traits::Platform:: \
+set_exit_policy_hook` (a new default-no-op trait method, overridden by the \
+winit and headless backends only) lets `runner.rs::install_exit_policy_hook` \
+install a hook that consults `AppRuntime::should_exit` INSTEAD of a \
+backend's own unconditional "every window I track just closed -> exit" \
+bookkeeping -- proven through the REAL platform seam (not a direct \
+`AppRuntime` call) by \
+`closing_one_of_two_windows_does_not_exit_through_the_real_platform_hook_ \
+closing_both_does` (`flui-app`) and the headless-backend-level \
+`closing_one_of_two_windows_does_not_consult_the_exit_policy_hook` / \
+`exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes` \
+(`flui-platform`'s own `tests/headless.rs`). Load-bearing ordering fix this \
+required: every window's own `on_close` (`run_desktop`'s primary, and BOTH \
+`WindowPolicy` branches of `open_secondary_window`) now routes through a \
+single `close_this_window` helper -- never a blind \
+`uninstall_platform_realm`, which would tear down an entire `SharedRealm` \
+group out from under a still-open sibling window -- which itself calls \
+`close_presentation`, correctly reducing to a full realm uninstall only when \
+the closing presentation is its realm's SOLE one. An earlier revision of \
+`open_secondary_window` left its own `on_close` log-only, so closing its \
+window never actually removed anything from `AppRuntime`'s registry and the \
+exit-policy hook vetoed every subsequent exit forever (a production hang: \
+zero windows left, app still alive) -- \
+`separate_realms_secondary_window_close_tears_down_its_own_realm_and_ \
+allows_exit` and \
+`shared_realm_secondary_presentation_close_removes_only_itself_and_keeps_ \
+the_realm_alive` are the regression pins, each mutant-verified against \
+exactly that log-only shape. `close_presentation`'s sole-presentation branch \
+also now dispatches `AppLifecycleState::Detached` through the realm BEFORE \
+requesting its uninstall (cancelling in-flight pointer sequences and \
+notifying lifecycle observers before the realm and its `Scheduler` are gone \
+-- the same reason `on_quit`'s own, now-secondary, Detached dispatch \
+exists), pinned by \
+`closing_the_sole_presentation_dispatches_detached_before_uninstalling`.
+
+**Reentrancy hazards this required fixing, and one still open, named \
+honestly:** the exit-policy hook (and, in the headless backend, the `quit` \
+callback it can trigger) is now taken OUT of each backend's own state lock \
+and invoked OUTSIDE it (`WinitPlatform::lease_exit_policy_hook`, \
+`HeadlessPlatform`'s `notify_closed`) -- the hook's body drops removed realm \
+state, whose destructors may call back into the SAME platform (a dispose \
+hook opening another window), which would deadlock on that non-reentrant \
+lock otherwise; this mirrors the pre-existing window-event-handler lease \
+pattern exactly (ADR-0039). Left open, stated rather than silently fixed: \
+calling a window's platform-level `close()` REENTRANTLY, from inside an \
+already-dispatched realm callback, makes the hook consult a registry that \
+has not actually emptied yet (`close_this_window`'s own same-realm \
+reentrant dispatch only enqueues; the uninstall applies at the OUTER \
+dispatch's own tail, after the hook already decided) -- an exit is missed, \
+not merely delayed, and nothing re-checks afterward. \
+`closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_ \
+exit_today` pins this AS a known gap (it asserts the CURRENT, imperfect \
+outcome, and says so in its own name and doc); the tracked fix is to \
+re-consult the hook once a deferred realm-map mutation actually applies, \
+e.g. at each dispatch's own tail, not attempted here.
+
+**A second product gap this required fixing: `open_secondary_window` \
+assumed `OwnerPlatform::open_window` always resolves `Ready`.** It does, \
+inside `on_ready`, and on the headless backend (no owner lane at all) -- but \
+the real winit backend defers any call after `on_ready` \
+(`WinitOwnerHooks::open_owner_window`), which is exactly the calling \
+convention this function's own doc names as its intended use (a callback the \
+FIRST window already registered). An earlier revision called `WindowOpen::\
+try_ready` directly and surfaced `Pending` as a hard error, so the advertised \
+"open a second window at runtime" flow could never work on the real desktop \
+backend it is meant for. `open_secondary_window_impl` now matches both arms: \
+`Ready` installs inline (unchanged, calling `finish_open_secondary_window` \
+directly); `Pending` is accepted and its completion is spawned on the first \
+realm hosted on this thread's own `flui_scheduler::AsyncDriver` \
+(`spawn_pending_secondary_window_completion`) -- never a hand-rolled \
+busy-loop: the `PendingWindow`'s own wake (fired when the owner lane \
+delivers) requests a fresh frame, and that frame's `Scheduler::\
+drive_async_tasks` polls the task to completion.
+
+A first revision of this fix had the spawned future call \
+`finish_open_secondary_window` directly from inside its own poll -- which \
+review caught as broken for `WindowPolicy::SharedRealm` specifically: \
+`Scheduler::drive_async_tasks` always runs from INSIDE a dispatched \
+`RealmTask::Frame` (`dispatched_realm_id` is `Some` for the whole checkout), \
+and `install_presentation_alongside` (SharedRealm's own install primitive) \
+has no defer-to-idle queue of its own -- it hard-refuses \
+(`InstallPresentationError::DispatchInFlight`, a `debug_assert!` panic in \
+debug builds) while a dispatch is in flight, which a `Pending` completion \
+always is. `SeparateRealms` happened to work anyway (`install_realm_\
+alongside` already defers through `AppRuntime::request_realm_install`'s own \
+queue), masking that `SharedRealm` could never complete on the real desktop \
+backend this whole fix targets. The corrected shape: the spawned future \
+never calls `finish_open_secondary_window` itself -- it only enqueues the \
+resolved `(WindowPolicy, window)` pair onto a new thread-local queue \
+(`PENDING_SECONDARY_WINDOW_COMPLETIONS`), drained only once this thread's \
+dispatch/hot-restart-visit checkout state clears (`dispatch_platform_realm`'s \
+own tail, mirroring where `AppRuntime`'s own deferred realm-map mutations \
+already apply; `for_each_installed_realm`'s tail drains it too, for \
+symmetry, though no production driver visits every realm yet). One \
+completion path (`finish_open_secondary_window`) for both `WindowPolicy` \
+variants -- only the trigger point differs between `Ready` (inline) and \
+`Pending` (deferred to the enclosing dispatch's own tail) -- so "both arms \
+install and wire identically" is genuinely true now, not merely for the \
+policy that happened to already have a queue.
+
+Tested end-to-end -- Pending -> resolved -> both-window close/exit -- on \
+the headless backend's own deferred-open test seam (`HeadlessPlatform::\
+enable_deferred_window_open`, `HeadlessDeferredWindowOpens::resolve_next`) \
+for BOTH policies: `crates/flui-platform`'s own `deferred_window_open_\
+resolves_via_the_pending_arm_like_the_real_winit_owner_lane` pins the \
+mechanism in isolation; `crates/flui-app`'s `open_secondary_window_\
+completes_through_the_pending_arm_like_the_real_winit_owner_lane` \
+(`SeparateRealms`) and `shared_realm_completes_through_the_pending_arm_\
+like_the_real_winit_owner_lane` (`SharedRealm` -- the harder case this \
+correction targets, since its own install target IS the realm whose \
+dispatch checkout the completion's poll runs inside of) each pin the full \
+embedder-seam flow; `dead_driver_realm_before_pending_resolution_\
+disclaims_cleanly_without_zombie_installing` additionally pins the \
+fail-closed path when the driver realm dies before its own pending \
+completion resolves (the captured `PendingWindow` drops along with the \
+realm's `AsyncDriver`, disclaiming the request rather than zombie-installing \
+anything later). A `Pending` completion's own failure (the resolve itself \
+failing, or `finish_open_secondary_window` failing on the resolved window) \
+is traced, never silently dropped. Named residual: this proves the \
+completion seam generically, not a full winit event-loop integration test \
+-- no CI gate exercises the real winit backend end-to-end at all (see \
+`flui-platform`'s own evidence-must-live-outside-the-test-gate constraint), \
+so confidence that `WinitOwnerHooks::open_owner_window`'s own `Pending` \
+construction and its lane's reply-delivery path compose correctly with this \
+completion is still design-level, not test-level -- named honestly rather \
+than silently assumed covered.
+
+**Named, deliberately out-of-scope residual:** a window `open_secondary_ \
+window` opens shows no widget content and never renders a frame. Two \
+distinct reasons, neither papered over. First, rendering in this crate is \
+one canonical frame-pump closure PER BACKEND (desktop/Android/web), pinned \
+by `runner_frame_ordering.rs`'s own mechanical guards \
+(`every_runner_frame_site_uses_the_shared_drive_frame_helper`, \
+`every_pump_async_arm_calls_finish_then_drive_async_tasks`) at exactly three \
+call sites -- giving a second window its own independently-rendering frame \
+pump means generalizing those three sites (and this guard's own pinned \
+count) into one shared per-window helper, real work belonging to its own \
+reviewed slice, not folded silently in here. Second, `UiRealm:: \
+attach_root_widget` (and everything built on it -- gesture arena, focus \
+root, vsync scope) reads a realm's PRIMARY presentation only, so mounting a \
+tree into a `SharedRealm` window's non-primary presentation has no capability \
+to call yet -- neither the forest slice (#607) nor the routing slice (#608) \
+added one. What IS real regardless: the window opens, is live-addressed, and \
+its registry/forest membership and input/close/focus/visibility/resize \
+dispatch are genuine and exactly as isolated (or shared) as `WindowPolicy`'s \
+own doc claims -- `hot_restart_with_two_realms_and_with_two_presentations` \
+pins that hot-restart's own visit primitive sees exactly what each policy \
+installed.
+
+It remains one TLS-scoped instance per owner thread (`APP_RUNTIME` in \
+`runner.rs`), not one per process -- unchanged by this slice, and not this \
+contract's own claim to begin with. A REALM hosting more than one \
 PRESENTATION is no longer a still-unstarted claim: issue #555's \
 addressed-routing slice lifted `PresentationForest`'s former `len()<=1` \
 ratchet and gave a second presentation a real `WindowRegistry` mapping and \
 addressed input/semantics/keyboard routing (see \
 `multi-presentation-forest-gate`, `input-domain-per-presentation`, \
-`focus-coordination-per-realm`) -- what remains unstarted is specifically \
-the NATIVE embedder wiring that would let a real second OS window drive \
-`install_presentation_alongside`, the same native-lifecycle gap named above \
-for the sibling multi-realm path, not the ownership/routing mechanism \
-itself.
+`focus-coordination-per-realm`), and this slice's `open_secondary_window` \
+is the real native embedder call site that drives both \
+`install_realm_alongside` and `install_presentation_alongside` in \
+production, closing the native-lifecycle gap named above for both paths.
+
+**Named residual, now durable here rather than only in a private field's \
+own doc comment:** `AppRuntime.visible`/`.focused` (`runtime.rs`) are still \
+LOOP-scoped, not per-realm -- with more than one hosted REALM, a \
+focus/visibility change on any one window's OS signal drives the SAME \
+`AppLifecycleState` derivation for every realm on this loop. Issue #555's \
+addressed-routing slice (#608) narrowed this for the WITHIN-one-realm \
+case (`WindowPolicy::SharedRealm`'s more-than-one-presentation shape): a \
+non-active presentation's own window losing OS focus no longer suspends its \
+realm (`UiRealm::is_active_presentation` gates it). The remaining gap is \
+strictly cross-REALM (`WindowPolicy::SeparateRealms`): this field pair has \
+no realm identity at all, so realm A's window gaining/losing focus still \
+drives realm B's own lifecycle derivation too. The fix is a genuinely \
+per-realm `(visible, focused)` pair (moving these fields onto `RealmSlot`), \
+out of this slice's scope; not attempted here.
 
 `with_owner_platform`'s fence (c) (ADR-0039 §6, trigger #22's runtime \
 backstop) re-points onto this struct: `AppRuntime::installed_realm_phase` \
@@ -371,13 +542,17 @@ longer exist at all, and `two_realms_coexist_same_thread` / \
 `two_realms_two_threads_no_shared_state` / `dropping_realm_a_cannot_wake_realm_b` / \
 `cross_realm_duplicate_global_key_mounts_succeed_in_both` prove two \
 directly-constructed `UiRealm`s share no widget/focus/gesture-arena/scheduler \
-state, on one thread or two. This state stays "partial", not "implemented", \
-because the remaining gap stated above -- native embedder wiring for a \
-genuine second OS window, for both a second realm and a second presentation \
-of an existing realm -- is real and unclosed; marking this contract fully \
-"implemented" would overclaim past what has actually landed.\
+state, on one thread or two. This state flips to "implemented": every gap \
+this contract itself named -- the single-slot realm host, the missing \
+`ExitPolicy` live wiring, and the missing native embedder call site for a \
+genuine second OS window -- is closed, for both `WindowPolicy` modes, with \
+red-exploit evidence at both the `AppRuntime`-mechanism level and through \
+the real platform seam. The widget-content/rendering residual named above is \
+real but is not this contract's own claim (it is a frame-pump/rendering \
+concern, #556's territory) -- named here so "implemented" is not read as \
+"a second window looks like the first one," which it does not yet.\
 """
-state = "partial"
+state = "implemented"
 domain = "application"
 owner_issue = 555
 mechanical = true
@@ -400,6 +575,33 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn two_realms_two_threads_no_shared_state" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropping_realm_a_cannot_wake_realm_b" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_realm_duplicate_global_key_mounts_succeed_in_both" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub enum WindowPolicy" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "pub fn open_secondary_window" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_exit_policy_hook" },
+    { kind = "symbol", file = "crates/flui-platform/src/traits/platform.rs", contains = "fn set_exit_policy_hook" },
+    { kind = "symbol", file = "crates/flui-platform/src/shared/handlers.rs", contains = "pub exit_policy: Option<Box<dyn Fn() -> bool + Send>>" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn two_realms_via_separate_windows_policy_share_nothing" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn one_realm_two_windows_policy_routes_by_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_one_of_two_windows_does_not_exit_through_the_real_platform_hook_closing_both_does" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn hot_restart_with_two_realms_and_with_two_presentations" },
+    { kind = "test", file = "crates/flui-platform/tests/headless.rs", contains = "fn closing_one_of_two_windows_does_not_consult_the_exit_policy_hook" },
+    { kind = "test", file = "crates/flui-platform/tests/headless.rs", contains = "fn exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn close_this_window" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn separate_realms_secondary_window_close_tears_down_its_own_realm_and_allows_exit" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn shared_realm_secondary_presentation_close_removes_only_itself_and_keeps_the_realm_alive" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_the_sole_presentation_dispatches_detached_before_uninstalling" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn separate_realms_secondary_window_input_reaches_its_own_realm_not_the_primarys" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_exit_today" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn lease_exit_policy_hook" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn spawn_pending_secondary_window_completion" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn finish_open_secondary_window" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn enable_deferred_window_open" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "pub struct HeadlessDeferredWindowOpens" },
+    { kind = "test", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn deferred_window_open_resolves_via_the_pending_arm_like_the_real_winit_owner_lane" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn drain_pending_secondary_window_completions" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing" },
 ]
 
 [[contract]]
@@ -1037,9 +1239,14 @@ own stale copy. `runner.rs::install_presentation_alongside` mints a second \
 presentation's registry mapping alongside an existing one, in the same call \
 that installs it into the forest (`UiRealm::install_presentation`), so no \
 hosted presentation is ever forest-resident without a registry mapping of \
-its own. Remainder: `AppRuntime` still hosts the registry as a single-slot \
-owner, not yet the public multi-window registry it grows once a real \
-embedder opens a genuine second native window through this path.\
+its own. `runner.rs::open_secondary_window` (issue #555's final slice) is \
+now that real embedder call site: it opens a genuine second native window and mints \
+its registry mapping in production, for both `install_realm_alongside` and \
+`install_presentation_alongside`, closing the "no real caller yet" half of \
+this remainder. Still not the public surface: this stays `AppRuntime`'s own \
+internal, TLS-scoped registry, never exposed as a standalone public type — \
+that reshape (if ever warranted) is unrelated to whether a real caller \
+exists.\
 """
 state = "partial"
 domain = "application"
@@ -1148,14 +1355,20 @@ contract's own red-exploit test before the exclusion existed. Excluding it \
 costs nothing real: every OTHER presentation still resolves normally, and \
 a presentation cannot meaningfully resolve one of its OWN keys through a \
 registry that is mid-teardown anyway. \
-Stays "partial", not "implemented": the ratchet lift and the addressed \
-routing it unblocks are both real and exercised, but no production embedder \
-call site opens a genuine second native window and installs a second \
-presentation through this path yet -- the same native-lifecycle gap \
-`app-runtime-composition-host`/`window-host-is-explicit-composition-owner` \
-name for the sibling multi-realm path.\
+Flips to "implemented": the ratchet lift and the addressed routing it \
+unblocks are both real and exercised, and the native-lifecycle gap this \
+entry used to name is now closed by `runner.rs::open_secondary_window` \
+(issue #555's final slice) — a real production embedder call site that opens a \
+genuine second native window and installs a second presentation through \
+this exact path under `WindowPolicy::SharedRealm` \
+(`one_realm_two_windows_policy_routes_by_presentation`). Named residual, \
+not this contract's own claim: that second presentation shows no widget \
+content, because `UiRealm::attach_root_widget` (and the gesture arena/focus \
+root/vsync scope built on it) still reads a realm's PRIMARY presentation \
+only — see `app-runtime-composition-host`'s own residual note for the full \
+statement of that gap and why it belongs to a different, future slice.\
 """
-state = "partial"
+state = "implemented"
 domain = "realm"
 owner_issue = 555
 mechanical = true
@@ -1699,7 +1912,11 @@ classification = "experimental"
 thread_affinity = "Send (statically asserted); wait() type-refuses the owner thread via WaitError::WouldBlockOwner rather than deadlocking on the lane it drains"
 owner = "the requester that received it from OwnerPlatform::open_window or PlatformProxy::open_window"
 failure_semantics = "dropping it disclaims the request (guard-like): the owner skips creation (not yet delivered) or unwinds the created window (already delivered) -- see ClaimSlot's module docs"
-consumers = ["winit lane deferred-open path"]
+consumers = [
+    "winit lane deferred-open path",
+    "flui-app's open_secondary_window Pending-arm completion (issue #555's final slice)",
+    "flui-platform's headless HeadlessDeferredOwnerHooks (test-only Pending-arm probe, no real event loop)",
+]
 owner_issue = 551
 
 [[surface]]
@@ -1712,7 +1929,11 @@ classification = "experimental"
 thread_affinity = "returned by OwnerPlatform::open_window; Ready always holds inside on_ready"
 owner = "OwnerPlatform::open_window's caller"
 failure_semantics = "exhaustive by design (Ready/Pending is the load-bearing two-state deferral model; a third state is a redesign); try_ready() converts Pending into the typed OpenWindowError::NotReady"
-consumers = ["every bootstrap_* function", "examples"]
+consumers = [
+    "every bootstrap_* function",
+    "examples",
+    "flui-app's open_secondary_window_impl, which matches both arms directly instead of calling try_ready (issue #555's final slice closed the prior Ready-only gap on this exact call site)",
+]
 owner_issue = 551
 
 [[surface]]
@@ -1733,7 +1954,7 @@ path = "flui_platform backend types (WinitPlatform, WindowsPlatform, MacOSPlatfo
 crate = "flui-platform"
 kind = "type"
 declared_in = "crates/flui-platform/src/lib.rs"
-contains = "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessPlatform}"
+contains = "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform}"
 classification = "transitional"
 thread_affinity = "construct and run on the thread that owns (or will own) the event loop; MacOSPlatform carries unsafe impl Send/Sync by AppKit convention"
 owner = "per-OS event-loop backends"

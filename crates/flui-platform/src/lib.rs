@@ -197,7 +197,7 @@ pub use platforms::IOSPlatform;
 pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
-pub use platforms::{FakeHaptics, FakeTextInput, HeadlessPlatform};
+pub use platforms::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform};
 // Web platform
 #[cfg(target_arch = "wasm32")]
 pub use platforms::WebPlatform;

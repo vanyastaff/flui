@@ -153,7 +153,7 @@ test-ci:
     # init, which `xvfb-run` supplies — a Linux-only tool, hence the guard.
     # On Windows this is not a missing-tool gap: STATUS_HEAP_CORRUPTION
     # (H9, docs/ROADMAP-TRACKER.md) is an unresolved crash in this crate's
-    # Windows backend, so the tests must not run there at all. 171/171
+    # Windows backend, so the tests must not run there at all. 175/175
     # pass on Linux, 5x-verified stable — see AGENTS.md Testing Quirks for
     # what stays excluded and why.
     {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else if os() == "windows" { "echo 'Skipping flui-platform tests: STATUS_HEAP_CORRUPTION (H9, docs/ROADMAP-TRACKER.md) is an unresolved Windows crash in this crate -- do not run its tests on a Windows host until that investigation lands a fix.'" } else { "echo 'Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see crates/flui-platform/AGENTS.md.'" } }}

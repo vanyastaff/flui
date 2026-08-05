@@ -262,6 +262,13 @@ impl SharedPlatform {
         self.platform.on_window_event(callback);
     }
 
+    /// Installs the hook this platform consults before exiting
+    /// unconditionally on "every window closed" — see
+    /// [`Platform::set_exit_policy_hook`]'s doc for the full contract.
+    pub fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
+        self.platform.set_exit_policy_hook(hook);
+    }
+
     /// Registers a callback for URLs opened by the system.
     pub fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {
         self.platform.on_open_urls(callback);
