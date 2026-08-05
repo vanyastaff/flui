@@ -2155,7 +2155,7 @@ used to carry a manual `unsafe impl Send`/`unsafe impl Sync` because \
 `BoxLayoutCtxErased`, which in turn existed only to satisfy the old \
 `Arc<RwLock<PipelineOwner>>` storage's own `Send + Sync` requirement. Once \
 `PipelineCell` replaced that storage and `BoxLayoutCtxErased` dropped its \
-`Send + Sync` supertrait (same change as the `Arc<RwLock<PipelineOwner` \
+`Send + Sync` supertrait (same change as the `Arc<RwLock<PipelineOwner>>` \
 retirement above), nothing requires `NodePtr: Send + Sync` any more, so it \
 reverts to the language default for a bare raw pointer -- `!Send + !Sync` \
 -- and `SubtreeArena::check_thread`'s per-access runtime assert retires \
