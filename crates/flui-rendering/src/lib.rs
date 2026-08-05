@@ -156,7 +156,7 @@ pub mod prelude {
             SliverGridParentData, SliverMultiBoxAdaptorParentData, SliverParentData,
             SliverPhysicalParentData, StackParentData,
         },
-        pipeline::{Canvas, Paint, PaintStyle, PipelineOwner},
+        pipeline::{Canvas, Paint, PaintStyle, PipelineCell, PipelineOwner},
         protocol::{BoxProtocol, Protocol, SliverProtocol},
         semantics::{
             SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
@@ -192,7 +192,7 @@ pub use context::{
 };
 pub use error::{RenderError, RenderResult};
 pub use parent_data::ParentData;
-pub use pipeline::PipelineOwner;
+pub use pipeline::{PipelineCell, PipelineOwner};
 pub use protocol::{
     // Re-entrant build contract (ADR-0003 Decision 2): child handle + outcome
     BoxChildRef,

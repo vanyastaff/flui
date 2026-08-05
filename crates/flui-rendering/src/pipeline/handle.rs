@@ -274,7 +274,17 @@ impl RepaintHandle {
 
 #[cfg(test)]
 mod tests {
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    // The retained-seam set: dirty-marking from inside a `!Send` render
+    // object crosses back to the owner thread through these handles, never
+    // through a `PipelineCell` clone. Both must stay `Send + Sync` or the
+    // cross-thread wake path the rest of the port relies on silently stops
+    // compiling for its callers instead of failing loudly here.
+    assert_impl_all!(PipelineOwnerHandle: Send, Sync);
+    assert_impl_all!(RepaintHandle: Send, Sync);
 
     fn id(n: usize) -> RenderId {
         RenderId::new(n)

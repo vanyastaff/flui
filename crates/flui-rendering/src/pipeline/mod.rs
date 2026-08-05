@@ -28,7 +28,7 @@ pub use handle::{
     DirtyKind, DirtyRequest, PipelineOwnerHandle, RepaintHandle, SendError as DirtySendError,
 };
 pub use notifier::VisualUpdateNotifier;
-pub use owner::PipelineOwner;
+pub use owner::{PipelineCell, PipelineOwner};
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
 
 // Re-export contexts from context module (canonical location)

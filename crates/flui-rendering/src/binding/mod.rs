@@ -27,7 +27,7 @@ use parking_lot::RwLock;
 
 use crate::{
     hit_testing::HitTestResult,
-    pipeline::PipelineOwner,
+    pipeline::{PipelineCell, PipelineOwner},
     view::{RenderView, ViewConfiguration},
 };
 
@@ -131,7 +131,7 @@ pub trait RendererBinding {
     /// This is the root of the PipelineOwner tree. Multi-window scenarios
     /// own multiple PipelineOwner instances side-by-side; the previous
     /// `PipelineOwner::adopt_child` hierarchical API was removed.
-    fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner>;
+    fn root_pipeline_owner(&self) -> &PipelineCell;
 
     /// Creates the root pipeline owner.
     ///
@@ -398,11 +398,12 @@ pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
 /// committed geometry/offset layered on); otherwise it falls back to the
 /// owner's `Debug` representation.
 pub fn debug_dump_pipeline_owner_tree<B: RendererBinding + ?Sized>(binding: &B) -> String {
-    let owner = binding.root_pipeline_owner().read();
-    match owner.debug_diagnostics_tree() {
-        Some(tree) => tree.to_string(),
-        None => format!("{:?}", *owner),
-    }
+    binding
+        .root_pipeline_owner()
+        .with(|owner| match owner.debug_diagnostics_tree() {
+            Some(tree) => tree.to_string(),
+            None => format!("{owner:?}"),
+        })
 }
 
 // ============================================================================
@@ -427,7 +428,7 @@ mod tests {
     /// `handle_metrics_changed`) and the free `debug_dump_*` functions, plus
     /// its own wiring of the required `send_frames_to_engine` method.
     struct TestBinding {
-        owner: RwLock<PipelineOwner>,
+        owner: PipelineCell,
         views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
         visual_update_calls: AtomicUsize,
         send_frames: AtomicBool,
@@ -436,7 +437,7 @@ mod tests {
     impl TestBinding {
         fn new() -> Self {
             Self {
-                owner: RwLock::new(PipelineOwner::new()),
+                owner: PipelineCell::new(PipelineOwner::new()),
                 views: RwLock::new(HashMap::new()),
                 visual_update_calls: AtomicUsize::new(0),
                 send_frames: AtomicBool::new(true),
@@ -465,7 +466,7 @@ mod tests {
         ) {
         }
 
-        fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner> {
+        fn root_pipeline_owner(&self) -> &PipelineCell {
             &self.owner
         }
 

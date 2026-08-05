@@ -31,9 +31,10 @@
 //! Render objects are wrapped in `RenderEntry<P>` which adds:
 //! - Tree structure via `NodeLinks` (parent, children, depth)
 //! - Dirty state via `RenderState<P>` (needs_layout, needs_paint, etc)
-//! - Thread-safe access via `RwLock`
+//! - Owner-local access via `PipelineCell` (the owning tree belongs to
+//!   exactly one `PipelineOwner` on exactly one thread)
 
-use downcast_rs::{DowncastSync, impl_downcast};
+use downcast_rs::{Downcast, impl_downcast};
 use flui_foundation::Diagnosticable;
 
 use crate::{
@@ -161,10 +162,12 @@ impl HitTestOutcome {
 /// Render objects are wrapped in `RenderEntry<P>` which adds:
 /// - Tree structure via `NodeLinks` (parent, children, depth)
 /// - Dirty state via `RenderState<P>` (needs_layout, needs_paint, etc)
-/// - Thread-safe access via `RwLock`
+/// - Owner-local access via `PipelineCell` (a `RenderTree` belongs to
+///   exactly one `PipelineOwner`, running on exactly one thread; there is no
+///   cross-thread mutable access to guard)
 ///
 /// The storage layer calls these trait methods to drive the rendering pipeline.
-pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync + 'static {
+pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     // ========================================================================
     // Core Operations
     // ========================================================================
@@ -290,11 +293,11 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         position: ProtocolPosition<P>,
         child_count: usize,
         size: flui_types::Size,
-        hit_child: &mut (
-                 dyn FnMut(usize, Option<ProtocolPosition<P>>, Option<flui_types::Matrix4>) -> bool
-                     + Send
-                     + Sync
-             ),
+        hit_child: &mut dyn FnMut(
+            usize,
+            Option<ProtocolPosition<P>>,
+            Option<flui_types::Matrix4>,
+        ) -> bool,
     ) -> HitTestOutcome;
 
     // ========================================================================
@@ -324,9 +327,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         _extent: f32,
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
-        _child_query: &mut (
-                 dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
-             ),
+        _child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32,
     ) -> f32 {
         0.0
     }
@@ -346,14 +347,10 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         _constraints: ProtocolConstraints<P>,
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
-        _child_query: &mut (
-                 dyn FnMut(
+        _child_query: &mut dyn FnMut(
             usize,
             crate::context::DryLayoutChildRequest,
-        ) -> crate::context::DryLayoutChildResponse
-                     + Send
-                     + Sync
-             ),
+        ) -> crate::context::DryLayoutChildResponse,
     ) -> ProtocolGeometry<P> {
         P::default_geometry()
     }
@@ -371,14 +368,10 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         _baseline: crate::traits::TextBaseline,
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
-        _child_query: &mut (
-                 dyn FnMut(
+        _child_query: &mut dyn FnMut(
             usize,
             crate::context::DryBaselineChildRequest,
-        ) -> crate::context::DryBaselineChildResponse
-                     + Send
-                     + Sync
-             ),
+        ) -> crate::context::DryBaselineChildResponse,
     ) -> Option<f32> {
         None
     }
@@ -763,7 +756,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     // method exercises via `.into()`.
 }
 
-impl_downcast!(sync RenderObject<P> where P: Protocol);
+impl_downcast!(RenderObject<P> where P: Protocol);
 
 #[cfg(test)]
 mod tests {
@@ -802,15 +795,11 @@ mod tests {
             _position: flui_types::Offset,
             _child_count: usize,
             _size: Size,
-            _hit_child: &mut (
-                     dyn FnMut(
+            _hit_child: &mut dyn FnMut(
                 usize,
                 Option<flui_types::Offset>,
                 Option<flui_types::Matrix4>,
-            ) -> bool
-                         + Send
-                         + Sync
-                 ),
+            ) -> bool,
         ) -> HitTestOutcome {
             HitTestOutcome::miss()
         }

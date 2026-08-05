@@ -1,15 +1,13 @@
 //! RenderView - the root of the render tree.
 
 use std::fmt::Debug;
-use std::sync::{Arc, Weak};
 
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_layer::TransformLayer;
 use flui_types::{Matrix4, Pixels, Rect, Size};
-use parking_lot::RwLock;
 
 use super::ViewConfiguration;
-use crate::{constraints::BoxConstraints, pipeline::PipelineOwner};
+use crate::constraints::BoxConstraints;
 
 /// The root of the render tree.
 ///
@@ -21,10 +19,14 @@ use crate::{constraints::BoxConstraints, pipeline::PipelineOwner};
 /// This object must be bootstrapped in a specific order:
 ///
 /// 1. First, set the [`configuration`](Self::set_configuration)
-/// 2. Second, [`attach`](Self::attach) the object to a
-///    [`PipelineOwner`]
-/// 3. Third, use [`prepare_initial_frame`](Self::prepare_initial_frame) to
-///    bootstrap
+/// 2. Second, use
+///    [`prepare_initial_frame_without_owner`](Self::prepare_initial_frame_without_owner)
+///    to bootstrap
+///
+/// There is no owner-attach step: a `RenderView` no longer holds a
+/// [`PipelineOwner`](crate::pipeline::PipelineOwner) back-reference -- the
+/// owner reaches the tree through the regular insert path, not through the
+/// view.
 ///
 /// # Flutter Equivalence
 ///
@@ -44,14 +46,6 @@ pub struct RenderView {
 
     /// Whether automatic system UI adjustment is enabled.
     automatic_system_ui_adjustment: bool,
-
-    /// The pipeline owner (weak reference to avoid preventing cleanup).
-    ///
-    /// Uses `Weak<RwLock<PipelineOwner>>` because `PipelineOwner` is stored as
-    /// `Arc<RwLock<PipelineOwner>>` in the application layer. A weak reference
-    /// allows the render view to reference the owner without preventing cleanup
-    /// when the owner is dropped.
-    owner: Option<Weak<RwLock<PipelineOwner>>>,
     // A 9-field `#[allow(dead_code)]` placeholder block used to live here
     // (depth / needs_layout / needs_paint / needs_compositing_bits_update /
     // needs_semantics_update / is_repaint_boundary / needs_compositing /
@@ -107,7 +101,6 @@ impl RenderView {
             root_transform: None,
             layer: None,
             automatic_system_ui_adjustment: true,
-            owner: None,
         }
     }
 
@@ -237,52 +230,6 @@ impl RenderView {
     // ========================================================================
     // Initialization
     // ========================================================================
-
-    /// Returns whether a pipeline owner is attached and still alive.
-    pub fn has_owner(&self) -> bool {
-        self.owner
-            .as_ref()
-            .is_some_and(|weak| weak.strong_count() > 0)
-    }
-
-    /// Attaches this render view to a pipeline owner.
-    ///
-    /// The render view holds a weak reference to the owner, so it does not
-    /// prevent cleanup when the owner is dropped.
-    pub fn attach(&mut self, owner: &Arc<RwLock<PipelineOwner>>) {
-        self.owner = Some(Arc::downgrade(owner));
-    }
-
-    /// Detaches this render view from its pipeline owner.
-    pub fn detach(&mut self) {
-        self.owner = None;
-    }
-
-    /// Bootstrap the rendering pipeline by preparing the first frame.
-    ///
-    /// # Panics
-    ///
-    /// Panics if:
-    /// - No pipeline owner is attached
-    /// - Already called before
-    /// - No configuration is set
-    pub fn prepare_initial_frame(&mut self) {
-        assert!(
-            self.has_owner(),
-            "attach the RenderView to a PipelineOwner before calling prepare_initial_frame"
-        );
-        assert!(
-            self.root_transform.is_none(),
-            "prepare_initial_frame must only be called once"
-        );
-        assert!(
-            self.has_configuration(),
-            "set a configuration before calling prepare_initial_frame"
-        );
-
-        Self::schedule_initial_layout_internal();
-        self.schedule_initial_paint_internal();
-    }
 
     fn schedule_initial_layout_internal() {
         // A `self.needs_layout = true` write used to happen here, but it had
@@ -518,15 +465,11 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
         child_count: usize,
         _size: flui_types::Size,
-        hit_child: &mut (
-                 dyn FnMut(
+        hit_child: &mut dyn FnMut(
             usize,
             Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
             Option<flui_types::Matrix4>,
-        ) -> bool
-                     + Send
-                     + Sync
-             ),
+        ) -> bool,
     ) -> crate::traits::HitTestOutcome {
         // Root pass-through: test children topmost-first (later
         // siblings paint on top). The view itself claims no hit — an
@@ -632,12 +575,11 @@ mod tests {
     // VALUE (a literal `0` / `true`), not any behavior driven by the field.
     // Both fields had zero production readers, so the assertions tested
     // the test itself.
-
-    #[test]
-    fn test_render_view_owner_is_none() {
-        let view = RenderView::new();
-        assert!(!view.has_owner());
-    }
+    //
+    // `test_render_view_owner_is_none` (and the `attach`/`detach`/`has_owner`
+    // lifecycle tests below it) were removed alongside the `owner` field
+    // `RenderView` no longer holds a `PipelineOwner` back-reference
+    // at all, so there is nothing left to assert liveness of.
 
     #[test]
     fn test_render_view_automatic_system_ui() {
@@ -706,73 +648,6 @@ mod tests {
         let mut transform = Matrix4::identity();
         view.apply_paint_transform(&mut transform);
         assert!((transform[0] - 3.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn attach_detach_and_owner_liveness_lifecycle() {
-        use std::sync::Arc;
-
-        use parking_lot::RwLock;
-
-        use crate::pipeline::PipelineOwner;
-
-        let mut view = RenderView::new();
-        assert!(!view.has_owner());
-
-        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        view.attach(&owner);
-        assert!(view.has_owner());
-
-        view.detach();
-        assert!(!view.has_owner());
-
-        // Re-attach, then drop the strong reference: the weak pointer must
-        // report no owner rather than upgrading to a dangling value.
-        view.attach(&owner);
-        assert!(view.has_owner());
-        drop(owner);
-        assert!(!view.has_owner());
-    }
-
-    #[test]
-    #[should_panic(expected = "attach the RenderView to a PipelineOwner")]
-    fn prepare_initial_frame_panics_without_owner() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 1.0);
-        let mut view = RenderView::with_configuration(config);
-        view.prepare_initial_frame();
-    }
-
-    #[test]
-    #[should_panic(expected = "set a configuration")]
-    fn prepare_initial_frame_panics_without_configuration() {
-        use std::sync::Arc;
-
-        use parking_lot::RwLock;
-
-        use crate::pipeline::PipelineOwner;
-
-        let mut view = RenderView::new();
-        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        view.attach(&owner);
-        view.prepare_initial_frame();
-    }
-
-    #[test]
-    #[should_panic(expected = "must only be called once")]
-    fn prepare_initial_frame_panics_on_second_call() {
-        use std::sync::Arc;
-
-        use parking_lot::RwLock;
-
-        use crate::pipeline::PipelineOwner;
-
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 1.0);
-        let mut view = RenderView::with_configuration(config);
-        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        view.attach(&owner);
-
-        view.prepare_initial_frame();
-        view.prepare_initial_frame();
     }
 
     #[test]

@@ -84,6 +84,11 @@ required-features = ["testing"]
 
 [dev-dependencies]
 criterion.workspace = true
+# Compile-time Send/Sync pins for the `PipelineCell` owner-local seam (see
+# `pipeline::owner::cell`'s tests): a manual `impl Send`/`Sync` reappearing on
+# `PipelineCell`, `PipelineOwner`, or `RenderTree` would silently reopen the
+# cross-thread aliasing hazard the newtype exists to close.
+static_assertions.workspace = true
 # Property-based tests for the virtualization B+-tree: random
 # insert/delete/set_measured/set_count sequences checked against a naive
 # Vec oracle + structural invariants. Test-only; no production dependency.

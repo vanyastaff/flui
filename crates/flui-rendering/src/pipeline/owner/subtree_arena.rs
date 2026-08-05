@@ -1996,51 +1996,19 @@ mod tests {
         );
     }
 
-    /// Verify that `check_thread` panics when called from a different thread.
-    ///
-    /// This is gate (c) from the adversarial test spec in the plan.
-    #[test]
-    fn check_thread_panics_on_wrong_thread() {
-        // Scoped thread borrows the stack-allocated poison table: the
-        // scope guarantees the join before `poison` goes out of scope.
-        let poison = LayoutPoison::default();
-        let arena: SubtreeArena<'_> = SubtreeArena {
-            by_id: HashMap::new(),
-            #[cfg(any(test, feature = "testing"))]
-            parent_data_seeds: FxHashMap::default(),
-            pending_builds: Mutex::new(Vec::new()),
-            pending_removes: Mutex::new(Vec::new()),
-            pending_child_requests: Mutex::new(Vec::new()),
-            pending_retain_bands: Mutex::new(Vec::new()),
-            layout_poison: &poison,
-            poison_retries: Mutex::new(FxHashSet::default()),
-            layout_failures: Mutex::new(Vec::new()),
-            layout_successes: Mutex::new(Vec::new()),
-            owner_thread: std::thread::current().id(),
-            _lifetime: PhantomData,
-        };
-
-        // Move arena into a different thread; check_thread must panic.
-        // We use catch_unwind inside the thread to capture the panic and
-        // relay it to the test thread via a channel.
-        let (sender, receiver) = std::sync::mpsc::channel::<bool>();
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                // arena.check_thread() is private — trigger it via arena.get(),
-                // which calls check_thread() before any HashMap lookup.
-                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    // RenderId::new(1) produces a valid id that won't be in the
-                    // empty map, but check_thread fires before the HashMap lookup.
-                    arena.get(RenderId::new(1));
-                }))
-                .is_err();
-                sender.send(panicked).ok();
-            });
-        });
-
-        let panicked = receiver.recv().expect("thread must send result");
-        assert!(panicked, "check_thread must panic on wrong-thread access");
-    }
+    // `check_thread_panics_on_wrong_thread` used to prove `check_thread`'s
+    // runtime assert fires when `SubtreeArena` is moved to another thread
+    // via `std::thread::scope`. It no longer compiles, and that is the
+    // point: `SubtreeArena` holds `Box<dyn RenderObject<P>>` slots, and
+    // `RenderObject` no longer requires `Send + Sync` (the pipeline owner
+    // this arena serves is confined to one thread by construction, not by
+    // a runtime check). `Scope::spawn` requires its closure to be `Send`,
+    // so the exact cross-thread misuse this test constructed is now a
+    // compile error one layer earlier than `check_thread`'s assert --
+    // the same class of improvement as `PipelineCell::with_mut`'s
+    // reentry panic: a documented strengthening, not a parity break.
+    // `check_thread` itself stays as defense-in-depth until its structural
+    // successor (the retired `unsafe impl Send for NodePtr`) lands.
 
     /// Verify that `LayoutCycleGuard` rejects re-entry and that `Drop`
     /// clears the id so a second entry attempt on a fresh guard succeeds.

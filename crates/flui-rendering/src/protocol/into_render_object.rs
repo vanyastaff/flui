@@ -127,7 +127,7 @@ pub trait IntoRenderObject<P: Protocol>: Sized {
 
 impl<T> IntoRenderObject<BoxProtocol> for T
 where
-    T: RenderBox + Send + Sync + 'static,
+    T: RenderBox + 'static,
 {
     fn into_render_entry(self) -> RenderEntry<BoxProtocol> {
         // No adapter needed - blanket impl makes T: RenderObject<BoxProtocol>
@@ -145,7 +145,7 @@ where
 
 impl<T> IntoRenderObject<SliverProtocol> for T
 where
-    T: RenderSliver + Send + Sync + 'static,
+    T: RenderSliver + 'static,
 {
     fn into_render_entry(self) -> RenderEntry<SliverProtocol> {
         // No adapter needed - blanket impl makes T: RenderObject<SliverProtocol>
