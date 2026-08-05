@@ -22,7 +22,7 @@ use crate::error::{TreeError, TreeResult};
 ///
 /// # Thread Safety
 ///
-/// See [`TreeRead`](super::TreeRead)'s Thread Safety section -- `Send +
+/// See [`TreeRead`]'s Thread Safety section -- `Send +
 /// Sync` is a property of the implementor, not required by this trait.
 /// Mutable operations require exclusive access (`&mut self`) regardless.
 ///

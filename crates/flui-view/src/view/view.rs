@@ -492,7 +492,7 @@ pub trait ElementBase: Downcast + 'static {
     /// The `RenderId` that this element's *children* should attach their
     /// `RenderObject`s under.
     ///
-    /// E3 propagation contract (companion to [`Self::pipeline_owner_any`]):
+    /// E3 propagation contract (companion to [`Self::pipeline_owner`]):
     /// for a `RenderObjectElement` this is its own `render_id` (children
     /// attach under it); for a component element it is the
     /// `parent_render_id` the element itself received (the nearest

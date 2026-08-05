@@ -185,7 +185,9 @@ impl BuildOwner {
     /// silent correctness bug, so neither binding may hand-roll this loop.
     ///
     /// The loop drives `run_layout` → `service_layout_builders` until no builder
-    /// needs a build, then delegates to [`PipelineOwner::run_frame`] for the full
+    /// needs a build, then delegates to
+    /// [`PipelineOwner::run_frame`](flui_rendering::pipeline::PipelineOwner::run_frame)
+    /// for the full
     /// layout → compositing → paint → semantics sequence. `run_frame`'s own
     /// `run_layout` is a no-op on the settled tree (it early-exits when the
     /// scheduler has no layout work), so the frame orchestrator is not

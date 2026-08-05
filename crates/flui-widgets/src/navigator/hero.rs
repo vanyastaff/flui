@@ -508,7 +508,8 @@ impl HeroHandle {
     /// The hero's render node, or `None` before it attaches and after it detaches.
     ///
     /// Resolving to `Some` says nothing about layout — `attach` runs during build.
-    /// Ask [`PipelineOwner::box_size`] for geometry.
+    /// Ask [`PipelineOwner::box_size`](flui_rendering::pipeline::PipelineOwner::box_size)
+    /// for geometry.
     pub(crate) fn render_id(&self) -> Option<RenderId> {
         self.inner.anchor.get()
     }
