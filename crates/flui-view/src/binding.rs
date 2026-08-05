@@ -495,6 +495,48 @@ pub enum AttachError {
     AlreadyAttached,
 }
 
+/// A realm-level `GlobalKey` registry spanning several [`WidgetsBinding`]s —
+/// one per presentation sharing a realm's `GlobalKeyScope` (ADR-0043 §1
+/// RULING 1b).
+///
+/// Assembled once over the presentations installed at the time
+/// [`Self::assemble`] runs, tried in the given order (a realm's mount
+/// order). `GlobalKeyScope`'s uniqueness invariant guarantees at most one
+/// binding ever answers a given hash, so trying each in turn and returning
+/// the first hit is exact, not a heuristic — see
+/// `key::registry::build_composite`'s doc for why resolving the FOLLOW-UP
+/// `with_element` call correctly (rather than by the same blind scan) needs
+/// a small correlation cache.
+///
+/// Internal seam: this type is visible at the crate boundary only because
+/// the owning realm above `flui-view` needs to hold and activate it, not a
+/// stable downstream API — gated identically to
+/// [`WidgetsBinding::with_global_key_registry`].
+#[doc(hidden)]
+#[cfg(any(test, feature = "runtime-internals"))]
+#[derive(Debug)]
+pub struct GlobalKeyRegistryComposite(crate::key::registry::GlobalKeyRegistryHandle);
+
+#[cfg(any(test, feature = "runtime-internals"))]
+impl GlobalKeyRegistryComposite {
+    /// Assemble a composite spanning `bindings`' own registries, in order.
+    #[must_use]
+    pub fn assemble<'a>(bindings: impl IntoIterator<Item = &'a WidgetsBinding>) -> Self {
+        let handles = bindings
+            .into_iter()
+            .map(WidgetsBinding::global_key_registry_handle)
+            .collect();
+        Self(crate::key::registry::build_composite(handles))
+    }
+
+    /// Activate this composite for the dynamic extent of `f` — the
+    /// multi-presentation counterpart to
+    /// [`WidgetsBinding::with_global_key_registry`].
+    pub fn enter<R>(&self, f: impl FnOnce() -> R) -> R {
+        crate::key::registry::with_active_registry(&self.0, f)
+    }
+}
+
 impl WidgetsBinding {
     /// Create a binding with a fresh, isolated focus manager.
     ///
@@ -590,6 +632,13 @@ impl WidgetsBinding {
                 }
             },
         )
+    }
+
+    /// This binding's own `GlobalKey` registry handle, for composing into a
+    /// [`GlobalKeyRegistryComposite`] spanning several bindings.
+    #[cfg(any(test, feature = "runtime-internals"))]
+    fn global_key_registry_handle(&self) -> crate::key::registry::GlobalKeyRegistryHandle {
+        self.global_key_registry.clone()
     }
 
     /// Set the [`PipelineCell`] for render tree management.
