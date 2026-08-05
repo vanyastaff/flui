@@ -24,6 +24,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_scheduler::{Instant, SchedulerPhase, UpdateScheduler};
 use parking_lot::Mutex;
 
+/// An Idle-slice deadline far enough in the future that it never passes
+/// during a test — these tests exercise post-frame ordering, not the
+/// deadline gate itself, so Idle-priority work must never be deferred here.
+fn far_deadline() -> Instant {
+    Instant::now() + std::time::Duration::from_hours(1)
+}
+
 /// Append-only log of the order things happened in.
 #[derive(Clone, Default)]
 struct Log(Arc<Mutex<Vec<&'static str>>>);
@@ -51,7 +58,7 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     }));
 
     let log_pipe = log.clone();
-    scheduler.drive_frame(Instant::now(), || {
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {
         log_pipe.push("pipeline");
     });
 
@@ -72,7 +79,7 @@ fn post_frame_callback_does_not_run_before_the_pipeline() {
     }));
 
     let fired_pipe = Arc::clone(&fired);
-    let seen_during_pipeline = scheduler.drive_frame(Instant::now(), || {
+    let seen_during_pipeline = scheduler.drive_frame(Instant::now(), far_deadline(), || {
         assert_eq!(
             UpdateScheduler::new().phase(),
             SchedulerPhase::Idle,
@@ -94,7 +101,7 @@ fn post_frame_callback_does_not_run_before_the_pipeline() {
 fn the_pipeline_runs_in_the_persistent_callbacks_phase() {
     let scheduler = UpdateScheduler::new();
     let probe = scheduler.clone();
-    let phase = scheduler.drive_frame(Instant::now(), || probe.phase());
+    let phase = scheduler.drive_frame(Instant::now(), far_deadline(), || probe.phase());
     assert_eq!(phase, SchedulerPhase::PersistentCallbacks);
 }
 
@@ -109,8 +116,8 @@ fn post_frame_callback_runs_exactly_once_across_two_frames() {
         calls_cb.fetch_add(1, Ordering::SeqCst);
     }));
 
-    scheduler.drive_frame(Instant::now(), || {});
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -133,10 +140,10 @@ fn a_post_frame_callback_registered_from_a_post_frame_callback_defers_to_the_nex
         }));
     }));
 
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(log.get(), vec!["outer"], "the inner callback must defer");
 
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(log.get(), vec!["outer", "inner"]);
 }
 
@@ -145,7 +152,7 @@ fn a_post_frame_callback_registered_from_a_post_frame_callback_defers_to_the_nex
 fn phase_is_idle_after_a_successful_frame() {
     let scheduler = UpdateScheduler::new();
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
 
@@ -160,7 +167,8 @@ fn a_pipeline_returning_an_error_still_completes_the_frame() {
         fired_cb.fetch_add(1, Ordering::SeqCst);
     }));
 
-    let result: Result<(), &str> = scheduler.drive_frame(Instant::now(), || Err("render failed"));
+    let result: Result<(), &str> =
+        scheduler.drive_frame(Instant::now(), far_deadline(), || Err("render failed"));
 
     assert_eq!(result, Err("render failed"));
     assert_eq!(fired.load(Ordering::SeqCst), 1, "an error is not an abort");
@@ -188,7 +196,9 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     }));
 
     let panicked = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(Instant::now(), || panic!("pipeline exploded"));
+        scheduler.drive_frame(Instant::now(), far_deadline(), || {
+            panic!("pipeline exploded")
+        });
     }))
     .is_err();
     assert!(panicked, "the panic must propagate, not be swallowed");
@@ -205,7 +215,7 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     );
 
     // The recovered scheduler drives a clean frame, and the queued callback runs.
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(fired.load(Ordering::SeqCst), 1);
 }
 
@@ -216,7 +226,7 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 fn a_frame_after_a_panicking_frame_starts_cleanly() {
     let scheduler = UpdateScheduler::new();
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(Instant::now(), || panic!("boom"));
+        scheduler.drive_frame(Instant::now(), far_deadline(), || panic!("boom"));
     }));
 
     let ran = Arc::new(AtomicUsize::new(0));
@@ -226,7 +236,7 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     }));
 
     // Would `debug_assert!` on the illegal transition if the frame were still open.
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(ran.load(Ordering::SeqCst), 1);
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
@@ -237,7 +247,7 @@ fn abort_frame_is_a_no_op_when_no_frame_is_open() {
     let scheduler = UpdateScheduler::new();
     scheduler.abort_frame();
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     scheduler.abort_frame();
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
@@ -303,7 +313,7 @@ fn persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter() {
     scheduler.add_post_frame_callback(Box::new(move |_| {
         log_post.push("post_frame");
     }));
-    scheduler.drive_frame(Instant::now(), || {
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {
         log_pipe.push("pipeline");
     });
 
@@ -325,7 +335,7 @@ fn frame_timing_is_recorded_once_per_frame() {
     }));
 
     let before = scheduler.frame_count();
-    scheduler.drive_frame(Instant::now(), || {});
+    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(scheduler.frame_count(), before + 1);
     assert_eq!(timings.load(Ordering::SeqCst), 1);
 }

@@ -9,11 +9,11 @@ use flui_animation::{
     AnimationController, Animation, AnimationExt,
     Curves, FloatTween, Animatable,
 };
-use flui_scheduler::Scheduler;
+use flui_scheduler::UpdateScheduler;
 use std::sync::Arc;
 use std::time::Duration;
 
-let scheduler = Arc::new(Scheduler::new());
+let scheduler = Arc::new(UpdateScheduler::new());
 ```
 
 ## AnimationController

@@ -487,7 +487,10 @@ mod tests {
                 .expect("lane active");
             assert!(
                 catch_unwind(AssertUnwindSafe(|| {
-                    scheduler.drive_frame(crate::Instant::now(), || panic!("pipeline probe"));
+                    let now = crate::Instant::now();
+                    scheduler.drive_frame(now, now + std::time::Duration::from_hours(1), || {
+                        panic!("pipeline probe")
+                    });
                 }))
                 .is_err()
             );

@@ -770,6 +770,10 @@ impl FrameTimingBuilder {
     }
 
     /// Build the frame timing
+    ///
+    /// A caller that specifies neither [`Self::target_fps`] nor
+    /// [`Self::frame_duration`] gets a 60fps fallback — an ordinary builder
+    /// default, not a scheduler-wide assumption.
     pub fn build(self) -> FrameTiming {
         let frame_duration = self
             .frame_duration
@@ -777,7 +781,9 @@ impl FrameTimingBuilder {
                 self.target_fps
                     .map(|fps| FrameDuration::try_from_fps(fps).expect("fps > 0"))
             })
-            .unwrap_or(FrameDuration::FPS_60);
+            .unwrap_or_else(|| {
+                FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid")
+            });
 
         let mut timing = FrameTiming::with_duration(frame_duration);
         timing.phase = self.initial_phase;
@@ -805,7 +811,7 @@ mod tests {
 
     #[test]
     fn test_frame_timing_budget() {
-        let timing = FrameTiming::new(60); // 16.67ms target
+        let timing = FrameTiming::new(60); // 60fps target duration
         assert!(!timing.is_over_budget());
         assert!(timing.remaining().value() > 0.0);
         assert!((timing.target_duration_ms() - 1000.0 / 60.0).abs() < 0.01);

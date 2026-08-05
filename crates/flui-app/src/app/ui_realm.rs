@@ -2980,13 +2980,15 @@ mod tests {
         // and observe realm B's scheduler from inside it, mid-frame.
         let phase_a_mid_frame = Cell::new(None);
         let phase_b_mid_frame = Cell::new(None);
-        realm_a
-            .scheduler()
-            .drive_frame(flui_scheduler::Instant::now(), || {
+        realm_a.scheduler().drive_frame(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+            || {
                 phase_a_mid_frame.set(Some(realm_a.scheduler().phase()));
                 phase_b_mid_frame.set(Some(realm_b.scheduler().phase()));
                 let _ = realm_a.draw_frame(coexistence_constraints());
-            });
+            },
+        );
         assert_ne!(
             phase_a_mid_frame.get(),
             Some(SchedulerPhase::Idle),
@@ -3081,26 +3083,30 @@ mod tests {
 
                 sender_b.request_redraw();
                 let _ = realm_b.drain_commands();
-                realm_b
-                    .scheduler()
-                    .drive_frame(flui_scheduler::Instant::now(), || {
+                realm_b.scheduler().drive_frame(
+                    flui_scheduler::Instant::now(),
+                    flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                    || {
                         // Mid-PersistentCallbacks rendezvous: cannot return
                         // until realm A's own closure below has ALSO
                         // reached this point.
                         rendezvous_or_timeout("realm B");
                         let _ = realm_b.draw_frame(coexistence_constraints());
-                    });
+                    },
+                );
                 (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
             });
 
             sender_a.request_redraw();
             let _ = realm_a.drain_commands();
-            realm_a
-                .scheduler()
-                .drive_frame(flui_scheduler::Instant::now(), || {
+            realm_a.scheduler().drive_frame(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                || {
                     rendezvous_or_timeout("realm A");
                     let _ = realm_a.draw_frame(coexistence_constraints());
-                });
+                },
+            );
 
             handle.join().expect("realm B's thread did not panic")
         });
@@ -3683,10 +3689,14 @@ mod tests {
             let flag = Arc::clone(&polled_before_pipeline);
             let polls_probe = Arc::clone(&polls);
 
-            scheduler.drive_frame(flui_scheduler::Instant::now(), || {
-                flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
-                let _ = realm.draw_frame(test_constraints());
-            });
+            scheduler.drive_frame(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                || {
+                    flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
+                    let _ = realm.draw_frame(test_constraints());
+                },
+            );
 
             assert!(
                 polled_before_pipeline.load(Ordering::Acquire),
@@ -3793,14 +3803,18 @@ mod tests {
                     })
                     .expect("schedule_local must succeed on the owner thread");
 
-                scheduler.drive_frame(flui_scheduler::Instant::now(), || {
-                    let _ = realm.draw_frame(BoxConstraints::new(
-                        px(0.0),
-                        px(200.0),
-                        px(0.0),
-                        px(200.0),
-                    ));
-                });
+                scheduler.drive_frame(
+                    flui_scheduler::Instant::now(),
+                    flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                    || {
+                        let _ = realm.draw_frame(BoxConstraints::new(
+                            px(0.0),
+                            px(200.0),
+                            px(0.0),
+                            px(200.0),
+                        ));
+                    },
+                );
             });
 
             assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -6361,9 +6375,11 @@ mod tests {
             // Poll the driver to completion — A's task runs, its captured
             // `RebuildHandle` schedules against A's own (now-orphaned)
             // inbox.
-            realm
-                .scheduler()
-                .drive_frame(flui_scheduler::Instant::now(), || {});
+            realm.scheduler().drive_frame(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                || {},
+            );
             assert!(
                 ran.load(Ordering::Relaxed),
                 "A's stale task must still run to completion"

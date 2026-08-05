@@ -505,7 +505,7 @@ pub enum AnimationError {
     InvalidDuration,    // Duration is zero or negative
     AlreadyDisposed,    // Operation on disposed controller
     AlreadyAnimating,   // Conflicting animation command
-    TickerError,        // Scheduler/ticker failure
+    TickerError,        // UpdateScheduler/ticker failure
 }
 ```
 

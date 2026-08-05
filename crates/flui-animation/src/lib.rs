@@ -158,7 +158,7 @@ pub use tween_types::{
 pub use flui_scheduler::ticker::TickerState;
 pub use flui_scheduler::{
     BudgetPolicy, FrameBudget, FramePhase, FrameTiming, Priority, TaskQueue, Ticker,
-    TickerCallback, TickerProvider, UpdateScheduler, VsyncCallback, VsyncScheduler,
+    TickerCallback, TickerProvider, UpdateScheduler,
 };
 
 /// Prelude module for convenient imports

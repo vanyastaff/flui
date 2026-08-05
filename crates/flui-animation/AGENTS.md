@@ -5,7 +5,7 @@ Animation system: controllers, curves, tweens, and spring values. Persistent obj
 ## What lives here
 
 - **`Animation<T>` trait** — base trait for all animations (extends `Listenable`, object-safe, Send+Sync+Debug)
-- **`AnimationController`** — primary driver (generates 0.0..1.0), requires `Scheduler`
+- **`AnimationController`** — primary driver (generates 0.0..1.0), requires `UpdateScheduler`
 - **`CurvedAnimation`** — applies easing curves to animations
 - **`Curve` trait + `Curves`** — easing curves (full Penner catalog, M3 `ThreePointCubic` emphasized set, `Split`)
 - **`Tween<T>`** — maps animation values; `OklabColorTween` for perceptual color interpolation
@@ -23,6 +23,6 @@ Animation system: controllers, curves, tweens, and spring values. Persistent obj
 
 ## Related crates
 
-- `flui-scheduler` — provides `Scheduler` for frame timing and ticker coordination
+- `flui-scheduler` — provides `UpdateScheduler` for frame timing and ticker coordination
 - `flui-macros` — provides `#[derive(Animatable)]`
 - `flui-foundation` — provides `Listenable` trait and `ListenerRegistry`

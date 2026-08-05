@@ -5069,9 +5069,13 @@ mod realm_dispatch_tests {
                 .clone()
         });
 
-        scheduler_a.drive_frame(web_time::Instant::now(), || {
-            let _ = with_owner_platform(|_owner| ());
-        });
+        scheduler_a.drive_frame(
+            web_time::Instant::now(),
+            web_time::Instant::now() + std::time::Duration::from_hours(1),
+            || {
+                let _ = with_owner_platform(|_owner| ());
+            },
+        );
     }
 
     /// The presentation-close dispatch seam (`close_presentation` ->
@@ -6104,7 +6108,11 @@ mod desktop_pacing_tests {
             ),
             WakeAction::Render
         );
-        scheduler.drive_frame(web_time::Instant::now(), || {});
+        scheduler.drive_frame(
+            web_time::Instant::now(),
+            web_time::Instant::now() + std::time::Duration::from_hours(1),
+            || {},
+        );
         assert_eq!(
             scheduler.frame_count(),
             frame_count_before + 1,
@@ -6211,6 +6219,18 @@ mod desktop_pacing_tests {
              capped) — a busy-spin without it would rack up orders of magnitude more",
         );
     }
+}
+
+/// Placeholder Idle-slice deadline for `UpdateScheduler::drive_frame`
+/// (`flui-scheduler`'s #556 PR-B reshape) until a real one exists.
+///
+/// No `FrameClock` is wired into any backend yet (that split lands in a
+/// later #556 slice) — every backend's `drive_frame` call passes a deadline
+/// far enough in the future that it never passes, so Idle-priority work is
+/// never deferred here, matching this runner's behavior before `drive_frame`
+/// took a deadline parameter at all.
+fn no_idle_deadline_yet(now: web_time::Instant) -> web_time::Instant {
+    now + std::time::Duration::from_hours(1)
 }
 
 #[cfg(all(
@@ -6545,7 +6565,7 @@ where
         // microtasks + the single async-driver poll) -> persistent callbacks ->
         // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
         // drives the same helper on its binding-local scheduler.
-            let presented = scheduler.drive_frame(now, || {
+            let presented = scheduler.drive_frame(now, no_idle_deadline_yet(now), || {
             // Render frame via the realm
             let mut r = renderer_frame.lock();
                 let did_present = realm.render_frame_entered(&mut *r);
@@ -7557,7 +7577,7 @@ where
                     // UpdateScheduler callbacks and rendering share ONE `UiRealm::enter`
                     // dynamic extent; callbacks may legally resolve realm-local
                     // capabilities throughout the complete frame transaction.
-                    scheduler.drive_frame(now, || {
+                    scheduler.drive_frame(now, no_idle_deadline_yet(now), || {
                         let mut r = renderer_frame.lock();
                         realm.render_frame_entered(&mut *r);
 
@@ -7910,7 +7930,7 @@ where
 
                     let now = web_time::Instant::now();
                     // UpdateScheduler callbacks and rendering share one realm entry.
-                    scheduler.drive_frame(now, || {
+                    scheduler.drive_frame(now, no_idle_deadline_yet(now), || {
                         let mut slot = renderer_frame.lock();
                         let Some(r) = slot.as_mut() else {
                             return;
@@ -8374,9 +8394,13 @@ mod tests {
         // (c). A panicking pipeline is caught internally and resolved back
         // to `Idle` via `abort_frame()` before the panic resumes, so this
         // test's own `#[should_panic]` unwind leaves the scheduler clean.
-        scheduler.drive_frame(web_time::Instant::now(), || {
-            let _ = with_owner_platform(|_owner| ());
-        });
+        scheduler.drive_frame(
+            web_time::Instant::now(),
+            web_time::Instant::now() + std::time::Duration::from_hours(1),
+            || {
+                let _ = with_owner_platform(|_owner| ());
+            },
+        );
     }
 
     /// The through-dispatch half of the fence-(c) pin above: `with_owner_platform`
@@ -8425,9 +8449,13 @@ mod tests {
         let dispatch_result = dispatch_platform_realm(
             dispatcher,
             RealmTask::Frame(Box::new(|realm| {
-                realm.scheduler().drive_frame(web_time::Instant::now(), || {
-                    let _ = with_owner_platform(|_owner| ());
-                });
+                realm.scheduler().drive_frame(
+                    web_time::Instant::now(),
+                    web_time::Instant::now() + std::time::Duration::from_hours(1),
+                    || {
+                        let _ = with_owner_platform(|_owner| ());
+                    },
+                );
             })),
         );
         // Unreachable on the fence-tripping path (the debug_assert panics

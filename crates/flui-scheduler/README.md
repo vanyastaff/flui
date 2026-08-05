@@ -18,15 +18,20 @@ Frame scheduling, task prioritization, and animation coordination for FLUI.
 ```text
 Application
     ↓
-Scheduler (orchestrates frames)
-    ├─ FrameScheduler (vsync coordination)
+UpdateScheduler (orchestrates frames — logical time only)
     ├─ TaskQueue (priority-based execution)
     ├─ TickerProvider (animation tickers)
-    └─ FrameBudget (time management)
+    └─ FrameBudget (phase-duration stats)
 
 Frame Timeline:
-VSync → BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
+BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
 ```
+
+`UpdateScheduler` makes no refresh-rate, display, or surface assumption of
+its own — a caller supplies the frame's vsync timestamp and an Idle-slice
+deadline to [`drive_frame`](#basic-frame-scheduling). Physical pacing
+(vsync coordination) is a presentation-owned concern that lives outside
+this crate.
 
 ## Installation
 
@@ -43,9 +48,9 @@ flui-scheduler = { version = "0.1", features = ["serde"] }
 ### Basic Frame Scheduling
 
 ```rust
-use flui_scheduler::{Scheduler, Priority};
+use flui_scheduler::{UpdateScheduler, Priority};
 
-let scheduler = Scheduler::new();
+let scheduler = UpdateScheduler::new();
 
 // Schedule a frame callback
 scheduler.schedule_frame(Box::new(|timing| {
@@ -70,9 +75,9 @@ scheduler.execute_frame();
 ```rust
 use std::sync::Arc;
 
-use flui_scheduler::{Scheduler, Ticker};
+use flui_scheduler::{UpdateScheduler, Ticker};
 
-let scheduler = Arc::new(Scheduler::new());
+let scheduler = Arc::new(UpdateScheduler::new());
 let mut ticker = Ticker::new_with_scheduler(Arc::clone(&scheduler));
 
 let future = ticker.start(|elapsed| {
@@ -93,7 +98,7 @@ assert!(future.is_complete());
 ```rust
 use flui_scheduler::{FrameBudget, BudgetPolicy};
 
-let mut budget = FrameBudget::new(60); // 16.67ms target
+let mut budget = FrameBudget::new(60); // 60fps target duration
 budget.set_policy(BudgetPolicy::SkipIdle);
 
 budget.reset(); // Start new frame
@@ -129,23 +134,6 @@ queue.add(Priority::Animation, || println!("Update animation"));
 queue.execute_all();
 ```
 
-### VSync Coordination
-
-```rust
-use flui_scheduler::{VsyncScheduler, VsyncMode};
-
-let vsync = VsyncScheduler::new(60); // 60Hz display
-vsync.set_mode(VsyncMode::On);
-
-vsync.set_callback(|instant| {
-    println!("VSync signal at {:?}", instant);
-    // Begin frame rendering
-});
-
-// Wait for next vsync (blocking)
-let vsync_time = vsync.wait_for_vsync();
-```
-
 ## Safety Features
 
 This crate uses small, explicit Rust types for correctness at API boundaries.
@@ -173,9 +161,10 @@ Newtype pattern prevents unit mixing:
 ```rust
 use flui_scheduler::duration::{Milliseconds, Seconds, FrameDuration};
 
-let elapsed = Milliseconds::new(10.0);     // 10ms
-let timeout = Seconds::new(1.5);           // 1.5s
-let budget = FrameDuration::from_fps(60);  // ~16.67ms
+let elapsed = Milliseconds::new(10.0);        // 10ms
+let timeout = Seconds::new(1.5);              // 1.5s
+let budget = FrameDuration::try_from_fps(60)  // ~60fps
+    .expect("fps > 0");
 
 // Type-safe comparisons
 assert!(!budget.is_over_budget(elapsed));
@@ -209,12 +198,14 @@ use flui_scheduler::duration::FrameDuration;
 
 // Fluent builder for FrameBudget
 let budget = FrameBudgetBuilder::new()
-    .with_target_fps(120)
+    .target_fps(120)
     .build();
 
-// Builder for Scheduler
+// Builder for UpdateScheduler. `target_fps` only labels the seeded
+// `FrameBudget`'s stats (see `UpdateScheduler::new`'s doc) — it has no
+// effect on frame gating, which `drive_frame`'s own `deadline` controls.
 let scheduler = SchedulerBuilder::new()
-    .with_target_fps(60)
+    .target_fps(60)
     .build();
 ```
 
@@ -245,14 +236,14 @@ Tasks execute in strict priority order:
 there is no `flui_core` crate in this workspace. The sketch below is
 illustrative shape, not the real struct (the actual `PipelineOwner` is
 typestate-generic over its pipeline phase and carries a `DirtyTracker`,
-not a bare `Scheduler` field — see `flui-rendering`'s own docs for the
+not a bare `UpdateScheduler` field — see `flui-rendering`'s own docs for the
 real definition):
 
 ```rust,ignore
-use flui_scheduler::{Scheduler, FramePhase};
+use flui_scheduler::{UpdateScheduler, FramePhase};
 
 struct PipelineOwner {
-    scheduler: Scheduler,
+    scheduler: UpdateScheduler,
 }
 
 impl PipelineOwner {
@@ -268,9 +259,9 @@ impl PipelineOwner {
 ### In Event Loop
 
 ```rust
-use flui_scheduler::{Scheduler, Priority};
+use flui_scheduler::{UpdateScheduler, Priority};
 
-let scheduler = Scheduler::new();
+let scheduler = UpdateScheduler::new();
 
 // In your event loop
 match event {
@@ -292,15 +283,22 @@ match event {
 
 ## Performance
 
-### Frame Budget Enforcement
+### Frame Budget Statistics
 
-| Target FPS | Frame Budget |
-|------------|--------------|
-| 60 FPS | 16.67ms |
-| 120 FPS | 8.33ms |
-| 144 FPS | 6.94ms |
+| Target FPS | Frame Duration |
+|------------|-----------------|
+| 60 FPS | ~16.7ms |
+| 120 FPS | ~8.3ms |
+| 144 FPS | ~6.9ms |
 
-When over budget, low-priority work is automatically skipped.
+`FrameBudget` reports timing statistics (jank, phase durations, over-budget)
+against whichever target the caller chose — `UpdateScheduler` itself makes
+no frame-rate assumption and does not act on these statistics to skip work.
+The only thing that ever defers work is [`drive_frame`]'s own `deadline`
+parameter, and it bounds `Priority::Idle` tasks alone; `Priority::Animation`
+and `Priority::Build` always run to completion.
+
+[`drive_frame`]: https://docs.rs/flui-scheduler/latest/flui_scheduler/scheduler/struct.UpdateScheduler.html#method.drive_frame
 
 ### Zero-Cost Abstractions
 

@@ -82,7 +82,6 @@ use crate::{
     post_frame::{LocalPostFrameEntry, OwnerPostFrameCallback, drain_active_lane},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
-    vsync::VsyncScheduler,
 };
 
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
@@ -272,7 +271,7 @@ impl FrameSkipPolicy {
     ///
     /// # Arguments
     /// * `elapsed_ms` - Time since last frame was rendered
-    /// * `frame_budget_ms` - Target frame duration (e.g., 16.67ms for 60fps)
+    /// * `frame_budget_ms` - Caller-chosen target frame duration in milliseconds
     /// * `max_skip` - Maximum frames to skip for `LimitedSkip` policy
     ///
     /// # Returns
@@ -352,8 +351,16 @@ struct FrameState {
     last_frame_end: Mutex<Option<Instant>>,
     /// Skipped frame counter
     skipped_frames: AtomicU64,
-    /// VSync scheduler (optional integration)
-    vsync: Mutex<Option<VsyncScheduler>>,
+    /// The current frame's Idle-slice deadline, set by
+    /// [`UpdateScheduler::drive_frame`] and consumed by
+    /// [`UpdateScheduler::handle_draw_frame`] to decide whether Idle-priority
+    /// tasks still fit. `None` (the default, and the state outside
+    /// `drive_frame`) means unbounded — a caller driving the phase machine
+    /// by hand (`handle_begin_frame`/`handle_draw_frame` directly, as
+    /// `HeadlessBinding` does) never has Idle work deferred. Only Idle is
+    /// ever gated this way: Animation and Build tasks run unconditionally
+    /// regardless of the deadline (see `drive_frame`'s doc).
+    idle_deadline: Mutex<Option<Instant>>,
     /// Pending frame completion futures
     completion_waiters: Mutex<Vec<FrameCompletionNotifier>>,
 }
@@ -557,9 +564,21 @@ fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
 }
 
 impl UpdateScheduler {
-    /// Create a new scheduler with 60 FPS target
+    /// Create a new scheduler.
+    ///
+    /// `UpdateScheduler` makes no refresh-rate assumption of its own — it
+    /// never knows a display, a surface, or a frame rate (that split lives
+    /// in the presentation-owned `FrameClock`; see the ownership rule in
+    /// ADR-0044). The internal [`FrameBudget`] this seeds is a 60fps-labeled
+    /// **stats** fallback only (`avg_fps`/jank tracking for a caller who
+    /// never called [`Self::set_target_fps`]/[`Self::with_target_fps`]) —
+    /// it does not gate anything. [`Self::drive_frame`]'s `deadline`
+    /// parameter is the only thing that bounds work, and it bounds Idle
+    /// priority tasks alone: Animation and Build tasks always run.
     pub fn new() -> Self {
-        Self::with_frame_duration(FrameDuration::FPS_60)
+        Self::with_frame_duration(
+            FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid"),
+        )
     }
 
     /// Create a scheduler with custom target FPS
@@ -600,7 +619,7 @@ impl UpdateScheduler {
                 max_frame_skip: Mutex::new(3),
                 last_frame_end: Mutex::new(None),
                 skipped_frames: AtomicU64::new(0),
-                vsync: Mutex::new(None),
+                idle_deadline: Mutex::new(None),
                 completion_waiters: Mutex::new(Vec::new()),
             },
             callbacks: CallbackState {
@@ -817,6 +836,17 @@ impl UpdateScheduler {
     ///
     /// Debug-asserts an illegal phase transition if no frame is open
     /// (`handle_begin_frame` was not called).
+    ///
+    /// # Idle-slice gating is the only gate
+    ///
+    /// Animation and Build priority tasks always run to completion here,
+    /// unconditionally. Only `Priority::Idle` work is bounded, and only by
+    /// the deadline [`drive_frame`](Self::drive_frame) supplies (see the
+    /// private `is_idle_deadline_passed` helper below) — a caller driving
+    /// this method directly, without going through `drive_frame`, has no
+    /// deadline set and Idle work always runs too.
+    /// A deadline can defer low-priority work; it can never skip a frame or
+    /// starve logical (Animation/Build) work.
     #[tracing::instrument(skip(self))]
     pub fn handle_draw_frame(&self) {
         // Phase 3: PersistentCallbacks (the pipeline's slot)
@@ -844,15 +874,28 @@ impl UpdateScheduler {
             }
         }
 
-        // Execute priority tasks with budget awareness
+        // Animation and Build always run — never gated. Only Idle work is
+        // deadline-bounded (see this method's own doc and `drive_frame`).
         self.inner.task_queue.execute_until(Priority::Animation);
+        self.inner.task_queue.execute_until(Priority::Build);
 
-        if !self.is_over_budget() {
-            self.inner.task_queue.execute_until(Priority::Build);
-        }
-        if !self.is_deadline_near() {
+        if !self.is_idle_deadline_passed() {
             self.inner.task_queue.execute_until(Priority::Idle);
         }
+    }
+
+    /// Whether the Idle-slice deadline [`drive_frame`](Self::drive_frame) set
+    /// for the current frame has already passed.
+    ///
+    /// `false` (never passed, i.e. Idle work is never deferred) when no
+    /// deadline is set — the state outside a `drive_frame` call, and for a
+    /// caller driving `handle_begin_frame`/`handle_draw_frame` by hand.
+    fn is_idle_deadline_passed(&self) -> bool {
+        self.inner
+            .frame
+            .idle_deadline
+            .lock()
+            .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
     /// Close the frame: run its **post-frame callbacks**, record timing, notify
@@ -1021,6 +1064,20 @@ impl UpdateScheduler {
     /// registered as a callback: FLUI's bindings own their element tree by value,
     /// so no `Fn` closure could drive it the way Flutter's `drawFrame` does.
     ///
+    /// # `deadline` bounds Idle work only
+    ///
+    /// `deadline` is a plain instant in time, supplied by the caller — this
+    /// scheduler has no refresh-rate or display of its own to derive one
+    /// from (that split lives in the presentation-owned `FrameClock`).
+    /// Once `deadline` has passed, [`handle_draw_frame`](Self::handle_draw_frame)
+    /// stops running `Priority::Idle` tasks for this frame. It can **never**
+    /// skip the frame itself, and it can never defer `Priority::Animation`
+    /// or `Priority::Build` work — those always run to completion,
+    /// regardless of `deadline`. A caller with no meaningful deadline yet
+    /// (no `FrameClock` wired in) can pass one far in the future; Idle work
+    /// then always runs, matching this method's behavior before `deadline`
+    /// existed.
+    ///
     /// # Errors and panics
     ///
     /// A pipeline that **returns** an error value is a completed frame: `end_frame`
@@ -1044,11 +1101,22 @@ impl UpdateScheduler {
     ///
     /// Under `panic = "abort"` nothing is caught and the process dies with the
     /// frame open, which is moot.
-    pub fn drive_frame<R>(&self, vsync_time: Instant, pipeline: impl FnOnce() -> R) -> R {
+    pub fn drive_frame<R>(
+        &self,
+        vsync_time: Instant,
+        deadline: Instant,
+        pipeline: impl FnOnce() -> R,
+    ) -> R {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+        *self.inner.frame.idle_deadline.lock() = Some(deadline);
         self.handle_begin_frame(vsync_time);
         self.handle_draw_frame();
+        // The deadline only ever needs to be visible for this frame's own
+        // `handle_draw_frame` call, immediately above; clear it so a caller
+        // that later drives `handle_begin_frame`/`handle_draw_frame` by hand
+        // (skipping `drive_frame`) never inherits a stale deadline.
+        *self.inner.frame.idle_deadline.lock() = None;
 
         match catch_unwind(AssertUnwindSafe(pipeline)) {
             Ok(result) => {
@@ -1397,18 +1465,8 @@ impl UpdateScheduler {
     }
 
     // =========================================================================
-    // VSync Integration
+    // Vsync Timestamp
     // =========================================================================
-
-    /// Set VSync scheduler for integration
-    pub fn set_vsync(&self, vsync: VsyncScheduler) {
-        *self.inner.frame.vsync.lock() = Some(vsync);
-    }
-
-    /// Get VSync scheduler reference
-    pub fn has_vsync(&self) -> bool {
-        self.inner.frame.vsync.lock().is_some()
-    }
 
     /// Get current vsync timestamp (if in frame)
     pub fn current_vsync_time(&self) -> Option<Instant> {
@@ -1447,8 +1505,14 @@ impl UpdateScheduler {
     // =========================================================================
     // Budget and Timing
     // =========================================================================
+    //
+    // These read the frame's *labeled* target duration (see `UpdateScheduler::new`'s
+    // doc) for informational stats only — none of them gate anything. The
+    // only thing that ever bounds work here is the `deadline` a caller
+    // passes to `drive_frame`, and it bounds `Priority::Idle` alone; see
+    // `handle_draw_frame`'s doc for the actual gate.
 
-    /// Check if currently over budget
+    /// Check if currently over budget (informational only — does not gate).
     pub fn is_over_budget(&self) -> bool {
         self.inner
             .frame
@@ -1458,7 +1522,8 @@ impl UpdateScheduler {
             .is_some_and(super::frame::FrameTiming::is_over_budget)
     }
 
-    /// Check if deadline is near (>80% budget used)
+    /// Check if deadline is near, i.e. >80% of the labeled target duration
+    /// used (informational only — does not gate; see this section's doc).
     pub fn is_deadline_near(&self) -> bool {
         self.inner
             .frame
@@ -1483,10 +1548,17 @@ impl UpdateScheduler {
         self.remaining_budget().value()
     }
 
-    /// Get frame budget reference
-    pub fn budget(&self) -> parking_lot::MutexGuard<'_, FrameBudget> {
-        // PORT-CHECK-OK-SP6: FrameBudget guard accessor; required for atomic snapshot semantics; pre-existing SP-6
-        self.inner.frame.budget.lock()
+    /// Snapshot the current frame budget statistics.
+    ///
+    /// Returns an owned, cheap-clone [`FrameBudget`] value rather than a
+    /// live lock guard — the caller cannot deadlock the scheduler by holding
+    /// this past its own scope, and the returned value is a stats snapshot
+    /// only: it does not gate anything (see [`drive_frame`](Self::drive_frame)
+    /// and [`handle_draw_frame`](Self::handle_draw_frame) for the actual
+    /// Idle-slice deadline gate).
+    #[must_use]
+    pub fn budget_snapshot(&self) -> FrameBudget {
+        self.inner.frame.budget.lock().clone()
     }
 
     // =========================================================================
@@ -2141,16 +2213,14 @@ impl TickerProvider for UpdateScheduler {
 pub struct SchedulerBuilder {
     frame_duration: FrameDuration,
     task_queue_capacity: Option<usize>,
-    vsync_refresh_rate: Option<u32>,
 }
 
 impl SchedulerBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self {
-            frame_duration: FrameDuration::FPS_60,
+            frame_duration: FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid"),
             task_queue_capacity: None,
-            vsync_refresh_rate: None,
         }
     }
 
@@ -2172,25 +2242,13 @@ impl SchedulerBuilder {
         self
     }
 
-    /// Set VSync refresh rate (creates integrated VsyncScheduler)
-    pub fn vsync_refresh_rate(mut self, refresh_rate: u32) -> Self {
-        self.vsync_refresh_rate = Some(refresh_rate);
-        self
-    }
-
     /// Build the scheduler
     pub fn build(self) -> UpdateScheduler {
         let task_queue = self
             .task_queue_capacity
             .map_or_else(TaskQueue::new, TaskQueue::with_capacity);
-        let scheduler =
-            UpdateScheduler::with_frame_duration_and_task_queue(self.frame_duration, task_queue);
 
-        if let Some(refresh_rate) = self.vsync_refresh_rate {
-            scheduler.set_vsync(VsyncScheduler::try_new(refresh_rate).expect("refresh > 0"));
-        }
-
-        scheduler
+        UpdateScheduler::with_frame_duration_and_task_queue(self.frame_duration, task_queue)
     }
 }
 
@@ -2631,52 +2689,52 @@ mod tests {
     #[test]
     fn test_frame_skip_policy_never() {
         // Never policy should never skip frames
-        assert_eq!(FrameSkipPolicy::Never.frames_to_skip(100.0, 16.67, 3), 0);
-        assert_eq!(FrameSkipPolicy::Never.frames_to_skip(1000.0, 16.67, 3), 0);
+        assert_eq!(FrameSkipPolicy::Never.frames_to_skip(100.0, 20.0, 3), 0);
+        assert_eq!(FrameSkipPolicy::Never.frames_to_skip(1000.0, 20.0, 3), 0);
     }
 
     #[test]
     fn test_frame_skip_policy_catch_up() {
         // Under budget - no skip
-        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(15.0, 16.67, 3), 0);
+        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(15.0, 20.0, 3), 0);
 
-        // Slightly over budget - no skip (only 1 frame behind)
-        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(20.0, 16.67, 3), 0);
+        // Exactly one frame's worth of time - no skip (only 1 frame behind)
+        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(20.0, 20.0, 3), 0);
 
         // 2 frames behind - skip 1
-        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(40.0, 16.67, 3), 1);
+        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(40.0, 20.0, 3), 1);
 
         // 3 frames behind - skip 2
-        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(60.0, 16.67, 3), 2);
+        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(60.0, 20.0, 3), 2);
     }
 
     #[test]
     fn test_frame_skip_policy_skip_to_latest() {
-        // 50ms elapsed / 16.67ms per frame = 2.99 = floor to 2 frames behind
+        // 50ms elapsed / 20ms per frame = 2.5 = floor to 2 frames behind
         // Skip 2-1 = 1 frame (keep latest)
         assert_eq!(
-            FrameSkipPolicy::SkipToLatest.frames_to_skip(50.0, 16.67, 3),
+            FrameSkipPolicy::SkipToLatest.frames_to_skip(50.0, 20.0, 3),
             1
         );
 
-        // 100ms = 5.99 = floor to 5 frames behind, skip 4
+        // 100ms / 20ms per frame = 5.0 = floor to 5 frames behind, skip 4
         assert_eq!(
-            FrameSkipPolicy::SkipToLatest.frames_to_skip(100.0, 16.67, 3),
+            FrameSkipPolicy::SkipToLatest.frames_to_skip(100.0, 20.0, 3),
             4
         );
     }
 
     #[test]
     fn test_frame_skip_policy_limited_skip() {
-        // 50ms = 2.99 = floor to 2 frames behind, skip 1
+        // 50ms / 20ms per frame = 2.5 = floor to 2 frames behind, skip 1
         assert_eq!(
-            FrameSkipPolicy::LimitedSkip.frames_to_skip(50.0, 16.67, 3),
+            FrameSkipPolicy::LimitedSkip.frames_to_skip(50.0, 20.0, 3),
             1
         );
 
-        // 200ms = 11.99 = floor to 11 frames behind, skip 10, but max 3
+        // 200ms / 20ms per frame = 10.0 = floor to 10 frames behind, skip 9, but max 3
         assert_eq!(
-            FrameSkipPolicy::LimitedSkip.frames_to_skip(200.0, 16.67, 3),
+            FrameSkipPolicy::LimitedSkip.frames_to_skip(200.0, 20.0, 3),
             3
         );
     }

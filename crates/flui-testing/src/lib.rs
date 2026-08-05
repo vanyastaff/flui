@@ -688,7 +688,13 @@ impl HeadlessBinding {
                 // the borrow on `self` for the pipeline closure.
                 let scheduler = scheduler.clone();
                 let vsync_time = flui_scheduler::Instant::now();
-                scheduler.drive_frame(vsync_time, || {
+                // No `FrameClock` is wired into the headless driver (it
+                // doesn't exist yet — see `UpdateScheduler::drive_frame`'s
+                // doc); a deadline far in the future means Idle-priority
+                // work is never deferred here, matching this binding's
+                // behavior before `drive_frame` took a deadline.
+                let idle_deadline = vsync_time + std::time::Duration::from_hours(1);
+                scheduler.drive_frame(vsync_time, idle_deadline, || {
                     *last_layer_tree = Self::run_pipeline(tree);
 
                     // 7. Re-hit-test every stationary device against the

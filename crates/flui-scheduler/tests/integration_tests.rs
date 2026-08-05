@@ -28,7 +28,6 @@ use flui_scheduler::{
     scheduler::{FrameSkipPolicy, SchedulerBuilder, UpdateScheduler},
     task::{Priority, TaskQueue},
     ticker::{Ticker, TickerCanceled, TickerFuture, TickerState},
-    vsync::{VsyncMode, VsyncScheduler},
 };
 
 // ============================================================================
@@ -263,38 +262,6 @@ fn test_ticker_canceled_error() {
 }
 
 // ============================================================================
-// VSync Integration Tests
-// ============================================================================
-
-#[test]
-fn test_vsync_scheduler_basic() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    assert_eq!(vsync.refresh_rate(), 60);
-    assert!(!vsync.is_active());
-
-    // Frame interval should be ~16.67ms for 60Hz
-    let interval_ms = vsync.frame_interval_ms();
-    assert!(interval_ms.value() > 16.0);
-    assert!(interval_ms.value() < 17.0);
-}
-
-#[test]
-fn test_vsync_modes() {
-    let vsync = VsyncScheduler::try_with_mode(60, VsyncMode::Adaptive).expect("refresh > 0");
-    assert_eq!(vsync.mode(), VsyncMode::Adaptive);
-
-    vsync.set_mode(VsyncMode::On);
-    assert_eq!(vsync.mode(), VsyncMode::On);
-
-    vsync.set_mode(VsyncMode::Off);
-    assert_eq!(vsync.mode(), VsyncMode::Off);
-
-    vsync.set_mode(VsyncMode::TripleBuffer);
-    assert_eq!(vsync.mode(), VsyncMode::TripleBuffer);
-}
-
-// ============================================================================
 // Task Queue Integration Tests
 // ============================================================================
 
@@ -407,13 +374,13 @@ fn test_frame_budget_tracking() {
 fn test_frame_budget_jank_detection() {
     let mut budget = FrameBudget::new(60);
 
-    // Record a fast frame (under 16.67ms budget)
+    // Record a fast frame (under the 60fps target duration)
     budget.record_frame_duration(Milliseconds::new(10.0));
-    assert!(!budget.is_janky()); // 10ms < 16.67ms, not janky
+    assert!(!budget.is_janky()); // 10ms is under the target, not janky
 
-    // Record a janky frame (> 16.67ms for 60fps)
+    // Record a janky frame (over the 60fps target duration)
     budget.record_frame_duration(Milliseconds::new(25.0));
-    assert!(budget.is_janky()); // 25ms > 16.67ms, janky
+    assert!(budget.is_janky()); // 25ms exceeds the target, janky
 
     // Jank count should reflect the janky frame
     assert_eq!(budget.jank_count(), 1);
@@ -1125,189 +1092,6 @@ fn test_app_lifecycle_state_all_variants() {
 }
 
 // ============================================================================
-// Extended VSync Tests (55% -> 80%+)
-// ============================================================================
-
-#[test]
-fn test_vsync_mode_properties() {
-    // Test waits_for_vsync
-    assert!(VsyncMode::On.waits_for_vsync());
-    assert!(!VsyncMode::Off.waits_for_vsync());
-    assert!(VsyncMode::Adaptive.waits_for_vsync());
-    assert!(VsyncMode::TripleBuffer.waits_for_vsync());
-
-    // Test can_tear
-    assert!(!VsyncMode::On.can_tear());
-    assert!(VsyncMode::Off.can_tear());
-    assert!(!VsyncMode::Adaptive.can_tear());
-    assert!(!VsyncMode::TripleBuffer.can_tear());
-
-    // Test description
-    let _ = VsyncMode::On.description();
-    let _ = VsyncMode::Off.description();
-    let _ = VsyncMode::Adaptive.description();
-    let _ = VsyncMode::TripleBuffer.description();
-}
-
-#[test]
-fn test_vsync_scheduler_start_stop() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    assert!(!vsync.is_active());
-    vsync.start();
-    assert!(vsync.is_active());
-    vsync.stop();
-    assert!(!vsync.is_active());
-}
-
-#[test]
-fn test_vsync_scheduler_callback() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-    let called = Arc::new(AtomicU32::new(0));
-
-    let c = Arc::clone(&called);
-    vsync.set_callback(move |_instant| {
-        c.fetch_add(1, Ordering::SeqCst);
-    });
-
-    vsync.signal_vsync();
-    assert_eq!(called.load(Ordering::SeqCst), 1);
-
-    vsync.signal_vsync();
-    assert_eq!(called.load(Ordering::SeqCst), 2);
-
-    vsync.clear_callback();
-    vsync.signal_vsync();
-    assert_eq!(called.load(Ordering::SeqCst), 2); // Still 2, callback cleared
-}
-
-#[test]
-fn test_vsync_scheduler_time_tracking() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    // No vsync yet
-    assert!(vsync.time_since_vsync().is_none());
-    assert!(vsync.time_since_vsync_ms().is_none());
-    assert!(vsync.predict_next_vsync().is_none());
-
-    // Signal vsync
-    vsync.signal_vsync();
-
-    // Now should have values
-    assert!(vsync.time_since_vsync().is_some());
-    assert!(vsync.time_since_vsync_ms().is_some());
-    assert!(vsync.predict_next_vsync().is_some());
-}
-
-#[test]
-fn test_vsync_stats() {
-    use flui_scheduler::vsync::VsyncStats;
-
-    // Default stats
-    let stats = VsyncStats::default();
-    assert_eq!(stats.signal_count, 0);
-    assert_eq!(stats.missed_count, 0);
-
-    // Miss rate with zero signals
-    assert_eq!(stats.miss_rate(), 0.0);
-
-    // Effective FPS with zero interval
-    assert_eq!(stats.effective_fps(), 0.0);
-}
-
-#[test]
-fn test_vsync_scheduler_stats() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    // Initial stats
-    let stats = vsync.stats();
-    assert_eq!(stats.signal_count, 0);
-
-    // Signal multiple times
-    vsync.signal_vsync();
-    std::thread::sleep(Duration::from_millis(16));
-    vsync.signal_vsync();
-    std::thread::sleep(Duration::from_millis(16));
-    vsync.signal_vsync();
-
-    // Check stats updated
-    let stats = vsync.stats();
-    assert!(stats.signal_count >= 2);
-    assert!(stats.avg_interval.value() > 0);
-
-    // Reset stats
-    vsync.reset_stats();
-    let stats = vsync.stats();
-    assert_eq!(stats.signal_count, 0);
-}
-
-#[test]
-fn test_vsync_scheduler_is_at_target_rate() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    // No data - should return true
-    assert!(vsync.is_at_target_rate());
-
-    // Signal at approximately correct rate
-    vsync.signal_vsync();
-    std::thread::sleep(Duration::from_millis(16));
-    vsync.signal_vsync();
-    std::thread::sleep(Duration::from_millis(16));
-    vsync.signal_vsync();
-
-    // Should be close to target rate
-    // This is a soft test - timing may vary on CI
-    let _ = vsync.is_at_target_rate();
-}
-
-#[test]
-fn test_vsync_scheduler_frame_intervals() {
-    // Test different refresh rates
-    let vsync_60 = VsyncScheduler::try_new(60).expect("refresh > 0");
-    let interval_60 = vsync_60.frame_interval();
-    assert!(interval_60.value().abs_diff(16_666) < 100);
-
-    let vsync_120 = VsyncScheduler::try_new(120).expect("refresh > 0");
-    let interval_120 = vsync_120.frame_interval();
-    assert!(interval_120.value().abs_diff(8_333) < 100);
-
-    // Test frame_interval_duration
-    let duration = vsync_60.frame_interval_duration();
-    assert!(duration.as_millis() >= 16);
-    assert!(duration.as_millis() <= 17);
-}
-
-#[test]
-fn test_vsync_scheduler_wait_for_vsync() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-
-    // Off mode - no waiting
-    vsync.set_mode(VsyncMode::Off);
-    let start = std::time::Instant::now();
-    let _ = vsync.wait_for_vsync();
-    let elapsed = start.elapsed();
-    assert!(elapsed.as_millis() < 5); // Should return immediately
-
-    // On mode - may wait (depends on previous vsync)
-    vsync.set_mode(VsyncMode::On);
-    let _ = vsync.wait_for_vsync();
-}
-
-#[test]
-fn test_vsync_scheduler_default() {
-    let vsync = VsyncScheduler::default();
-    assert_eq!(vsync.refresh_rate(), 60);
-}
-
-#[test]
-fn test_vsync_scheduler_debug() {
-    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-    let debug_str = format!("{vsync:?}");
-    assert!(debug_str.contains("VsyncScheduler"));
-    assert!(debug_str.contains("refresh_rate"));
-}
-
-// ============================================================================
 // Extended ID Tests (55% -> 80%+)
 // ============================================================================
 
@@ -1531,8 +1315,8 @@ fn test_milliseconds_from_microseconds() {
 
 #[test]
 fn test_milliseconds_from_f64() {
-    let ms: Milliseconds = 16.67.into();
-    assert_eq!(ms.value(), 16.67);
+    let ms: Milliseconds = 12.34.into();
+    assert_eq!(ms.value(), 12.34);
 }
 
 #[test]
@@ -1648,9 +1432,10 @@ fn test_microseconds_from_duration() {
 
 #[test]
 fn test_frame_duration_constants() {
-    // Test predefined constants
+    // Test predefined constants. `FrameDuration` intentionally has no
+    // `FPS_60` constant — flui-scheduler ships no fixed frame-rate default;
+    // 60fps durations are constructed via `try_from_fps(60)`.
     assert!((FrameDuration::FPS_30.fps() - 30.0).abs() < 0.1);
-    assert!((FrameDuration::FPS_60.fps() - 60.0).abs() < 0.1);
     assert!((FrameDuration::FPS_120.fps() - 120.0).abs() < 0.1);
     assert!((FrameDuration::FPS_144.fps() - 144.0).abs() < 0.1);
 }
@@ -1667,7 +1452,7 @@ fn test_frame_duration_as_seconds() {
 fn test_frame_duration_utilization() {
     let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
 
-    let elapsed = Milliseconds::new(8.333); // 50% of 16.67ms
+    let elapsed = Milliseconds::new(8.333); // 50% of the 60fps target duration
     let util = fd.utilization(elapsed);
 
     assert!((util - 0.5).abs() < 0.1);
@@ -1693,12 +1478,6 @@ fn test_frame_duration_is_janky() {
 
     // Over budget - janky
     assert!(fd.is_janky(Milliseconds::new(20.0)));
-}
-
-#[test]
-fn test_frame_duration_default() {
-    let fd = FrameDuration::default();
-    assert!((fd.fps() - 60.0).abs() < 0.1);
 }
 
 #[test]
