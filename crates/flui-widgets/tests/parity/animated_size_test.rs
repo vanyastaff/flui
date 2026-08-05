@@ -104,16 +104,14 @@ const RUN: Duration = Duration::from_millis(200);
 
 /// `(size, state)` of the unique `RenderAnimatedSize` node in `laid`.
 fn probe(laid: &common::LaidOut, id: RenderId) -> (flui_types::Size, AnimatedSizeState) {
-    let state = {
-        let owner_handle = laid.pipeline_owner();
-        let mut owner = owner_handle.write();
+    let state = laid.pipeline_owner().with_mut(|owner| {
         owner
             .render_tree_mut()
             .get_mut(id)
             .and_then(|node| node.downcast_render_object_mut::<RenderAnimatedSize>())
             .expect("render node should be a RenderAnimatedSize")
             .state()
-    };
+    });
     (laid.size(id), state)
 }
 
@@ -408,14 +406,14 @@ fn animated_size_can_set_and_update_clip_behavior() {
     let id = laid.find_by_render_type("RenderAnimatedSize");
 
     let clip_of = |laid: &common::LaidOut, id: RenderId| -> Clip {
-        let owner_handle = laid.pipeline_owner();
-        let mut owner = owner_handle.write();
-        owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderAnimatedSize>())
-            .expect("RenderAnimatedSize")
-            .clip_behavior()
+        laid.pipeline_owner().with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderAnimatedSize>())
+                .expect("RenderAnimatedSize")
+                .clip_behavior()
+        })
     };
 
     assert_eq!(clip_of(&laid, id), Clip::HardEdge, "default is HardEdge");

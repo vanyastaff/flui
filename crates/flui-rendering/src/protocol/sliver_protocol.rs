@@ -247,16 +247,14 @@ impl<P: ParentData + Default> SliverChildState<P> {
 }
 
 /// Callback type for synchronous sliver child layout.
-pub type SliverChildLayoutCallback<'a> =
-    &'a (dyn Fn(RenderId, SliverConstraints) -> SliverGeometry + Send + Sync);
+pub type SliverChildLayoutCallback<'a> = &'a dyn Fn(RenderId, SliverConstraints) -> SliverGeometry;
 
 /// Callback type for cross-protocol box child layout driven by a Sliver parent.
-pub type BoxChildLayoutCallback<'a> = &'a (dyn Fn(RenderId, BoxConstraints) -> Size + Send + Sync);
+pub type BoxChildLayoutCallback<'a> = &'a dyn Fn(RenderId, BoxConstraints) -> Size;
 
 /// Callback type for cross-protocol box child intrinsic queries driven by a
 /// Sliver parent.
-pub type BoxChildIntrinsicCallback<'a> =
-    &'a (dyn Fn(RenderId, IntrinsicDimension, f32) -> f32 + Send + Sync);
+pub type BoxChildIntrinsicCallback<'a> = &'a dyn Fn(RenderId, IntrinsicDimension, f32) -> f32;
 
 /// Dense per-child geometry cache used by Proxy storage.
 type ProxySliverChildGeometryCache = Vec<Option<SliverGeometry>>;
@@ -666,8 +664,10 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
 /// The trait surface mirrors the Box erased layout bridge: the pipeline
 /// owns parent-data-erased child slots, while the blanket impl rebuilds a
 /// typed `SliverLayoutCtx<T::Arity, T::ParentData>` and delegates child
-/// layout / parent-data access through this trait.
-pub trait SliverLayoutCtxErased: Send + Sync {
+/// layout / parent-data access through this trait. No longer `Send +
+/// Sync`-bound, for the same reason as
+/// [`BoxLayoutCtxErased`](super::box_protocol::BoxLayoutCtxErased).
+pub trait SliverLayoutCtxErased {
     /// Sliver constraints from parent.
     fn constraints(&self) -> SliverConstraints;
 
@@ -1319,7 +1319,7 @@ impl SliverHitTestEntry {
 /// position covers the sliver protocol's needs), so this is always
 /// `None` in practice.
 pub type SliverHitTestChildCallback<'a> =
-    &'a mut (dyn FnMut(usize, Option<MainAxisPosition>, Option<Matrix4>) -> bool + Send + Sync);
+    &'a mut dyn FnMut(usize, Option<MainAxisPosition>, Option<Matrix4>) -> bool;
 
 /// Sliver hit test context implementation.
 pub struct SliverHitTestCtx<'ctx, A: Arity, P: ParentData> {

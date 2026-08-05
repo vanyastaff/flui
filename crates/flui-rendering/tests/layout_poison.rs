@@ -90,15 +90,11 @@ impl RenderObject<BoxProtocol> for FlakyLeaf {
         _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut (
-                 dyn FnMut(
+        _hit_child: &mut dyn FnMut(
             usize,
             Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
             Option<Matrix4>,
-        ) -> bool
-                     + Send
-                     + Sync
-             ),
+        ) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }
@@ -453,7 +449,7 @@ impl RenderObject<BoxProtocol> for CountingIntrinsicBox {
         extent: f32,
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
-        child_query: &mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
+        child_query: &mut dyn FnMut(usize, IntrinsicDimension, f32) -> f32,
     ) -> f32 {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         if self.fail {
@@ -476,15 +472,11 @@ impl RenderObject<BoxProtocol> for CountingIntrinsicBox {
         _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut (
-                 dyn FnMut(
+        _hit_child: &mut dyn FnMut(
             usize,
             Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
             Option<Matrix4>,
-        ) -> bool
-                     + Send
-                     + Sync
-             ),
+        ) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }
@@ -779,15 +771,11 @@ impl RenderObject<BoxProtocol> for UnboundedHatingLeaf {
         _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut (
-                 dyn FnMut(
+        _hit_child: &mut dyn FnMut(
             usize,
             Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
             Option<Matrix4>,
-        ) -> bool
-                     + Send
-                     + Sync
-             ),
+        ) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }
@@ -834,15 +822,11 @@ impl RenderObject<BoxProtocol> for WidthSwitchParent {
         _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut (
-                 dyn FnMut(
+        _hit_child: &mut dyn FnMut(
             usize,
             Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
             Option<Matrix4>,
-        ) -> bool
-                     + Send
-                     + Sync
-             ),
+        ) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }

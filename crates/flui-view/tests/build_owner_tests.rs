@@ -6,7 +6,7 @@
 use flui_foundation::ElementId;
 use flui_interaction::{FocusManager, InteractionLane, PointerTarget};
 use flui_objects::RenderSizedBox;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     BuildOwner, ElementTree, RebuildReason, RenderObjectContext, RenderObjectContextError,
@@ -151,7 +151,7 @@ fn detached_render_object_context_reports_inactive_realm() {
 fn render_object_context_reaches_create_and_update_from_build_owner() {
     let lane = InteractionLane::try_new().expect("interaction lane");
     let handle = lane.dispatch_handle();
-    let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+    let pipeline = PipelineCell::new(PipelineOwner::new());
     let create_count = Arc::new(AtomicUsize::new(0));
     let update_count = Arc::new(AtomicUsize::new(0));
     let unmount_count = Arc::new(AtomicUsize::new(0));
@@ -170,7 +170,7 @@ fn render_object_context_reaches_create_and_update_from_build_owner() {
     lane.enter(|| {
         let root = tree.mount_root_with_pipeline_owner(
             &first,
-            Some(Arc::clone(&pipeline)),
+            Some(pipeline.clone()),
             &mut owner.element_owner_mut(),
         );
         tree.update(root, &second, &mut owner.element_owner_mut());

@@ -1048,7 +1048,7 @@ fn positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack() {
     });
     overlay.insert(&inner_stack, &InsertPosition::Top);
     let harness = mount(Overlay::new(overlay.clone()));
-    let positioned = sized_box_origin(&harness.pipeline_owner().read());
+    let positioned = harness.pipeline_owner().with(sized_box_origin);
 
     assert_eq!(
         positioned,
@@ -1067,7 +1067,7 @@ fn positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack() {
     });
     bare_overlay.insert(&bare, &InsertPosition::Top);
     let bare_harness = mount(Overlay::new(bare_overlay.clone()));
-    let dropped = sized_box_origin(&bare_harness.pipeline_owner().read());
+    let dropped = bare_harness.pipeline_owner().with(sized_box_origin);
 
     assert_eq!(
         dropped,

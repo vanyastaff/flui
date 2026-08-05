@@ -8,13 +8,13 @@
 //! own `WidgetsBinding` and `PipelineOwner`, so it never shares mutable UI
 //! state with the host's `UiRealm`.
 
+#[cfg(test)]
 use std::sync::Arc;
 
 use flui_layer::Scene;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_types::{Size, geometry::px};
 use flui_view::{StatelessView, View, WidgetsBinding};
-use parking_lot::RwLock;
 
 /// Log messages via Android logcat (or stderr on other platforms).
 ///
@@ -60,7 +60,7 @@ fn log(msg: &str) {
 #[allow(missing_debug_implementations)]
 pub struct PluginPipeline {
     widgets: WidgetsBinding,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
     #[cfg(test)]
     frame_boundary_probe: Option<Box<dyn FnMut() + Send>>,
 }
@@ -92,10 +92,10 @@ impl PluginPipeline {
         V: View + StatelessView + Clone + Send + Sync + 'static,
     {
         let widgets = WidgetsBinding::new();
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
 
         // Connect WidgetsBinding to PipelineOwner
-        widgets.set_pipeline_owner(Arc::clone(&pipeline_owner));
+        widgets.set_pipeline_owner(pipeline_owner.clone());
 
         widgets.with_global_key_registry(|| {
             widgets
@@ -109,14 +109,13 @@ impl PluginPipeline {
         });
 
         // Diagnostic: verify pipeline state after mount
-        {
-            let owner = pipeline_owner.read();
+        pipeline_owner.with(|owner| {
             let has_root = owner.root_id().is_some();
             let tree_len = owner.render_tree().len();
             log(&format!(
                 "mount complete: root_id={has_root}, render_tree_len={tree_len}, size={width}x{height}"
             ));
-        }
+        });
 
         Self {
             widgets,
@@ -163,14 +162,13 @@ impl PluginPipeline {
             // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. On
             // error we log and emit an empty Scene so the host's opaque
             // pointer stays valid.
-            let layer_tree = {
-                let mut guard = pipeline_owner.write();
+            let layer_tree = pipeline_owner.with_mut(|guard| {
                 if let Some(root_id) = guard.root_id() {
                     guard.mark_needs_paint(root_id);
                 } else {
                     log("draw_frame: WARNING — no root_id in pipeline");
                 }
-                let owner = std::mem::take(&mut *guard);
+                let owner = std::mem::take(guard);
                 let (owner, result) = owner.run_frame();
                 *guard = owner;
                 match result {
@@ -180,7 +178,7 @@ impl PluginPipeline {
                         None
                     }
                 }
-            };
+            });
 
             // Phase 3: Extract Scene from LayerTree
             let size = Size::new(px(width), px(height));

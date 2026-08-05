@@ -15,11 +15,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::RenderId;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_types::Size;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use super::binding::TransitionGroup;
 use super::navigator::{Navigator, NavigatorHandle};
@@ -435,25 +435,26 @@ fn route_subtree_names_the_page_anchor_not_the_transition_offstage_or_theater() 
 
     let RouteSubtree { render_id, .. } = navigator.route_subtree(pushed).expect("mounted");
     let owner = harness.pipeline_owner();
-    let owner = owner.read();
-    let tree = owner.render_tree();
+    owner.with(|owner| {
+        let tree = owner.render_tree();
 
-    assert!(is_render(&owner, render_id, "RenderSubtreeAnchor"));
+        assert!(is_render(owner, render_id, "RenderSubtreeAnchor"));
 
-    let parent = tree.parent(render_id).expect("the anchor has a parent");
-    assert!(
-        is_render(&owner, parent, "RenderOpacity"),
-        "the anchor sits *below* the transitions, so it never moves with them"
-    );
+        let parent = tree.parent(render_id).expect("the anchor has a parent");
+        assert!(
+            is_render(owner, parent, "RenderOpacity"),
+            "the anchor sits *below* the transitions, so it never moves with them"
+        );
 
-    let children = tree.children(render_id);
-    assert_eq!(children.len(), 1);
-    assert!(
-        is_render(&owner, children[0], "RenderConstrainedBox"),
-        "and *above* the page — `SizedBox` builds a RenderConstrainedBox"
-    );
+        let children = tree.children(render_id);
+        assert_eq!(children.len(), 1);
+        assert!(
+            is_render(owner, children[0], "RenderConstrainedBox"),
+            "and *above* the page — `SizedBox` builds a RenderConstrainedBox"
+        );
 
-    assert_eq!(owner.box_size(render_id), Some(SCREEN));
+        assert_eq!(owner.box_size(render_id), Some(SCREEN));
+    });
 }
 
 /// **The two-stage contract.** A `RouteSubtree` resolves from `attach`, which
@@ -480,7 +481,7 @@ fn route_subtree_ids_are_published_before_layout_commits() {
     struct Probe {
         navigator: NavigatorHandle,
         route: RouteId,
-        owner: Arc<RwLock<PipelineOwner>>,
+        owner: PipelineCell,
         seen: Arc<Mutex<Vec<Sighting>>>,
     }
 
@@ -493,11 +494,11 @@ fn route_subtree_ids_are_published_before_layout_commits() {
     impl StatelessView for Probe {
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
             let subtree = self.navigator.route_subtree(self.route);
-            let owner = self
+            // `with` panics (BUG) if the owner is checked out via `with_mut`
+            // elsewhere — it must not be, mid `build_scope`.
+            let size = self
                 .owner
-                .try_read()
-                .expect("BUG: the pipeline owner is not write-locked during build_scope");
-            let size = subtree.and_then(|s| owner.box_size(s.render_id));
+                .with(|owner| subtree.and_then(|s| owner.box_size(s.render_id)));
             self.seen.lock().push((subtree, size));
             SizedBox::new(30.0, 18.0)
         }
@@ -511,7 +512,7 @@ fn route_subtree_ids_are_published_before_layout_commits() {
     // The id must exist before the page builder can name it, so push a route whose
     // page closure captures it — `RouteId::next()` is what `push` will mint.
     let route_cell: Arc<Mutex<Option<RouteId>>> = Arc::new(Mutex::new(None));
-    let probe_parts = (navigator.clone(), Arc::clone(&owner), Arc::clone(&seen));
+    let probe_parts = (navigator.clone(), owner.clone(), Arc::clone(&seen));
     let route_for_page = Arc::clone(&route_cell);
     let _result = navigator.push(PageRoute::<i32>::new(move |_ctx, _a, _s| {
         let route = route_for_page
@@ -520,7 +521,7 @@ fn route_subtree_ids_are_published_before_layout_commits() {
         Probe {
             navigator: probe_parts.0.clone(),
             route,
-            owner: Arc::clone(&probe_parts.1),
+            owner: probe_parts.1.clone(),
             seen: Arc::clone(&probe_parts.2),
         }
         .boxed()
@@ -531,7 +532,7 @@ fn route_subtree_ids_are_published_before_layout_commits() {
     // What the post-frame callback of the very same frame sees.
     let after_layout: Arc<Mutex<Option<Size>>> = Arc::new(Mutex::new(None));
     let after_cb = Arc::clone(&after_layout);
-    let owner_cb = Arc::clone(&owner);
+    let owner_cb = owner.clone();
     let navigator_cb = navigator.clone();
     let post_frame = navigator
         .post_frame_handle()
@@ -540,7 +541,8 @@ fn route_subtree_ids_are_published_before_layout_commits() {
         post_frame
             .schedule_local(move |_| {
                 let subtree = navigator_cb.route_subtree(pushed);
-                *after_cb.lock() = subtree.and_then(|s| owner_cb.read().box_size(s.render_id));
+                *after_cb.lock() =
+                    subtree.and_then(|s| owner_cb.with(|owner| owner.box_size(s.render_id)));
             })
             .expect("owner-local post-frame lane is active");
     });

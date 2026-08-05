@@ -964,8 +964,7 @@ fn feedback_origin(scoped: &LaidOut) -> Point {
         .expect("the feedback layer's SizedBox must be mounted");
     scoped
         .pipeline_owner()
-        .read()
-        .local_to_global(target, Point::ZERO, None)
+        .with(|owner| owner.local_to_global(target, Point::ZERO, None))
         .expect("committed layout")
 }
 

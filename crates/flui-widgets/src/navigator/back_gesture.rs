@@ -355,7 +355,7 @@ impl BackGestureRuntime {
             .navigator
             .route_subtree(self.route)
             .zip(self.navigator.render_tree())
-            .and_then(|(subtree, owner)| owner.read().box_size(subtree.render_id))
+            .and_then(|(subtree, owner)| owner.with(|owner| owner.box_size(subtree.render_id)))
             .map_or(BACK_GESTURE_WIDTH, |size| size.width.0);
         width.max(1.0)
     }

@@ -40,7 +40,7 @@ use flui_foundation::RenderId;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Size;
 use flui_view::prelude::*;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use super::navigator::{Navigator, NavigatorHandle};
 use super::overlay_route::{RouteAnimation, SimpleRoute};
@@ -84,7 +84,7 @@ fn a_route_forced_offstage_has_committed_geometry_in_the_same_frames_post_frame_
 
     let owner = harness.pipeline_owner();
     assert!(
-        offstage_nodes(&owner.read()).is_empty(),
+        owner.with(offstage_nodes).is_empty(),
         "the seeded SimpleRoute has no ModalRoute Offstage wrapper"
     );
 
@@ -96,7 +96,7 @@ fn a_route_forced_offstage_has_committed_geometry_in_the_same_frames_post_frame_
     modal.set_offstage(true);
 
     assert!(
-        offstage_nodes(&owner.read()).is_empty(),
+        owner.with(offstage_nodes).is_empty(),
         "the pushed route must not be laid out until a frame runs — otherwise this \\
          test would pass on stale geometry"
     );
@@ -107,17 +107,24 @@ fn a_route_forced_offstage_has_committed_geometry_in_the_same_frames_post_frame_
 
     let calls_cb = Arc::clone(&calls);
     let observed_cb = Arc::clone(&observed);
-    let owner_cb: Arc<RwLock<PipelineOwner>> = Arc::clone(&owner);
-    harness
-        .scheduler()
-        .add_post_frame_callback(Box::new(move |_timing| {
-            calls_cb.fetch_add(1, Ordering::SeqCst);
-            let owner = owner_cb.read();
-            *observed_cb.lock() = offstage_nodes(&owner)
-                .into_iter()
-                .map(|id| (id, owner.box_size(id)))
-                .collect();
-        }));
+    let owner_cb = owner.clone();
+    // `PipelineCell` is `!Send`, so this callback must go through
+    // `schedule_local` (same-thread, runtime-checked) rather than
+    // `add_post_frame_callback` (`Send`-bound, for cross-thread wake).
+    let post_frame_handle = harness.post_frame_handle();
+    harness.enter_owner_scope(|| {
+        post_frame_handle
+            .schedule_local(move |_timing| {
+                calls_cb.fetch_add(1, Ordering::SeqCst);
+                *observed_cb.lock() = owner_cb.with(|owner| {
+                    offstage_nodes(owner)
+                        .into_iter()
+                        .map(|id| (id, owner.box_size(id)))
+                        .collect()
+                });
+            })
+            .expect("schedule_local must succeed on the owner thread");
+    });
 
     // One real frame, through `HeadlessBinding::pump_frame`. The callback is never
     // invoked by this test.
@@ -164,15 +171,19 @@ fn the_offstage_routes_committed_geometry_is_real_not_zero() {
 
     let observed: Arc<Mutex<Option<Size>>> = Arc::new(Mutex::new(None));
     let observed_cb = Arc::clone(&observed);
-    let owner_cb = Arc::clone(&owner);
-    harness
-        .scheduler()
-        .add_post_frame_callback(Box::new(move |_| {
-            let owner = owner_cb.read();
-            *observed_cb.lock() = offstage_nodes(&owner)
-                .first()
-                .and_then(|id| owner.box_size(*id));
-        }));
+    let owner_cb = owner.clone();
+    let post_frame_handle = harness.post_frame_handle();
+    harness.enter_owner_scope(|| {
+        post_frame_handle
+            .schedule_local(move |_| {
+                *observed_cb.lock() = owner_cb.with(|owner| {
+                    offstage_nodes(owner)
+                        .first()
+                        .and_then(|id| owner.box_size(*id))
+                });
+            })
+            .expect("schedule_local must succeed on the owner thread");
+    });
 
     harness.tick();
 

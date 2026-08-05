@@ -3,21 +3,15 @@
 //! This module provides efficient storage and tree operations for render
 //! objects. Implements `flui-tree` traits for unified tree interface.
 
-use std::sync::Arc;
-
 use flui_foundation::RenderId;
 use flui_tree::{
     iter::{AllSiblings, Ancestors, DescendantsWithDepth},
     traits::{TreeNav, TreeRead, TreeWrite},
 };
-use parking_lot::RwLock;
 use slab::Slab;
 
 use super::node::RenderNode;
-use crate::{
-    pipeline::PipelineOwner,
-    protocol::{BoxProtocol, RenderObject, SliverProtocol},
-};
+use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
 
 // ============================================================================
 // RenderTree
@@ -30,8 +24,10 @@ use crate::{
 ///
 /// # Thread Safety
 ///
-/// RenderTree itself is `Send + Sync`. For multi-threaded access, wrap in
-/// `Arc<RwLock<RenderTree>>`.
+/// RenderTree is deliberately `!Send + !Sync`: it is owned by
+/// exactly one [`PipelineOwner`](crate::pipeline::PipelineOwner), checked
+/// out through exactly one
+/// [`PipelineCell`](crate::pipeline::PipelineCell) on exactly one thread.
 ///
 /// # Example
 ///
@@ -62,9 +58,6 @@ pub struct RenderTree {
 
     /// Root node ID (None if tree is empty).
     root: Option<RenderId>,
-
-    /// Pipeline owner for dirty scheduling (optional).
-    owner: Option<Arc<RwLock<PipelineOwner>>>,
 }
 
 /// Materialises disjoint `&mut RenderNode` borrows for the given slab
@@ -129,7 +122,6 @@ impl RenderTree {
             nodes: Slab::new(),
             generations: Vec::new(),
             root: None,
-            owner: None,
         }
     }
 
@@ -139,7 +131,6 @@ impl RenderTree {
             nodes: Slab::with_capacity(capacity),
             generations: Vec::with_capacity(capacity),
             root: None,
-            owner: None,
         }
     }
 
@@ -210,47 +201,6 @@ impl RenderTree {
             .expect("render slot generation overflow: slot recycled u32::MAX times");
         *slot = core::num::NonZeroU32::new(next)
             .expect("generation+1 of a NonZeroU32 is always non-zero");
-    }
-
-    // ========================================================================
-    // Pipeline Owner
-    // ========================================================================
-
-    /// Returns the pipeline owner.
-    #[inline]
-    pub fn owner(&self) -> Option<&Arc<RwLock<PipelineOwner>>> {
-        // PORT-CHECK-OK-SP6: RenderTree owner accessor; pre-existing SP-6
-        self.owner.as_ref()
-    }
-
-    /// Stores the pipeline owner reference.
-    ///
-    /// # Semantics
-    ///
-    /// This is a **store-only** operation: existing nodes already in the tree
-    /// are NOT walked, not attached to the new owner, and not notified of the
-    /// owner change. The caller is responsible for the attach/detach
-    /// lifecycle. Two recommended patterns:
-    ///
-    /// 1. **Empty-tree set**: call [`set_owner`](Self::set_owner) BEFORE any
-    ///    nodes are inserted. Subsequent inserts attach to the stored owner
-    ///    via the regular insert path.
-    /// 2. **Per-node attach**: use [`PipelineOwner`]'s own insert /
-    ///    `add_node_needing_*` registration methods directly when adding
-    ///    nodes to an already-owned tree.
-    ///
-    /// # Documentation note
-    ///
-    /// An earlier version of this docstring claimed this method would
-    /// attach all existing nodes to the new owner, but the implementation
-    /// never did that — it silently no-ops on nodes already in the tree.
-    /// This doc has been corrected to describe the actual (store-only)
-    /// behavior rather than the aspirational one. Full Flutter parity
-    /// (`RenderObject::attach`'s recursive subtree walk) is still pending
-    /// work: it needs an `attached: AtomicBool` on `RenderState<P>::flags`
-    /// plus owner-dirty-list re-registration plumbing that doesn't exist yet.
-    pub fn set_owner(&mut self, owner: Option<Arc<RwLock<PipelineOwner>>>) {
-        self.owner = owner;
     }
 
     // ========================================================================
@@ -982,23 +932,17 @@ impl RenderTree {
     }
 }
 
-// Send + Sync auto-derive.
+// RenderTree is deliberately `!Send + !Sync`.
 //
-// A prior refactor removed the `RwLock<Box<dyn RenderObject<P>>>` field
-// on `RenderEntry<P>` and replaced it with plain `Box<dyn RenderObject<P>>`.
-// All transitive components are Send + Sync:
-//   - Slab<RenderNode> auto-derives Send + Sync from RenderNode.
-//   - RenderNode is an enum of RenderEntry<P>; each entry holds a plain
-//     Box<dyn RenderObject<P>>, RenderState<P> (lock-free atomics + OnceCell),
-//     and NodeLinks (POD).
-//   - Box<dyn RenderObject<P>> is Send + Sync because the trait requires
-//     `Send + Sync + 'static` (traits/render_object.rs).
-//   - Option<RenderId> and Option<Arc<RwLock<PipelineOwner>>> are Send + Sync.
-// No `unsafe impl` is required; the previous `unsafe impl Send/Sync for
-// RenderTree` block was load-bearing only because of the `RwLock` interior
-// mutability around `Box<dyn>`. With that gone, Rust's auto-derivation does
-// the right thing and produces the same `Send + Sync` reachability without
-// the unsafe carve-out.
+// `RenderObject<P>`/`RenderSliver`/`ParentData` no longer require
+// `Send + Sync` (traits/render_object.rs, traits/render_sliver.rs,
+// parent_data/base.rs) -- a render tree belongs to exactly one
+// `PipelineOwner`, checked out through exactly one `PipelineCell` on
+// exactly one thread, so there is no cross-thread mutable access left to
+// guard. `Box<dyn RenderObject<P>>` auto-propagates `!Send`/`!Sync` up
+// through `RenderNode`/`Slab<RenderNode>` to `RenderTree` itself -- no
+// `unsafe impl` needed in either direction; Rust's auto-trait
+// non-derivation does the right thing.
 //
 // See `docs/PORT.md` Refusal trigger 1 and
 // `crates/flui-rendering/ARCHITECTURE.md` for the rationale.
@@ -1133,9 +1077,17 @@ impl TreeNav<RenderId> for RenderTree {
 mod tests {
     use flui_tree::Leaf;
     use flui_types::{Size, geometry::px};
+    use static_assertions::assert_not_impl_any;
 
     use super::*;
     use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+    // `RenderTree` stores `Box<dyn RenderObject>`, and `RenderObject` dropped
+    // its `Send + Sync` supertrait bound as part of the `PipelineCell` port —
+    // a stray `unsafe impl Send`/`Sync` reappearing here would let a
+    // `RenderTree` (and the `!Send` objects inside it) cross threads under
+    // this crate's own nose. Pinned `!Send + !Sync`.
+    assert_not_impl_any!(RenderTree: Send, Sync);
 
     /// Minimal leaf stub — concrete objects live in `flui_objects`.
     /// This test only needs "something with RenderObject<BoxProtocol>" to

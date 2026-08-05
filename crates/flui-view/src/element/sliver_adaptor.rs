@@ -46,8 +46,8 @@ use std::{rc::Rc, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::{RenderSliverGridLazy, RenderSliverList};
-use flui_rendering::{pipeline::PipelineOwner, protocol::SliverProtocol};
-use parking_lot::{Mutex, RwLock};
+use flui_rendering::{pipeline::PipelineCell, protocol::SliverProtocol};
+use parking_lot::Mutex;
 
 use super::{
     Variable,
@@ -323,7 +323,7 @@ impl ChildManager for SliverListAdaptorManager {
         retain_last: usize,
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
     ) -> bool {
         let Some(host) = self.host_element_id else {
             // service called before mount: programming-contract violation;
@@ -769,30 +769,27 @@ impl std::fmt::Debug for SliverGridLazyAdaptorManager {
 }
 
 impl SliverGridLazyAdaptorManager {
-    fn clamp_render_item_count(
-        &mut self,
-        end_index: usize,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
-    ) -> bool {
+    fn clamp_render_item_count(&mut self, end_index: usize, pipeline: &PipelineCell) -> bool {
         let Some(render_id) = self.render_id else {
             return false;
         };
 
-        let mut owner = pipeline.write();
-        let Some(render_object) = owner
-            .render_tree_mut()
-            .get_mut(render_id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderSliverGridLazy>())
-        else {
-            return false;
-        };
+        pipeline.with_mut(|owner| {
+            let Some(render_object) = owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderSliverGridLazy>())
+            else {
+                return false;
+            };
 
-        if end_index < render_object.item_count() {
-            render_object.set_item_count(end_index);
-            true
-        } else {
-            false
-        }
+            if end_index < render_object.item_count() {
+                render_object.set_item_count(end_index);
+                true
+            } else {
+                false
+            }
+        })
     }
 }
 
@@ -804,7 +801,7 @@ impl ChildManager for SliverGridLazyAdaptorManager {
         retain_last: usize,
         tree: &mut crate::tree::ElementTree,
         owner: &mut ElementOwner<'_>,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
     ) -> bool {
         let Some(host) = self.host_element_id else {
             tracing::warn!(
@@ -1066,7 +1063,6 @@ mod tests {
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
     use flui_types::geometry::px;
-    use parking_lot::RwLock;
 
     use super::*;
     use crate::view::RenderView;
@@ -1355,18 +1351,13 @@ mod tests {
 
     /// Mount a render-bearing `ItemView` root wired to a fresh `PipelineOwner`.
     /// Returns `(tree, build_owner, pipeline, host_element_id)`.
-    fn host_tree() -> (
-        ElementTree,
-        BuildOwner,
-        Arc<RwLock<PipelineOwner>>,
-        ElementId,
-    ) {
-        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+    fn host_tree() -> (ElementTree, BuildOwner, PipelineCell, ElementId) {
+        let pipeline = PipelineCell::new(PipelineOwner::new());
         let mut build_owner = BuildOwner::new();
         let mut tree = ElementTree::new();
         let host = tree.mount_root_with_pipeline_owner(
             &ItemView,
-            Some(Arc::clone(&pipeline)),
+            Some(pipeline.clone()),
             &mut build_owner.element_owner_mut(),
         );
         (tree, build_owner, pipeline, host)

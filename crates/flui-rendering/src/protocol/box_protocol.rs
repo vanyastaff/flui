@@ -283,16 +283,14 @@ impl LayoutCapability for BoxLayout {
 /// Called when parent's `layout_child()` is invoked. The callback receives
 /// the child's `RenderId` and constraints, performs layout on the child via
 /// the RenderTree, and returns the child's size.
-pub type LayoutChildCallback<'a> =
-    &'a (dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size + Send + Sync);
+pub type LayoutChildCallback<'a> = &'a dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size;
 
 /// Callback for reading a laid-out child's actual baseline distance.
 ///
 /// Called after `layout_child` when a parent needs the post-layout baseline
 /// position (e.g. `RenderBaseline`, flex baseline cross-axis alignment).
-pub type ActualBaselineChildCallback<'a> = &'a (
-        dyn Fn(flui_foundation::RenderId, crate::traits::TextBaseline) -> Option<f32> + Send + Sync
-    );
+pub type ActualBaselineChildCallback<'a> =
+    &'a dyn Fn(flui_foundation::RenderId, crate::traits::TextBaseline) -> Option<f32>;
 
 /// Callback type for cross-protocol sliver child layout driven by a Box parent.
 ///
@@ -305,7 +303,7 @@ pub type ActualBaselineChildCallback<'a> = &'a (
 /// Mirrors [`LayoutChildCallback`] in contract; distinct because the input and
 /// output types differ (sliver protocol vs. box protocol).
 pub type SliverLayoutChildCallback<'a> =
-    &'a (dyn Fn(flui_foundation::RenderId, SliverConstraints) -> SliverGeometry + Send + Sync);
+    &'a dyn Fn(flui_foundation::RenderId, SliverConstraints) -> SliverGeometry;
 
 /// Callback for querying a Box child's intrinsic dimensions from within a Box
 /// parent's `perform_layout`.
@@ -323,11 +321,8 @@ pub type SliverLayoutChildCallback<'a> =
 ///
 /// Returns `0.0` when the callback cannot route the query (out-of-bounds index,
 /// error in child layout, or no callback wired on the Direct-storage path).
-pub type BoxChildIntrinsicCallback<'a> = &'a (
-        dyn Fn(flui_foundation::RenderId, crate::storage::IntrinsicDimension, f32) -> f32
-            + Send
-            + Sync
-    );
+pub type BoxChildIntrinsicCallback<'a> =
+    &'a dyn Fn(flui_foundation::RenderId, crate::storage::IntrinsicDimension, f32) -> f32;
 
 /// Per-child geometry storage owned by the typed wrapper when bridging
 /// from an erased context.
@@ -749,11 +744,12 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 ///
 /// # Thread-safety
 ///
-/// `Send + Sync` is required so the trait object can live inside a
-/// `LayoutContextApi`-implementing type whose own supertrait requires
-/// `Send + Sync` (see [`LayoutContextApi`] — the `Proxy` storage of
-/// [`BoxLayoutCtx`] carries `&mut dyn BoxLayoutCtxErased`).
-pub trait BoxLayoutCtxErased: Send + Sync {
+/// No longer `Send + Sync`-bound: the render tree this context walks is
+/// owned by exactly one `PipelineOwner` on exactly one thread, so
+/// `LayoutContextApi` (whose `Proxy` storage carries `&mut dyn
+/// BoxLayoutCtxErased`) dropped its own `Send + Sync` supertrait
+/// requirement along with it.
+pub trait BoxLayoutCtxErased {
     /// Box constraints from parent. Cheap copy (`BoxConstraints` is `Copy`).
     fn constraints(&self) -> BoxConstraints;
 
@@ -1366,11 +1362,8 @@ impl BoxHitTestEntry {
 ///   instead of silently discarded.
 ///
 /// Returns whether the child subtree was hit.
-// `Send + Sync` mechanically required by `HitTestContextApi`'s bounds
-// (inherited like `LayoutChildCallback`'s bound); the walk itself
-// is control-plane single-threaded.
 pub type HitTestChildCallback<'a> =
-    &'a mut (dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool + Send + Sync);
+    &'a mut dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool;
 
 /// Box-protocol hit-test context: local-space position, the entry
 /// path under construction, the live child recursion supplied by the

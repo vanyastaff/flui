@@ -32,8 +32,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use flui_foundation::RenderId;
-use flui_rendering::pipeline::PipelineOwner;
-use parking_lot::{Mutex, RwLock};
+use flui_rendering::pipeline::PipelineCell;
+use parking_lot::Mutex;
 
 use crate::{ElementOwner, tree::ElementTree};
 
@@ -97,6 +97,6 @@ pub(crate) trait ChildManager {
         retain_last: usize,
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
     ) -> bool;
 }

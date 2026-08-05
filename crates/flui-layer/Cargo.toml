@@ -56,6 +56,13 @@ thiserror = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
 flui-layer = { path = ".", version = "0.2.0", features = ["testing"] }
+# Compile-time Send pin: `SceneSnapshot` is the retained-seam value that
+# crosses from the (owner-thread-confined) rendering side to the raster/present
+# boundary, so it must stay `Send` regardless of what `PipelineCell` does
+# upstream. Not `Sync`: `Scene` carries `Box<dyn FnOnce() + Send>` composition
+# callbacks, which are `Send` but never `Sync`, and a snapshot is moved across
+# the boundary (one owner at a time), never shared by reference.
+static_assertions.workspace = true
 
 [[test]]
 name = "layer_it"

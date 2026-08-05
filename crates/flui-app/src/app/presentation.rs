@@ -18,12 +18,13 @@ use flui_platform::{
     CursorIcon,
     traits::{CursorError, PlatformWindow},
 };
+use flui_rendering::pipeline::PipelineCell;
+#[cfg(test)]
 use flui_rendering::pipeline::PipelineOwner;
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_types::HapticFeedback;
 #[cfg(feature = "hot-reload")]
 use flui_view::WidgetsBinding;
-use parking_lot::RwLock;
 
 use super::semantics_host::SemanticsHost;
 
@@ -114,7 +115,7 @@ pub(crate) enum PresentationLifecycle {
 pub(crate) struct PresentationState {
     id: PresentationId,
     lifecycle: Cell<PresentationLifecycle>,
-    pipeline: Arc<RwLock<PipelineOwner>>,
+    pipeline: PipelineCell,
     window: Weak<dyn PlatformWindow>,
     gestures: GestureBinding,
     focus: Rc<FocusManager>,
@@ -147,7 +148,7 @@ pub(crate) struct PresentationState {
 impl PresentationState {
     pub(crate) fn new(
         id: PresentationId,
-        pipeline: Arc<RwLock<PipelineOwner>>,
+        pipeline: PipelineCell,
         window: Arc<dyn PlatformWindow>,
     ) -> Self {
         let gestures = GestureBinding::new();
@@ -207,7 +208,7 @@ impl PresentationState {
     #[cfg(test)]
     pub(crate) fn new_for_test(
         id: PresentationId,
-        pipeline: Arc<RwLock<PipelineOwner>>,
+        pipeline: PipelineCell,
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
     ) -> Self {
         let window: Arc<dyn PlatformWindow> =
@@ -226,7 +227,7 @@ impl PresentationState {
     }
 
     #[must_use]
-    pub(crate) fn pipeline(&self) -> &Arc<RwLock<PipelineOwner>> {
+    pub(crate) fn pipeline(&self) -> &PipelineCell {
         &self.pipeline
     }
 
@@ -402,7 +403,15 @@ impl PresentationState {
     }
 
     /// Resolve an accessibility action through this presentation's exact
-    /// semantics owner, then invoke it after releasing the pipeline lock.
+    /// semantics owner, then invoke it after releasing the pipeline
+    /// checkout.
+    ///
+    /// `debug_assert!(is_free())` makes the Idle-commit contract this
+    /// dispatch site depends on an explicit, production-checked invariant:
+    /// `UiRealm::drain_commands` (the sole caller) only runs at a frame
+    /// boundary, so nothing should still hold the pipeline checked out by
+    /// the time a semantics-action handler runs. Registry:
+    /// `runtime-contract.toml`'s `semantics-two-phase-borrow` contract.
     pub(crate) fn dispatch_semantics_action(
         &self,
         request: SemanticsActionRequest,
@@ -413,10 +422,15 @@ impl PresentationState {
         ) {
             return Err(SemanticsActionError::PresentationClosed);
         }
-        let invocation = {
-            let pipeline = self.pipeline.read();
-            pipeline.resolve_semantics_action(request)?
-        };
+        let invocation = self
+            .pipeline
+            .with(|pipeline| pipeline.resolve_semantics_action(request))?;
+        debug_assert!(
+            self.pipeline.is_free(),
+            "BUG: the pipeline must be free before invoking a semantics-action handler — \
+             drain_commands runs only at a frame boundary, so nothing should still hold it \
+             checked out here"
+        );
         invocation.invoke();
         Ok(())
     }
@@ -434,7 +448,8 @@ impl PresentationState {
         match tier {
             HotReloadTier::HotReload => {
                 widgets.perform_reassemble();
-                self.pipeline.write().reassemble();
+                self.pipeline
+                    .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
                 tracing::info!(
                     { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
                     "hot reload reassembled element and render trees"
@@ -447,7 +462,8 @@ impl PresentationState {
                     "HotRestart root remount is not implemented; applying reassemble"
                 );
                 widgets.perform_reassemble();
-                self.pipeline.write().reassemble();
+                self.pipeline
+                    .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
                 true
             }
             HotReloadTier::FullRestart => {
@@ -520,7 +536,7 @@ mod tests {
     fn presentation() -> PresentationState {
         PresentationState::new_for_test(
             PresentationId::new_gen(0, NonZeroU32::MIN),
-            Arc::new(RwLock::new(PipelineOwner::new())),
+            PipelineCell::new(PipelineOwner::new()),
             None,
         )
     }
@@ -612,7 +628,7 @@ mod tests {
         let platform_window: Arc<dyn PlatformWindow> = window.clone();
         let presentation = PresentationState::new(
             PresentationId::new_gen(0, NonZeroU32::MIN),
-            Arc::new(RwLock::new(PipelineOwner::new())),
+            PipelineCell::new(PipelineOwner::new()),
             platform_window,
         );
         let position = Offset::new(Pixels(12.0), Pixels(8.0));
@@ -720,7 +736,7 @@ mod tests {
             // moving the only strong reference in.
             let presentation = PresentationState::new(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
-                Arc::new(RwLock::new(PipelineOwner::new())),
+                PipelineCell::new(PipelineOwner::new()),
                 Arc::clone(&window),
             );
 
@@ -746,7 +762,7 @@ mod tests {
             let window: Arc<dyn PlatformWindow> = Arc::new(BareWindow);
             let presentation = PresentationState::new(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
-                Arc::new(RwLock::new(PipelineOwner::new())),
+                PipelineCell::new(PipelineOwner::new()),
                 Arc::clone(&window),
             );
             drop(window);
@@ -761,7 +777,7 @@ mod tests {
         fn perform_haptic_feedback_on_a_window_without_haptics_is_a_silent_no_op() {
             let presentation = PresentationState::new(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
-                Arc::new(RwLock::new(PipelineOwner::new())),
+                PipelineCell::new(PipelineOwner::new()),
                 Arc::new(BareWindow),
             );
 

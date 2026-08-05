@@ -13,7 +13,6 @@ use std::any::TypeId;
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{AnimationController, Vsync};
@@ -31,7 +30,7 @@ use flui_objects::{
     RenderPhysicalModel, RenderPhysicalShape, RenderSliverOpacity, RenderTransform,
 };
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::storage::IntrinsicDimension;
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
@@ -41,19 +40,18 @@ use flui_types::styling::BorderRadius;
 use flui_types::{Offset, Pixels, Rect, Size};
 use flui_view::{BuildOwner, ElementTree, View};
 use flui_widgets::{FocusRoot, GestureArenaScope};
-use parking_lot::RwLock;
 
 /// A laid-out widget tree, holding the element + render trees alive (inside a
 /// tree-bound [`HeadlessBinding`]) so geometry can be queried after layout — and
 /// re-driven via [`LaidOut::pump`] / [`LaidOut::tick`] / [`LaidOut::pump_for`].
 ///
 /// `pipeline_owner` is the harness's own clone of the same shared
-/// `Arc<RwLock<PipelineOwner>>` the binding drives, so geometry reads observe the
+/// `PipelineCell` the binding drives, so geometry reads observe the
 /// frame the binding just ran.
 pub struct LaidOut {
     binding: HeadlessBinding,
     focus_manager: Rc<flui_interaction::FocusManager>,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
     root_render_id: RenderId,
     root_element_id: ElementId,
     /// Concrete identity of the caller's root below the presentation scopes.
@@ -97,7 +95,7 @@ pub fn tight(width: f32, height: f32) -> BoxConstraints {
 /// Build `root`, mount it as the render-tree root, and lay it out under
 /// `constraints`. Panics on any pipeline error so a regression is loud.
 pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     lay_out_with_pipeline_owner_and_binding(
         root,
         constraints,
@@ -111,7 +109,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
 pub fn lay_out_with_pipeline_owner(
     root: impl View,
     constraints: BoxConstraints,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
 ) -> LaidOut {
     lay_out_with_pipeline_owner_and_binding(
         root,
@@ -124,7 +122,7 @@ pub fn lay_out_with_pipeline_owner(
 fn lay_out_with_pipeline_owner_and_binding(
     root: impl View,
     constraints: BoxConstraints,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
     mut binding: HeadlessBinding,
 ) -> LaidOut {
     let logical_root_type = root.view_type_id();
@@ -142,7 +140,7 @@ fn lay_out_with_pipeline_owner_and_binding(
     let root_id = binding.enter_owner_scope(|| {
         let root_id = tree.mount_root_with_pipeline_owner(
             &root,
-            Some(Arc::clone(&pipeline_owner)),
+            Some(pipeline_owner.clone()),
             &mut build_owner.element_owner_mut(),
         );
 
@@ -157,8 +155,7 @@ fn lay_out_with_pipeline_owner_and_binding(
     // presentation render root. The pipeline must retain that parentless
     // anchor, while geometry probes keep their historical meaning: the
     // caller's logical render root immediately below it.
-    let (presentation_render_root_id, root_render_id) = {
-        let owner = pipeline_owner.read();
+    let (presentation_render_root_id, root_render_id) = pipeline_owner.with(|owner| {
         let render_tree = owner.render_tree();
         let mut roots = render_tree
             .iter()
@@ -178,14 +175,13 @@ fn lay_out_with_pipeline_owner_and_binding(
             "the presentation traversal anchor must wrap exactly one logical render root",
         );
         (root, children[0])
-    };
+    });
 
-    {
-        let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(presentation_render_root_id));
+    pipeline_owner.with_mut(|owner| {
+        owner.set_root_id(Some(presentation_render_root_id));
         // Setting fresh root constraints marks the root dirty for layout.
-        guard.set_root_constraints(Some(constraints));
-    }
+        owner.set_root_constraints(Some(constraints));
+    });
 
     {
         // Mirror the production frame path exactly: `HeadlessBinding::pump_frame`
@@ -201,9 +197,9 @@ fn lay_out_with_pipeline_owner_and_binding(
     }
 
     // Bootstrap done (mounted, rooted, first frame run): hand the three owners to
-    // the tree-bound binding, keeping our own clone of the shared pipeline-owner Arc
+    // the tree-bound binding, keeping our own clone of the shared `PipelineCell`
     // for geometry reads. `pump`/`tick`/`pump_for` route through the binding.
-    binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+    binding.bind_tree(build_owner, tree, pipeline_owner.clone());
 
     LaidOut {
         binding,
@@ -252,6 +248,18 @@ impl LaidOut {
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
         self.binding.enter_owner_scope(callback)
     }
+
+    /// The owner-local post-frame handle installed on this harness's
+    /// `BuildOwner`, so a test can `schedule_local` a callback that captures
+    /// the (`!Send`) [`PipelineCell`] — `PostFrameHandle::schedule`'s `Send`
+    /// bound cannot carry it.
+    pub fn post_frame_handle(&mut self) -> flui_scheduler::PostFrameHandle {
+        self.binding
+            .build_owner_mut()
+            .post_frame_handle()
+            .expect("post-frame handle installed by install_build_capabilities")
+            .clone()
+    }
     /// The render id of the root widget's render object.
     pub fn root(&self) -> RenderId {
         self.root_render_id
@@ -261,20 +269,21 @@ impl LaidOut {
     /// transparent traversal anchor. May differ from [`LaidOut::root`] if a
     /// rebuild remounted the caller's root subtree.
     pub fn current_root(&self) -> RenderId {
-        let owner = self.pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        let presentation_root = render_tree
-            .iter()
-            .map(|(id, _)| id)
-            .find(|id| render_tree.parent(*id).is_none())
-            .expect("a presentation render-tree root after layout");
-        let children = render_tree.children(presentation_root);
-        assert_eq!(
-            children.len(),
-            1,
-            "the presentation traversal anchor must wrap exactly one logical render root",
-        );
-        children[0]
+        self.pipeline_owner.with(|owner| {
+            let render_tree = owner.render_tree();
+            let presentation_root = render_tree
+                .iter()
+                .map(|(id, _)| id)
+                .find(|id| render_tree.parent(*id).is_none())
+                .expect("a presentation render-tree root after layout");
+            let children = render_tree.children(presentation_root);
+            assert_eq!(
+                children.len(),
+                1,
+                "the presentation traversal anchor must wrap exactly one logical render root",
+            );
+            children[0]
+        })
     }
 
     /// Number of nodes in the caller's logical render subtree.
@@ -284,17 +293,18 @@ impl LaidOut {
     /// infrastructure that owns and presents it.
     pub fn render_node_count(&self) -> usize {
         let root = self.current_root();
-        let owner = self.pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        let mut pending = vec![root];
-        let mut count = 0;
+        self.pipeline_owner.with(|owner| {
+            let render_tree = owner.render_tree();
+            let mut pending = vec![root];
+            let mut count = 0;
 
-        while let Some(id) = pending.pop() {
-            count += 1;
-            pending.extend(render_tree.children(id).iter().copied());
-        }
+            while let Some(id) = pending.pop() {
+                count += 1;
+                pending.extend(render_tree.children(id).iter().copied());
+            }
 
-        count
+            count
+        })
     }
 
     /// Number of elements currently in the element tree (mounted + soft-removed
@@ -308,7 +318,8 @@ impl LaidOut {
 
     /// The `i`-th render-tree child of `id`.
     pub fn child(&self, id: RenderId, index: usize) -> RenderId {
-        self.pipeline_owner.read().render_tree().children(id)[index]
+        self.pipeline_owner
+            .with(|owner| owner.render_tree().children(id)[index])
     }
 
     /// The first render-tree child of `id`.
@@ -318,19 +329,22 @@ impl LaidOut {
 
     /// The laid-out size of a render node.
     pub fn size(&self, id: RenderId) -> Size {
-        inspect::box_geometry(&self.pipeline_owner.read(), id)
+        self.pipeline_owner
+            .with(|owner| inspect::box_geometry(owner, id))
             .expect("render node should have box geometry after layout")
     }
 
     /// The committed sliver geometry of a render node.
     pub fn sliver_geometry(&self, id: RenderId) -> SliverGeometry {
-        inspect::sliver_geometry(&self.pipeline_owner.read(), id)
+        self.pipeline_owner
+            .with(|owner| inspect::sliver_geometry(owner, id))
             .expect("render node should have sliver geometry after layout")
     }
 
     /// The paint offset of a render node relative to its parent.
     pub fn offset(&self, id: RenderId) -> Offset {
-        inspect::render_offset(&self.pipeline_owner.read(), id)
+        self.pipeline_owner
+            .with(|owner| inspect::render_offset(owner, id))
             .expect("render node should have an offset after layout")
     }
 
@@ -344,22 +358,23 @@ impl LaidOut {
     /// every node between the root and `id` translates (no scale/rotation),
     /// which holds for the box-protocol trees these tests build.
     pub fn absolute_offset(&self, id: RenderId) -> Offset {
-        let owner = self.pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        let mut x = 0.0f32;
-        let mut y = 0.0f32;
-        let mut current = id;
-        loop {
-            if let Some(node_offset) = inspect::render_offset(&owner, current) {
-                x += node_offset.dx.get();
-                y += node_offset.dy.get();
+        self.pipeline_owner.with(|owner| {
+            let render_tree = owner.render_tree();
+            let mut x = 0.0f32;
+            let mut y = 0.0f32;
+            let mut current = id;
+            loop {
+                if let Some(node_offset) = inspect::render_offset(owner, current) {
+                    x += node_offset.dx.get();
+                    y += node_offset.dy.get();
+                }
+                match render_tree.parent(current) {
+                    Some(parent) => current = parent,
+                    None => break,
+                }
             }
-            match render_tree.parent(current) {
-                Some(parent) => current = parent,
-                None => break,
-            }
-        }
-        offset(x, y)
+            offset(x, y)
+        })
     }
 
     /// Drive one more frame after external state has changed — the headless
@@ -434,8 +449,8 @@ impl LaidOut {
 
     /// The shared pipeline owner, so a post-frame callback can read committed
     /// geometry from inside the frame.
-    pub fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
-        Arc::clone(&self.pipeline_owner)
+    pub fn pipeline_owner(&self) -> PipelineCell {
+        self.pipeline_owner.clone()
     }
 
     /// The committed opacity of a [`RenderOpacity`] node (e.g. the one a
@@ -446,18 +461,19 @@ impl LaidOut {
     /// implicit-animation tests' `< 1e-4` tolerance. Panics if `id` is
     /// neither.
     pub fn opacity(&self, id: RenderId) -> f32 {
-        let mut owner = self.pipeline_owner.write();
-        let node = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("render node should exist");
-        if let Some(render) = node.downcast_render_object_mut::<RenderOpacity>() {
-            return render.opacity();
-        }
-        if let Some(render) = node.downcast_render_object_mut::<RenderAnimatedOpacity>() {
-            return render.opacity_value();
-        }
-        panic!("render node should be a RenderOpacity or RenderAnimatedOpacity");
+        self.pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("render node should exist");
+            if let Some(render) = node.downcast_render_object_mut::<RenderOpacity>() {
+                return render.opacity();
+            }
+            if let Some(render) = node.downcast_render_object_mut::<RenderAnimatedOpacity>() {
+                return render.opacity_value();
+            }
+            panic!("render node should be a RenderOpacity or RenderAnimatedOpacity");
+        })
     }
 
     /// The [`RenderOpacity`] node's `paint_alpha()` — `None` when the node
@@ -471,15 +487,16 @@ impl LaidOut {
     pub fn opacity_paint_alpha(&self, id: RenderId) -> Option<u8> {
         use flui_rendering::traits::RenderBox;
 
-        let mut owner = self.pipeline_owner.write();
-        let node = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("render node should exist");
-        let render = node
-            .downcast_render_object_mut::<RenderOpacity>()
-            .expect("render node should be a RenderOpacity");
-        render.paint_alpha()
+        self.pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("render node should exist");
+            let render = node
+                .downcast_render_object_mut::<RenderOpacity>()
+                .expect("render node should be a RenderOpacity");
+            render.paint_alpha()
+        })
     }
 
     /// Whether the [`RenderOpacity`] node at `id` suppresses painting its
@@ -488,15 +505,16 @@ impl LaidOut {
     pub fn opacity_skip_paint(&self, id: RenderId) -> bool {
         use flui_rendering::traits::RenderBox;
 
-        let mut owner = self.pipeline_owner.write();
-        let node = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("render node should exist");
-        let render = node
-            .downcast_render_object_mut::<RenderOpacity>()
-            .expect("render node should be a RenderOpacity");
-        render.skip_paint()
+        self.pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("render node should exist");
+            let render = node
+                .downcast_render_object_mut::<RenderOpacity>()
+                .expect("render node should be a RenderOpacity");
+            render.skip_paint()
+        })
     }
 
     /// The [`RenderSliverOpacity`] node's `paint_alpha()` — the sliver-protocol
@@ -507,15 +525,16 @@ impl LaidOut {
     pub fn sliver_opacity_paint_alpha(&self, id: RenderId) -> Option<u8> {
         use flui_rendering::traits::RenderSliver;
 
-        let mut owner = self.pipeline_owner.write();
-        let node = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("render node should exist");
-        let render = node
-            .downcast_render_object_mut::<RenderSliverOpacity>()
-            .expect("render node should be a RenderSliverOpacity");
-        render.paint_alpha()
+        self.pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("render node should exist");
+            let render = node
+                .downcast_render_object_mut::<RenderSliverOpacity>()
+                .expect("render node should be a RenderSliverOpacity");
+            render.paint_alpha()
+        })
     }
 
     /// Whether the [`RenderSliverOpacity`] node at `id` suppresses painting
@@ -525,15 +544,16 @@ impl LaidOut {
     pub fn sliver_opacity_skip_paint(&self, id: RenderId) -> bool {
         use flui_rendering::traits::RenderSliver;
 
-        let mut owner = self.pipeline_owner.write();
-        let node = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("render node should exist");
-        let render = node
-            .downcast_render_object_mut::<RenderSliverOpacity>()
-            .expect("render node should be a RenderSliverOpacity");
-        render.skip_paint()
+        self.pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("render node should exist");
+            let render = node
+                .downcast_render_object_mut::<RenderSliverOpacity>()
+                .expect("render node should be a RenderSliverOpacity");
+            render.skip_paint()
+        })
     }
 
     /// The [`Clip`] behavior of a clip-family render node (`RenderClipRect`,
@@ -545,40 +565,42 @@ impl LaidOut {
     /// (`UnconstrainedBox`'s render object). Panics if `id` is none of the
     /// eight.
     pub fn clip_behavior(&self, id: RenderId) -> Clip {
-        let mut owner = self.pipeline_owner.write();
-        let node = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("render node should exist");
-        if let Some(render) = node.downcast_render_object_mut::<RenderClipRect>() {
-            return render.clip_behavior();
-        }
-        if let Some(render) = node.downcast_render_object_mut::<RenderClipRRect>() {
-            return render.clip_behavior();
-        }
-        if let Some(render) = node.downcast_render_object_mut::<RenderClipOval>() {
-            return render.clip_behavior();
-        }
-        if let Some(render) = node.downcast_render_object_mut::<RenderClipPath>() {
-            return render.clip_behavior();
-        }
-        if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
-            return render.clip_behavior();
-        }
-        if let Some(render) = node.downcast_render_object_mut::<RenderPhysicalModel>() {
-            return render.clip_behavior();
-        }
-        if let Some(render) = node.downcast_render_object_mut::<RenderPhysicalShape>() {
-            return render.clip_behavior();
-        }
-        if let Some(render) = node.downcast_render_object_mut::<RenderConstraintsTransformBox>() {
-            return render.clip_behavior();
-        }
-        panic!(
-            "render node should be a clip-family render object (Rect/RRect/Oval/Path), a \
+        self.pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("render node should exist");
+            if let Some(render) = node.downcast_render_object_mut::<RenderClipRect>() {
+                return render.clip_behavior();
+            }
+            if let Some(render) = node.downcast_render_object_mut::<RenderClipRRect>() {
+                return render.clip_behavior();
+            }
+            if let Some(render) = node.downcast_render_object_mut::<RenderClipOval>() {
+                return render.clip_behavior();
+            }
+            if let Some(render) = node.downcast_render_object_mut::<RenderClipPath>() {
+                return render.clip_behavior();
+            }
+            if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
+                return render.clip_behavior();
+            }
+            if let Some(render) = node.downcast_render_object_mut::<RenderPhysicalModel>() {
+                return render.clip_behavior();
+            }
+            if let Some(render) = node.downcast_render_object_mut::<RenderPhysicalShape>() {
+                return render.clip_behavior();
+            }
+            if let Some(render) = node.downcast_render_object_mut::<RenderConstraintsTransformBox>()
+            {
+                return render.clip_behavior();
+            }
+            panic!(
+                "render node should be a clip-family render object (Rect/RRect/Oval/Path), a \
              RenderFittedBox, a physical-model render object (Model/Shape), or a \
              RenderConstraintsTransformBox"
-        );
+            );
+        })
     }
 
     /// Whether the render node at `id` reported visual overflow at its last
@@ -588,59 +610,64 @@ impl LaidOut {
     /// paint that neither render object implements — see each type's own module
     /// doc). Panics if `id` is neither.
     pub fn has_visual_overflow(&self, id: RenderId) -> bool {
-        let mut owner = self.pipeline_owner.write();
-        let node = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("render node should exist");
-        if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
-            return render.has_visual_overflow();
-        }
-        if let Some(render) = node.downcast_render_object_mut::<RenderConstraintsTransformBox>() {
-            return render.has_visual_overflow();
-        }
-        panic!("render node should be a RenderFittedBox or RenderConstraintsTransformBox");
+        self.pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("render node should exist");
+            if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
+                return render.has_visual_overflow();
+            }
+            if let Some(render) = node.downcast_render_object_mut::<RenderConstraintsTransformBox>()
+            {
+                return render.has_visual_overflow();
+            }
+            panic!("render node should be a RenderFittedBox or RenderConstraintsTransformBox");
+        })
     }
 
     /// The installed [`BorderRadius`] of a `RenderClipRRect` node. Panics if
     /// `id` is not a `RenderClipRRect`, or it carries no border radius.
     pub fn clip_rrect_border_radius(&self, id: RenderId) -> BorderRadius {
-        let mut owner = self.pipeline_owner.write();
-        owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderClipRRect>())
-            .expect("render node should be a RenderClipRRect")
-            .border_radius()
-            .expect("RenderClipRRect should carry a border radius")
+        self.pipeline_owner.with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderClipRRect>())
+                .expect("render node should be a RenderClipRRect")
+                .border_radius()
+                .expect("RenderClipRRect should carry a border radius")
+        })
     }
 
     /// The x-scale (matrix `[0][0]`) of a [`RenderTransform`] node — the factor a
     /// `ScaleTransition` writes. Panics if `id` is not a `RenderTransform`.
     pub fn transform_scale(&self, id: RenderId) -> f32 {
-        let mut owner = self.pipeline_owner.write();
-        owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderTransform>())
-            .map(|render| render.transform().get(0, 0))
-            .expect("render node should be a RenderTransform")
+        self.pipeline_owner.with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderTransform>())
+                .map(|render| render.transform().get(0, 0))
+                .expect("render node should be a RenderTransform")
+        })
     }
 
     /// The Z-rotation (radians) of a [`RenderTransform`] node — what a
     /// `RotationTransition` writes — recovered from the matrix as
     /// `atan2(m[1][0], m[0][0])`. Panics if `id` is not a `RenderTransform`.
     pub fn transform_rotation(&self, id: RenderId) -> f32 {
-        let mut owner = self.pipeline_owner.write();
-        owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderTransform>())
-            .map(|render| {
-                let matrix = render.transform();
-                matrix.get(1, 0).atan2(matrix.get(0, 0))
-            })
-            .expect("render node should be a RenderTransform")
+        self.pipeline_owner.with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderTransform>())
+                .map(|render| {
+                    let matrix = render.transform();
+                    matrix.get(1, 0).atan2(matrix.get(0, 0))
+                })
+                .expect("render node should be a RenderTransform")
+        })
     }
 
     /// One intrinsic dimension of a box-protocol render node at `extent`,
@@ -661,8 +688,7 @@ impl LaidOut {
         extent: f32,
     ) -> f32 {
         self.pipeline_owner
-            .write()
-            .box_intrinsic_dimension(id, dimension, extent)
+            .with_mut(|owner| owner.box_intrinsic_dimension(id, dimension, extent))
             .expect("box_intrinsic_dimension should succeed for a live box-protocol node")
     }
 
@@ -670,26 +696,28 @@ impl LaidOut {
     /// node — the same matrix `paint_transform` hands the pipeline and
     /// `hit_test` inverts. Panics if `id` is not a `RenderFittedBox`.
     pub fn fitted_box_transform(&self, id: RenderId) -> Matrix4 {
-        let mut owner = self.pipeline_owner.write();
-        owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderFittedBox>())
-            .map(|render| render.effective_transform())
-            .expect("render node should be a RenderFittedBox")
+        self.pipeline_owner.with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderFittedBox>())
+                .map(|render| render.effective_transform())
+                .expect("render node should be a RenderFittedBox")
+        })
     }
 
     /// Whether a [`RenderImage`] node currently holds a decoded image (as
     /// opposed to the empty placeholder it paints nothing for). Panics if
     /// `id` is not a `RenderImage`.
     pub fn image_has_image(&self, id: RenderId) -> bool {
-        let mut owner = self.pipeline_owner.write();
-        owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
-            .map(|render| render.image().is_some())
-            .expect("render node should be a RenderImage")
+        self.pipeline_owner.with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+                .map(|render| render.image().is_some())
+                .expect("render node should be a RenderImage")
+        })
     }
 
     /// The forced logical width of a [`RenderImage`] node (`Image::width`),
@@ -697,13 +725,14 @@ impl LaidOut {
     /// reaches the render object it currently owns after a rebuild/reorder
     /// (not just at initial creation). Panics if `id` is not a `RenderImage`.
     pub fn image_width(&self, id: RenderId) -> Option<Pixels> {
-        let mut owner = self.pipeline_owner.write();
-        owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
-            .map(|render| render.width())
-            .expect("render node should be a RenderImage")
+        self.pipeline_owner.with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+                .map(|render| render.width())
+                .expect("render node should be a RenderImage")
+        })
     }
 
     /// The destination rectangle [`RenderImage::paint_rect_in`] computes for
@@ -714,13 +743,14 @@ impl LaidOut {
     /// `RenderImage`.
     pub fn image_paint_rect(&self, id: RenderId) -> Option<Rect> {
         let box_size = self.size(id);
-        let mut owner = self.pipeline_owner.write();
-        owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
-            .map(|render| render.paint_rect_in(box_size))
-            .expect("render node should be a RenderImage")
+        self.pipeline_owner.with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+                .map(|render| render.paint_rect_in(box_size))
+                .expect("render node should be a RenderImage")
+        })
     }
 
     /// The paint-space left edge of a `RenderParagraph` node's first laid-out
@@ -734,26 +764,27 @@ impl LaidOut {
     /// not a `RenderParagraph`, carries no text, or has no laid-out line —
     /// all of which indicate the paragraph was queried before layout ran.
     pub fn paragraph_first_line_left(&self, id: RenderId) -> f32 {
-        let mut owner = self.pipeline_owner.write();
-        let node = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("render node should exist");
-        let paragraph = node
-            .downcast_render_object_mut::<RenderParagraph>()
-            .expect("render node should be a RenderParagraph");
-        let text_len = paragraph
-            .painter()
-            .text()
-            .expect("a laid-out RenderParagraph carries a text span")
-            .to_plain_text()
-            .len();
-        paragraph
-            .painter()
-            .get_boxes_for_selection(0, text_len)
-            .first()
-            .map(|text_box| text_box.rect.left().get())
-            .expect("a laid-out non-empty paragraph has at least one selection box")
+        self.pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("render node should exist");
+            let paragraph = node
+                .downcast_render_object_mut::<RenderParagraph>()
+                .expect("render node should be a RenderParagraph");
+            let text_len = paragraph
+                .painter()
+                .text()
+                .expect("a laid-out RenderParagraph carries a text span")
+                .to_plain_text()
+                .len();
+            paragraph
+                .painter()
+                .get_boxes_for_selection(0, text_len)
+                .first()
+                .map(|text_box| text_box.rect.left().get())
+                .expect("a laid-out non-empty paragraph has at least one selection box")
+        })
     }
 
     /// The alphabetic baseline the `RenderParagraph` at `id` reported at its
@@ -770,19 +801,20 @@ impl LaidOut {
     ///
     /// Panics if `id` is not a laid-out `RenderParagraph`.
     pub fn text_baseline(&self, id: RenderId) -> f32 {
-        let mut owner = self.pipeline_owner.write();
-        let node = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("render node should exist");
-        let paragraph = node
-            .downcast_render_object_mut::<RenderParagraph>()
-            .expect("render node should be a RenderParagraph");
-        flui_rendering::traits::RenderBox::compute_distance_to_actual_baseline(
-            paragraph,
-            flui_rendering::traits::TextBaseline::Alphabetic,
-        )
-        .expect("a laid-out RenderParagraph reports an alphabetic baseline")
+        self.pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("render node should exist");
+            let paragraph = node
+                .downcast_render_object_mut::<RenderParagraph>()
+                .expect("render node should be a RenderParagraph");
+            flui_rendering::traits::RenderBox::compute_distance_to_actual_baseline(
+                paragraph,
+                flui_rendering::traits::TextBaseline::Alphabetic,
+            )
+            .expect("a laid-out RenderParagraph reports an alphabetic baseline")
+        })
     }
 
     /// Replace the root widget with `new_root` and drive a frame — Flutter's
@@ -815,26 +847,27 @@ impl LaidOut {
     /// happens to be monomorphized over.
     pub fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
         let logical_root = self.current_root();
-        let owner = self.pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        let mut logical_ids = HashSet::new();
-        let mut pending = vec![logical_root];
-        while let Some(id) = pending.pop() {
-            logical_ids.insert(id);
-            pending.extend(render_tree.children(id).iter().copied());
-        }
+        self.pipeline_owner.with(|owner| {
+            let render_tree = owner.render_tree();
+            let mut logical_ids = HashSet::new();
+            let mut pending = vec![logical_root];
+            while let Some(id) = pending.pop() {
+                logical_ids.insert(id);
+                pending.extend(render_tree.children(id).iter().copied());
+            }
 
-        let queried = base_type_name(render_type_name);
-        render_tree
-            .iter()
-            .filter_map(|(id, _node)| {
-                if !logical_ids.contains(&id) {
-                    return None;
-                }
-                let diagnostics = owner.debug_node_diagnostics(id)?;
-                (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
-            })
-            .collect()
+            let queried = base_type_name(render_type_name);
+            render_tree
+                .iter()
+                .filter_map(|(id, _node)| {
+                    if !logical_ids.contains(&id) {
+                        return None;
+                    }
+                    let diagnostics = owner.debug_node_diagnostics(id)?;
+                    (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
+                })
+                .collect()
+        })
     }
 
     /// The composited layer tree from the most recent pumped frame.
@@ -926,24 +959,25 @@ impl LaidOut {
     ///
     /// Panics when more than one `RenderParagraph` emits the same `text`.
     pub fn find_text(&self, text: &str) -> Option<RenderId> {
-        let owner = self.pipeline_owner.read();
-        let mut found: Option<RenderId> = None;
-        for (id, _node) in owner.render_tree().iter() {
-            let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
-                continue;
-            };
-            if diagnostics.name() != Some("RenderParagraph") {
-                continue;
+        self.pipeline_owner.with(|owner| {
+            let mut found: Option<RenderId> = None;
+            for (id, _node) in owner.render_tree().iter() {
+                let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
+                    continue;
+                };
+                if diagnostics.name() != Some("RenderParagraph") {
+                    continue;
+                }
+                if diagnostics.get_property("text") == Some(text) {
+                    assert!(
+                        found.is_none(),
+                        "find_text: multiple RenderParagraph nodes contain {text:?}"
+                    );
+                    found = Some(id);
+                }
             }
-            if diagnostics.get_property("text") == Some(text) {
-                assert!(
-                    found.is_none(),
-                    "find_text: multiple RenderParagraph nodes contain {text:?}"
-                );
-                found = Some(id);
-            }
-        }
-        found
+            found
+        })
     }
 
     /// Find every `RenderParagraph` node whose plain-text content equals
@@ -955,17 +989,18 @@ impl LaidOut {
     /// assertions counting sibling items). `find_text`'s own single-match
     /// behavior is unchanged. Returns an empty `Vec` when nothing matches.
     pub fn find_all_text(&self, text: &str) -> Vec<RenderId> {
-        let owner = self.pipeline_owner.read();
-        owner
-            .render_tree()
-            .iter()
-            .filter_map(|(id, _node)| {
-                let diagnostics = owner.debug_node_diagnostics(id)?;
-                (diagnostics.name() == Some("RenderParagraph")
-                    && diagnostics.get_property("text") == Some(text))
-                .then_some(id)
-            })
-            .collect()
+        self.pipeline_owner.with(|owner| {
+            owner
+                .render_tree()
+                .iter()
+                .filter_map(|(id, _node)| {
+                    let diagnostics = owner.debug_node_diagnostics(id)?;
+                    (diagnostics.name() == Some("RenderParagraph")
+                        && diagnostics.get_property("text") == Some(text))
+                    .then_some(id)
+                })
+                .collect()
+        })
     }
 
     /// Hit-test at a root-local position and return the canonical data-only
@@ -983,9 +1018,10 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let mut result = HitTestResult::new();
-        let owner = self.pipeline_owner.read();
-        owner.hit_test(position, &mut result);
-        result
+        self.pipeline_owner.with(|owner| {
+            owner.hit_test(position, &mut result);
+            result
+        })
     }
 
     /// Dispatch an already-constructed pointer event through the same complete

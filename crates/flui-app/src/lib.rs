@@ -52,8 +52,8 @@ pub use app::{
 pub use app::{run_app_android, run_app_android_with_config};
 // Bindings re-exports
 pub use bindings::{
-    GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
-    WidgetsBinding,
+    GestureBinding, PaintingBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding,
+    Scheduler, WidgetsBinding,
 };
 // Application identity is part of `AppConfig`; low-level subscriber/filter
 // controls remain in `flui-log` rather than leaking through this API surface.

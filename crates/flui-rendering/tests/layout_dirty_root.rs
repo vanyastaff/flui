@@ -553,45 +553,20 @@ fn sliver_node_surfaces_as_protocol_mismatch() {
 // SubtreeArena thread-affinity smoke
 // ============================================================================
 
-/// [`SubtreeArena`] (the replacement for `TreePtr`) carries the owning
-/// thread's `ThreadId` and panics with a documented diagnostic on
-/// cross-thread access via [`SubtreeArena::check_thread`].
-///
-/// This test verifies the legitimate worker-thread case: a pipeline
-/// run inside `std::thread::spawn` succeeds because `SubtreeArena`
-/// is constructed AND queried on the SAME (worker) thread per call.
-/// The pathological cross-thread case (`SubtreeArena` constructed
-/// on thread A, queried on thread B via a smuggled closure capture)
-/// cannot be exercised from integration tests because the type is
-/// private to `pipeline/owner.rs` — the guard is a defensive layer
-/// validated by code reading.
-#[test]
-fn subtree_borrows_worker_thread_pipeline_succeeds() {
-    let mut pipeline = fresh_layout_pipeline();
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let _child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("child insert must succeed");
-
-    let constraints = BoxConstraints::tight(Size::new(px(50.0), px(50.0)));
-
-    // Move pipeline into a worker thread, run layout there.
-    // SubtreeArena is constructed inside `layout_dirty_root` using
-    // the worker thread's id; subsequent `check_thread()` calls inside
-    // `layout_subtree_borrowed` are on the same worker thread; guard
-    // does NOT fire.
-    let join = std::thread::spawn(move || pipeline.layout_dirty_root(padding_id, constraints));
-
-    let result = join.join().expect("worker thread must not panic");
-    assert!(
-        result.is_ok(),
-        "single-threaded worker pipeline must succeed (SubtreeArena \
-         constructed AND queried on the same worker thread)",
-    );
-}
+// `subtree_borrows_worker_thread_pipeline_succeeds` used to prove that
+// handing a freshly-built, not-yet-shared `PipelineOwner` to a worker
+// thread and running layout there was a legitimate pattern -- as long as
+// `SubtreeArena` was constructed and queried on that same worker thread.
+// It no longer compiles, and that is the point: `PipelineOwner` stores a
+// `RenderTree` holding `Box<dyn RenderObject<P>>`, which is no longer
+// `Send` (a render object may now hold non-`Send` state). Moving a
+// `PipelineOwner` -- by value, not just by shared reference -- to any
+// thread other than the one it was created on is a compile error, full
+// stop; "single-owner, single-thread" is no longer a convention
+// `SubtreeArena::check_thread` merely encourages, it is the only shape
+// the type system allows. There is no successor test: the capability
+// this test exercised (worker-thread layout of an unshared owner) is
+// gone by design, not replaced.
 
 // ============================================================================
 // 4-level deep recursion (verifies pre-acquired subtree borrows

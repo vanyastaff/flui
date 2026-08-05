@@ -66,7 +66,7 @@ struct PostFrameProbeState {
 
 #[derive(Clone)]
 struct LocalPostFrameProbe {
-    pipeline: Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    pipeline: flui_rendering::pipeline::PipelineCell,
     observed_committed_geometry: Arc<AtomicBool>,
     desired_width: Arc<AtomicUsize>,
     rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
@@ -83,7 +83,7 @@ impl StatefulView for LocalPostFrameProbe {
 
     fn create_state(&self) -> Self::State {
         LocalPostFrameProbeState {
-            pipeline: Arc::clone(&self.pipeline),
+            pipeline: self.pipeline.clone(),
             observed_committed_geometry: Arc::clone(&self.observed_committed_geometry),
             desired_width: Arc::clone(&self.desired_width),
             rebuild: Arc::clone(&self.rebuild),
@@ -92,7 +92,7 @@ impl StatefulView for LocalPostFrameProbe {
 }
 
 struct LocalPostFrameProbeState {
-    pipeline: Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    pipeline: flui_rendering::pipeline::PipelineCell,
     observed_committed_geometry: Arc<AtomicBool>,
     desired_width: Arc<AtomicUsize>,
     rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
@@ -104,7 +104,7 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
         let handle = ctx
             .post_frame_handle()
             .expect("the binding must install a PostFrameHandle");
-        let pipeline = Arc::clone(&self.pipeline);
+        let pipeline = self.pipeline.clone();
         let observed = Arc::clone(&self.observed_committed_geometry);
         let owner_local = Rc::new(Cell::new(false));
         let callback_local = Rc::clone(&owner_local);
@@ -112,20 +112,21 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
         handle
             .schedule_local(move |_timing| {
                 callback_local.set(true);
-                let owner = pipeline.read();
-                let render_tree = owner.render_tree();
-                let root = render_tree
-                    .iter()
-                    .map(|(id, _)| id)
-                    .find(|id| render_tree.parent(*id).is_none())
-                    .expect("the mounted subtree should have a render root");
                 observed.store(
-                    callback_local.get()
-                        && owner.box_size(root)
-                            == Some(flui_types::Size::new(
-                                flui_types::geometry::px(64.0),
-                                flui_types::geometry::px(18.0),
-                            )),
+                    pipeline.with(|owner| {
+                        let render_tree = owner.render_tree();
+                        let root = render_tree
+                            .iter()
+                            .map(|(id, _)| id)
+                            .find(|id| render_tree.parent(*id).is_none())
+                            .expect("the mounted subtree should have a render root");
+                        callback_local.get()
+                            && owner.box_size(root)
+                                == Some(flui_types::Size::new(
+                                    flui_types::geometry::px(64.0),
+                                    flui_types::geometry::px(18.0),
+                                ))
+                    }),
                     Ordering::SeqCst,
                 );
             })
@@ -241,8 +242,20 @@ fn the_scheduled_callback_observes_this_frames_committed_layout() {
     let saw_committed_layout = Arc::new(AtomicBool::new(false));
     let saw = Arc::clone(&saw_committed_layout);
 
-    flui_scheduler::PostFrameHandle::new(&laid.binding_scheduler()).schedule(move |_| {
-        saw.store(pipeline.read().box_size(root).is_some(), Ordering::SeqCst);
+    // `PipelineCell` is `!Send`, so this callback cannot go through
+    // `PostFrameHandle::schedule` (its `Send` bound is for cross-thread
+    // wake). `schedule_local` enforces same-thread execution at runtime
+    // instead — same pattern as the `editable_text.rs` IME cursor loop.
+    let post_frame_handle = laid.post_frame_handle();
+    laid.enter_owner_scope(|| {
+        post_frame_handle
+            .schedule_local(move |_| {
+                saw.store(
+                    pipeline.with(|owner| owner.box_size(root).is_some()),
+                    Ordering::SeqCst,
+                );
+            })
+            .expect("schedule_local must succeed on the owner thread");
     });
 
     laid.pump_for(Duration::from_millis(16));
@@ -259,25 +272,24 @@ fn the_scheduled_callback_observes_this_frames_committed_layout() {
 /// test helper call immediately before scheduling.
 #[test]
 fn an_owner_local_post_frame_callback_observes_committed_geometry() {
-    let pipeline = Arc::new(parking_lot::RwLock::new(
-        flui_rendering::pipeline::PipelineOwner::new(),
-    ));
+    let pipeline =
+        flui_rendering::pipeline::PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
     let observed = Arc::new(AtomicBool::new(false));
     let desired_width = Arc::new(AtomicUsize::new(32));
     let rebuild = Arc::new(Mutex::new(None));
     let mut laid = crate::common::lay_out_with_pipeline_owner(
         LocalPostFrameProbe {
-            pipeline: Arc::clone(&pipeline),
+            pipeline: pipeline.clone(),
             observed_committed_geometry: Arc::clone(&observed),
             desired_width: Arc::clone(&desired_width),
             rebuild: Arc::clone(&rebuild),
         },
         loose(100.0),
-        Arc::clone(&pipeline),
+        pipeline.clone(),
     );
 
     assert_eq!(
-        pipeline.read().box_size(laid.root()),
+        pipeline.with(|owner| owner.box_size(laid.root())),
         Some(flui_types::Size::new(
             flui_types::geometry::px(32.0),
             flui_types::geometry::px(18.0),

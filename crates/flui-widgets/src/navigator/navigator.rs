@@ -137,7 +137,7 @@ struct NavigatorShared {
     /// post-frame handle — a `HeroController` then simply never measures, which is
     /// Flutter's `if (navigator == null) return;` (`heroes.dart:970`).
     post_frame: Mutex<Option<flui_scheduler::PostFrameHandle>>,
-    render_tree: Mutex<Option<Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>>>,
+    render_tree: Mutex<Option<flui_rendering::pipeline::PipelineCell>>,
 
     /// Whether the mounted `NavigatorState` currently holds the observers
     /// attached. Flutter's `NavigatorObserver._navigators[observer] != null`
@@ -1346,9 +1346,7 @@ impl NavigatorHandle {
     /// `navigator.context.findRenderObject()` (`heroes.dart:999`).
     ///
     /// `None` before mount and after unmount.
-    pub(crate) fn render_tree(
-        &self,
-    ) -> Option<Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+    pub(crate) fn render_tree(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
         self.shared.render_tree.lock().clone()
     }
 }

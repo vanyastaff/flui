@@ -484,10 +484,11 @@ fn requesting_focus_via_the_explicit_node_reveals_the_caret_after_a_tick() {
     );
     let editable = laid.find_by_render_type("RenderEditable");
     let show_caret_flag = |laid: &crate::common::LaidOut| -> Option<String> {
-        laid.pipeline_owner()
-            .read()
-            .debug_node_diagnostics(editable)
-            .and_then(|diagnostics| diagnostics.get_property("show_caret").map(str::to_string))
+        laid.pipeline_owner().with(|owner| {
+            owner
+                .debug_node_diagnostics(editable)
+                .and_then(|diagnostics| diagnostics.get_property("show_caret").map(str::to_string))
+        })
     };
 
     assert_eq!(

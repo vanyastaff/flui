@@ -194,12 +194,12 @@ use crate::harness;
 /// in the `flui-objects` render-object harness, applied here to a
 /// widget-level [`LaidOut::pipeline_owner`].
 fn descendant_property_f64(laid: &LaidOut, type_name: &str, property: &str) -> Option<f64> {
-    let owner = laid.pipeline_owner();
-    let owner = owner.read();
-    render_diagnostics(&owner)
-        .find_descendant_unique(type_name)
-        .ok()?
-        .get_property_f64(property)
+    laid.pipeline_owner().with(|owner| {
+        render_diagnostics(owner)
+            .find_descendant_unique(type_name)
+            .ok()?
+            .get_property_f64(property)
+    })
 }
 
 /// Default `Row` (no explicit alignment/size) lays out 3 equal children

@@ -20,16 +20,13 @@
 //! another acceptance test for a sample app, just a compile-and-mount
 //! smoke check for the facade surface itself.
 
-use std::sync::Arc;
-
 use flui::prelude::*;
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_types::Size;
 use flui_types::geometry::px;
 use flui_view::{BuildOwner, ElementTree};
-use parking_lot::RwLock;
 
 /// A trivial tree authored entirely off `flui::prelude::*` — the same import
 /// shape `src/lib.rs`'s crate-level doc-test demonstrates.
@@ -53,22 +50,21 @@ fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
     let binding = HeadlessBinding::new();
     let mut build_owner = BuildOwner::new();
     let mut tree = ElementTree::new();
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
 
     binding.install_build_capabilities(&mut build_owner);
 
     binding.enter_owner_scope(|| {
         let root_element = tree.mount_root_with_pipeline_owner(
             &FacadeSmokeApp,
-            Some(Arc::clone(&pipeline_owner)),
+            Some(pipeline_owner.clone()),
             &mut build_owner.element_owner_mut(),
         );
         build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
         build_owner.build_scope(&mut tree);
     });
 
-    let root_render_id = {
-        let owner = pipeline_owner.read();
+    let root_render_id = pipeline_owner.with(|owner| {
         let render_tree = owner.render_tree();
         let mut roots = render_tree
             .iter()
@@ -82,13 +78,12 @@ fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
             "expected exactly one render-tree root after mount"
         );
         root
-    };
+    });
 
-    {
-        let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(root_render_id));
-        guard.set_root_constraints(Some(root_constraints()));
-    }
+    pipeline_owner.with_mut(|owner| {
+        owner.set_root_id(Some(root_render_id));
+        owner.set_root_constraints(Some(root_constraints()));
+    });
 
     binding.enter_owner_scope(|| {
         build_owner

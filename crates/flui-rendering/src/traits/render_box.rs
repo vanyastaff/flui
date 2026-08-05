@@ -631,15 +631,11 @@ where
         position: crate::protocol::ProtocolPosition<BoxProtocol>,
         _child_count: usize,
         size: flui_types::Size,
-        hit_child: &mut (
-                 dyn FnMut(
+        hit_child: &mut dyn FnMut(
             usize,
             Option<crate::protocol::ProtocolPosition<BoxProtocol>>,
             Option<flui_types::Matrix4>,
-        ) -> bool
-                     + Send
-                     + Sync
-             ),
+        ) -> bool,
     ) -> HitTestOutcome {
         // The hit-test bridge: wrap the driver's child recursion in
         // the typed, arity-gated BoxHitTestContext and call the user's
@@ -676,9 +672,7 @@ where
         extent: f32,
         child_count: usize,
         child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
-        child_query: &mut (
-                 dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
-             ),
+        child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32,
     ) -> f32 {
         // The intrinsics bridge: wrap the driver's memoizing child
         // recursion in the typed ctx and dispatch the dimension to the
@@ -700,14 +694,10 @@ where
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
         child_count: usize,
         child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
-        child_query: &mut (
-                 dyn FnMut(
+        child_query: &mut dyn FnMut(
             usize,
             crate::context::DryLayoutChildRequest,
-        ) -> crate::context::DryLayoutChildResponse
-                     + Send
-                     + Sync
-             ),
+        ) -> crate::context::DryLayoutChildResponse,
     ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
         let mut ctx =
             crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_query);
@@ -720,14 +710,10 @@ where
         baseline: crate::traits::TextBaseline,
         child_count: usize,
         child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
-        child_query: &mut (
-                 dyn FnMut(
+        child_query: &mut dyn FnMut(
             usize,
             crate::context::DryBaselineChildRequest,
-        ) -> crate::context::DryBaselineChildResponse
-                     + Send
-                     + Sync
-             ),
+        ) -> crate::context::DryBaselineChildResponse,
     ) -> Option<f32> {
         let mut ctx =
             crate::context::BoxDryBaselineCtx::new(child_count, child_parent_data, child_query);

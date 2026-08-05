@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::prelude::*;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::HeadlessBinding;
@@ -56,21 +56,13 @@ impl RenderBox for FixedBox {
     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
 }
 
-fn binding_with_one_box() -> (
-    HeadlessBinding,
-    Arc<RwLock<PipelineOwner>>,
-    flui_foundation::RenderId,
-) {
+fn binding_with_one_box() -> (HeadlessBinding, PipelineCell, flui_foundation::RenderId) {
     binding_with_probe(FixedBox::default())
 }
 
 fn binding_with_probe(
     root_box: FixedBox,
-) -> (
-    HeadlessBinding,
-    Arc<RwLock<PipelineOwner>>,
-    flui_foundation::RenderId,
-) {
+) -> (HeadlessBinding, PipelineCell, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new();
     let root = owner.insert::<BoxProtocol>(Box::new(root_box));
     owner.set_root_id(Some(root));
@@ -81,9 +73,9 @@ fn binding_with_probe(
         px(200.0),
     )));
 
-    let pipeline = Arc::new(RwLock::new(owner));
+    let pipeline = PipelineCell::new(owner);
     let binding =
-        HeadlessBinding::with_tree(BuildOwner::new(), ElementTree::new(), Arc::clone(&pipeline));
+        HeadlessBinding::with_tree(BuildOwner::new(), ElementTree::new(), pipeline.clone());
     (binding, pipeline, root)
 }
 
@@ -95,7 +87,7 @@ fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
     let (mut binding, pipeline, root) = binding_with_one_box();
 
     assert_eq!(
-        pipeline.read().box_size(root),
+        pipeline.with(|owner| owner.box_size(root)),
         None,
         "nothing is laid out before the first frame"
     );
@@ -105,13 +97,28 @@ fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
 
     let observed_cb = Arc::clone(&observed);
     let calls_cb = Arc::clone(&calls);
-    let pipeline_cb = Arc::clone(&pipeline);
-    binding
-        .scheduler()
-        .add_post_frame_callback(Box::new(move |_timing| {
-            calls_cb.fetch_add(1, Ordering::SeqCst);
-            *observed_cb.write() = pipeline_cb.read().box_size(root);
-        }));
+    let pipeline_cb = pipeline.clone();
+    // `PipelineCell` is `!Send`, so this callback cannot go through
+    // `add_post_frame_callback` (its `Box<dyn Fn() + Send + Sync>` bound is for
+    // cross-thread wake, not owner-local frame callbacks). `schedule_local`
+    // enforces same-thread execution at runtime instead, matching the
+    // `editable_text.rs` IME cursor-loop pattern. It also requires its lane
+    // to be the active top scope at registration time, hence
+    // `enter_owner_scope`; the handle is cloned out first (it is
+    // `Clone + Send + Sync`) so the scope closure need not re-borrow `binding`.
+    let post_frame_handle = binding
+        .build_owner_mut()
+        .post_frame_handle()
+        .expect("post-frame handle installed by with_tree/bind_tree")
+        .clone();
+    binding.enter_owner_scope(|| {
+        post_frame_handle
+            .schedule_local(move |_timing| {
+                calls_cb.fetch_add(1, Ordering::SeqCst);
+                *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
+            })
+            .expect("schedule_local must succeed on the owner thread");
+    });
 
     binding.pump_frame(Duration::from_millis(16));
 
@@ -168,7 +175,7 @@ fn the_post_frame_callback_has_not_run_while_layout_is_still_uncommitted() {
     );
     assert!(fired.load(Ordering::SeqCst), "but it did run by frame end");
     assert_eq!(
-        pipeline.read().box_size(root),
+        pipeline.with(|owner| owner.box_size(root)),
         Some(Size::new(px(40.0), px(24.0)))
     );
 }

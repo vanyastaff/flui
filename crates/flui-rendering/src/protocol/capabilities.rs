@@ -119,9 +119,7 @@ pub enum ChildLayout<G> {
 }
 
 /// API for layout context operations.
-pub trait LayoutContextApi<'ctx, L: LayoutCapability + ?Sized, A: Arity, P: ParentData>:
-    Send + Sync
-{
+pub trait LayoutContextApi<'ctx, L: LayoutCapability + ?Sized, A: Arity, P: ParentData> {
     /// Gets the layout constraints from parent.
     fn constraints(&self) -> &L::Constraints;
 
@@ -191,9 +189,7 @@ pub trait HitTestCapability: Send + Sync + 'static {
 }
 
 /// API for hit test context operations.
-pub trait HitTestContextApi<'ctx, H: HitTestCapability + ?Sized, A: Arity, P: ParentData>:
-    Send + Sync
-{
+pub trait HitTestContextApi<'ctx, H: HitTestCapability + ?Sized, A: Arity, P: ParentData> {
     /// Gets the hit test position in local coordinates.
     fn position(&self) -> &H::Position;
 

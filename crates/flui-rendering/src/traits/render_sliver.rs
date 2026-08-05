@@ -58,7 +58,7 @@ use crate::{
 ///
 /// Implementations are automatically bridged to `RenderObject<SliverProtocol>`
 /// via blanket impl.
-pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static {
+pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -560,15 +560,11 @@ where
         position: crate::protocol::ProtocolPosition<SliverProtocol>,
         _child_count: usize,
         size: flui_types::Size,
-        hit_child: &mut (
-                 dyn FnMut(
+        hit_child: &mut dyn FnMut(
             usize,
             Option<crate::protocol::ProtocolPosition<SliverProtocol>>,
             Option<flui_types::Matrix4>,
-        ) -> bool
-                     + Send
-                     + Sync
-             ),
+        ) -> bool,
     ) -> HitTestOutcome {
         // The sliver hit gate is driver-owned (geometry / cross-axis
         // range), so `size` is threaded for signature uniformity but the

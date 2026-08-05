@@ -150,10 +150,13 @@ pub(super) struct SubtreeArena<'tree> {
     /// call stack.  This is the same invariant the former separate
     /// `Mutex<FxHashSet>` provided, now without the lock.
     ///
-    /// `AtomicBool` is `Sync`, so `SubtreeArena` stays `Send + Sync`
-    /// with **no new `unsafe impl`**.  `Relaxed` ordering suffices
-    /// because [`Self::check_thread`] already enforces single-thread
-    /// access; no cross-thread synchronisation is needed.
+    /// `AtomicBool` is `Sync` and needs no new `unsafe impl` of its own
+    /// here -- `SubtreeArena` as a whole is `!Send + !Sync` regardless
+    /// (see the interim pin in `tests`), transitively via
+    /// `pending_builds`'s `Box<dyn ParentData>`, not via this field.
+    /// `Relaxed` ordering suffices because [`Self::check_thread`] already
+    /// enforces single-thread access; no cross-thread synchronisation is
+    /// needed.
     by_id: HashMap<RenderId, (NodePtr, AtomicBool)>,
     #[cfg(any(test, feature = "testing"))]
     parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
@@ -161,11 +164,19 @@ pub(super) struct SubtreeArena<'tree> {
     /// mid-pass borrows could not insert synchronously — the re-entrant
     /// build contract's v1 next-frame backend (ADR-0003 Decision 2).
     /// `layout_dirty_root` drains this into the deferred-mutation queue
-    /// after the walk releases its borrows.  `Mutex` because the layout-
-    /// child closure requires `&SubtreeArena: Send + Sync`.  Empty unless
-    /// a lazy sliver requests a not-yet-built child.
+    /// after the walk releases its borrows.  `Mutex`, not `RefCell`: at the
+    /// time this shipped, the layout-child closure required
+    /// `&SubtreeArena: Send + Sync` (no longer true after the `PipelineCell`
+    /// port dropped that bound -- `SubtreeArena` itself is `!Send + !Sync`
+    /// now, transitively via this very field's `Box<dyn ParentData>`; see
+    /// the interim pin in `tests`). Downgrading to `RefCell` now that
+    /// nothing requires the lock is a follow-up, not done here. Empty
+    /// unless a lazy sliver requests a not-yet-built child.
     pending_builds: Mutex<Vec<crate::protocol::sliver_protocol::PendingBuild>>,
-    /// Symmetric remove sink (U3c D2): `(parent, child)` pairs of children
+    /// Symmetric remove sink pairing the deferred-build queue above with a
+    /// deferred-dispose path (ADR-0003 Decision 2's re-entrant build contract
+    /// needed both halves to keep a lazy sliver's child band bounded, not
+    /// just growing on build): `(parent, child)` pairs of children
     /// the consumer wants evicted from the tree.  The `parent` is the
     /// sliver's own `node_id` — **not** the walk root `id` passed to
     /// `layout_dirty_root`.  For a real `viewport → sliver → lazy →
@@ -173,11 +184,13 @@ pub(super) struct SubtreeArena<'tree> {
     /// `mark_needs_layout` must target the lazy sliver so it reflows after
     /// its child list changes.
     ///
-    /// Drained before `pending_builds` in `layout_dirty_root`
-    /// (Remove → Insert ordering, D3), post-drop of the subtree borrows,
+    /// Drained before `pending_builds` in `layout_dirty_root` (dispose
+    /// before build, matching ADR-0003 Decision 3's recycling policy),
+    /// post-drop of the subtree borrows,
     /// so no aliased `NodePtr` is live when the `defer_remove` calls touch
-    /// `&mut self`.  `Mutex` for the same reason as `pending_builds`
-    /// (the layout-child closure requires `&SubtreeArena: Send + Sync`).
+    /// `&mut self`.  `Mutex` for the same historical reason as
+    /// `pending_builds` (see its doc) -- no longer load-bearing for
+    /// thread-safety, since `SubtreeArena` is `!Send + !Sync` regardless.
     pending_removes: Mutex<Vec<(flui_foundation::RenderId, flui_foundation::RenderId)>>,
     /// Child-build requests from `RenderSliverList`: `(sliver_id,
     /// logical_index)` pairs recorded when an absent in-band child is
@@ -370,8 +383,9 @@ impl<'tree> SubtreeArena<'tree> {
     /// Returns `(parent, child)` pairs — the parent is the sliver's
     /// `node_id`, not the walk root — so `defer_remove` targets the correct
     /// ancestor.  Symmetric to [`Self::take_pending_builds`]; called in
-    /// `layout_dirty_root` BEFORE `take_pending_builds` (Remove → Insert
-    /// ordering, D3) and AFTER `drop(arena)` so no `NodePtr` alias is live
+    /// `layout_dirty_root` BEFORE `take_pending_builds` (dispose before
+    /// build, matching ADR-0003 Decision 3's recycling policy) and AFTER
+    /// `drop(arena)` so no `NodePtr` alias is live
     /// when the removes are applied.
     pub(super) fn take_pending_removes(
         &self,
@@ -1947,9 +1961,14 @@ mod tests {
     /// sinks start empty.
     ///
     /// Concrete adversarial tests (re-entrant layout_child, LayoutCycleGuard
-    /// rejection, cross-thread panic, pending-sink ordering) live in the
-    /// integration test files under `tests/` where a full `PipelineOwner` is
-    /// available: `tests/layout_dirty_root.rs` and `tests/layout_cycle_guard.rs`.
+    /// rejection, pending-sink ordering) live in the integration test files
+    /// under `tests/` where a full `PipelineOwner` is available:
+    /// `tests/layout_dirty_root.rs` and `tests/layout_cycle_guard.rs`. The
+    /// cross-thread-panic test this comment used to cite
+    /// (`check_thread_panics_on_wrong_thread`, this module) no longer
+    /// compiles and is not replaced by an equivalent runtime test -- see the
+    /// comment above the interim `assert_not_impl_any!` pin further down in
+    /// this file's test module.
     #[test]
     fn new_with_zero_ids_produces_empty_arena() {
         // Exercise `SubtreeArena::new` with the matched-length empty case
@@ -1996,51 +2015,24 @@ mod tests {
         );
     }
 
-    /// Verify that `check_thread` panics when called from a different thread.
-    ///
-    /// This is gate (c) from the adversarial test spec in the plan.
-    #[test]
-    fn check_thread_panics_on_wrong_thread() {
-        // Scoped thread borrows the stack-allocated poison table: the
-        // scope guarantees the join before `poison` goes out of scope.
-        let poison = LayoutPoison::default();
-        let arena: SubtreeArena<'_> = SubtreeArena {
-            by_id: HashMap::new(),
-            #[cfg(any(test, feature = "testing"))]
-            parent_data_seeds: FxHashMap::default(),
-            pending_builds: Mutex::new(Vec::new()),
-            pending_removes: Mutex::new(Vec::new()),
-            pending_child_requests: Mutex::new(Vec::new()),
-            pending_retain_bands: Mutex::new(Vec::new()),
-            layout_poison: &poison,
-            poison_retries: Mutex::new(FxHashSet::default()),
-            layout_failures: Mutex::new(Vec::new()),
-            layout_successes: Mutex::new(Vec::new()),
-            owner_thread: std::thread::current().id(),
-            _lifetime: PhantomData,
-        };
-
-        // Move arena into a different thread; check_thread must panic.
-        // We use catch_unwind inside the thread to capture the panic and
-        // relay it to the test thread via a channel.
-        let (sender, receiver) = std::sync::mpsc::channel::<bool>();
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                // arena.check_thread() is private — trigger it via arena.get(),
-                // which calls check_thread() before any HashMap lookup.
-                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    // RenderId::new(1) produces a valid id that won't be in the
-                    // empty map, but check_thread fires before the HashMap lookup.
-                    arena.get(RenderId::new(1));
-                }))
-                .is_err();
-                sender.send(panicked).ok();
-            });
-        });
-
-        let panicked = receiver.recv().expect("thread must send result");
-        assert!(panicked, "check_thread must panic on wrong-thread access");
-    }
+    // `check_thread_panics_on_wrong_thread` used to prove `check_thread`'s
+    // runtime assert fires when `SubtreeArena` is moved to another thread
+    // via `std::thread::scope`. It no longer compiles, and that is the
+    // point: `pending_builds: Mutex<Vec<PendingBuild>>` holds
+    // `PendingBuild::initial_parent_data: Option<Box<dyn ParentData>>`, and
+    // `ParentData` no longer requires `Send + Sync` (the pipeline owner this
+    // arena serves is confined to one thread by construction, not by a
+    // runtime check) -- so `SubtreeArena` itself is `!Send + !Sync` now,
+    // pinned below. `Scope::spawn` requires its closure to be `Send`, so the
+    // exact cross-thread misuse this test constructed is now a compile error
+    // one layer earlier than `check_thread`'s assert -- the same class of
+    // improvement as `PipelineCell::with_mut`'s reentry panic: a documented
+    // strengthening, not a parity break. `check_thread` itself stays as
+    // defense-in-depth: the interim pin below only proves today's field set
+    // is not `Send`/`Sync`, not that no future field addition could
+    // reintroduce the hazard, and a raw-pointer misuse inside `NodePtr`
+    // would bypass type-level `Send`/`Sync` checking entirely.
+    static_assertions::assert_not_impl_any!(SubtreeArena<'_>: Send, Sync);
 
     /// Verify that `LayoutCycleGuard` rejects re-entry and that `Drop`
     /// clears the id so a second entry attempt on a fresh guard succeeds.

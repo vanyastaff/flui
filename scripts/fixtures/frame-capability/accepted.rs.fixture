@@ -51,3 +51,29 @@ fn make_build_ctx(core: &ElementCore, owner: &ElementOwner) -> BuildCtx<'_> {
         owner.post_frame_handle.clone(),
     )
 }
+
+// `pipeline_owner()` is acquired in `init_state`, same as the other five, but
+// stored under a name that does not repeat the guarded token
+// (`pipeline_cell`, not `pipeline_owner`) — real production code
+// (`InteractiveViewerState`) clones the stored handle forward into `build`'s
+// own gesture closures, and a scanner with no method-call parse would flag
+// that re-clone identically to a fresh acquisition if the stored name still
+// read `pipeline_owner`.
+impl ViewState<InteractiveViewer> for InteractiveViewerState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.pipeline_cell = ctx.pipeline_owner();
+    }
+
+    fn build(&self, _view: &InteractiveViewer, _ctx: &dyn BuildContext) -> impl IntoView {
+        let pipeline_cell = self.pipeline_cell.clone();
+        AnimatedBuilder::new(self.listenable.clone(), move || {
+            let pipeline_cell = pipeline_cell.clone();
+            let pan_update = move |_details: DragUpdateDetails| {
+                if let Some(owner) = &pipeline_cell {
+                    owner.with(|owner| owner.box_size(RenderId::new(1)));
+                }
+            };
+            GestureDetector::new().on_pan_update(pan_update)
+        })
+    }
+}

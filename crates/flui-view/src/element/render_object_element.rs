@@ -13,7 +13,7 @@
 //! 3. Ancestor's `insertRenderObjectChild()` adds child to render tree
 //! 4. RenderTreeRootElement sets `pipelineOwner.rootNode = renderObject`
 
-use std::{any::Any, sync::Arc};
+use std::any::Any;
 
 use flui_foundation::ElementId;
 
@@ -149,14 +149,16 @@ pub trait RenderObjectElement: ElementBase {
 /// were panicking placeholders and they had no callers (Constitution
 /// Principle 6: no panic in production paths).
 pub trait RenderTreeRootElement: RenderObjectElement {
-    /// Get the PipelineOwner for this render tree.
+    /// Get the [`PipelineCell`](flui_rendering::pipeline::PipelineCell) for
+    /// this render tree.
     ///
-    /// The RenderTreeRootElement owns or references the PipelineOwner
+    /// The RenderTreeRootElement owns or references the `PipelineOwner`
     /// that manages the render tree rooted at this element.
-    fn pipeline_owner(&self) -> Option<Arc<dyn Any + Send + Sync>>;
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell>;
 
-    /// Set the PipelineOwner for this render tree.
-    fn set_pipeline_owner(&mut self, owner: Arc<dyn Any + Send + Sync>);
+    /// Set the [`PipelineCell`](flui_rendering::pipeline::PipelineCell) for
+    /// this render tree.
+    fn set_pipeline_owner(&mut self, owner: flui_rendering::pipeline::PipelineCell);
 }
 
 #[cfg(test)]

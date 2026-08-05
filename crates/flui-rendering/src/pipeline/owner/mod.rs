@@ -10,6 +10,7 @@ mod subtree_arena;
 
 mod accessors;
 mod actions;
+mod cell;
 mod compositing;
 mod construction;
 mod diagnostics;
@@ -19,6 +20,8 @@ mod poison;
 mod query;
 mod reassemble;
 mod semantics;
+
+pub use cell::PipelineCell;
 
 use std::{
     marker::PhantomData,
@@ -965,15 +968,11 @@ mod tests {
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
             _size: flui_types::Size,
-            _hit_child: &mut (
-                     dyn FnMut(
+            _hit_child: &mut dyn FnMut(
                 usize,
                 Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
                 Option<flui_types::Matrix4>,
-            ) -> bool
-                         + Send
-                         + Sync
-                 ),
+            ) -> bool,
         ) -> crate::traits::HitTestOutcome {
             crate::traits::HitTestOutcome::miss()
         }
@@ -1027,15 +1026,11 @@ mod tests {
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
             _size: flui_types::Size,
-            _hit_child: &mut (
-                     dyn FnMut(
+            _hit_child: &mut dyn FnMut(
                 usize,
                 Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
                 Option<flui_types::Matrix4>,
-            ) -> bool
-                         + Send
-                         + Sync
-                 ),
+            ) -> bool,
         ) -> crate::traits::HitTestOutcome {
             crate::traits::HitTestOutcome::miss()
         }
@@ -1344,15 +1339,11 @@ mod tests {
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
             _size: flui_types::Size,
-            _hit_child: &mut (
-                     dyn FnMut(
+            _hit_child: &mut dyn FnMut(
                 usize,
                 Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
                 Option<flui_types::Matrix4>,
-            ) -> bool
-                         + Send
-                         + Sync
-                 ),
+            ) -> bool,
         ) -> crate::traits::HitTestOutcome {
             crate::traits::HitTestOutcome::miss()
         }

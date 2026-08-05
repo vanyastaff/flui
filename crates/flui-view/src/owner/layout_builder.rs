@@ -9,9 +9,9 @@
 //! 1. `PipelineOwner::layout_node_with_children` holds `&mut RenderTree` for the
 //!    entire recursive walk (the `SubtreeArena`), so mid-walk structural
 //!    mutation is an aliasing violation.
-//! 2. Building while the pipeline write-lock is held self-deadlocks as soon as
-//!    the build mounts a render object, because elements reach the
-//!    `PipelineOwner` through the same non-reentrant `Arc<RwLock<…>>`.
+//! 2. Building while the pipeline is checked out panics as soon as the build
+//!    mounts a render object, because elements reach the `PipelineOwner`
+//!    through the same non-reentrant [`PipelineCell`].
 //!
 //! So the reentrancy boundary moves to the one point where neither borrow is
 //! live: **between** layout passes. [`BuildOwner::run_frame_with_layout_builders`]
@@ -34,8 +34,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::LayoutConstraintsCell;
-use flui_rendering::pipeline::PipelineOwner;
-use parking_lot::{Mutex, RwLock};
+use flui_rendering::pipeline::PipelineCell;
+use parking_lot::Mutex;
 
 use super::BuildOwner;
 use crate::tree::ElementTree;
@@ -91,37 +91,37 @@ impl BuildOwner {
     /// no longer in the render tree, **before** deciding what to build. This
     /// mirrors the hazard documented at `sliver_adaptor.rs`'s `on_unmount`.
     ///
-    /// # The pipeline lock must be free
+    /// # The pipeline cell must be free
     ///
     /// This runs `build_scope`, and mounting a render element reaches the
-    /// `PipelineOwner` through the `Arc<RwLock<…>>` each element carries
-    /// (`set_pipeline_owner_any`). So the caller must have **restored the owner
-    /// into its lock and dropped the write guard** first — exactly as
+    /// `PipelineOwner` through the [`PipelineCell`] each element carries
+    /// (`set_pipeline_owner`). So the caller must have **restored the owner
+    /// into the cell and let any borrow end** first — exactly as
     /// [`service_child_requests`](Self::service_child_requests) requires.
-    /// Holding the guard across this call self-deadlocks (`parking_lot`'s
-    /// `RwLock` is not reentrant) the moment a builder actually mounts a child.
-    /// The debug tripwire below turns that hang into a loud failure.
+    /// Holding a `with`/`with_mut` borrow across this call panics the moment a
+    /// builder actually mounts a child and reaches for the same cell. The
+    /// debug tripwire below turns that hang-turned-panic into a loud,
+    /// earlier failure.
     pub fn service_layout_builders(
         &mut self,
         tree: &mut ElementTree,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
     ) -> bool {
         debug_assert!(
-            pipeline.try_read().is_some(),
-            "BUG: service_layout_builders ran while the pipeline write-lock was held — \
-             build_scope would deadlock as soon as a builder mounts a child"
+            pipeline.is_free(),
+            "BUG: service_layout_builders ran while the pipeline was checked out — \
+             build_scope would panic as soon as a builder mounts a child"
         );
 
         // Prune stale entries and collect the ones that need a build, in one
-        // pass over the registry. Both the registry lock and the pipeline read
-        // lock are released before `build_scope` runs.
+        // pass over the registry. Both the registry lock and the pipeline
+        // borrow are released before `build_scope` runs.
         let mut scheduled: Vec<(RenderId, ElementId, Arc<LayoutConstraintsCell>)> = Vec::new();
-        {
-            let pipeline_guard = pipeline.read();
+        pipeline.with(|pipeline_owner| {
             let mut registry = self.layout_builder_registry.lock();
             registry.retain(|render_id, entry| {
                 let element_alive = tree.contains(entry.element);
-                let render_alive = pipeline_guard.render_tree().get(*render_id).is_some();
+                let render_alive = pipeline_owner.render_tree().get(*render_id).is_some();
                 if !element_alive || !render_alive {
                     tracing::debug!(
                         ?render_id,
@@ -137,7 +137,7 @@ impl BuildOwner {
                 }
                 true
             });
-        }
+        });
 
         if scheduled.is_empty() {
             return false;
@@ -164,13 +164,12 @@ impl BuildOwner {
         //    and dirty the render node so the next pass lays out the new child.
         //    Commit happens *after* the build, so a builder that observed
         //    constraints C is recorded as having built against C.
-        {
-            let mut pipeline_guard = pipeline.write();
+        pipeline.with_mut(|pipeline_owner| {
             for (render_id, _, cell) in &scheduled {
                 cell.commit();
-                pipeline_guard.mark_needs_layout(*render_id);
+                pipeline_owner.mark_needs_layout(*render_id);
             }
-        }
+        });
 
         // 4. Unmount children the reconcile replaced.
         self.finalize_tree(tree);
@@ -186,20 +185,23 @@ impl BuildOwner {
     /// silent correctness bug, so neither binding may hand-roll this loop.
     ///
     /// The loop drives `run_layout` → `service_layout_builders` until no builder
-    /// needs a build, then delegates to [`PipelineOwner::run_frame`] for the full
+    /// needs a build, then delegates to
+    /// [`PipelineOwner::run_frame`](flui_rendering::pipeline::PipelineOwner::run_frame)
+    /// for the full
     /// layout → compositing → paint → semantics sequence. `run_frame`'s own
     /// `run_layout` is a no-op on the settled tree (it early-exits when the
     /// scheduler has no layout work), so the frame orchestrator is not
     /// duplicated here.
     ///
-    /// # Locking
+    /// # Checkout discipline
     ///
-    /// Each pass takes the owner out of `pipeline` under the write lock, lays
-    /// out, **restores it and drops the guard**, and only then services the
+    /// Each pass checks the owner out of `pipeline` via `with_mut`, lays out,
+    /// **restores it before the closure returns**, and only then services the
     /// builders. `build_scope` mounts render objects through the very same
-    /// `Arc<RwLock<…>>`, so building under the guard would self-deadlock. This is
-    /// why the owner is threaded by lock rather than by value, and it is the same
-    /// discipline `service_child_requests` follows.
+    /// [`PipelineCell`], so building while still inside that `with_mut` closure
+    /// would panic (reentrant checkout). This is why the owner is threaded by
+    /// cell rather than by value, and it is the same discipline
+    /// `service_child_requests` follows.
     ///
     /// # Non-convergence
     ///
@@ -210,21 +212,20 @@ impl BuildOwner {
     pub fn run_frame_with_layout_builders(
         &mut self,
         tree: &mut ElementTree,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
     ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
         let converged = {
             let owner = &mut *self;
             drive_fixpoint(|| {
-                // Layout under the write lock…
-                {
-                    let mut guard = pipeline.write();
-                    let mut layout = std::mem::take(&mut *guard).into_layout();
+                // Layout checked out…
+                pipeline.with_mut(|pipeline_owner| {
+                    let mut layout = std::mem::take(pipeline_owner).into_layout();
                     let result = layout.run_layout();
                     // Restore on the error path too: the owner always comes back.
-                    *guard = layout.into_idle();
-                    result?;
-                }
-                // …build with the lock free.
+                    *pipeline_owner = layout.into_idle();
+                    result
+                })?;
+                // …build with the checkout closed.
                 Ok(owner.service_layout_builders(tree, pipeline))
             })
         };
@@ -235,10 +236,11 @@ impl BuildOwner {
             Ok(true) => {}
         }
 
-        let mut guard = pipeline.write();
-        let (owner, result) = std::mem::take(&mut *guard).run_frame();
-        *guard = owner;
-        result
+        pipeline.with_mut(|pipeline_owner| {
+            let (owner, result) = std::mem::take(pipeline_owner).run_frame();
+            *pipeline_owner = owner;
+            result
+        })
     }
 }
 
@@ -360,8 +362,8 @@ mod tests {
     }
 
     /// The shared pipeline handle, exactly as the bindings hold it.
-    fn shared_pipeline() -> Arc<RwLock<PipelineOwner>> {
-        Arc::new(RwLock::new(PipelineOwner::new()))
+    fn shared_pipeline() -> PipelineCell {
+        PipelineCell::new(PipelineOwner::new())
     }
 
     fn constraints(side: f32) -> BoxConstraints {
@@ -369,12 +371,13 @@ mod tests {
     }
 
     /// Whether `render_id` is queued for the next layout pass.
-    fn needs_layout(pipeline: &Arc<RwLock<PipelineOwner>>, render_id: RenderId) -> bool {
-        pipeline
-            .read()
-            .nodes_needing_layout()
-            .iter()
-            .any(|node| node.id == render_id)
+    fn needs_layout(pipeline: &PipelineCell, render_id: RenderId) -> bool {
+        pipeline.with(|pipeline_owner| {
+            pipeline_owner
+                .nodes_needing_layout()
+                .iter()
+                .any(|node| node.id == render_id)
+        })
     }
 
     /// Mount an element and insert a render node, returning ids that both pass
@@ -382,12 +385,12 @@ mod tests {
     fn live_entry(
         owner: &mut BuildOwner,
         tree: &mut ElementTree,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
     ) -> (RenderId, ElementId) {
         let element = tree.mount_root(&TestView, &mut owner.element_owner_mut());
-        let render_id = pipeline
-            .write()
-            .insert::<BoxProtocol>(Box::new(RenderSizedBox::shrink()));
+        let render_id = pipeline.with_mut(|pipeline_owner| {
+            pipeline_owner.insert::<BoxProtocol>(Box::new(RenderSizedBox::shrink()))
+        });
         (render_id, element)
     }
 
@@ -577,7 +580,7 @@ mod tests {
 
         // Establish the precondition: nothing is queued for layout. (Insertion
         // dirties the node for paint too, so assert on the layout queue only.)
-        pipeline.write().clear_all_dirty_nodes();
+        pipeline.with_mut(PipelineOwner::clear_all_dirty_nodes);
         assert!(
             !needs_layout(&pipeline, render_id),
             "precondition: the node must be clean before service, or the \
@@ -610,34 +613,40 @@ mod tests {
         );
     }
 
-    /// The tripwire that keeps the deadlock above from ever regressing silently:
-    /// calling the service under a held write guard fails loudly in debug rather
-    /// than hanging.
+    /// The tripwire that keeps the deadlock-turned-panic above from ever
+    /// regressing silently: calling the service under a held checkout fails
+    /// loudly in debug rather than hanging (or, before the `PipelineCell`
+    /// port, deadlocking).
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic(expected = "BUG: service_layout_builders ran while the pipeline write-lock")]
-    fn layout_builder_service_tripwire_fires_under_a_held_write_lock() {
+    #[should_panic(
+        expected = "BUG: service_layout_builders ran while the pipeline was checked out"
+    )]
+    fn layout_builder_service_tripwire_fires_under_a_held_checkout() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
         let pipeline = shared_pipeline();
 
-        let _guard = pipeline.write();
-        owner.service_layout_builders(&mut tree, &pipeline);
+        pipeline.with(|_pipeline_owner| {
+            owner.service_layout_builders(&mut tree, &pipeline);
+        });
     }
 
-    /// Regression: `build_scope` must run with the pipeline write-lock **free**.
+    /// Regression: `build_scope` must run with the pipeline checkout **free**.
     ///
-    /// Elements carry the `Arc<RwLock<PipelineOwner>>` (`set_pipeline_owner_any`)
-    /// and lock it to mount their render objects. An earlier draft of this seam
-    /// held the frame's write guard across `service_layout_builders`, which is a
-    /// self-deadlock (`parking_lot` `RwLock` is not reentrant) the instant a
-    /// builder mounts a child — invisible while the registry is empty, fatal on
-    /// the first real `LayoutBuilder`.
+    /// Elements carry a [`PipelineCell`] (`set_pipeline_owner`) and check it out
+    /// via `with_mut` to mount their render objects. An earlier draft of this
+    /// seam held the frame's write guard across `service_layout_builders`,
+    /// which self-deadlocked (`parking_lot`'s `RwLock` was not reentrant) the
+    /// instant a builder mounted a child — invisible while the registry is
+    /// empty, fatal on the first real `LayoutBuilder`. Under `PipelineCell` the
+    /// same mistake panics instead of hanging.
     ///
     /// Driving the whole helper over a pipeline-attached tree with a dirty
-    /// builder exercises exactly that path. If the guard is ever held across the
-    /// build, the `debug_assert!` tripwire in `service_layout_builders` fires,
-    /// turning what would be a hang into a loud failure.
+    /// builder exercises exactly that path. If the checkout is ever held
+    /// across the build, the `debug_assert!` tripwire in
+    /// `service_layout_builders` fires, turning what would be a hang (or now a
+    /// panic either way) into an earlier, more specific failure.
     #[test]
     fn layout_builder_frame_does_not_deadlock_on_a_pipeline_attached_tree() {
         let mut owner = BuildOwner::new();
@@ -646,12 +655,11 @@ mod tests {
 
         let element = tree.mount_root_with_pipeline_owner(
             &TestView,
-            Some(Arc::clone(&pipeline)),
+            Some(pipeline.clone()),
             &mut owner.element_owner_mut(),
         );
         let render_id = pipeline
-            .write()
-            .insert::<BoxProtocol>(Box::new(RenderSizedBox::shrink()));
+            .with_mut(|owner| owner.insert::<BoxProtocol>(Box::new(RenderSizedBox::shrink())));
 
         let cell = owner.register_layout_builder_for_test(render_id, element);
         cell.publish(constraints(32.0));

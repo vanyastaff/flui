@@ -6,6 +6,10 @@
 //! - [`WidgetsBinding`] - Element tree and build phase (from flui-view)
 //! - [`GestureBinding`] - Hit testing and gestures (from flui-interaction)
 //! - [`PipelineOwner`] - Render tree and layout/paint (from flui_rendering)
+//! - [`PipelineCell`] - Owner-local, closure-scoped handle to a
+//!   `PipelineOwner` (`!Send + !Sync`, from flui_rendering); the shape every
+//!   binding here actually stores and clones, `PipelineOwner` being the
+//!   value it wraps
 //! - [`Scheduler`] - Frame scheduling (from flui-scheduler)
 //! - [`RenderingFlutterBinding`] - Rendering integration (local); per-window
 //!   semantics enablement/announce/event delivery lives on `SemanticsHost`
@@ -34,7 +38,10 @@ mod renderer_binding;
 // Re-export bindings from their respective crates
 pub use flui_interaction::binding::GestureBinding;
 pub use flui_painting::PaintingBinding;
-pub use flui_rendering::{binding::RendererBinding, pipeline::PipelineOwner};
+pub use flui_rendering::{
+    binding::RendererBinding,
+    pipeline::{PipelineCell, PipelineOwner},
+};
 pub use flui_scheduler::Scheduler;
 pub use flui_view::WidgetsBinding;
 // Re-export the local binding

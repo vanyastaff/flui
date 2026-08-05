@@ -42,18 +42,15 @@ mod text_app;
 #[path = "widgets_gallery.rs"]
 mod widgets_gallery;
 
-use std::sync::Arc;
-
 use flui_engine::wgpu::HeadlessRenderer;
 use flui_layer::LayerTree;
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_types::Size;
 use flui_types::geometry::px;
 use flui_view::{BuildOwner, ElementTree, IntoView};
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
-use parking_lot::RwLock;
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -110,7 +107,7 @@ fn render_view_to_layers<V: IntoView + 'static>(
     let binding = HeadlessBinding::new();
     let mut build_owner = BuildOwner::new();
     let mut element_tree = ElementTree::new();
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
 
     // Wire the async-driver / post-frame / interaction capabilities onto the
     // owner before the mount build pass (matches the acceptance-test bootstrap).
@@ -123,31 +120,29 @@ fn render_view_to_layers<V: IntoView + 'static>(
     binding.enter_owner_scope(|| {
         let root_element = element_tree.mount_root_with_pipeline_owner(
             &scoped_root,
-            Some(Arc::clone(&pipeline_owner)),
+            Some(pipeline_owner.clone()),
             &mut build_owner.element_owner_mut(),
         );
         build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
         build_owner.build_scope(&mut element_tree);
     });
 
-    let root_render_id = {
-        let owner = pipeline_owner.read();
+    let root_render_id = pipeline_owner.with(|owner| {
         let render_tree = owner.render_tree();
         render_tree
             .iter()
             .map(|(id, _)| id)
             .find(|id| render_tree.parent(*id).is_none())
             .expect("the mounted demo tree must have a render root")
-    };
+    });
 
-    {
-        let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(root_render_id));
-        guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(
+    pipeline_owner.with_mut(|owner| {
+        owner.set_root_id(Some(root_render_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
             px(width as f32),
             px(height as f32),
         ))));
-    }
+    });
 
     // `PipelineOwner::run_frame` runs layout → compositing → paint and returns
     // the composited `LayerTree` (same extraction as `RendererBinding::
@@ -155,11 +150,12 @@ fn render_view_to_layers<V: IntoView + 'static>(
     // restore it. Driving the render frame directly on the freshly-built tree
     // keeps its paint dirty — a prior widgets-layer frame would have consumed it.
     let layer_tree = binding.enter_owner_scope(|| {
-        let mut guard = pipeline_owner.write();
-        let owner = std::mem::take(&mut *guard);
-        let (owner, result) = owner.run_frame();
-        *guard = owner;
-        result.expect("the render frame must succeed")
+        pipeline_owner.with_mut(|guard| {
+            let owner = std::mem::take(guard);
+            let (owner, result) = owner.run_frame();
+            *guard = owner;
+            result.expect("the render frame must succeed")
+        })
     });
 
     layer_tree.expect("the render frame must produce a LayerTree")

@@ -81,13 +81,13 @@ use flui_animation::{Animatable, Animation, ArcCurve, Curve, Curves};
 use flui_foundation::{RenderId, ViewKey};
 use flui_geometry::Rect;
 use flui_objects::SubtreeAnchor;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::PipelineCell;
 use flui_types::Size;
 use flui_types::geometry::px;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use super::hero_controller::FlightDirection;
 use super::subtree::AnchoredBox;
@@ -423,7 +423,7 @@ struct HeroInner {
     include_child: AtomicBool,
     /// The render tree, so `start_flight` can read its own committed size the way
     /// `_HeroState.startFlight` reads `box.size` (`:384-387`).
-    owner: Mutex<Option<Arc<RwLock<PipelineOwner>>>>,
+    owner: Mutex<Option<PipelineCell>>,
     /// `setState`. Acquired in `init_state`, fired from a post-frame callback —
     /// never from `build`/layout/paint (port-check trigger #22).
     rebuild: Mutex<Option<RebuildHandle>>,
@@ -508,7 +508,8 @@ impl HeroHandle {
     /// The hero's render node, or `None` before it attaches and after it detaches.
     ///
     /// Resolving to `Some` says nothing about layout — `attach` runs during build.
-    /// Ask [`PipelineOwner::box_size`] for geometry.
+    /// Ask [`PipelineOwner::box_size`](flui_rendering::pipeline::PipelineOwner::box_size)
+    /// for geometry.
     pub(crate) fn render_id(&self) -> Option<RenderId> {
         self.inner.anchor.get()
     }
@@ -578,10 +579,16 @@ impl HeroHandle {
     pub(crate) fn bounding_box_in(&self, ancestor: RenderId) -> Option<Rect> {
         let render_id = self.render_id()?;
         let owner = self.inner.owner.lock().clone()?;
-        let owner = owner.read();
-        let size = owner.box_size(render_id)?;
-        let transform = owner.transform_to(render_id, ancestor)?;
-        Some(transform.transform_rect(&Rect::from_ltwh(px(0.0), px(0.0), size.width, size.height)))
+        owner.with(|owner| {
+            let size = owner.box_size(render_id)?;
+            let transform = owner.transform_to(render_id, ancestor)?;
+            Some(transform.transform_rect(&Rect::from_ltwh(
+                px(0.0),
+                px(0.0),
+                size.width,
+                size.height,
+            )))
+        })
     }
 
     /// `_HeroState.startFlight` (`heroes.dart:381-389`): freeze the hero at its
@@ -598,8 +605,7 @@ impl HeroHandle {
         let render_id = self.render_id()?;
         let size = {
             let owner = self.inner.owner.lock().clone()?;
-            let owner = owner.read();
-            owner.box_size(render_id)?
+            owner.with(|owner| owner.box_size(render_id))?
         };
 
         self.inner

@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use downcast_rs::{DowncastSync, impl_downcast};
+use downcast_rs::{Downcast, impl_downcast};
 
 // ============================================================================
 // PARENT DATA TRAIT
@@ -49,7 +49,7 @@ use downcast_rs::{DowncastSync, impl_downcast};
 ///
 /// impl ParentData for CustomParentData {}
 /// ```
-pub trait ParentData: Debug + DowncastSync + dyn_clone::DynClone {
+pub trait ParentData: Debug + Downcast + dyn_clone::DynClone {
     /// Called when render object is removed from tree.
     ///
     /// Override to clean up resources (listeners, subscriptions, etc).
@@ -93,7 +93,7 @@ pub(crate) trait LogicalIndexParentData: ParentData {
 }
 
 // Enable downcasting for ParentData trait objects
-impl_downcast!(sync ParentData);
+impl_downcast!(ParentData);
 
 // Enable `Box<dyn ParentData>::clone()` — all concrete types that
 // derive `Clone` automatically satisfy the `DynClone` bound.

@@ -331,11 +331,11 @@ impl HitTestScene {
     /// WHICH ids were hit (matching the oracle's `result.path` inspection).
     fn hit(&self, x: f32, y: f32) -> Vec<RenderId> {
         self.laid.enter_owner_scope(|| {
-            let owner = self.laid.pipeline_owner();
-            let owner = owner.read();
-            let mut result = HitTestResult::new();
-            owner.hit_test(Offset::new(px(x), px(y)), &mut result);
-            result.path().iter().map(|entry| entry.target).collect()
+            self.laid.pipeline_owner().with(|owner| {
+                let mut result = HitTestResult::new();
+                owner.hit_test(Offset::new(px(x), px(y)), &mut result);
+                result.path().iter().map(|entry| entry.target).collect()
+            })
         })
     }
 

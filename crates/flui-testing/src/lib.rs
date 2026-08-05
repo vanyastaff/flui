@@ -30,7 +30,7 @@
 //!   deterministically with no `ElementTree` in play.
 //! - **Tree-bound** ([`with_tree`](HeadlessBinding::with_tree)): additionally owns
 //!   an already-mounted `BuildOwner` + `ElementTree` + shared
-//!   `Arc<RwLock<PipelineOwner>>`, so `pump_frame` also drains the build inbox
+//!   `PipelineCell`, so `pump_frame` also drains the build inbox
 //!   (`BuildOwner::build_scope`) and lays out / paints / composites
 //!   (`PipelineOwner::run_frame`). The binding does **not** mount or root the
 //!   tree — that bootstrap (root discovery, `set_root_constraints`) is
@@ -100,11 +100,10 @@ use flui_interaction::{
 // `flui-rendering` re-exports `flui-layer` wholesale, so naming the composited
 // tree costs no extra dependency edge.
 use flui_rendering::layer::LayerTree;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::{BoxedTask, LocalPostFrameLane, Scheduler, TaskToken};
 use flui_types::geometry::{Offset, Pixels};
 use flui_view::{BuildOwner, ElementId, ElementTree, View};
-use parking_lot::RwLock;
 
 fn preserve_first_pointer_panic(
     first: &mut Option<Box<dyn std::any::Any + Send>>,
@@ -133,14 +132,14 @@ fn preserve_first_pointer_panic(
 /// `build_owner`'s dirty heap + external inbox feed `build_scope`; `tree` is the
 /// element tree it rebuilds; `pipeline_owner` is the **shared** render owner the
 /// frame lays out / paints / composites. The owner is shared (the element tree
-/// holds an `Arc` clone for render-object attachment), so the per-frame step
-/// takes it out under the write lock, runs the frame by value, and restores it —
-/// mirroring the production frame path.
+/// holds a [`PipelineCell`] clone for render-object attachment), so the
+/// per-frame step checks it out via `with_mut`, runs the frame, and lets the
+/// checkout end — mirroring the production frame path.
 #[derive(Debug)]
 struct TreeBinding {
     build_owner: BuildOwner,
     tree: ElementTree,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
 }
 
 /// A deterministic, non-singleton headless frame driver.
@@ -313,7 +312,7 @@ impl HeadlessBinding {
     pub fn with_tree(
         build_owner: BuildOwner,
         tree: ElementTree,
-        pipeline_owner: Arc<RwLock<PipelineOwner>>,
+        pipeline_owner: PipelineCell,
     ) -> Self {
         let mut binding = Self::new();
         binding.bind_tree(build_owner, tree, pipeline_owner);
@@ -340,7 +339,7 @@ impl HeadlessBinding {
         &mut self,
         build_owner: BuildOwner,
         tree: ElementTree,
-        pipeline_owner: Arc<RwLock<PipelineOwner>>,
+        pipeline_owner: PipelineCell,
     ) {
         // Widgets spawn into the driver this binding's frame step
         // polls — the binding-local one, never some OTHER binding's or
@@ -613,7 +612,7 @@ impl HeadlessBinding {
     ///    still inside that same closure, mirrored here against this
     ///    binding's own tree-bound `PipelineOwner` rather than a
     ///    caller-supplied hit-test closure — `pump_frame`'s tree-bound
-    ///    branch already owns the same `Arc<RwLock<PipelineOwner>>`
+    ///    branch already owns the same `PipelineCell`
     ///    production's `hit_test_in_view` wraps, so no new parameter is
     ///    needed on this already-widely-called method. Step 7 therefore
     ///    runs inside the same `drive_frame` pipeline closure as step 6,
@@ -720,7 +719,7 @@ impl HeadlessBinding {
                         let pipeline_owner = &tree_binding.pipeline_owner;
                         gestures.mouse_tracker().update_all_devices(|position| {
                             let mut result = HitTestResult::new();
-                            pipeline_owner.read().hit_test(position, &mut result);
+                            pipeline_owner.with(|owner| owner.hit_test(position, &mut result));
                             result
                         });
                     }
@@ -752,9 +751,10 @@ impl HeadlessBinding {
         // screen would be a silent correctness bug, so neither path may
         // hand-roll the loop.
         //
-        // The owner is threaded by lock, not by value: the helper takes it out
-        // per layout pass and restores it before running the builders, whose
-        // `build_scope` mounts render objects through this same lock.
+        // The owner is threaded by cell, not by value: the helper checks it
+        // out per layout pass and lets the checkout end before running the
+        // builders, whose `build_scope` mounts render objects through this
+        // same cell.
         let result = tree_binding
             .build_owner
             .run_frame_with_layout_builders(&mut tree_binding.tree, &tree_binding.pipeline_owner);

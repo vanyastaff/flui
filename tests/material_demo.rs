@@ -30,7 +30,6 @@ mod tree;
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_foundation::RenderId;
@@ -39,14 +38,13 @@ use flui_material::back_button::back_arrow_icon_data;
 use flui_material::{Theme, ThemeData};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};
 use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
-use parking_lot::RwLock;
 
 /// The mounted root's logical width — wide enough for a card row, narrow
 /// enough that the FAB's end-float offset from the trailing edge is easy to
@@ -66,7 +64,7 @@ fn root_constraints() -> BoxConstraints {
 /// Everything the test needs to drive and inspect the mounted demo tree.
 struct MountedDemo {
     binding: HeadlessBinding,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
     /// Clone of the mounted [`tree::MaterialDemoRoot`]'s `home_create_count`
     /// — how many times `MaterialDemoHomeState::create_state` has run. See
     /// that field's doc for why this, and not a display assertion, is what
@@ -97,7 +95,7 @@ impl MountedDemo {
 
         let mut build_owner = BuildOwner::new();
         let mut tree = ElementTree::new();
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
 
         // Install the async-driver / post-frame / interaction-dispatch
         // capabilities on this binding's owner BEFORE the mount build pass —
@@ -112,15 +110,14 @@ impl MountedDemo {
         binding.enter_owner_scope(|| {
             let root_element = tree.mount_root_with_pipeline_owner(
                 &scoped_root,
-                Some(Arc::clone(&pipeline_owner)),
+                Some(pipeline_owner.clone()),
                 &mut build_owner.element_owner_mut(),
             );
             build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
             build_owner.build_scope(&mut tree);
         });
 
-        let root_render_id = {
-            let owner = pipeline_owner.read();
+        let root_render_id = pipeline_owner.with(|owner| {
             let render_tree = owner.render_tree();
             let mut roots = render_tree
                 .iter()
@@ -134,13 +131,12 @@ impl MountedDemo {
                 "expected exactly one render-tree root after mount"
             );
             root
-        };
+        });
 
-        {
-            let mut guard = pipeline_owner.write();
-            guard.set_root_id(Some(root_render_id));
-            guard.set_root_constraints(Some(root_constraints()));
-        }
+        pipeline_owner.with_mut(|owner| {
+            owner.set_root_id(Some(root_render_id));
+            owner.set_root_constraints(Some(root_constraints()));
+        });
 
         binding.enter_owner_scope(|| {
             build_owner
@@ -148,7 +144,7 @@ impl MountedDemo {
                 .expect("bootstrap frame over the demo tree should succeed");
         });
 
-        binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+        binding.bind_tree(build_owner, tree, pipeline_owner.clone());
 
         Self {
             binding,
@@ -180,10 +176,11 @@ impl MountedDemo {
     }
 
     fn hit_test(&self, position: Offset) -> HitTestResult {
-        let owner = self.pipeline_owner.read();
-        let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
-        result
+        self.pipeline_owner.with(|owner| {
+            let mut result = HitTestResult::new();
+            owner.hit_test(position, &mut result);
+            result
+        })
     }
 
     fn dispatch_pointer(&self, event: flui_interaction::PointerEvent) {
@@ -230,24 +227,25 @@ impl MountedDemo {
 
     /// The unique `RenderParagraph` node whose plain-text content is `text`.
     fn find_text(&self, text: &str) -> Option<RenderId> {
-        let owner = self.pipeline_owner.read();
-        let mut found = None;
-        for (id, _node) in owner.render_tree().iter() {
-            let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
-                continue;
-            };
-            if diagnostics.name() != Some("RenderParagraph") {
-                continue;
+        self.pipeline_owner.with(|owner| {
+            let mut found = None;
+            for (id, _node) in owner.render_tree().iter() {
+                let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
+                    continue;
+                };
+                if diagnostics.name() != Some("RenderParagraph") {
+                    continue;
+                }
+                if diagnostics.get_property("text") == Some(text) {
+                    assert!(
+                        found.is_none(),
+                        "multiple RenderParagraph nodes contain {text:?}"
+                    );
+                    found = Some(id);
+                }
             }
-            if diagnostics.get_property("text") == Some(text) {
-                assert!(
-                    found.is_none(),
-                    "multiple RenderParagraph nodes contain {text:?}"
-                );
-                found = Some(id);
-            }
-        }
-        found
+            found
+        })
     }
 
     /// Every render node whose short type name (generic parameters stripped)
@@ -255,21 +253,23 @@ impl MountedDemo {
     /// `crates/flui-material/tests/common/mod.rs`'s `LaidOut::find_all_by_render_type`
     /// for the same reason every other helper here is (see the module doc).
     fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
-        let owner = self.pipeline_owner.read();
-        owner
-            .render_tree()
-            .iter()
-            .filter_map(|(id, _node)| {
-                let diagnostics = owner.debug_node_diagnostics(id)?;
-                let short_name = diagnostics.name()?.split('<').next().unwrap_or("");
-                (short_name == render_type_name).then_some(id)
-            })
-            .collect()
+        self.pipeline_owner.with(|owner| {
+            owner
+                .render_tree()
+                .iter()
+                .filter_map(|(id, _node)| {
+                    let diagnostics = owner.debug_node_diagnostics(id)?;
+                    let short_name = diagnostics.name()?.split('<').next().unwrap_or("");
+                    (short_name == render_type_name).then_some(id)
+                })
+                .collect()
+        })
     }
 
     /// The laid-out size of a render node.
     fn size(&self, id: RenderId) -> Size {
-        inspect::box_geometry(&self.pipeline_owner.read(), id)
+        self.pipeline_owner
+            .with(|owner| inspect::box_geometry(owner, id))
             .expect("render node should have box geometry after layout")
     }
 
@@ -279,15 +279,16 @@ impl MountedDemo {
     /// paragraph sits inside the component's centered content. Walking to the
     /// enclosing box lets geometry assertions target the component itself.
     fn nearest_ancestor_with_size(&self, id: RenderId, size: Size) -> Option<RenderId> {
-        let owner = self.pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        let mut current = id;
-        loop {
-            if inspect::box_geometry(&owner, current) == Some(size) {
-                return Some(current);
+        self.pipeline_owner.with(|owner| {
+            let render_tree = owner.render_tree();
+            let mut current = id;
+            loop {
+                if inspect::box_geometry(owner, current) == Some(size) {
+                    return Some(current);
+                }
+                current = render_tree.parent(current)?;
             }
-            current = render_tree.parent(current)?;
-        }
+        })
     }
 
     /// The screen-space (root-local) top-left of `id`, by summing paint
@@ -295,22 +296,25 @@ impl MountedDemo {
     /// `id` in this tree only translates (no scale/rotation), so a plain sum
     /// recovers the absolute position.
     fn absolute_position(&self, id: RenderId) -> Offset {
-        let owner = self.pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        let mut x = 0.0f32;
-        let mut y = 0.0f32;
-        let mut current = id;
-        loop {
-            if let Some(offset) = flui_rendering::testing::inspect::render_offset(&owner, current) {
-                x += offset.dx.get();
-                y += offset.dy.get();
+        self.pipeline_owner.with(|owner| {
+            let render_tree = owner.render_tree();
+            let mut x = 0.0f32;
+            let mut y = 0.0f32;
+            let mut current = id;
+            loop {
+                if let Some(offset) =
+                    flui_rendering::testing::inspect::render_offset(owner, current)
+                {
+                    x += offset.dx.get();
+                    y += offset.dy.get();
+                }
+                match render_tree.parent(current) {
+                    Some(parent) => current = parent,
+                    None => break,
+                }
             }
-            match render_tree.parent(current) {
-                Some(parent) => current = parent,
-                None => break,
-            }
-        }
-        offset(x, y)
+            offset(x, y)
+        })
     }
 }
 

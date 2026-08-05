@@ -105,9 +105,7 @@ pub struct BoxDryBaselineCtx<'a> {
     /// (plus harness seeds when `test`/`testing` is active). Container
     /// objects downcast entries via [`Self::child_parent_data_as`].
     child_parent_data: &'a [Option<&'a dyn ParentData>],
-    query: &'a mut (
-                dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse + Send + Sync
-            ),
+    query: &'a mut dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse,
 }
 
 impl std::fmt::Debug for BoxDryBaselineCtx<'_> {
@@ -124,11 +122,7 @@ impl<'a> BoxDryBaselineCtx<'a> {
     pub(crate) fn new(
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
-        query: &'a mut (
-                    dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse
-                        + Send
-                        + Sync
-                ),
+        query: &'a mut dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse,
     ) -> Self {
         Self {
             child_count,
@@ -239,7 +233,7 @@ pub struct BoxIntrinsicsCtx<'a> {
     child_count: usize,
     /// Erased per-child parent data; same semantics as [`BoxDryLayoutCtx::child_parent_data`].
     child_parent_data: &'a [Option<&'a dyn ParentData>],
-    query: &'a mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
+    query: &'a mut dyn FnMut(usize, IntrinsicDimension, f32) -> f32,
 }
 
 impl std::fmt::Debug for BoxIntrinsicsCtx<'_> {
@@ -256,7 +250,7 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     pub(crate) fn new(
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
-        query: &'a mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
+        query: &'a mut dyn FnMut(usize, IntrinsicDimension, f32) -> f32,
     ) -> Self {
         Self {
             child_count,
@@ -356,8 +350,7 @@ pub struct BoxDryLayoutCtx<'a> {
     /// own `<Self as RenderBox>::ParentData` — the type they install on children — so
     /// mismatches are impossible in correctly-constructed trees.
     child_parent_data: &'a [Option<&'a dyn ParentData>],
-    query:
-        &'a mut (dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse + Send + Sync),
+    query: &'a mut dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse,
 }
 
 impl std::fmt::Debug for BoxDryLayoutCtx<'_> {
@@ -374,9 +367,7 @@ impl<'a> BoxDryLayoutCtx<'a> {
     pub(crate) fn new(
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
-        query: &'a mut (
-                    dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse + Send + Sync
-                ),
+        query: &'a mut dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse,
     ) -> Self {
         Self {
             child_count,

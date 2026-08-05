@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use flui_objects::RenderSizedBox;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_types::geometry::px;
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementTree, IntoView,
@@ -592,7 +592,7 @@ fn find_render_object_returns_nearest_render_id() {
     // None even though the ancestor IS a RenderElement.
     let tree = Arc::new(RwLock::new(ElementTree::new()));
     let owner = Arc::new(RwLock::new(BuildOwner::new()));
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
 
     let sized = SizedBoxView {
         width: 100.0,
@@ -600,7 +600,7 @@ fn find_render_object_returns_nearest_render_id() {
     };
     let sized_id = tree.write().mount_root_with_pipeline_owner(
         &sized,
-        Some(Arc::clone(&pipeline_owner)),
+        Some(pipeline_owner.clone()),
         &mut owner.write().element_owner_mut(),
     );
 

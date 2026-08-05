@@ -302,12 +302,13 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         };
 
         let cell = core.pipeline_owner().and_then(|pipeline| {
-            pipeline
-                .write()
-                .render_tree_mut()
-                .get_mut(render_id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderLayoutBuilder>())
-                .map(|render_object| Arc::clone(render_object.cell()))
+            pipeline.with_mut(|owner| {
+                owner
+                    .render_tree_mut()
+                    .get_mut(render_id)
+                    .and_then(|node| node.downcast_render_object_mut::<RenderLayoutBuilder>())
+                    .map(|render_object| Arc::clone(render_object.cell()))
+            })
         });
 
         let Some(cell) = cell else {
@@ -368,9 +369,8 @@ mod tests {
 
     use flui_foundation::{ElementId, RenderId};
     use flui_objects::{RenderConstrainedBox, RenderSizedBox};
-    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
     use flui_types::{Size, geometry::px};
-    use parking_lot::RwLock;
 
     use crate::{BuildOwner, IntoView, tree::ElementTree, view::ViewExt};
 
@@ -440,20 +440,20 @@ mod tests {
     struct Harness {
         owner: BuildOwner,
         tree: ElementTree,
-        pipeline: Arc<RwLock<PipelineOwner>>,
+        pipeline: PipelineCell,
         root: ElementId,
         root_render: RenderId,
     }
 
     impl Harness {
         fn mount(view: &dyn View, constraints: BoxConstraints) -> Self {
-            let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+            let pipeline = PipelineCell::new(PipelineOwner::new());
             let mut owner = BuildOwner::new();
             let mut tree = ElementTree::new();
 
             let root = tree.mount_root_with_pipeline_owner(
                 view,
-                Some(Arc::clone(&pipeline)),
+                Some(pipeline.clone()),
                 &mut owner.element_owner_mut(),
             );
 
@@ -466,9 +466,8 @@ mod tests {
             // The render root is the single render node with no render parent —
             // works whether the root view is itself a `RenderView` or a
             // `StatelessView` whose composition owns the outermost render object.
-            let root_render = {
-                let guard = pipeline.read();
-                let render_tree = guard.render_tree();
+            let root_render = pipeline.with(|owner| {
+                let render_tree = owner.render_tree();
                 let mut roots = render_tree
                     .iter()
                     .map(|(id, _)| id)
@@ -476,13 +475,12 @@ mod tests {
                 let found = roots.next().expect("the subtree must have a render root");
                 assert!(roots.next().is_none(), "exactly one render root expected");
                 found
-            };
+            });
 
-            {
-                let mut guard = pipeline.write();
-                guard.set_root_id(Some(root_render));
-                guard.set_root_constraints(Some(constraints));
-            }
+            pipeline.with_mut(|owner| {
+                owner.set_root_id(Some(root_render));
+                owner.set_root_constraints(Some(constraints));
+            });
 
             Self {
                 owner,
@@ -503,12 +501,14 @@ mod tests {
 
         fn set_constraints(&mut self, constraints: BoxConstraints) {
             self.pipeline
-                .write()
-                .set_root_constraints(Some(constraints));
+                .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
         }
 
         fn root_size(&self) -> Size {
-            flui_rendering::testing::inspect::box_geometry(&*self.pipeline.read(), self.root_render)
+            self.pipeline
+                .with(|owner| {
+                    flui_rendering::testing::inspect::box_geometry(owner, self.root_render)
+                })
                 .expect("root must have committed geometry")
         }
     }
@@ -556,7 +556,8 @@ mod tests {
         // committed geometry after ONE frame.
         let child_render = child_render_id(&h);
         assert_eq!(
-            flui_rendering::testing::inspect::box_geometry(&*h.pipeline.read(), child_render),
+            h.pipeline
+                .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, child_render)),
             Some(Size::new(px(120.0), px(80.0))),
             "the child returned by the builder must be laid out in the SAME frame; \
              a one-frame-late seam leaves it without committed geometry"
@@ -569,13 +570,14 @@ mod tests {
     /// not (a `StatelessView` parent owns no render object, so the builder is
     /// still the render root), this stays correct.
     fn child_render_id(h: &Harness) -> RenderId {
-        let guard = h.pipeline.read();
-        let children = guard
-            .render_tree()
-            .get(h.root_render)
-            .expect("root render node")
-            .children()
-            .to_vec();
+        let children = h.pipeline.with(|owner| {
+            owner
+                .render_tree()
+                .get(h.root_render)
+                .expect("root render node")
+                .children()
+                .to_vec()
+        });
         assert_eq!(
             children.len(),
             1,
@@ -617,11 +619,10 @@ mod tests {
             "size = constraints.constrain(child.size); it must NOT be constraints.biggest \
              (100x200) — the intermediate no-child pass must never survive into the frame"
         );
+        let child_render = child_render_id(&h);
         assert_eq!(
-            flui_rendering::testing::inspect::box_geometry(
-                &*h.pipeline.read(),
-                child_render_id(&h)
-            ),
+            h.pipeline
+                .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, child_render)),
             Some(Size::new(px(50.0), px(100.0))),
         );
     }
@@ -651,11 +652,10 @@ mod tests {
             "a resized parent must re-invoke the builder with the new constraints"
         );
         assert_eq!(h.root_size(), Size::new(px(60.0), px(40.0)));
+        let child_render = child_render_id(&h);
         assert_eq!(
-            flui_rendering::testing::inspect::box_geometry(
-                &*h.pipeline.read(),
-                child_render_id(&h)
-            ),
+            h.pipeline
+                .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, child_render)),
             Some(Size::new(px(60.0), px(40.0))),
             "the rebuilt child must be relaid out in the same frame"
         );
@@ -679,7 +679,8 @@ mod tests {
 
         // Force more layout passes with identical constraints.
         for _ in 0..3 {
-            h.pipeline.write().mark_needs_layout(h.root_render);
+            h.pipeline
+                .with_mut(|owner| owner.mark_needs_layout(h.root_render));
             h.frame();
         }
 
@@ -748,7 +749,8 @@ mod tests {
         h.frame();
         let wide_child = child_render_id(&h);
         assert_eq!(
-            flui_rendering::testing::inspect::box_geometry(&*h.pipeline.read(), wide_child),
+            h.pipeline
+                .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, wide_child)),
             Some(Size::new(px(120.0), px(120.0))),
             "the wide branch's RenderSizedBox is stretched by the tight constraints"
         );
@@ -764,7 +766,8 @@ mod tests {
             "a different view type must remount, not update in place"
         );
         assert!(
-            h.pipeline.read().render_tree().get(wide_child).is_none(),
+            h.pipeline
+                .with(|owner| owner.render_tree().get(wide_child).is_none()),
             "the replaced child's render object must be removed from the tree"
         );
     }

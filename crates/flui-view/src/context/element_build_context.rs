@@ -498,15 +498,9 @@ impl BuildContext for ElementBuildContext {
 
     /// See [`BuildContext::pipeline_owner`]. The owner is on this element's own
     /// node — no ancestor walk.
-    fn pipeline_owner(
-        &self,
-    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
         let tree = self.tree.read();
-        tree.get(self.element_id)?
-            .element()
-            .pipeline_owner_any()?
-            .downcast::<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>()
-            .ok()
+        tree.get(self.element_id)?.element().pipeline_owner()
     }
 
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
@@ -648,8 +642,7 @@ pub(crate) struct BuildCapabilities {
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
     /// The render tree this element is mounted in, cloned from its own
     /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
-    pub(crate) pipeline_owner:
-        Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>>,
+    pub(crate) pipeline_owner: Option<flui_rendering::pipeline::PipelineCell>,
 }
 
 pub(crate) struct BuildCtx<'b> {
@@ -898,9 +891,7 @@ impl BuildContext for BuildCtx<'_> {
     /// `build_scope` the element is *extracted* from its tree node, so a
     /// `BuildContext` cannot look itself up (`ElementNode::element` panics in that
     /// window). See `make_build_ctx`.
-    fn pipeline_owner(
-        &self,
-    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
         self.capabilities.pipeline_owner.clone()
     }
 

@@ -18,12 +18,11 @@ use flui_interaction::events::{
     PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_types::geometry::{Bounds, Pixels, px};
 use flui_types::{Offset, Size};
 use flui_view::View;
-use parking_lot::RwLock;
 
 /// A mounted, laid-out widget tree.
 pub(crate) struct Harness {
@@ -35,7 +34,7 @@ pub(crate) struct Harness {
     /// Concrete type of the caller's logical root below presentation
     /// infrastructure. Element-structure probes resolve this node lazily.
     logical_root_type: TypeId,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
     /// Every `TextInputHandle::set_cursor_area` call recorded by the
     /// installed IME capability, in delivery order. `None` when the harness
     /// was mounted with [`TextInputCapability::Absent`] — there is nothing
@@ -105,7 +104,7 @@ pub(crate) fn mount_with_capabilities(
     text_input: TextInputCapability,
 ) -> Harness {
     let logical_root_type = root.view_type_id();
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     let mut build_owner = flui_view::BuildOwner::new();
     let focus_manager = build_owner.focus_manager();
     let mut tree = flui_view::ElementTree::new();
@@ -155,7 +154,7 @@ pub(crate) fn mount_with_capabilities(
     let root_element = binding.enter_owner_scope(|| {
         let root_element = tree.mount_root_with_pipeline_owner(
             &root,
-            Some(Arc::clone(&pipeline_owner)),
+            Some(pipeline_owner.clone()),
             &mut build_owner.element_owner_mut(),
         );
 
@@ -164,27 +163,25 @@ pub(crate) fn mount_with_capabilities(
         root_element
     });
 
-    let root_render = {
-        let owner = pipeline_owner.read();
+    let root_render = pipeline_owner.with(|owner| {
         let render_tree = owner.render_tree();
         render_tree
             .iter()
             .map(|(id, _)| id)
             .find(|id| render_tree.parent(*id).is_none())
             .expect("the mounted subtree should have a render root")
-    };
-    {
-        let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(root_render));
-        guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(800.0), px(600.0)))));
-    }
+    });
+    pipeline_owner.with_mut(|owner| {
+        owner.set_root_id(Some(root_render));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(800.0), px(600.0)))));
+    });
     binding.enter_owner_scope(|| {
         build_owner
             .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
             .expect("headless frame should succeed");
     });
 
-    binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+    binding.bind_tree(build_owner, tree, pipeline_owner.clone());
 
     Harness {
         binding,
@@ -253,8 +250,8 @@ impl Harness {
         use flui_rendering::hit_testing::HitTestResult;
 
         let mut result = HitTestResult::new();
-        let owner = self.pipeline_owner.read();
-        owner.hit_test(position, &mut result);
+        self.pipeline_owner
+            .with(|owner| owner.hit_test(position, &mut result));
         result
     }
 
@@ -392,8 +389,20 @@ impl Harness {
 
     /// The shared pipeline owner, so a post-frame callback can read committed
     /// geometry from inside the frame.
-    pub(crate) fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
-        Arc::clone(&self.pipeline_owner)
+    pub(crate) fn pipeline_owner(&self) -> PipelineCell {
+        self.pipeline_owner.clone()
+    }
+
+    /// The owner-local post-frame handle installed on this harness's
+    /// `BuildOwner`, so a test can `schedule_local` a callback that captures
+    /// the (`!Send`) [`PipelineCell`] — `add_post_frame_callback`'s `Send`
+    /// bound cannot carry it.
+    pub(crate) fn post_frame_handle(&mut self) -> flui_scheduler::PostFrameHandle {
+        self.binding
+            .build_owner_mut()
+            .post_frame_handle()
+            .expect("post-frame handle installed by mount_with_capabilities")
+            .clone()
     }
 
     /// The `debug_name()` of every render object currently in the tree.
@@ -402,12 +411,13 @@ impl Harness {
     /// objects a view built, without duplicating the render-layer harness in
     /// `flui-objects`, which is where their behavior is pinned.
     pub(crate) fn render_debug_names(&self) -> Vec<&'static str> {
-        let owner = self.pipeline_owner.read();
-        owner
-            .render_tree()
-            .iter()
-            .map(|(_, node)| node.debug_name())
-            .collect()
+        self.pipeline_owner.with(|owner| {
+            owner
+                .render_tree()
+                .iter()
+                .map(|(_, node)| node.debug_name())
+                .collect()
+        })
     }
 
     /// The only child of `parent`.

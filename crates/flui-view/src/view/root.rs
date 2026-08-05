@@ -8,19 +8,15 @@
 //! This corresponds to Flutter's `_RawViewInternal` and `_RawViewElement`
 //! which bootstrap the render tree for a FlutterView.
 
-use std::{
-    any::{Any, TypeId},
-    sync::Arc,
-};
+use std::any::{Any, TypeId};
 
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::{
-    pipeline::PipelineOwner,
+    pipeline::{PipelineCell, PipelineOwner},
     storage::RenderNode,
     view::{RenderView as RenderViewObject, RenderViewAdapter, ViewConfiguration},
 };
 use flui_types::{Size, geometry::px};
-use parking_lot::RwLock;
 
 use crate::{
     element::{Lifecycle, RenderObjectElement, RenderSlot, RenderTreeRootElement},
@@ -95,8 +91,8 @@ pub struct RootRenderElement<V: View + Clone> {
     view: RootRenderView<V>,
     /// The root RenderObject ID in RenderTree
     render_id: Option<RenderId>,
-    /// PipelineOwner for this render tree
-    pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+    /// [`PipelineCell`] handle to this render tree's `PipelineOwner`
+    pipeline_owner: Option<PipelineCell>,
     /// Lifecycle state
     lifecycle: Lifecycle,
     /// Depth (always 0 for root)
@@ -132,14 +128,16 @@ impl<V: View + Clone + 'static> RootRenderElement<V> {
         }
     }
 
-    /// Set the PipelineOwner for this render tree.
-    pub fn set_pipeline_owner(&mut self, owner: Arc<RwLock<PipelineOwner>>) {
+    /// Set the [`PipelineCell`] for this render tree.
+    pub fn set_pipeline_owner(&mut self, owner: PipelineCell) {
         self.pipeline_owner = Some(owner);
     }
 
-    /// Get the PipelineOwner.
-    pub fn pipeline_owner(&self) -> Option<&Arc<RwLock<PipelineOwner>>> {
-        // PORT-CHECK-OK-SP6: RootView pipeline_owner accessor; pre-existing SP-6; consolidation tracked
+    /// Get the [`PipelineCell`].
+    ///
+    /// No SP-6 marker needed: `PipelineCell` is a lock-free, closure-scoped
+    /// handle, not a lock guard.
+    pub fn pipeline_owner(&self) -> Option<&PipelineCell> {
         self.pipeline_owner.as_ref()
     }
 
@@ -201,7 +199,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         let dpr = self
             .pipeline_owner
             .as_ref()
-            .map_or(1.0, |owner| owner.read().device_pixel_ratio());
+            .map_or(1.0, |owner| owner.with(PipelineOwner::device_pixel_ratio));
         let config = ViewConfiguration::from_size(logical_size, dpr);
         render_view.set_configuration(config);
         // Bootstrap the root transform + root layer. Without this,
@@ -213,11 +211,13 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
 
         // Insert into PipelineOwner's RenderTree via RenderViewAdapter
         if let Some(pipeline_owner) = &self.pipeline_owner {
-            let mut owner = pipeline_owner.write();
-            let adapter = RenderViewAdapter::new(render_view);
-            let node = RenderNode::new_box(Box::new(adapter));
-            let render_id = owner.insert_render_node(node);
-            owner.set_root_id(Some(render_id));
+            let render_id = pipeline_owner.with_mut(|owner| {
+                let adapter = RenderViewAdapter::new(render_view);
+                let node = RenderNode::new_box(Box::new(adapter));
+                let render_id = owner.insert_render_node(node);
+                owner.set_root_id(Some(render_id));
+                render_id
+            });
             self.render_id = Some(render_id);
 
             tracing::debug!(
@@ -243,12 +243,13 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
             // variant (`remove_shallow`) would orphan descendants in the
             // slab instead.
 
-            let mut owner = pipeline_owner.write();
-            owner.set_root_id(None);
-            // Dispose protocol: the owner evicts the subtree's dirty
-            // entries before freeing the slots (a Drop impl cannot —
-            // it has no &PipelineOwner).
-            owner.remove_render_object(render_id);
+            pipeline_owner.with_mut(|owner| {
+                owner.set_root_id(None);
+                // Dispose protocol: the owner evicts the subtree's dirty
+                // entries before freeing the slots (a Drop impl cannot —
+                // it has no &mut PipelineOwner).
+                owner.remove_render_object(render_id);
+            });
         }
         self.render_id = None;
 
@@ -287,32 +288,33 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
             // Update configuration if size changed
             if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id)
             {
-                // Mutable access to the render object goes
-                // through `&mut RenderTree` (`render_tree_mut().get_mut`) rather
-                // than acquiring a per-node `RwLock` write guard. The pipeline
-                // owner is still locked via its outer `Arc<RwLock<PipelineOwner>>`
-                // (shared-infrastructure lock, allowed per `docs/PORT.md`).
-                let mut owner = pipeline_owner.write();
-                // Read the owner's real DPR before re-deriving the config —
-                // `mount` sources the DPR the same way (`device_pixel_ratio()`).
-                // A hard-coded `1.0` here would halve the root's scale on
-                // every update after the first on any HiDPI (2x+) display,
-                // since the config `mount` built with the real DPR would be
-                // silently overwritten by this one.
-                let dpr = owner.device_pixel_ratio();
-                if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
-                    // RenderView uses BoxProtocol
-                    let render_object = node.box_render_object_mut();
-                    if let Some(render_view) = render_object
-                        .as_any_mut()
-                        .downcast_mut::<RenderViewObject>()
-                    {
-                        let (width, height) = self.view.size;
-                        let logical_size = Size::new(px(width), px(height));
-                        let config = ViewConfiguration::from_size(logical_size, dpr);
-                        render_view.set_configuration(config);
+                // Mutable access to the render object goes through
+                // `&mut RenderTree` (`render_tree_mut().get_mut`) rather than
+                // acquiring a per-node lock guard. The owner itself is
+                // reached through `PipelineCell::with_mut`'s closure-scoped
+                // checkout (owner-local, not a shared-infrastructure lock).
+                pipeline_owner.with_mut(|owner| {
+                    // Read the owner's real DPR before re-deriving the config —
+                    // `mount` sources the DPR the same way (`device_pixel_ratio()`).
+                    // A hard-coded `1.0` here would halve the root's scale on
+                    // every update after the first on any HiDPI (2x+) display,
+                    // since the config `mount` built with the real DPR would be
+                    // silently overwritten by this one.
+                    let dpr = owner.device_pixel_ratio();
+                    if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
+                        // RenderView uses BoxProtocol
+                        let render_object = node.box_render_object_mut();
+                        if let Some(render_view) = render_object
+                            .as_any_mut()
+                            .downcast_mut::<RenderViewObject>()
+                        {
+                            let (width, height) = self.view.size;
+                            let logical_size = Size::new(px(width), px(height));
+                            let config = ViewConfiguration::from_size(logical_size, dpr);
+                            render_view.set_configuration(config);
+                        }
                     }
-                }
+                });
             }
         }
     }
@@ -345,10 +347,8 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         vec![dyn_clone::clone_box(&self.view.child as &dyn View)]
     }
 
-    fn pipeline_owner_any(&self) -> Option<Arc<dyn Any + Send + Sync>> {
-        self.pipeline_owner
-            .as_ref()
-            .map(|po| Arc::clone(po) as Arc<dyn Any + Send + Sync>)
+    fn pipeline_owner(&self) -> Option<PipelineCell> {
+        self.pipeline_owner.clone()
     }
 
     /// The root's own `RenderId`, once `mount` has created its `RenderView`.
@@ -377,14 +377,9 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         self.render_id
     }
 
-    fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
-        // Downcast from Arc<dyn Any> to Arc<RwLock<PipelineOwner>>
-        if let Ok(pipeline_owner) = owner.downcast::<RwLock<PipelineOwner>>() {
-            self.pipeline_owner = Some(pipeline_owner);
-            tracing::debug!("RootRenderElement::set_pipeline_owner_any received PipelineOwner");
-        } else {
-            tracing::warn!("RootRenderElement::set_pipeline_owner_any received wrong type");
-        }
+    fn set_pipeline_owner(&mut self, owner: PipelineCell) {
+        self.pipeline_owner = Some(owner);
+        tracing::debug!("RootRenderElement::set_pipeline_owner received PipelineCell");
     }
 
     fn set_parent_render_id(&mut self, _parent_id: Option<RenderId>) {
@@ -430,10 +425,11 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
             // `RenderTree::adopt_child`.
             if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
-                pipeline_owner
-                    .write()
-                    .render_tree_mut()
-                    .adopt_child(parent_id, *child_render_id);
+                pipeline_owner.with_mut(|owner| {
+                    owner
+                        .render_tree_mut()
+                        .adopt_child(parent_id, *child_render_id);
+                });
             }
         }
     }
@@ -464,10 +460,11 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
             // `RenderTree::drop_child`.
             if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
-                pipeline_owner
-                    .write()
-                    .render_tree_mut()
-                    .drop_child(parent_id, *child_render_id);
+                pipeline_owner.with_mut(|owner| {
+                    owner
+                        .render_tree_mut()
+                        .drop_child(parent_id, *child_render_id);
+                });
             }
         }
     }
@@ -487,16 +484,12 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
 // ============================================================================
 
 impl<V: View + Clone + 'static> RenderTreeRootElement for RootRenderElement<V> {
-    fn pipeline_owner(&self) -> Option<Arc<dyn Any + Send + Sync>> {
-        self.pipeline_owner
-            .as_ref()
-            .map(|p| Arc::clone(p) as Arc<dyn Any + Send + Sync>)
+    fn pipeline_owner(&self) -> Option<PipelineCell> {
+        self.pipeline_owner.clone()
     }
 
-    fn set_pipeline_owner(&mut self, owner: Arc<dyn Any + Send + Sync>) {
-        if let Ok(pipeline) = owner.downcast::<RwLock<PipelineOwner>>() {
-            self.pipeline_owner = Some(pipeline);
-        }
+    fn set_pipeline_owner(&mut self, owner: PipelineCell) {
+        self.pipeline_owner = Some(owner);
     }
 
     // Attach / detach to the PipelineOwner is handled inline in `mount()`
@@ -561,9 +554,9 @@ mod tests {
         let root = RootRenderView::new(child, 800.0, 600.0);
         let mut element = RootRenderElement::new(&root);
 
-        // Set up PipelineOwner
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        element.set_pipeline_owner(Arc::clone(&pipeline_owner));
+        // Set up the pipeline cell
+        let pipeline_owner = flui_rendering::pipeline::PipelineCell::new(PipelineOwner::new());
+        element.set_pipeline_owner(pipeline_owner.clone());
 
         // Mount
         let mut build_owner = crate::BuildOwner::new();

@@ -39,7 +39,7 @@
 //! ```
 
 use std::{
-    any::{Any, TypeId},
+    any::TypeId,
     marker::PhantomData,
     sync::{
         Arc,
@@ -48,8 +48,7 @@ use std::{
 };
 
 use flui_foundation::{ElementId, ListenerCallback, RenderId};
-use flui_rendering::pipeline::PipelineOwner;
-use parking_lot::RwLock;
+use flui_rendering::pipeline::PipelineCell;
 
 use super::arity::ElementArity;
 use crate::{element::Lifecycle, owner::ExternalBuildScheduler, view::View};
@@ -59,7 +58,7 @@ use crate::{element::Lifecycle, owner::ExternalBuildScheduler, view::View};
 /// per `Element<V, A, B>` instantiation.
 ///
 /// Why this split exists: the lifecycle methods (`mount`/`unmount`/
-/// `activate`/`deactivate`/`set_pipeline_owner_any`/`set_parent_render_id`)
+/// `activate`/`deactivate`/`set_pipeline_owner`/`set_parent_render_id`)
 /// run only when nodes mount or move — never per frame — yet as generic
 /// methods their bodies (dominated by `tracing` callsite machinery) were
 /// duplicated into every one of the 130+ view-type instantiations in
@@ -83,8 +82,10 @@ struct CoreState {
     /// callbacks to mark the element dirty without mutable access.
     dirty: Arc<AtomicBool>,
 
-    /// PipelineOwner for render tree access, propagated from parent elements.
-    pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+    /// Owner-local handle to the render tree's `PipelineOwner`, propagated
+    /// from parent elements. Typed directly -- no `Arc<dyn Any>` erasure --
+    /// since `PipelineCell` is already a concrete, non-generic type.
+    pipeline_owner: Option<PipelineCell>,
 
     /// Parent's RenderId for tree structure.
     parent_render_id: Option<RenderId>,
@@ -179,19 +180,12 @@ impl CoreState {
         );
     }
 
-    fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>, view_type: TypeId) {
-        if let Ok(pipeline_owner) = owner.downcast::<RwLock<PipelineOwner>>() {
-            self.pipeline_owner = Some(pipeline_owner);
-            tracing::debug!(
-                "ElementCore::set_pipeline_owner_any received PipelineOwner for view_type={:?}",
-                view_type
-            );
-        } else {
-            tracing::warn!(
-                "ElementCore::set_pipeline_owner_any received wrong type for view_type={:?}",
-                view_type
-            );
-        }
+    fn set_pipeline_owner(&mut self, owner: PipelineCell, view_type: TypeId) {
+        self.pipeline_owner = Some(owner);
+        tracing::debug!(
+            "ElementCore::set_pipeline_owner received PipelineCell for view_type={:?}",
+            view_type
+        );
     }
 
     fn set_parent_render_id(&mut self, parent_id: Option<RenderId>, view_type: TypeId) {
@@ -500,18 +494,14 @@ where
     // Pipeline Owner (eliminates propagation boilerplate ~15 lines)
     // ========================================================================
 
-    /// Set the PipelineOwner for this element.
+    /// Set the [`PipelineCell`] for this element.
     ///
-    /// Downcasts from `Arc<dyn Any>` to `Arc<RwLock<PipelineOwner>>`.
-    /// This pattern is required for object safety of ElementBase.
-    ///
-    /// # Arguments
-    ///
-    /// * `owner` - `Arc<dyn Any>` that should downcast to
-    ///   `Arc<RwLock<PipelineOwner>>`
+    /// `PipelineCell` is already a concrete, non-generic type, so this no
+    /// longer needs the `Arc<dyn Any>` erase-then-downcast dance the `_any`
+    /// name used to flag -- it takes the handle directly.
     #[inline]
-    pub fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
-        self.state.set_pipeline_owner_any(owner, TypeId::of::<V>());
+    pub fn set_pipeline_owner(&mut self, owner: PipelineCell) {
+        self.state.set_pipeline_owner(owner, TypeId::of::<V>());
     }
 
     /// Set the parent's RenderId for tree structure.
@@ -631,9 +621,11 @@ where
         self.state.rebuild_handle()
     }
 
-    /// Get the PipelineOwner, if set.
-    pub fn pipeline_owner(&self) -> Option<&Arc<RwLock<PipelineOwner>>> {
-        // PORT-CHECK-OK-SP6: ElementCore pipeline_owner accessor; pre-existing SP-6
+    /// Get the [`PipelineCell`], if set.
+    ///
+    /// No SP-6 marker needed: `PipelineCell` is a lock-free, closure-scoped
+    /// handle, not a lock guard.
+    pub fn pipeline_owner(&self) -> Option<&PipelineCell> {
         self.state.pipeline_owner.as_ref()
     }
 

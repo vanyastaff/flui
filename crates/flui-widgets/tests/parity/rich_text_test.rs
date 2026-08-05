@@ -120,12 +120,12 @@ use crate::harness;
 
 /// The mounted `RichText`'s own `RenderParagraph` diagnostics node.
 fn render_node(laid: &crate::common::LaidOut) -> DiagnosticsNode {
-    let owner = laid.pipeline_owner();
-    let owner = owner.read();
-    render_diagnostics(&owner)
-        .find_descendant_unique("RenderParagraph")
-        .expect("RichText must mount exactly one RenderParagraph")
-        .clone()
+    laid.pipeline_owner().with(|owner| {
+        render_diagnostics(owner)
+            .find_descendant_unique("RenderParagraph")
+            .expect("RichText must mount exactly one RenderParagraph")
+            .clone()
+    })
 }
 
 /// `RichText`'s `align`, `direction`, `max_lines`, and text content reach
