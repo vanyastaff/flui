@@ -976,13 +976,41 @@ mod tests {
     /// signature forbids (see `BindingPtr`'s doc). The deadlock this test
     /// guards against is lock reentrancy on `semantics_listeners`, not a
     /// cross-thread race, so same-thread execution exercises the identical
-    /// hazard; the former `recv_timeout`-bounded hang-into-panic conversion
-    /// is lost (a regression here hangs this thread instead of panicking
-    /// it) — a documented behavior delta from the same-thread confinement,
-    /// not a gap in what the test proves when it passes.
+    /// hazard.
+    ///
+    /// The former `recv_timeout`-bounded hang-into-panic conversion is
+    /// restored below by a watchdog thread instead: it never touches
+    /// `binding` (only a `Send`-safe `Arc<AtomicBool>` completion flag),
+    /// so it does not reopen the same-thread-confinement problem this test
+    /// exists to accommodate. `cargo nextest` has no per-test timeout
+    /// configured in this workspace, so an actual regression here — the
+    /// exact deadlock this test guards against — would otherwise hang the
+    /// whole run rather than fail it.
     #[test]
     fn semantics_listener_that_registers_another_listener_does_not_deadlock() {
         use std::sync::atomic::AtomicUsize;
+        use std::time::Duration;
+
+        // Watchdog: a real regression here is a lock-reentrancy deadlock on
+        // the *main test thread*, which a panic on any OTHER thread cannot
+        // unblock — only terminating the process can. `completed` is the
+        // only thing the watchdog thread touches; `binding` itself never
+        // crosses a thread boundary.
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_watchdog = Arc::clone(&completed);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(5));
+            if !completed_watchdog.load(Ordering::SeqCst) {
+                eprintln!(
+                    "semantics_listener_that_registers_another_listener_does_not_deadlock: \
+                     watchdog fired after 5s -- the test thread is hung, which IS the \
+                     lock-reentrancy deadlock this test exists to catch. Hard-exiting: a \
+                     panic on this thread cannot unblock the hung test thread, and no \
+                     nextest terminate policy would otherwise stop this run."
+                );
+                std::process::exit(101);
+            }
+        });
 
         let binding = RenderingFlutterBinding::new();
         // `&raw const` takes the pointer directly, without building an
@@ -1013,6 +1041,12 @@ mod tests {
         // Second toggle: now observes `late_listener`, registered above.
         binding.set_semantics_enabled(false);
         let after_second = late_calls.load(Ordering::Relaxed);
+
+        // Past the only two calls that could actually hang -- disarm the
+        // watchdog now, before the assertions below, so an ordinary
+        // assertion failure (a fast, expected test failure) is never
+        // mistaken for the slow hang it exists to catch.
+        completed.store(true, Ordering::SeqCst);
 
         binding.remove_semantics_enabled_listener(&late_listener);
         binding.remove_semantics_enabled_listener(&reentrant_listener);
