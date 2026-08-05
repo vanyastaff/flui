@@ -1015,6 +1015,8 @@ evidence = [
     { kind = "test", file = "crates/flui-view/src/binding.rs", contains = "fn detach_root_widget_disposes_every_descendant_not_just_the_root" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispose_during_teardown_cannot_reach_sibling_or_dead_services" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn closing_presentation_a_leaves_sibling_layer_tree_identical" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropped_presentations_surviving_pipeline_handles_fail_closed" },
 ]
 
 [[contract]]
