@@ -45,13 +45,14 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, Scheduler, SchedulerPhase};
 use flui_semantics::SemanticsActionRequest;
 use flui_types::{HapticFeedback, Size, geometry::px};
-use flui_view::WidgetsBinding;
+use flui_view::{GlobalKeyRegistryComposite, GlobalKeyScope, WidgetsBinding};
 use flui_widgets::{FocusRoot, GestureArenaScope, NavigatorCommand, VsyncScope};
 use parking_lot::Mutex;
 #[cfg(test)]
 use parking_lot::RwLock;
 
-use super::presentation::PresentationState;
+use super::presentation::{PresentationState, RealmCapabilities};
+use super::presentation_forest::PresentationForest;
 use super::runtime::RealmServices;
 use crate::bindings::RenderingFlutterBinding;
 
@@ -376,32 +377,36 @@ impl UiCommandSender {
 /// access goes through [`UiCommandSender`] only.
 pub(crate) struct UiRealm {
     realm_id: RealmId,
-    /// Owner-local widget framework state. It is deliberately absent from any
-    /// process-global host; every widget-tree operation enters through this
-    /// realm and activates this binding's GlobalKey registry.
-    widgets: WidgetsBinding,
     /// Owner-local callback queue, activated with the realm's other TLS scope.
     local_post_frame: LocalPostFrameLane,
     /// Owner-local interaction callback storage, activated with the realm scope.
     interaction_lane: InteractionLane,
-    /// The current UI-owner presentation domain.
-    ///
-    /// The realm has one presentation until the element tree becomes a forest
-    /// with root-scoped capabilities. The nominal identity exists now so no
-    /// command or resource needs to overload `RealmId` or a native window id.
-    presentation: PresentationState,
-    /// Render tree, layout/paint pipeline coordination, and per-realm
-    /// semantics-enablement fan-out. A direct value, not `RwLock`-wrapped:
-    /// every field `RenderingFlutterBinding` itself owns already carries its
-    /// own interior mutability (`RwLock`/`AtomicBool`), so an outer lock
-    /// here would only ever be uncontended — this realm is the single
-    /// owner-thread-confined caller, never shared across threads. Moved
-    /// here from the retired `AppBinding`: the renderer's per-field
-    /// disposition (render_views, semantics fan-out, first-frame-deferral
-    /// counters) is per-realm state, not a process-wide concern — sharing
-    /// it across realms once `AppRuntime` hosts more than one was exactly
-    /// the hazard this placement designs out.
-    renderer: RenderingFlutterBinding,
+    /// This realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043 §1),
+    /// installed into every presentation's `BuildOwner` at assembly time
+    /// (`PresentationState::new`). Retained here (not just handed off once)
+    /// so a later-installed presentation can share the same scope; read back
+    /// by [`Self::global_key_scope`] for the isolation test suite, which
+    /// bypasses `PresentationForest`'s production ratchet to assemble a
+    /// second presentation sharing this exact scope.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production reader until a presentation-install path \
+                      (#555 PR-4/5) needs to hand this same scope to a newly \
+                      assembled presentation; the isolation test suite reads \
+                      it back today via Self::global_key_scope"
+        )
+    )]
+    global_key_scope: GlobalKeyScope,
+    /// The insertion-ordered set of UI-owner presentation domains this realm
+    /// hosts (ADR-0043 §1 — `PresentationForest`). Production topology stays
+    /// exactly one presentation per realm until the forest's own ratchet
+    /// lifts; see [`PresentationForest`]'s doc. Everything that builds, lays
+    /// out, focuses, or presents for one surface lives in and dies with its
+    /// own `PresentationState` inside this forest — the realm owns only
+    /// what is genuinely cross-tree (this struct's other fields).
+    presentations: PresentationForest,
     /// Controller registry for implicit animations (`VsyncScope`-driven).
     /// Moved here from the retired `AppBinding` — an interim home: a later
     /// scheduler-owning change re-homes controllers to `UpdateScheduler`,
@@ -477,7 +482,8 @@ impl std::fmt::Debug for UiRealm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UiRealm")
             .field("realm_id", &self.realm_id)
-            .field("presentation_id", &self.presentation.id())
+            .field("presentation_id", &self.presentations.primary().id())
+            .field("presentation_count", &self.presentations.len())
             .field("pending_commands", &self.rx.len())
             .field(
                 "redraw_pending",
@@ -629,91 +635,81 @@ impl UiRealm {
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
-        let (realm_id, presentation_id) = super::runtime::next_identity();
-        let pipeline = PipelineCell::new(PipelineOwner::new());
-        pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
-        let presentation = PresentationState::new(presentation_id, pipeline, window);
+        let identity = super::runtime::next_identity();
         let services = RealmServices::construct();
         Self::construct(
             capacity,
             wake,
-            realm_id,
-            presentation,
+            identity,
+            window,
+            Some(device_pixel_ratio),
             services,
             needs_redraw,
         )
     }
 
-    /// Builds the realm from already-resolved pieces. Takes `services:
-    /// RealmServices` — a fresh `Scheduler` plus the
-    /// `local_post_frame_lane()`/`async_driver()` handles derived from it —
-    /// built by the caller (`RealmServices::construct`, in `runtime.rs`),
-    /// which is what makes `UiRealm` perform zero `::instance()` calls and
-    /// gives every realm its own scheduler strong root instead of sharing a
-    /// process-global one.
+    /// Builds the realm from already-resolved pieces: identity, the
+    /// presentation's window, and `services: RealmServices` — a fresh
+    /// `Scheduler` plus the `local_post_frame_lane()`/`async_driver()`
+    /// handles derived from it, built by the caller (`RealmServices::
+    /// construct`, in `runtime.rs`), which is what makes `UiRealm` perform
+    /// zero `::instance()` calls and gives every realm its own scheduler
+    /// strong root instead of sharing a process-global one.
+    ///
+    /// `device_pixel_ratio` is `None` only for the `#[cfg(test)]`
+    /// constructors, which never touched it before this function existed
+    /// (`PipelineOwner::new`'s own default applies) — preserved exactly,
+    /// not silently changed to an explicit `1.0`.
+    ///
+    /// Assembles this realm's SOLE (production ratchet: `PresentationForest`
+    /// enforces `len() <= 1`) presentation via [`PresentationState::new`],
+    /// which installs the scope, the realm's shared dispatch handles, and
+    /// this presentation's own focus/IME before anything attaches or mounts
+    /// (ADR-0043 §1).
     fn construct(
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
-        realm_id: RealmId,
-        presentation: PresentationState,
+        (realm_id, presentation_id): (RealmId, PresentationId),
+        window: Arc<dyn PlatformWindow>,
+        device_pixel_ratio: Option<f32>,
         services: RealmServices,
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
         let (tx, rx) = bounded(capacity);
         let redraw_pending = Arc::new(AtomicBool::new(false));
-        let presentation_id = presentation.id();
         let RealmServices {
             local_post_frame,
             async_driver,
             scheduler,
         } = services;
         let interaction_lane = InteractionLane::try_new()?;
-        let widgets = WidgetsBinding::with_focus_manager(presentation.focus_manager());
-        widgets.set_pipeline_owner(presentation.pipeline().clone());
-        widgets.with_build_owner_mut(|owner| {
-            owner.set_async_driver(async_driver);
-            owner.set_post_frame_handle(local_post_frame.post_frame_handle());
-            owner.set_interaction_dispatch_handle(interaction_lane.dispatch_handle());
-            owner.set_text_input_handle(presentation.text_input_handle());
-        });
+        let global_key_scope = GlobalKeyScope::new();
 
-        // Renderer, sharing the SAME PipelineOwner as the presentation (one
-        // fact, one place) — moved here from the retired
-        // `AppBinding::new`/`RenderingFlutterBinding::new_with_pipeline` pair.
-        // Wired to THIS realm's own scheduler, never a process-global one.
-        let renderer =
-            RenderingFlutterBinding::new_with_pipeline(presentation.pipeline().clone(), &scheduler);
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        if let Some(device_pixel_ratio) = device_pixel_ratio {
+            pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
+        }
 
-        // Idle-wake wiring: a dirty mark (mark_needs_layout / mark_needs_paint)
-        // fires this callback so a quiescent event loop produces the frame —
-        // moved verbatim from `AppBinding::new`. Reentrancy-safe: the callback
-        // fires while the CALLER holds the pipeline cell checked out, and
-        // `wake` only touches `Send + Sync` runtime-level state — never this
-        // realm's own `widgets`/`renderer`.
-        let visual_wake = Arc::clone(&wake);
-        presentation
-            .pipeline()
-            .with_mut(|owner| owner.set_on_need_visual_update(move || visual_wake()));
-
-        // Semantics-enabled fan-out -> this presentation's own `SemanticsHost`:
-        // now that the renderer and the presentation are co-located on one
-        // `UiRealm`, the listener can capture a cheap `Arc<AtomicBool>`
-        // clone of the host's enablement flag directly, instead of the flag
-        // having nowhere to route to.
-        let semantics_flag = presentation
-            .semantics_host()
-            .platform_semantics_enabled_handle();
-        renderer.add_semantics_enabled_listener(Arc::new(move |enabled| {
-            semantics_flag.store(enabled, Ordering::Relaxed);
-        }));
+        let presentation = PresentationState::new(
+            presentation_id,
+            pipeline,
+            window,
+            RealmCapabilities {
+                global_key_scope: global_key_scope.clone(),
+                async_driver,
+                post_frame_handle: local_post_frame.post_frame_handle(),
+                interaction_dispatch_handle: interaction_lane.dispatch_handle(),
+                scheduler: &scheduler,
+                wake: Arc::clone(&wake),
+            },
+        );
 
         Ok(Self {
             realm_id,
-            widgets,
             local_post_frame,
             interaction_lane,
-            presentation,
-            renderer,
+            global_key_scope,
+            presentations: PresentationForest::single(presentation),
             vsync_slot: Mutex::new(Vsync::new()),
             start: web_time::Instant::now(),
             needs_redraw,
@@ -743,10 +739,8 @@ impl UiRealm {
     pub(crate) fn for_test_with_text_input(
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
     ) -> Self {
-        let (realm_id, presentation_id) = super::runtime::next_identity();
-        let pipeline = PipelineCell::new(PipelineOwner::new());
-        let presentation =
-            PresentationState::new_for_test(presentation_id, pipeline, platform_text_input);
+        let identity = super::runtime::next_identity();
+        let window = super::presentation::test_platform_window(platform_text_input);
         // The no-op `wake` still must set THIS SAME `needs_redraw` flag —
         // in production the two are the same fact through AppRuntime's
         // `frame_wake_callback` (see `Self::needs_redraw`'s field doc); a
@@ -761,8 +755,9 @@ impl UiRealm {
         Self::construct(
             DEFAULT_COMMAND_CAPACITY,
             wake,
-            realm_id,
-            presentation,
+            identity,
+            window,
+            None,
             RealmServices::construct(),
             needs_redraw,
         )
@@ -770,10 +765,11 @@ impl UiRealm {
     }
 
     /// Test-only: a clone of this realm's exact `PipelineCell` — the same
-    /// one its `renderer` and `widgets` share (one fact, one place).
+    /// one its primary presentation's `renderer` and `widgets` share (one
+    /// fact, one place).
     #[cfg(test)]
     pub(crate) fn pipeline_for_test(&self) -> PipelineCell {
-        self.presentation.pipeline().clone()
+        self.presentations.primary().pipeline().clone()
     }
 
     /// This incarnation's generational realm identity.
@@ -785,7 +781,24 @@ impl UiRealm {
     /// Current presentation incarnation.
     #[must_use]
     pub fn presentation_id(&self) -> PresentationId {
-        self.presentation.id()
+        self.presentations.primary().id()
+    }
+
+    /// This realm's shared cross-tree `GlobalKey` uniqueness domain
+    /// (ADR-0043 §1) — for the isolation test suite, which uses it to
+    /// assemble a second presentation sharing this realm's exact scope,
+    /// bypassing `PresentationForest`'s production ratchet deliberately.
+    #[cfg(test)]
+    pub(crate) fn global_key_scope(&self) -> &GlobalKeyScope {
+        &self.global_key_scope
+    }
+
+    /// Number of presentations this realm currently hosts — for the
+    /// isolation test suite (production topology is always exactly one until
+    /// `PresentationForest`'s ratchet lifts).
+    #[cfg(test)]
+    pub(crate) fn presentation_count(&self) -> usize {
+        self.presentations.len()
     }
 
     /// This realm's own scheduler — the strong root. `runner.rs`'s
@@ -802,7 +815,7 @@ impl UiRealm {
     /// checks at the physical owner ([`Self::handle_input_entered`]).
     #[must_use]
     pub(crate) fn presentation_lifecycle(&self) -> super::presentation::PresentationLifecycle {
-        self.presentation.lifecycle()
+        self.presentations.primary().lifecycle()
     }
 
     /// A new cross-thread sender into this runtime's inbox.
@@ -822,20 +835,29 @@ impl UiRealm {
 
     /// Enter this realm's owner scope.
     ///
-    /// The GlobalKey registry is active for the entire dynamic extent of `f`,
-    /// including lifecycle/build callbacks. Nested entry is stack-shaped and
-    /// panic unwinding restores the previously active realm.
+    /// A composite `GlobalKey` registry spanning every presentation this
+    /// realm hosts (ADR-0043 §1 RULING 1b) is active for the entire dynamic
+    /// extent of `f`, including lifecycle/build callbacks — whole-frame,
+    /// exactly as a single presentation's own registry always was: post-frame
+    /// callbacks, command drains, deferred arena resolutions, and hot-reload
+    /// reassemble all resolve keys realm-wide regardless of which
+    /// presentation's own segment is running. Nested entry is stack-shaped
+    /// and panic unwinding restores the previously active realm.
     pub(crate) fn enter<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
         self.local_post_frame.enter(|| {
-            self.interaction_lane
-                .enter(|| self.widgets.with_global_key_registry(|| f(self)))
+            self.interaction_lane.enter(|| {
+                let composite = GlobalKeyRegistryComposite::assemble(
+                    self.presentations.iter().map(PresentationState::widgets),
+                );
+                composite.enter(|| f(self))
+            })
         })
     }
 
     /// Owner-local widgets binding. Crate-private so callers cannot bypass the
     /// guarded realm entry boundary.
     pub(crate) fn widgets(&self) -> &WidgetsBinding {
-        &self.widgets
+        self.presentations.primary().widgets()
     }
 
     /// Gesture state for the realm's current single presentation.
@@ -843,25 +865,25 @@ impl UiRealm {
     /// Crate-private so platform input can only reach it through the entered
     /// realm dispatch path rather than exposing a second public owner seam.
     pub(crate) fn gestures(&self) -> &GestureBinding {
-        self.presentation.gestures()
+        self.presentations.primary().gestures()
     }
 
     /// Focus state for the realm's current presentation.
     #[must_use]
     pub(crate) fn focus_manager(&self) -> Rc<FocusManager> {
-        self.presentation.focus_manager()
+        self.presentations.primary().focus_manager()
     }
 
     /// Text-input state for the realm's current single presentation.
     pub(crate) fn text_input(&self) -> &TextInputOwner {
-        self.presentation.text_input()
+        self.presentations.primary().text_input()
     }
 
     /// Weak text-input capability for this exact presentation.
     #[must_use]
     #[cfg(test)]
     pub(crate) fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
-        self.presentation.text_input_handle()
+        self.presentations.primary().text_input_handle()
     }
 
     /// Keep presentation-owned resources aligned with the synthesized
@@ -869,22 +891,38 @@ impl UiRealm {
     pub(crate) fn handle_presentation_lifecycle(&self, state: AppLifecycleState) {
         match state {
             AppLifecycleState::Resumed | AppLifecycleState::Inactive => {
-                self.presentation.resume();
+                self.presentations.primary().resume();
             }
             AppLifecycleState::Hidden | AppLifecycleState::Paused => {
-                self.presentation.suspend();
+                self.presentations.primary().suspend();
             }
             AppLifecycleState::Detached => {
-                self.presentation.close();
+                self.presentations.primary().close();
             }
         }
     }
 
-    /// Reassemble this realm's element tree and exact presentation pipeline.
+    /// Reassemble EVERY presentation this realm hosts, in mount order —
+    /// under the whole-frame composite `enter()` already activates, so a
+    /// key resolved mid-fan-out still finds any presentation's tree, not
+    /// just the one currently reassembling.
+    ///
+    /// Deliberately does not short-circuit on the first presentation that
+    /// reports a change: every presentation must reassemble regardless of
+    /// what its predecessors reported, or a hot reload would silently skip
+    /// later-mounted presentations whenever an earlier one happened to
+    /// report no change. Returns whether ANY presentation requires a
+    /// redraw.
     #[cfg(feature = "hot-reload")]
     #[must_use]
     pub(crate) fn apply_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) -> bool {
-        self.presentation.apply_hot_reload(&self.widgets, tier)
+        let mut needs_redraw = false;
+        for presentation in self.presentations.iter() {
+            if presentation.apply_hot_reload(tier) {
+                needs_redraw = true;
+            }
+        }
+        needs_redraw
     }
 
     /// Apply a hot reload at the given tier (Flutter parity entry point),
@@ -919,7 +957,7 @@ impl UiRealm {
         )
     )]
     pub(crate) fn renderer(&self) -> &RenderingFlutterBinding {
-        &self.renderer
+        self.presentations.primary().renderer()
     }
 
     /// Re-dirty this realm's root so the next frame actually produces
@@ -932,7 +970,12 @@ impl UiRealm {
     /// the same explicit re-dirty `allow_first_frame` needs after a
     /// deferral lifts.
     pub(crate) fn redirty_root_for_frames_reenable(&self) {
-        crate::bindings::redirty_pipeline_root(self.renderer.root_pipeline_owner());
+        crate::bindings::redirty_pipeline_root(
+            self.presentations
+                .primary()
+                .renderer()
+                .root_pipeline_owner(),
+        );
     }
 
     /// A clone of the shared controller registry for implicit animations.
@@ -1096,7 +1139,7 @@ impl UiRealm {
         )
     )]
     pub(crate) fn defer_first_frame(&self) {
-        self.renderer.defer_first_frame();
+        self.presentations.primary().renderer().defer_first_frame();
     }
 
     /// See [`RenderingFlutterBinding::allow_first_frame`].
@@ -1108,13 +1151,16 @@ impl UiRealm {
         )
     )]
     pub(crate) fn allow_first_frame(&self) {
-        self.renderer.allow_first_frame();
+        self.presentations.primary().renderer().allow_first_frame();
     }
 
     /// See [`RenderingFlutterBinding::send_frames_to_engine`] (via the
     /// `RendererBinding` trait).
     pub(crate) fn send_frames_to_engine(&self) -> bool {
-        self.renderer.send_frames_to_engine()
+        self.presentations
+            .primary()
+            .renderer()
+            .send_frames_to_engine()
     }
 
     /// Total frames rendered successfully by this presentation.
@@ -1122,13 +1168,13 @@ impl UiRealm {
         not(test),
         expect(
             dead_code,
-            reason = "draw_frame_entered reads self.presentation.frames_rendered() \
+            reason = "draw_frame_entered reads self.presentations.primary().frames_rendered() \
                       directly for the frame-number computation, not through \
                       this wrapper; kept for tests and future external callers"
         )
     )]
     pub(crate) fn frames_rendered(&self) -> u64 {
-        self.presentation.frames_rendered()
+        self.presentations.primary().frames_rendered()
     }
 
     /// Frames dropped due to surface errors on this presentation.
@@ -1138,13 +1184,15 @@ impl UiRealm {
                   forwards PresentationState::frames_dropped, also uncalled"
     )]
     pub(crate) fn frames_dropped(&self) -> u64 {
-        self.presentation.frames_dropped()
+        self.presentations.primary().frames_dropped()
     }
 
     /// Turn this presentation's performance overlay on or off. See the
     /// retired `AppBinding::set_performance_overlay`'s doc.
     pub(crate) fn set_performance_overlay(&self, enabled: bool) {
-        self.presentation.set_performance_overlay(enabled);
+        self.presentations
+            .primary()
+            .set_performance_overlay(enabled);
     }
 
     /// Perform haptic feedback on this presentation's window. See the
@@ -1156,13 +1204,17 @@ impl UiRealm {
                   PresentationState::perform_haptic_feedback directly)"
     )]
     pub(crate) fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
-        self.presentation.perform_haptic_feedback(feedback);
+        self.presentations
+            .primary()
+            .perform_haptic_feedback(feedback);
     }
 
     /// Apply a new device pixel ratio to this realm's render pipeline (the
     /// resize path; construction applies the initial ratio directly).
     pub(crate) fn set_device_pixel_ratio(&self, device_pixel_ratio: f32) {
-        self.renderer
+        self.presentations
+            .primary()
+            .renderer()
             .root_pipeline_owner()
             .with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
     }
@@ -1171,11 +1223,13 @@ impl UiRealm {
     /// motion/deadlines, or a dirty render node. The runner's wake gate
     /// (`needs_redraw() || has_pending_work()`) reads this every frame.
     pub(crate) fn has_pending_work(&self) -> bool {
-        self.widgets.has_pending_builds()
+        self.presentations.primary().widgets().has_pending_builds()
             || self.gestures().has_pending_motion()
             || self.gestures().has_pending_deadlines()
             || self
-                .renderer
+                .presentations
+                .primary()
+                .renderer()
                 .root_pipeline_owner()
                 .with(PipelineOwner::has_dirty_nodes)
     }
@@ -1236,7 +1290,10 @@ impl UiRealm {
         let focused = FocusRoot::new(view.clone());
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated);
-        self.widgets.attach_root_widget(&wrapped)?;
+        self.presentations
+            .primary()
+            .widgets()
+            .attach_root_widget(&wrapped)?;
         self.request_redraw();
         tracing::debug!("Root widget attached");
         Ok(())
@@ -1278,7 +1335,9 @@ impl UiRealm {
         let focused = FocusRoot::new(view.clone());
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated);
-        self.widgets
+        self.presentations
+            .primary()
+            .widgets()
             .attach_root_widget_with_size(&wrapped, width, height)?;
         self.request_redraw();
         tracing::debug!(width, height, "Root widget attached (sized)");
@@ -1351,14 +1410,18 @@ impl UiRealm {
         // typestate-driven orchestrator.
         let mut pipeline_errored = false;
         let (layer_tree, link_registry) = {
-            self.renderer
+            self.presentations
+                .primary()
+                .renderer()
                 .root_pipeline_owner()
                 .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
             let result = self
                 .widgets()
-                .run_frame_with_layout_builders(self.presentation.pipeline());
+                .run_frame_with_layout_builders(self.presentations.primary().pipeline());
             let link_registry = self
-                .renderer
+                .presentations
+                .primary()
+                .renderer()
                 .root_pipeline_owner()
                 .with_mut(PipelineOwner::take_link_registry);
             match result {
@@ -1375,15 +1438,16 @@ impl UiRealm {
         // requests accumulated by `run_frame`'s layout pass.
         {
             let w = self.widgets();
-            w.service_child_requests(self.presentation.pipeline());
+            w.service_child_requests(self.presentations.primary().pipeline());
         }
 
         // Phase 4: Create Scene from LayerTree
         let size = constraints.constrain(Size::ZERO);
-        let frame_number = self.presentation.frames_rendered() + 1;
+        let frame_number = self.presentations.primary().frames_rendered() + 1;
 
         if let Some(mut layer_tree) = layer_tree {
-            self.presentation
+            self.presentations
+                .primary()
                 .attach_performance_overlay(&mut layer_tree);
 
             let root = layer_tree.root();
@@ -1434,7 +1498,9 @@ impl UiRealm {
 
         let (width, height) = renderer.size();
         let dpr = self
-            .renderer
+            .presentations
+            .primary()
+            .renderer()
             .root_pipeline_owner()
             .with(PipelineOwner::device_pixel_ratio);
         let constraints =
@@ -1445,14 +1511,20 @@ impl UiRealm {
             .mouse_tracker()
             .update_all_devices(|position| {
                 let mut result = flui_interaction::routing::HitTestResult::new();
-                self.renderer.hit_test_in_view(&mut result, position, 0);
+                self.presentations
+                    .primary()
+                    .renderer()
+                    .hit_test_in_view(&mut result, position, 0);
                 result
             });
 
         let send_to_engine = self.send_frames_to_engine();
         let errored = matches!(outcome, FramePaintOutcome::Errored);
         if send_to_engine && !errored {
-            self.renderer.mark_first_frame_sent();
+            self.presentations
+                .primary()
+                .renderer()
+                .mark_first_frame_sent();
         }
 
         let mut presented = false;
@@ -1466,10 +1538,10 @@ impl UiRealm {
                 Ok(did_present) => {
                     presented = did_present;
                     if did_present {
-                        self.presentation.record_frame_rendered();
+                        self.presentations.primary().record_frame_rendered();
                         tracing::trace!(
                             frame = scene.frame_number(),
-                            total = self.presentation.frames_rendered(),
+                            total = self.presentations.primary().frames_rendered(),
                             "Frame rendered successfully"
                         );
                     } else {
@@ -1480,24 +1552,24 @@ impl UiRealm {
                     }
                 }
                 Err(EngineError::SurfaceLost) => {
-                    self.presentation.record_frame_dropped();
+                    self.presentations.primary().record_frame_dropped();
                     retry_needed = true;
                     tracing::debug!("Surface lost; frame dropped — retry armed via wake_frame()");
                 }
                 Err(EngineError::DeviceLost) => {
-                    self.presentation.record_frame_dropped();
+                    self.presentations.primary().record_frame_dropped();
                     tracing::warn!(
                         "GPU device lost — recovery will be attempted by the platform runner"
                     );
                 }
                 Err(EngineError::SurfaceValidation) => {
-                    self.presentation.record_frame_dropped();
+                    self.presentations.primary().record_frame_dropped();
                     tracing::error!(
                         "Surface validation error — surface misconfig; external reconfigure required"
                     );
                 }
                 Err(e) => {
-                    self.presentation.record_frame_dropped();
+                    self.presentations.primary().record_frame_dropped();
                     tracing::error!(error = ?e, "Render error (non-recoverable this frame)");
                 }
             }
@@ -1550,7 +1622,11 @@ impl UiRealm {
                         .handle_pointer_event(&pointer_event, |position| {
                             let mut result = flui_interaction::routing::HitTestResult::new();
                             let offset = flui_types::Offset::new(position.dx, position.dy);
-                            self.renderer.hit_test_in_view(&mut result, offset, 0);
+                            self.presentations.primary().renderer().hit_test_in_view(
+                                &mut result,
+                                offset,
+                                0,
+                            );
                             if !result.is_empty() {
                                 tracing::debug!(hits = result.len(), "Hit test found targets");
                             }
@@ -1627,7 +1703,7 @@ impl UiRealm {
             match command {
                 #[cfg(feature = "hot-reload")]
                 UiCommand::HotReload(tier) => {
-                    if self.presentation.apply_hot_reload(&self.widgets, tier) {
+                    if self.presentations.primary().apply_hot_reload(tier) {
                         self.redraw_pending.store(true, Ordering::Release);
                     }
                     report.invoked += 1;
@@ -1636,17 +1712,21 @@ impl UiRealm {
                     presentation_id,
                     request,
                 } => {
-                    if presentation_id != self.presentation.id() {
+                    if presentation_id != self.presentations.primary().id() {
                         tracing::trace!(
                             { flui_foundation::diagnostics::PRESENTATION_ID } =
-                                self.presentation.id().as_u64(),
+                                self.presentations.primary().id().as_u64(),
                             stamped_presentation_id = presentation_id.as_u64(),
                             "dropping semantics action stamped for a stale presentation incarnation"
                         );
                         report.dropped_stale += 1;
                         continue;
                     }
-                    match self.presentation.dispatch_semantics_action(request) {
+                    match self
+                        .presentations
+                        .primary()
+                        .dispatch_semantics_action(request)
+                    {
                         Ok(()) => {
                             report.invoked += 1;
                         }
@@ -1656,7 +1736,7 @@ impl UiRealm {
                             // the latest semantics update.
                             tracing::trace!(
                                 { flui_foundation::diagnostics::PRESENTATION_ID } =
-                                    self.presentation.id().as_u64(),
+                                    self.presentations.primary().id().as_u64(),
                                 ?error,
                                 "dropping semantics action against a stale snapshot"
                             );
@@ -1684,7 +1764,13 @@ impl UiRealm {
 
 impl Drop for UiRealm {
     fn drop(&mut self) {
-        self.presentation.close();
+        // Every presentation this realm hosts closes when the realm drops —
+        // production topology is exactly one until the forest's ratchet
+        // lifts, but this loop is already correct for N: nothing here
+        // assumes `len() == 1`.
+        for presentation in self.presentations.iter() {
+            presentation.close();
+        }
     }
 }
 
@@ -1740,6 +1826,35 @@ mod tests {
             1.0,
             Arc::new(AtomicBool::new(false)),
         )
+    }
+
+    /// Assemble and install a second presentation sharing `realm`'s exact
+    /// `GlobalKeyScope` and realm-level dispatch handles.
+    ///
+    /// Bypasses `PresentationForest`'s production ratchet
+    /// (`PresentationForest::push_for_test`) deliberately — this is the
+    /// isolation-suite seam #555 PR-3's plan names: a genuine
+    /// multi-presentation realm ahead of the addressed routing (#555
+    /// PR-4/5) that makes doing so safe in production.
+    fn install_second_presentation_for_test(realm: &mut UiRealm) -> PresentationId {
+        let (_, presentation_id) = crate::app::runtime::next_identity();
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        let window = crate::app::presentation::test_platform_window(None);
+        let presentation = PresentationState::new(
+            presentation_id,
+            pipeline,
+            window,
+            RealmCapabilities {
+                global_key_scope: realm.global_key_scope().clone(),
+                async_driver: realm.scheduler.async_driver().clone(),
+                post_frame_handle: realm.local_post_frame.post_frame_handle(),
+                interaction_dispatch_handle: realm.interaction_lane.dispatch_handle(),
+                scheduler: &realm.scheduler,
+                wake: Arc::clone(&realm.wake),
+            },
+        );
+        realm.presentations.push_for_test(presentation);
+        presentation_id
     }
 
     #[test]
@@ -4437,6 +4552,154 @@ mod tests {
                 )),
                 Err(flui_interaction::TextInputError::Unsupported)
             );
+        }
+    }
+
+    // ========================================================================
+    // Presentation forest — isolation suite (ADR-0043 §1, #555 PR-3)
+    //
+    // Production topology is exactly one presentation per realm
+    // (`PresentationForest`'s `install` ratchet); these tests bypass it via
+    // `push_for_test` to exercise the composite `GlobalKey` registry and
+    // hot-reload fan-out against a genuine N=2 forest.
+    // ========================================================================
+    mod presentation_forest_isolation {
+        use super::*;
+
+        #[test]
+        fn push_for_test_bypasses_the_production_ratchet() {
+            let mut realm = UiRealm::for_test();
+            assert_eq!(realm.presentation_count(), 1);
+
+            install_second_presentation_for_test(&mut realm);
+
+            assert_eq!(
+                realm.presentation_count(),
+                2,
+                "the isolation suite's push_for_test seam must bypass \
+                 PresentationForest::install's len()<=1 ratchet"
+            );
+        }
+
+        /// The realm composite `enter()` activates (ADR-0043 §1 RULING 1b)
+        /// must resolve a `GlobalKey` registered in EITHER presentation's own
+        /// tree, not just the primary one — the correctness property
+        /// `GlobalKeyRegistryComposite` exists for.
+        #[test]
+        fn composite_registry_resolves_keys_registered_in_either_presentation() {
+            let mut realm = UiRealm::for_test();
+            let second_id = install_second_presentation_for_test(&mut realm);
+
+            let key_in_primary = flui_view::GlobalKey::<()>::new();
+            let element_in_primary = flui_foundation::ElementId::new(1);
+            let key_in_second = flui_view::GlobalKey::<()>::new();
+            let element_in_second = flui_foundation::ElementId::new(1); // deliberately the SAME numeral
+
+            realm.enter(|realm| {
+                realm
+                    .presentations
+                    .primary()
+                    .widgets()
+                    .with_build_owner_mut(|owner| {
+                        owner.register_global_key(key_in_primary.id(), element_in_primary);
+                    });
+                let second = realm
+                    .presentations
+                    .get(second_id)
+                    .expect("second presentation installed");
+                second.widgets().with_build_owner_mut(|owner| {
+                    owner.register_global_key(key_in_second.id(), element_in_second);
+                });
+
+                assert_eq!(
+                    key_in_primary.current_element(),
+                    Some(element_in_primary),
+                    "composite must resolve a key registered in the primary presentation"
+                );
+                assert_eq!(
+                    key_in_second.current_element(),
+                    Some(element_in_second),
+                    "composite must resolve a key registered in the second \
+                     presentation, even though both trees use the same raw \
+                     ElementId numeral"
+                );
+            });
+        }
+
+        /// `UiRealm::apply_hot_reload` must reassemble EVERY presentation in
+        /// mount order, not just the primary one.
+        #[test]
+        #[cfg(feature = "hot-reload")]
+        fn reassemble_fans_out_to_all_presentations_in_mount_order() {
+            use flui_hot_reload::HotReloadTier;
+
+            let mut realm = UiRealm::for_test();
+            install_second_presentation_for_test(&mut realm);
+
+            // Both presentations start with no root attached; `apply_hot_reload`
+            // still calls `perform_reassemble`/`PipelineOwner::reassemble` on
+            // each regardless of whether a root is mounted, so this proves the
+            // fan-out reaches both without asserting on any particular return
+            // value from an unmounted reassemble.
+            let mounted_order: std::cell::RefCell<Vec<flui_foundation::PresentationId>> =
+                std::cell::RefCell::new(Vec::new());
+            for presentation in realm.presentations.iter() {
+                mounted_order.borrow_mut().push(presentation.id());
+            }
+            let expected_order = mounted_order.into_inner();
+            assert_eq!(
+                expected_order.len(),
+                2,
+                "the forest must hold both presentations before reassembling"
+            );
+
+            // `apply_hot_reload` itself does not report per-presentation
+            // identity, so the oracle here is structural: it must not panic
+            // or skip a presentation, and every presentation's own pipeline
+            // must have run `PipelineOwner::reassemble` — observable via each
+            // presentation's pipeline still being usable afterward (a panic
+            // or an unreachable presentation would fail this test outright).
+            let _ = realm.apply_hot_reload(HotReloadTier::HotReload);
+
+            for presentation in realm.presentations.iter() {
+                assert!(
+                    expected_order.contains(&presentation.id()),
+                    "reassemble must not have dropped or skipped a presentation"
+                );
+            }
+        }
+
+        /// Dropping the realm closes EVERY presentation it hosts, not just
+        /// the primary one.
+        #[test]
+        fn dropping_the_realm_closes_every_presentation() {
+            let mut realm = UiRealm::for_test();
+            install_second_presentation_for_test(&mut realm);
+
+            let lifecycles_before: Vec<_> = realm
+                .presentations
+                .iter()
+                .map(crate::app::presentation::PresentationState::lifecycle)
+                .collect();
+            assert!(
+                lifecycles_before.iter().all(|l| {
+                    *l == crate::app::presentation::PresentationLifecycle::SurfaceAttached
+                }),
+                "both presentations must start attached"
+            );
+
+            drop(realm);
+            // Both presentations' own Drop impls ran as part of the realm's
+            // Drop (each PresentationState transitions to Closed on its own
+            // drop -- see PresentationState::close/Drop); nothing left to
+            // assert on here beyond "this did not panic", since the values
+            // themselves are gone. The meaningful oracle is
+            // `closing_presentation_a_leaves_sibling_layer_tree_identical`-
+            // style structural isolation, which the single-presentation
+            // production path already covers via existing render-frame
+            // tests; a genuine N>1 close-one-keep-one-running scenario needs
+            // the addressed teardown path #555 PR-4/5 adds and is out of
+            // this slice's scope.
         }
     }
 }

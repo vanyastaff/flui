@@ -153,6 +153,11 @@ pub use binding::{
     AppExitResponse, AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation,
     ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
 };
+// Internal seam (see `GlobalKeyRegistryComposite`'s own doc): re-exported only
+// under the same `runtime-internals`/test gate the type itself is defined
+// behind, so an ordinary downstream build never sees it.
+#[cfg(any(test, feature = "runtime-internals"))]
+pub use binding::GlobalKeyRegistryComposite;
 // Child helpers
 pub use child::{Child, Children};
 // Context

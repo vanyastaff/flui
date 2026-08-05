@@ -7,10 +7,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
 use flui_foundation::PresentationId;
-use flui_interaction::{FocusManager, GestureBinding, TextInputHandle, TextInputOwner};
+use flui_interaction::{
+    FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
+};
 use flui_layer::{Layer, LayerTree, PerformanceOverlayLayer, PerformanceStats};
 #[cfg(test)]
 use flui_platform::traits::PlatformTextInput;
@@ -18,15 +21,55 @@ use flui_platform::{
     CursorIcon,
     traits::{CursorError, PlatformWindow},
 };
+use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineOwner;
+use flui_scheduler::{AsyncDriver, PostFrameHandle, Scheduler};
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_types::HapticFeedback;
-#[cfg(feature = "hot-reload")]
-use flui_view::WidgetsBinding;
+use flui_view::{GlobalKeyScope, WidgetsBinding};
 
 use super::semantics_host::SemanticsHost;
+use crate::bindings::RenderingFlutterBinding;
+
+/// Realm-supplied capabilities threaded into a presentation at assembly
+/// time (ADR-0043 §1): [`Self::global_key_scope`] is installed FIRST — the
+/// underlying `BuildOwner::set_global_key_scope` setter panics with `BUG:`
+/// if called after this owner's own `GlobalKey` registration has begun —
+/// then the realm's shared dispatch handles, before this presentation's own
+/// focus/IME are wired into its fresh `WidgetsBinding`, all before
+/// attach/mount. See [`PresentationState::new`].
+pub(crate) struct RealmCapabilities<'a> {
+    /// The realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043).
+    pub(crate) global_key_scope: GlobalKeyScope,
+    /// The realm's shared async-task driver (`build_owner.rs:296` is
+    /// realm-level; see the presentation-teardown contract for the
+    /// consequence of that when this presentation closes).
+    pub(crate) async_driver: AsyncDriver,
+    /// The realm's local post-frame callback lane.
+    pub(crate) post_frame_handle: PostFrameHandle,
+    /// The realm's interaction dispatch lane.
+    pub(crate) interaction_dispatch_handle: InteractionDispatchHandle,
+    /// The realm's own scheduler — borrowed only for the duration of
+    /// assembly; the constructed [`RenderingFlutterBinding`] keeps just a
+    /// `WeakScheduler` derived from it.
+    pub(crate) scheduler: &'a Scheduler,
+    /// The realm's platform wake capability, cloned into this
+    /// presentation's pipeline as its `on_need_visual_update` callback.
+    pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
+}
+
+/// A realm-backed test window carrying an optional platform text-input
+/// capability — for `UiRealm::for_test_with_text_input`, which needs a real
+/// [`RealmCapabilities`]-assembled presentation (not the standalone
+/// [`PresentationState::new_for_test`] path), just with a test window.
+#[cfg(test)]
+pub(crate) fn test_platform_window(
+    platform_text_input: Option<Arc<dyn PlatformTextInput>>,
+) -> Arc<dyn PlatformWindow> {
+    Arc::new(TestPresentationWindow::new(platform_text_input))
+}
 
 #[cfg(test)]
 struct TestPresentationWindow {
@@ -127,6 +170,20 @@ pub(crate) struct PresentationState {
     /// renderer fan-out (production read) — announce/event delivery itself
     /// still has no production caller (see [`Self::semantics_host`]'s doc).
     semantics: SemanticsHost,
+    /// Owner-local widget framework state. One instance per presentation
+    /// (ADR-0043) — the realm-level singular binding this used to be
+    /// dissolves here; every widget-tree operation for this surface enters
+    /// through this presentation and activates this binding's own GlobalKey
+    /// registry (composed into the realm's whole-frame composite by
+    /// `UiRealm::enter`, never activated standalone in production).
+    widgets: WidgetsBinding,
+    /// Render tree, layout/paint pipeline coordination, and this
+    /// presentation's own semantics-enablement fan-out. Moved from the
+    /// retired realm-level singular `UiRealm::renderer`: `render_views`,
+    /// `first_frame_sent`, and the semantics-enabled listener are
+    /// per-presentation-window facts, not shareable once a realm hosts more
+    /// than one presentation.
+    renderer: RenderingFlutterBinding,
     /// Total frames rendered successfully for this presentation. Moved here
     /// from the retired `AppBinding`: per-window frame accounting, beside
     /// its consumer [`Self::performance_overlay`].
@@ -146,13 +203,13 @@ pub(crate) struct PresentationState {
 }
 
 impl PresentationState {
-    pub(crate) fn new(
-        id: PresentationId,
-        pipeline: PipelineCell,
-        window: Arc<dyn PlatformWindow>,
-    ) -> Self {
+    /// Assemble the gesture arena, wiring its mouse-tracker cursor callback
+    /// to `window` (shared by every constructor below — production and
+    /// test alike — since the callback shape never varies with capability
+    /// wiring).
+    fn build_gestures(id: PresentationId, window: &Arc<dyn PlatformWindow>) -> GestureBinding {
         let gestures = GestureBinding::new();
-        let cursor_window = Arc::downgrade(&window);
+        let cursor_window = Arc::downgrade(window);
         gestures
             .mouse_tracker()
             .set_cursor_change_callback(Rc::new(move |device_id, cursor| {
@@ -187,16 +244,113 @@ impl PresentationState {
                     }
                 }
             }));
-        let platform_text_input = window.text_input();
+        gestures
+    }
+
+    /// Assemble a presentation wired into a realm (ADR-0043 §1): installs
+    /// `capabilities.global_key_scope` FIRST, then the realm's shared
+    /// dispatch handles, before this presentation's own focus/IME are
+    /// wired to its fresh [`WidgetsBinding`] and [`RenderingFlutterBinding`]
+    /// — all before the caller ever attaches/mounts a root widget.
+    pub(crate) fn new(
+        id: PresentationId,
+        pipeline: PipelineCell,
+        window: Arc<dyn PlatformWindow>,
+        capabilities: RealmCapabilities<'_>,
+    ) -> Self {
+        let gestures = Self::build_gestures(id, &window);
+        let focus = FocusManager::new();
+        let text_input = TextInputOwner::new(window.text_input());
+
+        let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
+        widgets.set_pipeline_owner(pipeline.clone());
+        widgets.with_build_owner_mut(|owner| {
+            owner.set_global_key_scope(capabilities.global_key_scope);
+            owner.set_async_driver(capabilities.async_driver);
+            owner.set_post_frame_handle(capabilities.post_frame_handle);
+            owner.set_interaction_dispatch_handle(capabilities.interaction_dispatch_handle);
+            owner.set_text_input_handle(text_input.handle());
+        });
+
+        let renderer =
+            RenderingFlutterBinding::new_with_pipeline(pipeline.clone(), capabilities.scheduler);
+
+        // Idle-wake wiring: a dirty mark (mark_needs_layout / mark_needs_paint)
+        // fires this callback so a quiescent event loop produces the frame.
+        // Reentrancy-safe: the callback fires while the CALLER holds the
+        // pipeline cell checked out, and `wake` only touches `Send + Sync`
+        // runtime-level state — never this presentation's own `widgets` /
+        // `renderer` / gesture state.
+        let visual_wake = capabilities.wake;
+        pipeline.with_mut(|owner| owner.set_on_need_visual_update(move || visual_wake()));
+
+        let semantics = SemanticsHost::new();
+        // Semantics-enabled fan-out -> this presentation's own SemanticsHost.
+        let semantics_flag = semantics.platform_semantics_enabled_handle();
+        renderer.add_semantics_enabled_listener(Arc::new(move |enabled| {
+            semantics_flag.store(enabled, Ordering::Relaxed);
+        }));
+
         let state = Self {
             id,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             pipeline,
             window: Arc::downgrade(&window),
             gestures,
-            focus: FocusManager::new(),
-            text_input: TextInputOwner::new(platform_text_input),
-            semantics: SemanticsHost::new(),
+            focus,
+            text_input,
+            semantics,
+            widgets,
+            renderer,
+            frames_rendered: Cell::new(0),
+            frames_dropped: Cell::new(0),
+            performance_overlay: RefCell::new(None),
+        };
+        state.attach_surface();
+        state
+    }
+
+    /// Standalone assembly with no realm above it: this presentation's
+    /// `WidgetsBinding` lazily self-owns a private `GlobalKeyScope` on first
+    /// `GlobalKey` registration (never shared, so it never conflicts with
+    /// anything), and its `RenderingFlutterBinding` owns its own throwaway
+    /// `Scheduler` (see [`RenderingFlutterBinding::new_for_test_with_pipeline`]).
+    /// Used only by this module's own unit tests, which exercise
+    /// presentation-local behavior (gestures/focus/haptics/overlay) in
+    /// isolation; realm-backed tests use [`Self::new`] through
+    /// `UiRealm::for_test`, exactly like production.
+    #[cfg(test)]
+    pub(crate) fn new_for_test_with_window(
+        id: PresentationId,
+        pipeline: PipelineCell,
+        window: Arc<dyn PlatformWindow>,
+    ) -> Self {
+        let gestures = Self::build_gestures(id, &window);
+        let focus = FocusManager::new();
+        let text_input = TextInputOwner::new(window.text_input());
+
+        let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
+        widgets.set_pipeline_owner(pipeline.clone());
+
+        let renderer = RenderingFlutterBinding::new_for_test_with_pipeline(pipeline.clone());
+
+        let semantics = SemanticsHost::new();
+        let semantics_flag = semantics.platform_semantics_enabled_handle();
+        renderer.add_semantics_enabled_listener(Arc::new(move |enabled| {
+            semantics_flag.store(enabled, Ordering::Relaxed);
+        }));
+
+        let state = Self {
+            id,
+            lifecycle: Cell::new(PresentationLifecycle::Created),
+            pipeline,
+            window: Arc::downgrade(&window),
+            gestures,
+            focus,
+            text_input,
+            semantics,
+            widgets,
+            renderer,
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
             performance_overlay: RefCell::new(None),
@@ -213,7 +367,19 @@ impl PresentationState {
     ) -> Self {
         let window: Arc<dyn PlatformWindow> =
             Arc::new(TestPresentationWindow::new(platform_text_input));
-        Self::new(id, pipeline, window)
+        Self::new_for_test_with_window(id, pipeline, window)
+    }
+
+    /// This presentation's own widget framework state.
+    #[must_use]
+    pub(crate) fn widgets(&self) -> &WidgetsBinding {
+        &self.widgets
+    }
+
+    /// This presentation's own render tree / pipeline coordination binding.
+    #[must_use]
+    pub(crate) fn renderer(&self) -> &RenderingFlutterBinding {
+        &self.renderer
     }
 
     #[must_use]
@@ -248,6 +414,17 @@ impl PresentationState {
     }
 
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Self::new wires set_text_input_handle from the local \
+                      text_input binding directly (before self exists to call \
+                      this wrapper through); this accessor's one production \
+                      caller moved inline when assembly moved into this \
+                      constructor, kept for tests and any future external caller"
+        )
+    )]
     pub(crate) fn text_input_handle(&self) -> TextInputHandle {
         self.text_input.handle()
     }
@@ -255,10 +432,20 @@ impl PresentationState {
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery — the per-window home the retired
     /// `SemanticsBinding` singleton's enablement/announce/event state moved
-    /// into. `UiRealm::construct` reads this to wire the realm's renderer
+    /// into. `Self::new` reads the underlying flag directly (before `self`
+    /// exists to call this wrapper through) to wire the renderer's
     /// semantics-enabled fan-out; announce/event delivery itself still has
     /// no production caller (future platform-embedder wiring).
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "this accessor's one production caller moved inline into \
+                      Self::new's own assembly; kept for tests and any future \
+                      external caller"
+        )
+    )]
     pub(crate) fn semantics_host(&self) -> &SemanticsHost {
         &self.semantics
     }
@@ -435,19 +622,15 @@ impl PresentationState {
         Ok(())
     }
 
-    /// Apply a hot-reload tier to this presentation and its realm-owned
-    /// element tree. Returns whether a redraw is required.
+    /// Apply a hot-reload tier to this presentation's own element tree.
+    /// Returns whether a redraw is required.
     #[cfg(feature = "hot-reload")]
-    pub(crate) fn apply_hot_reload(
-        &self,
-        widgets: &WidgetsBinding,
-        tier: flui_hot_reload::HotReloadTier,
-    ) -> bool {
+    pub(crate) fn apply_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) -> bool {
         use flui_hot_reload::HotReloadTier;
 
         match tier {
             HotReloadTier::HotReload => {
-                widgets.perform_reassemble();
+                self.widgets.perform_reassemble();
                 self.pipeline
                     .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
                 tracing::info!(
@@ -461,7 +644,7 @@ impl PresentationState {
                     { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
                     "HotRestart root remount is not implemented; applying reassemble"
                 );
-                widgets.perform_reassemble();
+                self.widgets.perform_reassemble();
                 self.pipeline
                     .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
                 true
@@ -626,7 +809,7 @@ mod tests {
 
         let window = Arc::new(TestPresentationWindow::new(None));
         let platform_window: Arc<dyn PlatformWindow> = window.clone();
-        let presentation = PresentationState::new(
+        let presentation = PresentationState::new_for_test_with_window(
             PresentationId::new_gen(0, NonZeroU32::MIN),
             PipelineCell::new(PipelineOwner::new()),
             platform_window,
@@ -734,7 +917,7 @@ mod tests {
             // strong `Arc` in production); this test's own `window` binding
             // is what keeps it alive here, so pass a clone rather than
             // moving the only strong reference in.
-            let presentation = PresentationState::new(
+            let presentation = PresentationState::new_for_test_with_window(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
                 PipelineCell::new(PipelineOwner::new()),
                 Arc::clone(&window),
@@ -760,7 +943,7 @@ mod tests {
         #[test]
         fn perform_haptic_feedback_with_no_active_window_is_a_silent_no_op() {
             let window: Arc<dyn PlatformWindow> = Arc::new(BareWindow);
-            let presentation = PresentationState::new(
+            let presentation = PresentationState::new_for_test_with_window(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
                 PipelineCell::new(PipelineOwner::new()),
                 Arc::clone(&window),
@@ -775,7 +958,7 @@ mod tests {
         /// is also a silent no-op.
         #[test]
         fn perform_haptic_feedback_on_a_window_without_haptics_is_a_silent_no_op() {
-            let presentation = PresentationState::new(
+            let presentation = PresentationState::new_for_test_with_window(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
                 PipelineCell::new(PipelineOwner::new()),
                 Arc::new(BareWindow),

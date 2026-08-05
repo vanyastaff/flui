@@ -331,8 +331,10 @@ mod tests {
     fn member(entries: Vec<(u64, ElementId, &'static str)>) -> GlobalKeyRegistryHandle {
         let by_hash: HashMap<u64, ElementId> =
             entries.iter().map(|(hash, id, _)| (*hash, *id)).collect();
-        let by_id: HashMap<ElementId, &'static str> =
-            entries.into_iter().map(|(_, id, label)| (id, label)).collect();
+        let by_id: HashMap<ElementId, &'static str> = entries
+            .into_iter()
+            .map(|(_, id, label)| (id, label))
+            .collect();
         GlobalKeyRegistryHandle::new(
             move |hash| by_hash.get(&hash).copied(),
             move |id, f| {
@@ -379,7 +381,11 @@ mod tests {
 
         fn deactivate(&mut self) {}
 
-        fn update(&mut self, _new_view: &dyn crate::view::View, _owner: &mut crate::ElementOwner<'_>) {
+        fn update(
+            &mut self,
+            _new_view: &dyn crate::view::View,
+            _owner: &mut crate::ElementOwner<'_>,
+        ) {
             unreachable!("test double: update is never exercised by this composite test")
         }
 

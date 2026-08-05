@@ -15,6 +15,7 @@ pub mod direct;
 pub(crate) mod hot_reload;
 pub(crate) mod logging;
 pub(crate) mod presentation;
+pub(crate) mod presentation_forest;
 pub mod runner;
 pub(crate) mod runtime;
 pub(crate) mod semantics_host;
