@@ -2451,4 +2451,180 @@ mod tests {
              slot (its &mut is live on the ancestor frame)",
         );
     }
+
+    // ========================================================================
+    // Reentrant layout — a mid-layout child-request against the checked-out
+    // owner (miri coverage widened alongside the two walks above; see
+    // crates/flui-rendering/AGENTS.md's miri-scope line and the justfile
+    // `miri` recipe doc-comment).
+    // ========================================================================
+    //
+    // `RenderSliverList`'s request-strategy seam
+    // (`SliverLayoutContext::request_child_build`) records a child-build
+    // request into the arena's `pending_child_requests` sink WHILE a real
+    // `NodePtr` for the requesting sliver is live -- the walk has not
+    // returned, so the request is issued strictly mid-layout. The walk
+    // itself runs through a `PipelineCell` checkout (the production
+    // `with_mut { mem::take -> into_layout -> ... -> into_idle }` pattern
+    // from `flui-view/src/owner/layout_builder.rs`), and after
+    // `layout_dirty_root` returns, `mark_needs_layout` is called on the
+    // requesting sliver's id -- still inside the same checkout -- to prove
+    // the checked-out owner accepts an invalidation immediately after a
+    // walk that queued a request against it, with no aliasing hazard
+    // between the two.
+
+    use flui_types::layout::AxisDirection;
+
+    use crate::{
+        constraints::GrowthDirection,
+        context::{SliverHitTestContext, SliverLayoutContext},
+        parent_data::SliverParentData,
+        pipeline::PipelineCell,
+        protocol::SliverProtocol,
+        traits::{RenderObject, RenderSliver},
+        view::ScrollDirection,
+    };
+
+    /// Sliver constraints for a 300x600 vertical viewport at scroll offset 0.
+    fn mid_layout_sliver_constraints() -> SliverConstraints {
+        SliverConstraints {
+            axis_direction: AxisDirection::TopToBottom,
+            cross_axis_direction: AxisDirection::LeftToRight,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
+            scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
+            remaining_paint_extent: 400.0,
+            cross_axis_extent: 300.0,
+            viewport_main_axis_extent: 600.0,
+            remaining_cache_extent: 450.0,
+            cache_origin: 0.0,
+        }
+    }
+
+    /// Leaf sliver whose `perform_layout` issues a child-build request
+    /// (the `RenderSliverList` request-strategy seam) while its own
+    /// `NodePtr` is live on the walk's call stack -- the mid-layout hazard
+    /// this test exists to exercise under miri.
+    #[derive(Debug, Default)]
+    struct RequestingSliver;
+
+    impl Diagnosticable for RequestingSliver {}
+
+    impl RenderSliver for RequestingSliver {
+        type Arity = Leaf;
+        type ParentData = SliverParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut SliverLayoutContext<'_, Leaf, SliverParentData>,
+        ) -> SliverGeometry {
+            // Recorded into `SubtreeArena::pending_child_requests` (a
+            // `Mutex`, written through `&self`) while `self`'s own
+            // `NodePtr` is the live `&mut RenderNode` this call is
+            // borrowed from -- a different allocation entirely, but the
+            // property under test is that miri sees no UB in the
+            // interleaving.
+            let _ = ctx.request_child_build(7);
+            SliverGeometry {
+                scroll_extent: 0.0,
+                paint_extent: 0.0,
+                layout_extent: 0.0,
+                max_paint_extent: 0.0,
+                hit_test_extent: 0.0,
+                visible: false,
+                ..SliverGeometry::ZERO
+            }
+        }
+
+        fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, SliverParentData>) -> bool {
+            false
+        }
+    }
+
+    /// Box parent (`Single` arity) that drives its one Sliver child through
+    /// `ctx.layout_sliver_child`. Root + sliver leaf = 2 real `NodePtr`s.
+    #[derive(Debug)]
+    struct SliverHost {
+        sliver_constraints: SliverConstraints,
+    }
+
+    impl Diagnosticable for SliverHost {}
+
+    impl RenderBox for SliverHost {
+        type Arity = Single;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+        ) -> Size {
+            ctx.layout_sliver_child(0, self.sliver_constraints);
+            ctx.constraints().biggest()
+        }
+
+        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
+            false
+        }
+        fn hit_test_behavior(&self) -> HitTestBehavior {
+            HitTestBehavior::Opaque
+        }
+    }
+
+    #[test]
+    fn child_request_mid_layout_surfaces_on_the_checked_out_owner() {
+        let mut owner = PipelineOwner::new();
+        let root = owner.insert(Box::new(SliverHost {
+            sliver_constraints: mid_layout_sliver_constraints(),
+        }) as Box<dyn RenderObject<BoxProtocol>>);
+        let sliver_id = owner
+            .insert_sliver_child_render_object(
+                root,
+                Box::new(RequestingSliver) as Box<dyn RenderObject<SliverProtocol>>,
+            )
+            .expect("sliver child insert");
+        owner.set_root_id(Some(root));
+        owner.set_root_constraints(Some(BoxConstraints::new(
+            px(0.0),
+            px(800.0),
+            px(0.0),
+            px(600.0),
+        )));
+
+        let cell = PipelineCell::new(owner);
+
+        let (layout_result, requests) = cell.with_mut(|pipeline_owner| {
+            let mut layout = std::mem::take(pipeline_owner).into_layout();
+            let result = layout.layout_dirty_root(root, layout.root_constraints().expect(
+                "root constraints were set before the checkout",
+            ));
+            // Still inside the same checkout: the request queued mid-walk
+            // must already be visible on the checked-out owner.
+            let requests = layout.take_pending_child_requests();
+            // And the owner must accept a fresh invalidation immediately
+            // after the walk that queued the request -- no aliasing
+            // hazard between the two under miri.
+            layout.mark_needs_layout(sliver_id);
+            *pipeline_owner = layout.into_idle();
+            (result, requests)
+        });
+
+        layout_result.expect(
+            "a Box host driving a Sliver child that requests mid-layout must \
+             still complete the walk",
+        );
+        assert_eq!(
+            requests,
+            vec![(sliver_id, 7)],
+            "the mid-layout child-build request must surface on the \
+             checked-out owner after the walk, tagged with the requesting \
+             sliver's own id",
+        );
+        assert!(
+            cell.with(PipelineOwner::has_dirty_nodes),
+            "mark_needs_layout called on the checked-out owner right after \
+             the walk must register a dirty node for the next frame",
+        );
+    }
 }

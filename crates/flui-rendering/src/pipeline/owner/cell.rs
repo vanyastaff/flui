@@ -227,4 +227,124 @@ mod tests {
             assert!(!shared.is_free(), "clone must observe the same checkout");
         });
     }
+
+    // ========================================================================
+    // Owner-local traversal — full `run_frame` through a `PipelineCell`
+    // checkout (miri coverage: crates/flui-rendering/AGENTS.md miri-scope
+    // line, justfile `miri` recipe).
+    // ========================================================================
+    //
+    // Everything above this point exercises the checkout mechanism in
+    // isolation (never touches a real `RenderTree`). This test drives the
+    // exact production pattern `BuildOwner::run_frame_with_layout_builders`
+    // uses (`flui-view/src/owner/layout_builder.rs`): `with_mut` ->
+    // `mem::take` the owner out -> `run_frame` (layout -> compositing ->
+    // paint -> semantics, all real `NodePtr` reborrows inside
+    // `layout_dirty_root`) -> write the returned owner back -- so miri
+    // interprets the whole frame through the checkout seam, not just the
+    // raw `layout_dirty_root` call the older `subtree_arena` walks use.
+
+    use flui_tree::Exact;
+    use flui_types::{Color, Point, Rect, Size, geometry::px};
+
+    use crate::{
+        constraints::BoxConstraints,
+        context::{BoxLayoutContext, PaintCx},
+        parent_data::BoxParentData,
+        pipeline::Paint,
+        protocol::BoxProtocol,
+        traits::{RenderBox, RenderObject},
+    };
+
+    /// Leaf that reports a fixed size and paints a solid rect -- exercises
+    /// both the layout and paint phases of `run_frame` for a real `NodePtr`.
+    #[derive(Debug)]
+    struct FrameLeaf {
+        size: Size,
+    }
+
+    impl flui_foundation::Diagnosticable for FrameLeaf {}
+
+    impl RenderBox for FrameLeaf {
+        type Arity = flui_tree::Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>) -> Size {
+            ctx.constraints().constrain(self.size)
+        }
+
+        fn paint(&self, ctx: &mut PaintCx<'_, Self::Arity>) {
+            let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
+            ctx.canvas()
+                .draw_rect(rect, &Paint::fill(Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0])));
+        }
+    }
+
+    /// Two-child parent: lays out and paints both children in order. Root +
+    /// 2 leaves = 3 real `NodePtr`s, within the SPIKE's `<=4`-node budget.
+    #[derive(Debug)]
+    struct FrameParent;
+
+    impl flui_foundation::Diagnosticable for FrameParent {}
+
+    impl RenderBox for FrameParent {
+        type Arity = Exact<2>;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>) -> Size {
+            let constraints = *ctx.constraints();
+            ctx.layout_child(0, constraints);
+            ctx.layout_child(1, constraints);
+            constraints.biggest()
+        }
+
+        fn paint(&self, ctx: &mut PaintCx<'_, Self::Arity>) {
+            ctx.paint_children_in_order();
+        }
+    }
+
+    #[test]
+    fn real_node_ptr_frame_runs_through_pipeline_cell_checkout() {
+        let mut owner = PipelineOwner::new();
+        let root = owner.insert(Box::new(FrameParent) as Box<dyn RenderObject<BoxProtocol>>);
+        owner
+            .insert_child_render_object(
+                root,
+                Box::new(FrameLeaf {
+                    size: Size::new(px(10.0), px(10.0)),
+                }),
+            )
+            .expect("first leaf child insert");
+        owner
+            .insert_child_render_object(
+                root,
+                Box::new(FrameLeaf {
+                    size: Size::new(px(10.0), px(10.0)),
+                }),
+            )
+            .expect("second leaf child insert");
+        owner.set_root_id(Some(root));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(20.0), px(20.0)))));
+
+        let cell = PipelineCell::new(owner);
+
+        // The exact `with_mut { mem::take -> run_frame -> write back }`
+        // pattern `layout_builder.rs` drives in production.
+        let frame_result = cell.with_mut(|pipeline_owner| {
+            let (returned, result) = std::mem::take(pipeline_owner).run_frame();
+            *pipeline_owner = returned;
+            result
+        });
+
+        let layer_tree = frame_result
+            .expect("owner-local traversal: a full run_frame over a real 3-node tree must succeed under miri");
+        assert!(
+            layer_tree.is_some(),
+            "a successful frame with a live root must produce a layer tree"
+        );
+        assert!(
+            cell.is_free(),
+            "the cell must be free again once with_mut returns"
+        );
+    }
 }
