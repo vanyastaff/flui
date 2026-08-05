@@ -835,11 +835,18 @@ pub(crate) fn install_rect_provider(
     let owner = ctx.pipeline_owner();
     let provider: flui_interaction::RectProvider = Rc::new(move || {
         let render_id = anchor.get()?;
-        let owner = owner.as_ref()?.read();
-        let size = owner.box_size(render_id)?;
-        let root = owner.root_id()?;
-        let transform = owner.transform_to(render_id, root)?;
-        Some(transform.transform_rect(&Rect::from_ltwh(px(0.0), px(0.0), size.width, size.height)))
+        let owner = owner.as_ref()?;
+        owner.with(|owner| {
+            let size = owner.box_size(render_id)?;
+            let root = owner.root_id()?;
+            let transform = owner.transform_to(render_id, root)?;
+            Some(transform.transform_rect(&Rect::from_ltwh(
+                px(0.0),
+                px(0.0),
+                size.width,
+                size.height,
+            )))
+        })
     });
     let registration = node.register_rect_provider(Rc::clone(&provider));
     (provider, registration)

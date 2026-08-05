@@ -93,9 +93,9 @@
 //! production reproduced it correctly. `pump_frame` now runs the same
 //! recheck, every frame, unconditionally, for a tree-bound binding —
 //! against its own `PipelineOwner` directly (the tree-bound branch already
-//! owns the same `Arc<RwLock<PipelineOwner>>` production's
-//! `hit_test_in_view` wraps, so no caller-supplied hit-test closure needed
-//! adding to `pump_frame`'s signature). See the doc on
+//! owns the same `PipelineCell` production's `hit_test_in_view` wraps, so
+//! no caller-supplied hit-test closure needed adding to `pump_frame`'s
+//! signature). See the doc on
 //! [`HeadlessBinding::pump_frame`](flui_testing::HeadlessBinding::pump_frame)
 //! for the full ordering.
 //!

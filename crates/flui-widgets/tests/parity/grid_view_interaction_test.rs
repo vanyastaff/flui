@@ -389,8 +389,10 @@ const K_STATES: [&str; 50] = [
 /// never mounts an out-of-band child at all; this file's eager-mount path
 /// mounts every child but may never lay some of them out).
 fn is_onstage_v(laid: &LaidOut, id: RenderId, viewport_height: f32) -> bool {
-    let owner = laid.pipeline_owner();
-    let Some(node_size) = inspect::box_geometry(&owner.read(), id) else {
+    let Some(node_size) = laid
+        .pipeline_owner()
+        .with(|owner| inspect::box_geometry(owner, id))
+    else {
         return false;
     };
     let top = laid.absolute_offset(id).dy.get();
@@ -401,8 +403,10 @@ fn is_onstage_v(laid: &LaidOut, id: RenderId, viewport_height: f32) -> bool {
 /// As [`is_onstage_v`], but overlap-tests the HORIZONTAL axis — for case 5's
 /// `scroll_direction(Axis::Horizontal)` scene.
 fn is_onstage_h(laid: &LaidOut, id: RenderId, viewport_width: f32) -> bool {
-    let owner = laid.pipeline_owner();
-    let Some(node_size) = inspect::box_geometry(&owner.read(), id) else {
+    let Some(node_size) = laid
+        .pipeline_owner()
+        .with(|owner| inspect::box_geometry(owner, id))
+    else {
         return false;
     };
     let left = laid.absolute_offset(id).dx.get();
@@ -988,8 +992,10 @@ fn grid_view_one_line_paints_only_onstage_tiles() {
     let onstage_count = tiles
         .iter()
         .filter(|&&id| {
-            let owner = laid.pipeline_owner();
-            let Some(tile_size) = inspect::box_geometry(&owner.read(), id) else {
+            let Some(tile_size) = laid
+                .pipeline_owner()
+                .with(|owner| inspect::box_geometry(owner, id))
+            else {
                 return false;
             };
             let top = laid.absolute_offset(id).dy.get();

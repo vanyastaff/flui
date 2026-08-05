@@ -381,7 +381,7 @@ impl HeroController {
             && navigator
                 .route_subtree(to)
                 .zip(navigator.render_tree())
-                .and_then(|(subtree, owner)| owner.read().box_size(subtree.render_id))
+                .and_then(|(subtree, owner)| owner.with(|owner| owner.box_size(subtree.render_id)))
                 .is_some_and(Size::is_finite)
         {
             let pass = MeasurementPass {
@@ -501,13 +501,12 @@ impl MeasurementPass<'_> {
         let owner = self.navigator.render_tree();
 
         let (to_size, to_transform) = match (to_subtree, owner) {
-            (Some(subtree), Some(owner)) => {
-                let owner = owner.read();
+            (Some(subtree), Some(owner)) => owner.with(|owner| {
                 let transform = owner
                     .root_id()
                     .and_then(|root| owner.transform_to(subtree.render_id, root));
                 (owner.box_size(subtree.render_id), transform)
-            }
+            }),
             // An unmounted destination (`maintain_state == false` and covered) or an
             // unmounted navigator: nothing to measure, and nothing to fake.
             _ => (None, None),

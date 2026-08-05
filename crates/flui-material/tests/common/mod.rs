@@ -9,7 +9,6 @@
 
 use std::any::TypeId;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{AnimationController, Vsync};
@@ -17,21 +16,20 @@ use flui_foundation::{ElementId, RenderId};
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree, View};
 use flui_widgets::{FocusRoot, GestureArenaScope};
-use parking_lot::RwLock;
 
 /// A mounted widget tree, holding the element + render trees alive inside a
 /// tree-bound [`HeadlessBinding`], re-driven via [`LaidOut::pump`]/[`LaidOut::pump_for`].
 pub struct LaidOut {
     binding: HeadlessBinding,
     focus_manager: Rc<flui_interaction::FocusManager>,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
     root_render_id: RenderId,
     root_element_id: ElementId,
 }
@@ -59,7 +57,7 @@ pub fn tight(width: f32, height: f32) -> BoxConstraints {
 /// Build `root`, mount it as the render-tree root, and lay it out under
 /// `constraints`. Panics on any pipeline error so a regression is loud.
 pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     let mut build_owner = BuildOwner::new();
     let focus_manager = build_owner.focus_manager();
     let mut tree = ElementTree::new();
@@ -75,7 +73,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     let root_id = binding.enter_owner_scope(|| {
         let root_id = tree.mount_root_with_pipeline_owner(
             &root,
-            Some(Arc::clone(&pipeline_owner)),
+            Some(pipeline_owner.clone()),
             &mut build_owner.element_owner_mut(),
         );
         build_owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
@@ -88,8 +86,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     // root while exposing the caller's logical render root to geometry tests.
     // A recovered `ErrorView` is render-less, so its anchor legitimately has
     // no child; element-level error tests do not ask for root geometry.
-    let (presentation_render_root_id, root_render_id) = {
-        let owner = pipeline_owner.read();
+    let (presentation_render_root_id, root_render_id) = pipeline_owner.with(|owner| {
         let render_tree = owner.render_tree();
         let mut roots = render_tree
             .iter()
@@ -108,13 +105,12 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
             "the presentation traversal anchor must wrap at most one logical render root",
         );
         (root, children.first().copied().unwrap_or(root))
-    };
+    });
 
-    {
-        let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(presentation_render_root_id));
-        guard.set_root_constraints(Some(constraints));
-    }
+    pipeline_owner.with_mut(|owner| {
+        owner.set_root_id(Some(presentation_render_root_id));
+        owner.set_root_constraints(Some(constraints));
+    });
 
     binding.enter_owner_scope(|| {
         build_owner
@@ -122,7 +118,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
             .expect("headless frame should succeed");
     });
 
-    binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+    binding.bind_tree(build_owner, tree, pipeline_owner.clone());
 
     LaidOut {
         binding,
@@ -232,10 +228,11 @@ impl LaidOut {
     /// whole hit-test + dispatch sequence, matching how a real frame runs
     /// (`AppBinding::handle_input` executes entirely inside the lane).
     fn hit_test(&self, position: Offset) -> HitTestResult {
-        let owner = self.pipeline_owner.read();
-        let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
-        result
+        self.pipeline_owner.with(|owner| {
+            let mut result = HitTestResult::new();
+            owner.hit_test(position, &mut result);
+            result
+        })
     }
 
     /// Dispatch a synthetic pointer-down at `(x, y)` — the headless analogue
@@ -278,16 +275,17 @@ impl LaidOut {
     /// Every render node whose short type name (generic parameters stripped)
     /// equals `render_type_name`.
     pub fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
-        let owner = self.pipeline_owner.read();
-        let queried = base_type_name(render_type_name);
-        owner
-            .render_tree()
-            .iter()
-            .filter_map(|(id, _node)| {
-                let diagnostics = owner.debug_node_diagnostics(id)?;
-                (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
-            })
-            .collect()
+        self.pipeline_owner.with(|owner| {
+            let queried = base_type_name(render_type_name);
+            owner
+                .render_tree()
+                .iter()
+                .filter_map(|(id, _node)| {
+                    let diagnostics = owner.debug_node_diagnostics(id)?;
+                    (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
+                })
+                .collect()
+        })
     }
 
     /// The unique render node whose short type name equals `render_type_name`.
@@ -320,16 +318,18 @@ impl LaidOut {
     /// render-object type, which this harness has no generic support for.
     /// Returns `None` if `id` is not live or carries no such property.
     pub fn render_property(&self, id: RenderId, property_name: &str) -> Option<String> {
-        let owner = self.pipeline_owner.read();
-        let diagnostics = owner.debug_node_diagnostics(id)?;
-        diagnostics
-            .find_property(property_name)
-            .map(|property| property.value().to_string())
+        self.pipeline_owner.with(|owner| {
+            let diagnostics = owner.debug_node_diagnostics(id)?;
+            diagnostics
+                .find_property(property_name)
+                .map(|property| property.value().to_string())
+        })
     }
 
     /// The `i`-th render-tree child of `id`.
     pub fn child(&self, id: RenderId, index: usize) -> RenderId {
-        self.pipeline_owner.read().render_tree().children(id)[index]
+        self.pipeline_owner
+            .with(|owner| owner.render_tree().children(id)[index])
     }
 
     /// The full ordered list of `id`'s direct render-tree children — paint
@@ -337,10 +337,7 @@ impl LaidOut {
     /// child paints on top and is hit-tested first.
     pub fn children(&self, id: RenderId) -> Vec<RenderId> {
         self.pipeline_owner
-            .read()
-            .render_tree()
-            .children(id)
-            .to_vec()
+            .with(|owner| owner.render_tree().children(id).to_vec())
     }
 
     /// The first render-tree child of `id`.
@@ -350,13 +347,15 @@ impl LaidOut {
 
     /// The laid-out size of a render node.
     pub fn size(&self, id: RenderId) -> Size {
-        inspect::box_geometry(&self.pipeline_owner.read(), id)
+        self.pipeline_owner
+            .with(|owner| inspect::box_geometry(owner, id))
             .expect("render node should have box geometry after layout")
     }
 
     /// The paint offset of a render node relative to its parent.
     pub fn offset(&self, id: RenderId) -> Offset {
-        inspect::render_offset(&self.pipeline_owner.read(), id)
+        self.pipeline_owner
+            .with(|owner| inspect::render_offset(owner, id))
             .expect("render node should have an offset after layout")
     }
 
@@ -366,17 +365,18 @@ impl LaidOut {
     /// `Overlay`/`Stack`) where a test cannot cheaply hand-walk each
     /// intermediate child index.
     pub fn absolute_offset(&self, id: RenderId) -> Offset {
-        let owner = self.pipeline_owner.read();
-        let mut total = Offset::ZERO;
-        let mut current = id;
-        loop {
-            total += inspect::render_offset(&owner, current)
-                .expect("render node should have an offset after layout");
-            match owner.render_tree().parent(current) {
-                Some(parent) => current = parent,
-                None => return total,
+        self.pipeline_owner.with(|owner| {
+            let mut total = Offset::ZERO;
+            let mut current = id;
+            loop {
+                total += inspect::render_offset(owner, current)
+                    .expect("render node should have an offset after layout");
+                match owner.render_tree().parent(current) {
+                    Some(parent) => current = parent,
+                    None => return total,
+                }
             }
-        }
+        })
     }
 }
 

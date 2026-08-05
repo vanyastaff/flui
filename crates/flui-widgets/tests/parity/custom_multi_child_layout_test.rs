@@ -267,8 +267,8 @@ use crate::harness;
 /// actually surfaces in FLUI" in the module doc for why this, not
 /// `#[should_panic]`, is the right tool for the error-control-test cases.
 fn has_no_committed_geometry(laid: &LaidOut, id: RenderId) -> bool {
-    let owner = laid.pipeline_owner();
-    flui_rendering::testing::inspect::box_geometry(&owner.read(), id).is_none()
+    laid.pipeline_owner()
+        .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, id).is_none())
 }
 
 /// What the delegate saw, in the order the layout pass asked for it.

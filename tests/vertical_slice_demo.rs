@@ -34,21 +34,19 @@ mod tree;
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_foundation::RenderId;
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
-use parking_lot::RwLock;
 
 /// Root constraints the demo is mounted under: wide/tall enough that the
 /// counter row, the [`tree::LIST_BOX_HEIGHT`]-tall list box, and the
@@ -61,7 +59,7 @@ fn root_constraints() -> BoxConstraints {
 /// Everything the test needs to drive and inspect the mounted demo tree.
 struct MountedDemo {
     binding: HeadlessBinding,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
     /// Clone of the mounted [`tree::DemoRoot`]'s `home_create_count` — how many
     /// times `DemoHomeState::create_state` has run. See that field's doc for
     /// why this, and not a display assertion, is what proves state survival.
@@ -86,7 +84,7 @@ impl MountedDemo {
 
         let mut build_owner = BuildOwner::new();
         let mut tree = ElementTree::new();
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
 
         // Install the async-driver / post-frame / interaction-dispatch
         // capabilities on this binding's owner BEFORE the mount build pass —
@@ -101,15 +99,14 @@ impl MountedDemo {
         binding.enter_owner_scope(|| {
             let root_element = tree.mount_root_with_pipeline_owner(
                 &scoped_root,
-                Some(Arc::clone(&pipeline_owner)),
+                Some(pipeline_owner.clone()),
                 &mut build_owner.element_owner_mut(),
             );
             build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
             build_owner.build_scope(&mut tree);
         });
 
-        let root_render_id = {
-            let owner = pipeline_owner.read();
+        let root_render_id = pipeline_owner.with(|owner| {
             let render_tree = owner.render_tree();
             let mut roots = render_tree
                 .iter()
@@ -123,13 +120,12 @@ impl MountedDemo {
                 "expected exactly one render-tree root after mount"
             );
             root
-        };
+        });
 
-        {
-            let mut guard = pipeline_owner.write();
-            guard.set_root_id(Some(root_render_id));
-            guard.set_root_constraints(Some(root_constraints()));
-        }
+        pipeline_owner.with_mut(|owner| {
+            owner.set_root_id(Some(root_render_id));
+            owner.set_root_constraints(Some(root_constraints()));
+        });
 
         binding.enter_owner_scope(|| {
             build_owner
@@ -137,7 +133,7 @@ impl MountedDemo {
                 .expect("bootstrap frame over the demo tree should succeed");
         });
 
-        binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+        binding.bind_tree(build_owner, tree, pipeline_owner.clone());
 
         Self {
             binding,
@@ -169,10 +165,11 @@ impl MountedDemo {
     }
 
     fn hit_test(&self, position: Offset) -> HitTestResult {
-        let owner = self.pipeline_owner.read();
-        let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
-        result
+        self.pipeline_owner.with(|owner| {
+            let mut result = HitTestResult::new();
+            owner.hit_test(position, &mut result);
+            result
+        })
     }
 
     fn dispatch_pointer(&self, event: flui_interaction::PointerEvent) {
@@ -220,38 +217,40 @@ impl MountedDemo {
     /// which this test cannot import (its own `common` module lives in a
     /// different crate — see the module doc's re-bootstrapping note).
     fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
-        let owner = self.pipeline_owner.read();
-        let queried = base_type_name(render_type_name);
-        owner
-            .render_tree()
-            .iter()
-            .filter_map(|(id, _node)| {
-                let diagnostics = owner.debug_node_diagnostics(id)?;
-                (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
-            })
-            .collect()
+        self.pipeline_owner.with(|owner| {
+            let queried = base_type_name(render_type_name);
+            owner
+                .render_tree()
+                .iter()
+                .filter_map(|(id, _node)| {
+                    let diagnostics = owner.debug_node_diagnostics(id)?;
+                    (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
+                })
+                .collect()
+        })
     }
 
     /// The unique `RenderParagraph` node whose plain-text content is `text`.
     fn find_text(&self, text: &str) -> Option<RenderId> {
-        let owner = self.pipeline_owner.read();
-        let mut found = None;
-        for (id, _node) in owner.render_tree().iter() {
-            let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
-                continue;
-            };
-            if diagnostics.name() != Some("RenderParagraph") {
-                continue;
+        self.pipeline_owner.with(|owner| {
+            let mut found = None;
+            for (id, _node) in owner.render_tree().iter() {
+                let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
+                    continue;
+                };
+                if diagnostics.name() != Some("RenderParagraph") {
+                    continue;
+                }
+                if diagnostics.get_property("text") == Some(text) {
+                    assert!(
+                        found.is_none(),
+                        "multiple RenderParagraph nodes contain {text:?}"
+                    );
+                    found = Some(id);
+                }
             }
-            if diagnostics.get_property("text") == Some(text) {
-                assert!(
-                    found.is_none(),
-                    "multiple RenderParagraph nodes contain {text:?}"
-                );
-                found = Some(id);
-            }
-        }
-        found
+            found
+        })
     }
 
     /// The animated box's own `RenderConstrainedBox`.
@@ -268,30 +267,31 @@ impl MountedDemo {
     /// # Panics
     /// Panics when zero or more than one candidate matches.
     fn animated_box_render_id(&self) -> RenderId {
-        let owner = self.pipeline_owner.read();
-        let width_range = tree::COLLAPSED_WIDTH.min(tree::EXPANDED_WIDTH) - 1.0
-            ..=tree::COLLAPSED_WIDTH.max(tree::EXPANDED_WIDTH) + 1.0;
-        let height_range = tree::COLLAPSED_HEIGHT.min(tree::EXPANDED_HEIGHT) - 1.0
-            ..=tree::COLLAPSED_HEIGHT.max(tree::EXPANDED_HEIGHT) + 1.0;
-        let matches: Vec<RenderId> = self
-            .find_all_by_render_type("RenderConstrainedBox")
-            .into_iter()
-            .filter(|&id| {
-                inspect::box_geometry(&owner, id).is_some_and(|size| {
-                    width_range.contains(&size.width.get())
-                        && height_range.contains(&size.height.get())
+        self.pipeline_owner.with(|owner| {
+            let width_range = tree::COLLAPSED_WIDTH.min(tree::EXPANDED_WIDTH) - 1.0
+                ..=tree::COLLAPSED_WIDTH.max(tree::EXPANDED_WIDTH) + 1.0;
+            let height_range = tree::COLLAPSED_HEIGHT.min(tree::EXPANDED_HEIGHT) - 1.0
+                ..=tree::COLLAPSED_HEIGHT.max(tree::EXPANDED_HEIGHT) + 1.0;
+            let matches: Vec<RenderId> = self
+                .find_all_by_render_type("RenderConstrainedBox")
+                .into_iter()
+                .filter(|&id| {
+                    inspect::box_geometry(owner, id).is_some_and(|size| {
+                        width_range.contains(&size.width.get())
+                            && height_range.contains(&size.height.get())
+                    })
                 })
-            })
-            .collect();
-        match matches.as_slice() {
-            [id] => *id,
-            [] => panic!("no RenderConstrainedBox falls within the animated box's size range"),
-            _ => panic!(
-                "{} RenderConstrainedBox nodes fall within the animated box's size range; \
+                .collect();
+            match matches.as_slice() {
+                [id] => *id,
+                [] => panic!("no RenderConstrainedBox falls within the animated box's size range"),
+                _ => panic!(
+                    "{} RenderConstrainedBox nodes fall within the animated box's size range; \
                  expected exactly one",
-                matches.len()
-            ),
-        }
+                    matches.len()
+                ),
+            }
+        })
     }
 
     /// The list's fixed-height `SizedBox` wrapper.
@@ -306,26 +306,27 @@ impl MountedDemo {
     /// # Panics
     /// Panics when zero or more than one candidate matches.
     fn list_box_render_id(&self) -> RenderId {
-        let owner = self.pipeline_owner.read();
-        let matches: Vec<RenderId> = self
-            .find_all_by_render_type("RenderConstrainedBox")
-            .into_iter()
-            .filter(|&id| {
-                inspect::box_geometry(&owner, id)
-                    .is_some_and(|size| (size.height.get() - tree::LIST_BOX_HEIGHT).abs() < 1.0)
-            })
-            .collect();
-        match matches.as_slice() {
-            [id] => *id,
-            [] => panic!(
-                "no RenderConstrainedBox matches the list box height ({})",
-                tree::LIST_BOX_HEIGHT
-            ),
-            _ => panic!(
-                "{} RenderConstrainedBox nodes match the list box height; expected exactly one",
-                matches.len()
-            ),
-        }
+        self.pipeline_owner.with(|owner| {
+            let matches: Vec<RenderId> = self
+                .find_all_by_render_type("RenderConstrainedBox")
+                .into_iter()
+                .filter(|&id| {
+                    inspect::box_geometry(owner, id)
+                        .is_some_and(|size| (size.height.get() - tree::LIST_BOX_HEIGHT).abs() < 1.0)
+                })
+                .collect();
+            match matches.as_slice() {
+                [id] => *id,
+                [] => panic!(
+                    "no RenderConstrainedBox matches the list box height ({})",
+                    tree::LIST_BOX_HEIGHT
+                ),
+                _ => panic!(
+                    "{} RenderConstrainedBox nodes match the list box height; expected exactly one",
+                    matches.len()
+                ),
+            }
+        })
     }
 
     /// The list box's root-local center — a safe drag anchor: enough headroom
@@ -334,7 +335,9 @@ impl MountedDemo {
     /// next move).
     fn list_box_center(&self) -> (f32, f32) {
         let list_box = self.list_box_render_id();
-        let size = inspect::box_geometry(&self.pipeline_owner.read(), list_box)
+        let size = self
+            .pipeline_owner
+            .with(|owner| inspect::box_geometry(owner, list_box))
             .expect("the list box must have box geometry after the bootstrap frame");
         let top_left = self.absolute_position(list_box);
         (
@@ -348,22 +351,23 @@ impl MountedDemo {
     /// `id` in this tree only translates (no scale/rotation), so a plain sum
     /// recovers the absolute position.
     fn absolute_position(&self, id: RenderId) -> Offset {
-        let owner = self.pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        let mut x = 0.0f32;
-        let mut y = 0.0f32;
-        let mut current = id;
-        loop {
-            if let Some(offset) = inspect::render_offset(&owner, current) {
-                x += offset.dx.get();
-                y += offset.dy.get();
+        self.pipeline_owner.with(|owner| {
+            let render_tree = owner.render_tree();
+            let mut x = 0.0f32;
+            let mut y = 0.0f32;
+            let mut current = id;
+            loop {
+                if let Some(offset) = inspect::render_offset(owner, current) {
+                    x += offset.dx.get();
+                    y += offset.dy.get();
+                }
+                match render_tree.parent(current) {
+                    Some(parent) => current = parent,
+                    None => break,
+                }
             }
-            match render_tree.parent(current) {
-                Some(parent) => current = parent,
-                None => break,
-            }
-        }
-        offset(x, y)
+            offset(x, y)
+        })
     }
 }
 
@@ -557,7 +561,9 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
     let mut demo = MountedDemo::mount();
 
     let box_id = demo.animated_box_render_id();
-    let width_at_rest = inspect::box_geometry(&demo.pipeline_owner.read(), box_id)
+    let width_at_rest = demo
+        .pipeline_owner
+        .with(|owner| inspect::box_geometry(owner, box_id))
         .expect("the animated box must have box geometry after the bootstrap frame")
         .width
         .get();
@@ -573,7 +579,9 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
     demo.pump(Duration::ZERO); // the detection frame: rebuild + retarget, t = 0
 
     let box_id = demo.animated_box_render_id();
-    let width_after_retarget = inspect::box_geometry(&demo.pipeline_owner.read(), box_id)
+    let width_after_retarget = demo
+        .pipeline_owner
+        .with(|owner| inspect::box_geometry(owner, box_id))
         .expect("geometry after retarget")
         .width
         .get();
@@ -590,7 +598,9 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
     for _ in 0..16 {
         demo.pump(frame);
         let id = demo.animated_box_render_id();
-        let width = inspect::box_geometry(&demo.pipeline_owner.read(), id)
+        let width = demo
+            .pipeline_owner
+            .with(|owner| inspect::box_geometry(owner, id))
             .expect("geometry mid-flight")
             .width
             .get();

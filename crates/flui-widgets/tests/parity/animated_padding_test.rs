@@ -63,14 +63,14 @@ use crate::common::{self, lay_out, lay_out_animated, tight};
 
 /// The evaluated [`EdgeInsets`] of the unique `RenderPadding` node in `laid`.
 fn padding_of(laid: &common::LaidOut, id: flui_foundation::RenderId) -> EdgeInsets {
-    let owner_handle = laid.pipeline_owner();
-    let mut owner = owner_handle.write();
-    owner
-        .render_tree_mut()
-        .get_mut(id)
-        .and_then(|node| node.downcast_render_object_mut::<RenderPadding>())
-        .expect("render node should be a RenderPadding")
-        .padding()
+    laid.pipeline_owner().with_mut(|owner| {
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderPadding>())
+            .expect("render node should be a RenderPadding")
+            .padding()
+    })
 }
 
 /// Probe that rebuilds `AnimatedPadding` with `padding`'s current value on

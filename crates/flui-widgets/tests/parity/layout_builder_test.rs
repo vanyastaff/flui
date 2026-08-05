@@ -484,8 +484,7 @@ fn layout_builder_layout_only_invalidation_does_not_reinvoke_the_builder() {
 
     let layout_builder_id = laid.find_by_render_type("RenderLayoutBuilder");
     laid.pipeline_owner()
-        .write()
-        .mark_needs_layout(layout_builder_id);
+        .with_mut(|owner| owner.mark_needs_layout(layout_builder_id));
     laid.tick();
 
     assert_eq!(

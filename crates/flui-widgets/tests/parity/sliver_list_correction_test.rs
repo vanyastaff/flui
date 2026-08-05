@@ -335,11 +335,9 @@ fn drag_vertical(laid: &LaidOut, dy: f32) {
 /// "not laid out this frame" the same as "not painted" — `false`, matching
 /// Flutter's own `skipOffstage` semantics for a child mid-build, not a panic.
 fn is_onstage(laid: &LaidOut, id: RenderId, viewport_height: f32) -> bool {
-    let size = {
-        let owner = laid.pipeline_owner();
-        let owner = owner.read();
-        inspect::box_geometry(&owner, id)
-    };
+    let size = laid
+        .pipeline_owner()
+        .with(|owner| inspect::box_geometry(owner, id));
     let Some(size) = size else {
         return false;
     };

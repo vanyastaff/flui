@@ -67,7 +67,7 @@ use flui_interaction::events::ScrollEventData;
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
 use flui_objects::SubtreeAnchor;
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::PipelineCell;
 use flui_types::geometry::Pixels;
 use flui_types::gestures::Velocity;
 use flui_types::painting::Clip;
@@ -75,7 +75,6 @@ use flui_types::{Alignment, Axis, EdgeInsets, Offset, Point, Rect};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{Child, IntoView, View, ViewState};
-use parking_lot::RwLock;
 
 use crate::navigator::AnchoredBox;
 use crate::{AnimatedBuilder, ClipRect, GestureDetector, Listener, Transform};
@@ -656,13 +655,13 @@ impl InteractiveViewerState {
     /// collapses Flutter's two keys (`_parentKey` on the outer `Listener`,
     /// `_childKey` inside `Transform`) into the single `subtree_anchor` field.
     fn geometry(
-        pipeline_owner: Option<&std::sync::Arc<RwLock<PipelineOwner>>>,
+        pipeline_owner: Option<&PipelineCell>,
         anchor: &SubtreeAnchor,
         boundary_margin: EdgeInsets,
     ) -> Option<(Rect<Pixels>, Rect<Pixels>)> {
         let owner = pipeline_owner?;
         let render_id = anchor.get()?;
-        let size = owner.read().box_size(render_id)?;
+        let size = owner.with(|owner| owner.box_size(render_id))?;
         let rect = Rect::from_origin_size(Point::new(px(0.0), px(0.0)), size);
         Some((rect, boundary_margin.inflate_rect(rect)))
     }

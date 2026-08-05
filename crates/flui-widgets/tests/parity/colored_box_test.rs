@@ -309,13 +309,12 @@ fn colored_box_with_size_and_child_adopts_the_size_of_its_child() {
 fn colored_box_debug_fill_properties_carries_the_painted_color() {
     let laid = harness::pump_widget(ColoredBox::new(COLOR_TO_PAINT), harness::screen());
 
-    let owner = laid.pipeline_owner();
-    let owner = owner.read();
-    let node: DiagnosticsNode = render_diagnostics(&owner)
-        .find_descendant_unique("RenderDecoratedBox")
-        .expect("ColoredBox mounts exactly one RenderDecoratedBox")
-        .clone();
-    drop(owner);
+    let node: DiagnosticsNode = laid.pipeline_owner().with(|owner| {
+        render_diagnostics(owner)
+            .find_descendant_unique("RenderDecoratedBox")
+            .expect("ColoredBox mounts exactly one RenderDecoratedBox")
+            .clone()
+    });
 
     let first = node
         .properties()

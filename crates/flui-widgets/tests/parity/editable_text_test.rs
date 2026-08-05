@@ -135,17 +135,17 @@ use crate::common::{LaidOut, lay_out, loose};
 /// harness twin of `src/text/editable_text.rs`'s crate-internal
 /// `with_render_editable` test helper.
 fn with_render_editable<T>(laid: &LaidOut, f: impl FnOnce(&RenderEditable) -> T) -> Option<T> {
-    let owner = laid.pipeline_owner();
-    let owner = owner.read();
-    for (_, node) in owner.render_tree().iter() {
-        let editable = node
-            .as_box()
-            .and_then(|entry| entry.render_object().downcast_ref::<RenderEditable>()); // PORT-CHECK-OK-DOWNCAST: test-only reach to the one concrete render object type this widget mounts, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — see docs/PORT.md FR-033/widgets.
-        if let Some(editable) = editable {
-            return Some(f(editable));
+    laid.pipeline_owner().with(|owner| {
+        for (_, node) in owner.render_tree().iter() {
+            let editable = node
+                .as_box()
+                .and_then(|entry| entry.render_object().downcast_ref::<RenderEditable>()); // PORT-CHECK-OK-DOWNCAST: test-only reach to the one concrete render object type this widget mounts, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — see docs/PORT.md FR-033/widgets.
+            if let Some(editable) = editable {
+                return Some(f(editable));
+            }
         }
-    }
-    None
+        None
+    })
 }
 
 /// Oracle: `'Composing text is underlined and underline is cleared when

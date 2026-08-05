@@ -25,11 +25,11 @@ use std::time::Duration;
 use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::{Animatable, Vsync};
 use flui_geometry::Rect;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::PipelineCell;
 use flui_types::Size;
 use flui_widgets::prelude::*;
 use flui_widgets::{FlightDirection, HeroController, HeroControllerScope, PopupRoute, VsyncScope};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 const TRANSITION: Duration = Duration::from_millis(100);
 const FRAME: Duration = Duration::from_millis(16);
@@ -45,17 +45,18 @@ fn app(vsync: &Vsync, navigator: &NavigatorHandle) -> impl View {
 }
 
 /// How many shuttle `RenderIgnorePointer`s are currently airborne.
-fn shuttles(owner: &Arc<RwLock<PipelineOwner>>) -> usize {
+fn shuttles(owner: &PipelineCell) -> usize {
     render_count(owner, "RenderIgnorePointer")
 }
 
-fn render_count(owner: &Arc<RwLock<PipelineOwner>>, suffix: &str) -> usize {
-    owner
-        .read()
-        .render_tree()
-        .iter()
-        .filter(|(_, node)| node.debug_name().ends_with(suffix))
-        .count()
+fn render_count(owner: &PipelineCell, suffix: &str) -> usize {
+    owner.with(|owner| {
+        owner
+            .render_tree()
+            .iter()
+            .filter(|(_, node)| node.debug_name().ends_with(suffix))
+            .count()
+    })
 }
 
 /// Pump `frames` and report `(max shuttles seen at any frame, shuttles at the end)`.
@@ -63,7 +64,7 @@ fn render_count(owner: &Arc<RwLock<PipelineOwner>>, suffix: &str) -> usize {
 /// The maximum is counted *including* the state on entry, so a divert pushed just
 /// before the call is observed. Deterministic: `pump_for` advances a virtual clock, so
 /// the animation timeline is fixed run to run.
-fn run(laid: &mut LaidOut, owner: &Arc<RwLock<PipelineOwner>>, frames: usize) -> (usize, usize) {
+fn run(laid: &mut LaidOut, owner: &PipelineCell, frames: usize) -> (usize, usize) {
     let mut max = shuttles(owner);
     for _ in 0..frames {
         laid.pump_for(FRAME);

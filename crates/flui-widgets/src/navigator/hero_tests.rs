@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::ValueKey;
+use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Size;
 use flui_types::geometry::px;
 use flui_view::ViewExt;
@@ -150,8 +151,7 @@ fn duplicate_tags_in_one_route_log_and_drop_the_second() {
         .expect("the first hero holds the tag");
     let owner = harness.pipeline_owner();
     let winner_size = owner
-        .read()
-        .box_size(winner.render_id().expect("attached"))
+        .with(|owner| owner.box_size(winner.render_id().expect("attached")))
         .expect("laid out");
     assert_eq!(
         (winner_size.width.0, winner_size.height.0),
@@ -195,8 +195,7 @@ fn hero_render_id_is_none_before_attach_and_cleared_after_dispose() {
     assert!(
         harness
             .pipeline_owner()
-            .read()
-            .box_size(render_id)
+            .with(|owner| owner.box_size(render_id))
             .is_some(),
         "and laid out by the first frame"
     );
@@ -216,10 +215,9 @@ fn hero_render_id_is_none_before_attach_and_cleared_after_dispose() {
 /// The size of the one `RenderConstrainedBox` under the hero's anchor, i.e. what the
 /// hero's `SizedBox` placeholder resolved to.
 fn hero_box_size(harness: &Harness, hero: &HeroHandle) -> Size {
-    let owner = harness.pipeline_owner();
-    let owner = owner.read();
-    owner
-        .box_size(hero.render_id().expect("attached"))
+    harness
+        .pipeline_owner()
+        .with(|owner| owner.box_size(hero.render_id().expect("attached")))
         .expect("laid out")
 }
 
@@ -393,8 +391,7 @@ fn hero_bounding_box_is_taken_in_the_ancestors_coordinate_space() {
 
     let root = harness
         .pipeline_owner()
-        .read()
-        .root_id()
+        .with(PipelineOwner::root_id)
         .expect("a render root");
 
     let first_rect = first.bounding_box_in(root).expect("measurable");
@@ -431,8 +428,7 @@ fn an_unmounted_hero_measures_to_none() {
     let hero = registry.get(&tag("a")).expect("registered");
     let root = harness
         .pipeline_owner()
-        .read()
-        .root_id()
+        .with(PipelineOwner::root_id)
         .expect("a render root");
     assert!(hero.bounding_box_in(root).is_some());
 
@@ -529,8 +525,7 @@ fn a_hero_bounding_box_is_none_before_layout_commits() {
     let hero = registry.get(&tag("probe")).expect("registered");
     let root = harness
         .pipeline_owner()
-        .read()
-        .root_id()
+        .with(PipelineOwner::root_id)
         .expect("a render root");
     assert!(hero.bounding_box_in(root).is_some());
 }

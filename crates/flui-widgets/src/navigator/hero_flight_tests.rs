@@ -336,38 +336,38 @@ fn the_flight_entry_is_ignore_pointer_not_hit_testable() {
     harness.tick();
 
     let owner = harness.pipeline_owner();
-    let owner = owner.read();
-
-    let gates = descendants_named(&owner, "RenderIgnorePointer");
-    assert_eq!(gates.len(), 1, "the flight entry is the only IgnorePointer");
-    let shuttle = subtree_of(&owner, gates[0]);
-    assert!(
-        shuttle.iter().any(|id| owner
-            .render_tree()
-            .get(*id)
-            .is_some_and(|node| node.debug_name().ends_with("RenderDecoratedBox"))),
-        "the gate wraps something hit-testable, or this test proves nothing: {shuttle:?}"
-    );
-
-    let mut result = flui_interaction::HitTestResult::new();
-    let centre = Offset::new(
-        rect.min_x() + rect.width() / 2.0,
-        rect.min_y() + rect.height() / 2.0,
-    );
-    owner.hit_test(centre, &mut result);
-    let hit: Vec<flui_foundation::RenderId> =
-        result.path().iter().map(|entry| entry.target).collect();
-    assert!(
-        !hit.is_empty(),
-        "the point is over the page, so something was hit"
-    );
-
-    for node in shuttle {
+    owner.with(|owner| {
+        let gates = descendants_named(owner, "RenderIgnorePointer");
+        assert_eq!(gates.len(), 1, "the flight entry is the only IgnorePointer");
+        let shuttle = subtree_of(owner, gates[0]);
         assert!(
-            !hit.contains(&node),
-            "the shuttle must swallow no pointers; hit path: {hit:?}"
+            shuttle.iter().any(|id| owner
+                .render_tree()
+                .get(*id)
+                .is_some_and(|node| node.debug_name().ends_with("RenderDecoratedBox"))),
+            "the gate wraps something hit-testable, or this test proves nothing: {shuttle:?}"
         );
-    }
+
+        let mut result = flui_interaction::HitTestResult::new();
+        let centre = Offset::new(
+            rect.min_x() + rect.width() / 2.0,
+            rect.min_y() + rect.height() / 2.0,
+        );
+        owner.hit_test(centre, &mut result);
+        let hit: Vec<flui_foundation::RenderId> =
+            result.path().iter().map(|entry| entry.target).collect();
+        assert!(
+            !hit.is_empty(),
+            "the point is over the page, so something was hit"
+        );
+
+        for node in shuttle {
+            assert!(
+                !hit.contains(&node),
+                "the shuttle must swallow no pointers; hit path: {hit:?}"
+            );
+        }
+    });
 }
 
 /// Every render node at or below `root`.

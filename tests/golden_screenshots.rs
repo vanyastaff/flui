@@ -34,17 +34,15 @@ mod vertical_slice_demo;
 mod widgets_gallery;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use flui_engine::wgpu::HeadlessRenderer;
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_types::Size;
 use flui_types::geometry::px;
 use flui_view::{BuildOwner, ElementTree, IntoView};
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
-use parking_lot::RwLock;
 
 /// A single channel may differ by up to this much (0–255) before a pixel counts
 /// as "changed" — absorbs the sub-pixel jitter same-GPU rendering can still show
@@ -79,7 +77,7 @@ fn render_demo<V: IntoView + 'static>(root_view: V) -> Option<Vec<u8>> {
     let binding = HeadlessBinding::new();
     let mut build_owner = BuildOwner::new();
     let mut element_tree = ElementTree::new();
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     binding.install_build_capabilities(&mut build_owner);
 
     let focused_root = FocusRoot::new(root_view);
@@ -88,37 +86,36 @@ fn render_demo<V: IntoView + 'static>(root_view: V) -> Option<Vec<u8>> {
     binding.enter_owner_scope(|| {
         let root_element = element_tree.mount_root_with_pipeline_owner(
             &scoped_root,
-            Some(Arc::clone(&pipeline_owner)),
+            Some(pipeline_owner.clone()),
             &mut build_owner.element_owner_mut(),
         );
         build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
         build_owner.build_scope(&mut element_tree);
     });
 
-    let root_render_id = {
-        let owner = pipeline_owner.read();
+    let root_render_id = pipeline_owner.with(|owner| {
         let render_tree = owner.render_tree();
         render_tree
             .iter()
             .map(|(id, _)| id)
             .find(|id| render_tree.parent(*id).is_none())
             .expect("the mounted demo tree must have a render root")
-    };
-    {
-        let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(root_render_id));
-        guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(
+    });
+    pipeline_owner.with_mut(|owner| {
+        owner.set_root_id(Some(root_render_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
             px(SHOT_WIDTH as f32),
             px(SHOT_HEIGHT as f32),
         ))));
-    }
+    });
 
     let layer_tree = binding.enter_owner_scope(|| {
-        let mut guard = pipeline_owner.write();
-        let owner = std::mem::take(&mut *guard);
-        let (owner, result) = owner.run_frame();
-        *guard = owner;
-        result.expect("the render frame must succeed")
+        pipeline_owner.with_mut(|guard| {
+            let owner = std::mem::take(guard);
+            let (owner, result) = owner.run_frame();
+            *guard = owner;
+            result.expect("the render frame must succeed")
+        })
     });
     let layer_tree = layer_tree.expect("the render frame must produce a LayerTree");
 

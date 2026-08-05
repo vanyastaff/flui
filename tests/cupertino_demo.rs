@@ -18,7 +18,6 @@ mod tree;
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_cupertino::{CupertinoTabController, CupertinoTheme, CupertinoThemeData};
@@ -26,13 +25,12 @@ use flui_foundation::RenderId;
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};
 use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
-use parking_lot::RwLock;
 
 /// The mounted root's logical width.
 const ROOT_WIDTH: f32 = 400.0;
@@ -58,7 +56,7 @@ fn root_constraints() -> BoxConstraints {
 /// Everything the test needs to drive and inspect the mounted demo tree.
 struct MountedDemo {
     binding: HeadlessBinding,
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    pipeline_owner: PipelineCell,
     /// Clone of the mounted [`tree::CupertinoDemoRoot`]'s tab controller —
     /// lets a test assert the active tab index directly rather than only
     /// through rendered content.
@@ -87,7 +85,7 @@ impl MountedDemo {
 
         let mut build_owner = BuildOwner::new();
         let mut tree = ElementTree::new();
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
 
         binding.install_build_capabilities(&mut build_owner);
 
@@ -98,15 +96,14 @@ impl MountedDemo {
         binding.enter_owner_scope(|| {
             let root_element = tree.mount_root_with_pipeline_owner(
                 &scoped_root,
-                Some(Arc::clone(&pipeline_owner)),
+                Some(pipeline_owner.clone()),
                 &mut build_owner.element_owner_mut(),
             );
             build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
             build_owner.build_scope(&mut tree);
         });
 
-        let root_render_id = {
-            let owner = pipeline_owner.read();
+        let root_render_id = pipeline_owner.with(|owner| {
             let render_tree = owner.render_tree();
             let mut roots = render_tree
                 .iter()
@@ -120,13 +117,12 @@ impl MountedDemo {
                 "expected exactly one render-tree root after mount"
             );
             root
-        };
+        });
 
-        {
-            let mut guard = pipeline_owner.write();
-            guard.set_root_id(Some(root_render_id));
-            guard.set_root_constraints(Some(root_constraints()));
-        }
+        pipeline_owner.with_mut(|owner| {
+            owner.set_root_id(Some(root_render_id));
+            owner.set_root_constraints(Some(root_constraints()));
+        });
 
         binding.enter_owner_scope(|| {
             build_owner
@@ -134,7 +130,7 @@ impl MountedDemo {
                 .expect("bootstrap frame over the demo tree should succeed");
         });
 
-        binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+        binding.bind_tree(build_owner, tree, pipeline_owner.clone());
 
         Self {
             binding,
@@ -158,10 +154,11 @@ impl MountedDemo {
     }
 
     fn hit_test(&self, position: Offset) -> HitTestResult {
-        let owner = self.pipeline_owner.read();
-        let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
-        result
+        self.pipeline_owner.with(|owner| {
+            let mut result = HitTestResult::new();
+            owner.hit_test(position, &mut result);
+            result
+        })
     }
 
     fn dispatch_pointer(&self, event: flui_interaction::PointerEvent) {
@@ -210,66 +207,72 @@ impl MountedDemo {
 
     /// The unique `RenderParagraph` node whose plain-text content is `text`.
     fn find_text(&self, text: &str) -> Option<RenderId> {
-        let owner = self.pipeline_owner.read();
-        let mut found = None;
-        for (id, _node) in owner.render_tree().iter() {
-            let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
-                continue;
-            };
-            if diagnostics.name() != Some("RenderParagraph") {
-                continue;
+        self.pipeline_owner.with(|owner| {
+            let mut found = None;
+            for (id, _node) in owner.render_tree().iter() {
+                let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
+                    continue;
+                };
+                if diagnostics.name() != Some("RenderParagraph") {
+                    continue;
+                }
+                if diagnostics.get_property("text") == Some(text) {
+                    assert!(
+                        found.is_none(),
+                        "multiple RenderParagraph nodes contain {text:?}"
+                    );
+                    found = Some(id);
+                }
             }
-            if diagnostics.get_property("text") == Some(text) {
-                assert!(
-                    found.is_none(),
-                    "multiple RenderParagraph nodes contain {text:?}"
-                );
-                found = Some(id);
-            }
-        }
-        found
+            found
+        })
     }
 
     /// Every render node whose short type name equals `render_type_name`.
     fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
-        let owner = self.pipeline_owner.read();
-        owner
-            .render_tree()
-            .iter()
-            .filter_map(|(id, _node)| {
-                let diagnostics = owner.debug_node_diagnostics(id)?;
-                (diagnostics.name() == Some(render_type_name)).then_some(id)
-            })
-            .collect()
+        self.pipeline_owner.with(|owner| {
+            owner
+                .render_tree()
+                .iter()
+                .filter_map(|(id, _node)| {
+                    let diagnostics = owner.debug_node_diagnostics(id)?;
+                    (diagnostics.name() == Some(render_type_name)).then_some(id)
+                })
+                .collect()
+        })
     }
 
     /// The string value of a mounted render node's named diagnostic
     /// property.
     fn render_property(&self, id: RenderId, property_name: &str) -> Option<String> {
-        let owner = self.pipeline_owner.read();
-        let diagnostics = owner.debug_node_diagnostics(id)?;
-        diagnostics.get_property(property_name).map(str::to_string)
+        self.pipeline_owner.with(|owner| {
+            let diagnostics = owner.debug_node_diagnostics(id)?;
+            diagnostics.get_property(property_name).map(str::to_string)
+        })
     }
 
     /// The screen-space (root-local) top-left of `id`, by summing paint
     /// offsets up the render-tree ancestry.
     fn absolute_position(&self, id: RenderId) -> Offset {
-        let owner = self.pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        let mut x = 0.0f32;
-        let mut y = 0.0f32;
-        let mut current = id;
-        loop {
-            if let Some(offset) = flui_rendering::testing::inspect::render_offset(&owner, current) {
-                x += offset.dx.get();
-                y += offset.dy.get();
+        self.pipeline_owner.with(|owner| {
+            let render_tree = owner.render_tree();
+            let mut x = 0.0f32;
+            let mut y = 0.0f32;
+            let mut current = id;
+            loop {
+                if let Some(offset) =
+                    flui_rendering::testing::inspect::render_offset(owner, current)
+                {
+                    x += offset.dx.get();
+                    y += offset.dy.get();
+                }
+                match render_tree.parent(current) {
+                    Some(parent) => current = parent,
+                    None => break,
+                }
             }
-            match render_tree.parent(current) {
-                Some(parent) => current = parent,
-                None => break,
-            }
-        }
-        offset(x, y)
+            offset(x, y)
+        })
     }
 }
 

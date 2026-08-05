@@ -17,7 +17,7 @@ use flui_interaction::routing::{
 };
 use flui_interaction::{ClientToken, TextInputHandle};
 use flui_objects::RenderEditable;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{
     Color, ImeEvent, Point, Rect,
@@ -26,7 +26,6 @@ use flui_types::{
 };
 use flui_view::prelude::*;
 use flui_view::{BoxedView, RenderView, impl_render_view};
-use parking_lot::RwLock;
 
 use crate::AnimatedBuilder;
 use crate::text::controller::TextEditingController;
@@ -733,7 +732,7 @@ fn apply_ime_event(controller: &TextEditingController, event: &ImeEvent) {
 #[derive(Clone)]
 struct CursorAreaLoop {
     post_frame: flui_scheduler::PostFrameHandle,
-    pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+    pipeline_owner: Option<PipelineCell>,
     /// The `EditableTextRenderView`'s own inner anchor (ADR-0032) — see
     /// `EditableTextState::inner_anchor`'s doc.
     inner_anchor: flui_objects::SubtreeAnchor,
@@ -830,20 +829,22 @@ impl CursorAreaLoop {
     /// originally landed.
     fn global_caret_rect(&self) -> Option<Bounds<Pixels>> {
         let anchor_id = self.inner_anchor.get()?;
-        let owner = self.pipeline_owner.as_ref()?.read();
-        let root_id = owner.root_id()?;
-        let tree = owner.render_tree();
-        let editable_id = *tree.children(anchor_id).first()?;
-        let editable = tree
-            .get(editable_id)?
-            .as_box()?
-            .render_object()
-            .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: ADR-0032 IME cursor-area loop reaches the one concrete render object type it knows sits under `inner_anchor` (an `EditableTextRenderView`'s `RenderEditable`) through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — see docs/PORT.md FR-033/widgets.
-        let local_rect = editable
-            .rect_for_composing_range()
-            .unwrap_or_else(|| editable.caret_local_rect());
-        let transform = owner.transform_to(anchor_id, root_id)?;
-        Some(bounds_from_rect(transform.transform_rect(&local_rect)))
+        let owner = self.pipeline_owner.as_ref()?;
+        owner.with(|owner| {
+            let root_id = owner.root_id()?;
+            let tree = owner.render_tree();
+            let editable_id = *tree.children(anchor_id).first()?;
+            let editable = tree
+                .get(editable_id)?
+                .as_box()?
+                .render_object()
+                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: ADR-0032 IME cursor-area loop reaches the one concrete render object type it knows sits under `inner_anchor` (an `EditableTextRenderView`'s `RenderEditable`) through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — see docs/PORT.md FR-033/widgets.
+            let local_rect = editable
+                .rect_for_composing_range()
+                .unwrap_or_else(|| editable.caret_local_rect());
+            let transform = owner.transform_to(anchor_id, root_id)?;
+            Some(bounds_from_rect(transform.transform_rect(&local_rect)))
+        })
     }
 }
 
@@ -1927,18 +1928,19 @@ mod tests {
         f: impl FnOnce(&RenderEditable) -> T,
     ) -> Option<T> {
         let owner = harness.pipeline_owner();
-        let owner = owner.read();
-        let tree = owner.render_tree();
-        let mut f = Some(f);
-        for (_, node) in tree.iter() {
-            let editable = node
-                .as_box()
-                .and_then(|b| b.render_object().downcast_ref::<RenderEditable>()); // PORT-CHECK-OK-DOWNCAST: test-only reach to the one concrete render object type this widget mounts, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — same sanctioned boundary as `CursorAreaLoop::global_caret_rect` above; see docs/PORT.md FR-033/widgets.
-            if let Some(editable) = editable {
-                return f.take().map(|f| f(editable));
+        owner.with(|owner| {
+            let tree = owner.render_tree();
+            let mut f = Some(f);
+            for (_, node) in tree.iter() {
+                let editable = node
+                    .as_box()
+                    .and_then(|b| b.render_object().downcast_ref::<RenderEditable>()); // PORT-CHECK-OK-DOWNCAST: test-only reach to the one concrete render object type this widget mounts, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — same sanctioned boundary as `CursorAreaLoop::global_caret_rect` above; see docs/PORT.md FR-033/widgets.
+                if let Some(editable) = editable {
+                    return f.take().map(|f| f(editable));
+                }
             }
-        }
-        None
+            None
+        })
     }
 
     /// Whether the mounted field's caret is currently painted.
