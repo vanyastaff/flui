@@ -230,8 +230,8 @@ mod tests {
 
     // ========================================================================
     // Owner-local traversal — full `run_frame` through a `PipelineCell`
-    // checkout (miri coverage: crates/flui-rendering/AGENTS.md miri-scope
-    // line, justfile `miri` recipe).
+    // checkout (miri coverage: root `AGENTS.md`'s miri-scope line, justfile
+    // `miri` recipe).
     // ========================================================================
     //
     // Everything above this point exercises the checkout mechanism in
@@ -286,7 +286,8 @@ mod tests {
     }
 
     /// Two-child parent: lays out and paints both children in order. Root +
-    /// 2 leaves = 3 real `NodePtr`s, within the SPIKE's `<=4`-node budget.
+    /// 2 leaves = 3 real `NodePtr`s, kept small so the miri wall-time for
+    /// this test stays in budget.
     #[derive(Debug)]
     struct FrameParent;
 

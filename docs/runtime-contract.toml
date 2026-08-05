@@ -2168,6 +2168,19 @@ exist to close.\
 """
 allow_files = []
 
+[[forbidden_pattern]]
+pattern = "unsafe impl Sync for NodePtr"
+why = """
+the other half of the `unsafe impl Send for NodePtr` entry above: the two \
+manual impls were always deleted and reasoned about together (the SAFETY \
+comments that used to justify them cited the same `LayoutChildCallback` / \
+`BoxLayoutCtxErased` bound for both), so the same forbidden-pattern \
+protection covers `Sync` as its own literal substring rather than relying \
+on the `Send` entry alone to catch a `Sync`-only reintroduction. See the \
+`Send` entry's `why` for the full rationale.\
+"""
+allow_files = []
+
 [[forbidden_path]]
 path = "crates/flui-presentation"
 why = "the presentation composition contract: no flui-presentation crate; flui-app privately composes the three owners"

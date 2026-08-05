@@ -2030,11 +2030,10 @@ mod tests {
     // field addition that tried to re-derive `Send`/`Sync` some other way
     // would be caught at the type it actually touches). Both types are
     // private to this crate, so the externally observable half of this
-    // same fact is a `compile_fail` doctest on `RenderingFlutterBinding` in
-    // `flui-app/src/bindings/renderer_binding.rs` (`LayoutChildCallback`,
-    // the nearest public type with the identical never-`Send` shape) --
-    // cross-linked so neither half is deleted as "redundant" without
-    // checking the other.
+    // same fact is a `compile_fail` doctest on `LayoutChildCallback`'s own
+    // doc comment in `protocol/box_protocol.rs` (the nearest public type
+    // with the identical never-`Send` shape) -- cross-linked so neither
+    // half is deleted as "redundant" without checking the other.
     static_assertions::assert_not_impl_any!(SubtreeArena<'_>: Send, Sync);
     static_assertions::assert_not_impl_any!(NodePtr: Send, Sync);
 
@@ -2456,9 +2455,9 @@ mod tests {
 
     // ========================================================================
     // Reentrant layout — a mid-layout child-request against the checked-out
-    // owner (miri coverage widened alongside the two walks above; see
-    // crates/flui-rendering/AGENTS.md's miri-scope line and the justfile
-    // `miri` recipe doc-comment).
+    // owner (miri coverage widened alongside the two walks above; see root
+    // `AGENTS.md`'s miri-scope line and the justfile `miri` recipe
+    // doc-comment).
     // ========================================================================
     //
     // `RenderSliverList`'s request-strategy seam
