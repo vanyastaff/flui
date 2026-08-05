@@ -126,10 +126,10 @@ struct ScopeState {
 ///    claim a hash the first still holds.
 /// 2. **A tag-checked no-op release** — a stale or duplicate release from an
 ///    owner that no longer holds the claim never disturbs whoever holds it
-///    now (see [`release`](Self::release)).
+///    now (see this type's crate-internal `release` method).
 /// 3. **Two live elements momentarily existing under one key, one in each
 ///    owner's own tree** — reachable only if a claim is force-reclaimed
-///    (e.g. a direct [`reclaim_owner`](Self::reclaim_owner) call, not the
+///    (e.g. a direct crate-internal `reclaim_owner` call, not the
 ///    normal unmount path) while its original owner still has an inactive,
 ///    unfinalized retake candidate for that same key: a second owner can
 ///    then claim the hash fresh, and the first owner's later intra-tree
@@ -148,6 +148,13 @@ struct ScopeState {
 ///    owner still has an unfinalized candidate sitting on the other side of
 ///    it. Reaching outcome 3 requires calling `reclaim_owner` directly,
 ///    which no realm-native code path does.
+///
+/// Outcome 1's panic is a fatal application bug, not a recoverable error: the
+/// panicking owner's tree is left in a non-resumable state (the rejected
+/// element's mount never completed), matching the long-standing semantics of
+/// the pre-existing intra-tree duplicate-`GlobalKey` panic this one is
+/// widened from. A host that catches it and keeps using that owner's tree is
+/// operating on a torn mount, not a recovered one.
 ///
 /// [`BuildOwner`]: super::BuildOwner
 #[derive(Clone)]

@@ -235,7 +235,11 @@ impl ElementOwner<'_> {
     /// Panics if `key_hash` is already claimed, in the installed
     /// [`GlobalKeyScope`], by a *different* owner (see [`GlobalKeyScope`]'s
     /// contract). Re-registering a hash this same owner already holds never
-    /// panics.
+    /// panics. This panic is fatal, not recoverable: it fires from a
+    /// post-mount registration site, the same timing the pre-existing
+    /// intra-tree duplicate-key panic already has, so this owner's tree is
+    /// left with an incomplete mount. A host must not catch it and keep
+    /// using this owner's tree.
     pub fn register_global_key(&mut self, key_hash: u64, id: ElementId) {
         global_key_scope::claim_and_register(
             self.global_key_scope,

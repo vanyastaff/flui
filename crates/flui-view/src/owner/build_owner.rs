@@ -491,7 +491,7 @@ impl BuildOwner {
     /// // uniqueness domain.
     /// ```
     ///
-    /// # Panics (debug builds only)
+    /// # Panics
     ///
     /// The "called once, before mount" precondition is load-bearing, not
     /// advisory: a call after this owner has already registered a
@@ -499,18 +499,26 @@ impl BuildOwner {
     /// self-owned private scope's claims, or a previously installed shared
     /// scope's claims — while the owner's local map still lists them as
     /// registered, letting a sibling owner mount the "same" key with no
-    /// conflict and no trace. Debug builds `debug_assert!` that this
-    /// owner's local `GlobalKey` map is still empty and no scope has been
-    /// installed yet; release builds proceed (the discard still happens,
-    /// silently), matching this crate's panic policy of catching internal
-    /// invariants in debug without crashing production on a stray call.
+    /// conflict and no trace, and leaking the discarded scope's claims as
+    /// unreachable. This is a programming-error invariant, not a
+    /// caller-recoverable one, so the check runs and panics in every build,
+    /// release included — the cost is one cold-path emptiness test on a
+    /// setter called once at assembly time. A `tracing::error!` record
+    /// precedes the panic so an embedder catching it still has a structured
+    /// diagnostic.
     pub fn set_global_key_scope(&mut self, scope: GlobalKeyScope) {
-        debug_assert!(
-            self.global_keys.is_empty() && self.global_key_scope.is_none(),
-            "BuildOwner::set_global_key_scope called after this owner already registered a \
-             GlobalKey or installed a scope — call it once, at presentation assembly, before \
-             any element is mounted; a later call silently discards the prior scope's claims"
-        );
+        let already_wired = !self.global_keys.is_empty() || self.global_key_scope.is_some();
+        if already_wired {
+            tracing::error!(
+                "BuildOwner::set_global_key_scope called after this owner already registered \
+                 a GlobalKey or installed a scope — call it once, at presentation assembly, \
+                 before any element is mounted"
+            );
+            panic!(
+                "BUG: set_global_key_scope called after GlobalKey registration began (or \
+                 after a scope was installed) — claims would be silently discarded"
+            );
+        }
         self.global_key_scope = Some(scope);
     }
 
@@ -1405,7 +1413,11 @@ impl BuildOwner {
     /// Panics if `key_hash` is already claimed, in the installed
     /// [`GlobalKeyScope`], by a *different* owner (see
     /// [`GlobalKeyScope`]'s contract). Re-registering a hash this same owner
-    /// already holds never panics.
+    /// already holds never panics. This panic is fatal, not recoverable: it
+    /// fires from a post-mount registration site, the same timing the
+    /// pre-existing intra-tree duplicate-key panic already has, so this
+    /// owner's tree is left with an incomplete mount. A host must not catch
+    /// it and keep using this owner's tree.
     pub fn register_global_key(&mut self, key_hash: u64, element: ElementId) {
         global_key_scope::claim_and_register(
             &mut self.global_key_scope,
