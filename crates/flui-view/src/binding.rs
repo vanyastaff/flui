@@ -870,18 +870,28 @@ impl WidgetsBinding {
 
     /// Detach the root widget.
     ///
-    /// This clears the element tree.
+    /// This clears the element tree — the WHOLE tree, not just the root
+    /// node: `ElementTree::remove_subtree` (not the single-node `remove`)
+    /// walks every descendant deepest-first, running each one's own
+    /// `unmount`/`State::dispose` hook, exactly as a real permanent removal
+    /// must. A plain `remove` would only unmount the root's own element
+    /// (in practice the internal `RootRenderView` wrapper every attached
+    /// view is mounted under — see [`Self::attach_root_widget`]'s doc) and
+    /// silently orphan everything beneath it: no descendant's `dispose`
+    /// would ever run, leaking subscriptions/listeners/timers for the life
+    /// of this binding.
     pub fn detach_root_widget(&self) {
         let mut inner = self.inner.write();
 
         if let Some(root_id) = inner.root_element.take() {
-            // Remove root element (this clears the tree since it's the root)
+            // Remove the whole subtree (this clears the tree since root_id
+            // is its root).
             let WidgetsBindingInner {
                 ref mut build_owner,
                 ref mut element_tree,
                 ..
             } = *inner;
-            let _ = element_tree.remove(root_id, &mut build_owner.element_owner_mut());
+            element_tree.remove_subtree(root_id, &mut build_owner.element_owner_mut());
             tracing::debug!(?root_id, "Root widget detached");
         }
     }
@@ -2003,6 +2013,95 @@ mod tests {
 
         binding.detach_root_widget();
         assert!(binding.root_element().is_none());
+    }
+
+    #[derive(Clone)]
+    struct DisposeMarkerView {
+        disposed: Arc<parking_lot::Mutex<bool>>,
+    }
+
+    struct DisposeMarkerState {
+        disposed: Arc<parking_lot::Mutex<bool>>,
+    }
+
+    impl crate::StatefulView for DisposeMarkerView {
+        type State = DisposeMarkerState;
+
+        fn create_state(&self) -> Self::State {
+            DisposeMarkerState {
+                disposed: Arc::clone(&self.disposed),
+            }
+        }
+    }
+
+    impl crate::ViewState<DisposeMarkerView> for DisposeMarkerState {
+        fn build(
+            &self,
+            _view: &DisposeMarkerView,
+            _ctx: &dyn crate::BuildContext,
+        ) -> impl IntoView {
+            LeafView
+        }
+
+        fn dispose(&mut self) {
+            *self.disposed.lock() = true;
+        }
+    }
+
+    impl View for DisposeMarkerView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+    }
+
+    /// `detach_root_widget` must cascade through the WHOLE tree, not just
+    /// unmount the root's own node: the attached root is always wrapped in
+    /// an internal `RootRenderView` (see this method's own doc), so even a
+    /// single-widget tree is already two elements deep, and a real tree is
+    /// deeper still (this one plants the dispose-observing element as a
+    /// stateful GRANDCHILD of the reconciled `ParentView`/`LeafView` shape
+    /// used elsewhere in this file). A single-node `remove` would only ever
+    /// unmount `RootRenderView`'s own element and silently leak every
+    /// descendant's `State::dispose` — this test is the regression guard for
+    /// that exact class of bug.
+    #[test]
+    fn detach_root_widget_disposes_every_descendant_not_just_the_root() {
+        #[derive(Clone)]
+        struct ParentOfDisposeMarker {
+            child: DisposeMarkerView,
+        }
+
+        impl crate::StatelessView for ParentOfDisposeMarker {
+            fn build(&self, _ctx: &dyn crate::BuildContext) -> impl IntoView {
+                self.child.clone()
+            }
+        }
+
+        impl View for ParentOfDisposeMarker {
+            fn create_element(&self) -> crate::element::ElementKind {
+                crate::element::ElementKind::stateless(self)
+            }
+        }
+
+        let binding = WidgetsBinding::new();
+        let disposed = Arc::new(parking_lot::Mutex::new(false));
+        let view = ParentOfDisposeMarker {
+            child: DisposeMarkerView {
+                disposed: Arc::clone(&disposed),
+            },
+        };
+
+        binding.attach_root_widget(&view).expect("attach succeeds");
+        binding.draw_frame();
+        assert!(!*disposed.lock(), "precondition: nothing has torn down yet");
+
+        binding.detach_root_widget();
+
+        assert!(
+            *disposed.lock(),
+            "detach_root_widget must run State::dispose for every descendant, \
+             not just unmount the (internal RootRenderView-wrapped) root node"
+        );
     }
 
     #[test]

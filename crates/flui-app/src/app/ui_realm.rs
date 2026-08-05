@@ -1824,6 +1824,72 @@ impl UiRealm {
         }
         report
     }
+
+    /// Close and remove exactly one presentation from this realm's forest.
+    ///
+    /// Must run at Idle, outside the dispatched-scheduler gate — the same
+    /// discipline every other realm-map mutation follows; callers reach this
+    /// only from an idle-only teardown path, never from inside a frame
+    /// transaction. A no-op (returns `false`) if `id` does not name a
+    /// presentation this realm currently hosts.
+    ///
+    /// # Contract — six steps, in order
+    ///
+    /// 1. **Unregistering this presentation's window mappings from the
+    ///    process-wide `WindowRegistry` is NOT this method's job.**
+    ///    `UiRealm` has no access to that registry (`AppRuntime`-owned,
+    ///    ADR-0037 §2's single authority) — the caller must have already
+    ///    removed the registry entry before calling this. Today's only
+    ///    caller is `AppRuntime`'s realm teardown (closing a realm's SOLE
+    ///    presentation closes the realm), which already does registry
+    ///    removal first (`apply_uninstall`/`teardown_platform_realm`).
+    /// 2. IME detach + focus deactivate — [`PresentationState::close`]'s
+    ///    first half.
+    /// 3. `detach_root_widget` through this exact presentation's own
+    ///    `WidgetsBinding` — [`PresentationState::close`]'s second half.
+    ///    Every `State::dispose()` a descendant runs here still has its
+    ///    capabilities installed (nothing about the realm's shared dispatch
+    ///    handles has been touched), and routes only within THIS
+    ///    presentation's own tree: `RebuildHandle`/`ExternalBuildScheduler`
+    ///    are minted one-per-owner and never shared, so a dispose hook has
+    ///    no path to a sibling presentation's inbox even if it tries (see
+    ///    `dispose_during_teardown_cannot_reach_sibling_or_dead_services`).
+    /// 4. **Async-task disposition:** the realm-level `AsyncDriver` is not
+    ///    told about this closure — an in-flight task this presentation
+    ///    spawned is NOT cancelled here, matching `PresentationState`'s own
+    ///    `Drop` (which also does not reach into the driver). Its eventual
+    ///    completion fails closed against the now-dropped tree for the same
+    ///    reason step 3's dispose hooks do:
+    ///    `async_completion_after_presentation_teardown_fails_closed_no_sibling_reach`
+    ///    is the proof.
+    /// 5. `GlobalKeyScope` claims still tagged to this presentation's
+    ///    `BuildOwner` are reclaimed, traced — automatic, via `BuildOwner`'s
+    ///    own `Drop`, once step 6 drops the last reference to it.
+    /// 6. The removed `PresentationState` — and with it its `WidgetsBinding`
+    ///    (whose drop triggers step 5), `RenderingFlutterBinding`, and every
+    ///    other owned resource — drops at the end of this function.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production caller until a later addressed-routing \
+                      slice's presentation-close path removes a member from \
+                      a genuine N>1 forest; today's sole caller (AppRuntime's \
+                      realm teardown) closes the whole realm, which drops \
+                      every presentation through UiRealm::Drop instead of \
+                      calling this method"
+        )
+    )]
+    pub(crate) fn close_presentation(&mut self, id: PresentationId) -> bool {
+        let Some(presentation) = self.presentations.remove(id) else {
+            return false;
+        };
+        // Steps 2 + 3.
+        presentation.close();
+        // Steps 5 + 6: dropping `presentation` here (end of scope) is both
+        // the reclaim trigger and the disposal itself.
+        true
+    }
 }
 
 impl Drop for UiRealm {
@@ -4881,6 +4947,306 @@ mod tests {
                  bit must not be lost -- it must cause a second flush on \
                  the next pump, even though nothing else about the \
                  presentation is dirty"
+            );
+        }
+    }
+
+    // ========================================================================
+    // Async-task disposition audit (ADR-0043 §5) — a dropped presentation's
+    // in-flight AsyncDriver task must not reach a live sibling
+    // ========================================================================
+    mod async_completion_isolation {
+        use std::cell::RefCell;
+
+        use super::*;
+
+        /// Test-local view that captures its `RebuildHandle` and the realm's
+        /// `AsyncDriver` in `init_state` into a shared slot the test reads
+        /// back — the exact seam `flui_view::element::future_builder::
+        /// FutureBuilder` (the framework's own production async widget) uses,
+        /// minus the `AsyncSnapshot` state machine this test does not need.
+        #[derive(Clone)]
+        struct AsyncCaptureProbeView {
+            captured: Rc<RefCell<Option<(flui_view::RebuildHandle, flui_scheduler::AsyncDriver)>>>,
+        }
+
+        struct AsyncCaptureProbeState {
+            captured: Rc<RefCell<Option<(flui_view::RebuildHandle, flui_scheduler::AsyncDriver)>>>,
+        }
+
+        impl StatefulView for AsyncCaptureProbeView {
+            type State = AsyncCaptureProbeState;
+
+            fn create_state(&self) -> Self::State {
+                AsyncCaptureProbeState {
+                    captured: Rc::clone(&self.captured),
+                }
+            }
+        }
+
+        impl ViewState<AsyncCaptureProbeView> for AsyncCaptureProbeState {
+            fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+                if let Some(driver) = ctx.async_driver() {
+                    *self.captured.borrow_mut() = Some((ctx.rebuild_handle(), driver));
+                }
+            }
+
+            fn build(
+                &self,
+                _view: &AsyncCaptureProbeView,
+                _ctx: &dyn flui_view::BuildContext,
+            ) -> impl IntoView {
+                flui_widgets::SizedBox::new(0.0, 0.0)
+            }
+        }
+
+        impl flui_view::View for AsyncCaptureProbeView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateful(self)
+            }
+        }
+
+        /// The mandatory async-task-disposition audit: `AsyncDriver` is
+        /// realm-level (shared by every presentation in a realm), so an
+        /// in-flight task spawned from a presentation that later closes is
+        /// NOT cancelled — it keeps getting polled until it completes. Its
+        /// completion reaches back into a tree through a `RebuildHandle`,
+        /// which routes through `ExternalBuildScheduler` — an
+        /// `Arc<Mutex<HashMap<ElementId, _>>>` inbox minted fresh per
+        /// `BuildOwner` at construction, never shared or reused across
+        /// owners (`crates/flui-view/src/owner/build_owner.rs`'s
+        /// `external_scheduler`). A stale completion's `schedule()` call
+        /// therefore writes into ITS OWN (orphaned, since that `BuildOwner`
+        /// already dropped) inbox — there is no shared table keyed only by
+        /// raw `ElementId` for it to alias a live sibling's entry in, even
+        /// when the two owners' trees happen to reuse the same numeral (the
+        /// identical-numeral hazard `GlobalKeyRegistryComposite` exists for
+        /// is a DIFFERENT registry; this one was never shared to begin
+        /// with). This test proves it end to end rather than resting on
+        /// that code reading alone: no fix was needed here, and this test is
+        /// the evidence for that, not a description of one.
+        #[test]
+        fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach() {
+            let mut realm = UiRealm::for_test();
+            // `realm` starts with exactly one presentation; call it "A" and
+            // install a second, "B", to observe.
+            let a_id = realm.presentation_id();
+            let b_id = install_second_presentation_for_test(&mut realm);
+
+            let captured = Rc::new(RefCell::new(None));
+            let probe = AsyncCaptureProbeView {
+                captured: Rc::clone(&captured),
+            };
+            realm
+                .enter(|realm| realm.attach_root_widget(&probe))
+                .expect("A mounts the capture probe");
+            // `attach_root_widget` only creates the root element and
+            // schedules the first build -- `init_state` (where the probe
+            // captures its handles) does not run until that build pass
+            // actually happens, exactly like `a1_autowrap_causes_
+            // registration_after_build_pass` above.
+            let _ = realm.enter(|realm| {
+                realm.draw_frame_entered(BoxConstraints::tight(flui_types::Size::new(
+                    px(20.0),
+                    px(20.0),
+                )))
+            });
+
+            let (rebuild_handle, driver) = captured
+                .borrow_mut()
+                .take()
+                .expect("init_state must have captured both handles");
+
+            // Spawn on the REALM's shared driver — exactly what a real
+            // async widget on presentation A would have done. Nothing
+            // drives it to completion until explicitly polled below, well
+            // after A has already closed. `Arc<AtomicBool>`, not
+            // `Rc<Cell<bool>>`: `BoxedTask` requires `Send` (the driver is
+            // shared across threads even though polling only ever happens
+            // on the frame thread — see `AsyncDriver`'s own doc).
+            let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let ran_marker = Arc::clone(&ran);
+            let _token = driver.spawn_local(Box::pin(async move {
+                rebuild_handle.schedule(flui_foundation::RebuildReason::AsyncCompletion);
+                ran_marker.store(true, Ordering::Relaxed);
+            }));
+
+            // Close A through the real consolidated teardown path —
+            // production never cancels this realm-level `AsyncDriver`'s
+            // in-flight tasks (see this test's own doc and
+            // `UiRealm::close_presentation`'s).
+            assert!(realm.close_presentation(a_id), "A was installed");
+
+            let b_has_pending_builds = || {
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B still installed")
+                    .widgets()
+                    .has_pending_builds()
+            };
+            assert!(
+                !b_has_pending_builds(),
+                "precondition: B has no pending build before A's stale task runs"
+            );
+
+            // Poll the driver to completion — A's task runs, its captured
+            // `RebuildHandle` schedules against A's own (now-orphaned)
+            // inbox.
+            realm
+                .scheduler()
+                .drive_frame(flui_scheduler::Instant::now(), || {});
+            assert!(
+                ran.load(Ordering::Relaxed),
+                "A's stale task must still run to completion"
+            );
+
+            assert!(
+                !b_has_pending_builds(),
+                "A's stale completion must not have reached B's build inbox"
+            );
+        }
+    }
+
+    // ========================================================================
+    // Dispose-during-teardown isolation (ADR-0043 §5 step 3)
+    // ========================================================================
+    mod dispose_teardown_isolation {
+        use std::cell::{Cell, RefCell};
+
+        use super::*;
+
+        /// Captures its own `RebuildHandle` in `init_state` (capabilities are
+        /// installed then, per port-check trigger #22) and schedules through
+        /// it from `dispose`, exactly the shape a real widget's cleanup path
+        /// takes (e.g. cancelling a subscription and requesting one final
+        /// rebuild to reflect that).
+        #[derive(Clone)]
+        struct DisposeProbeView {
+            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+            disposed: Rc<Cell<bool>>,
+        }
+
+        struct DisposeProbeState {
+            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+            disposed: Rc<Cell<bool>>,
+            handle: Option<flui_view::RebuildHandle>,
+        }
+
+        impl StatefulView for DisposeProbeView {
+            type State = DisposeProbeState;
+
+            fn create_state(&self) -> Self::State {
+                DisposeProbeState {
+                    handle_slot: Rc::clone(&self.handle_slot),
+                    disposed: Rc::clone(&self.disposed),
+                    handle: None,
+                }
+            }
+        }
+
+        impl ViewState<DisposeProbeView> for DisposeProbeState {
+            fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+                let handle = ctx.rebuild_handle();
+                *self.handle_slot.borrow_mut() = Some(handle.clone());
+                self.handle = Some(handle);
+            }
+
+            fn build(
+                &self,
+                _view: &DisposeProbeView,
+                _ctx: &dyn flui_view::BuildContext,
+            ) -> impl IntoView {
+                flui_widgets::SizedBox::new(0.0, 0.0)
+            }
+
+            fn dispose(&mut self) {
+                // Capabilities installed at init_state are still valid here
+                // (nothing about this presentation's realm-shared dispatch
+                // handles has been touched by teardown step 3 alone) —
+                // schedule through this element's OWN handle, exactly a real
+                // cleanup hook would.
+                if let Some(handle) = &self.handle {
+                    handle.schedule(flui_foundation::RebuildReason::StateChange);
+                }
+                self.disposed.set(true);
+            }
+        }
+
+        impl flui_view::View for DisposeProbeView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateful(self)
+            }
+        }
+
+        /// A `State::dispose()` hook running as part of `UiRealm::
+        /// close_presentation`'s teardown (step 3) schedules through its OWN
+        /// `RebuildHandle` — proving it reaches only its own (about to be
+        /// dropped) tree, never a live sibling's, by the same
+        /// `ExternalBuildScheduler`-is-minted-one-per-owner argument
+        /// `close_presentation`'s own doc makes. "Dead services" — this
+        /// presentation's OWN focus/IME, already closed by teardown step 2
+        /// before step 3's detach runs — failing closed rather than
+        /// panicking is covered by `presentation.rs`'s
+        /// `text_input_handle_is_bound_to_the_owned_text_input_state`; this
+        /// test does not re-derive that, only the sibling-reach half.
+        #[test]
+        fn dispose_during_teardown_cannot_reach_sibling_or_dead_services() {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = install_second_presentation_for_test(&mut realm);
+
+            let handle_slot = Rc::new(RefCell::new(None));
+            let disposed = Rc::new(Cell::new(false));
+            let probe = DisposeProbeView {
+                handle_slot: Rc::clone(&handle_slot),
+                disposed: Rc::clone(&disposed),
+            };
+            // Through the normal `UiRealm::attach_root_widget` auto-wrap
+            // (`FocusRoot`/`VsyncScope`/`GestureArenaScope`), so this probe
+            // is a DESCENDANT of the mounted root, not the root itself —
+            // exercising `WidgetsBinding::detach_root_widget`'s cascading
+            // `remove_subtree` teardown (not just a single-node `remove`),
+            // the same depth a real widget tree has.
+            realm
+                .enter(|realm| realm.attach_root_widget(&probe))
+                .expect("A mounts the dispose probe");
+            let _ = realm.enter(|realm| {
+                realm.draw_frame_entered(BoxConstraints::tight(flui_types::Size::new(
+                    px(20.0),
+                    px(20.0),
+                )))
+            });
+            assert!(
+                handle_slot.borrow().is_some(),
+                "init_state must have captured the rebuild handle"
+            );
+
+            fn b_has_pending_builds(realm: &UiRealm, b_id: PresentationId) -> bool {
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B still installed")
+                    .widgets()
+                    .has_pending_builds()
+            }
+            assert!(
+                !b_has_pending_builds(&realm, b_id),
+                "precondition: B has no pending build before A tears down"
+            );
+
+            assert!(
+                realm.close_presentation(a_id),
+                "A must have been installed and removable"
+            );
+
+            assert!(
+                disposed.get(),
+                "close_presentation's detach_root_widget must have run A's dispose hook"
+            );
+            assert!(
+                !b_has_pending_builds(&realm, b_id),
+                "A's dispose-time schedule() must not have reached B's build inbox"
             );
         }
     }

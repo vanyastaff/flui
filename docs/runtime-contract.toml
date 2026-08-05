@@ -977,7 +977,20 @@ before deciding) is sampled, so a mark landing anywhere between that clear \
 and the next pump's sample is never lost. At the production ratchet (N=1) \
 this degenerates to exactly one always-run segment, proven identical by the \
 full pre-existing frame-pipeline test suite; the isolation suite proves the \
-skip/wake-bit machinery is real for N>1.\
+skip/wake-bit machinery is real for N>1. \
+`UiRealm::close_presentation` is the consolidated six-step teardown contract \
+(WindowRegistry unregister is the caller's job -- `UiRealm` has no access to \
+that registry; IME/focus deactivate; `detach_root_widget` with capabilities \
+still installed; the realm-level `AsyncDriver` is not told about the \
+closure, so an in-flight task is not cancelled and its eventual completion \
+must fail closed; `GlobalKeyScope` reclaim via `BuildOwner::Drop`; the final \
+drop). `WidgetsBinding::detach_root_widget` itself was fixed in the same \
+change to call `ElementTree::remove_subtree` instead of the single-node \
+`remove` it used before -- the single-node call only ever unmounted the \
+internal `RootRenderView` wrapper every attached view is mounted under and \
+silently orphaned every descendant's `State::dispose`, which would have \
+made "teardown is total for that bundle" false for any tree deeper than one \
+node.\
 """
 state = "partial"
 domain = "realm"
@@ -997,6 +1010,11 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropping_the_realm_closes_every_presentation" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn sibling_presentations_flush_independently" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_presentation_dirty_during_a_segment_sets_wake_bit_and_lands_next_pump" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn close_presentation" },
+    { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "element_tree.remove_subtree(root_id, &mut build_owner.element_owner_mut());" },
+    { kind = "test", file = "crates/flui-view/src/binding.rs", contains = "fn detach_root_widget_disposes_every_descendant_not_just_the_root" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispose_during_teardown_cannot_reach_sibling_or_dead_services" },
 ]
 
 [[contract]]
