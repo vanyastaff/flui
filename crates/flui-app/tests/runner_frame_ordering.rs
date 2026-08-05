@@ -112,9 +112,14 @@ fn every_runner_frame_site_uses_the_shared_drive_frame_helper() {
         );
     }
 
+    // `drive_frame_with_lane` is the same shared helper, additionally
+    // draining the realm's owner-local post-frame lane in the same total
+    // order as the shared queue (drain-by-parameter, not an ambient lookup)
+    // — every production frame site names it, not the bare `drive_frame`,
+    // because every production site owns a `UiRealm` and its lane.
     let sites = code_lines
         .iter()
-        .filter(|l| l.contains("drive_frame("))
+        .filter(|l| l.contains("drive_frame(") || l.contains("drive_frame_with_lane("))
         .count();
     assert_eq!(
         sites, 3,

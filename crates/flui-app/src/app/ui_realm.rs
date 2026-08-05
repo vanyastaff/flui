@@ -758,7 +758,7 @@ impl UiRealm {
             RealmCapabilities {
                 global_key_scope: global_key_scope.clone(),
                 async_driver,
-                post_frame_handle: local_post_frame.post_frame_handle(),
+                local_post_frame_handle: local_post_frame.local_handle(),
                 interaction_dispatch_handle: interaction_lane.dispatch_handle(),
                 scheduler: &scheduler,
                 wake: Arc::clone(&wake),
@@ -979,7 +979,7 @@ impl UiRealm {
             RealmCapabilities {
                 global_key_scope: self.global_key_scope.clone(),
                 async_driver: self.scheduler.async_driver().clone(),
-                post_frame_handle: self.local_post_frame.post_frame_handle(),
+                local_post_frame_handle: self.local_post_frame.local_handle(),
                 interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
                 scheduler: &self.scheduler,
                 wake: Arc::clone(&self.wake),
@@ -1067,6 +1067,16 @@ impl UiRealm {
         &self.scheduler
     }
 
+    /// This realm's owner-local post-frame lane. `runner.rs`'s per-backend
+    /// frame pumps pass this to `UpdateScheduler::drive_frame_with_lane` so
+    /// the frame drive drains it in the same total order as the shared
+    /// queue — drain-by-parameter, the same reason [`Self::scheduler`]
+    /// exists rather than a process-global lookup.
+    #[must_use]
+    pub(crate) fn local_post_frame_lane(&self) -> &flui_scheduler::LocalPostFrameLane {
+        &self.local_post_frame
+    }
+
     /// A new cross-thread sender into this runtime's inbox.
     #[must_use]
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
@@ -1087,19 +1097,24 @@ impl UiRealm {
     /// A composite `GlobalKey` registry spanning every presentation this
     /// realm hosts (ADR-0043 §1) is active for the entire dynamic
     /// extent of `f`, including lifecycle/build callbacks — whole-frame,
-    /// exactly as a single presentation's own registry always was: post-frame
-    /// callbacks, command drains, deferred arena resolutions, and hot-reload
-    /// reassemble all resolve keys realm-wide regardless of which
-    /// presentation's own segment is running. Nested entry is stack-shaped
-    /// and panic unwinding restores the previously active realm.
+    /// exactly as a single presentation's own registry always was: command
+    /// drains, deferred arena resolutions, and hot-reload reassemble all
+    /// resolve keys realm-wide regardless of which presentation's own
+    /// segment is running. Nested entry is stack-shaped and panic unwinding
+    /// restores the previously active realm.
+    ///
+    /// Does NOT activate the local post-frame lane: `LocalPostFrameHandle`
+    /// addresses its lane directly (a `Weak` pointer minted once per
+    /// presentation), so `schedule_local` needs no ambient "active lane"
+    /// scope to succeed. The frame drive drains that lane by passing it
+    /// explicitly to `UpdateScheduler::drive_frame_with_lane`/
+    /// `end_frame_with_lane`, not by anything entered here.
     pub(crate) fn enter<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
-        self.local_post_frame.enter(|| {
-            self.interaction_lane.enter(|| {
-                let composite = GlobalKeyRegistryComposite::assemble(
-                    self.presentations.iter().map(PresentationState::widgets),
-                );
-                composite.enter(|| f(self))
-            })
+        self.interaction_lane.enter(|| {
+            let composite = GlobalKeyRegistryComposite::assemble(
+                self.presentations.iter().map(PresentationState::widgets),
+            );
+            composite.enter(|| f(self))
         })
     }
 
@@ -1129,16 +1144,14 @@ impl UiRealm {
     /// principled answer anyway — the key is about to be unregistered by
     /// the same call regardless of what a lookup returns for it right now.
     fn enter_for_close<R>(&self, closing: PresentationId, f: impl FnOnce(&Self) -> R) -> R {
-        self.local_post_frame.enter(|| {
-            self.interaction_lane.enter(|| {
-                let composite = GlobalKeyRegistryComposite::assemble(
-                    self.presentations
-                        .iter()
-                        .filter(|presentation| presentation.id() != closing)
-                        .map(PresentationState::widgets),
-                );
-                composite.enter(|| f(self))
-            })
+        self.interaction_lane.enter(|| {
+            let composite = GlobalKeyRegistryComposite::assemble(
+                self.presentations
+                    .iter()
+                    .filter(|presentation| presentation.id() != closing)
+                    .map(PresentationState::widgets),
+            );
+            composite.enter(|| f(self))
         })
     }
 
@@ -2980,7 +2993,7 @@ mod tests {
         // and observe realm B's scheduler from inside it, mid-frame.
         let phase_a_mid_frame = Cell::new(None);
         let phase_b_mid_frame = Cell::new(None);
-        realm_a.scheduler().drive_frame(
+        realm_a.scheduler().drive_frame_with_lane(
             flui_scheduler::Instant::now(),
             flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
             || {
@@ -2988,6 +3001,7 @@ mod tests {
                 phase_b_mid_frame.set(Some(realm_b.scheduler().phase()));
                 let _ = realm_a.draw_frame(coexistence_constraints());
             },
+            realm_a.local_post_frame_lane(),
         );
         assert_ne!(
             phase_a_mid_frame.get(),
@@ -3083,7 +3097,7 @@ mod tests {
 
                 sender_b.request_redraw();
                 let _ = realm_b.drain_commands();
-                realm_b.scheduler().drive_frame(
+                realm_b.scheduler().drive_frame_with_lane(
                     flui_scheduler::Instant::now(),
                     flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                     || {
@@ -3093,19 +3107,21 @@ mod tests {
                         rendezvous_or_timeout("realm B");
                         let _ = realm_b.draw_frame(coexistence_constraints());
                     },
+                    realm_b.local_post_frame_lane(),
                 );
                 (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
             });
 
             sender_a.request_redraw();
             let _ = realm_a.drain_commands();
-            realm_a.scheduler().drive_frame(
+            realm_a.scheduler().drive_frame_with_lane(
                 flui_scheduler::Instant::now(),
                 flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {
                     rendezvous_or_timeout("realm A");
                     let _ = realm_a.draw_frame(coexistence_constraints());
                 },
+                realm_a.local_post_frame_lane(),
             );
 
             handle.join().expect("realm B's thread did not panic")
@@ -3689,13 +3705,14 @@ mod tests {
             let flag = Arc::clone(&polled_before_pipeline);
             let polls_probe = Arc::clone(&polls);
 
-            scheduler.drive_frame(
+            scheduler.drive_frame_with_lane(
                 flui_scheduler::Instant::now(),
                 flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {
                     flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
                     let _ = realm.draw_frame(test_constraints());
                 },
+                realm.local_post_frame_lane(),
             );
 
             assert!(
@@ -3775,35 +3792,26 @@ mod tests {
             let scheduler = realm.scheduler();
             // `PipelineCell` is `!Send`, so this callback cannot go through
             // `add_post_frame_callback` (its `Send` bound is for cross-thread
-            // wake). `schedule_local` enforces same-thread execution at
-            // runtime instead, matching the `editable_text.rs` IME
-            // cursor-loop pattern.
+            // wake). `LocalPostFrameHandle::schedule_local` accepts it
+            // instead, matching the `editable_text.rs` IME cursor-loop
+            // pattern.
             let post_frame_handle = realm
                 .widgets()
-                .with_build_owner(|owner| owner.post_frame_handle().cloned())
-                .expect("post-frame handle installed by UiRealm::construct");
-            // Registration AND `drive_frame` must share one outer `enter()`
-            // extent, matching how the real runner drives a frame
-            // (`dispatch_platform_realm`'s `realm.enter(|realm| event.run(realm))`
-            // wraps the entire dispatched task, `drive_frame` included).
-            // `drive_frame` calls `end_frame` (which drains the local lane)
-            // only *after* its pipeline closure returns — and that closure
-            // is where `realm.draw_frame` reactivates the lane via its own
-            // nested `enter()`. Registering here, then driving the frame in
-            // a SEPARATE top-level `enter()`, would deactivate the lane
-            // before `end_frame` ever ran, so the callback would sit queued
-            // forever: `drain_active_lane` requires the lane still be the
-            // active top of stack at drain time, not merely at schedule
-            // time.
-            realm.enter(|_realm| {
-                post_frame_handle
-                    .schedule_local(move |_timing| {
-                        calls_cb.fetch_add(1, Ordering::SeqCst);
-                        *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
-                    })
-                    .expect("schedule_local must succeed on the owner thread");
+                .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
+                .expect("owner-local post-frame handle installed by UiRealm::construct");
+            // The handle addresses its lane directly (a `Weak` pointer), so
+            // registration needs no `enter()` at all — only the drive itself
+            // needs the lane, passed explicitly to `drive_frame_with_lane`
+            // (drain-by-parameter, not an ambient "active lane" lookup).
+            post_frame_handle
+                .schedule_local(move |_timing| {
+                    calls_cb.fetch_add(1, Ordering::SeqCst);
+                    *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
+                })
+                .expect("the realm's local post-frame lane outlives this call");
 
-                scheduler.drive_frame(
+            realm.enter(|realm| {
+                scheduler.drive_frame_with_lane(
                     flui_scheduler::Instant::now(),
                     flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                     || {
@@ -3814,6 +3822,7 @@ mod tests {
                             px(200.0),
                         ));
                     },
+                    &realm.local_post_frame,
                 );
             });
 
@@ -6375,10 +6384,11 @@ mod tests {
             // Poll the driver to completion — A's task runs, its captured
             // `RebuildHandle` schedules against A's own (now-orphaned)
             // inbox.
-            realm.scheduler().drive_frame(
+            realm.scheduler().drive_frame_with_lane(
                 flui_scheduler::Instant::now(),
                 flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {},
+                realm.local_post_frame_lane(),
             );
             assert!(
                 ran.load(Ordering::Relaxed),
