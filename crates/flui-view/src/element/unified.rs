@@ -10,12 +10,9 @@
 use std::{
     any::{Any, TypeId},
     marker::PhantomData,
-    sync::Arc,
 };
 
 use flui_foundation::{ElementId, RenderId};
-use flui_rendering::pipeline::PipelineOwner;
-use parking_lot::RwLock;
 
 use super::{
     RenderObjectElement, RenderSlot, Single, Variable,
@@ -183,16 +180,15 @@ where
         self.core.is_dirty()
     }
 
-    fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
-        self.core.set_pipeline_owner_any(owner);
+    fn set_pipeline_owner(&mut self, owner: flui_rendering::pipeline::PipelineCell) {
+        self.core.set_pipeline_owner(owner);
     }
 
-    fn pipeline_owner_any(&self) -> Option<Arc<dyn Any + Send + Sync>> {
-        // Hand the core's `PipelineOwner` to the slab `insert` path so it
-        // can propagate it to a freshly-inserted child before mount.
-        self.core
-            .pipeline_owner()
-            .map(|po| Arc::clone(po) as Arc<dyn Any + Send + Sync>)
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
+        // Hand the core's `PipelineCell` to the slab `insert` path so it
+        // can propagate it to a freshly-inserted child before mount. A
+        // cheap `Rc` clone -- no `Arc<dyn Any>` erase-then-downcast needed.
+        self.core.pipeline_owner().cloned()
     }
 
     fn child_render_id(&self) -> Option<RenderId> {
@@ -398,10 +394,11 @@ where
             {
                 // `adopt_child` writes both link directions in one call —
                 // see `RenderTree::adopt_child`.
-                pipeline_owner
-                    .write()
-                    .render_tree_mut()
-                    .adopt_child(parent_id, *child_render_id);
+                pipeline_owner.with_mut(|owner| {
+                    owner
+                        .render_tree_mut()
+                        .adopt_child(parent_id, *child_render_id);
+                });
             }
         }
     }
@@ -432,10 +429,11 @@ where
             {
                 // `drop_child` clears both link directions in one call —
                 // see `RenderTree::drop_child`.
-                pipeline_owner
-                    .write()
-                    .render_tree_mut()
-                    .drop_child(parent_id, *child_render_id);
+                pipeline_owner.with_mut(|owner| {
+                    owner
+                        .render_tree_mut()
+                        .drop_child(parent_id, *child_render_id);
+                });
             }
         }
     }
@@ -548,9 +546,9 @@ where
         self.behavior.render_id()
     }
 
-    /// Set the PipelineOwner for this element.
-    pub fn set_pipeline_owner(&mut self, owner: Arc<RwLock<PipelineOwner>>) {
-        let owner_any: Arc<dyn Any + Send + Sync> = owner as Arc<dyn Any + Send + Sync>;
-        self.core.set_pipeline_owner_any(owner_any);
+    /// Set the [`PipelineCell`](flui_rendering::pipeline::PipelineCell) for
+    /// this element.
+    pub fn set_pipeline_owner(&mut self, owner: flui_rendering::pipeline::PipelineCell) {
+        self.core.set_pipeline_owner(owner);
     }
 }

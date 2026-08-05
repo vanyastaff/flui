@@ -409,13 +409,10 @@ macro_rules! impl_render_view {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use flui_foundation::RenderId;
     use flui_objects::RenderSizedBox;
-    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
     use flui_types::geometry::px;
-    use parking_lot::RwLock;
 
     use super::*;
     use crate::{
@@ -496,8 +493,8 @@ mod tests {
         let mut element = RenderElement::new(&view, RenderBehavior::new());
 
         // Set up PipelineOwner
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        element.set_pipeline_owner(Arc::clone(&pipeline_owner));
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        element.set_pipeline_owner(pipeline_owner.clone());
 
         let mut build_owner = crate::BuildOwner::new();
         element.mount(None, 0, &mut build_owner.element_owner_mut());
@@ -506,9 +503,10 @@ mod tests {
         assert!(element.render_id().is_some());
 
         // Verify RenderObject was inserted into RenderTree
-        let owner = pipeline_owner.read();
         let render_id = element.render_id().unwrap();
-        assert!(owner.render_tree().contains(render_id));
+        pipeline_owner.with(|owner| {
+            assert!(owner.render_tree().contains(render_id));
+        });
     }
 
     #[test]
@@ -519,20 +517,20 @@ mod tests {
         };
         let mut element = RenderElement::new(&view, RenderBehavior::new());
 
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        element.set_pipeline_owner(Arc::clone(&pipeline_owner));
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        element.set_pipeline_owner(pipeline_owner.clone());
         let mut build_owner = crate::BuildOwner::new();
         element.mount(None, 0, &mut build_owner.element_owner_mut());
 
         let render_id = element.render_id().unwrap();
-        assert!(pipeline_owner.read().render_tree().contains(render_id));
+        assert!(pipeline_owner.with(|owner| owner.render_tree().contains(render_id)));
 
         element.unmount(&mut build_owner.element_owner_mut());
 
         assert_eq!(element.lifecycle(), Lifecycle::Defunct);
         assert!(element.render_id().is_none());
         // RenderObject should be removed from tree
-        assert!(!pipeline_owner.read().render_tree().contains(render_id));
+        assert!(!pipeline_owner.with(|owner| owner.render_tree().contains(render_id)));
     }
 
     #[test]
@@ -545,8 +543,8 @@ mod tests {
         };
         let mut element = RenderElement::new(&view, RenderBehavior::new());
 
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        element.set_pipeline_owner(Arc::clone(&pipeline_owner));
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        element.set_pipeline_owner(pipeline_owner.clone());
         let mut build_owner = crate::BuildOwner::new();
         element.mount(None, 0, &mut build_owner.element_owner_mut());
 
@@ -558,11 +556,12 @@ mod tests {
         let render_id = render_any.downcast_ref::<RenderId>().unwrap();
 
         // Verify we can access the RenderObject through RenderTree
-        let owner = pipeline_owner.read();
-        let node = owner.render_tree().get(*render_id).unwrap();
-        let render_obj = node.box_render_object();
-        let sized_box = render_obj.as_any().downcast_ref::<RenderSizedBox>();
-        // RenderSizedBox exists - that's enough to verify
-        assert!(sized_box.is_some());
+        pipeline_owner.with(|owner| {
+            let node = owner.render_tree().get(*render_id).unwrap();
+            let render_obj = node.box_render_object();
+            let sized_box = render_obj.as_any().downcast_ref::<RenderSizedBox>();
+            // RenderSizedBox exists - that's enough to verify
+            assert!(sized_box.is_some());
+        });
     }
 }

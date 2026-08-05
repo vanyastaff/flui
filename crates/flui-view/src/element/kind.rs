@@ -672,12 +672,12 @@ impl ElementBase for ElementKind {
         self.element().debug_description()
     }
 
-    fn set_pipeline_owner_any(&mut self, owner: Arc<dyn std::any::Any + Send + Sync>) {
-        self.element_mut().set_pipeline_owner_any(owner);
+    fn set_pipeline_owner(&mut self, owner: flui_rendering::pipeline::PipelineCell) {
+        self.element_mut().set_pipeline_owner(owner);
     }
 
-    fn pipeline_owner_any(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        self.element().pipeline_owner_any()
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
+        self.element().pipeline_owner()
     }
 
     fn child_render_id(&self) -> Option<flui_foundation::RenderId> {

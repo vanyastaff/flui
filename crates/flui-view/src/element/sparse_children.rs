@@ -15,12 +15,10 @@
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::btree_map::Keys;
-use std::sync::Arc;
 
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
-use flui_rendering::pipeline::PipelineOwner;
-use parking_lot::RwLock;
+use flui_rendering::pipeline::PipelineCell;
 
 use crate::BoxedView;
 use crate::ElementOwner;
@@ -111,7 +109,7 @@ impl SparseChildren {
         host: ElementId,
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
     ) -> ElementId {
         if let Some(&existing) = self.by_logical_index.get(&logical_index) {
             return existing;
@@ -220,7 +218,7 @@ impl SparseChildren {
         host: ElementId,
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
     ) -> bool {
         let resident: Vec<(usize, ElementId)> = self.iter_built().collect();
         let mut any_work = false;
@@ -294,7 +292,7 @@ fn resident_type_matches(tree: &ElementTree, existing: ElementId, new: &dyn View
 /// regression where a non-render child is fed in by mistake.
 fn stamp_logical_index(
     tree: &ElementTree,
-    pipeline: &Arc<RwLock<PipelineOwner>>,
+    pipeline: &PipelineCell,
     child: ElementId,
     logical_index: usize,
 ) {
@@ -307,24 +305,22 @@ fn stamp_logical_index(
         );
         return;
     };
-    let mut owner = pipeline.write();
-    if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
-        node.set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(
-            logical_index,
-        )));
-    }
+    pipeline.with_mut(|owner| {
+        if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
+            node.set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(
+                logical_index,
+            )));
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use flui_foundation::ViewKey;
     use flui_objects::RenderSizedBox;
     use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
-    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
     use flui_types::geometry::px;
-    use parking_lot::RwLock;
 
     use super::SparseChildren;
     use crate::GlobalKey;
@@ -406,15 +402,15 @@ mod tests {
     fn host_tree() -> (
         ElementTree,
         BuildOwner,
-        Arc<RwLock<PipelineOwner>>,
+        PipelineCell,
         flui_foundation::ElementId,
     ) {
-        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+        let pipeline = PipelineCell::new(PipelineOwner::new());
         let mut build_owner = BuildOwner::new();
         let mut tree = ElementTree::new();
         let host = tree.mount_root_with_pipeline_owner(
             &LeafBox { side: 10.0 },
-            Some(Arc::clone(&pipeline)),
+            Some(pipeline.clone()),
             &mut build_owner.element_owner_mut(),
         );
         (tree, build_owner, pipeline, host)
@@ -423,15 +419,16 @@ mod tests {
     /// Read back the stamped logical index from a child's render node.
     fn stamped_index(
         tree: &ElementTree,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
         child: flui_foundation::ElementId,
     ) -> Option<usize> {
         let render_id = tree.get(child)?.element().render_id()?;
-        let owner = pipeline.read();
-        let node = owner.render_tree().get(render_id)?;
-        node.parent_data()?
-            .downcast_ref::<SliverMultiBoxAdaptorParentData>()
-            .map(|pd| pd.index)
+        pipeline.with(|owner| {
+            let node = owner.render_tree().get(render_id)?;
+            node.parent_data()?
+                .downcast_ref::<SliverMultiBoxAdaptorParentData>()
+                .map(|pd| pd.index)
+        })
     }
 
     #[test]
@@ -454,13 +451,13 @@ mod tests {
 
         // The child's render node attached under the host's render node.
         let child_render = tree.get(child).unwrap().element().render_id().unwrap();
-        let owner = pipeline.read();
-        assert_eq!(
-            owner.render_tree().parent(child_render),
-            Some(host_render),
-            "the lazy child's render node attaches under the host",
-        );
-        drop(owner);
+        pipeline.with(|owner| {
+            assert_eq!(
+                owner.render_tree().parent(child_render),
+                Some(host_render),
+                "the lazy child's render node attaches under the host",
+            );
+        });
 
         // And carries the logical index in its parent data.
         assert_eq!(stamped_index(&tree, &pipeline, child), Some(5));
@@ -515,11 +512,12 @@ mod tests {
         // The element is gone from the tree…
         assert!(tree.get(child).is_none(), "child element unmounted");
         // …and so is its render node.
-        let owner = pipeline.read();
-        assert!(
-            owner.render_tree().get(child_render).is_none(),
-            "the lazy child's render node is removed on evict",
-        );
+        pipeline.with(|owner| {
+            assert!(
+                owner.render_tree().get(child_render).is_none(),
+                "the lazy child's render node is removed on evict",
+            );
+        });
     }
 
     #[test]
@@ -662,20 +660,21 @@ mod tests {
         );
 
         // Render nodes must also be gone after subtree eviction.
-        let owner = pipeline.read();
-        if let Some(rid) = child_render_id {
-            assert!(
-                owner.render_tree().get(rid).is_none(),
-                "child render node must be removed on subtree evict",
-            );
-        }
-        if let Some(rid) = grandchild_render_id {
-            assert!(
-                owner.render_tree().get(rid).is_none(),
-                "grandchild render node must also be removed on subtree evict — \
-                 single-node remove leaks descendant render nodes",
-            );
-        }
+        pipeline.with(|owner| {
+            if let Some(rid) = child_render_id {
+                assert!(
+                    owner.render_tree().get(rid).is_none(),
+                    "child render node must be removed on subtree evict",
+                );
+            }
+            if let Some(rid) = grandchild_render_id {
+                assert!(
+                    owner.render_tree().get(rid).is_none(),
+                    "grandchild render node must also be removed on subtree evict — \
+                     single-node remove leaks descendant render nodes",
+                );
+            }
+        });
     }
 
     /// A globally-keyed lazy child pushed to the inactive queue by eviction

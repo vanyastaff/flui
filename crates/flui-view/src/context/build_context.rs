@@ -305,9 +305,7 @@ pub trait BuildContext {
     /// geometry from a post-frame callback, after layout commits.
     ///
     /// `None` before the element is mounted under a pipeline owner.
-    fn pipeline_owner(
-        &self,
-    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>>;
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell>;
 
     // ========================================================================
     // Tree Traversal

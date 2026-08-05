@@ -456,39 +456,36 @@ pub trait ElementBase: Downcast + 'static {
     // Pipeline Owner Propagation (for RenderTree integration)
     // ========================================================================
 
-    /// Set the PipelineOwner for this element.
+    /// Set the [`PipelineCell`](flui_rendering::pipeline::PipelineCell) for
+    /// this element.
     ///
-    /// Called by parent elements to propagate the PipelineOwner down the tree.
-    /// RenderObjectElements use this to insert their RenderObjects into the
-    /// RenderTree.
+    /// Called by parent elements to propagate the pipeline handle down the
+    /// tree. RenderObjectElements use this to insert their RenderObjects
+    /// into the RenderTree.
     ///
     /// Default implementation does nothing - only RenderObjectElements need
     /// this.
-    ///
-    /// # Arguments
-    /// * `owner` - `Arc<dyn Any>` that should be downcast to the concrete
-    ///   `PipelineOwner` type
-    fn set_pipeline_owner_any(&mut self, _owner: std::sync::Arc<dyn std::any::Any + Send + Sync>) {
+    fn set_pipeline_owner(&mut self, _owner: flui_rendering::pipeline::PipelineCell) {
         // Default: no-op
     }
 
-    /// Hand out this element's `PipelineOwner` as `Arc<dyn Any>` so the
-    /// slab `insert` path can propagate it to a freshly-inserted child
-    /// BEFORE the child mounts.
+    /// Hand out this element's [`PipelineCell`](flui_rendering::pipeline::PipelineCell)
+    /// (a cheap `Rc` clone) so the slab `insert` path can propagate it to a
+    /// freshly-inserted child BEFORE the child mounts.
     ///
     /// E3 (atomic box→arena swap): in the old box graph the parent
     /// propagated the owner to its children inside
     /// `update_or_create_child(ren)`. Children are now slab-resident, so
     /// [`ElementTree::insert`](crate::tree::ElementTree) reads this from
     /// the parent and threads it (plus [`Self::child_render_id`]) into the
-    /// child's `set_pipeline_owner_any` / `set_parent_render_id` before
+    /// child's `set_pipeline_owner` / `set_parent_render_id` before
     /// `mount`, preserving the propagate-before-mount ordering
     /// `RenderBehavior::on_mount` depends on (it creates its
     /// `RenderObject` only when a `PipelineOwner` is already in scope).
     ///
     /// Default returns `None`; the unified `Element<V, A, B>` overrides it
     /// to hand out its `ElementCore`'s owner.
-    fn pipeline_owner_any(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
         None
     }
 

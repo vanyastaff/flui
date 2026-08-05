@@ -233,10 +233,10 @@ pub(crate) fn mark_render_needs_layout_and_paint<V, A>(
     if let Some(render_id) = render_id
         && let Some(pipeline_owner) = core.pipeline_owner()
     {
-        let mut owner = pipeline_owner.write();
-
-        owner.mark_needs_layout(render_id);
-        owner.mark_needs_paint(render_id);
+        pipeline_owner.with_mut(|owner| {
+            owner.mark_needs_layout(render_id);
+            owner.mark_needs_paint(render_id);
+        });
 
         tracing::debug!(
             "{}::on_update marked render_id={:?} dirty through layout and paint boundary walks",
@@ -265,9 +265,8 @@ pub(crate) fn remove_render_object_from_tree<V, A>(
         // the cascade — when a parent element unmounts, all descendant
         // render objects must come down with it.
 
-        let mut owner = pipeline_owner.write();
         // Dispose protocol: evict dirty entries, then free the slots.
-        owner.remove_render_object(render_id);
+        pipeline_owner.with_mut(|owner| owner.remove_render_object(render_id));
         tracing::debug!(
             "{}::on_unmount removed render_id={:?}",
             behavior_name,

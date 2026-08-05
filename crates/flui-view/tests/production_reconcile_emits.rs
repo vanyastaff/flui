@@ -18,16 +18,13 @@
 
 #![cfg(feature = "test-utils")]
 
-use std::sync::Arc;
-
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     BuildOwner, ElementTree, GlobalKey, RenderView, View, ViewExt, tree::ReconcileEventKind,
 };
-use parking_lot::RwLock;
 use serial_test::serial;
 
 use crate::reconcile_capture::capture;
@@ -277,7 +274,7 @@ fn variable_arity_reorder_through_build_scope_preserves_ids_and_emits_parent_id(
 #[test]
 #[serial]
 fn active_global_key_move_through_build_scope_updates_render_parent_links() {
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
 
@@ -291,7 +288,7 @@ fn active_global_key_move_through_build_scope_updates_render_parent_links() {
     );
     let root_id = tree.mount_root_with_pipeline_owner(
         &root_v1,
-        Some(Arc::clone(&pipeline_owner)),
+        Some(pipeline_owner.clone()),
         &mut owner.element_owner_mut(),
     );
 
@@ -318,15 +315,14 @@ fn active_global_key_move_through_build_scope_updates_render_parent_links() {
         .and_then(|node| node.element().render_id())
         .expect("moved child has a render object");
 
-    {
-        let pipeline = pipeline_owner.read();
+    pipeline_owner.with(|pipeline| {
         let render_tree = pipeline.render_tree();
         assert_eq!(
             render_tree.get(parent_a_render).unwrap().children(),
             &[moved_render],
             "precondition: parent A owns the moved render child before reparent",
         );
-    }
+    });
 
     let parent_b_v2 = MultiBox::host(2, vec![GlobalLeafBox::new(global.clone()).boxed()]);
     tree.update(parent_b, &parent_b_v2, &mut owner.element_owner_mut());
@@ -362,24 +358,25 @@ fn active_global_key_move_through_build_scope_updates_render_parent_links() {
     assert_eq!(reparent_events[0].parent, parent_b.as_u64());
     assert_eq!(reparent_events[0].from_parent, Some(parent_a.as_u64()));
 
-    let pipeline = pipeline_owner.read();
-    let render_tree = pipeline.render_tree();
-    assert!(
-        !render_tree
-            .get(parent_a_render)
-            .unwrap()
-            .children()
-            .contains(&moved_render),
-        "old render parent must no longer list the moved render child",
-    );
-    assert_eq!(
-        render_tree.get(parent_b_render).unwrap().children(),
-        &[moved_render],
-        "new render parent must list the moved render child",
-    );
-    assert_eq!(
-        render_tree.get(moved_render).unwrap().parent(),
-        Some(parent_b_render),
-        "moved render child parent pointer must follow the element reparent",
-    );
+    pipeline_owner.with(|pipeline| {
+        let render_tree = pipeline.render_tree();
+        assert!(
+            !render_tree
+                .get(parent_a_render)
+                .unwrap()
+                .children()
+                .contains(&moved_render),
+            "old render parent must no longer list the moved render child",
+        );
+        assert_eq!(
+            render_tree.get(parent_b_render).unwrap().children(),
+            &[moved_render],
+            "new render parent must list the moved render child",
+        );
+        assert_eq!(
+            render_tree.get(moved_render).unwrap().parent(),
+            Some(parent_b_render),
+            "moved render child parent pointer must follow the element reparent",
+        );
+    });
 }

@@ -61,7 +61,7 @@ use std::{
 
 use flui_foundation::ElementId;
 use flui_interaction::FocusManager;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::PipelineCell;
 use parking_lot::RwLock;
 
 use crate::{
@@ -454,10 +454,10 @@ struct WidgetsBindingInner {
     /// The root element ID (set after attachRootWidget).
     root_element: Option<ElementId>,
 
-    /// Pipeline owner for render tree management.
+    /// Owner-local handle to the render tree's `PipelineOwner`.
     /// This is set by the application binding (`flui-app`'s `UiRealm`)
     /// and propagated to elements during mounting.
-    pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+    pipeline_owner: Option<PipelineCell>,
 
     /// Lifecycle observers.
     observers: Vec<Arc<dyn WidgetsBindingObserver>>,
@@ -592,10 +592,10 @@ impl WidgetsBinding {
         )
     }
 
-    /// Set the PipelineOwner for render tree management.
+    /// Set the [`PipelineCell`] for render tree management.
     ///
     /// This should be called by the application binding (`flui-app`'s
-    /// `UiRealm`) before attaching the root widget. The PipelineOwner will
+    /// `UiRealm`) before attaching the root widget. The pipeline cell will
     /// be propagated to elements during mounting so they can create their
     /// RenderObjects.
     ///
@@ -603,14 +603,16 @@ impl WidgetsBinding {
     ///
     /// In Flutter, this is handled by the RendererBinding mixin which provides
     /// access to `pipelineOwner` and `rootPipelineOwner`.
-    pub fn set_pipeline_owner(&self, owner: Arc<RwLock<PipelineOwner>>) {
+    pub fn set_pipeline_owner(&self, owner: PipelineCell) {
         self.inner.write().pipeline_owner = Some(owner);
         tracing::debug!("WidgetsBinding: PipelineOwner set");
     }
 
-    /// Get the PipelineOwner if set.
-    pub fn pipeline_owner(&self) -> Option<Arc<RwLock<PipelineOwner>>> {
-        // PORT-CHECK-OK-SP6: binding layer Arc<RwLock<PipelineOwner>> leak; consolidation tracked under architecture-correction-plan SP-6
+    /// Get the [`PipelineCell`] if set.
+    ///
+    /// No SP-6 marker needed: `PipelineCell` is a lock-free, closure-scoped
+    /// handle, not a lock guard.
+    pub fn pipeline_owner(&self) -> Option<PipelineCell> {
         self.inner.read().pipeline_owner.clone()
     }
 
@@ -1141,7 +1143,7 @@ impl WidgetsBinding {
     /// same code path. Future gap-#2 work (production Vsync / implicit-animation
     /// tick) will land at the same `draw_frame` call site immediately after this
     /// call, keeping both bindings in sync.
-    pub fn service_child_requests(&self, pipeline: &Arc<RwLock<PipelineOwner>>) {
+    pub fn service_child_requests(&self, pipeline: &PipelineCell) {
         let mut inner = self.inner.write();
         let WidgetsBindingInner {
             ref mut build_owner,
@@ -1167,7 +1169,7 @@ impl WidgetsBinding {
     /// With no `LayoutBuilder` mounted, this is exactly `PipelineOwner::run_frame`.
     pub fn run_frame_with_layout_builders(
         &self,
-        pipeline: &Arc<RwLock<PipelineOwner>>,
+        pipeline: &PipelineCell,
     ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
         let mut inner = self.inner.write();
         let WidgetsBindingInner {
@@ -1519,10 +1521,18 @@ mod tests {
 
     use flui_interaction::FocusManager;
     use flui_objects::RenderSizedBox;
+    use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
+    use static_assertions::assert_not_impl_any;
 
     use super::*;
     use crate::RootRenderElement;
+
+    // Carries a `PipelineCell` (via `CoreState::pipeline_owner`), so it must
+    // stay pinned `!Send + !Sync` -- a stray `unsafe impl` here would let a
+    // `WidgetsBinding` cross threads while its `PipelineCell` still aliases
+    // the owner-thread-confined `PipelineOwner`/`RenderTree` underneath.
+    assert_not_impl_any!(WidgetsBinding: Send, Sync);
 
     /// A render-family leaf view with no child views.
     #[derive(Clone)]
@@ -1762,8 +1772,8 @@ mod tests {
     #[test]
     fn test_attach_root_widget_bootstraps_render_tree() {
         let binding = WidgetsBinding::new();
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        binding.set_pipeline_owner(Arc::clone(&pipeline_owner));
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        binding.set_pipeline_owner(pipeline_owner.clone());
 
         binding
             .attach_root_widget(&LeafView)
@@ -1785,7 +1795,7 @@ mod tests {
             );
         });
         assert!(
-            pipeline_owner.read().root_id().is_some(),
+            pipeline_owner.with(|owner| owner.root_id().is_some()),
             "PipelineOwner's root node is wired to the RenderView"
         );
     }
@@ -1797,8 +1807,8 @@ mod tests {
     #[test]
     fn test_attach_root_widget_with_size_bootstraps_render_tree() {
         let binding = WidgetsBinding::new();
-        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        binding.set_pipeline_owner(Arc::clone(&pipeline_owner));
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        binding.set_pipeline_owner(pipeline_owner.clone());
 
         binding
             .attach_root_widget_with_size(&LeafView, 1024.0, 768.0)
@@ -1817,7 +1827,7 @@ mod tests {
             );
         });
         assert!(
-            pipeline_owner.read().root_id().is_some(),
+            pipeline_owner.with(|owner| owner.root_id().is_some()),
             "PipelineOwner root node wired under the sized bootstrap path"
         );
     }

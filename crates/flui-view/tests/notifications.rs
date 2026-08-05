@@ -145,7 +145,7 @@ impl<N: Notification> ElementBase for NotificationListenerElement<N> {
 
     fn mark_needs_build(&mut self) {}
 
-    fn set_pipeline_owner_any(&mut self, _owner: Arc<dyn std::any::Any + Send + Sync>) {}
+    fn set_pipeline_owner(&mut self, _owner: flui_rendering::pipeline::PipelineCell) {}
 
     fn set_parent_render_id(&mut self, _parent_id: Option<RenderId>) {}
 

@@ -89,7 +89,8 @@ where
     // The pipeline owner comes off the core, not off the tree node: `build_scope`
     // has the element *extracted* from its node for the duration of the build
     // (`ElementNode::element` panics in that window), so a `BuildContext` cannot
-    // look itself up. `ElementCore` holds the same `Arc` the node would have.
+    // look itself up. `ElementCore` holds the same `PipelineCell` the node would
+    // have.
     BuildCtxChoice::Live(BuildCtx::new(
         element_id,
         tree_depth,
@@ -101,7 +102,7 @@ where
             async_driver: owner.async_driver.clone(),
             post_frame_handle: owner.post_frame_handle.clone(),
             text_input_handle: owner.text_input_handle.clone(),
-            pipeline_owner: core.pipeline_owner().map(std::sync::Arc::clone),
+            pipeline_owner: core.pipeline_owner().cloned(),
         },
     ))
 }
@@ -767,11 +768,9 @@ where
             let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
             let render_object = core.view().create_render_object(&ctx);
 
-            let render_id = {
-                let mut pipeline_owner = pipeline_owner.write();
-
+            let render_id = pipeline_owner.with_mut(|pipeline_owner| {
                 // Use helper to insert (handles Protocol type)
-                let render_id = insert_render_object_helper(render_object, &mut pipeline_owner);
+                let render_id = insert_render_object_helper(render_object, pipeline_owner);
 
                 // Handle parent relationship. `adopt_child` writes the
                 // child's parent link and the parent's child-list entry in
@@ -784,7 +783,7 @@ where
                 }
 
                 render_id
-            };
+            });
 
             self.render_id = Some(render_id);
 
@@ -799,14 +798,15 @@ where
             && let Some(pipeline_owner) = core.pipeline_owner()
         {
             let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
-            let mut pipeline_owner = pipeline_owner.write();
-            if let Some(render_object) = pipeline_owner
-                .render_tree_mut()
-                .get_mut(render_id)
-                .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
-            {
-                core.view().did_unmount_render_object(&ctx, render_object);
-            }
+            pipeline_owner.with_mut(|pipeline_owner| {
+                if let Some(render_object) = pipeline_owner
+                    .render_tree_mut()
+                    .get_mut(render_id)
+                    .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
+                {
+                    core.view().did_unmount_render_object(&ctx, render_object);
+                }
+            });
         }
         super::behavior_commons::remove_render_object_from_tree(
             core,
@@ -827,14 +827,15 @@ where
             && let Some(pipeline_owner) = core.pipeline_owner()
         {
             let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
-            let mut pipeline_owner = pipeline_owner.write();
-            if let Some(render_object) = pipeline_owner
-                .render_tree_mut()
-                .get_mut(render_id)
-                .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
-            {
-                core.view().update_render_object(&ctx, render_object);
-            }
+            pipeline_owner.with_mut(|pipeline_owner| {
+                if let Some(render_object) = pipeline_owner
+                    .render_tree_mut()
+                    .get_mut(render_id)
+                    .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
+                {
+                    core.view().update_render_object(&ctx, render_object);
+                }
+            });
         }
 
         super::behavior_commons::mark_render_needs_layout_and_paint(

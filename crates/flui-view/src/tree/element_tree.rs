@@ -9,8 +9,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
-use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineOwner};
-use parking_lot::RwLock;
+use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell};
 use slab::Slab;
 
 use crate::element::ElementKind;
@@ -533,23 +532,20 @@ impl ElementTree {
     ///   scheduling can take effect during initial mount.
     ///
     /// Returns the ElementId of the root element.
-    #[allow(clippy::needless_pass_by_value)] // Arc is cloned into element, taking Option by value is idiomatic
     pub fn mount_root_with_pipeline_owner(
         &mut self,
         view: &dyn View,
-        pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+        pipeline_owner: Option<PipelineCell>,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
         let mut element = view.create_element();
 
-        // Pass PipelineOwner to element BEFORE mounting
+        // Pass the pipeline cell to the element BEFORE mounting.
         // This is critical for RenderObjectElements to create their RenderObjects
         if let Some(ref pipeline) = pipeline_owner {
-            let owner_any: Arc<dyn std::any::Any + Send + Sync> =
-                Arc::clone(pipeline) as Arc<dyn std::any::Any + Send + Sync>;
-            element.element_mut().set_pipeline_owner_any(owner_any);
+            element.element_mut().set_pipeline_owner(pipeline.clone());
             tracing::debug!(
-                "ElementTree::mount_root_with_pipeline_owner: passed PipelineOwner to root element"
+                "ElementTree::mount_root_with_pipeline_owner: passed PipelineCell to root element"
             );
         }
 
@@ -651,21 +647,21 @@ impl ElementTree {
         // `RenderBehavior::on_mount` creates its `RenderObject` only when a
         // `PipelineOwner` is already in scope. Children are now
         // slab-resident, so that propagate-before-mount ordering moves
-        // here: read `pipeline_owner_any()` / `child_render_id()` off the
+        // here: read `pipeline_owner()` / `child_render_id()` off the
         // parent node, hand them to the child, then mount.
         let (parent_depth, parent_owner, child_parent_render_id, parent_inherited) =
             match self.get(parent) {
                 Some(node) => (
                     node.depth,
-                    node.element().pipeline_owner_any(),
+                    node.element().pipeline_owner(),
                     node.element().child_render_id(),
                     Arc::clone(&node.inherited),
                 ),
                 None => (0, None, None, Arc::new(HashMap::new())),
             };
 
-        if let Some(owner_any) = parent_owner {
-            element.element_mut().set_pipeline_owner_any(owner_any);
+        if let Some(pipeline_owner) = parent_owner {
+            element.element_mut().set_pipeline_owner(pipeline_owner);
         }
         element
             .element_mut()
@@ -774,7 +770,7 @@ impl ElementTree {
         let Some(child_render_id) = child.element().render_id() else {
             return;
         };
-        let pipeline_any = child.element().pipeline_owner_any();
+        let pipeline_owner = child.element().pipeline_owner();
         let mut cursor = child.parent();
 
         let mut nearest_config: Option<Box<dyn flui_rendering::parent_data::ParentData>> = None;
@@ -798,21 +794,19 @@ impl ElementTree {
         let Some(config) = nearest_config else {
             return;
         };
-        let Some(pipeline_any) = pipeline_any else {
-            return;
-        };
-        let Ok(pipeline_owner) = pipeline_any.downcast::<RwLock<PipelineOwner>>() else {
+        let Some(pipeline_owner) = pipeline_owner else {
             return;
         };
 
-        // Tree borrows are dropped; the lock guards only the render tree.
-        let mut owner = pipeline_owner.write();
-        if let Some(node) = owner.render_tree_mut().get_mut(child_render_id) {
-            node.set_parent_data(config);
-        }
-        if let Some(parent_render_id) = parent_render_id {
-            owner.mark_needs_layout(parent_render_id);
-        }
+        // Tree borrows are dropped; the checkout guards only the render tree.
+        pipeline_owner.with_mut(|owner| {
+            if let Some(node) = owner.render_tree_mut().get_mut(child_render_id) {
+                node.set_parent_data(config);
+            }
+            if let Some(parent_render_id) = parent_render_id {
+                owner.mark_needs_layout(parent_render_id);
+            }
+        });
     }
 
     /// Reorder every render object's children to match element-slot order.
@@ -862,7 +856,7 @@ impl ElementTree {
             flui_foundation::RenderId,
             Option<flui_foundation::RenderId>,
         > = HashMap::new();
-        let mut pipeline_any: Option<Arc<dyn std::any::Any + Send + Sync>> = None;
+        let mut pipeline_owner: Option<PipelineCell> = None;
 
         let roots: Vec<ElementId> = self
             .iter_nodes()
@@ -882,8 +876,8 @@ impl ElementTree {
                 if let Some(parent_render) = render_ancestor {
                     target.entry(parent_render).or_default().push(render_id);
                 }
-                if pipeline_any.is_none() {
-                    pipeline_any = node.element().pipeline_owner_any();
+                if pipeline_owner.is_none() {
+                    pipeline_owner = node.element().pipeline_owner();
                 }
                 Some(render_id)
             } else {
@@ -897,105 +891,104 @@ impl ElementTree {
         if desired_parent.is_empty() {
             return;
         }
-        let Some(pipeline_any) = pipeline_any else {
-            return;
-        };
-        let Ok(pipeline_owner) = pipeline_any.downcast::<RwLock<PipelineOwner>>() else {
+        let Some(pipeline_owner) = pipeline_owner else {
             return;
         };
 
-        // Tree borrows are dropped; the lock guards only the render tree.
-        let mut owner = pipeline_owner.write();
-        let mut dirty_render_parents: HashSet<flui_foundation::RenderId> = HashSet::new();
-        {
-            let render_tree = owner.render_tree_mut();
-            let render_ids: Vec<_> = render_tree.iter().map(|(id, _)| id).collect();
+        // Tree borrows are dropped; the checkout guards only the render tree.
+        pipeline_owner.with_mut(|owner| {
+            let mut dirty_render_parents: HashSet<flui_foundation::RenderId> = HashSet::new();
+            {
+                let render_tree = owner.render_tree_mut();
+                let render_ids: Vec<_> = render_tree.iter().map(|(id, _)| id).collect();
 
-            // Sync render parent pointers first. Sibling sorting alone is not
-            // enough when a GlobalKey move transfers an already-attached
-            // render subtree from one render parent to another.
-            for render_id in &render_ids {
-                let Some(&desired) = desired_parent.get(render_id) else {
-                    continue;
-                };
-                let Some(node) = render_tree.get_mut(*render_id) else {
-                    continue;
-                };
-                let current = node.parent();
-                if current != desired {
-                    if let Some(parent) = current {
-                        dirty_render_parents.insert(parent);
+                // Sync render parent pointers first. Sibling sorting alone is not
+                // enough when a GlobalKey move transfers an already-attached
+                // render subtree from one render parent to another.
+                for render_id in &render_ids {
+                    let Some(&desired) = desired_parent.get(render_id) else {
+                        continue;
+                    };
+                    let Some(node) = render_tree.get_mut(*render_id) else {
+                        continue;
+                    };
+                    let current = node.parent();
+                    if current != desired {
+                        if let Some(parent) = current {
+                            dirty_render_parents.insert(parent);
+                        }
+                        if let Some(parent) = desired {
+                            dirty_render_parents.insert(parent);
+                        }
+                        node.set_parent(desired);
                     }
-                    if let Some(parent) = desired {
-                        dirty_render_parents.insert(parent);
+                }
+
+                // Sync every element-managed render node's child list exactly to
+                // element slot order. Parents absent from `target` are render
+                // leaves in the element graph, so their desired child list is
+                // empty; clearing them removes donor-side stale children after a
+                // cross-parent move.
+                for parent_render in &render_ids {
+                    if !desired_parent.contains_key(parent_render) {
+                        continue;
                     }
-                    node.set_parent(desired);
+                    let mut desired_children =
+                        target.get(parent_render).cloned().unwrap_or_default();
+                    append_sparse_sliver_children(render_tree, *parent_render, &mut desired_children);
+                    let Some(parent_node) = render_tree.get_mut(*parent_render) else {
+                        continue;
+                    };
+                    if parent_node.children() == desired_children.as_slice() {
+                        continue;
+                    }
+                    let current = parent_node.children().to_vec();
+                    for child in current {
+                        parent_node.remove_child(child);
+                    }
+                    for (target_index, child) in desired_children.into_iter().enumerate() {
+                        parent_node.insert_child(target_index, child);
+                    }
+                    dirty_render_parents.insert(*parent_render);
                 }
-            }
 
-            // Sync every element-managed render node's child list exactly to
-            // element slot order. Parents absent from `target` are render
-            // leaves in the element graph, so their desired child list is
-            // empty; clearing them removes donor-side stale children after a
-            // cross-parent move.
-            for parent_render in &render_ids {
-                if !desired_parent.contains_key(parent_render) {
-                    continue;
-                }
-                let mut desired_children = target.get(parent_render).cloned().unwrap_or_default();
-                append_sparse_sliver_children(render_tree, *parent_render, &mut desired_children);
-                let Some(parent_node) = render_tree.get_mut(*parent_render) else {
-                    continue;
-                };
-                if parent_node.children() == desired_children.as_slice() {
-                    continue;
-                }
-                let current = parent_node.children().to_vec();
-                for child in current {
-                    parent_node.remove_child(child);
-                }
-                for (target_index, child) in desired_children.into_iter().enumerate() {
-                    parent_node.insert_child(target_index, child);
-                }
-                dirty_render_parents.insert(*parent_render);
-            }
-
-            // Invariant check (debug-only, O(desired_parent size)): the two
-            // loops above write the parent-pointer and the children-list
-            // separately, so prove they agree rather than trust it silently.
-            // This is exactly the asymmetry the root-hop parent-link defect
-            // produced — a child present in its parent's children list with
-            // its own `parent` link disagreeing (or missing).
-            #[cfg(debug_assertions)]
-            for (&render_id, &desired) in &desired_parent {
-                let Some(node) = render_tree.get(render_id) else {
-                    continue;
-                };
-                debug_assert_eq!(
-                    node.parent(),
-                    desired,
-                    "reorder pass: render node {render_id:?}'s parent link disagrees with the \
-                     desired parent the DFS computed for it — the two directions of a render-tree \
-                     edge must always be written consistently"
-                );
-                if let Some(parent_id) = desired {
-                    let parent_has_child = render_tree
-                        .get(parent_id)
-                        .is_some_and(|parent_node| parent_node.children().contains(&render_id));
-                    debug_assert!(
-                        parent_has_child,
-                        "reorder pass: render node {render_id:?} claims parent {parent_id:?}, \
-                         but that parent's children list does not contain it"
+                // Invariant check (debug-only, O(desired_parent size)): the two
+                // loops above write the parent-pointer and the children-list
+                // separately, so prove they agree rather than trust it silently.
+                // This is exactly the asymmetry the root-hop parent-link defect
+                // produced — a child present in its parent's children list with
+                // its own `parent` link disagreeing (or missing).
+                #[cfg(debug_assertions)]
+                for (&render_id, &desired) in &desired_parent {
+                    let Some(node) = render_tree.get(render_id) else {
+                        continue;
+                    };
+                    debug_assert_eq!(
+                        node.parent(),
+                        desired,
+                        "reorder pass: render node {render_id:?}'s parent link disagrees with the \
+                         desired parent the DFS computed for it — the two directions of a render-tree \
+                         edge must always be written consistently"
                     );
+                    if let Some(parent_id) = desired {
+                        let parent_has_child = render_tree.get(parent_id).is_some_and(
+                            |parent_node| parent_node.children().contains(&render_id),
+                        );
+                        debug_assert!(
+                            parent_has_child,
+                            "reorder pass: render node {render_id:?} claims parent {parent_id:?}, \
+                             but that parent's children list does not contain it"
+                        );
+                    }
                 }
             }
-        }
 
-        for parent in dirty_render_parents {
-            if owner.render_tree().contains(parent) {
-                owner.mark_needs_layout(parent);
+            for parent in dirty_render_parents {
+                if owner.render_tree().contains(parent) {
+                    owner.mark_needs_layout(parent);
+                }
             }
-        }
+        });
     }
 
     /// Recompute ancestry-derived metadata for the subtree rooted at

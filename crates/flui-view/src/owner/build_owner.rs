@@ -15,7 +15,7 @@ use std::{
 
 use flui_foundation::{ElementId, RebuildReasons, RenderId};
 use flui_interaction::FocusManager;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
@@ -993,15 +993,14 @@ impl BuildOwner {
     pub fn service_child_requests(
         &mut self,
         tree: &mut ElementTree,
-        pipeline: &Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
+        pipeline: &flui_rendering::pipeline::PipelineCell,
     ) {
-        // 1. Drain pending buffers from the pipeline (under a brief write lock).
-        let (pending_requests, retain_bands) = {
-            let mut guard = pipeline.write();
+        // 1. Drain pending buffers from the pipeline (a brief checkout).
+        let (pending_requests, retain_bands) = pipeline.with_mut(|guard| {
             let requests = guard.take_pending_child_requests();
             let bands = guard.take_pending_retain_bands();
             (requests, bands)
-        };
+        });
 
         // Finalize BEFORE the early-return: `build_scope` does not call
         // `finalize_tree`, so sparse children pushed to `inactive_elements` by
@@ -1129,10 +1128,11 @@ impl BuildOwner {
         //    `service_child_requests` early-returns on the next frame.
         //    This breaks the unconditional dirty-loop that prevented quiescence.
         if any_service_did_work {
-            let mut guard = pipeline.write();
-            for (sliver_id, _) in &manager_arcs {
-                guard.mark_needs_layout(*sliver_id);
-            }
+            pipeline.with_mut(|guard| {
+                for (sliver_id, _) in &manager_arcs {
+                    guard.mark_needs_layout(*sliver_id);
+                }
+            });
         } else {
             tracing::debug!(
                 "service_child_requests: no work done, skipping mark_needs_layout \
