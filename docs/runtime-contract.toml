@@ -592,18 +592,36 @@ evidence = [
 [[contract]]
 key = "globalkey-realm-scoped"
 statement = """
-GlobalKey identity is realm-scoped through a realm-entry activation stack, \
-not a process-global active registry. Deliberate divergence from Flutter's \
-process-global registry, sanctioned by the leapfrog-zone governance.\
+GlobalKey identity is realm-scoped, split across two authorities (ADR-0043 \
+§1): `BuildOwner.global_keys` is the intra-tree RETAKE authority (key hash \
+-> ElementId in that owner's own tree; `element_tree.rs`'s reparent/retake \
+machinery reads and writes only this map and is scope-blind by design). \
+`GlobalKeyScope` is the cross-tree UNIQUENESS authority shared by every \
+presentation in a realm (key hash -> which owner currently holds it) -- a \
+cross-owner duplicate mount fails eagerly, traced before the panic, naming \
+both owners. RESOLUTION for `GlobalKey::current_element`/`with_current_state` \
+goes through neither authority directly: `UiRealm::enter()` activates one \
+`GlobalKeyRegistryComposite` (flui-view) assembled over every presentation's \
+own `WidgetsBinding` registry, whole-frame, exactly as a single \
+presentation's own registry always was -- so post-frame callbacks, command \
+drains, deferred arena resolutions, and hot-reload reassemble all resolve \
+keys realm-wide regardless of which presentation's own segment is running. \
+Deliberate divergence from Flutter's process-global registry, sanctioned by \
+the leapfrog-zone governance.\
 """
 state = "implemented"
 domain = "realm"
 mechanical = true
 mechanism = "test existence pinned here"
 evidence = [
+    { kind = "symbol", file = "crates/flui-view/src/owner/global_key_scope.rs", contains = "pub struct GlobalKeyScope" },
+    { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "pub struct GlobalKeyRegistryComposite" },
+    { kind = "symbol", file = "crates/flui-view/src/key/registry.rs", contains = "pub(crate) fn build_composite" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn realm_id" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn realm_entry_activates_its_global_key_registry" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn whole_frame_event_keeps_realm_global_key_scope_active" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn composite_registry_resolves_keys_registered_in_either_presentation" },
+    { kind = "test", file = "crates/flui-view/src/key/registry.rs", contains = "fn composite_routes_with_element_to_the_member_that_resolved_the_lookup" },
 ]
 
 [[contract]]
@@ -934,19 +952,101 @@ evidence = [
 [[contract]]
 key = "multi-presentation-forest-gate"
 statement = """
-One-realm/multi-presentation support is gated on a verified element forest; \
-until then a realm holds at most one live `PresentationState`. The gate \
-holds structurally today — `UiRealm` stores exactly one `PresentationState` \
-by value, so a second attachment is unrepresentable. The forest itself is \
-future work.\
+`UiRealm` hosts an insertion-ordered `PresentationForest` (ADR-0043 §1), not \
+a single `PresentationState` field — but production topology stays gated at \
+exactly one presentation per realm through the forest's own mechanical \
+ratchet: `PresentationForest::install` panics with `BUG:` if the forest \
+already holds a presentation, and has no production caller (opening a second \
+independent window installs a second REALM instead, through the multi-realm \
+`AppRuntime`). `push_for_test` is the isolation suite's only bypass, \
+`cfg(test)`-gated. Every presentation is its own bundle (own \
+`WidgetsBinding`, `RenderingFlutterBinding`, focus/IME/gestures/semantics) \
+assembled via `PresentationState::new`'s `RealmCapabilities` parameter, which \
+installs the realm's `GlobalKeyScope` before any realm-shared dispatch handle \
+and before attach/mount. Addressed routing across a genuine N>1 forest \
+(`PresentationForest::get`/`remove` by id) is wired but has no production \
+entry point yet -- a later addressed-routing slice adds one; lifting the \
+ratchet is deferred to it, not to this contract's ownership shape. \
+`UiRealm::draw_frame_entered`'s pump processes every presentation once each, \
+in mount order: each presentation's own wake bit (`PresentationState::
+redraw_pending`) is cleared at the START of its segment, before its dirty \
+predicate (`has_pending_work`: pending build, a live `LayoutBuilder` seam \
+entry, or a dirty render node -- draining the cross-thread dirty-request \
+channel first, since that channel is what `run_frame` itself always drains \
+before deciding) is sampled, so a mark landing anywhere between that clear \
+and the next pump's sample is never lost. At the production ratchet (N=1) \
+this degenerates to exactly one always-run segment, proven identical by the \
+full pre-existing frame-pipeline test suite; the isolation suite proves the \
+skip/wake-bit machinery is real for N>1. \
+`UiRealm::close_presentation_entered` is the consolidated six-step teardown \
+contract (WindowRegistry unregister is the caller's job -- `UiRealm` has no \
+access to that registry; IME/focus deactivate; `detach_root_widget` with \
+capabilities still installed; the realm-level `AsyncDriver` is not told \
+about the closure, so an in-flight task is not cancelled and its eventual \
+completion must fail closed; `GlobalKeyScope` reclaim via `BuildOwner::\
+Drop`; the final drop). `WidgetsBinding::detach_root_widget` itself was \
+fixed in the same change to call `ElementTree::remove_subtree` instead of \
+the single-node `remove` it used before -- the single-node call only ever \
+unmounted the internal `RootRenderView` wrapper every attached view is \
+mounted under and silently orphaned every descendant's `State::dispose`, \
+which would have made "teardown is total for that bundle" false for any \
+tree deeper than one node. \
+`close_presentation_entered` takes `&mut self` (it removes the closed \
+presentation from the forest), so it is reached only from `runner.rs`'s \
+`dispatch_platform_realm`, which special-cases a dedicated `RealmTask::\
+ClosePresentation` variant in its own drain loop (the one place the realm \
+sits checked out of `AppRuntime` as an owned local, so `&mut` is naturally \
+available) rather than routing it through `RealmTask::run`'s shared-`&self` \
+receiver every other task variant uses. `runner.rs::close_presentation` is \
+the request-shaped public entry (enqueue via the existing dispatch seam, \
+never a direct call) -- teardown-at-Idle is enforced by the dispatch \
+drain point itself, the same discipline `install_realm_alongside`/\
+`uninstall_platform_realm` already established for every other realm-map \
+mutation, not a second, independently-maintained convention. \
+Step 2-3 runs inside `UiRealm::enter_for_close`, which assembles the \
+whole-frame `GlobalKeyRegistryComposite` from every presentation EXCEPT \
+the one being closed: composing the closing presentation in would let a \
+dispose hook's `GlobalKey::current_element()` call -- for ANY key, even one \
+belonging to a different presentation, since the composite tries every \
+member in insertion order regardless of which one is being looked up -- \
+re-acquire a read lock on the exact non-reentrant `WidgetsBindingInner` \
+`RwLock` that same call already holds for writing across the whole \
+recursive `detach_root_widget` removal; that is an unconditional \
+self-deadlock, not a race, and was caught (the test hung) by this \
+contract's own red-exploit test before the exclusion existed. Excluding it \
+costs nothing real: every OTHER presentation still resolves normally, and \
+a presentation cannot meaningfully resolve one of its OWN keys through a \
+registry that is mid-teardown anyway.\
 """
 state = "partial"
 domain = "realm"
 owner_issue = 555
 mechanical = true
-mechanism = "single-field storage pinned by symbol check; a second slot or Vec would change the string"
+mechanism = "PresentationForest symbol + its install-ratchet panic message pinned; a lifted ratchet or renamed panic would change these strings"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "presentation: PresentationState" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "presentations: PresentationForest" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "widgets: WidgetsBinding" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "renderer: RenderingFlutterBinding" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "redraw_pending: Cell<bool>" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "BUG: PresentationForest::install called while the ratchet is" },
+    { kind = "test", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "fn install_panics_once_the_forest_already_holds_a_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "fn push_for_test_bypasses_the_ratchet" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn push_for_test_bypasses_the_production_ratchet" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn reassemble_fans_out_to_all_presentations_in_mount_order" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropping_the_realm_closes_every_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn sibling_presentations_flush_independently" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_presentation_dirty_during_a_segment_sets_wake_bit_and_lands_next_pump" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn close_presentation_entered" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn enter_for_close" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "ClosePresentation(flui_foundation::PresentationId)" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn close_presentation(" },
+    { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "element_tree.remove_subtree(root_id, &mut build_owner.element_owner_mut());" },
+    { kind = "test", file = "crates/flui-view/src/binding.rs", contains = "fn detach_root_widget_disposes_every_descendant_not_just_the_root" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispose_during_teardown_cannot_reach_sibling_or_dead_services" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn closing_presentation_a_leaves_sibling_layer_tree_identical" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropped_presentations_surviving_pipeline_handles_fail_closed" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter" },
 ]
 
 [[contract]]

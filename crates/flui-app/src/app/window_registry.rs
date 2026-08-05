@@ -207,6 +207,31 @@ impl WindowRegistry {
         removed
     }
 
+    /// Removes and returns every entry mapped to this EXACT
+    /// `(RealmId, PresentationId)` address — never a sibling presentation
+    /// within the same realm, and never every window the realm owns (see
+    /// [`Self::remove_realm`] for that whole-realm removal). This is step 1
+    /// of closing a single presentation out of a realm that keeps hosting
+    /// others: the closed presentation's own window mapping must stop
+    /// resolving to it before the presentation itself goes away, or a stale
+    /// platform event delivered to that exact window would still resolve to
+    /// a dead presentation id instead of being refused.
+    pub(crate) fn remove_presentation(
+        &mut self,
+        address: PresentationAddress,
+    ) -> Vec<(WindowId, PresentationAddress)> {
+        let mut removed = Vec::new();
+        self.entries.retain(|(id, entry_address)| {
+            if *entry_address == address {
+                removed.push((*id, *entry_address));
+                false
+            } else {
+                true
+            }
+        });
+        removed
+    }
+
     /// The number of window mappings currently held. Test/introspection
     /// only — production code never needs to enumerate the registry, only
     /// resolve or remove by identity.

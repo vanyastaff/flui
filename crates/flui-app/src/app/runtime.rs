@@ -786,12 +786,17 @@ impl AppRuntime {
     }
 
     /// The un-deferred application of an `Uninstall` mutation.
+    ///
+    /// Registry removal runs first, matching `window_registry.rs`'s
+    /// module-doc invariant and `teardown_platform_realm`'s own ordering:
+    /// stop new routing before the returned `RealmSlot`'s queued
+    /// old-generation events are ever dropped (whenever the caller
+    /// eventually drops it — see this module's TLS-borrow-reentrancy
+    /// discipline for why that drop happens outside this function, not
+    /// inside it).
     fn apply_uninstall(&mut self, id: RealmId) -> Option<RealmSlot> {
-        let removed = self.realms.remove(&id);
-        if removed.is_some() {
-            self.registry.remove_realm(id);
-        }
-        removed
+        self.registry.remove_realm(id);
+        self.realms.remove(&id)
     }
 
     /// Requests installing a newly-constructed realm, registering `window`'s
@@ -859,14 +864,13 @@ impl AppRuntime {
     /// whatever `APP_RUNTIME` borrow is live — the same discipline
     /// `install_platform_realm`/`teardown_platform_realm` already follow for
     /// every other realm-owning drop in this module.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "uninstall_platform_realm is design-for-N mechanism with no production \
-                      embedder call site yet -- exercised by this crate's own tests"
-        )
-    )]
+    ///
+    /// Production caller: `dispatch_platform_realm`'s `RealmTask::
+    /// ClosePresentation` handling (`runner.rs`), when the presentation
+    /// being closed is the realm's only one — closing a realm's sole
+    /// presentation IS closing the realm, so that dispatch handling routes
+    /// here instead of ever leaving a live realm with an empty
+    /// `PresentationForest`.
     pub(super) fn request_realm_uninstall(&mut self, id: RealmId) -> Option<RealmSlot> {
         if self.dispatched_realm_id.is_some() || self.iterating_all_realms {
             self.pending_realm_mutations

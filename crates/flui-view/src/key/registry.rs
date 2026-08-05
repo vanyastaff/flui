@@ -36,6 +36,16 @@ use std::{cell::RefCell, sync::Arc};
 use crate::view::ElementBase;
 use flui_foundation::ElementId;
 
+// `build_composite` (below) is the sole user of `HashMap`/`Rc` — both go
+// unused (and therefore unused-import-warn, `-D warnings`-fail under CI's
+// feature-matrix `cargo-hack` sweep) in a build with neither `test` nor
+// `runtime-internals` active, e.g. `flui-widgets`'s own `--features images`
+// test build, which pulls in `flui-view` with its default feature set only.
+// Gated identically to the function that needs them, not a blanket
+// `#[allow(unused_imports)]`.
+#[cfg(any(test, feature = "runtime-internals"))]
+use std::{collections::HashMap, rc::Rc};
+
 /// Snapshot of the framework's global-key lookup surface that
 /// `GlobalKey::current_element` / `with_current_state` consult.
 ///
@@ -113,6 +123,58 @@ impl GlobalKeyRegistryHandle {
         });
         result
     }
+}
+
+/// Build one composite handle spanning `members`, consulted in the given
+/// order (ADR-0043 §1's realm composite, over per-presentation
+/// `WidgetsBinding` registries).
+///
+/// `GlobalKeyScope`'s uniqueness invariant guarantees at most one member ever
+/// answers a given hash, so `lookup` trying each member in turn and
+/// returning the first hit is exact, not a heuristic. `with_element` cannot
+/// re-derive that same answer from an `ElementId` alone — two members' trees
+/// may validly reuse the same raw id for unrelated elements — so `lookup`
+/// additionally remembers, per id, which member resolved it; `with_element`
+/// consults that memory first and only falls back to a try-in-order scan for
+/// an id nothing has looked up yet (no production caller does this today —
+/// `GlobalKey::with_current_state` always calls `current_element` first —
+/// but the fallback keeps the composite correct-by-construction rather than
+/// correct-by-caller-discipline). The memory is a plain cache: an entry for
+/// an id that has since unmounted is simply a miss on lookup (the owning
+/// member's own `with_element` already returns `None` for a gone id), never
+/// a dangling reference.
+#[cfg(any(test, feature = "runtime-internals"))]
+pub(crate) fn build_composite(members: Vec<GlobalKeyRegistryHandle>) -> GlobalKeyRegistryHandle {
+    let resolved_by: Rc<RefCell<HashMap<ElementId, usize>>> = Rc::new(RefCell::new(HashMap::new()));
+    let lookup_members = members.clone();
+    let lookup_cache = Rc::clone(&resolved_by);
+    let visit_members = members;
+
+    GlobalKeyRegistryHandle::new(
+        move |hash| {
+            for (index, member) in lookup_members.iter().enumerate() {
+                if let Some(id) = member.lookup_element(hash) {
+                    lookup_cache.borrow_mut().insert(id, index);
+                    return Some(id);
+                }
+            }
+            None
+        },
+        move |id, f| {
+            let cached_index = resolved_by.borrow().get(&id).copied();
+            if let Some(index) = cached_index
+                && let Some(member) = visit_members.get(index)
+                && member.with_element(id, |el| f(el)).is_some()
+            {
+                return;
+            }
+            for member in &visit_members {
+                if member.with_element(id, |el| f(el)).is_some() {
+                    return;
+                }
+            }
+        },
+    )
 }
 
 thread_local! {
@@ -266,5 +328,153 @@ mod tests {
         assert_eq!(current(), Some(ElementId::new(11)));
         let _ = take_registry();
         assert_eq!(current(), None);
+    }
+
+    // ========================================================================
+    // `build_composite` — the realm composite (ADR-0043 §1)
+    // ========================================================================
+
+    /// A member whose lookup/visit are driven by a plain `HashMap` the test
+    /// controls directly, so a composite test can construct exact,
+    /// deliberately colliding scenarios (same `ElementId` numeral valid in
+    /// two different members) rather than depending on a real element tree.
+    fn member(entries: Vec<(u64, ElementId, &'static str)>) -> GlobalKeyRegistryHandle {
+        let by_hash: HashMap<u64, ElementId> =
+            entries.iter().map(|(hash, id, _)| (*hash, *id)).collect();
+        let by_id: HashMap<ElementId, &'static str> = entries
+            .into_iter()
+            .map(|(_, id, label)| (id, label))
+            .collect();
+        GlobalKeyRegistryHandle::new(
+            move |hash| by_hash.get(&hash).copied(),
+            move |id, f| {
+                if let Some(label) = by_id.get(&id) {
+                    f(&LabeledElement(label));
+                }
+            },
+        )
+    }
+
+    /// Minimal `ElementBase` test double: every lifecycle/build method is
+    /// `unreachable!()` because this composite test never drives lifecycle —
+    /// it only exercises `with_element`'s visit path, which reads
+    /// `state_as_any` and nothing else.
+    struct LabeledElement(&'static str);
+
+    impl ElementBase for LabeledElement {
+        fn view_type_id(&self) -> std::any::TypeId {
+            std::any::TypeId::of::<Self>()
+        }
+
+        fn depth(&self) -> usize {
+            0
+        }
+
+        fn lifecycle(&self) -> crate::element::Lifecycle {
+            crate::element::Lifecycle::Active
+        }
+
+        fn mount(
+            &mut self,
+            _parent: Option<ElementId>,
+            _slot: usize,
+            _owner: &mut crate::ElementOwner<'_>,
+        ) {
+            unreachable!("test double: mount is never exercised by this composite test")
+        }
+
+        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
+            unreachable!("test double: unmount is never exercised by this composite test")
+        }
+
+        fn activate(&mut self) {}
+
+        fn deactivate(&mut self) {}
+
+        fn update(
+            &mut self,
+            _new_view: &dyn crate::view::View,
+            _owner: &mut crate::ElementOwner<'_>,
+        ) {
+            unreachable!("test double: update is never exercised by this composite test")
+        }
+
+        fn mark_needs_build(&mut self) {}
+
+        fn build_into_views(
+            &mut self,
+            _owner: &mut crate::ElementOwner<'_>,
+        ) -> Vec<Box<dyn crate::view::View>> {
+            Vec::new()
+        }
+
+        fn state_as_any(&self) -> Option<&dyn std::any::Any> {
+            Some(&self.0)
+        }
+    }
+
+    fn visited_label(registry: &GlobalKeyRegistryHandle, id: ElementId) -> Option<&'static str> {
+        registry.with_element(id, |el| {
+            *el.state_as_any()
+                .expect("LabeledElement always has state")
+                .downcast_ref::<&'static str>()
+                .expect("LabeledElement's state is always &str")
+        })
+    }
+
+    #[test]
+    fn composite_lookup_tries_members_in_order_and_returns_the_first_hit() {
+        let a = member(vec![(1, ElementId::new(5), "a")]);
+        let b = member(vec![(2, ElementId::new(5), "b")]);
+        let composite = build_composite(vec![a, b]);
+
+        assert_eq!(composite.lookup_element(1), Some(ElementId::new(5)));
+        assert_eq!(composite.lookup_element(2), Some(ElementId::new(5)));
+        assert_eq!(composite.lookup_element(3), None);
+    }
+
+    /// The correctness property `build_composite` exists for: two members
+    /// both validly using `ElementId::new(5)` for unrelated elements must not
+    /// cross-contaminate a `with_element` call once `lookup` has resolved
+    /// which member owns a given hash — even though `with_element` itself
+    /// only ever receives the bare id, never the hash.
+    #[test]
+    fn composite_routes_with_element_to_the_member_that_resolved_the_lookup() {
+        let a = member(vec![(1, ElementId::new(5), "a")]);
+        let b = member(vec![(2, ElementId::new(5), "b")]);
+        let composite = build_composite(vec![a, b]);
+
+        assert_eq!(composite.lookup_element(1), Some(ElementId::new(5)));
+        assert_eq!(
+            visited_label(&composite, ElementId::new(5)),
+            Some("a"),
+            "the id lookup(1) just resolved must route to member a, not b's \
+             colliding id 5"
+        );
+
+        assert_eq!(composite.lookup_element(2), Some(ElementId::new(5)));
+        assert_eq!(
+            visited_label(&composite, ElementId::new(5)),
+            Some("b"),
+            "re-resolving the same numeral through member b must now route \
+             to b"
+        );
+    }
+
+    /// No preceding `lookup` for this id: falls back to a try-in-order scan
+    /// rather than returning nothing.
+    #[test]
+    fn composite_with_element_without_a_preceding_lookup_falls_back_to_scanning_members() {
+        let a = member(vec![(1, ElementId::new(9), "a")]);
+        let composite = build_composite(vec![a]);
+
+        assert_eq!(visited_label(&composite, ElementId::new(9)), Some("a"));
+    }
+
+    #[test]
+    fn composite_over_zero_members_resolves_nothing() {
+        let composite = build_composite(vec![]);
+        assert_eq!(composite.lookup_element(1), None);
+        assert_eq!(visited_label(&composite, ElementId::new(1)), None);
     }
 }

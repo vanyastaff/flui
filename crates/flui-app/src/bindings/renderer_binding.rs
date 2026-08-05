@@ -222,6 +222,22 @@ impl RenderingFlutterBinding {
         binding
     }
 
+    /// Test/standalone construction sharing a CALLER-supplied
+    /// [`PipelineCell`] rather than building a fresh one.
+    ///
+    /// Same self-owned-scheduler shape as [`Self::new`] (see
+    /// `standalone_scheduler`'s field doc for the dead-weak-reference bug
+    /// this avoids) — for `PresentationState::new_for_test`, which must
+    /// share its exact caller-supplied pipeline with its renderer but has no
+    /// realm above it to supply a live `&Scheduler`.
+    #[cfg(test)]
+    pub(crate) fn new_for_test_with_pipeline(pipeline_owner: PipelineCell) -> Self {
+        let scheduler = Scheduler::new();
+        let mut binding = Self::new_with_pipeline(pipeline_owner, &scheduler);
+        binding.standalone_scheduler = Some(scheduler);
+        binding
+    }
+
     /// Creates a new rendering binding with a shared PipelineOwner, wired to
     /// `scheduler` for its (rare) device-metrics force-frame path.
     ///

@@ -45,13 +45,14 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, Scheduler, SchedulerPhase};
 use flui_semantics::SemanticsActionRequest;
 use flui_types::{HapticFeedback, Size, geometry::px};
-use flui_view::WidgetsBinding;
+use flui_view::{GlobalKeyRegistryComposite, GlobalKeyScope, WidgetsBinding};
 use flui_widgets::{FocusRoot, GestureArenaScope, NavigatorCommand, VsyncScope};
 use parking_lot::Mutex;
 #[cfg(test)]
 use parking_lot::RwLock;
 
-use super::presentation::PresentationState;
+use super::presentation::{PresentationState, RealmCapabilities};
+use super::presentation_forest::PresentationForest;
 use super::runtime::RealmServices;
 use crate::bindings::RenderingFlutterBinding;
 
@@ -376,32 +377,37 @@ impl UiCommandSender {
 /// access goes through [`UiCommandSender`] only.
 pub(crate) struct UiRealm {
     realm_id: RealmId,
-    /// Owner-local widget framework state. It is deliberately absent from any
-    /// process-global host; every widget-tree operation enters through this
-    /// realm and activates this binding's GlobalKey registry.
-    widgets: WidgetsBinding,
     /// Owner-local callback queue, activated with the realm's other TLS scope.
     local_post_frame: LocalPostFrameLane,
     /// Owner-local interaction callback storage, activated with the realm scope.
     interaction_lane: InteractionLane,
-    /// The current UI-owner presentation domain.
-    ///
-    /// The realm has one presentation until the element tree becomes a forest
-    /// with root-scoped capabilities. The nominal identity exists now so no
-    /// command or resource needs to overload `RealmId` or a native window id.
-    presentation: PresentationState,
-    /// Render tree, layout/paint pipeline coordination, and per-realm
-    /// semantics-enablement fan-out. A direct value, not `RwLock`-wrapped:
-    /// every field `RenderingFlutterBinding` itself owns already carries its
-    /// own interior mutability (`RwLock`/`AtomicBool`), so an outer lock
-    /// here would only ever be uncontended — this realm is the single
-    /// owner-thread-confined caller, never shared across threads. Moved
-    /// here from the retired `AppBinding`: the renderer's per-field
-    /// disposition (render_views, semantics fan-out, first-frame-deferral
-    /// counters) is per-realm state, not a process-wide concern — sharing
-    /// it across realms once `AppRuntime` hosts more than one was exactly
-    /// the hazard this placement designs out.
-    renderer: RenderingFlutterBinding,
+    /// This realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043 §1),
+    /// installed into every presentation's `BuildOwner` at assembly time
+    /// (`PresentationState::new`). Retained here (not just handed off once)
+    /// so a later-installed presentation can share the same scope; read back
+    /// by the `cfg(test)`-only `global_key_scope` accessor below for the
+    /// isolation test suite, which bypasses `PresentationForest`'s production
+    /// ratchet to assemble a second presentation sharing this exact scope.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production reader until a later addressed-routing \
+                      slice's presentation-install path needs to hand this \
+                      same scope to a newly assembled presentation; the \
+                      isolation test suite reads it back today via \
+                      Self::global_key_scope"
+        )
+    )]
+    global_key_scope: GlobalKeyScope,
+    /// The insertion-ordered set of UI-owner presentation domains this realm
+    /// hosts (ADR-0043 §1 — `PresentationForest`). Production topology stays
+    /// exactly one presentation per realm until the forest's own ratchet
+    /// lifts; see [`PresentationForest`]'s doc. Everything that builds, lays
+    /// out, focuses, or presents for one surface lives in and dies with its
+    /// own `PresentationState` inside this forest — the realm owns only
+    /// what is genuinely cross-tree (this struct's other fields).
+    presentations: PresentationForest,
     /// Controller registry for implicit animations (`VsyncScope`-driven).
     /// Moved here from the retired `AppBinding` — an interim home: a later
     /// scheduler-owning change re-homes controllers to `UpdateScheduler`,
@@ -477,7 +483,8 @@ impl std::fmt::Debug for UiRealm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UiRealm")
             .field("realm_id", &self.realm_id)
-            .field("presentation_id", &self.presentation.id())
+            .field("presentation_id", &self.presentations.primary().id())
+            .field("presentation_count", &self.presentations.len())
             .field("pending_commands", &self.rx.len())
             .field(
                 "redraw_pending",
@@ -629,91 +636,81 @@ impl UiRealm {
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
-        let (realm_id, presentation_id) = super::runtime::next_identity();
-        let pipeline = PipelineCell::new(PipelineOwner::new());
-        pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
-        let presentation = PresentationState::new(presentation_id, pipeline, window);
+        let identity = super::runtime::next_identity();
         let services = RealmServices::construct();
         Self::construct(
             capacity,
             wake,
-            realm_id,
-            presentation,
+            identity,
+            window,
+            Some(device_pixel_ratio),
             services,
             needs_redraw,
         )
     }
 
-    /// Builds the realm from already-resolved pieces. Takes `services:
-    /// RealmServices` — a fresh `Scheduler` plus the
-    /// `local_post_frame_lane()`/`async_driver()` handles derived from it —
-    /// built by the caller (`RealmServices::construct`, in `runtime.rs`),
-    /// which is what makes `UiRealm` perform zero `::instance()` calls and
-    /// gives every realm its own scheduler strong root instead of sharing a
-    /// process-global one.
+    /// Builds the realm from already-resolved pieces: identity, the
+    /// presentation's window, and `services: RealmServices` — a fresh
+    /// `Scheduler` plus the `local_post_frame_lane()`/`async_driver()`
+    /// handles derived from it, built by the caller (`RealmServices::
+    /// construct`, in `runtime.rs`), which is what makes `UiRealm` perform
+    /// zero `::instance()` calls and gives every realm its own scheduler
+    /// strong root instead of sharing a process-global one.
+    ///
+    /// `device_pixel_ratio` is `None` only for the `#[cfg(test)]`
+    /// constructors, which never touched it before this function existed
+    /// (`PipelineOwner::new`'s own default applies) — preserved exactly,
+    /// not silently changed to an explicit `1.0`.
+    ///
+    /// Assembles this realm's SOLE (production ratchet: `PresentationForest`
+    /// enforces `len() <= 1`) presentation via [`PresentationState::new`],
+    /// which installs the scope, the realm's shared dispatch handles, and
+    /// this presentation's own focus/IME before anything attaches or mounts
+    /// (ADR-0043 §1).
     fn construct(
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
-        realm_id: RealmId,
-        presentation: PresentationState,
+        (realm_id, presentation_id): (RealmId, PresentationId),
+        window: Arc<dyn PlatformWindow>,
+        device_pixel_ratio: Option<f32>,
         services: RealmServices,
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
         let (tx, rx) = bounded(capacity);
         let redraw_pending = Arc::new(AtomicBool::new(false));
-        let presentation_id = presentation.id();
         let RealmServices {
             local_post_frame,
             async_driver,
             scheduler,
         } = services;
         let interaction_lane = InteractionLane::try_new()?;
-        let widgets = WidgetsBinding::with_focus_manager(presentation.focus_manager());
-        widgets.set_pipeline_owner(presentation.pipeline().clone());
-        widgets.with_build_owner_mut(|owner| {
-            owner.set_async_driver(async_driver);
-            owner.set_post_frame_handle(local_post_frame.post_frame_handle());
-            owner.set_interaction_dispatch_handle(interaction_lane.dispatch_handle());
-            owner.set_text_input_handle(presentation.text_input_handle());
-        });
+        let global_key_scope = GlobalKeyScope::new();
 
-        // Renderer, sharing the SAME PipelineOwner as the presentation (one
-        // fact, one place) — moved here from the retired
-        // `AppBinding::new`/`RenderingFlutterBinding::new_with_pipeline` pair.
-        // Wired to THIS realm's own scheduler, never a process-global one.
-        let renderer =
-            RenderingFlutterBinding::new_with_pipeline(presentation.pipeline().clone(), &scheduler);
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        if let Some(device_pixel_ratio) = device_pixel_ratio {
+            pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
+        }
 
-        // Idle-wake wiring: a dirty mark (mark_needs_layout / mark_needs_paint)
-        // fires this callback so a quiescent event loop produces the frame —
-        // moved verbatim from `AppBinding::new`. Reentrancy-safe: the callback
-        // fires while the CALLER holds the pipeline cell checked out, and
-        // `wake` only touches `Send + Sync` runtime-level state — never this
-        // realm's own `widgets`/`renderer`.
-        let visual_wake = Arc::clone(&wake);
-        presentation
-            .pipeline()
-            .with_mut(|owner| owner.set_on_need_visual_update(move || visual_wake()));
-
-        // Semantics-enabled fan-out -> this presentation's own `SemanticsHost`:
-        // now that the renderer and the presentation are co-located on one
-        // `UiRealm`, the listener can capture a cheap `Arc<AtomicBool>`
-        // clone of the host's enablement flag directly, instead of the flag
-        // having nowhere to route to.
-        let semantics_flag = presentation
-            .semantics_host()
-            .platform_semantics_enabled_handle();
-        renderer.add_semantics_enabled_listener(Arc::new(move |enabled| {
-            semantics_flag.store(enabled, Ordering::Relaxed);
-        }));
+        let presentation = PresentationState::new(
+            presentation_id,
+            pipeline,
+            window,
+            RealmCapabilities {
+                global_key_scope: global_key_scope.clone(),
+                async_driver,
+                post_frame_handle: local_post_frame.post_frame_handle(),
+                interaction_dispatch_handle: interaction_lane.dispatch_handle(),
+                scheduler: &scheduler,
+                wake: Arc::clone(&wake),
+            },
+        );
 
         Ok(Self {
             realm_id,
-            widgets,
             local_post_frame,
             interaction_lane,
-            presentation,
-            renderer,
+            global_key_scope,
+            presentations: PresentationForest::single(presentation),
             vsync_slot: Mutex::new(Vsync::new()),
             start: web_time::Instant::now(),
             needs_redraw,
@@ -743,10 +740,8 @@ impl UiRealm {
     pub(crate) fn for_test_with_text_input(
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
     ) -> Self {
-        let (realm_id, presentation_id) = super::runtime::next_identity();
-        let pipeline = PipelineCell::new(PipelineOwner::new());
-        let presentation =
-            PresentationState::new_for_test(presentation_id, pipeline, platform_text_input);
+        let identity = super::runtime::next_identity();
+        let window = super::presentation::test_platform_window(platform_text_input);
         // The no-op `wake` still must set THIS SAME `needs_redraw` flag —
         // in production the two are the same fact through AppRuntime's
         // `frame_wake_callback` (see `Self::needs_redraw`'s field doc); a
@@ -761,8 +756,9 @@ impl UiRealm {
         Self::construct(
             DEFAULT_COMMAND_CAPACITY,
             wake,
-            realm_id,
-            presentation,
+            identity,
+            window,
+            None,
             RealmServices::construct(),
             needs_redraw,
         )
@@ -770,10 +766,11 @@ impl UiRealm {
     }
 
     /// Test-only: a clone of this realm's exact `PipelineCell` — the same
-    /// one its `renderer` and `widgets` share (one fact, one place).
+    /// one its primary presentation's `renderer` and `widgets` share (one
+    /// fact, one place).
     #[cfg(test)]
     pub(crate) fn pipeline_for_test(&self) -> PipelineCell {
-        self.presentation.pipeline().clone()
+        self.presentations.primary().pipeline().clone()
     }
 
     /// This incarnation's generational realm identity.
@@ -785,7 +782,118 @@ impl UiRealm {
     /// Current presentation incarnation.
     #[must_use]
     pub fn presentation_id(&self) -> PresentationId {
-        self.presentation.id()
+        self.presentations.primary().id()
+    }
+
+    /// True if `id` names this realm's ONLY currently-hosted presentation.
+    ///
+    /// `runner.rs`'s `RealmTask::ClosePresentation` handling reads this
+    /// BEFORE calling [`Self::close_presentation_entered`]: closing the
+    /// realm's sole presentation would leave the forest empty, and every
+    /// other method on this realm (`widgets()`, `presentation_id()`, a
+    /// future frame pump) assumes `PresentationForest::primary()` always
+    /// resolves — closing the last presentation is closing the REALM, and
+    /// must route there instead (see that match arm's own doc).
+    #[must_use]
+    pub(crate) fn is_sole_presentation(&self, id: PresentationId) -> bool {
+        self.presentations.len() == 1 && self.presentations.get(id).is_some()
+    }
+
+    /// The presentation id that would become this realm's PRIMARY if `id`
+    /// were removed right now — WITHOUT actually removing it.
+    ///
+    /// `runner.rs`'s `RealmTask::ClosePresentation` handling reads this
+    /// BEFORE running `id`'s own teardown/dispose hooks (`close_presentation_
+    /// entered`'s step 2-3), not after: `RealmSlot::address.presentation_id`
+    /// must already name the SURVIVING primary by the time a dispose hook
+    /// could re-enter `dispatch_platform_realm` with `id`'s own dispatcher,
+    /// or that reentrant dispatch would still compare EQUAL against the
+    /// not-yet-updated address, pass the `StalePresentation` check, and get
+    /// enqueued (same-realm reentrancy) instead of refused — running later
+    /// in the same drain loop against whatever survives the close, silently
+    /// misaddressed rather than refused outright.
+    ///
+    /// Mirrors exactly what [`PresentationForest::remove`]'s `Vec::remove`
+    /// shift produces: if `id` is the CURRENT primary, the new primary is
+    /// whichever presentation is next in mount order; otherwise removing
+    /// `id` cannot move index 0 at all, so the primary is unchanged.
+    /// `None` only if `id` names the realm's only presentation — unreachable
+    /// from that same dispatch handling, which checks
+    /// [`Self::is_sole_presentation`] first and never reaches this call in
+    /// that case.
+    #[must_use]
+    pub(crate) fn primary_id_excluding(&self, id: PresentationId) -> Option<PresentationId> {
+        if self.presentations.primary().id() != id {
+            return Some(self.presentations.primary().id());
+        }
+        self.presentations
+            .iter()
+            .find(|presentation| presentation.id() != id)
+            .map(PresentationState::id)
+    }
+
+    /// This realm's shared cross-tree `GlobalKey` uniqueness domain
+    /// (ADR-0043 §1) — for the isolation test suite, which uses it to
+    /// assemble a second presentation sharing this realm's exact scope,
+    /// bypassing `PresentationForest`'s production ratchet deliberately.
+    #[cfg(test)]
+    pub(crate) fn global_key_scope(&self) -> &GlobalKeyScope {
+        &self.global_key_scope
+    }
+
+    /// Number of presentations this realm currently hosts — for the
+    /// isolation test suite (production topology is always exactly one until
+    /// `PresentationForest`'s ratchet lifts).
+    #[cfg(test)]
+    pub(crate) fn presentation_count(&self) -> usize {
+        self.presentations.len()
+    }
+
+    /// This realm's `WidgetsBinding` for the presentation named `id` — for
+    /// the isolation test suite, which uses it to register a `GlobalKey`
+    /// directly into a NON-primary presentation without going through
+    /// [`Self::enter`] (registration itself needs no active composite; only
+    /// resolution via [`flui_view::GlobalKey::current_element`] does).
+    /// `pub(crate)` for the same cross-module reason as
+    /// [`Self::install_second_presentation_for_test`] above.
+    #[cfg(test)]
+    pub(crate) fn presentation_widgets_for_test(&self, id: PresentationId) -> &WidgetsBinding {
+        self.presentations
+            .get(id)
+            .expect("BUG: presentation_widgets_for_test called with an unknown id")
+            .widgets()
+    }
+
+    /// Assemble and install a second presentation sharing this realm's exact
+    /// `GlobalKeyScope` and realm-level dispatch handles.
+    ///
+    /// Bypasses `PresentationForest`'s production ratchet
+    /// (`PresentationForest::push_for_test`) deliberately — the
+    /// isolation-suite seam for exercising a genuine multi-presentation
+    /// realm ahead of the addressed routing that makes doing so safe in
+    /// production. `pub(crate)` (rather than confined to this module's own
+    /// `mod tests`) so `runner.rs`'s dispatch-seam tests can build the same
+    /// two-presentation fixture their real dispatch machinery drives.
+    #[cfg(test)]
+    pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
+        let (_, presentation_id) = super::runtime::next_identity();
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        let window = super::presentation::test_platform_window(None);
+        let presentation = PresentationState::new(
+            presentation_id,
+            pipeline,
+            window,
+            RealmCapabilities {
+                global_key_scope: self.global_key_scope().clone(),
+                async_driver: self.scheduler.async_driver().clone(),
+                post_frame_handle: self.local_post_frame.post_frame_handle(),
+                interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
+                scheduler: &self.scheduler,
+                wake: Arc::clone(&self.wake),
+            },
+        );
+        self.presentations.push_for_test(presentation);
+        presentation_id
     }
 
     /// This realm's own scheduler — the strong root. `runner.rs`'s
@@ -802,7 +910,7 @@ impl UiRealm {
     /// checks at the physical owner ([`Self::handle_input_entered`]).
     #[must_use]
     pub(crate) fn presentation_lifecycle(&self) -> super::presentation::PresentationLifecycle {
-        self.presentation.lifecycle()
+        self.presentations.primary().lifecycle()
     }
 
     /// A new cross-thread sender into this runtime's inbox.
@@ -822,20 +930,68 @@ impl UiRealm {
 
     /// Enter this realm's owner scope.
     ///
-    /// The GlobalKey registry is active for the entire dynamic extent of `f`,
-    /// including lifecycle/build callbacks. Nested entry is stack-shaped and
-    /// panic unwinding restores the previously active realm.
+    /// A composite `GlobalKey` registry spanning every presentation this
+    /// realm hosts (ADR-0043 §1) is active for the entire dynamic
+    /// extent of `f`, including lifecycle/build callbacks — whole-frame,
+    /// exactly as a single presentation's own registry always was: post-frame
+    /// callbacks, command drains, deferred arena resolutions, and hot-reload
+    /// reassemble all resolve keys realm-wide regardless of which
+    /// presentation's own segment is running. Nested entry is stack-shaped
+    /// and panic unwinding restores the previously active realm.
     pub(crate) fn enter<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
         self.local_post_frame.enter(|| {
-            self.interaction_lane
-                .enter(|| self.widgets.with_global_key_registry(|| f(self)))
+            self.interaction_lane.enter(|| {
+                let composite = GlobalKeyRegistryComposite::assemble(
+                    self.presentations.iter().map(PresentationState::widgets),
+                );
+                composite.enter(|| f(self))
+            })
+        })
+    }
+
+    /// [`Self::enter`], but the composite excludes presentation `closing`.
+    ///
+    /// Used ONLY by [`Self::close_presentation_entered`]'s step 2–3 phase.
+    /// `PresentationState::close`'s final step (`detach_root_widget`) holds
+    /// `closing`'s own `WidgetsBindingInner` write lock for the entire
+    /// recursive subtree removal — the exclusive access that walk needs to
+    /// unmount every descendant. `GlobalKeyRegistryComposite`'s lookup tries
+    /// each member in insertion order regardless of which key is being
+    /// resolved (`build_composite`'s `for` loop runs until one member's
+    /// `lookup_element` returns `Some`, trying every earlier member first),
+    /// so if `closing` were composed in, a dispose hook's `GlobalKey::
+    /// current_element()` call — for ANY key, even one belonging to a
+    /// different presentation entirely — would have `closing`'s own lookup
+    /// closure try to re-acquire a read lock on the exact `RwLock` this call
+    /// already holds for writing, on the same thread: an unconditional
+    /// self-deadlock (`parking_lot::RwLock` is not reentrant), not a race.
+    /// Caught by this issue's own red-exploit test
+    /// (`dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter`
+    /// in `runner.rs`, which hung before this exclusion existed).
+    ///
+    /// Excluding `closing` costs nothing real: every OTHER presentation
+    /// still resolves normally, and querying a presentation's OWN GlobalKey
+    /// while that exact presentation's registry is mid-teardown has no
+    /// principled answer anyway — the key is about to be unregistered by
+    /// the same call regardless of what a lookup returns for it right now.
+    fn enter_for_close<R>(&self, closing: PresentationId, f: impl FnOnce(&Self) -> R) -> R {
+        self.local_post_frame.enter(|| {
+            self.interaction_lane.enter(|| {
+                let composite = GlobalKeyRegistryComposite::assemble(
+                    self.presentations
+                        .iter()
+                        .filter(|presentation| presentation.id() != closing)
+                        .map(PresentationState::widgets),
+                );
+                composite.enter(|| f(self))
+            })
         })
     }
 
     /// Owner-local widgets binding. Crate-private so callers cannot bypass the
     /// guarded realm entry boundary.
     pub(crate) fn widgets(&self) -> &WidgetsBinding {
-        &self.widgets
+        self.presentations.primary().widgets()
     }
 
     /// Gesture state for the realm's current single presentation.
@@ -843,25 +999,25 @@ impl UiRealm {
     /// Crate-private so platform input can only reach it through the entered
     /// realm dispatch path rather than exposing a second public owner seam.
     pub(crate) fn gestures(&self) -> &GestureBinding {
-        self.presentation.gestures()
+        self.presentations.primary().gestures()
     }
 
     /// Focus state for the realm's current presentation.
     #[must_use]
     pub(crate) fn focus_manager(&self) -> Rc<FocusManager> {
-        self.presentation.focus_manager()
+        self.presentations.primary().focus_manager()
     }
 
     /// Text-input state for the realm's current single presentation.
     pub(crate) fn text_input(&self) -> &TextInputOwner {
-        self.presentation.text_input()
+        self.presentations.primary().text_input()
     }
 
     /// Weak text-input capability for this exact presentation.
     #[must_use]
     #[cfg(test)]
     pub(crate) fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
-        self.presentation.text_input_handle()
+        self.presentations.primary().text_input_handle()
     }
 
     /// Keep presentation-owned resources aligned with the synthesized
@@ -869,22 +1025,38 @@ impl UiRealm {
     pub(crate) fn handle_presentation_lifecycle(&self, state: AppLifecycleState) {
         match state {
             AppLifecycleState::Resumed | AppLifecycleState::Inactive => {
-                self.presentation.resume();
+                self.presentations.primary().resume();
             }
             AppLifecycleState::Hidden | AppLifecycleState::Paused => {
-                self.presentation.suspend();
+                self.presentations.primary().suspend();
             }
             AppLifecycleState::Detached => {
-                self.presentation.close();
+                self.presentations.primary().close();
             }
         }
     }
 
-    /// Reassemble this realm's element tree and exact presentation pipeline.
+    /// Reassemble EVERY presentation this realm hosts, in mount order —
+    /// under the whole-frame composite `enter()` already activates, so a
+    /// key resolved mid-fan-out still finds any presentation's tree, not
+    /// just the one currently reassembling.
+    ///
+    /// Deliberately does not short-circuit on the first presentation that
+    /// reports a change: every presentation must reassemble regardless of
+    /// what its predecessors reported, or a hot reload would silently skip
+    /// later-mounted presentations whenever an earlier one happened to
+    /// report no change. Returns whether ANY presentation requires a
+    /// redraw.
     #[cfg(feature = "hot-reload")]
     #[must_use]
     pub(crate) fn apply_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) -> bool {
-        self.presentation.apply_hot_reload(&self.widgets, tier)
+        let mut needs_redraw = false;
+        for presentation in self.presentations.iter() {
+            if presentation.apply_hot_reload(tier) {
+                needs_redraw = true;
+            }
+        }
+        needs_redraw
     }
 
     /// Apply a hot reload at the given tier (Flutter parity entry point),
@@ -919,7 +1091,7 @@ impl UiRealm {
         )
     )]
     pub(crate) fn renderer(&self) -> &RenderingFlutterBinding {
-        &self.renderer
+        self.presentations.primary().renderer()
     }
 
     /// Re-dirty this realm's root so the next frame actually produces
@@ -932,7 +1104,12 @@ impl UiRealm {
     /// the same explicit re-dirty `allow_first_frame` needs after a
     /// deferral lifts.
     pub(crate) fn redirty_root_for_frames_reenable(&self) {
-        crate::bindings::redirty_pipeline_root(self.renderer.root_pipeline_owner());
+        crate::bindings::redirty_pipeline_root(
+            self.presentations
+                .primary()
+                .renderer()
+                .root_pipeline_owner(),
+        );
     }
 
     /// A clone of the shared controller registry for implicit animations.
@@ -1034,8 +1211,17 @@ impl UiRealm {
     /// Request a redraw (flag only — does not poke the platform window).
     /// See [`Self::needs_redraw`]'s field doc for why this and
     /// [`Self::wake_frame`] share one underlying atomic with `AppRuntime`.
+    ///
+    /// Every current caller is a presentation-scoped operation
+    /// (`attach_root_widget*`, `handle_input_entered`) working on
+    /// `self.presentations.primary()` — no addressed routing exists yet
+    /// (a later slice's job) — so this also marks that presentation's own
+    /// pump wake bit (ADR-0043 §3), the signal
+    /// `UiRealm::draw_frame_entered`'s per-presentation loop reads at
+    /// segment start.
     pub(crate) fn request_redraw(&self) {
         self.needs_redraw.store(true, Ordering::Relaxed);
+        self.presentations.primary().mark_redraw_pending();
     }
 
     /// Whether a redraw is needed.
@@ -1096,7 +1282,7 @@ impl UiRealm {
         )
     )]
     pub(crate) fn defer_first_frame(&self) {
-        self.renderer.defer_first_frame();
+        self.presentations.primary().renderer().defer_first_frame();
     }
 
     /// See [`RenderingFlutterBinding::allow_first_frame`].
@@ -1108,13 +1294,16 @@ impl UiRealm {
         )
     )]
     pub(crate) fn allow_first_frame(&self) {
-        self.renderer.allow_first_frame();
+        self.presentations.primary().renderer().allow_first_frame();
     }
 
     /// See [`RenderingFlutterBinding::send_frames_to_engine`] (via the
     /// `RendererBinding` trait).
     pub(crate) fn send_frames_to_engine(&self) -> bool {
-        self.renderer.send_frames_to_engine()
+        self.presentations
+            .primary()
+            .renderer()
+            .send_frames_to_engine()
     }
 
     /// Total frames rendered successfully by this presentation.
@@ -1122,13 +1311,13 @@ impl UiRealm {
         not(test),
         expect(
             dead_code,
-            reason = "draw_frame_entered reads self.presentation.frames_rendered() \
+            reason = "draw_frame_entered reads self.presentations.primary().frames_rendered() \
                       directly for the frame-number computation, not through \
                       this wrapper; kept for tests and future external callers"
         )
     )]
     pub(crate) fn frames_rendered(&self) -> u64 {
-        self.presentation.frames_rendered()
+        self.presentations.primary().frames_rendered()
     }
 
     /// Frames dropped due to surface errors on this presentation.
@@ -1138,13 +1327,15 @@ impl UiRealm {
                   forwards PresentationState::frames_dropped, also uncalled"
     )]
     pub(crate) fn frames_dropped(&self) -> u64 {
-        self.presentation.frames_dropped()
+        self.presentations.primary().frames_dropped()
     }
 
     /// Turn this presentation's performance overlay on or off. See the
     /// retired `AppBinding::set_performance_overlay`'s doc.
     pub(crate) fn set_performance_overlay(&self, enabled: bool) {
-        self.presentation.set_performance_overlay(enabled);
+        self.presentations
+            .primary()
+            .set_performance_overlay(enabled);
     }
 
     /// Perform haptic feedback on this presentation's window. See the
@@ -1156,28 +1347,34 @@ impl UiRealm {
                   PresentationState::perform_haptic_feedback directly)"
     )]
     pub(crate) fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
-        self.presentation.perform_haptic_feedback(feedback);
+        self.presentations
+            .primary()
+            .perform_haptic_feedback(feedback);
     }
 
     /// Apply a new device pixel ratio to this realm's render pipeline (the
     /// resize path; construction applies the initial ratio directly).
     pub(crate) fn set_device_pixel_ratio(&self, device_pixel_ratio: f32) {
-        self.renderer
+        self.presentations
+            .primary()
+            .renderer()
             .root_pipeline_owner()
             .with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
     }
 
-    /// Check if there is pending work: a pending build, pending gesture
-    /// motion/deadlines, or a dirty render node. The runner's wake gate
-    /// (`needs_redraw() || has_pending_work()`) reads this every frame.
+    /// Check if there is pending work in ANY presentation this realm hosts:
+    /// a pending build, pending gesture motion/deadlines, or a dirty render
+    /// node. The runner's wake gate (`needs_redraw() || has_pending_work()`)
+    /// reads this every frame. Production topology is exactly one
+    /// presentation, so this union is behaviorally identical to reading the
+    /// primary's own state directly; it generalizes to the isolation suite's
+    /// N>1 forests without needing a second code path.
     pub(crate) fn has_pending_work(&self) -> bool {
-        self.widgets.has_pending_builds()
-            || self.gestures().has_pending_motion()
-            || self.gestures().has_pending_deadlines()
-            || self
-                .renderer
-                .root_pipeline_owner()
-                .with(PipelineOwner::has_dirty_nodes)
+        self.presentations.iter().any(|presentation| {
+            presentation.has_pending_work()
+                || presentation.gestures().has_pending_motion()
+                || presentation.gestures().has_pending_deadlines()
+        })
     }
 
     // ========================================================================
@@ -1236,7 +1433,10 @@ impl UiRealm {
         let focused = FocusRoot::new(view.clone());
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated);
-        self.widgets.attach_root_widget(&wrapped)?;
+        self.presentations
+            .primary()
+            .widgets()
+            .attach_root_widget(&wrapped)?;
         self.request_redraw();
         tracing::debug!("Root widget attached");
         Ok(())
@@ -1278,7 +1478,9 @@ impl UiRealm {
         let focused = FocusRoot::new(view.clone());
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated);
-        self.widgets
+        self.presentations
+            .primary()
+            .widgets()
             .attach_root_widget_with_size(&wrapped, width, height)?;
         self.request_redraw();
         tracing::debug!(width, height, "Root widget attached (sized)");
@@ -1301,15 +1503,29 @@ impl UiRealm {
 
     /// The complete build+layout+paint pipeline for one frame.
     ///
-    /// **Frame-phase parity (critical):** this ordering — the vsync tick
-    /// block, the gesture-deadline tick, the build phase, the
-    /// layout/paint/scene-creation phase, and the pipeline-failure error
-    /// path — moves VERBATIM from the retired `AppBinding::draw_frame_entered`.
-    /// Reordering any of it is out of scope for the change that moved it
-    /// here; the frame-loop tests below are the parity oracle.
+    /// **Frame-phase parity (critical):** the realm-level pre-phase (vsync
+    /// tick, then gesture-deadline tick) MUST precede every presentation's
+    /// own segment, for the identical ordering argument the retired
+    /// `AppBinding::draw_frame_entered` depended on: both tick calls can
+    /// dirty render/build state a segment's dirty sample needs to observe.
+    /// Reordering the pre-phase is out of scope for the change that
+    /// introduced the per-presentation loop below; the frame-loop tests are
+    /// the parity oracle.
+    ///
+    /// **Per-presentation segment loop (ADR-0043 §3):** presentations are
+    /// processed once each, in mount order. Production topology is exactly
+    /// one presentation (`PresentationForest`'s ratchet), so this loop
+    /// degenerates to exactly today's single unconditional segment — see
+    /// [`Self::draw_frame_for_presentation`]'s doc for the proof that its
+    /// dirty gate cannot skip a segment the old, ungated code would have
+    /// run. Returns the LAST presentation's outcome (matches today's single-
+    /// presentation return value exactly; a genuine multi-presentation
+    /// caller reads each presentation's own render state directly rather
+    /// than this aggregate — addressed per-presentation return values are a
+    /// later slice's job).
     fn draw_frame_entered(&self, constraints: BoxConstraints) -> FramePaintOutcome {
-        // Vsync tick — MUST precede the build phase (Phase 1). See the
-        // retired `AppBinding::draw_frame_entered`'s doc for the full
+        // Vsync tick — MUST precede every presentation's build phase. See
+        // the retired `AppBinding::draw_frame_entered`'s doc for the full
         // disjoint-controller-set argument this ordering depends on.
         let now = self.now_secs();
         {
@@ -1324,11 +1540,16 @@ impl UiRealm {
             }
         }
 
-        // Gesture-deadline tick + keep-alive — also MUST precede the build
-        // phase, for the identical ordering argument as the vsync tick.
-        self.gestures().tick_deadlines();
-        if self.gestures().has_pending_deadlines() {
-            self.wake_frame();
+        // Gesture-deadline tick + keep-alive — also MUST precede every
+        // presentation's build phase, for the identical ordering argument as
+        // the vsync tick. Each presentation owns its own gesture arena, so
+        // this runs once per presentation rather than once per realm; at
+        // N=1 this is exactly today's single `self.gestures()` call.
+        for presentation in self.presentations.iter() {
+            presentation.gestures().tick_deadlines();
+            if presentation.gestures().has_pending_deadlines() {
+                self.wake_frame();
+            }
         }
 
         // The async-driver step lives in `Scheduler::handle_begin_frame`'s
@@ -1339,9 +1560,49 @@ impl UiRealm {
         // frame, on the right `Scheduler` instance, is enforced by the
         // scheduler itself.
 
+        let mut last_outcome = FramePaintOutcome::Idle;
+        for presentation in self.presentations.iter() {
+            // Segment start: clear this presentation's wake bit BEFORE
+            // sampling dirty, so a mark arriving WHILE this segment runs
+            // sets the bit again and lands next pump instead of being lost.
+            let woken = presentation.take_redraw_pending();
+            if !(woken || presentation.has_pending_work()) {
+                // Nothing to flush and nobody asked: skip this presentation's
+                // segment entirely. Bound: each presentation builds and
+                // flushes at most once per pump; this `continue` is what
+                // makes that true rather than merely documented.
+                continue;
+            }
+            last_outcome = Self::draw_frame_for_presentation(presentation, constraints);
+        }
+        last_outcome
+    }
+
+    /// One presentation's build+layout+paint segment — moves VERBATIM from
+    /// the retired `AppBinding::draw_frame_entered`'s Phase 1–4, now
+    /// parameterized by `presentation` instead of hard-wired to
+    /// `self.presentations.primary()`.
+    ///
+    /// **Why the caller's dirty gate cannot skip a segment this body would
+    /// have produced `Painted` for:** `run_frame_with_layout_builders`
+    /// itself returns `None` (this function's `Idle` outcome) whenever
+    /// nothing is dirty — that decision already lived inside the pipeline
+    /// before this loop existed. `Self::has_pending_work` (build pending OR
+    /// a dirty render node) is exactly the union of conditions that
+    /// decision depends on, so gating the CALL on the same union, one level
+    /// up, changes nothing observable: either both agree nothing is dirty
+    /// (skip here, `Idle` there — same outcome, cheaper), or either finds
+    /// real work and the segment runs exactly as it always did.
+    fn draw_frame_for_presentation(
+        presentation: &PresentationState,
+        constraints: BoxConstraints,
+    ) -> FramePaintOutcome {
+        #[cfg(test)]
+        presentation.record_flush();
+
         // Phase 1: Build (WidgetsBinding)
         {
-            let w = self.widgets();
+            let w = presentation.widgets();
             if w.has_pending_builds() {
                 w.draw_frame();
             }
@@ -1351,14 +1612,15 @@ impl UiRealm {
         // typestate-driven orchestrator.
         let mut pipeline_errored = false;
         let (layer_tree, link_registry) = {
-            self.renderer
+            presentation
+                .renderer()
                 .root_pipeline_owner()
                 .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
-            let result = self
+            let result = presentation
                 .widgets()
-                .run_frame_with_layout_builders(self.presentation.pipeline());
-            let link_registry = self
-                .renderer
+                .run_frame_with_layout_builders(presentation.pipeline());
+            let link_registry = presentation
+                .renderer()
                 .root_pipeline_owner()
                 .with_mut(PipelineOwner::take_link_registry);
             match result {
@@ -1374,17 +1636,16 @@ impl UiRealm {
         // Production<->headless convergence point: service lazy-sliver child
         // requests accumulated by `run_frame`'s layout pass.
         {
-            let w = self.widgets();
-            w.service_child_requests(self.presentation.pipeline());
+            let w = presentation.widgets();
+            w.service_child_requests(presentation.pipeline());
         }
 
         // Phase 4: Create Scene from LayerTree
         let size = constraints.constrain(Size::ZERO);
-        let frame_number = self.presentation.frames_rendered() + 1;
+        let frame_number = presentation.frames_rendered() + 1;
 
         if let Some(mut layer_tree) = layer_tree {
-            self.presentation
-                .attach_performance_overlay(&mut layer_tree);
+            presentation.attach_performance_overlay(&mut layer_tree);
 
             let root = layer_tree.root();
             let scene = Scene::with_links(
@@ -1434,7 +1695,9 @@ impl UiRealm {
 
         let (width, height) = renderer.size();
         let dpr = self
-            .renderer
+            .presentations
+            .primary()
+            .renderer()
             .root_pipeline_owner()
             .with(PipelineOwner::device_pixel_ratio);
         let constraints =
@@ -1445,14 +1708,20 @@ impl UiRealm {
             .mouse_tracker()
             .update_all_devices(|position| {
                 let mut result = flui_interaction::routing::HitTestResult::new();
-                self.renderer.hit_test_in_view(&mut result, position, 0);
+                self.presentations
+                    .primary()
+                    .renderer()
+                    .hit_test_in_view(&mut result, position, 0);
                 result
             });
 
         let send_to_engine = self.send_frames_to_engine();
         let errored = matches!(outcome, FramePaintOutcome::Errored);
         if send_to_engine && !errored {
-            self.renderer.mark_first_frame_sent();
+            self.presentations
+                .primary()
+                .renderer()
+                .mark_first_frame_sent();
         }
 
         let mut presented = false;
@@ -1466,10 +1735,10 @@ impl UiRealm {
                 Ok(did_present) => {
                     presented = did_present;
                     if did_present {
-                        self.presentation.record_frame_rendered();
+                        self.presentations.primary().record_frame_rendered();
                         tracing::trace!(
                             frame = scene.frame_number(),
-                            total = self.presentation.frames_rendered(),
+                            total = self.presentations.primary().frames_rendered(),
                             "Frame rendered successfully"
                         );
                     } else {
@@ -1480,24 +1749,24 @@ impl UiRealm {
                     }
                 }
                 Err(EngineError::SurfaceLost) => {
-                    self.presentation.record_frame_dropped();
+                    self.presentations.primary().record_frame_dropped();
                     retry_needed = true;
                     tracing::debug!("Surface lost; frame dropped — retry armed via wake_frame()");
                 }
                 Err(EngineError::DeviceLost) => {
-                    self.presentation.record_frame_dropped();
+                    self.presentations.primary().record_frame_dropped();
                     tracing::warn!(
                         "GPU device lost — recovery will be attempted by the platform runner"
                     );
                 }
                 Err(EngineError::SurfaceValidation) => {
-                    self.presentation.record_frame_dropped();
+                    self.presentations.primary().record_frame_dropped();
                     tracing::error!(
                         "Surface validation error — surface misconfig; external reconfigure required"
                     );
                 }
                 Err(e) => {
-                    self.presentation.record_frame_dropped();
+                    self.presentations.primary().record_frame_dropped();
                     tracing::error!(error = ?e, "Render error (non-recoverable this frame)");
                 }
             }
@@ -1550,7 +1819,11 @@ impl UiRealm {
                         .handle_pointer_event(&pointer_event, |position| {
                             let mut result = flui_interaction::routing::HitTestResult::new();
                             let offset = flui_types::Offset::new(position.dx, position.dy);
-                            self.renderer.hit_test_in_view(&mut result, offset, 0);
+                            self.presentations.primary().renderer().hit_test_in_view(
+                                &mut result,
+                                offset,
+                                0,
+                            );
                             if !result.is_empty() {
                                 tracing::debug!(hits = result.len(), "Hit test found targets");
                             }
@@ -1627,7 +1900,18 @@ impl UiRealm {
             match command {
                 #[cfg(feature = "hot-reload")]
                 UiCommand::HotReload(tier) => {
-                    if self.presentation.apply_hot_reload(&self.widgets, tier) {
+                    // Reuse the SAME fan-out `Self::apply_hot_reload` the
+                    // direct `perform_hot_reload_entered` path calls --
+                    // calling `self.presentations.primary().apply_hot_reload`
+                    // here instead (as this arm once did) reassembles only
+                    // the primary and silently skips every other
+                    // presentation, exactly the class of bug
+                    // `reassemble_fans_out_to_all_presentations_in_mount_
+                    // order` exists to catch on the direct path; this
+                    // inbox arm is the untested twin of that same call, and
+                    // the desktop worker's own hot-reload trigger goes
+                    // through THIS arm, not the direct one.
+                    if self.apply_hot_reload(tier) {
                         self.redraw_pending.store(true, Ordering::Release);
                     }
                     report.invoked += 1;
@@ -1636,17 +1920,21 @@ impl UiRealm {
                     presentation_id,
                     request,
                 } => {
-                    if presentation_id != self.presentation.id() {
+                    if presentation_id != self.presentations.primary().id() {
                         tracing::trace!(
                             { flui_foundation::diagnostics::PRESENTATION_ID } =
-                                self.presentation.id().as_u64(),
+                                self.presentations.primary().id().as_u64(),
                             stamped_presentation_id = presentation_id.as_u64(),
                             "dropping semantics action stamped for a stale presentation incarnation"
                         );
                         report.dropped_stale += 1;
                         continue;
                     }
-                    match self.presentation.dispatch_semantics_action(request) {
+                    match self
+                        .presentations
+                        .primary()
+                        .dispatch_semantics_action(request)
+                    {
                         Ok(()) => {
                             report.invoked += 1;
                         }
@@ -1656,7 +1944,7 @@ impl UiRealm {
                             // the latest semantics update.
                             tracing::trace!(
                                 { flui_foundation::diagnostics::PRESENTATION_ID } =
-                                    self.presentation.id().as_u64(),
+                                    self.presentations.primary().id().as_u64(),
                                 ?error,
                                 "dropping semantics action against a stale snapshot"
                             );
@@ -1680,11 +1968,142 @@ impl UiRealm {
         }
         report
     }
+
+    /// Close and remove exactly one presentation from this realm's forest.
+    ///
+    /// Called from `runner.rs`'s `dispatch_platform_realm` loop, which
+    /// special-cases `RealmTask::ClosePresentation` to call this with
+    /// `&mut self` directly (the realm sits checked out of `AppRuntime`'s
+    /// registry as an owned local at that point, so `&mut` is naturally
+    /// available — no other caller reaches this method). That same
+    /// dispatch has ALREADY set `dispatched_realm_id` for the whole
+    /// checkout, so a dispose callback this method's own step 3 runs is
+    /// covered by the identical TLS deferral guard every other realm-map
+    /// mutation already respects: one deferral authority, not a second one
+    /// to keep in sync with it. See `runner.rs::close_presentation` for the
+    /// request-shaped public entry point (`enqueue + wake`) that gets here.
+    ///
+    /// A no-op (returns `false`) if `id` does not name a presentation this
+    /// realm currently hosts.
+    ///
+    /// # Contract — six steps, in order
+    ///
+    /// 1. **Unregistering this presentation's window mapping from the
+    ///    process-wide `WindowRegistry` is NOT this method's job.**
+    ///    `UiRealm` has no access to that registry (`AppRuntime`-owned,
+    ///    ADR-0037 §2's single authority) — the caller must have already
+    ///    removed the registry entry before calling this. The real (and
+    ///    today's only) caller is `dispatch_platform_realm`'s
+    ///    `RealmTask::ClosePresentation` handling in `runner.rs`, NOT
+    ///    `AppRuntime`'s realm-teardown path (`apply_uninstall`/
+    ///    `teardown_platform_realm` close a WHOLE realm and never call this
+    ///    method at all — a realm's own `Drop` closes every remaining
+    ///    presentation directly). That dispatch handling unregisters this
+    ///    exact presentation's own window mapping first when a SIBLING
+    ///    presentation is staying open, and routes to a full realm
+    ///    uninstall instead of calling this method at all when `id` names
+    ///    the realm's only presentation (seeing [`Self::is_sole_presentation`]
+    ///    return `true`) — this method's own contract never has to reason
+    ///    about leaving the forest empty.
+    /// 2. IME detach + focus deactivate — [`PresentationState::close`]'s
+    ///    first half.
+    /// 3. `detach_root_widget` through this exact presentation's own
+    ///    `WidgetsBinding` — [`PresentationState::close`]'s second half —
+    ///    run inside [`Self::enter_for_close`], so a `State::dispose()` a
+    ///    descendant runs here gets the SAME realm-shared capabilities
+    ///    (post-frame/interaction handles, TLS deferral) any other
+    ///    frame/lifecycle callback gets, and can resolve a `GlobalKey`
+    ///    living in any OTHER presentation this realm hosts. It cannot
+    ///    resolve one of its OWN keys through the registry mid-teardown —
+    ///    `enter_for_close` deliberately excludes `id` itself from the
+    ///    composite it assembles; see that method's own doc for the
+    ///    self-deadlock excluding it avoids. An install/uninstall request a
+    ///    dispose hook makes here defers through the dispatched-path TLS
+    ///    guard described above. Any BUILD SCHEDULING it does still routes
+    ///    only within THIS presentation's own tree:
+    ///    `RebuildHandle`/`ExternalBuildScheduler` are minted one-per-owner
+    ///    and never shared, so a dispose hook has no path to a sibling
+    ///    presentation's build inbox even if it tries (see
+    ///    `dispose_during_teardown_cannot_reach_sibling_or_dead_services`).
+    /// 4. **Async-task disposition:** the realm-level `AsyncDriver` is not
+    ///    told about this closure — an in-flight task this presentation
+    ///    spawned is NOT cancelled here, matching `PresentationState`'s own
+    ///    `Drop` (which also does not reach into the driver). Its eventual
+    ///    completion fails closed against the now-dropped tree for the same
+    ///    reason step 3's dispose hooks do:
+    ///    `async_completion_after_presentation_teardown_fails_closed_no_sibling_reach`
+    ///    is the proof.
+    /// 5. `GlobalKeyScope` claims still tagged to this presentation's
+    ///    `BuildOwner` are reclaimed, traced — automatic, via `BuildOwner`'s
+    ///    own `Drop`, once step 6 drops the last reference to it.
+    /// 6. The removed `PresentationState` — and with it its `WidgetsBinding`
+    ///    (whose drop triggers step 5), `RenderingFlutterBinding`, and every
+    ///    other owned resource — drops after [`Self::enter_for_close`]
+    ///    returns.
+    ///
+    /// # Why this is two calls, not one `&mut`-threaded closure
+    ///
+    /// [`Self::enter_for_close`] hands its closure `&Self` (shared) — every
+    /// existing caller only ever needed read access to the realm for the
+    /// duration of a frame/lifecycle callback, so it was never shaped to
+    /// also hand out `&mut`. Steps 2–3 only need `&PresentationState`
+    /// (`PresentationState::close` takes `&self`), so they run inside one
+    /// `self.enter_for_close(...)` call. Steps 4–6 (the actual `Vec`
+    /// removal + drop) need `&mut self.presentations`, which happens in a
+    /// SEPARATE, sequential statement after that call returns — not nested
+    /// inside it, so there is no borrow conflict and no need to reshape
+    /// `enter_for_close` itself or give `PresentationForest` interior
+    /// mutability.
+    pub(crate) fn close_presentation_entered(&mut self, id: PresentationId) -> bool {
+        let existed = self.enter_for_close(id, |realm| {
+            let Some(presentation) = realm.presentations.get(id) else {
+                return false;
+            };
+            // Steps 2 + 3, composite (minus `id` itself) + capabilities active.
+            presentation.close();
+            true
+        });
+        if !existed {
+            return false;
+        }
+        // Steps 4-6: `self.enter_for_close(...)` above has already returned,
+        // so this is a plain, non-nested `&mut self.presentations` access.
+        // Dropping `removed` here (end of statement) is both the
+        // `GlobalKeyScope` reclaim trigger (step 5, via `BuildOwner::Drop`)
+        // and the disposal itself (step 6) — no active registry needed for
+        // either, since `GlobalKeyScope::reclaim_owner` is a plain
+        // data-structure operation.
+        let removed = self.presentations.remove(id);
+        debug_assert!(
+            removed.is_some(),
+            "BUG: presentation existed a moment ago (checked via self.enter_for_close above) \
+             and nothing between here and there could have removed it -- \
+             enter_for_close's closure only reads the forest"
+        );
+        true
+    }
 }
 
 impl Drop for UiRealm {
     fn drop(&mut self) {
-        self.presentation.close();
+        // Every presentation this realm hosts closes when the realm drops —
+        // production topology is exactly one until the forest's ratchet
+        // lifts, but this loop is already correct for N: nothing here
+        // assumes `len() == 1`.
+        //
+        // Deliberately NOT wrapped in `enter()`: this runs during `Drop`,
+        // which can itself run during thread-local destruction (e.g. a
+        // realm still alive when its owning thread exits) where touching
+        // ANOTHER thread-local (the registry activation stack `enter()`
+        // pushes onto) aborts the process
+        // ("cannot access a Thread Local Storage value during or after
+        // destruction"). A `State::dispose()` hook that needs a `GlobalKey`
+        // lookup during realm teardown is out of scope for this fix; the
+        // registries this realm's `WidgetsBinding`s expose are simply
+        // inactive here, matching every other un-entered context.
+        for presentation in self.presentations.iter() {
+            presentation.close();
+        }
     }
 }
 
@@ -4436,6 +4855,848 @@ mod tests {
                     flui_types::Size::new(px(1.0), px(1.0)),
                 )),
                 Err(flui_interaction::TextInputError::Unsupported)
+            );
+        }
+    }
+
+    // ========================================================================
+    // Presentation forest — isolation suite (ADR-0043 §1)
+    //
+    // Production topology is exactly one presentation per realm
+    // (`PresentationForest`'s `install` ratchet); these tests bypass it via
+    // `push_for_test` to exercise the composite `GlobalKey` registry and
+    // hot-reload fan-out against a genuine N=2 forest.
+    // ========================================================================
+    mod presentation_forest_isolation {
+        use super::*;
+
+        #[test]
+        fn push_for_test_bypasses_the_production_ratchet() {
+            let mut realm = UiRealm::for_test();
+            assert_eq!(realm.presentation_count(), 1);
+
+            realm.install_second_presentation_for_test();
+
+            assert_eq!(
+                realm.presentation_count(),
+                2,
+                "the isolation suite's push_for_test seam must bypass \
+                 PresentationForest::install's len()<=1 ratchet"
+            );
+        }
+
+        /// The realm composite `enter()` activates (ADR-0043 §1)
+        /// must resolve a `GlobalKey` registered in EITHER presentation's own
+        /// tree, not just the primary one — the correctness property
+        /// `GlobalKeyRegistryComposite` exists for.
+        #[test]
+        fn composite_registry_resolves_keys_registered_in_either_presentation() {
+            let mut realm = UiRealm::for_test();
+            let second_id = realm.install_second_presentation_for_test();
+
+            let key_in_primary = flui_view::GlobalKey::<()>::new();
+            let element_in_primary = flui_foundation::ElementId::new(1);
+            let key_in_second = flui_view::GlobalKey::<()>::new();
+            let element_in_second = flui_foundation::ElementId::new(1); // deliberately the SAME numeral
+
+            realm.enter(|realm| {
+                realm
+                    .presentations
+                    .primary()
+                    .widgets()
+                    .with_build_owner_mut(|owner| {
+                        owner.register_global_key(key_in_primary.id(), element_in_primary);
+                    });
+                let second = realm
+                    .presentations
+                    .get(second_id)
+                    .expect("second presentation installed");
+                second.widgets().with_build_owner_mut(|owner| {
+                    owner.register_global_key(key_in_second.id(), element_in_second);
+                });
+
+                assert_eq!(
+                    key_in_primary.current_element(),
+                    Some(element_in_primary),
+                    "composite must resolve a key registered in the primary presentation"
+                );
+                assert_eq!(
+                    key_in_second.current_element(),
+                    Some(element_in_second),
+                    "composite must resolve a key registered in the second \
+                     presentation, even though both trees use the same raw \
+                     ElementId numeral"
+                );
+            });
+        }
+
+        /// `PresentationState::new` wires `RealmCapabilities::
+        /// global_key_scope` into `BuildOwner::set_global_key_scope` FIRST —
+        /// before this presentation's own focus/IME wiring, before
+        /// attach/mount (see that constructor's own doc comment). The pin:
+        /// two presentations of ONE realm, sharing that exact scope,
+        /// mounting the IDENTICAL `GlobalKey` must conflict eagerly —
+        /// `GlobalKeyScope`'s cross-owner uniqueness domain — naming both
+        /// owner tags in the panic (`global_key_scope.rs::claim_and_register`'s
+        /// sole conflict branch).
+        ///
+        /// Unpinned before this test: deleting the `set_global_key_scope`
+        /// call from `PresentationState::new` leaves both the flui-view and
+        /// flui-app suites green, because each presentation's `BuildOwner`
+        /// then lazily creates its OWN private, single-tenant scope on first
+        /// use (`claim_and_register`'s `get_or_insert_with` fallback) — the
+        /// two owners never actually share one scope, so mounting the same
+        /// key in both silently succeeds in each instead of conflicting.
+        /// Mutant-verified: removing that one setter call from
+        /// `PresentationState::new` makes this test fail (no panic);
+        /// restoring it makes the eager panic fire again.
+        #[test]
+        #[should_panic(expected = "is already claimed by")]
+        fn duplicate_global_key_across_presentations_panics_eagerly_naming_both_owners() {
+            let mut realm = UiRealm::for_test();
+            let b_id = realm.install_second_presentation_for_test();
+
+            let key = flui_view::GlobalKey::<()>::new();
+            let element_in_a = flui_foundation::ElementId::new(1);
+            let element_in_b = flui_foundation::ElementId::new(2);
+
+            realm.widgets().with_build_owner_mut(|owner| {
+                owner.register_global_key(key.id(), element_in_a);
+            });
+
+            // B shares A's realm's exact GlobalKeyScope
+            // (install_second_presentation_for_test wires it that way, the
+            // same capability-threading order PresentationState::new uses
+            // in production) -- mounting the SAME key here must conflict
+            // eagerly, never silently succeed in a second, private scope.
+            realm
+                .presentation_widgets_for_test(b_id)
+                .with_build_owner_mut(|owner| {
+                    owner.register_global_key(key.id(), element_in_b);
+                });
+        }
+
+        /// `UiRealm::apply_hot_reload` must reassemble EVERY presentation in
+        /// mount order, not just the primary one.
+        ///
+        /// Oracle: `has_pending_builds()` on EACH presentation's own
+        /// `WidgetsBinding` after `apply_hot_reload` — `perform_reassemble`
+        /// (`BuildOwner::reassemble`) marks every MOUNTED element dirty, so a
+        /// presentation that was actually reassembled reports a pending
+        /// build; one that fan-out skipped does not. A membership check
+        /// alone (does the forest still contain both ids) is vacuous here:
+        /// it stays green even if fan-out silently reverted to
+        /// primary-only, since nothing removes a presentation from the
+        /// forest just because reassemble skipped it. Mutant-verified:
+        /// reverting `UiRealm::apply_hot_reload`'s loop to call
+        /// `self.presentations.primary().apply_hot_reload(tier)` alone (no
+        /// loop over the whole forest) makes this test fail on B's
+        /// `has_pending_builds()` assertion; restoring the loop makes it
+        /// pass again.
+        #[test]
+        #[cfg(feature = "hot-reload")]
+        fn reassemble_fans_out_to_all_presentations_in_mount_order() {
+            use flui_hot_reload::HotReloadTier;
+
+            let mut realm = UiRealm::for_test();
+            let b_id = realm.install_second_presentation_for_test();
+
+            // Mount independent content on BOTH presentations -- reassemble
+            // has nothing to mark dirty on an empty tree, so the oracle
+            // below needs a real mounted root on each.
+            realm
+                .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+                .expect("A mounts");
+            realm
+                .enter(|realm| {
+                    realm
+                        .presentations
+                        .get(b_id)
+                        .expect("B installed")
+                        .widgets()
+                        .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
+                })
+                .expect("B mounts");
+
+            // A fresh mount always starts with a pending initial build --
+            // drain both before reassembling, or the oracle below cannot
+            // tell "still pending from mount" apart from "reassemble
+            // actually re-marked it dirty".
+            let constraints = BoxConstraints::tight(flui_types::Size::new(px(50.0), px(50.0)));
+            let _ = realm.draw_frame(constraints);
+            assert!(
+                !realm.widgets().has_pending_builds(),
+                "precondition: A's initial build must be drained before reassembling"
+            );
+            assert!(
+                !realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .widgets()
+                    .has_pending_builds(),
+                "precondition: B's initial build must be drained before reassembling"
+            );
+
+            let _ = realm.apply_hot_reload(HotReloadTier::HotReload);
+
+            assert!(
+                realm.widgets().has_pending_builds(),
+                "reassemble must mark A's mounted root dirty"
+            );
+            assert!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .widgets()
+                    .has_pending_builds(),
+                "reassemble must mark B's mounted root dirty too -- fan-out must not skip \
+                 or stop at the primary presentation"
+            );
+        }
+
+        /// The SAME fan-out property as `reassemble_fans_out_to_all_
+        /// presentations_in_mount_order`, but driven through the OTHER
+        /// production entry point: the closed-command inbox
+        /// (`command_sender().request_hot_reload` + `drain_commands`), the
+        /// path the desktop worker's own hot-reload trigger actually uses --
+        /// not `apply_hot_reload`/`perform_hot_reload_entered` called
+        /// directly. Before this arm reused `Self::apply_hot_reload`, it
+        /// called `self.presentations.primary().apply_hot_reload(tier)`
+        /// directly, reassembling only the primary and silently skipping
+        /// every sibling — the registry-pinned exploit's exact regression
+        /// class, on its untested twin path. Mutant-verified: reverting
+        /// `drain_commands`'s `UiCommand::HotReload` arm back to
+        /// `self.presentations.primary().apply_hot_reload(tier)` makes this
+        /// test fail on B's `has_pending_builds()` assertion; restoring the
+        /// `self.apply_hot_reload(tier)` fan-out call makes it pass again.
+        #[test]
+        #[cfg(feature = "hot-reload")]
+        fn hot_reload_via_the_command_inbox_fans_out_to_all_presentations_in_mount_order() {
+            use flui_hot_reload::HotReloadTier;
+
+            let mut realm = UiRealm::for_test();
+            let b_id = realm.install_second_presentation_for_test();
+
+            realm
+                .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+                .expect("A mounts");
+            realm
+                .enter(|realm| {
+                    realm
+                        .presentations
+                        .get(b_id)
+                        .expect("B installed")
+                        .widgets()
+                        .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
+                })
+                .expect("B mounts");
+
+            let constraints = BoxConstraints::tight(flui_types::Size::new(px(50.0), px(50.0)));
+            let _ = realm.draw_frame(constraints);
+            assert!(
+                !realm.widgets().has_pending_builds(),
+                "precondition: A's initial build must be drained before reassembling"
+            );
+            assert!(
+                !realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .widgets()
+                    .has_pending_builds(),
+                "precondition: B's initial build must be drained before reassembling"
+            );
+
+            realm
+                .command_sender()
+                .request_hot_reload(HotReloadTier::HotReload)
+                .expect("inbox has room");
+            let report = realm.drain_commands();
+            assert_eq!(
+                report.invoked, 1,
+                "the hot-reload command must be applied, not dropped as stale"
+            );
+
+            assert!(
+                realm.widgets().has_pending_builds(),
+                "the inbox path must mark A's mounted root dirty, exactly like the direct path"
+            );
+            assert!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .widgets()
+                    .has_pending_builds(),
+                "the inbox path must mark B's mounted root dirty too -- it is the SAME \
+                 fan-out as the direct perform_hot_reload_entered path, not a narrower one"
+            );
+        }
+
+        /// Dropping the realm closes EVERY presentation it hosts, not just
+        /// the primary one.
+        #[test]
+        fn dropping_the_realm_closes_every_presentation() {
+            let mut realm = UiRealm::for_test();
+            realm.install_second_presentation_for_test();
+
+            let lifecycles_before: Vec<_> = realm
+                .presentations
+                .iter()
+                .map(crate::app::presentation::PresentationState::lifecycle)
+                .collect();
+            assert!(
+                lifecycles_before.iter().all(|l| {
+                    *l == crate::app::presentation::PresentationLifecycle::SurfaceAttached
+                }),
+                "both presentations must start attached"
+            );
+
+            drop(realm);
+            // Both presentations' own Drop impls ran as part of the realm's
+            // Drop (each PresentationState transitions to Closed on its own
+            // drop -- see PresentationState::close/Drop); nothing left to
+            // assert on here beyond "this did not panic", since the values
+            // themselves are gone. Proving that closing ONE presentation
+            // structurally cannot disturb a SURVIVING sibling's own layer
+            // tree needs an addressed per-presentation teardown path (close
+            // exactly one member, keep the rest running) that this slice
+            // does not add -- production topology never removes a single
+            // member from a live forest today, it only ever drops the whole
+            // realm, which is what this test actually exercises.
+        }
+
+        fn segment_constraints() -> BoxConstraints {
+            BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+        }
+
+        /// Oracle: FLUSH COUNTS (`PresentationState::flush_count`), never
+        /// rebuild counts — a presentation with a settled, never-rebuilding
+        /// tree still flushes every segment its own dirty state (or wake
+        /// bit) causes to run, and a presentation that was never dirtied
+        /// must NOT flush just because its sibling did.
+        #[test]
+        fn sibling_presentations_flush_independently() {
+            let mut realm = UiRealm::for_test();
+            let second_id = realm.install_second_presentation_for_test();
+
+            // Mark ONLY the second presentation dirty — reaching its own
+            // wake bit directly, the same seam a later addressed-routing
+            // slice would call through (no addressed entry point exists
+            // yet).
+            realm
+                .presentations
+                .get(second_id)
+                .expect("second presentation installed")
+                .mark_redraw_pending();
+
+            let _ = realm.enter(|realm| realm.draw_frame_entered(segment_constraints()));
+
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                0,
+                "the primary presentation was never marked dirty and must \
+                 not flush just because its sibling did"
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(second_id)
+                    .expect("still installed")
+                    .flush_count(),
+                1,
+                "the second presentation's own wake bit must cause exactly \
+                 one flush"
+            );
+
+            // A second pump with nothing newly dirty must flush neither —
+            // both presentations are now settled.
+            let _ = realm.enter(|realm| realm.draw_frame_entered(segment_constraints()));
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                0,
+                "still never dirtied, still zero flushes"
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(second_id)
+                    .expect("still installed")
+                    .flush_count(),
+                1,
+                "a settled presentation must not flush again with nothing \
+                 new to do"
+            );
+        }
+
+        /// A mark arriving for a presentation while ITS OWN segment is
+        /// running must not be lost: the segment already cleared the bit at
+        /// its own START, so a mark landing anywhere between that clear and
+        /// the next pump's sample must survive to be observed there.
+        ///
+        /// This collapses the timing to a single thread (mark, run the
+        /// segment, mark again immediately after) rather than a literal
+        /// concurrent race — in a single-threaded pump there is no OTHER
+        /// window where a mark could land except between one segment
+        /// ending and the next beginning, or nested inside the segment's
+        /// own build via a real callback; both reduce to the same
+        /// observable property this test checks: the bit set after the
+        /// clear is not silently dropped.
+        #[test]
+        fn cross_presentation_dirty_during_a_segment_sets_wake_bit_and_lands_next_pump() {
+            let realm = UiRealm::for_test();
+            let presentation = realm.presentations.primary();
+
+            presentation.mark_redraw_pending();
+            let _ = realm.enter(|realm| realm.draw_frame_entered(segment_constraints()));
+            assert_eq!(
+                presentation.flush_count(),
+                1,
+                "the armed wake bit must cause exactly one flush"
+            );
+
+            // A mark arrives during (or immediately after) that segment —
+            // nothing else about the presentation is dirty (no widget tree
+            // was ever attached, so no pending builds; the render tree is
+            // empty, so no dirty nodes either): the wake bit is the ONLY
+            // dirty signal in play.
+            presentation.mark_redraw_pending();
+
+            let _ = realm.enter(|realm| realm.draw_frame_entered(segment_constraints()));
+            assert_eq!(
+                presentation.flush_count(),
+                2,
+                "the wake bit set after the first segment cleared its own \
+                 bit must not be lost -- it must cause a second flush on \
+                 the next pump, even though nothing else about the \
+                 presentation is dirty"
+            );
+        }
+    }
+
+    // ========================================================================
+    // Async-task disposition audit (ADR-0043 §5) — a dropped presentation's
+    // in-flight AsyncDriver task must not reach a live sibling
+    // ========================================================================
+    mod async_completion_isolation {
+        use std::cell::RefCell;
+
+        use super::*;
+
+        /// Test-local view that captures its `RebuildHandle` and the realm's
+        /// `AsyncDriver` in `init_state` into a shared slot the test reads
+        /// back — the exact seam `flui_view::element::future_builder::
+        /// FutureBuilder` (the framework's own production async widget) uses,
+        /// minus the `AsyncSnapshot` state machine this test does not need.
+        #[derive(Clone)]
+        struct AsyncCaptureProbeView {
+            captured: Rc<RefCell<Option<(flui_view::RebuildHandle, flui_scheduler::AsyncDriver)>>>,
+        }
+
+        struct AsyncCaptureProbeState {
+            captured: Rc<RefCell<Option<(flui_view::RebuildHandle, flui_scheduler::AsyncDriver)>>>,
+        }
+
+        impl StatefulView for AsyncCaptureProbeView {
+            type State = AsyncCaptureProbeState;
+
+            fn create_state(&self) -> Self::State {
+                AsyncCaptureProbeState {
+                    captured: Rc::clone(&self.captured),
+                }
+            }
+        }
+
+        impl ViewState<AsyncCaptureProbeView> for AsyncCaptureProbeState {
+            fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+                if let Some(driver) = ctx.async_driver() {
+                    *self.captured.borrow_mut() = Some((ctx.rebuild_handle(), driver));
+                }
+            }
+
+            fn build(
+                &self,
+                _view: &AsyncCaptureProbeView,
+                _ctx: &dyn flui_view::BuildContext,
+            ) -> impl IntoView {
+                flui_widgets::SizedBox::new(0.0, 0.0)
+            }
+        }
+
+        impl flui_view::View for AsyncCaptureProbeView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateful(self)
+            }
+        }
+
+        /// The mandatory async-task-disposition audit: `AsyncDriver` is
+        /// realm-level (shared by every presentation in a realm), so an
+        /// in-flight task spawned from a presentation that later closes is
+        /// NOT cancelled — it keeps getting polled until it completes. Its
+        /// completion reaches back into a tree through a `RebuildHandle`,
+        /// which routes through `ExternalBuildScheduler` — an
+        /// `Arc<Mutex<HashMap<ElementId, _>>>` inbox minted fresh per
+        /// `BuildOwner` at construction, never shared or reused across
+        /// owners (`crates/flui-view/src/owner/build_owner.rs`'s
+        /// `external_scheduler`). A stale completion's `schedule()` call
+        /// therefore writes into ITS OWN (orphaned, since that `BuildOwner`
+        /// already dropped) inbox — there is no shared table keyed only by
+        /// raw `ElementId` for it to alias a live sibling's entry in, even
+        /// when the two owners' trees happen to reuse the same numeral (the
+        /// identical-numeral hazard `GlobalKeyRegistryComposite` exists for
+        /// is a DIFFERENT registry; this one was never shared to begin
+        /// with). This test proves it end to end rather than resting on
+        /// that code reading alone: no fix was needed here, and this test is
+        /// the evidence for that, not a description of one.
+        #[test]
+        fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach() {
+            let mut realm = UiRealm::for_test();
+            // `realm` starts with exactly one presentation; call it "A" and
+            // install a second, "B", to observe.
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+
+            let captured = Rc::new(RefCell::new(None));
+            let probe = AsyncCaptureProbeView {
+                captured: Rc::clone(&captured),
+            };
+            realm
+                .enter(|realm| realm.attach_root_widget(&probe))
+                .expect("A mounts the capture probe");
+            // `attach_root_widget` only creates the root element and
+            // schedules the first build -- `init_state` (where the probe
+            // captures its handles) does not run until that build pass
+            // actually happens, exactly like `a1_autowrap_causes_
+            // registration_after_build_pass` above.
+            let _ = realm.enter(|realm| {
+                realm.draw_frame_entered(BoxConstraints::tight(flui_types::Size::new(
+                    px(20.0),
+                    px(20.0),
+                )))
+            });
+
+            let (rebuild_handle, driver) = captured
+                .borrow_mut()
+                .take()
+                .expect("init_state must have captured both handles");
+
+            // Spawn on the REALM's shared driver — exactly what a real
+            // async widget on presentation A would have done. Nothing
+            // drives it to completion until explicitly polled below, well
+            // after A has already closed. `Arc<AtomicBool>`, not
+            // `Rc<Cell<bool>>`: `BoxedTask` requires `Send` (the driver is
+            // shared across threads even though polling only ever happens
+            // on the frame thread — see `AsyncDriver`'s own doc).
+            let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let ran_marker = Arc::clone(&ran);
+            let _token = driver.spawn_local(Box::pin(async move {
+                rebuild_handle.schedule(flui_foundation::RebuildReason::AsyncCompletion);
+                ran_marker.store(true, Ordering::Relaxed);
+            }));
+
+            // Close A through the real consolidated teardown path —
+            // production never cancels this realm-level `AsyncDriver`'s
+            // in-flight tasks (see this test's own doc and
+            // `UiRealm::close_presentation_entered`'s).
+            assert!(realm.close_presentation_entered(a_id), "A was installed");
+
+            let b_has_pending_builds = || {
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B still installed")
+                    .widgets()
+                    .has_pending_builds()
+            };
+            assert!(
+                !b_has_pending_builds(),
+                "precondition: B has no pending build before A's stale task runs"
+            );
+
+            // Poll the driver to completion — A's task runs, its captured
+            // `RebuildHandle` schedules against A's own (now-orphaned)
+            // inbox.
+            realm
+                .scheduler()
+                .drive_frame(flui_scheduler::Instant::now(), || {});
+            assert!(
+                ran.load(Ordering::Relaxed),
+                "A's stale task must still run to completion"
+            );
+
+            assert!(
+                !b_has_pending_builds(),
+                "A's stale completion must not have reached B's build inbox"
+            );
+        }
+    }
+
+    // ========================================================================
+    // Dispose-during-teardown isolation (ADR-0043 §5 step 3)
+    // ========================================================================
+    mod dispose_teardown_isolation {
+        use std::cell::{Cell, RefCell};
+
+        use super::*;
+
+        /// Captures its own `RebuildHandle` in `init_state` (capabilities are
+        /// installed then, per port-check trigger #22) and schedules through
+        /// it from `dispose`, exactly the shape a real widget's cleanup path
+        /// takes (e.g. cancelling a subscription and requesting one final
+        /// rebuild to reflect that).
+        #[derive(Clone)]
+        struct DisposeProbeView {
+            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+            disposed: Rc<Cell<bool>>,
+        }
+
+        struct DisposeProbeState {
+            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+            disposed: Rc<Cell<bool>>,
+            handle: Option<flui_view::RebuildHandle>,
+        }
+
+        impl StatefulView for DisposeProbeView {
+            type State = DisposeProbeState;
+
+            fn create_state(&self) -> Self::State {
+                DisposeProbeState {
+                    handle_slot: Rc::clone(&self.handle_slot),
+                    disposed: Rc::clone(&self.disposed),
+                    handle: None,
+                }
+            }
+        }
+
+        impl ViewState<DisposeProbeView> for DisposeProbeState {
+            fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+                let handle = ctx.rebuild_handle();
+                *self.handle_slot.borrow_mut() = Some(handle.clone());
+                self.handle = Some(handle);
+            }
+
+            fn build(
+                &self,
+                _view: &DisposeProbeView,
+                _ctx: &dyn flui_view::BuildContext,
+            ) -> impl IntoView {
+                flui_widgets::SizedBox::new(0.0, 0.0)
+            }
+
+            fn dispose(&mut self) {
+                // Capabilities installed at init_state are still valid here
+                // (nothing about this presentation's realm-shared dispatch
+                // handles has been touched by teardown step 3 alone) —
+                // schedule through this element's OWN handle, exactly a real
+                // cleanup hook would.
+                if let Some(handle) = &self.handle {
+                    handle.schedule(flui_foundation::RebuildReason::StateChange);
+                }
+                self.disposed.set(true);
+            }
+        }
+
+        impl flui_view::View for DisposeProbeView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateful(self)
+            }
+        }
+
+        /// A `State::dispose()` hook running as part of `UiRealm::
+        /// close_presentation_entered`'s teardown (step 3) schedules through
+        /// its OWN `RebuildHandle` — proving it reaches only its own (about
+        /// to be dropped) tree, never a live sibling's, by the same
+        /// `ExternalBuildScheduler`-is-minted-one-per-owner argument
+        /// `close_presentation_entered`'s own doc makes. "Dead services" — this
+        /// presentation's OWN focus/IME, already closed by teardown step 2
+        /// before step 3's detach runs — failing closed rather than
+        /// panicking is covered by `presentation.rs`'s
+        /// `text_input_handle_is_bound_to_the_owned_text_input_state`; this
+        /// test does not re-derive that, only the sibling-reach half.
+        #[test]
+        fn dispose_during_teardown_cannot_reach_sibling_or_dead_services() {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+
+            let handle_slot = Rc::new(RefCell::new(None));
+            let disposed = Rc::new(Cell::new(false));
+            let probe = DisposeProbeView {
+                handle_slot: Rc::clone(&handle_slot),
+                disposed: Rc::clone(&disposed),
+            };
+            // Through the normal `UiRealm::attach_root_widget` auto-wrap
+            // (`FocusRoot`/`VsyncScope`/`GestureArenaScope`), so this probe
+            // is a DESCENDANT of the mounted root, not the root itself —
+            // exercising `WidgetsBinding::detach_root_widget`'s cascading
+            // `remove_subtree` teardown (not just a single-node `remove`),
+            // the same depth a real widget tree has.
+            realm
+                .enter(|realm| realm.attach_root_widget(&probe))
+                .expect("A mounts the dispose probe");
+            let _ = realm.enter(|realm| {
+                realm.draw_frame_entered(BoxConstraints::tight(flui_types::Size::new(
+                    px(20.0),
+                    px(20.0),
+                )))
+            });
+            assert!(
+                handle_slot.borrow().is_some(),
+                "init_state must have captured the rebuild handle"
+            );
+
+            fn b_has_pending_builds(realm: &UiRealm, b_id: PresentationId) -> bool {
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B still installed")
+                    .widgets()
+                    .has_pending_builds()
+            }
+            assert!(
+                !b_has_pending_builds(&realm, b_id),
+                "precondition: B has no pending build before A tears down"
+            );
+
+            assert!(
+                realm.close_presentation_entered(a_id),
+                "A must have been installed and removable"
+            );
+
+            assert!(
+                disposed.get(),
+                "close_presentation_entered's detach_root_widget must have run A's dispose hook"
+            );
+            assert!(
+                !b_has_pending_builds(&realm, b_id),
+                "A's dispose-time schedule() must not have reached B's build inbox"
+            );
+        }
+    }
+
+    // ========================================================================
+    // Closing one presentation must be structurally invisible to a
+    // surviving sibling (ADR-0043's end-state invariant)
+    // ========================================================================
+    mod closing_one_presentation_is_invisible_to_siblings {
+        use super::*;
+
+        /// Oracle: a LAYER-TREE COMPARE (`format!("{:?}", ...)` on the
+        /// produced `LayerTree`), never a rebuild/flush count — B's own
+        /// render output, not merely whether B ran, must be byte-for-byte
+        /// unaffected by A closing.
+        #[test]
+        fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+
+            // Mount independent content on both presentations.
+            realm
+                .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+                .expect("A mounts");
+            realm
+                .enter(|realm| {
+                    realm
+                        .presentations
+                        .get(b_id)
+                        .expect("B installed")
+                        .widgets()
+                        .attach_root_widget(&flui_widgets::SizedBox::new(30.0, 30.0))
+                })
+                .expect("B mounts");
+
+            let constraints = BoxConstraints::tight(flui_types::Size::new(px(50.0), px(50.0)));
+            let b_layer_tree_before = realm.enter(|realm| {
+                let b = realm.presentations.get(b_id).expect("B installed");
+                match UiRealm::draw_frame_for_presentation(b, constraints) {
+                    FramePaintOutcome::Painted(scene) => format!("{:?}", scene.layer_tree()),
+                    FramePaintOutcome::Idle => panic!("B's first frame must paint, got Idle"),
+                    FramePaintOutcome::Errored => {
+                        panic!("B's first frame must paint, got Errored")
+                    }
+                }
+            });
+
+            assert!(
+                realm.close_presentation_entered(a_id),
+                "A must have been installed and removable"
+            );
+
+            let b_layer_tree_after = realm.enter(|realm| {
+                let b = realm.presentations.get(b_id).expect("B still installed");
+                // The first draw already settled B (nothing left dirty), so
+                // an unconditional second draw would correctly report Idle
+                // regardless of A -- that would prove nothing about B's
+                // CONTENT. Force B's root render node dirty directly so this
+                // second draw genuinely re-produces its layer tree from
+                // scratch, the same content as the first draw, to compare
+                // against it (a rebuild alone is not enough: reconciling an
+                // unchanged `SizedBox` config is legitimately a no-op that
+                // marks nothing dirty).
+                b.pipeline().with_mut(|owner| {
+                    if let Some(root_id) = owner.root_id() {
+                        owner.mark_needs_paint(root_id);
+                    }
+                });
+                match UiRealm::draw_frame_for_presentation(b, constraints) {
+                    FramePaintOutcome::Painted(scene) => format!("{:?}", scene.layer_tree()),
+                    FramePaintOutcome::Idle => {
+                        panic!("B's post-A-close frame must still paint, got Idle")
+                    }
+                    FramePaintOutcome::Errored => {
+                        panic!("B's post-A-close frame must still paint, got Errored")
+                    }
+                }
+            });
+
+            assert_eq!(
+                b_layer_tree_before, b_layer_tree_after,
+                "B's own layer tree must be byte-for-byte identical before and \
+                 after A closes -- nothing about B's content changed, so \
+                 nothing about its render output may either"
+            );
+        }
+
+        /// A `RepaintHandle` obtained from presentation A's pipeline BEFORE
+        /// A closes, and still held afterward, must fail closed
+        /// (`DirtySendError::OwnerGone`) rather than panic when used — the
+        /// underlying `PipelineOwner`'s dirty-request channel receiver drops
+        /// along with A's `PresentationState`, so the handle's sender side
+        /// simply finds nobody listening.
+        #[test]
+        fn dropped_presentations_surviving_pipeline_handles_fail_closed() {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+
+            let render_id = realm.presentations.primary().pipeline().with_mut(|owner| {
+                owner.insert::<flui_rendering::protocol::BoxProtocol>(Box::new(
+                    flui_objects::RenderColoredBox::red(10.0, 10.0),
+                ))
+            });
+            let repaint_handle = realm
+                .presentations
+                .primary()
+                .pipeline()
+                .with(|owner| owner.repaint_handle(render_id))
+                .expect("a freshly inserted node has a live repaint handle");
+
+            assert!(
+                repaint_handle.mark_needs_layout().is_ok(),
+                "precondition: the handle works while A is still alive"
+            );
+
+            assert!(realm.close_presentation_entered(a_id), "A was installed");
+
+            assert!(
+                matches!(
+                    repaint_handle.mark_needs_layout(),
+                    Err(flui_rendering::pipeline::DirtySendError::OwnerGone)
+                ),
+                "a RepaintHandle surviving its presentation's teardown must \
+                 fail closed, not panic and not silently succeed"
             );
         }
     }
