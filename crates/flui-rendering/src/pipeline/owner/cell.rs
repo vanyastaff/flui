@@ -269,14 +269,19 @@ mod tests {
         type Arity = flui_tree::Leaf;
         type ParentData = BoxParentData;
 
-        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>) -> Size {
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+        ) -> Size {
             ctx.constraints().constrain(self.size)
         }
 
         fn paint(&self, ctx: &mut PaintCx<'_, Self::Arity>) {
             let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
-            ctx.canvas()
-                .draw_rect(rect, &Paint::fill(Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0])));
+            ctx.canvas().draw_rect(
+                rect,
+                &Paint::fill(Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0])),
+            );
         }
     }
 
@@ -291,7 +296,10 @@ mod tests {
         type Arity = Exact<2>;
         type ParentData = BoxParentData;
 
-        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>) -> Size {
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+        ) -> Size {
             let constraints = *ctx.constraints();
             ctx.layout_child(0, constraints);
             ctx.layout_child(1, constraints);

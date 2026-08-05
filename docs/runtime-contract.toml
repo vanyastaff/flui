@@ -2146,6 +2146,28 @@ allow_files = [
     "crates/flui-rendering/src/pipeline/owner/mod.rs",
 ]
 
+[[forbidden_pattern]]
+pattern = "unsafe impl Send for NodePtr"
+why = """
+the NodePtr aliasing contract: `NodePtr` (`pipeline/owner/subtree_arena.rs`) \
+used to carry a manual `unsafe impl Send`/`unsafe impl Sync` because \
+`LayoutChildCallback` (and siblings) inherited a `Send + Sync` bound from \
+`BoxLayoutCtxErased`, which in turn existed only to satisfy the old \
+`Arc<RwLock<PipelineOwner>>` storage's own `Send + Sync` requirement. Once \
+`PipelineCell` replaced that storage and `BoxLayoutCtxErased` dropped its \
+`Send + Sync` supertrait (same change as the `Arc<RwLock<PipelineOwner` \
+retirement above), nothing requires `NodePtr: Send + Sync` any more, so it \
+reverts to the language default for a bare raw pointer -- `!Send + !Sync` \
+-- and `SubtreeArena::check_thread`'s per-access runtime assert retires \
+alongside it: confinement to the constructing thread is now structural \
+(`SubtreeArena: !Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!` \
+in `pipeline/owner/subtree_arena.rs`'s own tests), not a runtime check a \
+caller could bypass. Reintroducing either manual impl would silently \
+reopen the cross-thread aliasing hazard `PipelineCell`/the dropped bounds \
+exist to close.\
+"""
+allow_files = []
+
 [[forbidden_path]]
 path = "crates/flui-presentation"
 why = "the presentation composition contract: no flui-presentation crate; flui-app privately composes the three owners"

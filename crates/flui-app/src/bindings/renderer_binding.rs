@@ -944,8 +944,15 @@ mod tests {
     /// violating what it protects against in any binding that is genuinely
     /// shared across threads.
     struct BindingPtr(*const RenderingFlutterBinding);
+    // SAFETY: see the struct doc above — every closure built from a
+    // `BindingPtr` fires synchronously, inline, on the same thread and
+    // within the lifetime of the `binding` local it was taken from; the
+    // pointer is never stored past that call and never actually crosses a
+    // thread, so the type-level `Send` this test's `Arc<dyn Fn + Send +
+    // Sync>` listener signature demands is never exercised for real.
     #[allow(unsafe_code)]
     unsafe impl Send for BindingPtr {}
+    // SAFETY: same as `Send` above — no genuine cross-thread share occurs.
     #[allow(unsafe_code)]
     unsafe impl Sync for BindingPtr {}
     impl BindingPtr {
