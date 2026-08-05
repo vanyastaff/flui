@@ -27,18 +27,12 @@ use flui_foundation::{PresentationAddress, RealmId};
 use flui_platform::traits::{PlatformWindow, WindowId};
 
 /// Errors from [`WindowRegistry::try_register`].
-// The strict path has no production call site yet (today's single-window
-// install always uses the replace semantics of `register_window`); it is
-// reserved for a future multi-window install path that chooses
-// strict-vs-replace per call site, and is exercised by this module's own
-// tests in the meantime.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "reserved for a future multi-window install path; exercised by this module's tests"
-    )
-)]
+///
+/// Reached from `AppRuntime::apply_install`
+/// (`crates/flui-app/src/app/runtime.rs`): the strict, refuse-on-collision
+/// path `install_realm_alongside`'s non-displacing install uses, so a
+/// second realm's window id colliding with an already-registered one is
+/// refused rather than silently re-routed onto the sibling's mapping.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum RegistryError {
@@ -127,19 +121,9 @@ impl WindowRegistry {
         displaced
     }
 
-    /// The strict, design-for-N alternative to [`Self::register_window`]:
-    /// refuses instead of replacing when `id` is already mapped.
-    ///
-    /// Not dead code despite zero production call sites today — exercised
-    /// by this module's own tests, and reserved for a future multi-window
-    /// install path that chooses strict-vs-replace per call site.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "reserved for a future multi-window install path; exercised by this module's tests"
-        )
-    )]
+    /// The strict alternative to [`Self::register_window`]: refuses instead
+    /// of replacing when `id` is already mapped. See [`RegistryError`]'s doc
+    /// for its one production caller.
     pub(crate) fn try_register(
         &mut self,
         id: WindowId,

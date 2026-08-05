@@ -74,7 +74,7 @@ use super::runner::{RealmTask, SurfaceApplier};
 #[cfg(not(target_os = "ios"))]
 use super::ui_realm::UiRealm;
 #[cfg(not(target_os = "ios"))]
-use super::window_registry::WindowRegistry;
+use super::window_registry::{RegistryError, WindowRegistry};
 
 /// Process-level engine services, each resolved **once** per owner thread in
 /// [`SharedEngineServices::resolve`] — never re-resolved on every access, and
@@ -371,17 +371,23 @@ impl RealmRegistry {
 
 /// A realm-registry install/uninstall requested while a mutation must defer
 /// (a dispatch or an all-realms iteration is in flight on this thread — see
-/// [`AppRuntime::request_realm_mutation`]). Applied in request order once
-/// the deferring condition clears.
+/// [`AppRuntime::request_realm_install`]/[`AppRuntime::request_realm_uninstall`]).
+/// Applied in request order once the deferring condition clears. Private:
+/// external callers (`super::runner`) go through the typed
+/// `request_realm_install`/`request_realm_uninstall` methods, never
+/// construct this enum directly — keeping the window-registration step
+/// (see [`AppRuntime::apply_install`]) bundled with the registry insert
+/// atomically, instead of requiring every call site to remember both.
 #[cfg(not(target_os = "ios"))]
-pub(super) enum RealmMapMutation {
+enum RealmMapMutation {
     /// Add a newly-constructed realm to the registry (never displaces a
-    /// sibling — see `install_realm_alongside` in `super::runner`). Boxed:
-    /// `RealmSlot` owns a whole `UiRealm`, over a kilobyte, next to
-    /// `Uninstall`'s bare `RealmId` -- boxing keeps this enum (and every
-    /// `Vec<RealmMapMutation>` queueing it) from paying that size for every
-    /// entry regardless of variant.
-    Install(RealmId, Box<RealmSlot>),
+    /// sibling — see `install_realm_alongside` in `super::runner`), plus the
+    /// window whose id mints its `WindowRegistry` mapping. Boxed: `RealmSlot`
+    /// owns a whole `UiRealm`, over a kilobyte, next to `Uninstall`'s bare
+    /// `RealmId` -- boxing keeps this enum (and every `Vec<RealmMapMutation>`
+    /// queueing it) from paying that size for every entry regardless of
+    /// variant.
+    Install(RealmId, Box<RealmSlot>, Arc<dyn PlatformWindow>),
     /// Remove one realm from the registry (a window closing while siblings
     /// stay open — see `uninstall_platform_realm` in `super::runner`).
     Uninstall(RealmId),
@@ -552,16 +558,22 @@ pub(crate) struct AppRuntime {
     /// is currently checked out, so a nested dispatch attempt targeting a
     /// DIFFERENT realm can be told apart from a legitimate same-realm
     /// reentrant call (already handled by each slot's own `draining` flag).
+    /// Also set (alongside `dispatched_scheduler`) for the realm
+    /// `for_each_installed_realm` currently has checked out of the registry
+    /// mid-visit — from fence (c)'s perspective a visited realm IS
+    /// dispatched: its own scheduler phase must still be observable, not
+    /// blind, for the whole time it sits outside `realms`.
     pub(super) dispatched_realm_id: Option<RealmId>,
     /// Set for the duration of `for_each_installed_realm`'s (`runner.rs`)
     /// hot-restart-shaped visit over every hosted realm. A realm-map
     /// mutation requested while this is `true` defers exactly like one
     /// requested while `dispatched_realm_id` is `Some` — see
-    /// [`Self::request_realm_mutation`] — so a mutation triggered by a
-    /// callback running mid-visit never changes the set of realms that same
-    /// visit is still walking.
+    /// [`Self::request_realm_install`]/[`Self::request_realm_uninstall`] —
+    /// so a mutation triggered by a callback running mid-visit never
+    /// changes the set of realms that same visit is still walking.
     pub(super) iterating_all_realms: bool,
-    /// Realm-map mutations requested while [`Self::request_realm_mutation`]
+    /// Realm-map mutations requested while
+    /// [`Self::request_realm_install`]/[`Self::request_realm_uninstall`]
     /// decided they must defer. Applied, in request order, by
     /// [`Self::drain_pending_realm_mutations`].
     pending_realm_mutations: Vec<RealmMapMutation>,
@@ -741,7 +753,44 @@ impl AppRuntime {
             .or_else(|| phases.first().copied())
     }
 
-    /// Requests a realm-registry install/uninstall.
+    /// The un-deferred application of an `Install` mutation: registers
+    /// `window`'s id in the `WindowRegistry` FIRST, strictly (never
+    /// replacing an existing mapping — an id collision is refused, not
+    /// silently re-routed onto a sibling realm's window), and only inserts
+    /// `slot` into `realms` once that registration succeeds. On
+    /// `Err`, `slot` (and the `UiRealm` it owns) is dropped by the caller;
+    /// this method itself never touches `realms` in that case.
+    fn apply_install(
+        &mut self,
+        id: RealmId,
+        slot: RealmSlot,
+        window: &Arc<dyn PlatformWindow>,
+    ) -> Result<(), RegistryError> {
+        self.registry.try_register(window.id(), slot.address)?;
+        self.realms.insert(id, slot);
+        Ok(())
+    }
+
+    /// The un-deferred application of an `Uninstall` mutation.
+    fn apply_uninstall(&mut self, id: RealmId) -> Option<RealmSlot> {
+        let removed = self.realms.remove(&id);
+        if removed.is_some() {
+            self.registry.remove_realm(id);
+        }
+        removed
+    }
+
+    /// Requests installing a newly-constructed realm, registering `window`'s
+    /// id and inserting `slot` into the registry TOGETHER, atomically from
+    /// every caller's perspective: either both happen now, or both are
+    /// queued as one [`RealmMapMutation::Install`] entry and both happen
+    /// together once the queue drains. This closes the gap a two-step
+    /// "register the window now, defer the realm insert" sequence would
+    /// otherwise leave open — a platform event addressed to the new
+    /// window's id arriving in that gap would find a `WindowRegistry` entry
+    /// but no matching `realms` entry, and `dispatch_platform_realm` would
+    /// misreport it as `StaleRealm` ("a newer realm replaced the one it was
+    /// dispatched for") instead of "this realm's install has not landed yet".
     ///
     /// Applied immediately unless a dispatch (`dispatched_realm_id` is
     /// `Some`) or an all-realms iteration (`iterating_all_realms`) is
@@ -753,7 +802,41 @@ impl AppRuntime {
     /// mid-hot-restart-visit never changes the set of realms
     /// `for_each_installed_realm` is still walking (its own tail).
     ///
-    /// Returns any [`RealmSlot`] an IMMEDIATE `Uninstall` removed, so the
+    /// `Err` only when applied immediately AND the window's id already maps
+    /// to a live entry — deferred installs cannot fail synchronously (the
+    /// caller has already returned by the time they apply); see
+    /// [`Self::drain_pending_realm_mutations`] for how that case is handled
+    /// instead (traced and dropped, never silently re-routed).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "install_realm_alongside is design-for-N mechanism with no production \
+                      embedder call site yet -- exercised by this crate's own tests"
+        )
+    )]
+    pub(super) fn request_realm_install(
+        &mut self,
+        id: RealmId,
+        slot: RealmSlot,
+        window: Arc<dyn PlatformWindow>,
+    ) -> Result<(), RegistryError> {
+        if self.dispatched_realm_id.is_some() || self.iterating_all_realms {
+            self.pending_realm_mutations.push(RealmMapMutation::Install(
+                id,
+                Box::new(slot),
+                window,
+            ));
+            return Ok(());
+        }
+        self.apply_install(id, slot, &window)
+    }
+
+    /// Requests uninstalling one realm — a single window closing while
+    /// siblings stay open. Same defer-to-idle discipline as
+    /// [`Self::request_realm_install`]; see that method's doc for why.
+    ///
+    /// Returns any [`RealmSlot`] an IMMEDIATE uninstall removed, so the
     /// caller can drop it (and the `UiRealm` it owns) only after releasing
     /// whatever `APP_RUNTIME` borrow is live — the same discipline
     /// `install_platform_realm`/`teardown_platform_realm` already follow for
@@ -762,32 +845,17 @@ impl AppRuntime {
         not(test),
         expect(
             dead_code,
-            reason = "both production call sites (install_realm_alongside, \
-                      uninstall_platform_realm) are themselves design-for-N mechanism with \
-                      no production embedder call site yet -- exercised by this crate's own tests"
+            reason = "uninstall_platform_realm is design-for-N mechanism with no production \
+                      embedder call site yet -- exercised by this crate's own tests"
         )
     )]
-    pub(super) fn request_realm_mutation(
-        &mut self,
-        mutation: RealmMapMutation,
-    ) -> Option<RealmSlot> {
+    pub(super) fn request_realm_uninstall(&mut self, id: RealmId) -> Option<RealmSlot> {
         if self.dispatched_realm_id.is_some() || self.iterating_all_realms {
-            self.pending_realm_mutations.push(mutation);
+            self.pending_realm_mutations
+                .push(RealmMapMutation::Uninstall(id));
             return None;
         }
-        match mutation {
-            RealmMapMutation::Install(id, slot) => {
-                self.realms.insert(id, *slot);
-                None
-            }
-            RealmMapMutation::Uninstall(id) => {
-                let removed = self.realms.remove(&id);
-                if removed.is_some() {
-                    self.registry.remove_realm(id);
-                }
-                removed
-            }
-        }
+        self.apply_uninstall(id)
     }
 
     /// Applies every realm-map mutation deferred while a dispatch or an
@@ -796,21 +864,50 @@ impl AppRuntime {
     /// the tail of `for_each_installed_realm` (both `runner.rs`), and
     /// [`Self::should_exit`] (the drain-before-decide rule).
     ///
+    /// **Early-returns (drains nothing) while `dispatched_realm_id.is_some()
+    /// || iterating_all_realms` is still true** — a NESTED call reached
+    /// through one of those three call sites (e.g. a dispatch run from
+    /// inside a `for_each_installed_realm` visit, which that function's own
+    /// doc says is safe to attempt) must not apply a mutation an OUTER,
+    /// still-in-flight operation deferred: draining it early would remove a
+    /// realm's slot while that realm might still be the one checked out for
+    /// the outer visit, and the outer visit's own restore step
+    /// (`realm_slot.realm = Some(realm)` finding no slot to write into)
+    /// would then silently drop a live, un-torn-down `UiRealm` instead of
+    /// restoring it. All three legitimate call sites clear their OWN flag
+    /// before calling this, so the guard only ever blocks a genuinely nested
+    /// caller, never the outer operation whose completion is supposed to
+    /// trigger the drain.
+    ///
     /// Returns every removed [`RealmSlot`] (from a deferred `Uninstall`), for
     /// the caller to drop outside the live `APP_RUNTIME` borrow — see
-    /// [`Self::request_realm_mutation`]'s doc for why that discipline
-    /// matters here.
+    /// [`Self::request_realm_install`]'s doc for why that discipline matters
+    /// here.
     pub(super) fn drain_pending_realm_mutations(&mut self) -> Vec<RealmSlot> {
+        if self.dispatched_realm_id.is_some() || self.iterating_all_realms {
+            return Vec::new();
+        }
         let pending = std::mem::take(&mut self.pending_realm_mutations);
         let mut removed = Vec::new();
         for mutation in pending {
             match mutation {
-                RealmMapMutation::Install(id, slot) => {
-                    self.realms.insert(id, *slot);
+                RealmMapMutation::Install(id, slot, window) => {
+                    if let Err(error) = self.apply_install(id, *slot, &window) {
+                        // The realm this Install carried is dropped here,
+                        // with `slot` (and the `UiRealm` it owned) falling
+                        // out of scope at the end of this match arm --
+                        // never silently re-routed onto whichever sibling
+                        // realm already owns this window id.
+                        tracing::error!(
+                            ?id,
+                            ?error,
+                            "dropping a deferred realm install: its window id collided with an \
+                             already-registered mapping"
+                        );
+                    }
                 }
                 RealmMapMutation::Uninstall(id) => {
-                    if let Some(slot) = self.realms.remove(&id) {
-                        self.registry.remove_realm(id);
+                    if let Some(slot) = self.apply_uninstall(id) {
                         removed.push(slot);
                     }
                 }
