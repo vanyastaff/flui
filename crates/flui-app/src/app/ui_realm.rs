@@ -1769,6 +1769,17 @@ impl Drop for UiRealm {
         // production topology is exactly one until the forest's ratchet
         // lifts, but this loop is already correct for N: nothing here
         // assumes `len() == 1`.
+        //
+        // Deliberately NOT wrapped in `enter()`: this runs during `Drop`,
+        // which can itself run during thread-local destruction (e.g. a
+        // realm still alive when its owning thread exits) where touching
+        // ANOTHER thread-local (the registry activation stack `enter()`
+        // pushes onto) aborts the process
+        // ("cannot access a Thread Local Storage value during or after
+        // destruction"). A `State::dispose()` hook that needs a `GlobalKey`
+        // lookup during realm teardown is out of scope for this fix; the
+        // registries this realm's `WidgetsBinding`s expose are simply
+        // inactive here, matching every other un-entered context.
         for presentation in self.presentations.iter() {
             presentation.close();
         }

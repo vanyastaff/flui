@@ -659,7 +659,22 @@ impl PresentationState {
         }
     }
 
-    /// Begin deterministic owner-local teardown.
+    /// Begin deterministic owner-local teardown (ADR-0043 §5's per-presentation
+    /// ordering, the part of it this type alone can carry out): input/cursor
+    /// first, IME and focus deactivate next, THEN the root widget detaches
+    /// through this exact presentation's own `WidgetsBinding` — so any
+    /// `State::dispose()` hook a descendant runs sees focus/IME already
+    /// quiesced, never a live input surface mid-teardown. `GlobalKeyScope`
+    /// reclamation is not this method's job: it happens when this
+    /// presentation's `BuildOwner` itself drops (`GlobalKeyScope::
+    /// reclaim_owner`, wired through `BuildOwner`'s own `Drop`), which
+    /// dropping this `WidgetsBinding` triggers regardless of whether
+    /// `detach_root_widget` found a root to unmount.
+    ///
+    /// Callers that need dispose hooks to resolve `GlobalKey` lookups
+    /// correctly must run this inside the realm's own `enter()` (see
+    /// `UiRealm`'s `Drop` impl) — this method itself does not activate any
+    /// registry.
     pub(crate) fn close(&self) {
         match self.lifecycle.get() {
             PresentationLifecycle::Closing | PresentationLifecycle::Closed => return,
@@ -689,6 +704,11 @@ impl PresentationState {
         }
         self.focus.close();
         self.text_input.close();
+        // Detach LAST: a no-op if nothing was ever attached (many tests never
+        // mount a root), and otherwise unmounts through this presentation's
+        // OWN element tree only -- never a sibling's, since each
+        // PresentationState owns an exclusive WidgetsBinding.
+        self.widgets.detach_root_widget();
         self.lifecycle.set(PresentationLifecycle::Closed);
     }
 }
@@ -743,6 +763,29 @@ mod tests {
         presentation.close();
         presentation.close();
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
+    }
+
+    /// `close` must detach through this presentation's OWN `WidgetsBinding`
+    /// — the ADR-0043 teardown ordering this method now carries out, not
+    /// just the input/focus/IME steps that predate it.
+    #[test]
+    fn close_detaches_this_presentations_own_root_widget() {
+        let presentation = presentation();
+        presentation
+            .widgets()
+            .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
+            .expect("fresh presentation attaches its first root");
+        assert!(
+            presentation.widgets().root_element().is_some(),
+            "root must be attached before close"
+        );
+
+        presentation.close();
+
+        assert!(
+            presentation.widgets().root_element().is_none(),
+            "close must detach the root through this presentation's own binding"
+        );
     }
 
     /// If reverted: remove the lifecycle check from `dispatch_semantics_action`
