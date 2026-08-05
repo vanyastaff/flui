@@ -5,7 +5,10 @@
 //!
 //! - **Minimal**: Each trait has a single responsibility
 //! - **Composable**: Traits can be combined for richer functionality
-//! - **Thread-Safe**: All traits require `Send + Sync`
+//! - **Thread-affinity-agnostic**: no trait here requires `Send + Sync`;
+//!   whether a tree is thread-safe is a property of its owner (`RenderTree`
+//!   is deliberately `!Send + !Sync`; `ElementTree`/`ViewTree` are
+//!   `Send + Sync` because their fields are)
 //! - **Generic over ID**: All traits use `I: TreeId` generic parameter
 //!
 //! # Trait Hierarchy

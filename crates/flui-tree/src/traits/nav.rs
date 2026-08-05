@@ -30,7 +30,9 @@ use crate::{
 ///
 /// # Thread Safety
 ///
-/// All operations are read-only and must be `Send + Sync` compatible.
+/// All operations are read-only; see [`TreeRead`](super::TreeRead)'s
+/// Thread Safety section -- `Send + Sync` is a property of the
+/// implementor, not required by this trait.
 ///
 /// # Performance
 ///

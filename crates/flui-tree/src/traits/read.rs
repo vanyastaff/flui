@@ -25,7 +25,12 @@ use flui_foundation::TreeId;
 ///
 /// # Thread Safety
 ///
-/// Implementations must be `Send + Sync` to enable concurrent read access.
+/// `TreeRead` does not itself require `Send + Sync`: a tree's thread
+/// affinity is a property of its owner, not of this trait. `ElementTree`
+/// and `ViewTree` are `Send + Sync` because every field they store is;
+/// `RenderTree` is deliberately `!Send + !Sync` because it stores
+/// `Box<dyn RenderObject<P>>` and is owned by exactly one `PipelineOwner`
+/// on exactly one thread. Neither shape is privileged by this trait.
 ///
 /// # Performance
 ///
@@ -70,7 +75,7 @@ use flui_foundation::TreeId;
 /// assert_eq!(tree.get(ElementId::new(1)), Some(&"hello".to_string()));
 /// assert_eq!(tree.get(ElementId::new(2)), None);
 /// ```
-pub trait TreeRead<I: TreeId>: Send + Sync {
+pub trait TreeRead<I: TreeId> {
     /// The node type stored in the tree.
     ///
     /// This associated type allows implementations to define their
