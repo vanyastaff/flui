@@ -41,13 +41,15 @@ use flui_platform::traits::PlatformTextInput;
 use flui_platform::traits::{DragDropEvent, PlatformInput, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, Scheduler, SchedulerPhase};
 use flui_semantics::SemanticsActionRequest;
 use flui_types::{HapticFeedback, Size, geometry::px};
 use flui_view::WidgetsBinding;
 use flui_widgets::{FocusRoot, GestureArenaScope, NavigatorCommand, VsyncScope};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
+#[cfg(test)]
+use parking_lot::RwLock;
 
 use super::presentation::PresentationState;
 use super::runtime::RealmServices;
@@ -628,8 +630,8 @@ impl UiRealm {
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
         let (realm_id, presentation_id) = super::runtime::next_identity();
-        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
-        pipeline.write().set_device_pixel_ratio(device_pixel_ratio);
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
         let presentation = PresentationState::new(presentation_id, pipeline, window);
         let services = RealmServices::construct();
         Self::construct(
@@ -667,7 +669,7 @@ impl UiRealm {
         } = services;
         let interaction_lane = InteractionLane::try_new()?;
         let widgets = WidgetsBinding::with_focus_manager(presentation.focus_manager());
-        widgets.set_pipeline_owner(Arc::clone(presentation.pipeline()));
+        widgets.set_pipeline_owner(presentation.pipeline().clone());
         widgets.with_build_owner_mut(|owner| {
             owner.set_async_driver(async_driver);
             owner.set_post_frame_handle(local_post_frame.post_frame_handle());
@@ -679,22 +681,19 @@ impl UiRealm {
         // fact, one place) — moved here from the retired
         // `AppBinding::new`/`RenderingFlutterBinding::new_with_pipeline` pair.
         // Wired to THIS realm's own scheduler, never a process-global one.
-        let renderer = RenderingFlutterBinding::new_with_pipeline(
-            Arc::clone(presentation.pipeline()),
-            &scheduler,
-        );
+        let renderer =
+            RenderingFlutterBinding::new_with_pipeline(presentation.pipeline().clone(), &scheduler);
 
         // Idle-wake wiring: a dirty mark (mark_needs_layout / mark_needs_paint)
         // fires this callback so a quiescent event loop produces the frame —
-        // moved verbatim from `AppBinding::new`. Lock order is safe: the
-        // callback fires while the CALLER holds the pipeline-owner lock, and
+        // moved verbatim from `AppBinding::new`. Reentrancy-safe: the callback
+        // fires while the CALLER holds the pipeline cell checked out, and
         // `wake` only touches `Send + Sync` runtime-level state — never this
         // realm's own `widgets`/`renderer`.
         let visual_wake = Arc::clone(&wake);
         presentation
             .pipeline()
-            .write()
-            .set_on_need_visual_update(move || visual_wake());
+            .with_mut(|owner| owner.set_on_need_visual_update(move || visual_wake()));
 
         // Semantics-enabled fan-out -> this presentation's own `SemanticsHost`:
         // now that the renderer and the presentation are co-located on one
@@ -745,7 +744,7 @@ impl UiRealm {
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
     ) -> Self {
         let (realm_id, presentation_id) = super::runtime::next_identity();
-        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+        let pipeline = PipelineCell::new(PipelineOwner::new());
         let presentation =
             PresentationState::new_for_test(presentation_id, pipeline, platform_text_input);
         // The no-op `wake` still must set THIS SAME `needs_redraw` flag —
@@ -770,11 +769,11 @@ impl UiRealm {
         .expect("test UiRealm should create an interaction lane")
     }
 
-    /// Test-only: a clone of this realm's exact pipeline `Arc` — the same
+    /// Test-only: a clone of this realm's exact `PipelineCell` — the same
     /// one its `renderer` and `widgets` share (one fact, one place).
     #[cfg(test)]
-    pub(crate) fn pipeline_for_test(&self) -> Arc<RwLock<PipelineOwner>> {
-        Arc::clone(self.presentation.pipeline())
+    pub(crate) fn pipeline_for_test(&self) -> PipelineCell {
+        self.presentation.pipeline().clone()
     }
 
     /// This incarnation's generational realm identity.
@@ -1165,8 +1164,7 @@ impl UiRealm {
     pub(crate) fn set_device_pixel_ratio(&self, device_pixel_ratio: f32) {
         self.renderer
             .root_pipeline_owner()
-            .write()
-            .set_device_pixel_ratio(device_pixel_ratio);
+            .with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
     }
 
     /// Check if there is pending work: a pending build, pending gesture
@@ -1176,7 +1174,10 @@ impl UiRealm {
         self.widgets.has_pending_builds()
             || self.gestures().has_pending_motion()
             || self.gestures().has_pending_deadlines()
-            || self.renderer.root_pipeline_owner().read().has_dirty_nodes()
+            || self
+                .renderer
+                .root_pipeline_owner()
+                .with(PipelineOwner::has_dirty_nodes)
     }
 
     // ========================================================================
@@ -1350,20 +1351,16 @@ impl UiRealm {
         // typestate-driven orchestrator.
         let mut pipeline_errored = false;
         let (layer_tree, link_registry) = {
-            {
-                self.renderer
-                    .root_pipeline_owner()
-                    .write()
-                    .set_root_constraints(Some(constraints));
-            }
+            self.renderer
+                .root_pipeline_owner()
+                .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
             let result = self
                 .widgets()
                 .run_frame_with_layout_builders(self.presentation.pipeline());
             let link_registry = self
                 .renderer
                 .root_pipeline_owner()
-                .write()
-                .take_link_registry();
+                .with_mut(PipelineOwner::take_link_registry);
             match result {
                 Ok(layer_tree) => (layer_tree, link_registry),
                 Err(e) => {
@@ -1436,12 +1433,10 @@ impl UiRealm {
         self.gestures().flush_pending_moves();
 
         let (width, height) = renderer.size();
-        let dpr = {
-            self.renderer
-                .root_pipeline_owner()
-                .read()
-                .device_pixel_ratio()
-        };
+        let dpr = self
+            .renderer
+            .root_pipeline_owner()
+            .with(PipelineOwner::device_pixel_ratio);
         let constraints =
             BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
         let outcome = self.draw_frame_entered(constraints);
@@ -1805,6 +1800,36 @@ mod tests {
         );
     }
 
+    /// Dropping a realm must free its `PipelineOwner` -- no stray strong
+    /// `PipelineCell` clone survives in a listener closure, a cached
+    /// binding, or (the hazard the type's own docs call out) a render
+    /// object that captured its own owning cell and closed a
+    /// `cell -> owner -> tree -> object -> cell` `Rc` cycle nothing frees.
+    ///
+    /// Red-check: have any long-lived piece of `UiRealm` (a semantics
+    /// listener, the renderer binding, `WidgetsBinding`) hold an *extra*
+    /// `PipelineCell` clone past the realm's own lifetime and this weak
+    /// upgrade stops returning `None`.
+    #[test]
+    fn dropping_the_realm_frees_its_pipeline_owner() {
+        let realm = UiRealm::for_test();
+        let weak = realm.pipeline_for_test().downgrade_for_test();
+        assert!(
+            weak.upgrade().is_some(),
+            "sanity: the owner is alive while the realm holds it"
+        );
+
+        drop(realm);
+
+        assert!(
+            weak.upgrade().is_none(),
+            "dropping the realm must drop every strong PipelineCell clone it \
+             held (presentation, widgets binding, renderer binding) -- a \
+             surviving upgrade means one of them outlives the realm, or a \
+             cycle is keeping the owner alive"
+        );
+    }
+
     #[test]
     fn cross_thread_navigation_command_drains_on_owner_thread() {
         let runtime = new_runtime(noop_wake()).expect("runtime");
@@ -1830,15 +1855,25 @@ mod tests {
         assert_eq!(pushed.try_take(), Some(None));
     }
 
+    /// The lock-free-at-dispatch invariant this test used to probe from
+    /// *inside* the action handler (`Weak<RwLock<PipelineOwner>>::try_write`)
+    /// is unrepresentable now: `SemanticsActionHandler` is
+    /// `Arc<dyn Fn(..) + Send + Sync>` (a retained cross-thread seam — see
+    /// `flui-semantics/src/action.rs`), and `PipelineCell` is `!Send`, so no
+    /// handle derived from it can be captured in that closure any more. The
+    /// invariant itself did not disappear — it moved into production as the
+    /// `debug_assert!(is_free())` in `PresentationState::dispatch_semantics_
+    /// action` (registry: `runtime-contract.toml:781`), which this test's
+    /// normal pass/fail already exercises (the assert would panic the test
+    /// if it ever fired). What remains directly assertable here — and what
+    /// this test still proves — is the *observable* contract: dispatch
+    /// defers to the owner's Idle commit point, and the counts are right.
     #[test]
     fn semantics_action_commits_on_the_owner_after_releasing_the_pipeline_lock() {
         let realm = UiRealm::for_test();
         let pipeline = realm.pipeline_for_test();
-        let weak_pipeline = Arc::downgrade(&pipeline);
         let invoked = Arc::new(AtomicUsize::new(0));
         let invoked_in_handler = Arc::clone(&invoked);
-        let lock_was_free = Arc::new(AtomicBool::new(false));
-        let lock_was_free_in_handler = Arc::clone(&lock_was_free);
         let render_id = RenderId::new(7);
         let target = AccessibilityNodeId::from(render_id);
 
@@ -1849,18 +1884,12 @@ mod tests {
                 assert_eq!(action, SemanticsAction::Tap);
                 assert!(arguments.is_none());
                 invoked_in_handler.fetch_add(1, Ordering::SeqCst);
-
-                let pipeline = weak_pipeline
-                    .upgrade()
-                    .expect("bound pipeline must outlive the action");
-                let guard = pipeline.try_write();
-                lock_was_free_in_handler.store(guard.is_some(), Ordering::SeqCst);
             }),
         );
         let mut semantics_owner = SemanticsOwner::new(Arc::new(|_| {}));
         let root = semantics_owner.insert(node);
         semantics_owner.set_root(Some(root));
-        pipeline.write().set_semantics_owner(Some(semantics_owner));
+        pipeline.with_mut(|owner| owner.set_semantics_owner(Some(semantics_owner)));
 
         let sender = realm.command_sender();
         std::thread::spawn(move || {
@@ -1881,10 +1910,6 @@ mod tests {
         assert_eq!(report.invoked, 1);
         assert_eq!(report.dropped_stale, 0);
         assert_eq!(invoked.load(Ordering::SeqCst), 1);
-        assert!(
-            lock_was_free.load(Ordering::SeqCst),
-            "semantics handlers must run after the PipelineOwner read guard is released"
-        );
     }
 
     #[test]
@@ -1896,8 +1921,7 @@ mod tests {
         semantics_owner.set_root(Some(root));
         realm
             .pipeline_for_test()
-            .write()
-            .set_semantics_owner(Some(semantics_owner));
+            .with_mut(|owner| owner.set_semantics_owner(Some(semantics_owner)));
 
         realm
             .command_sender()
@@ -1945,8 +1969,7 @@ mod tests {
         semantics_owner.set_root(Some(root));
         realm
             .pipeline_for_test()
-            .write()
-            .set_semantics_owner(Some(semantics_owner));
+            .with_mut(|owner| owner.set_semantics_owner(Some(semantics_owner)));
 
         let live = realm.presentation_id();
         let forged = PresentationId::new_gen(
@@ -2152,7 +2175,9 @@ mod tests {
             "two realms must never share one focus tree"
         );
         assert!(
-            !Arc::ptr_eq(&realm_a.pipeline_for_test(), &realm_b.pipeline_for_test()),
+            !realm_a
+                .pipeline_for_test()
+                .ptr_eq(&realm_b.pipeline_for_test()),
             "two realms must never share one PipelineOwner (and therefore never one SemanticsOwner)"
         );
 
@@ -2690,18 +2715,18 @@ mod tests {
             let realm = UiRealm::for_test();
             let pipeline = realm.pipeline_for_test();
 
-            let id = pipeline
-                .write()
-                .insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
+            let id = pipeline.with_mut(|owner| {
+                owner.insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
                     as Box<
                         dyn flui_rendering::traits::RenderObject<
                                 flui_rendering::protocol::BoxProtocol,
                             >,
-                    >);
-            pipeline.write().clear_all_dirty_nodes();
+                    >)
+            });
+            pipeline.with_mut(PipelineOwner::clear_all_dirty_nodes);
             realm.mark_rendered();
 
-            pipeline.write().mark_needs_layout(id);
+            pipeline.with_mut(|owner| owner.mark_needs_layout(id));
             assert!(
                 realm.needs_redraw(),
                 "an owner dirty mark must wake the realm via the visual-update \
@@ -2714,7 +2739,7 @@ mod tests {
             let realm = UiRealm::for_test();
             realm.mark_rendered();
 
-            let handle = realm.pipeline_for_test().read().handle();
+            let handle = realm.pipeline_for_test().with(PipelineOwner::handle);
             std::thread::spawn(move || {
                 handle
                     .request_mark_dirty(
@@ -2765,7 +2790,9 @@ mod tests {
                 .enter(|realm| realm.attach_root_widget(&LeafView))
                 .expect("attach succeeds");
             assert!(
-                realm.pipeline_for_test().read().root_id().is_some(),
+                realm
+                    .pipeline_for_test()
+                    .with(|owner| owner.root_id().is_some()),
                 "UiRealm must pass its PipelineOwner to the widgets binding so the \
                  root render tree bootstraps; without it the window renders nothing",
             );
@@ -2783,39 +2810,39 @@ mod tests {
                 .expect("attach succeeds");
             let _ = realm.draw_frame(test_constraints());
 
-            let owner = realm.pipeline_for_test();
-            let owner = owner.read();
-            let root_id = owner.root_id().expect("root id set by attach_root_widget");
-            let root_node = owner
-                .render_tree()
-                .get(root_id)
-                .expect("root render node resolves");
-            let leaf_id = *root_node
-                .children()
-                .first()
-                .expect("LeafView must have mounted one render child under the root");
-
-            assert_eq!(
-                owner
+            realm.pipeline_for_test().with(|owner| {
+                let root_id = owner.root_id().expect("root id set by attach_root_widget");
+                let root_node = owner
                     .render_tree()
-                    .get(leaf_id)
-                    .and_then(flui_rendering::storage::RenderNode::parent),
-                Some(root_id),
-                "the leaf's render node must carry a parent link back to the root"
-            );
+                    .get(root_id)
+                    .expect("root render node resolves");
+                let leaf_id = *root_node
+                    .children()
+                    .first()
+                    .expect("LeafView must have mounted one render child under the root");
 
-            let transform = owner.transform_to(leaf_id, root_id);
-            assert!(
-                transform.is_some(),
-                "transform_to(leaf, root) must resolve through the root hop; None means the \
-                 ancestor walk broke at the very first step"
-            );
-            assert_eq!(
-                transform,
-                Some(flui_types::Matrix4::IDENTITY),
-                "LeafView (RenderSizedBox::shrink(), zero offset) composes to the identity \
-                 transform into root space"
-            );
+                assert_eq!(
+                    owner
+                        .render_tree()
+                        .get(leaf_id)
+                        .and_then(flui_rendering::storage::RenderNode::parent),
+                    Some(root_id),
+                    "the leaf's render node must carry a parent link back to the root"
+                );
+
+                let transform = owner.transform_to(leaf_id, root_id);
+                assert!(
+                    transform.is_some(),
+                    "transform_to(leaf, root) must resolve through the root hop; None means the \
+                     ancestor walk broke at the very first step"
+                );
+                assert_eq!(
+                    transform,
+                    Some(flui_types::Matrix4::IDENTITY),
+                    "LeafView (RenderSizedBox::shrink(), zero offset) composes to the identity \
+                     transform into root space"
+                );
+            });
         }
 
         /// Wiring test: `draw_frame` must invoke
@@ -2826,27 +2853,24 @@ mod tests {
             let realm = UiRealm::for_test();
             let pipeline = realm.pipeline_for_test();
 
-            let sliver_id = pipeline
-                .write()
-                .insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
+            let sliver_id = pipeline.with_mut(|owner| {
+                owner.insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
                     as Box<
                         dyn flui_rendering::traits::RenderObject<
                                 flui_rendering::protocol::BoxProtocol,
                             >,
-                    >);
-            pipeline
-                .write()
-                .push_pending_child_request_for_test(sliver_id, 0);
-            {
-                let mut guard = pipeline.write();
-                let drained = guard.take_pending_child_requests();
+                    >)
+            });
+            pipeline.with_mut(|owner| owner.push_pending_child_request_for_test(sliver_id, 0));
+            pipeline.with_mut(|owner| {
+                let drained = owner.take_pending_child_requests();
                 assert_eq!(drained.len(), 1, "seed must be present before draw_frame");
-                guard.push_pending_child_request_for_test(sliver_id, 0);
-            }
+                owner.push_pending_child_request_for_test(sliver_id, 0);
+            });
 
             let _ = realm.draw_frame(test_constraints());
 
-            let remaining = pipeline.write().take_pending_child_requests();
+            let remaining = pipeline.with_mut(PipelineOwner::take_pending_child_requests);
             assert!(
                 remaining.is_empty(),
                 "draw_frame must drain pending_child_requests via service_child_requests; \
@@ -2938,16 +2962,15 @@ mod tests {
             let realm = UiRealm::for_test();
             let pipeline = realm.pipeline_for_test();
 
-            let root = {
-                let mut owner = pipeline.write();
+            let root = pipeline.with_mut(|owner| {
                 let root =
                     owner.insert::<flui_rendering::protocol::BoxProtocol>(Box::new(FixedBox));
                 owner.set_root_id(Some(root));
                 root
-            };
+            });
 
             assert_eq!(
-                pipeline.read().box_size(root),
+                pipeline.with(|owner| owner.box_size(root)),
                 None,
                 "nothing is laid out before the first frame"
             );
@@ -2956,17 +2979,47 @@ mod tests {
             let calls = Arc::new(AtomicUsize::new(0));
             let observed_cb = Arc::clone(&observed);
             let calls_cb = Arc::clone(&calls);
-            let pipeline_cb = Arc::clone(&pipeline);
+            let pipeline_cb = pipeline.clone();
 
             let scheduler = realm.scheduler();
-            scheduler.add_post_frame_callback(Box::new(move |_timing| {
-                calls_cb.fetch_add(1, Ordering::SeqCst);
-                *observed_cb.write() = pipeline_cb.read().box_size(root);
-            }));
+            // `PipelineCell` is `!Send`, so this callback cannot go through
+            // `add_post_frame_callback` (its `Send` bound is for cross-thread
+            // wake). `schedule_local` enforces same-thread execution at
+            // runtime instead, matching the `editable_text.rs` IME
+            // cursor-loop pattern.
+            let post_frame_handle = realm
+                .widgets()
+                .with_build_owner(|owner| owner.post_frame_handle().cloned())
+                .expect("post-frame handle installed by UiRealm::construct");
+            // Registration AND `drive_frame` must share one outer `enter()`
+            // extent, matching how the real runner drives a frame
+            // (`dispatch_platform_realm`'s `realm.enter(|realm| event.run(realm))`
+            // wraps the entire dispatched task, `drive_frame` included).
+            // `drive_frame` calls `end_frame` (which drains the local lane)
+            // only *after* its pipeline closure returns — and that closure
+            // is where `realm.draw_frame` reactivates the lane via its own
+            // nested `enter()`. Registering here, then driving the frame in
+            // a SEPARATE top-level `enter()`, would deactivate the lane
+            // before `end_frame` ever ran, so the callback would sit queued
+            // forever: `drain_active_lane` requires the lane still be the
+            // active top of stack at drain time, not merely at schedule
+            // time.
+            realm.enter(|_realm| {
+                post_frame_handle
+                    .schedule_local(move |_timing| {
+                        calls_cb.fetch_add(1, Ordering::SeqCst);
+                        *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
+                    })
+                    .expect("schedule_local must succeed on the owner thread");
 
-            scheduler.drive_frame(flui_scheduler::Instant::now(), || {
-                let _ =
-                    realm.draw_frame(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)));
+                scheduler.drive_frame(flui_scheduler::Instant::now(), || {
+                    let _ = realm.draw_frame(BoxConstraints::new(
+                        px(0.0),
+                        px(200.0),
+                        px(0.0),
+                        px(200.0),
+                    ));
+                });
             });
 
             assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -3016,28 +3069,28 @@ mod tests {
             realm.mark_rendered();
             assert!(!realm.needs_redraw(), "precondition: needs_redraw clear");
 
-            let node_id = pipeline
-                .write()
-                .insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
+            let node_id = pipeline.with_mut(|owner| {
+                owner.insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
                     as Box<
                         dyn flui_rendering::traits::RenderObject<
                                 flui_rendering::protocol::BoxProtocol,
                             >,
-                    >);
-            pipeline.write().clear_all_dirty_nodes();
+                    >)
+            });
+            pipeline.with_mut(PipelineOwner::clear_all_dirty_nodes);
             assert!(
                 !realm.has_pending_work(),
                 "baseline: no pending work after clearing dirty nodes",
             );
 
-            pipeline.write().mark_needs_layout(node_id);
+            pipeline.with_mut(|owner| owner.mark_needs_layout(node_id));
             assert!(
                 realm.has_pending_work(),
                 "a dirty layout node must make has_pending_work() true so the runner \
                  schedules the settling frame",
             );
 
-            pipeline.write().clear_all_dirty_nodes();
+            pipeline.with_mut(PipelineOwner::clear_all_dirty_nodes);
             assert!(
                 !realm.has_pending_work(),
                 "after clearing dirty nodes has_pending_work() must be false so a \
@@ -3569,7 +3622,9 @@ mod tests {
 
             let realm = UiRealm::for_test();
             realm.mark_rendered();
-            realm.pipeline_for_test().write().clear_all_dirty_nodes();
+            realm
+                .pipeline_for_test()
+                .with_mut(PipelineOwner::clear_all_dirty_nodes);
 
             realm.enter(|realm| {
                 realm
@@ -4115,14 +4170,15 @@ mod tests {
 
         fn mount_panicking_root() -> UiRealm {
             let realm = UiRealm::for_test();
-            let pipeline = realm.pipeline_for_test();
-            let mut owner = pipeline.write();
-            let root_id = owner.insert(Box::new(PanicOnLayoutBox)
-                as Box<
-                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
-                >);
-            owner.set_root_id(Some(root_id));
-            drop(owner);
+            realm.pipeline_for_test().with_mut(|owner| {
+                let root_id = owner.insert(Box::new(PanicOnLayoutBox)
+                    as Box<
+                        dyn flui_rendering::traits::RenderObject<
+                                flui_rendering::protocol::BoxProtocol,
+                            >,
+                    >);
+                owner.set_root_id(Some(root_id));
+            });
             realm
         }
 

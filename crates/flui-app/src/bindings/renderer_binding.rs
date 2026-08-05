@@ -45,7 +45,7 @@ use flui_painting::PaintingBinding;
 use flui_rendering::{
     binding::RendererBinding,
     hit_testing::HitTestResult,
-    pipeline::PipelineOwner,
+    pipeline::{PipelineCell, PipelineOwner},
     view::{RenderView, ViewConfiguration},
 };
 use flui_types::Offset;
@@ -64,26 +64,24 @@ use flui_scheduler::{Scheduler, WeakScheduler};
 type SemanticsEnabledListener = Arc<dyn Fn(bool) + Send + Sync>;
 
 /// Shared body for [`RenderingFlutterBinding::redirty_root_for_represent`]:
-/// operates on the bare `Arc<RwLock<PipelineOwner>>` (rather than requiring
-/// a full `RenderingFlutterBinding` reference) so a caller that only holds
-/// that handle — e.g. a `Send + Sync` closure captured once at
-/// `AppBinding::instance()`'s bootstrap (the frames-disabled→enabled
-/// re-dirty listener; see `ADR-0035`) — can reuse the identical logic
-/// instead of re-deriving it.
-pub(crate) fn redirty_pipeline_root(pipeline_owner: &RwLock<PipelineOwner>) {
-    let root_owner = pipeline_owner.read();
-    if let Some(root_id) = root_owner.root_id()
-        && let Some(handle) = root_owner.repaint_handle(root_id)
+/// operates on the bare [`PipelineCell`] (rather than requiring a full
+/// `RenderingFlutterBinding` reference) so a caller that only holds that
+/// handle can reuse the identical logic instead of re-deriving it.
+pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
+    let repaint_handle = pipeline_owner.with(|root_owner| {
+        root_owner
+            .root_id()
+            .and_then(|root_id| root_owner.repaint_handle(root_id))
+    });
+    if let Some(handle) = repaint_handle
+        && let Err(e) = handle.mark_needs_layout()
     {
-        drop(root_owner);
-        if let Err(e) = handle.mark_needs_layout() {
-            tracing::warn!(
-                error = ?e,
-                "redirty_root_for_represent: failed to re-mark the root dirty; \
-                 the withheld/re-enabled content may not present until \
-                 something else dirties the tree",
-            );
-        }
+        tracing::warn!(
+            error = ?e,
+            "redirty_root_for_represent: failed to re-mark the root dirty; \
+             the withheld/re-enabled content may not present until \
+             something else dirties the tree",
+        );
     }
 }
 
@@ -108,12 +106,36 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &RwLock<PipelineOwner>) {
 ///
 /// # Thread Safety
 ///
-/// This binding is thread-safe and can be accessed from multiple threads.
-/// Internal state is protected by `RwLock`s.
+/// Owner-thread-confined (`!Send + !Sync`, transitively via
+/// `PipelineCell`'s `Rc<RefCell<_>>`): a `PipelineOwner` belongs to exactly
+/// one presentation on exactly one thread. Non-pipeline internal state
+/// still uses `RwLock`/`Arc` for the same-thread checkout discipline
+/// this binding shares with the rest of the realm.
+///
+/// This is enforced at compile time, not by convention -- pinned by
+/// `assert_not_impl_any!(PipelineCell: Send, Sync)` and
+/// `assert_not_impl_any!(PipelineOwner: Send, Sync)` in
+/// `flui_rendering::pipeline::owner::cell`'s own tests. A clone taken from
+/// this binding cannot cross a thread boundary:
+///
+/// ```compile_fail
+/// use flui_app::bindings::RenderingFlutterBinding;
+/// use flui_rendering::binding::RendererBinding;
+///
+/// let binding = RenderingFlutterBinding::new();
+/// let pipeline = binding.root_pipeline_owner().clone();
+/// // error[E0277]: `Rc<RefCell<PipelineOwner>>` cannot be sent between
+/// // threads safely -- `PipelineCell` is `!Send` by construction, so this
+/// // never reaches the runtime deadlock the old `Arc<RwLock<_>>` shape
+/// // risked; it fails to compile instead.
+/// std::thread::spawn(move || {
+///     pipeline.with(|owner| owner.root_id());
+/// });
+/// ```
 pub struct RenderingFlutterBinding {
-    /// Root of the PipelineOwner tree (shared with AppBinding when used
-    /// together).
-    root_pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    /// Root of the PipelineOwner tree (shared with the owning `UiRealm`'s
+    /// presentation).
+    root_pipeline_owner: PipelineCell,
 
     /// Render views managed by this binding (viewId → RenderView).
     render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
@@ -195,7 +217,7 @@ impl RenderingFlutterBinding {
     pub fn new() -> Self {
         let scheduler = Scheduler::new();
         let mut binding =
-            Self::new_with_pipeline(Arc::new(RwLock::new(PipelineOwner::new())), &scheduler);
+            Self::new_with_pipeline(PipelineCell::new(PipelineOwner::new()), &scheduler);
         binding.standalone_scheduler = Some(scheduler);
         binding
     }
@@ -204,13 +226,10 @@ impl RenderingFlutterBinding {
     /// `scheduler` for its (rare) device-metrics force-frame path.
     ///
     /// This allows the owning `UiRealm` to pass in the same
-    /// `Arc<RwLock<PipelineOwner>>` that elements use, ensuring a single
-    /// PipelineOwner instance at runtime, and its OWN scheduler — never a
-    /// process-global one.
-    pub fn new_with_pipeline(
-        pipeline_owner: Arc<RwLock<PipelineOwner>>,
-        scheduler: &Scheduler,
-    ) -> Self {
+    /// [`PipelineCell`] that elements use, ensuring a single PipelineOwner
+    /// instance at runtime, and its OWN scheduler — never a process-global
+    /// one.
+    pub fn new_with_pipeline(pipeline_owner: PipelineCell, scheduler: &Scheduler) -> Self {
         Self::init_instances();
         Self {
             root_pipeline_owner: pipeline_owner,
@@ -448,10 +467,8 @@ impl RenderingFlutterBinding {
     /// [`Self::mark_first_frame_sent`] directly at its own presentation
     /// step.
     pub fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
-        let root_owner = self.root_pipeline_owner();
-        let layer_tree = {
-            let mut guard = root_owner.write();
-            let owner = std::mem::take(&mut *guard);
+        let layer_tree = self.root_pipeline_owner().with_mut(|guard| {
+            let owner = std::mem::take(guard);
             let (owner, result) = owner.run_frame();
             *guard = owner;
             match result {
@@ -461,7 +478,7 @@ impl RenderingFlutterBinding {
                     None
                 }
             }
-        };
+        });
 
         if self.send_frames_to_engine() {
             self.mark_first_frame_sent();
@@ -627,13 +644,13 @@ impl RendererBinding for RenderingFlutterBinding {
         // logical pixels too, so the position passes through unscaled
         // — dividing by the DPR here would shrink every hit a second
         // time on scaled displays.
-        let owner = self.root_pipeline_owner.read();
-        owner.hit_test(position, result);
+        self.root_pipeline_owner
+            .with(|owner| owner.hit_test(position, result));
     }
 
     // ---- RendererBinding proper ----
 
-    fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner> {
+    fn root_pipeline_owner(&self) -> &PipelineCell {
         &self.root_pipeline_owner
     }
 
@@ -766,9 +783,8 @@ mod tests {
         use flui_rendering::constraints::BoxConstraints;
         use flui_types::{Size, geometry::px};
 
-        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        let root_id = {
-            let mut o = owner.write();
+        let owner = PipelineCell::new(PipelineOwner::new());
+        let root_id = owner.with_mut(|o| {
             let id = o.insert(Box::new(RenderColoredBox::red(40.0, 40.0))
                 as Box<
                     dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
@@ -776,7 +792,7 @@ mod tests {
             o.set_root_id(Some(id));
             o.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
             id
-        };
+        });
         // Bound to a local, not passed as a bare temporary: `new_with_pipeline`
         // only stores a downgraded `WeakScheduler`, so a temporary here would
         // drop at the end of THIS statement and leave the binding holding a
@@ -800,8 +816,7 @@ mod tests {
         // next frame paints again.
         binding
             .root_pipeline_owner()
-            .write()
-            .mark_needs_layout(root_id);
+            .with_mut(|owner| owner.mark_needs_layout(root_id));
         let tree = binding
             .draw_frame()
             .expect("non-deferred frame with dirty work must return the layer tree");
@@ -823,9 +838,8 @@ mod tests {
         use flui_rendering::constraints::BoxConstraints;
         use flui_types::{Offset, geometry::px};
 
-        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
-        {
-            let mut o = owner.write();
+        let owner = PipelineCell::new(PipelineOwner::new());
+        owner.with_mut(|o| {
             o.set_device_pixel_ratio(2.0);
             let id = o.insert(Box::new(RenderColoredBox::red(40.0, 40.0))
                 as Box<
@@ -840,7 +854,7 @@ mod tests {
                 px(0.0),
                 px(100.0),
             )));
-        }
+        });
         // See the sibling `draw_frame_returns_layer_tree_and_defers_when_gated`
         // test's comment: bound to a local so it outlives this statement,
         // not passed as a bare temporary.
@@ -914,6 +928,35 @@ mod tests {
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
     }
 
+    /// A pointer proving Send/Sync only by never actually crossing a
+    /// thread — see the test below for why one is needed.
+    ///
+    /// SAFETY: `RendererBinding::add_semantics_enabled_listener` demands
+    /// `Arc<dyn Fn(bool) + Send + Sync>` because *some* bindings fan out to
+    /// genuinely cross-thread platform-accessibility callers. This test's
+    /// `RenderingFlutterBinding`, though, is owner-thread-confined
+    /// (`!Send`/`!Sync`, transitively via `PipelineCell`) and every closure
+    /// built from a `BindingPtr` is invoked synchronously, inline, from
+    /// `set_semantics_enabled` on the same thread and within the lifetime
+    /// of the local `binding` these pointers are taken from — never stored
+    /// past that call, never actually sent anywhere. The `unsafe impl`
+    /// therefore satisfies the trait's *type-level* requirement without
+    /// violating what it protects against in any binding that is genuinely
+    /// shared across threads.
+    struct BindingPtr(*const RenderingFlutterBinding);
+    #[allow(unsafe_code)]
+    unsafe impl Send for BindingPtr {}
+    #[allow(unsafe_code)]
+    unsafe impl Sync for BindingPtr {}
+    impl BindingPtr {
+        // SAFETY: see the struct's doc — valid only for the duration of the
+        // local `binding` this test constructs it from.
+        #[allow(unsafe_code)]
+        unsafe fn get(&self) -> &RenderingFlutterBinding {
+            unsafe { &*self.0 }
+        }
+    }
+
     /// A listener that registers another listener from inside its own
     /// callback must not deadlock `set_semantics_enabled`.
     ///
@@ -924,63 +967,55 @@ mod tests {
     /// same thread. The fix snapshots the listeners into an owned `Vec` and
     /// drops the read guard before invoking any of them.
     ///
-    /// The whole scenario (attach, both toggles, detach) runs on one
-    /// dedicated background thread rather than the test thread purely so a
-    /// deadlock regression hangs a throwaway thread, not the test-runner
-    /// thread itself: `binding` is `Send + Sync` (an `Arc` clone moves into
-    /// the spawned thread), so this is no longer forced by any
-    /// singleton/owner-thread affinity the way it used to be. The test
-    /// thread only bounds how long it waits for that thread's result over a
-    /// channel: a bare `.join()` would hang forever (and, under `cargo
-    /// test`'s shared-process threads, wedge the rest of the suite) if the
-    /// deadlock regressed; `recv_timeout` turns that hang into an explicit
-    /// `expect` panic instead.
+    /// Runs directly on the test thread rather than a spawned one:
+    /// `RenderingFlutterBinding` is now owner-thread-confined (`!Send`,
+    /// transitively via `PipelineCell`), so it can no longer cross an
+    /// `Arc` into `std::thread::spawn`, and the reentrant listener's own
+    /// closure can no longer capture `binding` directly — it would make the
+    /// closure itself `!Send`, which `add_semantics_enabled_listener`'s
+    /// signature forbids (see `BindingPtr`'s doc). The deadlock this test
+    /// guards against is lock reentrancy on `semantics_listeners`, not a
+    /// cross-thread race, so same-thread execution exercises the identical
+    /// hazard; the former `recv_timeout`-bounded hang-into-panic conversion
+    /// is lost (a regression here hangs this thread instead of panicking
+    /// it) — a documented behavior delta from the same-thread confinement,
+    /// not a gap in what the test proves when it passes.
     #[test]
     fn semantics_listener_that_registers_another_listener_does_not_deadlock() {
-        use std::sync::{atomic::AtomicUsize, mpsc};
-        use std::time::Duration;
+        use std::sync::atomic::AtomicUsize;
 
-        let binding = Arc::new(RenderingFlutterBinding::new());
-        let binding_for_thread = Arc::clone(&binding);
+        let binding = RenderingFlutterBinding::new();
+        // `&raw const` takes the pointer directly, without building an
+        // intermediate `&RenderingFlutterBinding` reference just to decay it.
+        let binding_ptr = BindingPtr(&raw const binding);
 
-        let (result_tx, result_rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let binding = binding_for_thread;
-
-            let late_calls = Arc::new(AtomicUsize::new(0));
-            let late_calls_for_listener = Arc::clone(&late_calls);
-            let late_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
-                late_calls_for_listener.fetch_add(1, Ordering::Relaxed);
-            });
-
-            let late_listener_for_reentrant = late_listener.clone();
-            let binding_for_reentrant = Arc::clone(&binding);
-            let reentrant_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
-                binding_for_reentrant
-                    .add_semantics_enabled_listener(late_listener_for_reentrant.clone());
-            });
-            binding.add_semantics_enabled_listener(reentrant_listener.clone());
-
-            // First toggle: `reentrant_listener` fires and registers
-            // `late_listener`, but must not itself run in this same pass.
-            binding.set_semantics_enabled(true);
-            let after_first = late_calls.load(Ordering::Relaxed);
-
-            // Second toggle: now observes `late_listener`, registered above.
-            binding.set_semantics_enabled(false);
-            let after_second = late_calls.load(Ordering::Relaxed);
-
-            binding.remove_semantics_enabled_listener(&late_listener);
-            binding.remove_semantics_enabled_listener(&reentrant_listener);
-
-            let _ = result_tx.send((after_first, after_second));
+        let late_calls = Arc::new(AtomicUsize::new(0));
+        let late_calls_for_listener = Arc::clone(&late_calls);
+        let late_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
+            late_calls_for_listener.fetch_add(1, Ordering::Relaxed);
         });
 
-        let (after_first, after_second) = result_rx.recv_timeout(Duration::from_secs(5)).expect(
-            "set_semantics_enabled deadlocked: a listener that registers another \
-             listener from inside its own callback must not block on the \
-             notification loop's own read guard",
-        );
+        let late_listener_for_reentrant = late_listener.clone();
+        let reentrant_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
+            // SAFETY: see `BindingPtr`'s doc — invoked synchronously, inline,
+            // on the same thread as (and within the lifetime of) `binding`.
+            #[allow(unsafe_code)]
+            unsafe { binding_ptr.get() }
+                .add_semantics_enabled_listener(late_listener_for_reentrant.clone());
+        });
+        binding.add_semantics_enabled_listener(reentrant_listener.clone());
+
+        // First toggle: `reentrant_listener` fires and registers
+        // `late_listener`, but must not itself run in this same pass.
+        binding.set_semantics_enabled(true);
+        let after_first = late_calls.load(Ordering::Relaxed);
+
+        // Second toggle: now observes `late_listener`, registered above.
+        binding.set_semantics_enabled(false);
+        let after_second = late_calls.load(Ordering::Relaxed);
+
+        binding.remove_semantics_enabled_listener(&late_listener);
+        binding.remove_semantics_enabled_listener(&reentrant_listener);
 
         assert_eq!(
             after_first, 0,
