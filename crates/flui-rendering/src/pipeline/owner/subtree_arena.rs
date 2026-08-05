@@ -2011,7 +2011,13 @@ mod tests {
     // this: `SubtreeArena` for the aggregate (every field, including the
     // `Mutex` sinks), `NodePtr` for the raw pointer itself (so a future
     // field addition that tried to re-derive `Send`/`Sync` some other way
-    // would be caught at the type it actually touches).
+    // would be caught at the type it actually touches). Both types are
+    // private to this crate, so the externally observable half of this
+    // same fact is a `compile_fail` doctest on `RenderingFlutterBinding` in
+    // `flui-app/src/bindings/renderer_binding.rs` (`LayoutChildCallback`,
+    // the nearest public type with the identical never-`Send` shape) --
+    // cross-linked so neither half is deleted as "redundant" without
+    // checking the other.
     static_assertions::assert_not_impl_any!(SubtreeArena<'_>: Send, Sync);
     static_assertions::assert_not_impl_any!(NodePtr: Send, Sync);
 
