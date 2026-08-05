@@ -5,44 +5,46 @@
 //! registry, or a platform callback. This module is that authority's home.
 //! `WindowId` (the platform-internal native-handle key) is confined to this
 //! file within `flui-app` — every other module addresses a presentation
-//! through [`PresentationAddress`] only, minted here. The mechanical
-//! `forbidden_pattern` scan in `docs/runtime-contract.toml` confines the
-//! `WindowId` token itself to this one file within `crates/flui-app/src`.
+//! through [`PresentationAddress`] only, minted here. Every write path
+//! (`register_window`, `try_register_window`) takes a `&Arc<dyn
+//! PlatformWindow>` and derives the id itself; no caller outside this file
+//! ever names or passes a bare `WindowId`. The mechanical `forbidden_pattern`
+//! scan in `docs/runtime-contract.toml` confines the `WindowId` token itself
+//! to this one file within `crates/flui-app/src`.
 //!
 //! # Derived-cache invariant
 //!
-//! `AppRuntime.address: Option<PresentationAddress>` (`app/runtime.rs`) is a
-//! **derived cache** of this registry, not a second source of truth. Both
-//! are written only by `install_platform_realm`/`teardown_platform_realm`,
-//! inside the same TLS borrow, in that order: on install, the registry is
-//! written first (which also removes every mapping of a realm displaced by
-//! a panic-recovery reinstall — never just the new window), then the
-//! cache; on teardown, the registry entries are removed first — so map
-//! removal stops new routing before the queued old-generation events still
-//! sitting in the host's queue are dropped (ADR-0037 §2).
+//! Each hosted realm's own `RealmSlot.address: PresentationAddress`
+//! (`app/runtime.rs`'s `RealmRegistry`) is a **derived cache** of this
+//! registry, not a second source of truth. Both are written together, in
+//! the same TLS borrow: `install_platform_realm`/`teardown_platform_realm`
+//! for the legacy single-primary-realm path, and `AppRuntime::apply_install`/
+//! `apply_uninstall` for the multi-realm registry/uninstall path (issue
+//! #555) — in each case the registry write and the `RealmSlot` write happen
+//! inside the same borrow, in the order ADR-0037 §2 requires: on install,
+//! the registry is written first (which also removes every mapping of a
+//! realm displaced by a panic-recovery reinstall — never just the new
+//! window), then the realm entry; on uninstall/teardown, the registry
+//! entries are removed first — so map removal stops new routing before the
+//! queued old-generation events still sitting in the host's queue are
+//! dropped.
 
 use std::sync::Arc;
 
 use flui_foundation::{PresentationAddress, RealmId};
 use flui_platform::traits::{PlatformWindow, WindowId};
 
-/// Errors from [`WindowRegistry::try_register`].
-// The strict path has no production call site yet (today's single-window
-// install always uses the replace semantics of `register_window`); it is
-// reserved for a future multi-window install path that chooses
-// strict-vs-replace per call site, and is exercised by this module's own
-// tests in the meantime.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "reserved for a future multi-window install path; exercised by this module's tests"
-    )
-)]
+/// Errors from [`WindowRegistry::try_register_window`].
+///
+/// Reached from `AppRuntime::apply_install`
+/// (`crates/flui-app/src/app/runtime.rs`): the strict, refuse-on-collision
+/// path `install_realm_alongside`'s non-displacing install uses, so a
+/// second realm's window id colliding with an already-registered one is
+/// refused rather than silently re-routed onto the sibling's mapping.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum RegistryError {
-    /// The window already has a mapped address; `try_register` never
+    /// The window already has a mapped address; `try_register_window` never
     /// replaces (use [`WindowRegistry::register_window`] for replace
     /// semantics).
     #[error("window is already mapped to {existing:?}")]
@@ -82,8 +84,8 @@ impl WindowRegistry {
     /// registry lives alongside, and the web host never tears down at all — a hard error here
     /// would brick reinstall on either path. A replacement is traced at
     /// `warn` with both addresses so a genuine double-install bug is still
-    /// visible; [`Self::try_register`] is the strict alternative for a
-    /// caller that wants a hard error instead.
+    /// visible; [`Self::try_register_window`] is the strict alternative for
+    /// a caller that wants a hard error instead.
     ///
     /// This only replaces the mapping for the exact same `WindowId` — it
     /// does **not** remove any *other* window mapped to a realm this
@@ -127,20 +129,34 @@ impl WindowRegistry {
         displaced
     }
 
-    /// The strict, design-for-N alternative to [`Self::register_window`]:
-    /// refuses instead of replacing when `id` is already mapped.
+    /// The strict alternative to [`Self::register_window`]: refuses instead
+    /// of replacing when `window`'s id is already mapped. See
+    /// [`RegistryError`]'s doc for its one production caller.
     ///
-    /// Not dead code despite zero production call sites today — exercised
-    /// by this module's own tests, and reserved for a future multi-window
-    /// install path that chooses strict-vs-replace per call site.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "reserved for a future multi-window install path; exercised by this module's tests"
-        )
-    )]
-    pub(crate) fn try_register(
+    /// Calls `window.id()` internally, exactly like [`Self::register_window`]
+    /// does — so a caller outside this file (`AppRuntime::apply_install`,
+    /// specifically) derives and pairs a window's id with an address without
+    /// ever naming [`WindowId`] itself. Before this method existed,
+    /// `apply_install` called `window.id()` directly and passed the raw
+    /// `WindowId` across the module boundary to [`Self::try_register`] (the
+    /// bare, id-taking primitive below) — a second native-window-lookup path
+    /// this module's own single-authority contract (ADR-0037 §2) forbids.
+    pub(crate) fn try_register_window(
+        &mut self,
+        window: &Arc<dyn PlatformWindow>,
+        address: PresentationAddress,
+    ) -> Result<(), RegistryError> {
+        self.try_register(window.id(), address)
+    }
+
+    /// The bare, `WindowId`-taking primitive [`Self::try_register_window`]
+    /// wraps. Private: only this module's own test submodule (which
+    /// constructs a `WindowId` directly to probe collision handling without
+    /// needing a real `PlatformWindow`) can reach it, since a nested `mod
+    /// tests` sees its parent module's private items. Every OTHER caller, in
+    /// or out of this file, goes through `try_register_window` instead,
+    /// never naming `WindowId` itself.
+    fn try_register(
         &mut self,
         id: WindowId,
         address: PresentationAddress,

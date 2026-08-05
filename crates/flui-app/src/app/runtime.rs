@@ -74,7 +74,7 @@ use super::runner::{RealmTask, SurfaceApplier};
 #[cfg(not(target_os = "ios"))]
 use super::ui_realm::UiRealm;
 #[cfg(not(target_os = "ios"))]
-use super::window_registry::WindowRegistry;
+use super::window_registry::{RegistryError, WindowRegistry};
 
 /// Process-level engine services, each resolved **once** per owner thread in
 /// [`SharedEngineServices::resolve`] — never re-resolved on every access, and
@@ -232,6 +232,221 @@ pub(crate) fn next_identity() -> (RealmId, PresentationId) {
     )
 }
 
+// ============================================================================
+// Multi-realm hosting (issue #555)
+// ============================================================================
+
+/// One realm's dispatch-adjacent state, keyed by [`RealmId`] in
+/// [`AppRuntime`]'s [`RealmRegistry`]. Bundles exactly what the single-slot
+/// design this replaces used to keep as flat `AppRuntime` fields (`realm`,
+/// `queue`, `draining`, `address`, `surface_applier`): each hosted realm now
+/// owns its own copy of all five, so a second realm's dispatch, resize
+/// routing, and reentrancy guard are independent of the first's — the
+/// concrete mechanism behind the end-state invariant that two windows share
+/// no mutable UI tree through `AppRuntime` (sharing happens only through
+/// explicit `SharedEngineServices`/app-model injection, never through this
+/// registry).
+#[cfg(not(target_os = "ios"))]
+pub(super) struct RealmSlot {
+    /// `None` while this realm is checked OUT of the registry for
+    /// [`dispatch_platform_realm`](super::runner) — the other four fields
+    /// stay in place throughout that checkout (never removed alongside
+    /// `realm`), so a nested same-realm dispatch still finds its target and
+    /// enqueues into `queue`, instead of reading back `StaleRealm`.
+    pub(super) realm: Option<UiRealm>,
+    /// This realm's own owner-thread work queue — never shared with a
+    /// sibling realm's queue, so draining one realm's events can never pop a
+    /// task meant for another.
+    pub(super) queue: VecDeque<RealmTask>,
+    /// Set while a queued task for THIS realm is running, so a reentrant
+    /// same-realm dispatch enqueues instead of recursing into `realm.take()`.
+    pub(super) draining: bool,
+    /// This realm's routable address — the per-slot replacement for the
+    /// single `AppRuntime.address: Option<PresentationAddress>` this type
+    /// used to be.
+    pub(super) address: PresentationAddress,
+    /// This realm's own registration-lifetime renderer-surface applier for a
+    /// `Resized` event — never shared with a sibling realm's applier, so a
+    /// resize addressed to one window can never resize another's surface.
+    pub(super) surface_applier: Option<SurfaceApplier>,
+}
+
+/// The [`RealmId`]-keyed, insertion-ordered realm registry `AppRuntime` hosts
+/// — the multi-realm replacement for the single `Option<UiRealm>` slot (plus
+/// its four sibling flat fields) this type used to be.
+///
+/// Insertion order matters: hot-restart's [`super::runner`]
+/// `for_each_installed_realm` and the exit-policy drain both visit realms in
+/// the order they were installed, i.e. mount order.
+///
+/// Storage is a linear-scan `Vec`, not a hash map: the number of live realms
+/// is the number of open top-level windows, small enough that O(n) lookup is
+/// not a real cost, and a `Vec` gives insertion order for free with no extra
+/// bookkeeping — the same reasoning `WindowRegistry` already applies to its
+/// own `Vec<(WindowId, PresentationAddress)>` storage.
+#[cfg(not(target_os = "ios"))]
+#[derive(Default)]
+pub(super) struct RealmRegistry {
+    slots: Vec<(RealmId, RealmSlot)>,
+}
+
+#[cfg(not(target_os = "ios"))]
+impl RealmRegistry {
+    pub(super) const fn new() -> Self {
+        Self { slots: Vec::new() }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "shared-reference lookup; every production call site so far checks a slot \
+                      out via get_mut (the checkout-based dispatch/visit pattern) -- exercised \
+                      by this crate's own tests, which only need to read a slot back, never \
+                      mutate it"
+        )
+    )]
+    pub(super) fn get(&self, id: &RealmId) -> Option<&RealmSlot> {
+        self.slots
+            .iter()
+            .find(|(slot_id, _)| slot_id == id)
+            .map(|(_, slot)| slot)
+    }
+
+    pub(super) fn get_mut(&mut self, id: &RealmId) -> Option<&mut RealmSlot> {
+        self.slots
+            .iter_mut()
+            .find(|(slot_id, _)| slot_id == id)
+            .map(|(_, slot)| slot)
+    }
+
+    pub(super) fn contains_key(&self, id: &RealmId) -> bool {
+        self.slots.iter().any(|(slot_id, _)| slot_id == id)
+    }
+
+    /// Inserts `slot` at `id`, appending at the end of insertion order.
+    ///
+    /// `id` must not already be present: `next_identity` never repeats a
+    /// `RealmId`, and every removal path (`remove`/`clear`) drops the old
+    /// entry before a replacement is ever inserted, so a collision here
+    /// means a stale id was reused — a bug this debug_assert catches instead
+    /// of silently shadowing a live realm.
+    pub(super) fn insert(&mut self, id: RealmId, slot: RealmSlot) {
+        debug_assert!(
+            !self.contains_key(&id),
+            "BUG: RealmRegistry::insert called for an id already present -- \
+             next_identity never repeats a RealmId, so this means a stale id was reused"
+        );
+        self.slots.push((id, slot));
+    }
+
+    /// Removes and returns the slot at `id`, if present.
+    pub(super) fn remove(&mut self, id: &RealmId) -> Option<RealmSlot> {
+        let index = self.slots.iter().position(|(slot_id, _)| slot_id == id)?;
+        Some(self.slots.remove(index).1)
+    }
+
+    /// Removes and returns every slot, in insertion order — the
+    /// multi-realm generalization of `mem::take`-ing the old single
+    /// `Option` slot (`install_platform_realm`'s reinstall-without-teardown
+    /// path, and `teardown_platform_realm`'s full loop-exit teardown, both
+    /// use this).
+    pub(super) fn clear(&mut self) -> Vec<(RealmId, RealmSlot)> {
+        std::mem::take(&mut self.slots)
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = &(RealmId, RealmSlot)> {
+        self.slots.iter()
+    }
+
+    /// Every installed `RealmId`, in insertion (mount) order — the read
+    /// `for_each_installed_realm` (`super::runner`) snapshots before it
+    /// starts checking realms out one at a time.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "for_each_installed_realm's only production driver is a follow-up; \
+                      exercised by this module's own tests via that function"
+        )
+    )]
+    pub(super) fn keys(&self) -> Vec<RealmId> {
+        self.slots.iter().map(|(id, _)| *id).collect()
+    }
+}
+
+/// A realm-registry install/uninstall requested while a mutation must defer
+/// (a dispatch or an all-realms iteration is in flight on this thread — see
+/// [`AppRuntime::request_realm_install`]/[`AppRuntime::request_realm_uninstall`]).
+/// Applied in request order once the deferring condition clears. Private:
+/// external callers (`super::runner`) go through the typed
+/// `request_realm_install`/`request_realm_uninstall` methods, never
+/// construct this enum directly — keeping the window-registration step
+/// (see [`AppRuntime::apply_install`]) bundled with the registry insert
+/// atomically, instead of requiring every call site to remember both.
+#[cfg(not(target_os = "ios"))]
+enum RealmMapMutation {
+    /// Add a newly-constructed realm to the registry (never displaces a
+    /// sibling — see `install_realm_alongside` in `super::runner`), plus the
+    /// window whose id mints its `WindowRegistry` mapping. Boxed: `RealmSlot`
+    /// owns a whole `UiRealm`, over a kilobyte, next to `Uninstall`'s bare
+    /// `RealmId` -- boxing keeps this enum (and every `Vec<RealmMapMutation>`
+    /// queueing it) from paying that size for every entry regardless of
+    /// variant.
+    Install(RealmId, Box<RealmSlot>, Arc<dyn PlatformWindow>),
+    /// Remove one realm from the registry (a window closing while siblings
+    /// stay open — see `uninstall_platform_realm` in `super::runner`).
+    Uninstall(RealmId),
+}
+
+/// Governs when the platform loop should exit once every hosted realm's
+/// window has closed — the embedder-facing policy knob for the "new
+/// independent desktop window ⇒ new realm" production policy (ADR-0027 step
+/// 5's multi-window follow-up, issue #555).
+///
+/// Consulted through [`AppRuntime::should_exit`], which drains any deferred
+/// realm-map mutation FIRST (the drain-before-decide rule): a
+/// queued "open another window" install — e.g. a splash screen's dispose
+/// callback requesting the main window — is applied before the
+/// empty-registry check, so it vetoes exit instead of racing it. Without
+/// that ordering, a splash-close and a main-window-open landing in the same
+/// idle tick could observe "no realms installed" and exit before the queued
+/// install ever lands.
+///
+/// `#[non_exhaustive]`: a future variant (e.g. "never exit automatically;
+/// the embedder calls `quit()` itself") must not be a breaking change for a
+/// caller that already matches exhaustively — the same precedent
+/// `AttachError` set (`binding.rs`).
+///
+/// Not yet wired into a live platform loop: `run_desktop`/`run_android`/
+/// `run_web` still let each backend's own window-close handling
+/// (`flui-platform`'s per-backend `CloseRequested`/`on_should_close`
+/// handling) decide exit unconditionally. This type and
+/// `AppRuntime::should_exit` are the decision *mechanism* — the policy shape
+/// is the deliverable now, wiring a real winit multi-window loop through it
+/// is a follow-up (tracked as this issue's native-lifecycle slice).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the exit-policy mechanism has no production embedder call site yet -- \
+                  wiring a real winit multi-window loop through it is this issue's \
+                  native-lifecycle follow-up; exercised by this crate's own tests"
+    )
+)]
+pub enum ExitPolicy {
+    /// Exit once every hosted realm has closed and none is queued to open.
+    /// The default policy.
+    #[default]
+    OnLastWindowClosed,
+}
+
 /// Cross-thread wake capability for the platform event loop.
 ///
 /// Setting `needs_redraw` and poking a live window are two independent
@@ -285,37 +500,37 @@ impl FrameWakeHandle {
 ///
 /// # Design-for-N
 ///
-/// The realm-facing API is `RealmId`-keyed ([`AppRuntime::realm`]);
-/// *storage* is a single `Option<UiRealm>` slot until the element forest
-/// lets a realm host multiple presentations and this grows a real
-/// multi-realm registry. `next_identity` above already mints from a shape
-/// that does not need to change when that lands.
+/// The realm-facing API is `RealmId`-keyed: `realms` is [`RealmRegistry`],
+/// an insertion-ordered map of any number of hosted realms (issue #555) —
+/// `next_identity` above already mints from a shape that never needed to
+/// change for this to land.
 #[cfg(not(target_os = "ios"))]
 pub(crate) struct AppRuntime {
-    /// The single hosted realm, when one is installed.
-    pub(super) realm: Option<UiRealm>,
-    /// Queued owner-thread work: cross-thread platform events plus the
-    /// co-located frame pump (see `runner.rs`'s `RealmTask`).
-    pub(super) queue: VecDeque<RealmTask>,
-    /// Set while a queued task is running, so a reentrant dispatch enqueues
-    /// instead of recursing into `realm.take()`.
-    pub(super) draining: bool,
-    /// The thread that installed the current realm; every dispatch checks
-    /// against this before touching the slot.
+    /// Every hosted realm, keyed by `RealmId`, in mount (insertion) order.
+    /// Replaces the single `Option<UiRealm>` slot (plus its four sibling
+    /// flat fields `queue`/`draining`/`address`/`surface_applier`) this
+    /// struct used to carry — see [`RealmSlot`]'s doc for why those four
+    /// moved inside the per-realm entry instead of staying flat.
+    pub(super) realms: RealmRegistry,
+    /// The thread that installed the first realm hosted here; every dispatch
+    /// checks against this before touching the registry. Loop-scoped, not
+    /// per-realm: every realm this `AppRuntime` ever hosts lives on the same
+    /// owner thread (`APP_RUNTIME` is thread-local), so one shared value is
+    /// exact, not an approximation of a per-realm concept.
     pub(super) owner_thread: Option<ThreadId>,
-    /// This realm incarnation's routable address — a derived cache of
-    /// `registry` below, not a second source of truth (see
-    /// `window_registry`'s module doc for the write-ordering invariant).
-    pub(super) address: Option<PresentationAddress>,
     /// The sole native-window-to-presentation mapping authority (ADR-0037
-    /// §2). A future multi-window `AppRuntime` lifts this unchanged — the
-    /// type itself has no TLS assumption baked in.
+    /// §2), already `RealmId`-keyed and multi-window-shaped — see its own
+    /// module doc.
     pub(super) registry: WindowRegistry,
-    /// The registration-lifetime renderer-surface applier for a `Resized`
-    /// event; installed once at realm install, cleared at teardown.
-    pub(super) surface_applier: Option<SurfaceApplier>,
     /// Single-window `(visible, focused)` tracking for the
     /// `AppLifecycleState` derivation (ADR-0035). Both default `true`.
+    ///
+    /// **Known limitation, stated rather than silently overclaimed:** this
+    /// pair is still loop-scoped, not per-realm — with more than one
+    /// hosted realm, a focus/visibility change on any one window's OS
+    /// signal drives the SAME derivation for the whole loop. Per-realm
+    /// lifecycle derivation is `FocusCoordinator` territory (a later, exact-routing
+    /// slice of issue #555), out of this change's scope.
     pub(super) visible: bool,
     pub(super) focused: bool,
     /// The loop-scoped owner-thread platform capability (ADR-0039 §6).
@@ -323,24 +538,55 @@ pub(crate) struct AppRuntime {
     /// another realm before it exits (hot-restart does exactly this).
     pub(super) owner_platform: Option<OwnerPlatform>,
     /// A clone of the currently-dispatched realm's scheduler, held ONLY
-    /// while `dispatch_platform_realm` (in `runner.rs`) has taken that realm
-    /// out of `realm` above for the duration of a queued task. Without this,
-    /// [`Self::installed_realm_phase`] (`with_owner_platform`'s fence (c))
-    /// reads `None` for the realm's entire dispatched extent — not just when
-    /// no realm is installed at all — because `dispatch_platform_realm`
-    /// checks the realm OUT of this struct before running any task,
-    /// including the frame pump that drives the scheduler through
-    /// `PersistentCallbacks`. That makes the fence blind exactly when a
-    /// frame phase is actually running, which is the one case trigger #22
-    /// exists to catch. `Scheduler` is a single-`Arc` handle (see
+    /// while `dispatch_platform_realm` (in `runner.rs`) has taken that
+    /// realm's slot out of `realms` above for the duration of a queued task.
+    /// Without this, [`Self::installed_realm_phase`] (`with_owner_platform`'s
+    /// fence (c)) reads `None` for the realm's entire dispatched extent —
+    /// not just when no realm is installed at all — because
+    /// `dispatch_platform_realm` checks the realm's `UiRealm` OUT of its slot
+    /// before running any task, including the frame pump that drives the
+    /// scheduler through `PersistentCallbacks`. That makes the fence blind
+    /// exactly when a frame phase is actually running, which is the one case
+    /// trigger #22 exists to catch. `Scheduler` is a single-`Arc` handle (see
     /// `flui-scheduler`'s `Scheduler`/`SchedulerInner` split), so cloning it
     /// here to survive the checkout is cheap — an `Arc::clone`, not a new
     /// scheduler. Set at checkout, cleared at restore
     /// (`dispatch_platform_realm`), in both cases inside the same
-    /// `catch_unwind`-guarded block that restores `realm` itself, so an
-    /// unwinding dispatched task leaves this `None` exactly as reliably as
-    /// it leaves `realm` restored.
+    /// `catch_unwind`-guarded block that restores the realm's slot itself, so
+    /// an unwinding dispatched task leaves this `None` exactly as reliably as
+    /// it leaves the slot restored.
+    ///
+    /// Stays single-slot on purpose: dispatch is
+    /// single-threaded and sequential, so at most one realm is EVER checked
+    /// out on this thread at a given instant — [`RealmMapMutation`]'s
+    /// defer-to-idle discipline exists precisely so no second, nested
+    /// dispatch for a DIFFERENT realm is ever attempted while this is
+    /// `Some`; `dispatch_platform_realm` debug-asserts that invariant at its
+    /// one checkout site.
     pub(super) dispatched_scheduler: Option<Scheduler>,
+    /// The identity companion to `dispatched_scheduler` above: which realm
+    /// is currently checked out, so a nested dispatch attempt targeting a
+    /// DIFFERENT realm can be told apart from a legitimate same-realm
+    /// reentrant call (already handled by each slot's own `draining` flag).
+    /// Also set (alongside `dispatched_scheduler`) for the realm
+    /// `for_each_installed_realm` currently has checked out of the registry
+    /// mid-visit — from fence (c)'s perspective a visited realm IS
+    /// dispatched: its own scheduler phase must still be observable, not
+    /// blind, for the whole time it sits outside `realms`.
+    pub(super) dispatched_realm_id: Option<RealmId>,
+    /// Set for the duration of `for_each_installed_realm`'s (`runner.rs`)
+    /// hot-restart-shaped visit over every hosted realm. A realm-map
+    /// mutation requested while this is `true` defers exactly like one
+    /// requested while `dispatched_realm_id` is `Some` — see
+    /// [`Self::request_realm_install`]/[`Self::request_realm_uninstall`] —
+    /// so a mutation triggered by a callback running mid-visit never
+    /// changes the set of realms that same visit is still walking.
+    pub(super) iterating_all_realms: bool,
+    /// Realm-map mutations requested while
+    /// [`Self::request_realm_install`]/[`Self::request_realm_uninstall`]
+    /// decided they must defer. Applied, in request order, by
+    /// [`Self::drain_pending_realm_mutations`].
+    pending_realm_mutations: Vec<RealmMapMutation>,
     /// Process-level engine services. Deliberately **not** resolved in
     /// [`AppRuntime::new`] -- see [`AppRuntime::ensure_services`] for why.
     services: OnceCell<SharedEngineServices>,
@@ -396,17 +642,16 @@ impl AppRuntime {
     /// and this change does not touch it.
     pub(super) fn new() -> Self {
         Self {
-            realm: None,
-            queue: VecDeque::new(),
-            draining: false,
+            realms: RealmRegistry::new(),
             owner_thread: None,
-            address: None,
             registry: WindowRegistry::new(),
-            surface_applier: None,
             visible: true,
             focused: true,
             owner_platform: None,
             dispatched_scheduler: None,
+            dispatched_realm_id: None,
+            iterating_all_realms: false,
+            pending_realm_mutations: Vec::new(),
             services: OnceCell::new(),
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Arc::new(Mutex::new(None)),
@@ -450,25 +695,17 @@ impl AppRuntime {
         self.services.get().is_some()
     }
 
-    /// `RealmId`-keyed lookup: `Some` only when `id` matches the single
-    /// installed realm's identity. Storage is one slot until the element
-    /// forest lets a realm host multiple presentations and `AppRuntime`
-    /// grows a real multi-realm registry — the keyed shape is the
-    /// deliverable now, so that growth does not have to reshape this
-    /// method's callers, only its body.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "design-for-N accessor; the single production caller \
-                      (per-realm dispatch) still addresses the TLS slot \
-                      directly until the element forest lets a realm host \
-                      multiple presentations and this grows a real \
-                      multi-realm registry"
+    /// True if `phase` is one of the phases `with_owner_platform`'s fence (c)
+    /// forbids: a frame transaction genuinely in flight, as opposed to
+    /// `Idle`/`PostFrameCallbacks`, both of which are legitimate times to
+    /// acquire owner-platform capability (ADR-0021-style post-frame work).
+    fn is_frame_transaction_phase(phase: flui_scheduler::SchedulerPhase) -> bool {
+        matches!(
+            phase,
+            flui_scheduler::SchedulerPhase::TransientCallbacks
+                | flui_scheduler::SchedulerPhase::MidFrameMicrotasks
+                | flui_scheduler::SchedulerPhase::PersistentCallbacks
         )
-    )]
-    pub(crate) fn realm(&self, id: RealmId) -> Option<&UiRealm> {
-        self.realm.as_ref().filter(|realm| realm.realm_id() == id)
     }
 
     /// The installed realm's scheduler phase, or `None` if no realm is
@@ -476,22 +713,277 @@ impl AppRuntime {
     /// dispatch either — the replacement for `with_owner_platform`'s fence
     /// (c), formerly a bare `Scheduler::instance().phase()` read.
     ///
-    /// Falls back to [`Self::dispatched_scheduler`] when `realm` itself is
-    /// empty: `dispatch_platform_realm` takes the realm OUT of `realm` for
-    /// the entire extent of a queued task (including the frame pump that
-    /// drives `PersistentCallbacks`), so reading only `realm` here would
-    /// make this probe blind for every production frame, not merely when no
-    /// realm is installed at all. `None` (truly no realm, and none
-    /// dispatched) is vacuous-but-truthful: no realm means no frame
-    /// transaction can be in flight on this thread, so the caller's
-    /// "not mid-frame" assertion holds trivially. Storage is the single slot
-    /// until the element forest lets a realm host multiple presentations; a
-    /// future multi-realm `AppRuntime` iterates its slot set here instead.
+    /// **Design-for-N (issue #555): iterates every resident slot in
+    /// `realms`**, rather than assuming a single slot is "the" realm that
+    /// matters — but checks [`Self::dispatched_scheduler`] FIRST: dispatch is
+    /// single-threaded and sequential, so whenever a realm is checked out for
+    /// `dispatch_platform_realm` (the entire extent of a queued task,
+    /// including the frame pump that drives `PersistentCallbacks`), every
+    /// OTHER resident realm is necessarily `Idle`/`PostFrameCallbacks` (no
+    /// two realms ever run their frame pump concurrently on one thread) —
+    /// reading `dispatched_scheduler` first is therefore both sufficient and
+    /// exact for that case, not merely a fallback. Only once nothing is
+    /// checked out does this fall through to scanning `realms` itself, so an
+    /// addressed probe (this dispatch's own realm) and the aggregate fence
+    /// both stay correct without duplicating the forbidden-phase list.
+    /// Single-pass, no intermediate allocation: returns the first FORBIDDEN
+    /// phase found, short-circuiting the scan; if none is forbidden, returns
+    /// the first realm's OBSERVED phase honestly (never claimed to be
+    /// specifically `Idle` — a fully quiescent realm can legitimately sit in
+    /// `PostFrameCallbacks` just as validly, and this reads back whichever
+    /// one it actually is) rather than `None`, matching this function's
+    /// pre-registry single-slot behavior for the common one-realm case (a
+    /// realm being installed reads back its own real phase, not a
+    /// vacuous "nothing installed" `None`).
     pub(super) fn installed_realm_phase(&self) -> Option<flui_scheduler::SchedulerPhase> {
-        self.realm
-            .as_ref()
-            .map(|realm| realm.scheduler().phase())
-            .or_else(|| self.dispatched_scheduler.as_ref().map(Scheduler::phase))
+        if let Some(scheduler) = self.dispatched_scheduler.as_ref() {
+            return Some(scheduler.phase());
+        }
+        let mut first_observed = None;
+        for (_, slot) in self.realms.iter() {
+            let Some(realm) = slot.realm.as_ref() else {
+                continue;
+            };
+            let phase = realm.scheduler().phase();
+            if Self::is_frame_transaction_phase(phase) {
+                return Some(phase);
+            }
+            first_observed.get_or_insert(phase);
+        }
+        first_observed
+    }
+
+    /// The un-deferred application of an `Install` mutation: registers
+    /// `window` in the `WindowRegistry` FIRST, strictly (never replacing an
+    /// existing mapping — an id collision is refused, not silently
+    /// re-routed onto a sibling realm's window), and only inserts `slot`
+    /// into `realms` once that registration succeeds. Hands `window` to
+    /// [`super::window_registry::WindowRegistry::try_register_window`]
+    /// rather than deriving its id here: `WindowId` is the registry's own
+    /// single-authority concern (ADR-0037 §2) — `AppRuntime` never names or
+    /// touches it directly.
+    ///
+    /// On `Err`, hands `slot` BACK rather than dropping it here: this method
+    /// is always called while some caller's `APP_RUNTIME` `RefCell` borrow is
+    /// still live, and `slot` owns a whole `UiRealm` whose destructors may
+    /// re-enter platform/framework code — the same reason
+    /// `install_platform_realm`/`teardown_platform_realm` never drop a
+    /// realm-owning value while their own TLS borrow is held. Every caller of
+    /// this method routes the returned slot through its own `removed`-style
+    /// return value instead, so the actual drop happens only once that
+    /// borrow has released.
+    fn apply_install(
+        &mut self,
+        id: RealmId,
+        slot: RealmSlot,
+        window: &Arc<dyn PlatformWindow>,
+    ) -> Result<(), (RegistryError, Box<RealmSlot>)> {
+        if let Err(error) = self.registry.try_register_window(window, slot.address) {
+            return Err((error, Box::new(slot)));
+        }
+        self.realms.insert(id, slot);
+        Ok(())
+    }
+
+    /// The un-deferred application of an `Uninstall` mutation.
+    fn apply_uninstall(&mut self, id: RealmId) -> Option<RealmSlot> {
+        let removed = self.realms.remove(&id);
+        if removed.is_some() {
+            self.registry.remove_realm(id);
+        }
+        removed
+    }
+
+    /// Requests installing a newly-constructed realm, registering `window`'s
+    /// id and inserting `slot` into the registry TOGETHER, atomically from
+    /// every caller's perspective: either both happen now, or both are
+    /// queued as one [`RealmMapMutation::Install`] entry and both happen
+    /// together once the queue drains. This closes the gap a two-step
+    /// "register the window now, defer the realm insert" sequence would
+    /// otherwise leave open — a platform event addressed to the new
+    /// window's id arriving in that gap would find a `WindowRegistry` entry
+    /// but no matching `realms` entry, and `dispatch_platform_realm` would
+    /// misreport it as `StaleRealm` ("a newer realm replaced the one it was
+    /// dispatched for") instead of "this realm's install has not landed yet".
+    ///
+    /// Applied immediately unless a dispatch (`dispatched_realm_id` is
+    /// `Some`) or an all-realms iteration (`iterating_all_realms`) is
+    /// currently in flight on this thread, in which case it queues instead —
+    /// the mechanism behind two contracts: an install requested from inside a
+    /// dispatched frame callback never nests into a second, concurrent
+    /// dispatch (it lands once the outer dispatch's restore completes,
+    /// `dispatch_platform_realm`'s tail), and a mutation requested
+    /// mid-hot-restart-visit never changes the set of realms
+    /// `for_each_installed_realm` is still walking (its own tail).
+    ///
+    /// `Err` only when applied immediately AND the window's id already maps
+    /// to a live entry — deferred installs cannot fail synchronously (the
+    /// caller has already returned by the time they apply); see
+    /// [`Self::drain_pending_realm_mutations`] for how that case is handled
+    /// instead (traced and dropped, never silently re-routed). On that
+    /// immediate `Err`, hands `slot` back inside the error (see
+    /// [`Self::apply_install`]'s own doc for why) — the caller (always
+    /// itself inside a live `APP_RUNTIME` borrow) must drop it only after
+    /// that borrow releases.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "install_realm_alongside is design-for-N mechanism with no production \
+                      embedder call site yet -- exercised by this crate's own tests"
+        )
+    )]
+    pub(super) fn request_realm_install(
+        &mut self,
+        id: RealmId,
+        slot: RealmSlot,
+        window: Arc<dyn PlatformWindow>,
+    ) -> Result<(), (RegistryError, Box<RealmSlot>)> {
+        if self.dispatched_realm_id.is_some() || self.iterating_all_realms {
+            self.pending_realm_mutations.push(RealmMapMutation::Install(
+                id,
+                Box::new(slot),
+                window,
+            ));
+            return Ok(());
+        }
+        self.apply_install(id, slot, &window)
+    }
+
+    /// Requests uninstalling one realm — a single window closing while
+    /// siblings stay open. Same defer-to-idle discipline as
+    /// [`Self::request_realm_install`]; see that method's doc for why.
+    ///
+    /// Returns any [`RealmSlot`] an IMMEDIATE uninstall removed, so the
+    /// caller can drop it (and the `UiRealm` it owns) only after releasing
+    /// whatever `APP_RUNTIME` borrow is live — the same discipline
+    /// `install_platform_realm`/`teardown_platform_realm` already follow for
+    /// every other realm-owning drop in this module.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "uninstall_platform_realm is design-for-N mechanism with no production \
+                      embedder call site yet -- exercised by this crate's own tests"
+        )
+    )]
+    pub(super) fn request_realm_uninstall(&mut self, id: RealmId) -> Option<RealmSlot> {
+        if self.dispatched_realm_id.is_some() || self.iterating_all_realms {
+            self.pending_realm_mutations
+                .push(RealmMapMutation::Uninstall(id));
+            return None;
+        }
+        self.apply_uninstall(id)
+    }
+
+    /// Applies every realm-map mutation deferred while a dispatch or an
+    /// all-realms iteration was in flight, in request order. Called once the
+    /// deferring condition clears: the tail of `dispatch_platform_realm` and
+    /// the tail of `for_each_installed_realm` (both `runner.rs`), and
+    /// [`Self::should_exit`] (the drain-before-decide rule).
+    ///
+    /// **Early-returns (drains nothing) while `dispatched_realm_id.is_some()
+    /// || iterating_all_realms` is still true** — a NESTED call reached
+    /// through one of those three call sites (e.g. a dispatch run from
+    /// inside a `for_each_installed_realm` visit, which that function's own
+    /// doc says is safe to attempt) must not apply a mutation an OUTER,
+    /// still-in-flight operation deferred: draining it early would remove a
+    /// realm's slot while that realm might still be the one checked out for
+    /// the outer visit, and the outer visit's own restore step
+    /// (`realm_slot.realm = Some(realm)` finding no slot to write into)
+    /// would then silently drop a live, un-torn-down `UiRealm` instead of
+    /// restoring it. All three legitimate call sites clear their OWN flag
+    /// before calling this, so the guard only ever blocks a genuinely nested
+    /// caller, never the outer operation whose completion is supposed to
+    /// trigger the drain.
+    ///
+    /// Returns every removed [`RealmSlot`] — both from a deferred
+    /// `Uninstall`, AND from a deferred `Install` that collided on its
+    /// window id — for the caller to drop outside the live `APP_RUNTIME`
+    /// borrow — see [`Self::apply_install`]'s own doc for why that
+    /// discipline matters here: this method runs inside every one of its
+    /// three callers' live `RefCell` borrow, so it must never drop a
+    /// realm-owning value itself.
+    pub(super) fn drain_pending_realm_mutations(&mut self) -> Vec<RealmSlot> {
+        if self.dispatched_realm_id.is_some() || self.iterating_all_realms {
+            return Vec::new();
+        }
+        let pending = std::mem::take(&mut self.pending_realm_mutations);
+        let mut removed = Vec::new();
+        for mutation in pending {
+            match mutation {
+                RealmMapMutation::Install(id, slot, window) => {
+                    if let Err((error, slot)) = self.apply_install(id, *slot, &window) {
+                        // The collided slot is routed through `removed`, the
+                        // SAME bucket a rejected/removed `Uninstall` slot
+                        // uses below -- never dropped here, inside this
+                        // method's live borrow.
+                        tracing::error!(
+                            ?id,
+                            ?error,
+                            "dropping a deferred realm install: its window id collided with an \
+                             already-registered mapping"
+                        );
+                        removed.push(*slot);
+                    }
+                }
+                RealmMapMutation::Uninstall(id) => {
+                    if let Some(slot) = self.apply_uninstall(id) {
+                        removed.push(slot);
+                    }
+                }
+            }
+        }
+        removed
+    }
+
+    /// Teardown-only introspection: whether any realm-map mutation is still
+    /// waiting to be applied. Should always be `false` by the time
+    /// `teardown_platform_realm` (full loop-exit teardown) runs: both
+    /// `dispatch_platform_realm` and `for_each_installed_realm` drain
+    /// unconditionally in their own tails (panic or not), so nothing should
+    /// ever still be queued once every in-flight dispatch/iteration has
+    /// completed. `teardown_platform_realm` asserts this rather than
+    /// silently dropping a still-pending mutation (and the `UiRealm` an
+    /// `Install` mutation might still be holding) unnoticed.
+    ///
+    /// `cfg`-gated to match that one caller exactly: `teardown_platform_realm`
+    /// is `#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]`
+    /// (the web host never tears down at all — see that function's own
+    /// module doc), so on wasm32 this method has no caller at all and must
+    /// not compile there either, or it is dead code under `wasm-check`'s
+    /// deny-warnings build.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn has_pending_realm_mutations(&self) -> bool {
+        !self.pending_realm_mutations.is_empty()
+    }
+
+    /// Whether the loop should exit under `policy`, given the realms
+    /// currently hosted, plus any [`RealmSlot`]s a deferred mutation just
+    /// removed (drop these outside the `APP_RUNTIME` borrow, same as every
+    /// other realm-owning drop in this module).
+    ///
+    /// **Drain-before-decide:** calls
+    /// [`Self::drain_pending_realm_mutations`] BEFORE checking `policy` — a
+    /// queued install (e.g. a splash screen's dispose callback requesting the
+    /// main window) is applied first, so it vetoes exit instead of racing the
+    /// empty-registry check. Without that ordering, a splash-close and a
+    /// main-window-open landing in the same idle tick could observe "no
+    /// realms installed" and exit before the queued install ever lands.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the exit-policy mechanism has no production embedder call site yet -- \
+                      exercised by this crate's own tests"
+        )
+    )]
+    pub(super) fn should_exit(&mut self, policy: ExitPolicy) -> (bool, Vec<RealmSlot>) {
+        let removed = self.drain_pending_realm_mutations();
+        let exit = match policy {
+            ExitPolicy::OnLastWindowClosed => self.realms.is_empty(),
+        };
+        (exit, removed)
     }
 
     // ========================================================================
@@ -706,7 +1198,7 @@ mod app_runtime_tests {
         let runtime = AppRuntime::new();
 
         assert!(
-            runtime.realm.is_none(),
+            runtime.realms.is_empty(),
             "a freshly constructed AppRuntime hosts no realm yet"
         );
         assert!(
@@ -721,9 +1213,10 @@ mod app_runtime_tests {
         );
         assert!(
             runtime
-                .realm(RealmId::new_gen(0, NonZeroU32::new(1).unwrap()))
+                .realms
+                .get(&RealmId::new_gen(0, NonZeroU32::new(1).unwrap()))
                 .is_none(),
-            "the RealmId-keyed accessor must return None when no realm is installed"
+            "the RealmId-keyed registry must return None when no realm is installed"
         );
     }
 
