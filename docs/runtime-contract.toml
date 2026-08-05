@@ -325,9 +325,17 @@ call site opens a genuinely second native window through \
 one, through the legacy displacing `install_platform_realm`) -- that native \
 wiring, plus `ExitPolicy` actually gating a live winit loop's exit instead \
 of the platform backend's own unconditional "last window closed" signal, is \
-this issue's native-lifecycle follow-up; and a REALM hosting more than one \
-PRESENTATION (the element forest) is a separate, still-unstarted claim this \
-contract does not yet make.
+this issue's native-lifecycle follow-up. A REALM hosting more than one \
+PRESENTATION is no longer a still-unstarted claim: issue #555's \
+addressed-routing slice lifted `PresentationForest`'s former `len()<=1` \
+ratchet and gave a second presentation a real `WindowRegistry` mapping and \
+addressed input/semantics/keyboard routing (see \
+`multi-presentation-forest-gate`, `input-domain-per-presentation`, \
+`focus-coordination-per-realm`) -- what remains unstarted is specifically \
+the NATIVE embedder wiring that would let a real second OS window drive \
+`install_presentation_alongside`, the same native-lifecycle gap named above \
+for the sibling multi-realm path, not the ownership/routing mechanism \
+itself.
 
 `with_owner_platform`'s fence (c) (ADR-0039 §6, trigger #22's runtime \
 backstop) re-points onto this struct: `AppRuntime::installed_realm_phase` \
@@ -364,10 +372,10 @@ longer exist at all, and `two_realms_coexist_same_thread` / \
 `cross_realm_duplicate_global_key_mounts_succeed_in_both` prove two \
 directly-constructed `UiRealm`s share no widget/focus/gesture-arena/scheduler \
 state, on one thread or two. This state stays "partial", not "implemented", \
-because the remaining gaps stated above (native second-window wiring, a \
-realm hosting more than one presentation) are real and unclosed -- marking \
-this contract fully "implemented" would overclaim past what has actually \
-landed.\
+because the remaining gap stated above -- native embedder wiring for a \
+genuine second OS window, for both a second realm and a second presentation \
+of an existing realm -- is real and unclosed; marking this contract fully \
+"implemented" would overclaim past what has actually landed.\
 """
 state = "partial"
 domain = "application"
@@ -648,14 +656,24 @@ defaulting to the realm's initial presentation) and is the sole thing \
 event always routes to the coordinator's ACTIVE presentation, never to \
 whichever presentation the event happens to be stamped for -- covering the \
 race/stray-event case where the two disagree \
-(`keyboard_routes_to_active_presentation_only`). The sole write side, \
-`FocusCoordinator::note_focus_gained`, fires from `PlatformToUi::WindowFocus(true)` \
-handling (`runner.rs`), stamped with the presentation that event's own \
-dispatcher was addressed to; `WindowFocus(false)` (focus LOST) never moves \
-the active presentation (`focus_lost_does_not_move_the_active_presentation`) \
--- losing focus names no new owner, matching Flutter's own focus-retention \
-model. A focus-gained notification naming a presentation this realm no \
-longer hosts is a traced no-op, never a panic \
+(`keyboard_routes_to_active_presentation_only`). \
+`FocusCoordinator::note_focus_gained` has TWO write sides, not one: \
+`PlatformToUi::WindowFocus(true)` handling (`runner.rs`) fires it with the \
+presentation that event's own dispatcher was addressed to, driven \
+end-to-end through the real `dispatch_platform_realm` seam (not a direct \
+call) by `window_focus_true_moves_active_presentation_end_to_end_and_false_\
+does_not` (`runner.rs`); `WindowFocus(false)` (focus LOST) never moves the \
+active presentation there -- losing focus names no new owner, matching \
+Flutter's own focus-retention model. The second write side is \
+`UiRealm::close_presentation_entered`, re-stamping active to the surviving \
+primary (`primary_id_excluding`) BEFORE dispose hooks run (mirroring \
+`RealmSlot::address`'s own re-stamp-before-dispose ordering) whenever the \
+presentation being closed is the currently active one -- without this, \
+closing the active presentation would leave the coordinator pointing at a \
+dead id, and every keyboard event would drop traced until a fresh \
+`WindowFocus(true)` happened to arrive (`keyboard_after_closing_the_active_\
+presentation_routes_to_the_survivor`). A focus-gained notification naming a \
+presentation this realm no longer hosts is a traced no-op, never a panic \
 (`focus_gained_for_an_unknown_presentation_is_a_traced_no_op`).\
 """
 state = "implemented"
@@ -669,8 +687,9 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn notify_presentation_focus_gained" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn presentation_and_widget_tree_share_the_exact_focus_owner" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn keyboard_routes_to_active_presentation_only" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn focus_lost_does_not_move_the_active_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn window_focus_true_moves_active_presentation_end_to_end_and_false_does_not" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn focus_gained_for_an_unknown_presentation_is_a_traced_no_op" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn keyboard_after_closing_the_active_presentation_routes_to_the_survivor" },
 ]
 
 [[contract]]
@@ -763,9 +782,15 @@ dispatcher is refused at the SAME authority a fresh dispatch would resolve \
 against, never a second source of truth. `runner.rs::install_presentation_alongside` \
 is the production entry point that mints a NEW presentation's real \
 registry mapping alongside an existing one -- the "non-primary presentations \
-get real mappings when installed" residual the forest slice \
-(`docs/pr-notes-555-3.md`) left open. Remains "partial" overall: `WindowHost` \
-itself is still not a real owner OBJECT with its own cancellation tokens \
+get real mappings when installed" residual the forest slice left open. \
+Ordering is load-bearing there too: the presentation is assembled \
+(`UiRealm::assemble_presentation`) but NOT installed into the forest until \
+AFTER its registry mapping is confirmed, so a registration failure leaves \
+nothing forest-resident to roll back -- the assembled-but-unregistered \
+`PresentationState` is simply dropped \
+(`install_presentation_alongside_leaves_the_forest_unchanged_on_registration_\
+failure`). Remains "partial" overall: `WindowHost` itself is still not a \
+real owner OBJECT with its own cancellation tokens \
 (`cancellable-platform-callbacks` tracks that separately), and per-window \
 resize/lifecycle events are still realm-wide, not yet addressed to the exact \
 presentation the way input/IME/semantics now are.\
@@ -780,6 +805,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn contains_address" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_presentation_alongside" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn install_presentation" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn assemble_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_presentation_alongside_leaves_the_forest_unchanged_on_registration_failure" },
 ]
 
 [[contract]]
@@ -888,16 +915,23 @@ closed window drops the update). `UiRealm::handle_input_addressed` \
 (issue #555's addressed-routing slice) is the hop-2 entry point that makes \
 this genuinely cross-presentation: it resolves the exact addressed \
 presentation from the realm's forest (a presentation this realm no longer \
-hosts is a traced drop, never a fall-through to the primary) and delivers \
+hosts -- an id that never existed, or a real id already closed -- is a \
+traced drop, never a fall-through to the primary) and delivers \
 Pointer/IME/DragDrop to THAT presentation's own gesture/text-input state \
 only -- never a sibling's, proven now that a second presentation can \
-actually exist (`input_stamped_for_a_never_reaches_bs_arena`, \
-`ime_attach_on_a_does_not_detach_bs_session`). Keyboard is the documented \
-exception -- see `focus-coordination-per-realm`. `handle_input_entered` \
-(no explicit id) is the pre-addressed-routing convenience that still \
-resolves to the primary, kept for every single-presentation call site; \
-production dispatch (`runner.rs`'s `PlatformToUi::run`) always calls the \
-addressed form with the real stamped id.\
+actually exist (`input_stamped_for_b_never_reaches_as_arena`, \
+`ime_event_addressed_to_b_does_not_reach_as_session`, both deliberately \
+addressing the NON-primary presentation B, not A: an A-addressed fixture \
+cannot distinguish "delivered to the addressed presentation" from \
+"delivered to the primary", since A already is the primary; \
+`input_addressed_to_a_closed_or_unknown_presentation_drops_traced_never_\
+falls_through` pins the no-fallback half for both an id that never existed \
+and a real id already closed). Keyboard is the documented exception -- see \
+`focus-coordination-per-realm`. `handle_input_entered` (no explicit id) is \
+the pre-addressed-routing convenience that still resolves to the primary, \
+kept for every single-presentation call site; production dispatch \
+(`runner.rs`'s `PlatformToUi::run`) always calls the addressed form with \
+the real stamped id.\
 """
 state = "implemented"
 domain = "presentation"
@@ -907,8 +941,9 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "gestures: GestureBinding" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn handle_input_addressed" },
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn mouse_tracker_applies_cursor_to_the_exact_owned_window" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn input_stamped_for_a_never_reaches_bs_arena" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn ime_attach_on_a_does_not_detach_bs_session" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn input_stamped_for_b_never_reaches_as_arena" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn ime_event_addressed_to_b_does_not_reach_as_session" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn input_addressed_to_a_closed_or_unknown_presentation_drops_traced_never_falls_through" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn redraw_request_from_a_does_not_wake_bs_window" },
 ]
 

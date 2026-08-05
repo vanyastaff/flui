@@ -1448,39 +1448,69 @@ fn install_realm_alongside(
     }
 }
 
+/// Errors from [`install_presentation_alongside`]. A dedicated type rather
+/// than folding into [`RealmDispatchError`]: none of that enum's variants
+/// mean "the realm is fine, but this specific window id collided" —
+/// mislabeling that as `RealmUnavailable` (the pre-fix shape) told a caller
+/// the wrong thing about what actually went wrong.
+#[cfg(not(target_os = "ios"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+enum InstallPresentationError {
+    /// `dispatcher`'s realm no longer exists (a newer realm replaced it, or
+    /// it was already torn down).
+    #[error("the realm this dispatcher was minted for no longer exists")]
+    RealmUnavailable,
+    /// A dispatch or hot-restart visit is currently in flight on this
+    /// thread; see this function's own doc for why that is a named,
+    /// stated gap rather than a defer-to-idle path.
+    #[error("a dispatch or hot-restart visit is in flight on this thread")]
+    DispatchInFlight,
+    /// `window`'s id was already registered to a (possibly different)
+    /// address — practically unreachable for a freshly opened window, but
+    /// a real, distinct failure mode from `RealmUnavailable`: the realm
+    /// itself is perfectly fine.
+    #[error("window is already registered: {0}")]
+    WindowAlreadyMapped(#[from] super::window_registry::RegistryError),
+}
+
 /// Installs another presentation into `dispatcher`'s realm, alongside
 /// whatever it already hosts — the addressed-routing counterpart to
 /// [`install_realm_alongside`] (which installs a second REALM instead of a
 /// second presentation of the SAME realm). This is the production entry
 /// point [`super::presentation_forest::PresentationForest`]'s doc and
 /// `docs/runtime-contract.toml`'s `multi-presentation-forest-gate` entry
-/// both point to: the forest's former `len()<=1` ratchet lifted (issue #555
-///) specifically so this function has somewhere real to install into.
+/// both point to: the forest's former `len()<=1` ratchet lifted (issue #555)
+/// specifically so this function has somewhere real to install into.
 ///
-/// `window` becomes the fresh presentation's own native window; its
-/// `WindowRegistry` mapping is minted in the SAME call, at the fresh
-/// presentation's real address, so the returned [`RealmDispatcher`] is
-/// dispatchable the moment this returns — no window is ever left resident
-/// in the forest without a registry entry of its own (the still-open gap
-/// this function closes; see `docs/pr-notes-555-3.md`'s "recommended next
-/// steps" for the exact residual).
+/// `window` becomes the fresh presentation's own native window. Ordering is
+/// load-bearing: the presentation is
+/// [`assembled`](super::ui_realm::UiRealm::assemble_presentation) but NOT
+/// yet installed into the forest, then its `WindowRegistry` mapping is
+/// minted, and ONLY on success is it
+/// [`installed`](super::ui_realm::UiRealm::install_presentation) — so a
+/// registration failure leaves nothing forest-resident to roll back (the
+/// assembled-but-uninstalled `PresentationState` is simply dropped), never
+/// a presentation the forest holds with no registry entry of its own. This
+/// is the single-native-window-map-authority invariant this function
+/// exists to uphold: no hosted presentation is ever forest-resident
+/// without a mapping.
 ///
 /// # Errors
 ///
-/// [`RealmDispatchError::RealmUnavailable`] if `dispatcher`'s realm no
-/// longer exists, OR — folded into the same variant rather than growing a
-/// new one for a path no test exercises yet — if `window`'s id is somehow
-/// already registered (practically unreachable: a freshly opened window has
-/// a fresh id by construction). [`RealmDispatchError::
-/// NestedCrossRealmDispatchRejected`] if a dispatch or hot-restart visit is
-/// currently in flight on this thread: **named gap, not a silent one** —
-/// unlike [`install_realm_alongside`]/[`uninstall_platform_realm`], this
-/// path does not yet defer to loop idle through
-/// `AppRuntime::pending_realm_mutations`; no production embedder call site
-/// opens a second presentation from inside a running callback yet, so
-/// there is nothing forcing that generalization today. Extending the
-/// deferral queue to presentation-install requests is follow-up work, not
-/// silently skipped: this refuses loudly (a `debug_assert!` in debug
+/// [`InstallPresentationError::RealmUnavailable`] if `dispatcher`'s realm no
+/// longer exists. [`InstallPresentationError::WindowAlreadyMapped`] if
+/// `window`'s id is somehow already registered (practically unreachable: a
+/// freshly opened window has a fresh id by construction) — nothing is
+/// installed into the forest in this case.
+/// [`InstallPresentationError::DispatchInFlight`] if a dispatch or
+/// hot-restart visit is currently in flight on this thread: **named gap,
+/// not a silent one** — unlike [`install_realm_alongside`]/
+/// [`uninstall_platform_realm`], this path does not yet defer to loop idle
+/// through `AppRuntime::pending_realm_mutations`; no production embedder
+/// call site opens a second presentation from inside a running callback
+/// yet, so there is nothing forcing that generalization today. Extending
+/// the deferral queue to presentation-install requests is follow-up work,
+/// not silently skipped: this refuses loudly (a `debug_assert!` in debug
 /// builds) rather than corrupting `AppRuntime` state.
 #[cfg(not(target_os = "ios"))]
 #[cfg_attr(
@@ -1495,7 +1525,7 @@ fn install_realm_alongside(
 fn install_presentation_alongside(
     dispatcher: RealmDispatcher,
     window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
-) -> Result<RealmDispatcher, RealmDispatchError> {
+) -> Result<RealmDispatcher, InstallPresentationError> {
     let realm_id = dispatcher.address.realm_id;
     let owner_thread = dispatcher.owner_thread;
     APP_RUNTIME.with(|slot| {
@@ -1511,29 +1541,33 @@ fn install_presentation_alongside(
                 ?realm_id,
                 "rejecting install_presentation_alongside while a dispatch is in flight"
             );
-            return Err(RealmDispatchError::NestedCrossRealmDispatchRejected);
+            return Err(InstallPresentationError::DispatchInFlight);
         }
         let Some(realm_slot) = state.realms.get_mut(&realm_id) else {
-            return Err(RealmDispatchError::RealmUnavailable);
+            return Err(InstallPresentationError::RealmUnavailable);
         };
         let Some(realm) = realm_slot.realm.as_mut() else {
-            return Err(RealmDispatchError::RealmUnavailable);
+            return Err(InstallPresentationError::RealmUnavailable);
         };
-        let presentation_id = realm.install_presentation(std::sync::Arc::clone(window));
+        // Assemble WITHOUT installing yet -- see this function's own doc
+        // for why the ordering matters. `presentation` is dropped (no
+        // forest membership, so nothing to roll back) if registration
+        // below fails.
+        let presentation = realm.assemble_presentation(std::sync::Arc::clone(window));
         let address = flui_foundation::PresentationAddress {
             realm_id,
-            presentation_id,
+            presentation_id: presentation.id(),
         };
-        if let Err(error) = state.registry.try_register_window(window, address) {
-            tracing::error!(
-                ?error,
-                ?address,
-                "install_presentation_alongside: the fresh presentation's window id was \
-                 already registered -- folding this into RealmUnavailable, since no test \
-                 exercises a real collision here"
-            );
-            return Err(RealmDispatchError::RealmUnavailable);
-        }
+        state.registry.try_register_window(window, address)?;
+        let realm_slot = state
+            .realms
+            .get_mut(&realm_id)
+            .expect("BUG: presence checked above, and nothing between here and there removed it");
+        let realm = realm_slot
+            .realm
+            .as_mut()
+            .expect("BUG: presence checked above, and nothing between here and there took it");
+        realm.install_presentation(presentation);
         Ok(RealmDispatcher {
             owner_thread,
             address,
@@ -3895,11 +3929,11 @@ mod realm_dispatch_tests {
 
         let dispatcher = install_platform_realm(realm, &window_a);
         // B installs alongside A through the REAL production entry point
-        // (issue #555's addressed-routing slice), with its own genuine `WindowRegistry` mapping
-        // -- not the `cfg(test)`-only `install_second_presentation_for_test`
-        // bypass this test used before, which left B with no mapping of its
-        // own and is why `teardown_platform_realm()` used to have to be
-        // skipped here (see this test's `git blame` / `pr-notes-555-3.md`).
+        // (issue #555's addressed-routing slice), with its own genuine
+        // `WindowRegistry` mapping -- not the `cfg(test)`-only
+        // `install_second_presentation_for_test` bypass this test used
+        // before, which left B with no mapping of its own and is why
+        // `teardown_platform_realm()` used to have to be skipped here.
         let b_dispatcher = install_presentation_alongside(dispatcher, &window_b)
             .expect("B installs alongside A with a real window mapping");
         let b_id = b_dispatcher.address.presentation_id;
@@ -4218,6 +4252,140 @@ mod realm_dispatch_tests {
 
         // Harmless no-op cleanup (the realm is already gone) -- matches
         // every other test in this module for the same TLS-state hygiene.
+        teardown_platform_realm();
+    }
+
+    /// `FocusCoordinator`'s two write-side behaviors, end to end through the
+    /// REAL production path (`dispatch_platform_realm` running a genuine
+    /// `RealmTask::Event(PlatformToUi::WindowFocus(_))` task, not a direct
+    /// `notify_presentation_focus_gained` call): `WindowFocus(true)`
+    /// dispatched for a presentation moves the active presentation to it;
+    /// `WindowFocus(false)` dispatched for a DIFFERENT, non-active
+    /// presentation never moves it away from whichever presentation is
+    /// currently active.
+    ///
+    /// Mutant: `PlatformToUi::run`'s `WindowFocus` arm calls
+    /// `notify_presentation_focus_gained` inside `if focused { .. }` --
+    /// removing that guard (calling it unconditionally, so `WindowFocus(false)`
+    /// also moves active) makes this fail: the final assertion would observe
+    /// A active instead of B.
+    #[test]
+    fn window_focus_true_moves_active_presentation_end_to_end_and_false_does_not() {
+        // One shared platform instance for both windows -- see
+        // `install_two_test_realms`'s doc for why two independent
+        // `headless_platform()` calls would risk an aliased window id.
+        let platform = flui_platform::headless_platform();
+        let window_a = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window a");
+        let window_b = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window b");
+
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        let dispatcher_a = install_platform_realm(realm, &window_a);
+        let a_id = dispatcher_a.address.presentation_id;
+        let dispatcher_b = install_presentation_alongside(dispatcher_a, &window_b)
+            .expect("B installs alongside A with a real window mapping");
+        let b_id = dispatcher_b.address.presentation_id;
+
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_eq!(
+                    realm.active_presentation_for_test(),
+                    a_id,
+                    "precondition: a freshly installed realm starts with its primary active"
+                );
+            })),
+        )
+        .expect("precondition frame task dispatches");
+
+        // WindowFocus(true) dispatched for B, through the REAL dispatch
+        // seam -- not a direct notify_presentation_focus_gained call.
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Event(PlatformToUi::WindowFocus(true)),
+        )
+        .expect("WindowFocus(true) for B dispatches");
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_eq!(
+                    realm.active_presentation_for_test(),
+                    b_id,
+                    "WindowFocus(true) dispatched through the real production path must move \
+                     the active presentation to the presentation it was addressed to"
+                );
+            })),
+        )
+        .expect("frame task dispatches");
+
+        // WindowFocus(false) dispatched for A -- NOT the currently active
+        // presentation (B is) -- must never move active away from B.
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Event(PlatformToUi::WindowFocus(false)),
+        )
+        .expect("WindowFocus(false) for A dispatches");
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_eq!(
+                    realm.active_presentation_for_test(),
+                    b_id,
+                    "WindowFocus(false) must never move the active presentation, regardless \
+                     of which presentation it was addressed to"
+                );
+            })),
+        )
+        .expect("frame task dispatches");
+
+        teardown_platform_realm();
+    }
+
+    /// If `window`'s id is already registered (forced here by reusing A's
+    /// OWN window as the "second" presentation's window), the forest must
+    /// be left EXACTLY as it was -- no presentation resident without a
+    /// registry mapping of its own (`single-native-window-map-authority`).
+    ///
+    /// If reverted (installing into the forest BEFORE registering, with no
+    /// rollback on failure -- the pre-fix ordering): this fails --
+    /// `presentation_count()` observes `2` instead of `1`, a forest-resident
+    /// presentation this test's own colliding window never actually mapped.
+    #[test]
+    fn install_presentation_alongside_leaves_the_forest_unchanged_on_registration_failure() {
+        let window_a = test_window();
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        let dispatcher = install_platform_realm(realm, &window_a);
+
+        // Reusing A's own window forces `try_register_window` to fail --
+        // its id is already mapped to A's own address.
+        let result = install_presentation_alongside(dispatcher, &window_a);
+        assert!(
+            matches!(
+                result,
+                Err(InstallPresentationError::WindowAlreadyMapped(_))
+            ),
+            "a colliding window id must be refused as WindowAlreadyMapped, got {result:?}"
+        );
+
+        let count = Rc::new(Cell::new(None));
+        let count_in_task = Rc::clone(&count);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |realm| {
+                count_in_task.set(Some(realm.presentation_count()));
+            })),
+        )
+        .expect("frame task dispatches");
+        assert_eq!(
+            count.get(),
+            Some(1),
+            "a registration failure must leave the forest exactly as it was -- the \
+             assembled-but-unregistered presentation must never have been installed"
+        );
+
         teardown_platform_realm();
     }
 }

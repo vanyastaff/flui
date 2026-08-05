@@ -95,9 +95,13 @@ impl FocusCoordinator {
         self.active.get()
     }
 
-    /// Record that `id`'s native window just gained OS focus — the sole
-    /// production write side (`PlatformToUi::WindowFocus(true)` handling,
-    /// `runner.rs`).
+    /// Record that `id` is now the active presentation. Two write sides:
+    /// `PlatformToUi::WindowFocus(true)` handling (`runner.rs`) calls this
+    /// with the event's own addressed presentation when its native window
+    /// gains OS focus; [`UiRealm::close_presentation_entered`] calls this
+    /// with the surviving primary when `id` is the presentation being
+    /// closed and it was the active one (never leave this pointing at a
+    /// presentation the forest is about to drop).
     ///
     /// A `WindowFocus(false)` (focus LOST) never calls this: losing focus
     /// names no new owner, so the coordinator keeps pointing at whichever
@@ -433,10 +437,10 @@ pub(crate) struct UiRealm {
     /// installed into every presentation's `BuildOwner` at assembly time
     /// (`PresentationState::new`). Retained here (not just handed off once)
     /// so a later-installed presentation can share the same scope: both
-    /// [`Self::install_presentation`] (production, issue #555's addressed-routing slice) and the
-    /// `cfg(test)`-only `global_key_scope` accessor below (the isolation
-    /// test suite) read it back to assemble a second presentation sharing
-    /// this exact scope.
+    /// [`Self::assemble_presentation`] (production, issue #555's
+    /// addressed-routing slice) and its `install_second_presentation_for_test`
+    /// counterpart (the isolation test suite) read it back to assemble a
+    /// second presentation sharing this exact scope.
     global_key_scope: GlobalKeyScope,
     /// The insertion-ordered set of UI-owner presentation domains this realm
     /// hosts (ADR-0043 §1 — `PresentationForest`). Production topology
@@ -903,7 +907,7 @@ impl UiRealm {
     /// addressed counterpart to [`Self::text_input_handle`] (primary-only),
     /// for the isolation suite proving IME sessions stay exclusive to the
     /// exact presentation they were attached on
-    /// (`ime_attach_on_a_does_not_detach_bs_session`).
+    /// (`ime_event_addressed_to_b_does_not_reach_as_session`).
     #[must_use]
     #[cfg(test)]
     pub(crate) fn presentation_text_input_handle_for_test(
@@ -916,28 +920,27 @@ impl UiRealm {
             .text_input_handle()
     }
 
-    /// Assemble and install another presentation into this realm, sharing
-    /// its exact `GlobalKeyScope` and realm-level dispatch handles — the
-    /// production entry point (this slice lifted
-    /// `PresentationForest::install`'s former `len()<=1` ratchet).
+    /// Assemble another presentation for this realm, sharing its exact
+    /// `GlobalKeyScope` and realm-level dispatch handles — WITHOUT
+    /// installing it into the forest yet. Deliberately split from
+    /// [`Self::install_presentation`] below: a caller that must register a
+    /// `WindowRegistry` mapping before this presentation is safely
+    /// dispatchable (`runner.rs::install_presentation_alongside`) can do so
+    /// BETWEEN assembly and installation — if registration fails, the
+    /// assembled-but-never-installed `PresentationState` is simply dropped
+    /// (no forest membership to roll back; its construction has no
+    /// observable side effect on anything this realm shares, since nothing
+    /// has attached/mounted into it yet).
     ///
     /// `window` becomes this presentation's own native window (cursor,
-    /// haptics, redraw-poke — see `PresentationState::new`'s wiring); the
-    /// caller is responsible for minting its `WindowRegistry` mapping —
-    /// `UiRealm` has no access to that registry (ADR-0037 §2), exactly the
-    /// same split [`Self::close_presentation_entered`]'s own doc states for
-    /// teardown. `runner.rs::install_presentation_alongside` is that
-    /// caller in production; `Self::install_second_presentation_for_test`
-    /// (`cfg(test)`-only, no stable link target in a non-test doc build) is
-    /// the test-only counterpart for `UiRealm`-only tests that never touch
-    /// `AppRuntime`/`WindowRegistry` at all.
-    pub(crate) fn install_presentation(
-        &mut self,
+    /// haptics, redraw-poke — see `PresentationState::new`'s wiring).
+    pub(crate) fn assemble_presentation(
+        &self,
         window: Arc<dyn PlatformWindow>,
-    ) -> PresentationId {
+    ) -> PresentationState {
         let (_, presentation_id) = super::runtime::next_identity();
         let pipeline = PipelineCell::new(PipelineOwner::new());
-        let presentation = PresentationState::new(
+        PresentationState::new(
             presentation_id,
             pipeline,
             window,
@@ -949,7 +952,29 @@ impl UiRealm {
                 scheduler: &self.scheduler,
                 wake: Arc::clone(&self.wake),
             },
-        );
+        )
+    }
+
+    /// Install an already-[`assembled`](Self::assemble_presentation)
+    /// presentation into this realm's forest — the production entry point
+    /// (this slice lifted `PresentationForest::install`'s former
+    /// `len()<=1` ratchet).
+    ///
+    /// The caller is responsible for minting this presentation's
+    /// `WindowRegistry` mapping BEFORE calling this (typically between
+    /// `assemble_presentation` and this call) — `UiRealm` has no access to
+    /// that registry (ADR-0037 §2), exactly the same split
+    /// [`Self::close_presentation_entered`]'s own doc states for teardown.
+    /// `runner.rs::install_presentation_alongside` is that caller in
+    /// production; `Self::install_second_presentation_for_test`
+    /// (`cfg(test)`-only, no stable link target in a non-test doc build) is
+    /// the test-only counterpart for `UiRealm`-only tests that never touch
+    /// `AppRuntime`/`WindowRegistry` at all.
+    pub(crate) fn install_presentation(
+        &mut self,
+        presentation: PresentationState,
+    ) -> PresentationId {
+        let presentation_id = presentation.id();
         self.presentations.install(presentation);
         presentation_id
     }
@@ -966,7 +991,8 @@ impl UiRealm {
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
         let window = super::presentation::test_platform_window(None);
-        self.install_presentation(window)
+        let presentation = self.assemble_presentation(window);
+        self.install_presentation(presentation)
     }
 
     /// The presentation keyboard input currently routes to
@@ -1910,13 +1936,15 @@ impl UiRealm {
     /// primary`](super::presentation_forest::PresentationForest::primary).
     ///
     /// Pointer/IME/drag-drop events go to the ADDRESSED presentation's own
-    /// gesture/text-input state — never a sibling's
-    /// (`input_stamped_for_a_never_reaches_bs_arena`,
-    /// `ime_attach_on_a_does_not_detach_bs_session`). Keyboard is the one
-    /// exception: it always goes to [`Self::focus_coordinator`]'s currently
-    /// ACTIVE presentation instead of the stamped one — see
-    /// [`FocusCoordinator`]'s own doc for why
-    /// (`keyboard_routes_to_active_presentation_only`).
+    /// gesture/text-input state — never a sibling's, and never falling
+    /// through to the primary when the addressed id is missing
+    /// (`input_stamped_for_b_never_reaches_as_arena`,
+    /// `ime_event_addressed_to_b_does_not_reach_as_session`,
+    /// `input_addressed_to_a_closed_or_unknown_presentation_drops_traced_
+    /// never_falls_through`). Keyboard is the one exception: it always
+    /// goes to [`Self::focus_coordinator`]'s currently ACTIVE presentation
+    /// instead of the stamped one — see [`FocusCoordinator`]'s own doc for
+    /// why (`keyboard_routes_to_active_presentation_only`).
     ///
     /// [`input_dropped_by_lifecycle`] gates every kind next, against the
     /// RESOLVED target's own lifecycle (not necessarily `presentation_id`'s,
@@ -2225,6 +2253,26 @@ impl UiRealm {
             let Some(presentation) = realm.presentations.get(id) else {
                 return false;
             };
+            // Re-stamp the active presentation to the survivor BEFORE
+            // dispose hooks run, if `id` is the realm's currently ACTIVE
+            // one (`FocusCoordinator`) -- mirrors `runner.rs`'s
+            // `RealmSlot::address` re-stamp ordering (dispose-time
+            // reentrancy safety: re-stamp before disposal, never after) and
+            // closes the keyboard-blackhole gap a naive close would leave:
+            // without this, `FocusCoordinator` keeps pointing at `id` after
+            // steps 4-6 remove it from the forest, so `handle_input_
+            // addressed`'s `Keyboard` arm resolves a presentation the
+            // forest no longer has and every keyboard event drops traced
+            // until a fresh `WindowFocus(true)` names a live presentation --
+            // `primary_id_excluding` always returns `Some` here since
+            // `close_presentation_entered` is never called for a realm's
+            // sole presentation (that case routes through a full realm
+            // uninstall instead, in `runner.rs`).
+            if realm.focus_coordinator.active() == id
+                && let Some(surviving) = realm.primary_id_excluding(id)
+            {
+                realm.focus_coordinator.note_focus_gained(surviving);
+            }
             // Steps 2 + 3, composite (minus `id` itself) + capabilities active.
             presentation.close();
             true
@@ -5565,26 +5613,41 @@ mod tests {
             (fake, capability)
         }
 
-        /// A pointer event addressed to A must reach ONLY A's own gesture
-        /// arena — never B's, even though both presentations share one
-        /// realm's `enter()` scope and dispatch machinery.
+        /// A pointer event addressed to B (the NON-primary presentation)
+        /// must reach ONLY B's own gesture arena — never A's (the primary),
+        /// even though both presentations share one realm's `enter()` scope
+        /// and dispatch machinery.
         ///
-        /// If reverted (`handle_input_addressed`'s `Pointer` arm reads
-        /// `self.presentations.primary()` instead of the resolved addressed
-        /// target): this fails whenever `presentation_id` names the
-        /// non-primary presentation, since the event would land on the
-        /// wrong arena entirely.
+        /// Deliberately stamps for B, not A: A is this realm's primary, so a
+        /// mutant that reroutes `handle_input_addressed` to
+        /// `self.presentations.primary()` regardless of the addressed id
+        /// would still (accidentally) satisfy an A-stamped version of this
+        /// test — addressed-vs-primary is unobservable when the stamped
+        /// target IS the primary. Stamping for B is the only fixture that
+        /// actually exercises the addressed lookup: reverting the `Pointer`
+        /// arm to `self.presentations.primary()` makes this fail (B's count
+        /// stays `0`, A's becomes `1`).
         #[test]
-        fn input_stamped_for_a_never_reaches_bs_arena() {
+        fn input_stamped_for_b_never_reaches_as_arena() {
             let mut realm = UiRealm::for_test();
             let a_id = realm.presentation_id();
             let b_id = realm.install_second_presentation_for_test();
 
             let down = make_down_event(Offset::new(Pixels(4.0), Pixels(6.0)), PointerType::Mouse);
             realm.enter(|realm| {
-                realm.handle_input_addressed(a_id, PlatformInput::Pointer(down));
+                realm.handle_input_addressed(b_id, PlatformInput::Pointer(down));
             });
 
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .gestures()
+                    .active_pointer_count(),
+                1,
+                "the addressed (non-primary) presentation must receive the pointer event"
+            );
             assert_eq!(
                 realm
                     .presentations
@@ -5592,8 +5655,50 @@ mod tests {
                     .expect("A installed")
                     .gestures()
                     .active_pointer_count(),
-                1,
-                "the addressed presentation must receive the pointer event"
+                0,
+                "a pointer event stamped for B must never reach A's own gesture arena, even \
+                 though A is this realm's primary"
+            );
+        }
+
+        /// Input addressed to a presentation this realm does not (or no
+        /// longer) host must drop traced -- never silently fall through to
+        /// the primary, and never reach ANY live presentation's own arena.
+        /// Covers both shapes of "not a live presentation": an id that
+        /// never existed in this realm, and a real id that existed, was
+        /// closed, and is now gone from the forest.
+        ///
+        /// If reverted (`handle_input_addressed` falling back to
+        /// `self.presentations.primary()` when the addressed id is not
+        /// found, instead of tracing and returning): this fails in BOTH
+        /// cases -- A's (the primary's) pointer count would become
+        /// nonzero instead of staying `0`.
+        #[test]
+        fn input_addressed_to_a_closed_or_unknown_presentation_drops_traced_never_falls_through() {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+
+            // Case 1: an id that never existed in this realm at all.
+            let bogus = flui_foundation::PresentationId::new_gen(
+                999,
+                std::num::NonZeroU32::new(999).expect("nonzero"),
+            );
+            let down_for_bogus =
+                make_down_event(Offset::new(Pixels(4.0), Pixels(6.0)), PointerType::Mouse);
+            realm.enter(|realm| {
+                realm.handle_input_addressed(bogus, PlatformInput::Pointer(down_for_bogus));
+            });
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(a_id)
+                    .expect("A installed")
+                    .gestures()
+                    .active_pointer_count(),
+                0,
+                "input addressed to a never-existed presentation id must never fall through \
+                 to the primary"
             );
             assert_eq!(
                 realm
@@ -5603,25 +5708,56 @@ mod tests {
                     .gestures()
                     .active_pointer_count(),
                 0,
-                "a pointer event stamped for A must never reach B's own gesture arena"
+                "input addressed to a never-existed presentation id must never reach ANY \
+                 live presentation"
+            );
+
+            // Case 2: a real id that existed, was closed, and is now gone
+            // from the forest.
+            realm.close_presentation_entered(b_id);
+            assert!(
+                realm.presentations.get(b_id).is_none(),
+                "precondition: B must actually be gone from the forest after closing"
+            );
+            let down_for_closed =
+                make_down_event(Offset::new(Pixels(8.0), Pixels(10.0)), PointerType::Mouse);
+            realm.enter(|realm| {
+                realm.handle_input_addressed(b_id, PlatformInput::Pointer(down_for_closed));
+            });
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(a_id)
+                    .expect("A installed")
+                    .gestures()
+                    .active_pointer_count(),
+                0,
+                "input addressed to a CLOSED presentation id must never fall through to the \
+                 surviving primary either"
             );
         }
 
         /// Two independently attached IME sessions, one per presentation:
-        /// delivering an event addressed to A must reach only A's attached
-        /// client and must not disturb B's own platform IME session.
+        /// delivering an event addressed to B (the NON-primary presentation)
+        /// must reach only B's attached client and must not disturb A's
+        /// (the primary's) own platform IME session.
         ///
-        /// If reverted the same way as the pointer exploit above: this
-        /// fails by observing B's sink non-empty, or A's sink empty.
+        /// Deliberately addresses B, not A — see `input_stamped_for_b_never_
+        /// reaches_as_arena`'s doc for why an A-addressed fixture cannot
+        /// distinguish "delivered to the addressed presentation" from
+        /// "delivered to the primary": reverting the `Ime` arm to
+        /// `self.presentations.primary()` makes this fail (B's sink stays
+        /// empty, A's receives the event instead).
         #[test]
-        fn ime_attach_on_a_does_not_detach_bs_session() {
+        fn ime_event_addressed_to_b_does_not_reach_as_session() {
             let (fake_a, capability_a) = headless_text_input();
             let (fake_b, capability_b) = headless_text_input();
 
             let mut realm = UiRealm::for_test_with_text_input(Some(capability_a));
             let a_id = realm.presentation_id();
             let window_b = crate::app::presentation::test_platform_window(Some(capability_b));
-            let b_id = realm.install_presentation(window_b);
+            let presentation_b = realm.assemble_presentation(window_b);
+            let b_id = realm.install_presentation(presentation_b);
 
             let received_a = Rc::new(RefCell::new(Vec::new()));
             let sink_a = Rc::clone(&received_a);
@@ -5646,24 +5782,25 @@ mod tests {
 
             realm.enter(|realm| {
                 realm.handle_input_addressed(
-                    a_id,
+                    b_id,
                     PlatformInput::Ime(ImeEvent::Commit("hello".to_string())),
                 );
             });
 
             assert_eq!(
-                received_a.borrow().as_slice(),
+                received_b.borrow().as_slice(),
                 [ImeEvent::Commit("hello".to_string())],
-                "A's attached client must receive the event addressed to A"
+                "B's attached client must receive the event addressed to B, even though A is \
+                 this realm's primary"
             );
             assert!(
-                received_b.borrow().is_empty(),
-                "an IME event addressed to A must never reach B's attached client"
+                received_a.borrow().is_empty(),
+                "an IME event addressed to B must never reach A's attached client"
             );
             assert_eq!(
-                fake_b.last_ime_allowed(),
+                fake_a.last_ime_allowed(),
                 Some(true),
-                "delivering an event to A must not touch B's own platform IME session"
+                "delivering an event to B must not touch A's own platform IME session"
             );
         }
 
@@ -5716,31 +5853,19 @@ mod tests {
             );
         }
 
-        /// `WindowFocus(false)` (focus LOST) never moves the active
-        /// presentation — see [`FocusCoordinator::note_focus_gained`]'s doc
-        /// for why: losing focus names no new owner.
-        #[test]
-        fn focus_lost_does_not_move_the_active_presentation() {
-            let mut realm = UiRealm::for_test();
-            let a_id = realm.presentation_id();
-            let b_id = realm.install_second_presentation_for_test();
-
-            realm.notify_presentation_focus_gained(b_id);
-            assert_eq!(realm.active_presentation_for_test(), b_id);
-
-            // `notify_presentation_focus_gained` only exists for the
-            // gained-focus direction; there is no "focus lost" write side to
-            // call, by design (see FocusCoordinator's doc) -- this test pins
-            // that b_id, once active, stays active absent a DIFFERENT
-            // presentation's own focus-gained notification.
-            assert_eq!(
-                realm.active_presentation_for_test(),
-                b_id,
-                "the active presentation must not drift without an explicit focus-gained \
-                 notification naming someone else"
-            );
-            let _ = a_id;
-        }
+        // This module can only exercise `UiRealm`'s own write side
+        // (`notify_presentation_focus_gained`) directly -- the production
+        // `WindowFocus(false)`-never-moves-active guard actually lives in
+        // `runner.rs`'s `PlatformToUi::run` (the `if focused` check around
+        // the call to `notify_presentation_focus_gained`), which a direct
+        // `UiRealm`-level test cannot reach or mutate. See
+        // `realm_dispatch_tests::window_focus_true_moves_active_
+        // presentation_end_to_end_and_false_does_not` (`runner.rs`) for the
+        // real end-to-end proof, driven through `dispatch_platform_realm`
+        // with genuine `RealmTask::Event(PlatformToUi::WindowFocus(_))`
+        // tasks -- a vacuous direct-call version of this test (set B active,
+        // assert B active, assert B active again with no operation between)
+        // used to live here and was replaced for exactly that reason.
 
         /// A focus-gained notification naming a presentation this realm no
         /// longer hosts (already closed, or a forged id) is a traced no-op —
@@ -5760,6 +5885,53 @@ mod tests {
                 realm.active_presentation_for_test(),
                 a_id,
                 "an unknown presentation id must never become the active one"
+            );
+        }
+
+        /// Closing the realm's currently ACTIVE presentation must re-stamp
+        /// `FocusCoordinator` to the surviving primary before returning --
+        /// never leave it pointing at a now-dead id, which would
+        /// black-hole every keyboard event until a fresh `WindowFocus(true)`
+        /// happened to name a live presentation. Closes B (the non-primary)
+        /// while B is active, so this also exercises "the active
+        /// presentation being closed is not the primary" -- not just "close
+        /// the primary while it's active".
+        ///
+        /// If reverted (the re-stamp removed from
+        /// `close_presentation_entered`): this fails -- the post-close
+        /// keyboard event resolves `self.presentations.get(dead_b_id)` to
+        /// `None` and drops traced, so A's `redraw_pending` bit is never
+        /// set.
+        #[test]
+        fn keyboard_after_closing_the_active_presentation_routes_to_the_survivor() {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+
+            realm.notify_presentation_focus_gained(b_id);
+            assert_eq!(realm.active_presentation_for_test(), b_id);
+
+            realm.close_presentation_entered(b_id);
+
+            assert_eq!(
+                realm.active_presentation_for_test(),
+                a_id,
+                "closing the active presentation must re-stamp active to the surviving primary"
+            );
+
+            let key_event = KeyEventBuilder::new(flui_interaction::events::Code::KeyA).build();
+            realm.enter(|realm| {
+                realm.handle_input_addressed(a_id, PlatformInput::Keyboard(key_event));
+            });
+
+            assert!(
+                realm
+                    .presentations
+                    .get(a_id)
+                    .expect("A installed")
+                    .take_redraw_pending(),
+                "keyboard input must reach the surviving primary after the active presentation \
+                 closes, never drop as if no presentation were active"
             );
         }
     }
@@ -5858,7 +6030,8 @@ mod tests {
             )
             .expect("realm constructs");
             let a_id = realm.presentation_id();
-            let b_id = realm.install_presentation(Arc::clone(&window_b));
+            let presentation_b = realm.assemble_presentation(Arc::clone(&window_b));
+            let b_id = realm.install_presentation(presentation_b);
 
             assert_eq!(calls_a.load(AtomicOrdering::Relaxed), 0);
             assert_eq!(calls_b.load(AtomicOrdering::Relaxed), 0);
