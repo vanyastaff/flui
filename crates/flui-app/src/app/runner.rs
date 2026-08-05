@@ -1325,7 +1325,7 @@ fn install_realm_alongside(
         presentation_id: realm.presentation_id(),
     };
     let window = std::sync::Arc::clone(window);
-    APP_RUNTIME.with(|slot| {
+    let result = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         state.owner_thread.get_or_insert(owner_thread);
         let _ = state.ensure_services();
@@ -1340,11 +1340,21 @@ fn install_realm_alongside(
             },
             window,
         )
-    })?;
-    Ok(RealmDispatcher {
-        owner_thread,
-        address,
-    })
+    });
+    // On a refused collision, `result` carries the rejected `RealmSlot` (and
+    // the `UiRealm` it owns) back out of the TLS borrow above -- dropped
+    // only here, after that borrow has released, never inside it (see
+    // `AppRuntime::apply_install`'s own doc for why).
+    match result {
+        Ok(()) => Ok(RealmDispatcher {
+            owner_thread,
+            address,
+        }),
+        Err((error, rejected_slot)) => {
+            drop(rejected_slot);
+            Err(error)
+        }
+    }
 }
 
 /// Uninstalls exactly one realm — a single window closing while siblings
@@ -1521,20 +1531,33 @@ fn dispatch_platform_realm(
 /// Hot-restart's own iteration primitive (issue #555): visits every
 /// currently-installed realm, in mount order, running `f` against each one
 /// OUTSIDE the `APP_RUNTIME` borrow — the same checkout/restore discipline
-/// [`dispatch_platform_realm`] uses for a single addressed realm — so `f` may
-/// safely call back into any `APP_RUNTIME`-touching function, including a
-/// realm-map install/uninstall request. Such a request, arriving while this
-/// visit is still in progress, defers rather than applies immediately
-/// ([`super::runtime::AppRuntime::request_realm_install`]'s own doc),
-/// applied only once every realm has been visited — so the set of realms
-/// visited never shifts mid-iteration.
+/// [`dispatch_platform_realm`] uses for a single addressed realm.
+///
+/// What `f` may safely do, precisely (not "any `APP_RUNTIME`-touching
+/// function" — the visited realm counts as dispatched, see below, so the
+/// same restrictions a dispatched task's own closure has apply here too):
+/// dispatch back to the SAME realm being visited (enqueues via the ordinary
+/// same-realm reentrant path, never recurses); request a realm-map
+/// install/uninstall (defers rather than applies immediately — see
+/// [`super::runtime::AppRuntime::request_realm_install`]'s own doc — applied
+/// only once every realm has been visited, so the set of realms visited
+/// never shifts mid-iteration); or call [`super::runtime::AppRuntime::should_exit`]
+/// (also defers its own drain while this visit is in flight, for the same
+/// reason). Dispatching to a DIFFERENT, sibling realm is NOT safe: it now
+/// trips `dispatch_platform_realm`'s nested-cross-realm-dispatch guard (see
+/// the next paragraph), a deliberate behavior change, not an oversight.
 ///
 /// Each visited realm is ALSO stashed into `dispatched_scheduler`/
 /// `dispatched_realm_id` for the duration of its own call to `f` — the same
 /// fields `dispatch_platform_realm` stashes for a dispatched task — so
 /// `with_owner_platform`'s fence (c) stays able to see the visited realm's
 /// own scheduler phase for the whole time it sits checked out of `realms`,
-/// exactly as it does for a real dispatch.
+/// exactly as it does for a real dispatch. A side effect of that stash is
+/// exactly the restriction stated above: `dispatch_platform_realm` treats a
+/// visited realm as "checked out" indistinguishably from a dispatched one,
+/// so a nested dispatch to a sibling realm from inside `f` is rejected by
+/// the same nested-cross-realm-dispatch guard a nested dispatch from inside
+/// another dispatch would be.
 ///
 /// A panic inside `f` is caught, not propagated past this function's own
 /// cleanup: the visited realm is restored to its slot, `iterating_all_realms`
@@ -1713,7 +1736,10 @@ fn teardown_platform_realm() {
     not(target_arch = "wasm32")
 ))]
 mod realm_dispatch_tests {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
     use flui_interaction::{
         HitTestResult,
@@ -2858,6 +2884,77 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
+    /// The DEFERRED half of the collision-refusal path:
+    /// `drain_pending_realm_mutations`'s own `Install` arm, reached only
+    /// when a collision is requested mid-visit/mid-dispatch rather than at
+    /// idle. Must behave identically to the immediate path above -- refuse,
+    /// leave realm A's own registration untouched, and never corrupt the
+    /// registry -- and must do so without ever dropping the rejected
+    /// `RealmSlot` (and the `UiRealm` it owns) while this visit's own
+    /// `APP_RUNTIME` borrow is live: `apply_install`/
+    /// `drain_pending_realm_mutations` route a rejected slot through
+    /// `removed` instead, the same bucket a removed `Uninstall` slot uses,
+    /// dropped only once the caller's borrow has released.
+    #[test]
+    fn deferred_install_collision_is_refused_without_corrupting_the_registry() {
+        let platform = flui_platform::headless_platform();
+        let window = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create a test window");
+        let dispatcher_a =
+            install_platform_realm(super::super::ui_realm::UiRealm::for_test(), &window);
+        let realm_a_id = dispatcher_a.address.realm_id;
+
+        let colliding_realm = super::super::ui_realm::UiRealm::for_test();
+        let colliding_address = flui_foundation::PresentationAddress {
+            realm_id: colliding_realm.realm_id(),
+            presentation_id: colliding_realm.presentation_id(),
+        };
+        let mut colliding_realm = Some(colliding_realm);
+
+        for_each_installed_realm(|realm| {
+            assert_eq!(
+                realm.realm_id(),
+                realm_a_id,
+                "the sole installed realm is realm A"
+            );
+            let deferred = APP_RUNTIME.with(|slot| {
+                slot.borrow_mut().request_realm_install(
+                    colliding_address.realm_id,
+                    RealmSlot {
+                        realm: colliding_realm.take(),
+                        queue: VecDeque::new(),
+                        draining: false,
+                        address: colliding_address,
+                        surface_applier: None,
+                    },
+                    std::sync::Arc::clone(&window),
+                )
+            });
+            assert!(
+                deferred.is_ok(),
+                "an Install requested mid-visit must defer (Ok), not fail synchronously -- \
+                 the collision is only discovered once the deferred drain applies it"
+            );
+        });
+
+        assert!(
+            APP_RUNTIME.with(|slot| slot
+                .borrow()
+                .realms
+                .get(&colliding_address.realm_id)
+                .is_none()),
+            "the colliding realm must never enter the registry -- its window id collided with \
+             realm A's own mapping when the deferred drain applied it"
+        );
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().realms.get(&realm_a_id).is_some()),
+            "realm A's own registration must survive the sibling's refused, deferred collision"
+        );
+
+        teardown_platform_realm();
+    }
+
     /// Closing one of two hosted windows must not exit the loop while a
     /// sibling realm is still hosted (the default `ExitPolicy::OnLastWindowClosed`).
     #[test]
@@ -3136,9 +3233,30 @@ mod realm_dispatch_tests {
              otherwise every future realm-map mutation request would defer forever"
         );
 
-        dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {}))).expect(
-            "the realm must still be dispatchable after a panicking visit -- its slot \
-                     was restored, not permanently stranded at realm: None",
+        // A bare `.expect(Ok(()))` on the dispatch below is NOT sufficient
+        // evidence the realm's slot was actually restored: if `realm: None`
+        // were left stranded, `dispatch_platform_realm` would take its
+        // enqueue-only early-return path (`realm_slot.realm.is_none()`) and
+        // still return `Ok(())` — successfully queuing the task forever
+        // without ever running it, indistinguishable from success at the
+        // `Result` level alone. Give the task an observable side effect
+        // instead: it only runs SYNCHRONOUSLY, inside this same call, if the
+        // slot's `realm` was genuinely `Some(..)` at call time.
+        let ran = Rc::new(Cell::new(false));
+        let ran_in_task = Rc::clone(&ran);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| {
+                ran_in_task.set(true);
+            })),
+        )
+        .expect("dispatch must return cleanly after a panicking visit");
+        assert!(
+            ran.get(),
+            "the dispatched task must actually RUN, not merely enqueue forever -- it only runs \
+             if the visit's cleanup genuinely restored realm: Some(..) into this realm's slot; \
+             a stranded realm: None slot would still return Ok(()) from the enqueue-only path \
+             above without ever executing this closure"
         );
 
         teardown_platform_realm();

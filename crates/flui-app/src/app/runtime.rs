@@ -757,16 +757,26 @@ impl AppRuntime {
     /// `window`'s id in the `WindowRegistry` FIRST, strictly (never
     /// replacing an existing mapping — an id collision is refused, not
     /// silently re-routed onto a sibling realm's window), and only inserts
-    /// `slot` into `realms` once that registration succeeds. On
-    /// `Err`, `slot` (and the `UiRealm` it owns) is dropped by the caller;
-    /// this method itself never touches `realms` in that case.
+    /// `slot` into `realms` once that registration succeeds.
+    ///
+    /// On `Err`, hands `slot` BACK rather than dropping it here: this method
+    /// is always called while some caller's `APP_RUNTIME` `RefCell` borrow is
+    /// still live, and `slot` owns a whole `UiRealm` whose destructors may
+    /// re-enter platform/framework code — the same reason
+    /// `install_platform_realm`/`teardown_platform_realm` never drop a
+    /// realm-owning value while their own TLS borrow is held. Every caller of
+    /// this method routes the returned slot through its own `removed`-style
+    /// return value instead, so the actual drop happens only once that
+    /// borrow has released.
     fn apply_install(
         &mut self,
         id: RealmId,
         slot: RealmSlot,
         window: &Arc<dyn PlatformWindow>,
-    ) -> Result<(), RegistryError> {
-        self.registry.try_register(window.id(), slot.address)?;
+    ) -> Result<(), (RegistryError, Box<RealmSlot>)> {
+        if let Err(error) = self.registry.try_register(window.id(), slot.address) {
+            return Err((error, Box::new(slot)));
+        }
         self.realms.insert(id, slot);
         Ok(())
     }
@@ -806,7 +816,11 @@ impl AppRuntime {
     /// to a live entry — deferred installs cannot fail synchronously (the
     /// caller has already returned by the time they apply); see
     /// [`Self::drain_pending_realm_mutations`] for how that case is handled
-    /// instead (traced and dropped, never silently re-routed).
+    /// instead (traced and dropped, never silently re-routed). On that
+    /// immediate `Err`, hands `slot` back inside the error (see
+    /// [`Self::apply_install`]'s own doc for why) — the caller (always
+    /// itself inside a live `APP_RUNTIME` borrow) must drop it only after
+    /// that borrow releases.
     #[cfg_attr(
         not(test),
         expect(
@@ -820,7 +834,7 @@ impl AppRuntime {
         id: RealmId,
         slot: RealmSlot,
         window: Arc<dyn PlatformWindow>,
-    ) -> Result<(), RegistryError> {
+    ) -> Result<(), (RegistryError, Box<RealmSlot>)> {
         if self.dispatched_realm_id.is_some() || self.iterating_all_realms {
             self.pending_realm_mutations.push(RealmMapMutation::Install(
                 id,
@@ -879,10 +893,13 @@ impl AppRuntime {
     /// caller, never the outer operation whose completion is supposed to
     /// trigger the drain.
     ///
-    /// Returns every removed [`RealmSlot`] (from a deferred `Uninstall`), for
-    /// the caller to drop outside the live `APP_RUNTIME` borrow — see
-    /// [`Self::request_realm_install`]'s doc for why that discipline matters
-    /// here.
+    /// Returns every removed [`RealmSlot`] — both from a deferred
+    /// `Uninstall`, AND from a deferred `Install` that collided on its
+    /// window id — for the caller to drop outside the live `APP_RUNTIME`
+    /// borrow — see [`Self::apply_install`]'s own doc for why that
+    /// discipline matters here: this method runs inside every one of its
+    /// three callers' live `RefCell` borrow, so it must never drop a
+    /// realm-owning value itself.
     pub(super) fn drain_pending_realm_mutations(&mut self) -> Vec<RealmSlot> {
         if self.dispatched_realm_id.is_some() || self.iterating_all_realms {
             return Vec::new();
@@ -892,18 +909,18 @@ impl AppRuntime {
         for mutation in pending {
             match mutation {
                 RealmMapMutation::Install(id, slot, window) => {
-                    if let Err(error) = self.apply_install(id, *slot, &window) {
-                        // The realm this Install carried is dropped here,
-                        // with `slot` (and the `UiRealm` it owned) falling
-                        // out of scope at the end of this match arm --
-                        // never silently re-routed onto whichever sibling
-                        // realm already owns this window id.
+                    if let Err((error, slot)) = self.apply_install(id, *slot, &window) {
+                        // The collided slot is routed through `removed`, the
+                        // SAME bucket a rejected/removed `Uninstall` slot
+                        // uses below -- never dropped here, inside this
+                        // method's live borrow.
                         tracing::error!(
                             ?id,
                             ?error,
                             "dropping a deferred realm install: its window id collided with an \
                              already-registered mapping"
                         );
+                        removed.push(*slot);
                     }
                 }
                 RealmMapMutation::Uninstall(id) => {
