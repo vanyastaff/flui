@@ -352,24 +352,64 @@ impl MockWindow {
     /// a no-op unless [`crate::traits::Platform::set_exit_policy_hook`] was
     /// called first, matching every other headless test/consumer that
     /// predates this mechanism.
+    ///
+    /// Every user-supplied callback (the hook itself, and `on_quit`) is taken
+    /// out of the lock and called OUTSIDE it (ADR-0039) — the same
+    /// take/invoke/restore-if-none discipline `WinitPlatform`'s own
+    /// window-event-handler lease uses, and for the identical reason: the
+    /// hook's body (`flui-app`'s `AppRuntime::should_exit`) drops removed
+    /// realm state, whose destructors may call back into this platform (a
+    /// dispose hook opening another window, say). Calling either callback
+    /// while still holding `platform_state`'s lock would deadlock the
+    /// instant such a callback re-entered any lock-guarded method (e.g.
+    /// `open_window`).
     fn notify_closed(&self) {
         let Some(platform_state) = self.platform_state.upgrade() else {
             return;
         };
-        let mut state = platform_state.lock();
-        state.windows.retain(|w| w.id != self.id);
-        if state.active_window == Some(self.id) {
-            state.active_window = state.windows.first().map(|w| w.id);
+
+        let windows_empty = {
+            let mut state = platform_state.lock();
+            state.windows.retain(|w| w.id != self.id);
+            if state.active_window == Some(self.id) {
+                state.active_window = state.windows.first().map(|w| w.id);
+            }
+            state.windows.is_empty()
+        };
+        if !windows_empty {
+            return;
         }
-        let should_quit = state.windows.is_empty()
-            && state
-                .handlers
-                .exit_policy
-                .as_ref()
-                .is_some_and(|hook| hook());
-        if should_quit {
+
+        // `is_some_and`, not `is_none_or`: headless's own pre-#555 default
+        // is "no hook -> never quit" (matching every headless test/consumer
+        // that predates this mechanism, none of which expects closing a
+        // mock window to spontaneously call `quit`) -- the OPPOSITE of
+        // winit's "no hook -> exit unconditionally" default, which matches
+        // real native pre-#555 window-close behavior instead. The two
+        // backends' defaults are deliberately different; this is not a
+        // typo.
+        let hook = platform_state.lock().handlers.exit_policy.take();
+        let should_quit = hook.as_ref().is_some_and(|hook| hook());
+        // Restore only if nothing fresher was installed meanwhile -- the
+        // hook is not one-shot, unlike `quit` below: a veto here must leave
+        // it in place for the NEXT window close to consult.
+        if let Some(hook) = hook {
+            let mut state = platform_state.lock();
+            if state.handlers.exit_policy.is_none() {
+                state.handlers.exit_policy = Some(hook);
+            }
+        }
+        if !should_quit {
+            return;
+        }
+
+        let quit_callback = {
+            let mut state = platform_state.lock();
             state.is_running = false;
-            state.handlers.invoke_quit();
+            state.handlers.quit.take()
+        };
+        if let Some(mut callback) = quit_callback {
+            callback();
         }
     }
 

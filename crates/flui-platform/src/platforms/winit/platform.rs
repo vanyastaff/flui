@@ -476,6 +476,22 @@ impl WinitPlatform {
             handler,
         }
     }
+
+    /// Takes the exit-policy hook out from under the state lock so it can be
+    /// consulted outside it (ADR-0039) — the same take/invoke/restore-if-none
+    /// discipline [`Self::lease_window_event_handler`] uses, for the same
+    /// reason: the hook's own body (`flui-app`'s `AppRuntime::should_exit`)
+    /// drops removed realm state, whose destructors (a dispose hook opening
+    /// another window, say) may call back into this platform. Calling the
+    /// hook while still holding this non-reentrant lock would deadlock the
+    /// instant such a callback re-entered any `with_state`-guarded method.
+    fn lease_exit_policy_hook(&self) -> ExitPolicyHookLease<'_> {
+        let hook = self.with_state(|state| state.handlers.exit_policy.take());
+        ExitPolicyHookLease {
+            platform: self,
+            hook,
+        }
+    }
 }
 
 /// See [`WinitPlatform::lease_window_event_handler`].
@@ -502,6 +518,34 @@ impl Drop for WindowEventHandlerLease<'_> {
         self.platform.with_state(|state| {
             if state.handlers.window_event.is_none() {
                 state.handlers.window_event = Some(handler);
+            }
+        });
+    }
+}
+
+/// See [`WinitPlatform::lease_exit_policy_hook`].
+struct ExitPolicyHookLease<'a> {
+    platform: &'a WinitPlatform,
+    hook: Option<Box<dyn Fn() -> bool + Send>>,
+}
+
+impl ExitPolicyHookLease<'_> {
+    /// Consults the leased hook outside the platform state lock. `true`
+    /// (allow the exit) when no hook is installed — the pre-#555
+    /// unconditional default.
+    fn invoke(&self) -> bool {
+        self.hook.as_ref().is_none_or(|hook| hook())
+    }
+}
+
+impl Drop for ExitPolicyHookLease<'_> {
+    fn drop(&mut self) {
+        let Some(hook) = self.hook.take() else {
+            return;
+        };
+        self.platform.with_state(|state| {
+            if state.handlers.exit_policy.is_none() {
+                state.handlers.exit_policy = Some(hook);
             }
         });
     }
@@ -760,10 +804,15 @@ impl ApplicationHandler for WinitApp {
                 // handler asking for the main window) -- the exit-policy
                 // hook, when installed, gets the final word; unset, this
                 // is the exact pre-#555 unconditional behavior.
-                let should_exit = windows_empty
-                    && self
-                        .platform
-                        .with_state(|state| state.handlers.invoke_exit_policy());
+                //
+                // Lease-take the hook and consult it OUTSIDE the state lock
+                // (ADR-0039), exactly like the window-event handler above:
+                // the hook's own body drops removed realm state, whose
+                // destructors may call back into this platform (e.g. a
+                // dispose hook opening another window) -- consulting it
+                // while still holding this non-reentrant lock would deadlock
+                // the instant such a callback re-entered `with_state`.
+                let should_exit = windows_empty && self.platform.lease_exit_policy_hook().invoke();
 
                 if should_exit {
                     self.request_exit(event_loop);

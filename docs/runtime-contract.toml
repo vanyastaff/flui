@@ -343,11 +343,49 @@ closing_both_does` (`flui-app`) and the headless-backend-level \
 `closing_one_of_two_windows_does_not_consult_the_exit_policy_hook` / \
 `exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes` \
 (`flui-platform`'s own `tests/headless.rs`). Load-bearing ordering fix this \
-required: `run_desktop`'s `window.on_close` now calls \
-`uninstall_platform_realm` on ITS OWN realm before the platform's exit \
-decision runs -- without it, `AppRuntime`'s realm registry would never empty \
-on a native close and the hook would veto every exit forever, including the \
-app's ordinary single-window case.
+required: every window's own `on_close` (`run_desktop`'s primary, and BOTH \
+`WindowPolicy` branches of `open_secondary_window`) now routes through a \
+single `close_this_window` helper -- never a blind \
+`uninstall_platform_realm`, which would tear down an entire `SharedRealm` \
+group out from under a still-open sibling window -- which itself calls \
+`close_presentation`, correctly reducing to a full realm uninstall only when \
+the closing presentation is its realm's SOLE one. An earlier revision of \
+`open_secondary_window` left its own `on_close` log-only, so closing its \
+window never actually removed anything from `AppRuntime`'s registry and the \
+exit-policy hook vetoed every subsequent exit forever (a production hang: \
+zero windows left, app still alive) -- \
+`separate_realms_secondary_window_close_tears_down_its_own_realm_and_ \
+allows_exit` and \
+`shared_realm_secondary_presentation_close_removes_only_itself_and_keeps_ \
+the_realm_alive` are the regression pins, each mutant-verified against \
+exactly that log-only shape. `close_presentation`'s sole-presentation branch \
+also now dispatches `AppLifecycleState::Detached` through the realm BEFORE \
+requesting its uninstall (cancelling in-flight pointer sequences and \
+notifying lifecycle observers before the realm and its `Scheduler` are gone \
+-- the same reason `on_quit`'s own, now-secondary, Detached dispatch \
+exists), pinned by \
+`closing_the_sole_presentation_dispatches_detached_before_uninstalling`.
+
+**Reentrancy hazards this required fixing, and one still open, named \
+honestly:** the exit-policy hook (and, in the headless backend, the `quit` \
+callback it can trigger) is now taken OUT of each backend's own state lock \
+and invoked OUTSIDE it (`WinitPlatform::lease_exit_policy_hook`, \
+`HeadlessPlatform`'s `notify_closed`) -- the hook's body drops removed realm \
+state, whose destructors may call back into the SAME platform (a dispose \
+hook opening another window), which would deadlock on that non-reentrant \
+lock otherwise; this mirrors the pre-existing window-event-handler lease \
+pattern exactly (ADR-0039). Left open, stated rather than silently fixed: \
+calling a window's platform-level `close()` REENTRANTLY, from inside an \
+already-dispatched realm callback, makes the hook consult a registry that \
+has not actually emptied yet (`close_this_window`'s own same-realm \
+reentrant dispatch only enqueues; the uninstall applies at the OUTER \
+dispatch's own tail, after the hook already decided) -- an exit is missed, \
+not merely delayed, and nothing re-checks afterward. \
+`closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_ \
+exit_today` pins this AS a known gap (it asserts the CURRENT, imperfect \
+outcome, and says so in its own name and doc); the tracked fix is to \
+re-consult the hook once a deferred realm-map mutation actually applies, \
+e.g. at each dispatch's own tail, not attempted here.
 
 **Named, deliberately out-of-scope residual:** a window `open_secondary_ \
 window` opens shows no widget content and never renders a frame. Two \
@@ -383,6 +421,21 @@ addressed input/semantics/keyboard routing (see \
 is the real native embedder call site that drives both \
 `install_realm_alongside` and `install_presentation_alongside` in \
 production, closing the native-lifecycle gap named above for both paths.
+
+**Named residual, now durable here rather than only in a private field's \
+own doc comment:** `AppRuntime.visible`/`.focused` (`runtime.rs`) are still \
+LOOP-scoped, not per-realm -- with more than one hosted REALM, a \
+focus/visibility change on any one window's OS signal drives the SAME \
+`AppLifecycleState` derivation for every realm on this loop. Issue #555's \
+addressed-routing slice (PR-4/#608) narrowed this for the WITHIN-one-realm \
+case (`WindowPolicy::SharedRealm`'s more-than-one-presentation shape): a \
+non-active presentation's own window losing OS focus no longer suspends its \
+realm (`UiRealm::is_active_presentation` gates it). The remaining gap is \
+strictly cross-REALM (`WindowPolicy::SeparateRealms`): this field pair has \
+no realm identity at all, so realm A's window gaining/losing focus still \
+drives realm B's own lifecycle derivation too. The fix is a genuinely \
+per-realm `(visible, focused)` pair (moving these fields onto `RealmSlot`), \
+out of this slice's scope; not attempted here.
 
 `with_owner_platform`'s fence (c) (ADR-0039 §6, trigger #22's runtime \
 backstop) re-points onto this struct: `AppRuntime::installed_realm_phase` \
@@ -462,6 +515,13 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn hot_restart_with_two_realms_and_with_two_presentations" },
     { kind = "test", file = "crates/flui-platform/tests/headless.rs", contains = "fn closing_one_of_two_windows_does_not_consult_the_exit_policy_hook" },
     { kind = "test", file = "crates/flui-platform/tests/headless.rs", contains = "fn exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn close_this_window" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn separate_realms_secondary_window_close_tears_down_its_own_realm_and_allows_exit" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn shared_realm_secondary_presentation_close_removes_only_itself_and_keeps_the_realm_alive" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_the_sole_presentation_dispatches_detached_before_uninstalling" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn separate_realms_secondary_window_input_reaches_its_own_realm_not_the_primarys" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_exit_today" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn lease_exit_policy_hook" },
 ]
 
 [[contract]]

@@ -29,6 +29,7 @@ use crate::traits::{DispatchEventResult, PlatformInput, WindowEvent};
 ///
 /// All callbacks are `Send` but not `Sync`, as they're typically invoked from
 /// the main thread only.
+#[non_exhaustive]
 pub struct PlatformHandlers {
     /// Called when the application should quit
     pub quit: Option<Box<dyn FnMut() + Send>>,
@@ -114,7 +115,17 @@ impl PlatformHandlers {
     }
 
     /// Consult the exit-policy hook (see [`Self::exit_policy`]'s doc). `true`
-    /// when unset — the pre-#555 unconditional default.
+    /// when unset — the pre-#555 unconditional "last window closed -> exit"
+    /// default a real native backend (winit) had. Only a storage-level test
+    /// calls this directly today: winit's own `CloseRequested` handling
+    /// leases the hook out of the lock first (`WinitPlatform::
+    /// lease_exit_policy_hook`) rather than calling this while the lock is
+    /// held. The headless backend does NOT use this method at all — its own
+    /// pre-#555 default is the OPPOSITE ("no hook -> never quit", matching
+    /// every headless test/consumer that predates this mechanism, none of
+    /// which expects closing a mock window to spontaneously call `quit`) —
+    /// see `HeadlessPlatform`'s own `notify_closed` for that backend's
+    /// inline equivalent.
     #[inline]
     pub fn invoke_exit_policy(&self) -> bool {
         self.exit_policy.as_ref().is_none_or(|hook| hook())
