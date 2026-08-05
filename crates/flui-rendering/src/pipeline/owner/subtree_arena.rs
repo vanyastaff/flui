@@ -31,7 +31,7 @@
 //!
 //! ## Safety-gate note
 //!
-//! All three `unsafe fn` bodies in this file must be reviewed by
+//! All seven `unsafe fn` bodies in this file must be reviewed by
 //! `unsafe-auditor` before the SAFETY-GATE passes.  The SAFETY comments
 //! attached to each `unsafe` block document the invariant that makes the
 //! operation sound; they are the primary artefact for the audit.
@@ -39,7 +39,9 @@
 // The sanctioned `unsafe` island for the layout walk (see module docs above).
 // The opt-out is scoped to this file; every block carries a `// SAFETY:`
 // comment, and the invariants are machine-checked by the miri CI job /
-// `just miri`, which runs exactly this module's tests.
+// `just miri`, which runs this module's tests as part of a wider
+// `pipeline::owner` sweep (cell.rs's PipelineCell checkout tests and the
+// rest of the owner module's unit tests ride along in the same filter).
 #![allow(unsafe_code)]
 
 use std::collections::HashMap;
@@ -168,7 +170,7 @@ pub(super) struct SubtreeArena<'tree> {
     /// `&SubtreeArena: Send + Sync` (no longer true after the `PipelineCell`
     /// port dropped that bound -- `SubtreeArena` itself is `!Send + !Sync`
     /// now, transitively via this very field's `Box<dyn ParentData>`; see
-    /// the interim pin in `tests`). Downgrading to `RefCell` now that
+    /// the pin in `tests`). Downgrading to `RefCell` now that
     /// nothing requires the lock is a follow-up, not done here. Empty
     /// unless a lazy sliver requests a not-yet-built child.
     pending_builds: Mutex<Vec<crate::protocol::sliver_protocol::PendingBuild>>,
@@ -742,9 +744,10 @@ unsafe fn build_intrinsic_child_parent_data(
 /// Reborrows one [`NodePtr`] from the pre-acquired [`SubtreeArena`]
 /// at each call level, drives `perform_layout_raw` against a typed
 /// `BoxLayoutCtx`, and recurses via a closure that captures
-/// `&SubtreeArena` (Sync via [`NodePtr`]'s `unsafe impl`).  Distinct
-/// call levels reborrow distinct slab slots (parent ≠ child) — no
-/// aliasing.
+/// `&SubtreeArena` — no `Send`/`Sync` needed; the closure runs to
+/// completion on the constructing thread, synchronously, and never
+/// crosses a thread boundary. Distinct call levels reborrow distinct
+/// slab slots (parent ≠ child) — no aliasing.
 ///
 /// # Safety
 ///
@@ -795,7 +798,9 @@ unsafe fn layout_subtree_borrowed_impl(
     // Rust's drop-on-unwind discipline.
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
-    // Resolve id → NodePtr.  Cross-thread access panics inside `get`.
+    // Resolve id → NodePtr. Confinement to the constructing thread is
+    // structural (`SubtreeArena: !Send + !Sync`) — there is no cross-thread
+    // case for `get` to reject at runtime.
     let Some(NodePtr(node_ptr)) = arena.get(id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
@@ -1027,18 +1032,26 @@ unsafe fn layout_subtree_borrowed_impl(
         // Descendant-error tracking flag.  Closure flips to `true` on any
         // descendant `RenderError`; stage 6 below skips `clear_needs_layout`
         // when set so the parent stays dirty for next-frame retry.  Shared
-        // via `Arc<AtomicBool>` because the closure is `Send + Sync`
-        // (inherited from `LayoutChildCallback`'s bound).
+        // via `Arc<AtomicBool>` even though the closure never leaves this
+        // thread: `Arc` gives a cheap `Clone` for the recursive callback to
+        // carry alongside `arena_for_cb` without fighting the closure's own
+        // borrow of `arena`; a `Rc<Cell<bool>>` would work just as well
+        // soundness-wise but `Arc<AtomicBool>` was already the established
+        // idiom elsewhere in this walk (see the `layout_failures`/
+        // `layout_successes` sinks) before this callback existed.
         let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
 
-        // Capture `&SubtreeArena` for the recursive callback.  `&T` is
-        // `Send` iff `T: Sync`; `SubtreeArena: Sync` because its
-        // `HashMap<RenderId, NodePtr>` is Sync (NodePtr declares Sync via
-        // unsafe impl + RenderId is Sync) and the `PhantomData<&'tree mut ()>`
-        // is Sync too.  So `&SubtreeArena: Send + Sync`, satisfying
-        // `LayoutChildCallback: Send + Sync`.
+        // Capture `&SubtreeArena` for the recursive callback. Neither the
+        // capture nor the closure it is captured into needs `Send`/`Sync`:
+        // `LayoutChildCallback` carries no such bound (dropped along with
+        // `BoxLayoutCtxErased`'s own `Send + Sync` supertrait), and
+        // `SubtreeArena` is `!Send + !Sync` regardless (pinned by
+        // `assert_not_impl_any!` in this module's tests) — this closure
+        // simply never crosses a thread boundary; it runs to completion on
+        // the same thread that called `layout_dirty_root`, synchronously,
+        // before this stack frame returns.
         let arena_for_cb: &SubtreeArena<'_> = arena;
         let descendant_error_for_sliver_cb = std::sync::Arc::clone(&descendant_error_flag);
         let cb_owned = move |child_id: RenderId,
@@ -1444,7 +1457,9 @@ unsafe fn box_intrinsic_query_borrowed_impl(
     // `build_intrinsic_child_parent_data` gates each deref on `is_in_flight`
     // and skips any in-flight slot (see its `# Safety`). This call precedes the
     // child-query closure, so no non-cyclic child slot has been entered yet, and
-    // `arena.get` enforces single-thread access. All its preconditions hold.
+    // no other arena walk can run concurrently: that is structural
+    // (`SubtreeArena: !Send + !Sync`), not a runtime check `arena.get()`
+    // performs. All its preconditions hold.
     let child_parent_data_owned: Vec<Option<Box<dyn ParentData>>> = unsafe {
         build_intrinsic_child_parent_data(
             arena,
@@ -1570,7 +1585,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // Drop runs on every exit including unwind so the flag stays consistent.
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
-    // Resolve id → NodePtr.  Cross-thread access panics inside `get`.
+    // Resolve id → NodePtr. Confinement to the constructing thread is
+    // structural (`SubtreeArena: !Send + !Sync`) — there is no cross-thread
+    // case for `get` to reject at runtime.
     let Some(NodePtr(node_ptr)) = arena.get(id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
