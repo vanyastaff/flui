@@ -1673,6 +1673,7 @@ dependencies = [
  "flui-tree",
  "flui-types",
  "slab",
+ "static_assertions",
  "thiserror 2.0.19",
  "tracing",
  "web-time",
@@ -1836,6 +1837,7 @@ dependencies = [
  "slab",
  "smallvec",
  "stacker",
+ "static_assertions",
  "thiserror 2.0.19",
  "tracing",
 ]

@@ -95,7 +95,7 @@ declarations = [
     "pub mod embedder;",
     "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, run_direct, };",
     "pub use app::{run_app_android, run_app_android_with_config};",
-    "pub use bindings::{ GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler, WidgetsBinding, };",
+    "pub use bindings::{ GestureBinding, PaintingBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding, Scheduler, WidgetsBinding, };",
     "pub use flui_log::{AppIdentity, AppleBundleId};",
     "pub use flui_view::{ BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView, StatelessElement, StatelessView, View, };",
     "pub mod prelude {",
@@ -770,7 +770,13 @@ statement = """
 Accessibility actions are closed, identity-stamped commands resolved through \
 the presentation's exact pipeline owner in two borrow phases — no action \
 invocation runs while the render tree is borrowed; stale identities are \
-rejected and traced.\
+rejected and traced. Enforced by a production `debug_assert!(self.pipeline.is_free(), \
+..)` at the invocation site (moved off the `PipelineCell` port from a \
+test-only `Weak<RwLock<_>>::try_write()` probe, which became unrepresentable \
+once the pipeline handle turned `!Send` — a `PipelineCell` cannot be \
+captured by the `Arc<dyn Fn + Send + Sync>` handler closure a probe would \
+need); the two cited tests assert the observable contract (invoked-once, \
+report counts) instead of reaching into the lock.\
 """
 state = "implemented"
 domain = "presentation"
@@ -778,6 +784,7 @@ mechanical = true
 mechanism = "test existence pinned here"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "fn dispatch_semantics_action" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "BUG: the pipeline must be free before invoking a semantics-action handler" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn semantics_action_commits_on_the_owner_after_releasing_the_pipeline_lock" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn stale_semantics_action_is_gracefully_dropped" },
 ]
@@ -1294,13 +1301,13 @@ owner_issue = 556
 notes = "The type survives; its field set must become fully effective or shrink (the effective-configuration contract)."
 
 [[surface]]
-path = "flui_app::bindings re-export bundle (Scheduler, PipelineOwner, GestureBinding, WidgetsBinding, PaintingBinding, RenderingFlutterBinding)"
+path = "flui_app::bindings re-export bundle (Scheduler, PipelineOwner, PipelineCell, GestureBinding, WidgetsBinding, PaintingBinding, RenderingFlutterBinding)"
 crate = "flui-app"
 kind = "re-export"
 declared_in = "crates/flui-app/src/bindings/mod.rs"
-contains = "pub use flui_rendering::{binding::RendererBinding, pipeline::PipelineOwner}"
+contains = "pipeline::{PipelineCell, PipelineOwner}"
 classification = "transitional"
-thread_affinity = "mixed; the remaining singletons (Scheduler) are owner-thread-local via HasInstance"
+thread_affinity = "mixed; PipelineCell/PipelineOwner and WidgetsBinding are owner-thread-confined (!Send + !Sync, via PipelineCell's Rc<RefCell<_>>) -- a PipelineOwner belongs to exactly one presentation on exactly one thread; the remaining singletons (Scheduler) are owner-thread-local via HasInstance"
 owner = "transitional singleton service graph"
 failure_semantics = "singleton accessors construct lazily per thread; no typed errors (PaintingBinding and RenderingFlutterBinding excepted: both left the singleton graph -- PaintingBinding is a plain constructible value, RenderingFlutterBinding's impl_binding_singleton! invocation and instance()/ensure_initialized() are deleted -- both still re-exported here as types). SemanticsBinding is gone from this bundle entirely: it was deleted, not slimmed -- its process-scoped accessibility_features field moved to AppRuntime's SharedEngineServices, and its per-window enablement/announce/event state moved to the per-presentation SemanticsHost (crates/flui-app/src/app/semantics_host.rs)."
 consumers = ["flui-app prelude", "flui facade via app module"]
@@ -2113,6 +2120,31 @@ allow_files = []
 pattern = "SCHEDULER_PHASE_TEST_LOCK"
 why = "the ambient-singleton contract: retired alongside the process-global half of the Scheduler singleton -- every UiRealm now owns its own fresh Scheduler value, so there is no shared phase state left to guard"
 allow_files = []
+
+[[forbidden_pattern]]
+pattern = "Arc<RwLock<PipelineOwner"
+why = """
+the owner-local pipeline contract: `PipelineOwner` belongs to exactly one \
+presentation on exactly one thread, so the historical `Arc<RwLock<PipelineOwner>>` \
+shape never had a genuine cross-thread reader/writer to serialize -- it only \
+ever guarded a checkout slot (`BuildOwner::run_frame_with_layout_builders`'s \
+`mem::take`-transform-restore dance) and turned every reentrant checkout \
+into a silent deadlock instead of a loud panic. `PipelineCell` (a `!Send + \
+!Sync` `Rc<RefCell<PipelineOwner>>` newtype, `with`/`with_mut` closure-scoped \
+access, `RefCell::try_borrow_mut` reentrancy detection) replaces it \
+everywhere in production and test code; `RenderTree::owner`/`RenderView::owner` \
+(the two back-pointers a hypothetical caller could have used to rebuild the \
+old shape) are deleted, not merely retyped. The two allow-listed hits are \
+contrast documentation citing the retired shape by name, not a reintroduction: \
+`pipeline/owner/cell.rs`'s module doc explains what `PipelineCell` replaces, \
+and `pipeline/owner/mod.rs`'s "Multi-window" doc describes a DIFFERENT, \
+already-removed hierarchical-pipelines API (`adopt_child`/`drop_child`) that \
+predates this change and used the same anti-pattern for tree nodes.\
+"""
+allow_files = [
+    "crates/flui-rendering/src/pipeline/owner/cell.rs",
+    "crates/flui-rendering/src/pipeline/owner/mod.rs",
+]
 
 [[forbidden_path]]
 path = "crates/flui-presentation"
