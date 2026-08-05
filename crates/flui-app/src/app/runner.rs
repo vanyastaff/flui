@@ -442,29 +442,56 @@ pub(super) enum PlatformToUi {
     Lifecycle(AppLifecycleState),
 }
 
-/// One queued unit of owner-thread work: either a typed cross-thread
-/// [`PlatformToUi`] event, or the co-located frame pump. `Frame` is
-/// deliberately NOT part of the cross-thread vocabulary above — it is
-/// same-thread by construction (the `WrongThread` guard in
-/// [`dispatch_platform_realm`] rejects it from anywhere else) and carries an
-/// owner-local closure, which a cross-thread payload must never do
-/// (ADR-0037 §3 forbids `Box<dyn FnOnce()>` on that boundary). The `Send`
-/// assertion above applies to `PlatformToUi` only; splitting the two types
-/// is what makes that assertion non-vacuous.
+/// One queued unit of owner-thread work: a typed cross-thread
+/// [`PlatformToUi`] event, the co-located frame pump, or a request to close
+/// one presentation out of this realm's forest. `Frame` and
+/// `ClosePresentation` are deliberately NOT part of the cross-thread
+/// vocabulary above — both are same-thread by construction (the
+/// `WrongThread` guard in [`dispatch_platform_realm`] rejects them from
+/// anywhere else); `Frame` carries an owner-local closure, which a
+/// cross-thread payload must never do (ADR-0037 §3 forbids `Box<dyn
+/// FnOnce()>` on that boundary), and `ClosePresentation` carries a plain
+/// `Copy` id specifically so it CAN cross the same `Send` boundary
+/// `PlatformToUi` does if a later slice needs that — nothing about it
+/// requires same-thread delivery the way a closure does.
+///
+/// `ClosePresentation` is handled specially by [`dispatch_platform_realm`]'s
+/// own drain loop, never by [`RealmTask::run`]: closing a presentation needs
+/// `&mut UiRealm` (removing it from the forest), which only exists for the
+/// brief window the realm sits checked out of `APP_RUNTIME` as an owned
+/// local — exactly the window the drain loop already has open, and the
+/// reason this variant exists instead of giving `PresentationForest`
+/// interior mutability to reach the same `&mut` from behind `run`'s shared
+/// `&UiRealm` receiver.
 // `pub(super)` (rather than private) so `AppRuntime`'s `queue` field, defined
 // in the sibling `runtime` module, can name this type.
 #[cfg(not(target_os = "ios"))]
 pub(super) enum RealmTask {
     Event(PlatformToUi),
     Frame(Box<dyn FnOnce(&super::ui_realm::UiRealm)>),
+    ClosePresentation(flui_foundation::PresentationId),
 }
 
 #[cfg(not(target_os = "ios"))]
 impl RealmTask {
+    /// Runs an `Event`/`Frame` task against the realm's shared capabilities.
+    ///
+    /// # Panics
+    /// Panics if called with `Self::ClosePresentation` — that variant never
+    /// reaches this method: [`dispatch_platform_realm`]'s drain loop matches
+    /// it out before calling `run`, since it needs `&mut UiRealm` instead of
+    /// this method's `&UiRealm` receiver. Not reachable from any other
+    /// caller — `run` has exactly one call site.
     fn run(self, realm: &super::ui_realm::UiRealm) {
         match self {
             Self::Event(event) => event.run(realm),
             Self::Frame(run) => run(realm),
+            Self::ClosePresentation(id) => unreachable!(
+                "BUG: RealmTask::ClosePresentation({id:?}) reached RealmTask::run -- \
+                 dispatch_platform_realm's drain loop must match this variant out before \
+                 calling run, so it can call close_presentation_entered with &mut UiRealm \
+                 instead"
+            ),
         }
     }
 }
@@ -1403,6 +1430,49 @@ fn uninstall_platform_realm(realm_id: RealmId) {
     drop(removed);
 }
 
+/// Requests that one presentation be closed and removed from `dispatcher`'s
+/// realm — a single window closing out of a realm that hosts more than one,
+/// without tearing down the realm itself (contrast [`uninstall_platform_realm`],
+/// which removes a whole realm). Request-shaped, like every other realm-map
+/// mutation in this module: this function only enqueues
+/// [`RealmTask::ClosePresentation`] and (if the realm is currently idle)
+/// drives the drain loop that runs it — it never runs the six teardown
+/// steps itself, and never returns anything about their outcome beyond
+/// whether the request was accepted for this dispatcher (see
+/// [`dispatch_platform_realm`]'s own `Err` variants).
+///
+/// The six steps run at Idle inside [`super::ui_realm::UiRealm::close_presentation_entered`],
+/// which only [`dispatch_platform_realm`]'s own drain loop calls, and only
+/// with the realm checked out as an owned local — so a dispose callback the
+/// closed presentation runs mid-teardown sees the exact same
+/// `dispatched_realm_id` TLS state (and therefore the exact same
+/// install/uninstall deferral discipline) any other dispatched frame or
+/// event callback sees. Production contract: async-at-Idle only — a caller
+/// needing the six steps to have actually run before proceeding must drive
+/// the dispatch loop to idle itself (a synchronous bypass would defeat the
+/// whole point of routing this through the dispatch seam).
+///
+/// No production embedder call site yet — no backend currently closes a
+/// single presentation out of a multi-presentation forest (this issue's
+/// later slice adds one); exercised directly by this module's own tests in
+/// the meantime.
+#[cfg(not(target_os = "ios"))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "design-for-N presentation-close request path; no production embedder call \
+                  site closes one presentation out of a live multi-presentation forest yet -- \
+                  exercised by this module's own tests"
+    )
+)]
+fn close_presentation(
+    dispatcher: RealmDispatcher,
+    id: flui_foundation::PresentationId,
+) -> Result<(), RealmDispatchError> {
+    dispatch_platform_realm(dispatcher, RealmTask::ClosePresentation(id))
+}
+
 #[cfg(not(target_os = "ios"))]
 fn dispatch_platform_realm(
     dispatcher: RealmDispatcher,
@@ -1507,7 +1577,7 @@ fn dispatch_platform_realm(
         state.dispatched_realm_id = Some(realm_id);
         Ok(realm.map(|realm| (realm, first)))
     })?;
-    let Some((realm, first)) = checked_out else {
+    let Some((mut realm, first)) = checked_out else {
         return Ok(());
     };
 
@@ -1516,7 +1586,19 @@ fn dispatch_platform_realm(
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut next = Some(first);
         while let Some(event) = next {
-            realm.enter(|realm| event.run(realm));
+            // `ClosePresentation` is matched out here, before it would
+            // otherwise reach `RealmTask::run`'s `&UiRealm` receiver: closing
+            // a presentation removes it from the forest (`&mut UiRealm`),
+            // which is only available in this exact window -- `realm` sits
+            // here as an owned local, checked out of `APP_RUNTIME` for the
+            // whole dispatched task, so `&mut` falls out naturally instead of
+            // needing interior mutability on the forest itself.
+            match event {
+                RealmTask::ClosePresentation(id) => {
+                    realm.close_presentation_entered(id);
+                }
+                other => realm.enter(|realm| other.run(realm)),
+            }
             next = APP_RUNTIME.with(|slot| {
                 slot.borrow_mut()
                     .realms
@@ -3411,6 +3493,196 @@ mod realm_dispatch_tests {
         scheduler_a.drive_frame(web_time::Instant::now(), || {
             let _ = with_owner_platform(|_owner| ());
         });
+    }
+
+    /// The presentation-close dispatch seam (`close_presentation` ->
+    /// `dispatch_platform_realm` -> the special-cased `RealmTask::
+    /// ClosePresentation` branch -> `UiRealm::close_presentation_entered`)
+    /// runs presentation A's teardown with the exact same
+    /// `dispatched_realm_id` TLS state any other dispatched frame/event
+    /// callback runs under. One dispose hook on A proves both halves of
+    /// that claim:
+    ///
+    /// 1. it can RESOLVE a `GlobalKey` registered in SIBLING presentation
+    ///    B — the whole-frame composite `close_presentation_entered`'s own
+    ///    `self.enter(...)` activates for its step 2–3 phase spans every
+    ///    presentation still in the forest, not just the one being closed
+    ///    (the same fact `whole_frame_event_keeps_realm_global_key_scope_active`
+    ///    proves for an ordinary dispatched frame);
+    /// 2. an `install_realm_alongside` call it makes must DEFER — not
+    ///    apply immediately, not reenter `APP_RUNTIME` — exactly the
+    ///    discipline `frame_callback_opening_a_window_installs_second_realm_without_nested_dispatch`
+    ///    proves for an ordinary dispatched frame callback.
+    ///
+    /// Red-check performed by hand while writing this test (not left in the
+    /// tree): replacing the `close_presentation(dispatcher, a_id)` call
+    /// below with a direct `realm.close_presentation_entered(a_id)` reached
+    /// through a raw `APP_RUNTIME` borrow-and-take (bypassing
+    /// `dispatch_platform_realm` entirely, so `dispatched_realm_id` stays
+    /// `None` for the whole teardown) makes the `install_deferred`
+    /// assertion below fail: with no dispatch in flight,
+    /// `install_realm_alongside` applies the new realm IMMEDIATELY instead
+    /// of deferring, so this test observes it already installed at the
+    /// point it checks — proving the assertion is genuinely pinned to the
+    /// TLS deferral guard, not vacuously green regardless of which path
+    /// teardown takes.
+    #[test]
+    fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter() {
+        #[derive(Clone)]
+        struct OpenWindowOnDisposeView {
+            key_in_sibling: flui_view::GlobalKey<()>,
+            new_window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+            resolved_sibling_element: Rc<Cell<Option<flui_foundation::ElementId>>>,
+            install_deferred: Rc<Cell<Option<bool>>>,
+            opened_realm_id: Rc<Cell<Option<flui_foundation::RealmId>>>,
+        }
+
+        struct OpenWindowOnDisposeState {
+            key_in_sibling: flui_view::GlobalKey<()>,
+            new_window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+            resolved_sibling_element: Rc<Cell<Option<flui_foundation::ElementId>>>,
+            install_deferred: Rc<Cell<Option<bool>>>,
+            opened_realm_id: Rc<Cell<Option<flui_foundation::RealmId>>>,
+        }
+
+        impl flui_view::StatefulView for OpenWindowOnDisposeView {
+            type State = OpenWindowOnDisposeState;
+
+            fn create_state(&self) -> Self::State {
+                OpenWindowOnDisposeState {
+                    key_in_sibling: self.key_in_sibling.clone(),
+                    new_window: std::sync::Arc::clone(&self.new_window),
+                    resolved_sibling_element: Rc::clone(&self.resolved_sibling_element),
+                    install_deferred: Rc::clone(&self.install_deferred),
+                    opened_realm_id: Rc::clone(&self.opened_realm_id),
+                }
+            }
+        }
+
+        impl flui_view::ViewState<OpenWindowOnDisposeView> for OpenWindowOnDisposeState {
+            fn build(
+                &self,
+                _view: &OpenWindowOnDisposeView,
+                _ctx: &dyn flui_view::BuildContext,
+            ) -> impl flui_view::IntoView {
+                flui_widgets::SizedBox::new(0.0, 0.0)
+            }
+
+            fn dispose(&mut self) {
+                // (1) Resolve a GlobalKey registered in the SIBLING
+                // presentation B: only possible if the whole-frame composite
+                // is still active for this dispose call, spanning every
+                // OTHER presentation the realm hosts (this presentation
+                // itself, mid-teardown, is deliberately excluded from that
+                // composite -- see `UiRealm::enter_for_close`'s doc).
+                self.resolved_sibling_element
+                    .set(self.key_in_sibling.current_element());
+
+                // (2) Attempt to open a second realm/window mid-teardown.
+                // Production contract: this must defer to loop idle, the
+                // same as any other dispatched callback's install request.
+                // `new_window` was pre-opened from the SAME shared platform
+                // instance realm A's own window came from -- a second,
+                // independently-constructed `HeadlessPlatform` here would
+                // mint an aliasing window id from its own zeroed counter,
+                // which `WindowRegistry` would then read as a collision
+                // against A's window rather than a genuinely distinct one.
+                let new_realm = super::super::ui_realm::UiRealm::for_test();
+                let new_realm_id = new_realm.realm_id();
+                let installed = install_realm_alongside(new_realm, &self.new_window);
+                assert!(
+                    installed.is_ok(),
+                    "install_realm_alongside must defer mid-teardown (Ok, not yet visible), \
+                     never fail"
+                );
+                self.opened_realm_id.set(Some(new_realm_id));
+                let visible_immediately =
+                    APP_RUNTIME.with(|slot| slot.borrow().realms.get(&new_realm_id).is_some());
+                self.install_deferred.set(Some(!visible_immediately));
+            }
+        }
+
+        impl View for OpenWindowOnDisposeView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateful(self)
+            }
+        }
+
+        // One shared platform instance for BOTH windows -- see
+        // `install_two_test_realms`'s doc for why two independent
+        // `headless_platform()` calls would risk an aliased window id.
+        let platform = flui_platform::headless_platform();
+        let window_a = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window a");
+        let window_for_new_realm = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create the second window");
+
+        let mut realm = super::super::ui_realm::UiRealm::for_test();
+        let a_id = realm.presentation_id();
+        let b_id = realm.install_second_presentation_for_test();
+
+        let key_in_sibling = flui_view::GlobalKey::<()>::new();
+        let element_in_sibling = flui_foundation::ElementId::new(1);
+        realm
+            .presentation_widgets_for_test(b_id)
+            .with_build_owner_mut(|owner| {
+                owner.register_global_key(key_in_sibling.id(), element_in_sibling);
+            });
+
+        let resolved_sibling_element = Rc::new(Cell::new(None));
+        let install_deferred = Rc::new(Cell::new(None));
+        let opened_realm_id = Rc::new(Cell::new(None));
+        let probe = OpenWindowOnDisposeView {
+            key_in_sibling,
+            new_window: window_for_new_realm,
+            resolved_sibling_element: Rc::clone(&resolved_sibling_element),
+            install_deferred: Rc::clone(&install_deferred),
+            opened_realm_id: Rc::clone(&opened_realm_id),
+        };
+        realm
+            .enter(|realm| realm.attach_root_widget(&probe))
+            .expect("A mounts the probe");
+        // `attach_root_widget` only SCHEDULES the initial build; the probe's
+        // concrete element (and therefore its `State`) is not actually
+        // constructed until a frame runs it, exactly the same reason
+        // `dispose_during_teardown_cannot_reach_sibling_or_dead_services`
+        // and `closing_presentation_a_leaves_sibling_layer_tree_identical`
+        // both draw a frame between mounting and closing.
+        let _ = realm.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
+            flui_types::Size::new(
+                flui_types::geometry::px(20.0),
+                flui_types::geometry::px(20.0),
+            ),
+        ));
+
+        let dispatcher = install_platform_realm(realm, &window_a);
+
+        close_presentation(dispatcher, a_id).expect("A closes through the real dispatch seam");
+
+        assert_eq!(
+            resolved_sibling_element.get(),
+            Some(element_in_sibling),
+            "A's dispose hook must resolve B's GlobalKey through the whole-frame composite \
+             active during close_presentation_entered's step 2-3 phase"
+        );
+        assert_eq!(
+            install_deferred.get(),
+            Some(true),
+            "A's dispose-time install_realm_alongside request must defer -- not yet visible \
+             in the registry -- while A's own realm is still checked out for this dispatch"
+        );
+
+        let opened_realm_id = opened_realm_id
+            .get()
+            .expect("dispose must have attempted the install");
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().realms.get(&opened_realm_id).is_some()),
+            "the deferred install must land once A's close dispatch restores"
+        );
+
+        teardown_platform_realm();
     }
 }
 

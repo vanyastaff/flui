@@ -802,6 +802,53 @@ impl UiRealm {
         self.presentations.len()
     }
 
+    /// This realm's `WidgetsBinding` for the presentation named `id` — for
+    /// the isolation test suite, which uses it to register a `GlobalKey`
+    /// directly into a NON-primary presentation without going through
+    /// [`Self::enter`] (registration itself needs no active composite; only
+    /// resolution via [`flui_view::GlobalKey::current_element`] does).
+    /// `pub(crate)` for the same cross-module reason as
+    /// [`Self::install_second_presentation_for_test`] above.
+    #[cfg(test)]
+    pub(crate) fn presentation_widgets_for_test(&self, id: PresentationId) -> &WidgetsBinding {
+        self.presentations
+            .get(id)
+            .expect("BUG: presentation_widgets_for_test called with an unknown id")
+            .widgets()
+    }
+
+    /// Assemble and install a second presentation sharing this realm's exact
+    /// `GlobalKeyScope` and realm-level dispatch handles.
+    ///
+    /// Bypasses `PresentationForest`'s production ratchet
+    /// (`PresentationForest::push_for_test`) deliberately — the
+    /// isolation-suite seam for exercising a genuine multi-presentation
+    /// realm ahead of the addressed routing that makes doing so safe in
+    /// production. `pub(crate)` (rather than confined to this module's own
+    /// `mod tests`) so `runner.rs`'s dispatch-seam tests can build the same
+    /// two-presentation fixture their real dispatch machinery drives.
+    #[cfg(test)]
+    pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
+        let (_, presentation_id) = super::runtime::next_identity();
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        let window = super::presentation::test_platform_window(None);
+        let presentation = PresentationState::new(
+            presentation_id,
+            pipeline,
+            window,
+            RealmCapabilities {
+                global_key_scope: self.global_key_scope().clone(),
+                async_driver: self.scheduler.async_driver().clone(),
+                post_frame_handle: self.local_post_frame.post_frame_handle(),
+                interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
+                scheduler: &self.scheduler,
+                wake: Arc::clone(&self.wake),
+            },
+        );
+        self.presentations.push_for_test(presentation);
+        presentation_id
+    }
+
     /// This realm's own scheduler — the strong root. `runner.rs`'s
     /// realm-scoped lifecycle sites (`emit_lifecycle_transition`, the
     /// per-backend frame pumps) read through here instead of a process-global
@@ -849,6 +896,45 @@ impl UiRealm {
             self.interaction_lane.enter(|| {
                 let composite = GlobalKeyRegistryComposite::assemble(
                     self.presentations.iter().map(PresentationState::widgets),
+                );
+                composite.enter(|| f(self))
+            })
+        })
+    }
+
+    /// [`Self::enter`], but the composite excludes presentation `closing`.
+    ///
+    /// Used ONLY by [`Self::close_presentation_entered`]'s step 2–3 phase.
+    /// `PresentationState::close`'s final step (`detach_root_widget`) holds
+    /// `closing`'s own `WidgetsBindingInner` write lock for the entire
+    /// recursive subtree removal — the exclusive access that walk needs to
+    /// unmount every descendant. `GlobalKeyRegistryComposite`'s lookup tries
+    /// each member in insertion order regardless of which key is being
+    /// resolved (`build_composite`'s `for` loop runs until one member's
+    /// `lookup_element` returns `Some`, trying every earlier member first),
+    /// so if `closing` were composed in, a dispose hook's `GlobalKey::
+    /// current_element()` call — for ANY key, even one belonging to a
+    /// different presentation entirely — would have `closing`'s own lookup
+    /// closure try to re-acquire a read lock on the exact `RwLock` this call
+    /// already holds for writing, on the same thread: an unconditional
+    /// self-deadlock (`parking_lot::RwLock` is not reentrant), not a race.
+    /// Caught by this issue's own red-exploit test
+    /// (`dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter`
+    /// in `runner.rs`, which hung before this exclusion existed).
+    ///
+    /// Excluding `closing` costs nothing real: every OTHER presentation
+    /// still resolves normally, and querying a presentation's OWN GlobalKey
+    /// while that exact presentation's registry is mid-teardown has no
+    /// principled answer anyway — the key is about to be unregistered by
+    /// the same call regardless of what a lookup returns for it right now.
+    fn enter_for_close<R>(&self, closing: PresentationId, f: impl FnOnce(&Self) -> R) -> R {
+        self.local_post_frame.enter(|| {
+            self.interaction_lane.enter(|| {
+                let composite = GlobalKeyRegistryComposite::assemble(
+                    self.presentations
+                        .iter()
+                        .filter(|presentation| presentation.id() != closing)
+                        .map(PresentationState::widgets),
                 );
                 composite.enter(|| f(self))
             })
@@ -1827,11 +1913,20 @@ impl UiRealm {
 
     /// Close and remove exactly one presentation from this realm's forest.
     ///
-    /// Must run at Idle, outside the dispatched-scheduler gate — the same
-    /// discipline every other realm-map mutation follows; callers reach this
-    /// only from an idle-only teardown path, never from inside a frame
-    /// transaction. A no-op (returns `false`) if `id` does not name a
-    /// presentation this realm currently hosts.
+    /// Called from `runner.rs`'s `dispatch_platform_realm` loop, which
+    /// special-cases `RealmTask::ClosePresentation` to call this with
+    /// `&mut self` directly (the realm sits checked out of `AppRuntime`'s
+    /// registry as an owned local at that point, so `&mut` is naturally
+    /// available — no other caller reaches this method). That same
+    /// dispatch has ALREADY set `dispatched_realm_id` for the whole
+    /// checkout, so a dispose callback this method's own step 3 runs is
+    /// covered by the identical TLS deferral guard every other realm-map
+    /// mutation already respects: one deferral authority, not a second one
+    /// to keep in sync with it. See `runner.rs::close_presentation` for the
+    /// request-shaped public entry point (`enqueue + wake`) that gets here.
+    ///
+    /// A no-op (returns `false`) if `id` does not name a presentation this
+    /// realm currently hosts.
     ///
     /// # Contract — six steps, in order
     ///
@@ -1846,13 +1941,22 @@ impl UiRealm {
     /// 2. IME detach + focus deactivate — [`PresentationState::close`]'s
     ///    first half.
     /// 3. `detach_root_widget` through this exact presentation's own
-    ///    `WidgetsBinding` — [`PresentationState::close`]'s second half.
-    ///    Every `State::dispose()` a descendant runs here still has its
-    ///    capabilities installed (nothing about the realm's shared dispatch
-    ///    handles has been touched), and routes only within THIS
-    ///    presentation's own tree: `RebuildHandle`/`ExternalBuildScheduler`
-    ///    are minted one-per-owner and never shared, so a dispose hook has
-    ///    no path to a sibling presentation's inbox even if it tries (see
+    ///    `WidgetsBinding` — [`PresentationState::close`]'s second half —
+    ///    run inside [`Self::enter_for_close`], so a `State::dispose()` a
+    ///    descendant runs here gets the SAME realm-shared capabilities
+    ///    (post-frame/interaction handles, TLS deferral) any other
+    ///    frame/lifecycle callback gets, and can resolve a `GlobalKey`
+    ///    living in any OTHER presentation this realm hosts. It cannot
+    ///    resolve one of its OWN keys through the registry mid-teardown —
+    ///    `enter_for_close` deliberately excludes `id` itself from the
+    ///    composite it assembles; see that method's own doc for the
+    ///    self-deadlock excluding it avoids. An install/uninstall request a
+    ///    dispose hook makes here defers through the dispatched-path TLS
+    ///    guard described above. Any BUILD SCHEDULING it does still routes
+    ///    only within THIS presentation's own tree:
+    ///    `RebuildHandle`/`ExternalBuildScheduler` are minted one-per-owner
+    ///    and never shared, so a dispose hook has no path to a sibling
+    ///    presentation's build inbox even if it tries (see
     ///    `dispose_during_teardown_cannot_reach_sibling_or_dead_services`).
     /// 4. **Async-task disposition:** the realm-level `AsyncDriver` is not
     ///    told about this closure — an in-flight task this presentation
@@ -1867,27 +1971,48 @@ impl UiRealm {
     ///    own `Drop`, once step 6 drops the last reference to it.
     /// 6. The removed `PresentationState` — and with it its `WidgetsBinding`
     ///    (whose drop triggers step 5), `RenderingFlutterBinding`, and every
-    ///    other owned resource — drops at the end of this function.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller until a later addressed-routing \
-                      slice's presentation-close path removes a member from \
-                      a genuine N>1 forest; today's sole caller (AppRuntime's \
-                      realm teardown) closes the whole realm, which drops \
-                      every presentation through UiRealm::Drop instead of \
-                      calling this method"
-        )
-    )]
-    pub(crate) fn close_presentation(&mut self, id: PresentationId) -> bool {
-        let Some(presentation) = self.presentations.remove(id) else {
+    ///    other owned resource — drops after [`Self::enter_for_close`]
+    ///    returns.
+    ///
+    /// # Why this is two calls, not one `&mut`-threaded closure
+    ///
+    /// [`Self::enter_for_close`] hands its closure `&Self` (shared) — every
+    /// existing caller only ever needed read access to the realm for the
+    /// duration of a frame/lifecycle callback, so it was never shaped to
+    /// also hand out `&mut`. Steps 2–3 only need `&PresentationState`
+    /// (`PresentationState::close` takes `&self`), so they run inside one
+    /// `self.enter_for_close(...)` call. Steps 4–6 (the actual `Vec`
+    /// removal + drop) need `&mut self.presentations`, which happens in a
+    /// SEPARATE, sequential statement after that call returns — not nested
+    /// inside it, so there is no borrow conflict and no need to reshape
+    /// `enter_for_close` itself or give `PresentationForest` interior
+    /// mutability.
+    pub(crate) fn close_presentation_entered(&mut self, id: PresentationId) -> bool {
+        let existed = self.enter_for_close(id, |realm| {
+            let Some(presentation) = realm.presentations.get(id) else {
+                return false;
+            };
+            // Steps 2 + 3, composite (minus `id` itself) + capabilities active.
+            presentation.close();
+            true
+        });
+        if !existed {
             return false;
-        };
-        // Steps 2 + 3.
-        presentation.close();
-        // Steps 5 + 6: dropping `presentation` here (end of scope) is both
-        // the reclaim trigger and the disposal itself.
+        }
+        // Steps 4-6: `self.enter_for_close(...)` above has already returned,
+        // so this is a plain, non-nested `&mut self.presentations` access.
+        // Dropping `removed` here (end of statement) is both the
+        // `GlobalKeyScope` reclaim trigger (step 5, via `BuildOwner::Drop`)
+        // and the disposal itself (step 6) — no active registry needed for
+        // either, since `GlobalKeyScope::reclaim_owner` is a plain
+        // data-structure operation.
+        let removed = self.presentations.remove(id);
+        debug_assert!(
+            removed.is_some(),
+            "BUG: presentation existed a moment ago (checked via self.enter_for_close above) \
+             and nothing between here and there could have removed it -- \
+             enter_for_close's closure only reads the forest"
+        );
         true
     }
 }
@@ -1967,35 +2092,6 @@ mod tests {
             1.0,
             Arc::new(AtomicBool::new(false)),
         )
-    }
-
-    /// Assemble and install a second presentation sharing `realm`'s exact
-    /// `GlobalKeyScope` and realm-level dispatch handles.
-    ///
-    /// Bypasses `PresentationForest`'s production ratchet
-    /// (`PresentationForest::push_for_test`) deliberately — the
-    /// isolation-suite seam for exercising a genuine multi-presentation
-    /// realm ahead of the addressed routing that makes doing so safe in
-    /// production.
-    fn install_second_presentation_for_test(realm: &mut UiRealm) -> PresentationId {
-        let (_, presentation_id) = crate::app::runtime::next_identity();
-        let pipeline = PipelineCell::new(PipelineOwner::new());
-        let window = crate::app::presentation::test_platform_window(None);
-        let presentation = PresentationState::new(
-            presentation_id,
-            pipeline,
-            window,
-            RealmCapabilities {
-                global_key_scope: realm.global_key_scope().clone(),
-                async_driver: realm.scheduler.async_driver().clone(),
-                post_frame_handle: realm.local_post_frame.post_frame_handle(),
-                interaction_dispatch_handle: realm.interaction_lane.dispatch_handle(),
-                scheduler: &realm.scheduler,
-                wake: Arc::clone(&realm.wake),
-            },
-        );
-        realm.presentations.push_for_test(presentation);
-        presentation_id
     }
 
     #[test]
@@ -4712,7 +4808,7 @@ mod tests {
             let mut realm = UiRealm::for_test();
             assert_eq!(realm.presentation_count(), 1);
 
-            install_second_presentation_for_test(&mut realm);
+            realm.install_second_presentation_for_test();
 
             assert_eq!(
                 realm.presentation_count(),
@@ -4729,7 +4825,7 @@ mod tests {
         #[test]
         fn composite_registry_resolves_keys_registered_in_either_presentation() {
             let mut realm = UiRealm::for_test();
-            let second_id = install_second_presentation_for_test(&mut realm);
+            let second_id = realm.install_second_presentation_for_test();
 
             let key_in_primary = flui_view::GlobalKey::<()>::new();
             let element_in_primary = flui_foundation::ElementId::new(1);
@@ -4775,7 +4871,7 @@ mod tests {
             use flui_hot_reload::HotReloadTier;
 
             let mut realm = UiRealm::for_test();
-            install_second_presentation_for_test(&mut realm);
+            realm.install_second_presentation_for_test();
 
             // Both presentations start with no root attached; `apply_hot_reload`
             // still calls `perform_reassemble`/`PipelineOwner::reassemble` on
@@ -4815,7 +4911,7 @@ mod tests {
         #[test]
         fn dropping_the_realm_closes_every_presentation() {
             let mut realm = UiRealm::for_test();
-            install_second_presentation_for_test(&mut realm);
+            realm.install_second_presentation_for_test();
 
             let lifecycles_before: Vec<_> = realm
                 .presentations
@@ -4855,7 +4951,7 @@ mod tests {
         #[test]
         fn sibling_presentations_flush_independently() {
             let mut realm = UiRealm::for_test();
-            let second_id = install_second_presentation_for_test(&mut realm);
+            let second_id = realm.install_second_presentation_for_test();
 
             // Mark ONLY the second presentation dirty — reaching its own
             // wake bit directly, the same seam a later addressed-routing
@@ -5031,7 +5127,7 @@ mod tests {
             // `realm` starts with exactly one presentation; call it "A" and
             // install a second, "B", to observe.
             let a_id = realm.presentation_id();
-            let b_id = install_second_presentation_for_test(&mut realm);
+            let b_id = realm.install_second_presentation_for_test();
 
             let captured = Rc::new(RefCell::new(None));
             let probe = AsyncCaptureProbeView {
@@ -5074,8 +5170,8 @@ mod tests {
             // Close A through the real consolidated teardown path —
             // production never cancels this realm-level `AsyncDriver`'s
             // in-flight tasks (see this test's own doc and
-            // `UiRealm::close_presentation`'s).
-            assert!(realm.close_presentation(a_id), "A was installed");
+            // `UiRealm::close_presentation_entered`'s).
+            assert!(realm.close_presentation_entered(a_id), "A was installed");
 
             let b_has_pending_builds = || {
                 realm
@@ -5180,11 +5276,11 @@ mod tests {
         }
 
         /// A `State::dispose()` hook running as part of `UiRealm::
-        /// close_presentation`'s teardown (step 3) schedules through its OWN
-        /// `RebuildHandle` — proving it reaches only its own (about to be
-        /// dropped) tree, never a live sibling's, by the same
+        /// close_presentation_entered`'s teardown (step 3) schedules through
+        /// its OWN `RebuildHandle` — proving it reaches only its own (about
+        /// to be dropped) tree, never a live sibling's, by the same
         /// `ExternalBuildScheduler`-is-minted-one-per-owner argument
-        /// `close_presentation`'s own doc makes. "Dead services" — this
+        /// `close_presentation_entered`'s own doc makes. "Dead services" — this
         /// presentation's OWN focus/IME, already closed by teardown step 2
         /// before step 3's detach runs — failing closed rather than
         /// panicking is covered by `presentation.rs`'s
@@ -5194,7 +5290,7 @@ mod tests {
         fn dispose_during_teardown_cannot_reach_sibling_or_dead_services() {
             let mut realm = UiRealm::for_test();
             let a_id = realm.presentation_id();
-            let b_id = install_second_presentation_for_test(&mut realm);
+            let b_id = realm.install_second_presentation_for_test();
 
             let handle_slot = Rc::new(RefCell::new(None));
             let disposed = Rc::new(Cell::new(false));
@@ -5236,13 +5332,13 @@ mod tests {
             );
 
             assert!(
-                realm.close_presentation(a_id),
+                realm.close_presentation_entered(a_id),
                 "A must have been installed and removable"
             );
 
             assert!(
                 disposed.get(),
-                "close_presentation's detach_root_widget must have run A's dispose hook"
+                "close_presentation_entered's detach_root_widget must have run A's dispose hook"
             );
             assert!(
                 !b_has_pending_builds(&realm, b_id),
@@ -5266,7 +5362,7 @@ mod tests {
         fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
             let mut realm = UiRealm::for_test();
             let a_id = realm.presentation_id();
-            let b_id = install_second_presentation_for_test(&mut realm);
+            let b_id = realm.install_second_presentation_for_test();
 
             // Mount independent content on both presentations.
             realm
@@ -5296,7 +5392,7 @@ mod tests {
             });
 
             assert!(
-                realm.close_presentation(a_id),
+                realm.close_presentation_entered(a_id),
                 "A must have been installed and removable"
             );
 
@@ -5363,7 +5459,7 @@ mod tests {
                 "precondition: the handle works while A is still alive"
             );
 
-            assert!(realm.close_presentation(a_id), "A was installed");
+            assert!(realm.close_presentation_entered(a_id), "A was installed");
 
             assert!(
                 matches!(

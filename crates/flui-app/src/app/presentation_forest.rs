@@ -102,30 +102,20 @@ impl PresentationForest {
     }
 
     /// Look up a presentation by its exact generational id.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "addressed lookup by id has no production caller until \
-                      a later addressed-routing slice's entry points land"
-        )
-    )]
+    ///
+    /// Production caller: [`super::ui_realm::UiRealm::close_presentation_entered`]'s
+    /// step 2–3 phase resolves the presentation to close through this
+    /// before removing it via [`Self::remove`] below.
     pub(crate) fn get(&self, id: PresentationId) -> Option<&PresentationState> {
         self.presentations.iter().find(|p| p.id() == id)
     }
 
     /// Remove and return the presentation with the given id, if present.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller until a later addressed-routing \
-                      slice's presentation-close path removes a member from \
-                      a genuine N>1 forest; teardown of the realm's SOLE \
-                      presentation today drops the whole forest instead of \
-                      removing a member from it"
-        )
-    )]
+    ///
+    /// Production caller: [`super::ui_realm::UiRealm::close_presentation_entered`]'s
+    /// steps 4–6 — the only path today that removes a member from a genuine
+    /// `N>1` forest rather than dropping the whole forest at once (the
+    /// realm's own `Drop` still does the latter).
     pub(crate) fn remove(&mut self, id: PresentationId) -> Option<PresentationState> {
         let index = self.presentations.iter().position(|p| p.id() == id)?;
         Some(self.presentations.remove(index))
