@@ -490,7 +490,27 @@ impl BuildOwner {
     /// // `owner_a` and `owner_b` now share one cross-owner `GlobalKey`
     /// // uniqueness domain.
     /// ```
+    ///
+    /// # Panics (debug builds only)
+    ///
+    /// The "called once, before mount" precondition is load-bearing, not
+    /// advisory: a call after this owner has already registered a
+    /// `GlobalKey` would silently discard those keys' claims — a lazily
+    /// self-owned private scope's claims, or a previously installed shared
+    /// scope's claims — while the owner's local map still lists them as
+    /// registered, letting a sibling owner mount the "same" key with no
+    /// conflict and no trace. Debug builds `debug_assert!` that this
+    /// owner's local `GlobalKey` map is still empty and no scope has been
+    /// installed yet; release builds proceed (the discard still happens,
+    /// silently), matching this crate's panic policy of catching internal
+    /// invariants in debug without crashing production on a stray call.
     pub fn set_global_key_scope(&mut self, scope: GlobalKeyScope) {
+        debug_assert!(
+            self.global_keys.is_empty() && self.global_key_scope.is_none(),
+            "BuildOwner::set_global_key_scope called after this owner already registered a \
+             GlobalKey or installed a scope — call it once, at presentation assembly, before \
+             any element is mounted; a later call silently discards the prior scope's claims"
+        );
         self.global_key_scope = Some(scope);
     }
 
@@ -1379,6 +1399,13 @@ impl BuildOwner {
     /// this first claims `key_hash` in that scope: a different owner already
     /// holding the same hash there is a cross-owner collision, traced then
     /// panicked (ADR-0043) rather than silently recorded here.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key_hash` is already claimed, in the installed
+    /// [`GlobalKeyScope`], by a *different* owner (see
+    /// [`GlobalKeyScope`]'s contract). Re-registering a hash this same owner
+    /// already holds never panics.
     pub fn register_global_key(&mut self, key_hash: u64, element: ElementId) {
         global_key_scope::claim_and_register(
             &mut self.global_key_scope,
@@ -1853,6 +1880,19 @@ mod tests {
     // reclaim) in isolation; these cover it wired through real mounts.
     // ========================================================================
 
+    /// Extract a panic payload's message, whether the panic macro produced a
+    /// `&'static str` or an interpolated `String` — the conflict panic in
+    /// `global_key_scope::claim_and_register` uses the latter.
+    fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+        if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            String::from("<non-string panic payload>")
+        }
+    }
+
     /// A `GlobalKey` mounted in one owner while a second owner sharing the
     /// same scope still holds it must fail eagerly (traced, then panicked),
     /// and the failed attempt must leave the first owner's tree completely
@@ -1870,17 +1910,25 @@ mod tests {
         owner_a.set_global_key_scope(scope.clone());
         let root_a = tree_a.mount_root(&keyed, &mut owner_a.element_owner_mut());
         assert_eq!(tree_a.len(), 1);
+        let tag_a = owner_a.owner_tag();
 
         let mut tree_b = ElementTree::new();
         let mut owner_b = BuildOwner::new();
         owner_b.set_global_key_scope(scope);
+        let tag_b = owner_b.owner_tag();
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tree_b.mount_root(&keyed, &mut owner_b.element_owner_mut());
         }));
+        let payload = outcome.expect_err("b must not silently alias a's live GlobalKey");
+        let message = panic_message(&*payload);
         assert!(
-            outcome.is_err(),
-            "b must not silently alias a's live GlobalKey"
+            message.contains(&tag_a.to_string()),
+            "panic must name a's tag (the claim's holder): {message}"
+        );
+        assert!(
+            message.contains(&tag_b.to_string()),
+            "panic must name b's tag (the rejected owner): {message}"
         );
 
         // a's tree is exactly as it was before b's rejected mount attempt.
@@ -1930,10 +1978,12 @@ mod tests {
     }
 
     /// Dropping an owner without ever unmounting its tree must not wedge the
-    /// shared scope forever — the claim is reclaimed (traced, not asserted)
-    /// so a different owner can mount the same key afterward.
+    /// shared scope forever — the claim is reclaimed (not asserted, per
+    /// `GlobalKeyScope::reclaim_owner`'s doc) so a different owner can mount
+    /// the same key afterward. This test asserts the functional outcome
+    /// only; it does not capture a trace record.
     #[test]
-    fn scope_claims_reclaimed_on_owner_drop_traced() {
+    fn scope_claims_reclaimed_on_owner_drop() {
         let scope = GlobalKeyScope::new();
         let keyed = KeyedView {
             key: crate::GlobalKey::new(),
@@ -2017,12 +2067,23 @@ mod tests {
         );
 
         // The hash is still b's, not free — a third owner cannot claim it.
+        let tag_b = owner_b.owner_tag();
         let mut owner_c = BuildOwner::new();
         owner_c.set_global_key_scope(scope);
+        let tag_c = owner_c.owner_tag();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             owner_c.register_global_key(hash, ElementId::new(3));
         }));
-        assert!(outcome.is_err(), "the hash is still b's, not free");
+        let payload = outcome.expect_err("the hash is still b's, not free");
+        let message = panic_message(&*payload);
+        assert!(
+            message.contains(&tag_b.to_string()),
+            "panic must name b as the surviving holder: {message}"
+        );
+        assert!(
+            message.contains(&tag_c.to_string()),
+            "panic must name c as the rejected owner: {message}"
+        );
     }
 
     /// Adversarial interleaving: a hand-rolled rig that forces exactly the
@@ -2030,12 +2091,17 @@ mod tests {
     /// serialization, finalize running inside the deactivating owner's own
     /// segment) says a real realm never produces — a's scope claim reclaimed
     /// while a's element is still queued inactive, before a's own finalize
-    /// ever ran. Proves the contract's "outside a realm, still a defined
-    /// outcome" clause: the untouched intra-tree retake path (never
-    /// scope-aware, by design — see `global_key_scope`'s module docs) still
-    /// structurally succeeds and never touches b; when a's retaken element
-    /// is later unmounted for real, a's own release is silently a no-op
-    /// against b's now-live claim rather than corrupting it.
+    /// ever ran. Proves the contract's third defined out-of-contract
+    /// outcome: the untouched intra-tree retake path (never scope-aware, by
+    /// design — see `global_key_scope`'s module docs) still structurally
+    /// succeeds on its own terms, momentarily leaving two live elements
+    /// under the same key — a's retaken element and b's freshly mounted one
+    /// — each legitimate inside its own tree, and never touching each
+    /// other's tree. The duplicate self-heals the moment either side is
+    /// genuinely unmounted: when a's retaken element is later unmounted for
+    /// real, a's own release is silently a tag-checked no-op against b's
+    /// now-live claim rather than corrupting it, and b's claim is confirmed
+    /// to survive as the sole surviving holder.
     #[test]
     fn a_intra_tree_retake_after_b_fresh_mount_has_defined_outcome() {
         let scope = GlobalKeyScope::new();
@@ -2079,6 +2145,12 @@ mod tests {
             retaken, child_a,
             "the untouched intra-tree retake path reuses the inactive candidate"
         );
+
+        // The third defined out-of-contract outcome, made concrete: two
+        // live elements under one key, one per owner's own tree. Each
+        // resolves correctly within its own owner — this is confined, not a
+        // cross-tree corruption.
+        assert_eq!(owner_a.element_for_global_key(hash), Some(retaken));
         assert_eq!(owner_b.element_for_global_key(hash), Some(root_b));
 
         // When a's retaken element is eventually unmounted for real, a's
@@ -2095,15 +2167,39 @@ mod tests {
             Some(root_b),
             "b was never the one who paid for a's stale bookkeeping"
         );
+
+        // Pin the surviving claim's HOLDER as b, not merely its count: a
+        // third owner's conflicting claim must name b, proving the
+        // duplicate fully healed onto b rather than leaving an orphaned or
+        // reassignable entry.
+        let tag_b = owner_b.owner_tag();
+        let mut owner_d = BuildOwner::new();
+        owner_d.set_global_key_scope(scope);
+        let tag_d = owner_d.owner_tag();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner_d.register_global_key(hash, ElementId::new(99));
+        }));
+        let payload = outcome.expect_err("the surviving claim is still b's, not free");
+        let message = panic_message(&*payload);
+        assert!(
+            message.contains(&tag_b.to_string()),
+            "the surviving claim's holder must be named as b: {message}"
+        );
+        assert!(
+            message.contains(&tag_d.to_string()),
+            "panic must name the rejected owner: {message}"
+        );
     }
 
     /// One full lifecycle round trip across two owners — claim, eager
     /// conflict, release, fresh claim elsewhere, a stale duplicate release,
     /// and a second release — proving the state machine composes correctly
     /// across every transition the documented contract names, not just each
-    /// one in isolation.
+    /// one in isolation. (No intra-tree retake features in this round trip —
+    /// see `a_intra_tree_retake_after_b_fresh_mount_has_defined_outcome` for
+    /// that leg specifically.)
     #[test]
-    fn claim_release_retake_finalize_interleaving_across_two_owners_matches_contract() {
+    fn claim_conflict_release_and_reclaim_across_two_owners_matches_contract() {
         let scope = GlobalKeyScope::new();
         let keyed = KeyedView {
             key: crate::GlobalKey::new(),
@@ -2115,6 +2211,8 @@ mod tests {
         owner_a.set_global_key_scope(scope.clone());
         let mut owner_b = BuildOwner::new();
         owner_b.set_global_key_scope(scope.clone());
+        let tag_a = owner_a.owner_tag();
+        let tag_b = owner_b.owner_tag();
 
         // 1. a claims first.
         let root_a1 = tree_a.mount_root(&keyed, &mut owner_a.element_owner_mut());
@@ -2126,7 +2224,16 @@ mod tests {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tree_b.mount_root(&keyed, &mut owner_b.element_owner_mut());
         }));
-        assert!(outcome.is_err());
+        let payload = outcome.expect_err("b must not silently alias a's live claim");
+        let message = panic_message(&*payload);
+        assert!(
+            message.contains(&tag_a.to_string()),
+            "panic must name a as the claim's holder: {message}"
+        );
+        assert!(
+            message.contains(&tag_b.to_string()),
+            "panic must name b as the rejected owner: {message}"
+        );
         assert_eq!(tree_a.len(), 1);
         assert_eq!(owner_a.element_for_global_key(hash), Some(root_a1));
 

@@ -229,6 +229,13 @@ impl ElementOwner<'_> {
     /// there: a DIFFERENT owner already holding it is a cross-owner
     /// collision, traced then panicked (ADR-0043) rather than silently
     /// aliased.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key_hash` is already claimed, in the installed
+    /// [`GlobalKeyScope`], by a *different* owner (see [`GlobalKeyScope`]'s
+    /// contract). Re-registering a hash this same owner already holds never
+    /// panics.
     pub fn register_global_key(&mut self, key_hash: u64, id: ElementId) {
         global_key_scope::claim_and_register(
             self.global_key_scope,

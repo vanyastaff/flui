@@ -42,21 +42,12 @@
 //! soft-remove time, only at the `register_global_key`/`unregister_global_key`
 //! call sites the finalize/mount paths already drive.
 //!
-//! # Contract (CONTRACT, not test choreography)
+//! # Contract
 //!
-//! Under the realm execution contract this scope is designed for —
-//! single-thread serialized presentation segments, and finalize discipline
-//! (an owner's deactivated keys are finalized within its own segment) —
-//! `GlobalKey` uniqueness across every owner sharing a scope is realm-scoped
-//! and eager: a key's state never silently migrates between owners, and a
-//! key is mountable in another owner exactly when its claim has been
-//! released by unmount/finalize. These preconditions are documented here,
-//! not enforced by this type: violating them outside that contract (e.g. a
-//! hand-rolled multi-owner rig driving claim/release/retake/finalize out of
-//! the order a real realm would ever produce) still yields a defined
-//! outcome — an eager panic, or a tag-checked no-op release that never
-//! disturbs a claim it does not hold — never undefined behavior or a
-//! cross-tree state corruption.
+//! The execution contract this scope is designed for, the three defined
+//! outcomes of violating it, and why the third one cannot arise inside a
+//! real realm are documented on [`GlobalKeyScope`] itself — the type this
+//! module exists to define — not here.
 
 use std::{
     cell::RefCell,
@@ -112,6 +103,51 @@ struct ScopeState {
 /// owners agreeing to share one `GlobalKey` uniqueness domain". Construct
 /// one per realm at presentation-assembly time and install it into each
 /// owner via [`BuildOwner::set_global_key_scope`](super::BuildOwner::set_global_key_scope).
+///
+/// # Contract
+///
+/// This scope is designed for one execution contract: presentation segments
+/// run serialized on a single thread, and an owner's own finalize (its
+/// deactivated keys being unmounted for real) runs inside its own segment —
+/// never observed mid-flight by a different owner's segment. Under that
+/// contract, `GlobalKey` uniqueness across every owner sharing a scope is
+/// realm-scoped and eager: a key's state never silently migrates between
+/// owners, and a key is mountable in another owner exactly when its claim
+/// has been released by unmount or finalize.
+///
+/// This type does not enforce that contract — it cannot see thread
+/// scheduling or segment boundaries, only claims. Violating the contract
+/// (a hand-rolled multi-owner rig driving claim/release/retake/finalize in
+/// an order a real realm would never produce) still yields one of three
+/// defined outcomes, never undefined behavior:
+///
+/// 1. **An eager panic naming both owners** — the ordinary case: a
+///    cross-owner conflict is detected the moment a second owner tries to
+///    claim a hash the first still holds.
+/// 2. **A tag-checked no-op release** — a stale or duplicate release from an
+///    owner that no longer holds the claim never disturbs whoever holds it
+///    now (see [`release`](Self::release)).
+/// 3. **Two live elements momentarily existing under one key, one in each
+///    owner's own tree** — reachable only if a claim is force-reclaimed
+///    (e.g. a direct [`reclaim_owner`](Self::reclaim_owner) call, not the
+///    normal unmount path) while its original owner still has an inactive,
+///    unfinalized retake candidate for that same key: a second owner can
+///    then claim the hash fresh, and the first owner's later intra-tree
+///    retake — which never consults this scope, by design (see the module
+///    docs' "Split authority" section) — still succeeds on its own terms,
+///    reactivating its own candidate. This is confined, not a corruption in
+///    the memory-unsafety sense: each owner's element is legitimate inside
+///    its own tree, and the duplicate self-heals the moment either one is
+///    genuinely unmounted, because that release is tag-checked against
+///    whoever currently holds the claim (outcome 2). It cannot arise inside
+///    a real realm: every realm-native path that frees an owner's claim
+///    either runs that owner's own finalize first (which destroys the
+///    retake candidate `remove_finalized` would otherwise leave behind) or
+///    drops the owner outright (destroying every candidate it could ever
+///    retake) — there is no realm path that reclaims a live claim while its
+///    owner still has an unfinalized candidate sitting on the other side of
+///    it. Reaching outcome 3 requires calling `reclaim_owner` directly,
+///    which no realm-native code path does.
 ///
 /// [`BuildOwner`]: super::BuildOwner
 #[derive(Clone)]
@@ -366,6 +402,19 @@ mod tests {
         ElementId::new(n)
     }
 
+    /// Extract a panic payload's message, whether the panic macro produced a
+    /// `&'static str` (the `panic!("literal")` fast path) or a `String` (the
+    /// `panic!("{a} {b}")` interpolated path this module's panics use).
+    fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+        if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            String::from("<non-string panic payload>")
+        }
+    }
+
     #[test]
     fn fresh_scope_has_no_claims() {
         let scope = GlobalKeyScope::new();
@@ -500,7 +549,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "already claimed")]
     fn claim_and_register_panics_on_cross_owner_conflict() {
         let shared = GlobalKeyScope::new();
         let owner_a = OwnerTag::fresh();
@@ -511,10 +559,28 @@ mod tests {
         let mut scope_b = Some(shared);
 
         claim_and_register(&mut scope_a, owner_a, 3, eid(1), &mut local_a);
+
         // owner_b sharing the same scope must not silently alias owner_a's
         // claim; local_b stays untouched because the panic unwinds before
         // the insert.
-        claim_and_register(&mut scope_b, owner_b, 3, eid(2), &mut local_b);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            claim_and_register(&mut scope_b, owner_b, 3, eid(2), &mut local_b);
+        }));
+        let payload = outcome.expect_err("owner_b must not silently alias owner_a's live claim");
+        let message = panic_message(&*payload);
+        assert!(
+            message.contains(&owner_a.to_string()),
+            "panic must name the claim's current holder (owner_a): {message}"
+        );
+        assert!(
+            message.contains(&owner_b.to_string()),
+            "panic must name the rejected owner (owner_b): {message}"
+        );
+        assert_eq!(
+            local_b.get(&3),
+            None,
+            "local_b stays untouched because the panic unwinds before the insert"
+        );
     }
 
     #[test]
