@@ -1,15 +1,15 @@
 //! `PresentationForest` — the insertion-ordered collection of
 //! [`PresentationState`]s one `UiRealm` owns (ADR-0043 §1).
 //!
-//! Production topology is exactly one presentation per realm today: opening
-//! a second independent window installs a second REALM (`AppRuntime`'s
-//! `RealmId`-keyed map), not a second presentation inside an existing one.
-//! This type exists so that shape — the realm-level composite `GlobalKey`
-//! registry, the per-presentation pump/teardown/reassemble machinery — is
-//! written once, generally, over `Vec<PresentationState>` rather than
-//! hand-specialized to "exactly one", so a later addressed-routing slice
-//! (window grouping / `WindowPolicy`) can lift the ratchet below without
-//! re-deriving this plumbing.
+//! Production topology now allows any number of presentations per realm
+//! (issue #555's addressed-routing slice lifts the mechanical 1×N ratchet this type used to
+//! enforce): `UiRealm::install_presentation` is the production entry point
+//! that assembles and installs a second (third, ...) presentation sharing
+//! this realm's `GlobalKeyScope` and dispatch handles, with its own real
+//! `WindowRegistry` mapping (`runner.rs::install_presentation_alongside`).
+//! Opening a genuinely independent, unrelated window still installs a second
+//! REALM (`AppRuntime`'s `RealmId`-keyed map) — this forest is for windows
+//! that share one realm's GlobalKey scope, focus arbitration, and scheduler.
 //!
 //! Iteration order is insertion (mount) order: a plain `Vec`, never
 //! reordered. Pump, reassemble fan-out, and the composite registry all rely
@@ -21,24 +21,13 @@ use flui_foundation::PresentationId;
 use super::presentation::PresentationState;
 
 /// The insertion-ordered set of presentations one `UiRealm` owns.
-///
-/// # Ratchet
-///
-/// [`Self::install`] is the production entry point and panics if the forest
-/// already holds a presentation — registry-pinned
-/// (`multi-presentation-forest-gate`, `docs/runtime-contract.toml`) as the
-/// mechanical 1×N ratchet: production topology stays exactly one
-/// presentation per realm until a later slice's addressed routing lifts it.
-/// `push_for_test` is the only bypass, and only compiles under `cfg(test)`
-/// (not linked from this doc: a plain `cfg(test)` item has no stable link
-/// target in a non-test doc build).
 pub(crate) struct PresentationForest {
     presentations: Vec<PresentationState>,
 }
 
 impl PresentationForest {
-    /// Construct a forest holding exactly one presentation — the only
-    /// production shape until the ratchet in [`Self::install`] lifts.
+    /// Construct a forest holding exactly one presentation — every realm's
+    /// starting shape; [`Self::install`] grows it from there.
     pub(crate) fn single(presentation: PresentationState) -> Self {
         Self {
             presentations: vec![presentation],
@@ -47,36 +36,14 @@ impl PresentationForest {
 
     /// Install another presentation into this forest.
     ///
-    /// **Ratchet:** panics with `BUG:` if the forest is not currently empty
-    /// — there is no production call site for this today (opening a second
-    /// window installs a second realm, not a second presentation), so this
-    /// exists to fail loudly the moment one is added ahead of the addressed
-    /// routing that makes a true forest safe to drive.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller until the len()<=1 ratchet lifts \
-                      (a later addressed-routing slice); push_for_test is the \
-                      isolation-suite bypass"
-        )
-    )]
+    /// Production entry point (this slice lifted the former `len()<=1`
+    /// ratchet, registry-pinned as `multi-presentation-forest-gate` in
+    /// `docs/runtime-contract.toml`): `UiRealm::install_presentation` is the
+    /// realm-level caller, and `runner.rs::install_presentation_alongside`
+    /// is the caller that also mints this presentation's real
+    /// `WindowRegistry` mapping — the two steps a hosted presentation needs
+    /// to be genuinely dispatchable, not just forest-resident.
     pub(crate) fn install(&mut self, presentation: PresentationState) {
-        assert!(
-            self.presentations.is_empty(),
-            "BUG: PresentationForest::install called while the ratchet is \
-             still closed -- production topology is exactly one presentation \
-             per realm until a later addressed-routing slice lifts the \
-             len()<=1 gate; tests use push_for_test to bypass it deliberately"
-        );
-        self.presentations.push(presentation);
-    }
-
-    /// Isolation-suite-only bypass of [`Self::install`]'s ratchet, so a test
-    /// can drive a genuine multi-presentation realm ahead of the addressed
-    /// routing that makes doing so safe in production.
-    #[cfg(test)]
-    pub(crate) fn push_for_test(&mut self, presentation: PresentationState) {
         self.presentations.push(presentation);
     }
 
@@ -159,26 +126,26 @@ mod tests {
         assert_eq!(forest.primary().id(), id);
     }
 
+    /// The former mechanical ratchet (`len() <= 1`) is lifted: `install`
+    /// now accepts any number of presentations through the SAME production
+    /// entry point every isolation test uses, not a `cfg(test)`-only
+    /// bypass. If reverted (the old `assert!(self.presentations.is_empty())`
+    /// restored), this fails on the second `install` call instead of
+    /// observing `len() == 2`.
     #[test]
-    #[should_panic(expected = "BUG: PresentationForest::install called")]
-    fn install_panics_once_the_forest_already_holds_a_presentation() {
+    fn install_accepts_any_number_of_presentations() {
         let mut forest = PresentationForest::single(presentation(1));
         forest.install(presentation(2));
-    }
+        forest.install(presentation(3));
 
-    #[test]
-    fn push_for_test_bypasses_the_ratchet() {
-        let mut forest = PresentationForest::single(presentation(1));
-        forest.push_for_test(presentation(2));
-
-        assert_eq!(forest.len(), 2);
+        assert_eq!(forest.len(), 3);
     }
 
     #[test]
     fn iter_yields_presentations_in_mount_order() {
         let mut forest = PresentationForest::single(presentation(1));
-        forest.push_for_test(presentation(2));
-        forest.push_for_test(presentation(3));
+        forest.install(presentation(2));
+        forest.install(presentation(3));
 
         let ids: Vec<_> = forest.iter().map(PresentationState::id).collect();
         assert_eq!(
@@ -197,7 +164,7 @@ mod tests {
         let mut forest = PresentationForest::single(presentation(1));
         let second = presentation(2);
         let second_id = second.id();
-        forest.push_for_test(second);
+        forest.install(second);
 
         assert!(forest.get(second_id).is_some());
         let removed = forest.remove(second_id).expect("present");

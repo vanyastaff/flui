@@ -304,8 +304,29 @@ impl PresentationState {
         // pipeline cell checked out, and `wake` only touches `Send + Sync`
         // runtime-level state — never this presentation's own `widgets` /
         // `renderer` / gesture state.
+        //
+        // Pokes THIS presentation's own window directly (`Weak`, exactly
+        // like `Self::window` below — never a strong ref kept past the
+        // platform's own teardown), in addition to the realm-wide
+        // `capabilities.wake` call: `capabilities.wake` sets the shared
+        // `needs_redraw` bit (still required — it is what wakes an idle
+        // event loop at all) but only pokes whichever ONE window
+        // `AppRuntime`'s own `redraw_window` slot happens to hold (issue
+        // #555's still-single-window wake contract). Once a realm hosts
+        // more than one presentation, each needs its OWN window poked when
+        // IT dirties — never a sibling's — or a redraw request stamped for
+        // this presentation would silently wake (or fail to wake) the wrong
+        // native window. See `redraw_request_from_a_does_not_wake_bs_window`.
         let visual_wake = capabilities.wake;
-        pipeline.with_mut(|owner| owner.set_on_need_visual_update(move || visual_wake()));
+        let redraw_window = Arc::downgrade(&window);
+        pipeline.with_mut(|owner| {
+            owner.set_on_need_visual_update(move || {
+                visual_wake();
+                if let Some(window) = redraw_window.upgrade() {
+                    window.request_redraw();
+                }
+            });
+        });
 
         let semantics = SemanticsHost::new();
         // Semantics-enabled fan-out -> this presentation's own SemanticsHost.

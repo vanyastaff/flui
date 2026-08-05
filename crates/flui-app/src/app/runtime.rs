@@ -256,8 +256,18 @@ pub(super) struct RealmSlot {
     pub(super) realm: Option<UiRealm>,
     /// This realm's own owner-thread work queue — never shared with a
     /// sibling realm's queue, so draining one realm's events can never pop a
-    /// task meant for another.
-    pub(super) queue: VecDeque<RealmTask>,
+    /// task meant for another. Each entry is stamped with the
+    /// [`PresentationId`] of the `RealmDispatcher` (`runner.rs`, private to
+    /// that module) that enqueued it (issue #555's addressed-routing slice): a
+    /// realm's queue is shared across every presentation it hosts, so which
+    /// window produced a given `RealmTask::Event` cannot be recovered from
+    /// the queue's OWN dispatch call alone once more than one presentation's
+    /// window can enqueue into it — the stamp travels with the task itself
+    /// instead. `RealmTask::Frame`/`ClosePresentation` ignore their stamp
+    /// (frame pump is realm-wide; `ClosePresentation` already carries its
+    /// own target id as its payload) — only `RealmTask::Event` reads it, in
+    /// `PlatformToUi::run` (`runner.rs`).
+    pub(super) queue: VecDeque<(PresentationId, RealmTask)>,
     /// Set while a queued task for THIS realm is running, so a reentrant
     /// same-realm dispatch enqueues instead of recursing into `realm.take()`.
     pub(super) draining: bool,
@@ -527,10 +537,22 @@ pub(crate) struct AppRuntime {
     ///
     /// **Known limitation, stated rather than silently overclaimed:** this
     /// pair is still loop-scoped, not per-realm — with more than one
-    /// hosted realm, a focus/visibility change on any one window's OS
-    /// signal drives the SAME derivation for the whole loop. Per-realm
-    /// lifecycle derivation is `FocusCoordinator` territory (a later, exact-routing
-    /// slice of issue #555), out of this change's scope.
+    /// hosted REALM, a focus/visibility change on any one window's OS
+    /// signal drives the SAME derivation for every realm on this loop.
+    /// Issue #555's addressed-routing slice narrowed this for the
+    /// WITHIN-one-realm case (more than one PRESENTATION of the same
+    /// realm): `runner.rs`'s `PlatformToUi::WindowFocus` handling now
+    /// checks `UiRealm::is_active_presentation` before applying a `false`
+    /// signal to this field, so a non-active presentation's own window
+    /// losing OS focus (a normal consequence of focus having already moved
+    /// to a sibling presentation of that SAME realm) no longer suspends it
+    /// — only the realm's currently active presentation's own focus-loss
+    /// is authoritative. The remaining, unaddressed gap is strictly
+    /// cross-REALM: this field has no realm identity at all, so a focus
+    /// change on realm A's window still drives realm B's own lifecycle
+    /// derivation too. A genuinely per-realm `(visible, focused)` pair
+    /// (moving these fields onto `RealmSlot`) is the fix for that
+    /// remainder, out of this slice's scope.
     pub(super) visible: bool,
     pub(super) focused: bool,
     /// The loop-scoped owner-thread platform capability (ADR-0039 §6).
