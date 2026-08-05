@@ -256,8 +256,18 @@ pub(super) struct RealmSlot {
     pub(super) realm: Option<UiRealm>,
     /// This realm's own owner-thread work queue — never shared with a
     /// sibling realm's queue, so draining one realm's events can never pop a
-    /// task meant for another.
-    pub(super) queue: VecDeque<RealmTask>,
+    /// task meant for another. Each entry is stamped with the
+    /// [`PresentationId`] of the `RealmDispatcher` (`runner.rs`, private to
+    /// that module) that enqueued it (issue #555's addressed-routing slice): a
+    /// realm's queue is shared across every presentation it hosts, so which
+    /// window produced a given `RealmTask::Event` cannot be recovered from
+    /// the queue's OWN dispatch call alone once more than one presentation's
+    /// window can enqueue into it — the stamp travels with the task itself
+    /// instead. `RealmTask::Frame`/`ClosePresentation` ignore their stamp
+    /// (frame pump is realm-wide; `ClosePresentation` already carries its
+    /// own target id as its payload) — only `RealmTask::Event` reads it, in
+    /// `PlatformToUi::run` (`runner.rs`).
+    pub(super) queue: VecDeque<(PresentationId, RealmTask)>,
     /// Set while a queued task for THIS realm is running, so a reentrant
     /// same-realm dispatch enqueues instead of recursing into `realm.take()`.
     pub(super) draining: bool,

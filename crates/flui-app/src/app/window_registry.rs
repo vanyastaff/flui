@@ -176,6 +176,20 @@ impl WindowRegistry {
             .map(|(_, address)| *address)
     }
 
+    /// Whether `address` names a window mapping currently held by this
+    /// registry — the addressed-dispatch validity check `dispatch_platform_
+    /// realm` (`runner.rs`) uses in place of comparing against a single
+    /// cached "current" address (issue #555's per-presentation
+    /// generational `StalePresentation` extension): a realm hosting more
+    /// than one presentation has more than one live address at once, so
+    /// membership in this one authority — not equality against any single
+    /// value — is the only check general enough for N presentations.
+    pub(crate) fn contains_address(&self, address: PresentationAddress) -> bool {
+        self.entries
+            .iter()
+            .any(|(_, entry_address)| *entry_address == address)
+    }
+
     /// Removes and returns **every** entry addressed to `realm_id`.
     ///
     /// The target model is one realm owning any number of windows, so a
