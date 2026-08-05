@@ -31,16 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`TickerFuture::when_complete_or_cancel`** now uses `event-listener` crate instead of busy-wait thread spawn, eliminating potential resource leaks
 - **`SchedulerBindingState`** is now per-`Scheduler` instance instead of global static, enabling proper test isolation and multiple scheduler support
 
-### Breaking (#556 PR-B — `UpdateScheduler` reshape)
+### Breaking (issue #556 — `UpdateScheduler` reshape)
 
 - **`Scheduler` → `UpdateScheduler`, `WeakScheduler` → `WeakUpdateScheduler`**
   — hard rename, no alias, workspace-wide.
-- **`UpdateScheduler::drive_frame`** gained a `deadline: Instant` parameter:
-  `drive_frame(vsync_time, deadline, pipeline)`. `deadline` bounds
+- **`UpdateScheduler::drive_frame`** gained a `deadline: IdleDeadline`
+  parameter: `drive_frame(vsync_time, deadline, pipeline)`. `IdleDeadline`
+  is a newtype over `Instant` — not a bare second `Instant` — so it cannot
+  be silently swapped with `vsync_time` at a call site. `deadline` bounds
   `Priority::Idle` task execution alone — `Priority::Animation` and
   `Priority::Build` always run to completion regardless of it. A deadline
   can defer low-priority work; it can never skip a frame or starve logical
-  work.
+  work. A panicking task never leaks a stale deadline into a later frame
+  (an RAII guard clears it, including during an unwind).
 - **`UpdateScheduler::budget()`** (a `parking_lot::MutexGuard<FrameBudget>`
   accessor) is replaced by **`UpdateScheduler::budget_snapshot()`**, which
   returns an owned `FrameBudget` value (now `Clone`) instead of a live lock
@@ -48,8 +51,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`UpdateScheduler::new()`** no longer defaults its internal frame-budget
   stats via a named `FrameDuration::FPS_60` constant — that constant is
   deleted (`flui-scheduler` ships no fixed frame-rate default anywhere).
-  `UpdateScheduler` never assumes a refresh rate; the 60fps-labeled stats
-  fallback `new()` still seeds is informational only and gates nothing.
+  `UpdateScheduler` carries no `frame_duration`/`target_fps` field or
+  accessor at all: `set_target_fps`, `target_fps`, `set_frame_duration`,
+  `frame_duration`, `with_target_fps`, and `with_frame_duration` are all
+  deleted. `SchedulerBuilder::target_fps`/`frame_duration` still configure
+  the internal stats budget's label (read back only through
+  `budget_snapshot()`), never a scheduler-wide rate.
+- **`FrameSkipPolicy`, `UpdateScheduler::{set_frame_skip_policy,
+  frame_skip_policy, set_max_frame_skip, max_frame_skip,
+  skipped_frame_count, should_skip_frames, check_and_skip_frame,
+  clear_skip_stats, skip_rate}` are deleted.** `should_skip_frames`/
+  `check_and_skip_frame` made a live frame-skip decision off the deleted
+  fixed-rate assumption — dead surface with zero production consumers
+  (tests only, no strategy ever installed).
+- **`SchedulingStrategy`, `default_scheduling_strategy` are deleted**
+  (`config.rs`) for the same reason: zero production consumers, and
+  `default_scheduling_strategy` read `is_over_budget()` to make exactly the
+  kind of live gating decision `UpdateScheduler` no longer makes.
 - **`VsyncScheduler`, `VsyncMode`, `VsyncStats`, `VsyncCallback`, and
   `Scheduler::{set_vsync, has_vsync}`/`SchedulerBuilder::vsync_refresh_rate`
   are deleted.** This was a fixed-rate vsync *simulator* with zero

@@ -162,13 +162,13 @@ declarations = [
     "pub mod id;",
     "pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};",
     "pub use budget::{ AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget, };",
-    "pub use config::{ PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, SchedulingStrategy, TimingsCallback, default_scheduling_strategy, set_time_dilation, time_dilation, };",
+    "pub use config::{ PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, TimingsCallback, set_time_dilation, time_dilation, };",
     "pub use post_frame::{LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle};",
     "pub use web_time::Instant;",
     "pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};",
     "pub use frame::{ AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder, LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback, SchedulerPhase, };",
     "pub use id::{CallbackId, Id, IdGenerator, Marker, markers};",
-    "pub use scheduler::{ FrameCompletionFuture, FrameSkipPolicy, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler, };",
+    "pub use scheduler::{ FrameCompletionFuture, IdleDeadline, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler, };",
     "pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};",
     "pub use ticker::{ Ticker, TickerCallback, TickerCanceled, TickerFuture, TickerFutureOrCancel, TickerGroup, TickerId, TickerProvider, TickerState, };",
     "pub mod prelude {",
@@ -607,7 +607,7 @@ key = "scheduling-splits-by-level"
 statement = """
 Logical update scheduling (realm `UpdateScheduler`), physical pacing \
 (presentation `FrameClock`), and raster backpressure are separate owners. \
-`Scheduler` was hard-renamed to `UpdateScheduler` and reshaped (#556 PR-B): \
+`Scheduler` was hard-renamed to `UpdateScheduler` and reshaped (#556): \
 its constructor no longer defaults to a fixed 60fps target (`FrameDuration::\
 FPS_60` is deleted), `drive_frame` takes an explicit `deadline: Instant` that \
 bounds `Priority::Idle` task execution ONLY (`Priority::Animation`/`Build` \
@@ -2049,11 +2049,11 @@ declared_in = "crates/flui-scheduler/src/scheduler.rs"
 contains = "pub struct UpdateScheduler"
 classification = "transitional"
 thread_affinity = "realm-owned value (a `UiRealm` field, one fresh instance per realm, built by `RealmServices::construct()`); cross-thread wake and ticker cancellation via a `WeakUpdateScheduler` handle over its single internal `Arc`, never a `'static` singleton reach"
-owner = "per-realm scheduling authority — logical time only (phase machine, callback queues, task queue); makes no refresh-rate/display/surface assumption of its own (#556 PR-B); splits further into presentation FrameClock + raster backpressure in later #556 slices"
+owner = "per-realm scheduling authority — logical time only (phase machine, callback queues, task queue); makes no refresh-rate/display/surface assumption of its own (#556); splits further into presentation FrameClock + raster backpressure in later #556 slices"
 failure_semantics = "construction is infallible; phase machine asserts on misuse; a `WeakUpdateScheduler` upgrade fails closed once its owning realm drops"
 consumers = ["AppRuntime", "UiRealm", "flui-animation tickers", "flui-view"]
 owner_issue = 556
-notes = "Hard-renamed from `Scheduler`/`WeakScheduler` in #556 PR-B (no alias; 61 files / 363 occurrences outside flui-scheduler, measured by review). Same PR: `drive_frame(vsync_time, deadline, pipeline)` gained the `deadline: Instant` parameter, which bounds `Priority::Idle` task execution ONLY — `Priority::Animation`/`Build` always run to completion regardless of it; the constructor no longer defaults via a named `FrameDuration::FPS_60` constant (deleted, along with the `VsyncScheduler` simulator family — see the retired-surface entry below)."
+notes = "Hard-renamed from `Scheduler`/`WeakScheduler` in #556 (no alias; 61 files / 369 occurrences outside flui-scheduler, measured by review). Same change: `drive_frame(vsync_time, deadline, pipeline)` gained the `deadline: IdleDeadline` parameter (a newtype over `Instant`, not a bare second `Instant` -- two adjacent same-typed parameters could otherwise be silently swapped at a call site), which bounds `Priority::Idle` task execution ONLY — `Priority::Animation`/`Build` always run to completion regardless of it; the constructor no longer defaults via a named `FrameDuration::FPS_60` constant (deleted, along with the `VsyncScheduler` simulator family — see the retirement note below)."
 
 [[surface]]
 path = "flui_scheduler::{FrameBudget, SharedBudget, BudgetPolicy}"
@@ -2062,7 +2062,7 @@ kind = "type"
 declared_in = "crates/flui-scheduler/src/budget.rs"
 contains = "pub struct FrameBudget"
 classification = "transitional"
-thread_affinity = "plain data; `Clone` (#556 PR-B); read via `UpdateScheduler::budget_snapshot()`, an owned-value accessor -- there is no live lock guard on this surface any more (see the retired `budget()` entry below)"
+thread_affinity = "plain data; `Clone` (#556); read via `UpdateScheduler::budget_snapshot()`, an owned-value accessor -- there is no live lock guard on this surface any more (see the retired `budget()` entry below)"
 owner = "per-phase timing statistics against a caller-chosen target framerate — `UpdateScheduler` itself makes no frame-rate assumption and does not act on these statistics to gate anything"
 failure_semantics = "infallible; budget overruns are advisory statistics"
 consumers = ["UpdateScheduler", "diagnostics"]
@@ -2093,17 +2093,17 @@ owner = "post-frame callback lanes"
 failure_semantics = "typed LocalPostFrameScheduleError outside the owner scope"
 consumers = ["flui-view", "flui-widgets", "UiRealm"]
 owner_issue = 556
-notes = "ADR-0027 §2a's retirement condition for the weak-TLS post-frame ticket registry (`LOCAL_LANES`/`ACTIVE_LANES`, crates/flui-scheduler/src/post_frame.rs) has TWO clauses, not one: the Scheduler becomes realm-owned AND the handle can point directly at realm-local storage. This PR (#553 PR-5) lands clause 1 only -- `Scheduler` is now a `UiRealm`-owned field, not a process-global singleton (that type is `UpdateScheduler` as of #556 PR-B's hard rename; the clause-1 history above predates and is unaffected by the rename). Clause 2 is NOT satisfied: `PostFrameHandle` stays `Clone + Send + Sync` (flipped internally to hold a `WeakUpdateScheduler` rather than a strong `UpdateScheduler` clone, so it fails closed after its realm drops, but its shape is unchanged), so `schedule_local` still cannot hold the lane's `Rc<LocalLaneInner>` directly on that Send handle -- that is the entire reason `LOCAL_LANES`/`ACTIVE_LANES` exist as a thread-local resolution registry in the first place, and realm-owning the scheduler alone does not remove the need for it. The residual is named, not silently dropped: retiring clause 2 requires splitting `schedule_local` off the Send `PostFrameHandle` onto a new, owner-affine, `!Send` `LocalPostFrameHandle { lane: Weak<LocalLaneInner> }` type, with drain-by-parameter into the frame drive instead of a TLS lookup. That split ripples past this slice into the `BuildContext` capability surface (a new capability type alongside `rebuild_handle()`/`post_frame_handle()`), the trigger-#22 frame-capability-scope scanner's token list (a second token alongside `post_frame_handle`), and flui-material's `scaffold_messenger.rs` (today's only production `schedule_local` consumer, which would move onto the new type) -- each a cross-crate change too large to fold into the scheduler-ownership move itself. `LOCAL_LANES` and `ACTIVE_LANES` therefore both remain exactly as they were pre-PR-5; the scanner token `post_frame_handle` is unaffected either way."
+notes = "ADR-0027 §2a's retirement condition for the weak-TLS post-frame ticket registry (`LOCAL_LANES`/`ACTIVE_LANES`, crates/flui-scheduler/src/post_frame.rs) has TWO clauses, not one: the Scheduler becomes realm-owned AND the handle can point directly at realm-local storage. This PR (#553 PR-5) lands clause 1 only -- `Scheduler` is now a `UiRealm`-owned field, not a process-global singleton (that type is `UpdateScheduler` as of #556's hard rename; the clause-1 history above predates and is unaffected by the rename). Clause 2 is NOT satisfied: `PostFrameHandle` stays `Clone + Send + Sync` (flipped internally to hold a `WeakUpdateScheduler` rather than a strong `UpdateScheduler` clone, so it fails closed after its realm drops, but its shape is unchanged), so `schedule_local` still cannot hold the lane's `Rc<LocalLaneInner>` directly on that Send handle -- that is the entire reason `LOCAL_LANES`/`ACTIVE_LANES` exist as a thread-local resolution registry in the first place, and realm-owning the scheduler alone does not remove the need for it. The residual is named, not silently dropped: retiring clause 2 requires splitting `schedule_local` off the Send `PostFrameHandle` onto a new, owner-affine, `!Send` `LocalPostFrameHandle { lane: Weak<LocalLaneInner> }` type, with drain-by-parameter into the frame drive instead of a TLS lookup. That split ripples past this slice into the `BuildContext` capability surface (a new capability type alongside `rebuild_handle()`/`post_frame_handle()`), the trigger-#22 frame-capability-scope scanner's token list (a second token alongside `post_frame_handle`), and flui-material's `scaffold_messenger.rs` (today's only production `schedule_local` consumer, which would move onto the new type) -- each a cross-crate change too large to fold into the scheduler-ownership move itself. `LOCAL_LANES` and `ACTIVE_LANES` therefore both remain exactly as they were pre-PR-5; the scanner token `post_frame_handle` is unaffected either way."
 
 [[surface]]
-path = "flui_scheduler::Scheduler::budget (MutexGuard accessor) — RETIRED, #556 PR-B"
+path = "flui_scheduler::UpdateScheduler::budget_snapshot"
 crate = "flui-scheduler"
 kind = "function"
 declared_in = "crates/flui-scheduler/src/scheduler.rs"
 contains = "pub fn budget_snapshot(&self) -> FrameBudget"
-classification = "removal-target"
-thread_affinity = "no live lock guard leaves this surface -- returns an owned, cheap-clone `FrameBudget` value"
-owner = "retired SP-6 lock-shaped accessor, replaced by `UpdateScheduler::budget_snapshot`"
+classification = "experimental"
+thread_affinity = "no live lock guard on this surface -- returns an owned `FrameBudget` value (one small allocation: it carries a bounded rolling-window `VecDeque` of recent frame times, so 'owned value' does not mean zero-cost)"
+owner = "stats/diagnostics accessor, replacing the retired `Scheduler::budget` guard"
 failure_semantics = "infallible; the returned value is a stats snapshot only and gates nothing"
 consumers = ["stats/diagnostics call sites"]
 owner_issue = 556
@@ -2111,7 +2111,7 @@ notes = "The former `pub fn budget(&self) -> parking_lot::MutexGuard<'_, FrameBu
 
 # `flui_scheduler::{VsyncScheduler, VsyncMode, VsyncStats, VsyncCallback}`
 # (declared_in crates/flui-scheduler/src/vsync.rs) is deleted outright in
-# #556 PR-B, module and file included -- no surface entry for it survives
+# #556, module and file included -- no surface entry for it survives
 # here (a `declared_in` citation requires the file to still exist). It was a
 # fixed-rate vsync simulator with zero production consumers; real frame
 # pacing lives in the blocking Fifo present (ADR-0029). Deleted alongside it:
@@ -2301,7 +2301,7 @@ notes = "Overlay renders, but the renderer ignores the frame counter and the Per
 # The `instance-call` arm is now EMPTY: the scheduler was the last singleton
 # this ratchet tracked (painting, semantics/rendering, and `AppBinding` all
 # retired in earlier slices). Each `UiRealm` now owns a fresh `UpdateScheduler`
-# (renamed from `Scheduler` in #556 PR-B) value built by
+# (renamed from `Scheduler` in #556) value built by
 # `RealmServices::construct()` (`runtime.rs`); `SchedulerRef` — the typed
 # resolution seam earlier slices funneled every same-thread reach through —
 # is deleted, not flipped, since a realm-owned field needs no resolution step
@@ -2636,7 +2636,7 @@ allow_files = []
 
 [[forbidden_pattern]]
 pattern = "SCHEDULER_PHASE_TEST_LOCK"
-why = "the ambient-singleton contract: retired alongside the process-global half of the Scheduler singleton (renamed UpdateScheduler in #556 PR-B) -- every UiRealm now owns its own fresh UpdateScheduler value, so there is no shared phase state left to guard"
+why = "the ambient-singleton contract: retired alongside the process-global half of the Scheduler singleton (renamed UpdateScheduler in #556) -- every UiRealm now owns its own fresh UpdateScheduler value, so there is no shared phase state left to guard"
 allow_files = []
 
 [[forbidden_pattern]]

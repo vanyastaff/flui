@@ -21,14 +21,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_scheduler::{Instant, SchedulerPhase, UpdateScheduler};
+use flui_scheduler::{IdleDeadline, Instant, SchedulerPhase, UpdateScheduler};
 use parking_lot::Mutex;
 
 /// An Idle-slice deadline far enough in the future that it never passes
 /// during a test — these tests exercise post-frame ordering, not the
 /// deadline gate itself, so Idle-priority work must never be deferred here.
-fn far_deadline() -> Instant {
-    Instant::now() + std::time::Duration::from_hours(1)
+fn far_deadline() -> IdleDeadline {
+    IdleDeadline::far_future(Instant::now())
 }
 
 /// Append-only log of the order things happened in.

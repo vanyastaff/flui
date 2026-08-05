@@ -154,8 +154,8 @@ pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
 pub use config::{
-    PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, SchedulingStrategy,
-    TimingsCallback, default_scheduling_strategy, set_time_dilation, time_dilation,
+    PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, TimingsCallback,
+    set_time_dilation, time_dilation,
 };
 pub use post_frame::{LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle};
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
@@ -174,7 +174,7 @@ pub use frame::{
 // Re-exports - ID types (unified with flui-foundation)
 pub use id::{CallbackId, Id, IdGenerator, Marker, markers};
 pub use scheduler::{
-    FrameCompletionFuture, FrameSkipPolicy, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler,
+    FrameCompletionFuture, IdleDeadline, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler,
 };
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 pub use ticker::{

@@ -693,7 +693,7 @@ impl HeadlessBinding {
                 // doc); a deadline far in the future means Idle-priority
                 // work is never deferred here, matching this binding's
                 // behavior before `drive_frame` took a deadline.
-                let idle_deadline = vsync_time + std::time::Duration::from_hours(1);
+                let idle_deadline = flui_scheduler::IdleDeadline::far_future(vsync_time);
                 scheduler.drive_frame(vsync_time, idle_deadline, || {
                     *last_layer_tree = Self::run_pipeline(tree);
 

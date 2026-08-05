@@ -25,7 +25,7 @@ use flui_scheduler::{
     config::PerformanceMode,
     duration::{FrameDuration, Milliseconds},
     frame::{AppLifecycleState, SchedulerPhase},
-    scheduler::{FrameSkipPolicy, SchedulerBuilder, UpdateScheduler},
+    scheduler::{SchedulerBuilder, UpdateScheduler},
     task::{Priority, TaskQueue},
     ticker::{Ticker, TickerCanceled, TickerFuture, TickerState},
 };
@@ -625,31 +625,6 @@ fn test_end_of_frame_future() {
     scheduler.execute_frame();
 
     // Future should be completed after frame
-}
-
-// ============================================================================
-// Frame Skip Policy Tests
-// ============================================================================
-
-#[test]
-fn test_frame_skip_policies() {
-    let scheduler = UpdateScheduler::new();
-
-    // Test default policy
-    let default_policy = scheduler.frame_skip_policy();
-
-    // Test setting different policies
-    scheduler.set_frame_skip_policy(FrameSkipPolicy::Never);
-    assert_eq!(scheduler.frame_skip_policy(), FrameSkipPolicy::Never);
-
-    scheduler.set_frame_skip_policy(FrameSkipPolicy::SkipToLatest);
-    assert_eq!(scheduler.frame_skip_policy(), FrameSkipPolicy::SkipToLatest);
-
-    scheduler.set_frame_skip_policy(FrameSkipPolicy::CatchUp);
-    assert_eq!(scheduler.frame_skip_policy(), FrameSkipPolicy::CatchUp);
-
-    // Restore default
-    scheduler.set_frame_skip_policy(default_policy);
 }
 
 // ============================================================================

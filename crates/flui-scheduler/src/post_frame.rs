@@ -488,7 +488,7 @@ mod tests {
             assert!(
                 catch_unwind(AssertUnwindSafe(|| {
                     let now = crate::Instant::now();
-                    scheduler.drive_frame(now, now + std::time::Duration::from_hours(1), || {
+                    scheduler.drive_frame(now, crate::IdleDeadline::far_future(now), || {
                         panic!("pipeline probe")
                     });
                 }))

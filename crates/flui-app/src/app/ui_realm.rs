@@ -2982,7 +2982,7 @@ mod tests {
         let phase_b_mid_frame = Cell::new(None);
         realm_a.scheduler().drive_frame(
             flui_scheduler::Instant::now(),
-            flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
             || {
                 phase_a_mid_frame.set(Some(realm_a.scheduler().phase()));
                 phase_b_mid_frame.set(Some(realm_b.scheduler().phase()));
@@ -3085,7 +3085,7 @@ mod tests {
                 let _ = realm_b.drain_commands();
                 realm_b.scheduler().drive_frame(
                     flui_scheduler::Instant::now(),
-                    flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                     || {
                         // Mid-PersistentCallbacks rendezvous: cannot return
                         // until realm A's own closure below has ALSO
@@ -3101,7 +3101,7 @@ mod tests {
             let _ = realm_a.drain_commands();
             realm_a.scheduler().drive_frame(
                 flui_scheduler::Instant::now(),
-                flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {
                     rendezvous_or_timeout("realm A");
                     let _ = realm_a.draw_frame(coexistence_constraints());
@@ -3691,7 +3691,7 @@ mod tests {
 
             scheduler.drive_frame(
                 flui_scheduler::Instant::now(),
-                flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {
                     flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
                     let _ = realm.draw_frame(test_constraints());
@@ -3805,7 +3805,7 @@ mod tests {
 
                 scheduler.drive_frame(
                     flui_scheduler::Instant::now(),
-                    flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                     || {
                         let _ = realm.draw_frame(BoxConstraints::new(
                             px(0.0),
@@ -6377,7 +6377,7 @@ mod tests {
             // inbox.
             realm.scheduler().drive_frame(
                 flui_scheduler::Instant::now(),
-                flui_scheduler::Instant::now() + std::time::Duration::from_hours(1),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {},
             );
             assert!(

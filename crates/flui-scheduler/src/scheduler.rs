@@ -63,8 +63,6 @@ use std::{
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
 use web_time::{Duration, Instant};
 
 use crate::{
@@ -202,124 +200,50 @@ struct FrameCompletionNotifier {
     state: Arc<Mutex<FrameCompletionState>>,
 }
 
-/// Frame skip policy - determines behavior when catching up from frame drops
+/// The Idle-slice deadline [`UpdateScheduler::drive_frame`] bounds
+/// `Priority::Idle` task execution by (see that method's own doc — it
+/// never gates `Priority::Animation`/`Build`, and it can never skip a
+/// frame).
 ///
-/// When the application falls behind (missing vsync signals), this policy
-/// determines whether to render every frame (potentially falling further
-/// behind) or skip frames to catch up.
-///
-/// # Flutter Comparison
-///
-/// Flutter uses a similar approach with `timeDilation` and frame scheduling.
-/// The key insight is that animations should advance by real elapsed time,
-/// but rendering can be skipped if we're behind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[repr(u8)]
-pub enum FrameSkipPolicy {
-    /// Never skip frames - always render, even if behind
-    ///
-    /// Use this for applications where every frame matters (video playback).
-    /// May cause increasing latency if consistently over budget.
-    Never = 0,
+/// A distinct type from `drive_frame`'s `vsync_time: Instant` parameter on
+/// purpose: two adjacent, same-typed `Instant` parameters can be silently
+/// swapped at a call site (a swap still type-checks, and inverts this
+/// method's whole deadline semantics without a compiler diagnostic).
+/// Wrapping the second one closes that hole structurally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct IdleDeadline(pub Instant);
 
-    /// Skip frames if more than one frame behind (default)
-    ///
-    /// This balances responsiveness with animation smoothness.
-    /// Animations advance by real time, skipped frames just don't render.
-    #[default]
-    CatchUp = 1,
-
-    /// Aggressively skip to latest vsync
-    ///
-    /// Only render the most recent frame, skipping all intermediate ones.
-    /// Best for input latency, but animations may appear to "jump".
-    SkipToLatest = 2,
-
-    /// Limit skips to a maximum count
-    ///
-    /// Skip up to N frames, then render regardless. Prevents animations
-    /// from jumping too far ahead after a long stall.
-    LimitedSkip = 3,
-}
-
-impl TryFrom<u8> for FrameSkipPolicy {
-    type Error = u8;
-
-    #[inline]
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Self::try_from_u8(value).ok_or(value)
+impl IdleDeadline {
+    /// An Idle-slice deadline far enough past `now` that it never passes in
+    /// practice — for a caller with no real deadline source yet (no
+    /// `FrameClock` wired into any backend; see `drive_frame`'s doc). Idle
+    /// work is never deferred under this deadline, matching `drive_frame`'s
+    /// behavior before it took a deadline parameter at all.
+    #[must_use]
+    pub fn far_future(now: Instant) -> Self {
+        Self(now + std::time::Duration::from_hours(1))
     }
 }
 
-impl FrameSkipPolicy {
-    /// Try to convert from u8 representation
-    ///
-    /// Returns `None` if the value is not a valid discriminant.
-    #[inline]
-    pub const fn try_from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Never),
-            1 => Some(Self::CatchUp),
-            2 => Some(Self::SkipToLatest),
-            3 => Some(Self::LimitedSkip),
-            _ => None,
-        }
+impl From<Instant> for IdleDeadline {
+    fn from(instant: Instant) -> Self {
+        Self(instant)
     }
+}
 
-    /// Calculate how many frames to skip given elapsed time since last frame
-    ///
-    /// # Arguments
-    /// * `elapsed_ms` - Time since last frame was rendered
-    /// * `frame_budget_ms` - Caller-chosen target frame duration in milliseconds
-    /// * `max_skip` - Maximum frames to skip for `LimitedSkip` policy
-    ///
-    /// # Returns
-    /// Number of frames to skip (0 means render this frame)
-    pub fn frames_to_skip(self, elapsed_ms: f64, frame_budget_ms: f64, max_skip: u32) -> u32 {
-        if frame_budget_ms <= 0.0 || elapsed_ms <= 0.0 {
-            return 0;
-        }
+/// Clears the scheduler's Idle-slice deadline on drop — including during an
+/// unwind. See [`UpdateScheduler::drive_frame`]'s own doc ("A panicking task
+/// never leaks a stale deadline") for why this must be `Drop`-based rather
+/// than a plain "clear after the call" statement: a panicking task or
+/// persistent callback inside `handle_begin_frame`/`handle_draw_frame`
+/// unwinds straight past ordinary sequential cleanup code.
+struct IdleDeadlineGuard<'a> {
+    slot: &'a Mutex<Option<Instant>>,
+}
 
-        // How many frame intervals have passed?
-        let frames_behind = (elapsed_ms / frame_budget_ms).floor() as u32;
-
-        match self {
-            Self::Never => 0,
-            Self::CatchUp => {
-                // Skip if more than 1 frame behind
-                if frames_behind > 1 {
-                    frames_behind.saturating_sub(1)
-                } else {
-                    0
-                }
-            }
-            Self::SkipToLatest => {
-                // Skip all but the latest
-                frames_behind.saturating_sub(1)
-            }
-            Self::LimitedSkip => {
-                // Skip up to max_skip frames
-                let skip = frames_behind.saturating_sub(1);
-                skip.min(max_skip)
-            }
-        }
-    }
-
-    /// Check if this policy allows skipping
-    #[inline]
-    pub const fn allows_skip(self) -> bool {
-        !matches!(self, Self::Never)
-    }
-
-    /// Get a description of this policy
-    pub const fn description(self) -> &'static str {
-        match self {
-            Self::Never => "Never skip frames",
-            Self::CatchUp => "Skip to catch up when behind",
-            Self::SkipToLatest => "Always skip to latest frame",
-            Self::LimitedSkip => "Skip up to a maximum count",
-        }
+impl Drop for IdleDeadlineGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.lock() = None;
     }
 }
 
@@ -331,9 +255,12 @@ struct FrameState {
     current_frame: Mutex<Option<FrameTiming>>,
     /// VSync timestamp for current frame
     current_vsync_time: Mutex<Option<Instant>>,
-    /// Frame duration configuration
-    frame_duration: Mutex<FrameDuration>,
-    /// Frame budget management
+    /// Per-phase timing statistics against a caller-chosen target framerate.
+    /// This is the only place `flui-scheduler` tracks a frame-duration
+    /// value at all — it is stats-only (`UpdateScheduler::budget_snapshot`,
+    /// `avg_fps`, `is_janky`), never a gate. There is deliberately no
+    /// separate `frame_duration`/`target_fps` field or accessor on
+    /// `UpdateScheduler` itself; see `UpdateScheduler::new`'s doc.
     budget: Mutex<FrameBudget>,
     /// Whether a frame is currently scheduled
     frame_scheduled: AtomicBool,
@@ -343,14 +270,6 @@ struct FrameState {
     janky_frame_count: AtomicU64,
     /// Whether warm-up frame was executed
     warm_up_done: AtomicBool,
-    /// Frame skip policy for catching up
-    frame_skip_policy: AtomicU8,
-    /// Maximum frames to skip (for LimitedSkip policy)
-    max_frame_skip: Mutex<u32>,
-    /// Last frame end time (for skip calculation)
-    last_frame_end: Mutex<Option<Instant>>,
-    /// Skipped frame counter
-    skipped_frames: AtomicU64,
     /// The current frame's Idle-slice deadline, set by
     /// [`UpdateScheduler::drive_frame`] and consumed by
     /// [`UpdateScheduler::handle_draw_frame`] to decide whether Idle-priority
@@ -564,61 +483,48 @@ fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
 }
 
 impl UpdateScheduler {
-    /// Create a new scheduler.
+    /// Create a new scheduler with the default configuration
+    /// (equivalent to `SchedulerBuilder::new().build()`).
     ///
     /// `UpdateScheduler` makes no refresh-rate assumption of its own — it
     /// never knows a display, a surface, or a frame rate (that split lives
     /// in the presentation-owned `FrameClock`; see the ownership rule in
-    /// ADR-0044). The internal [`FrameBudget`] this seeds is a 60fps-labeled
-    /// **stats** fallback only (`avg_fps`/jank tracking for a caller who
-    /// never called [`Self::set_target_fps`]/[`Self::with_target_fps`]) —
-    /// it does not gate anything. [`Self::drive_frame`]'s `deadline`
-    /// parameter is the only thing that bounds work, and it bounds Idle
-    /// priority tasks alone: Animation and Build tasks always run.
+    /// ADR-0044), and carries no `frame_duration`/`target_fps` field or
+    /// accessor. The internal [`FrameBudget`] [`SchedulerBuilder`] seeds is a
+    /// stats-window default only (`avg_fps`/jank tracking for a caller who
+    /// never configured [`SchedulerBuilder::target_fps`]) — it does not gate
+    /// anything. [`Self::drive_frame`]'s `deadline` parameter is the only
+    /// thing that bounds work, and it bounds Idle priority tasks alone:
+    /// Animation and Build tasks always run.
     pub fn new() -> Self {
-        Self::with_frame_duration(
-            FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid"),
-        )
+        SchedulerBuilder::new().build()
     }
 
-    /// Create a scheduler with custom target FPS
-    pub fn with_target_fps(target_fps: u32) -> Self {
-        Self::with_frame_duration(FrameDuration::try_from_fps(target_fps).expect("fps > 0"))
-    }
-
-    /// Create a scheduler with specific frame duration
-    pub fn with_frame_duration(frame_duration: FrameDuration) -> Self {
-        Self::with_frame_duration_and_task_queue(frame_duration, TaskQueue::new())
-    }
-
-    /// [`Self::with_frame_duration`], with an explicit [`TaskQueue`] — the
-    /// seam [`SchedulerBuilder::build`] uses for `task_queue_capacity`.
+    /// [`SchedulerBuilder::build`]'s constructor seam: `budget_target` seeds
+    /// only the internal, stats-only [`FrameBudget`] (see [`Self::new`]'s
+    /// doc) — it is not stored anywhere else, and `UpdateScheduler` exposes
+    /// no way to read or change it after construction.
     ///
     /// A post-construction `Arc::get_mut` on `inner` cannot do this instead:
     /// `get_mut` requires zero weak refs too, and the async-driver wake hook
     /// this constructor installs always holds one (see below), so it would
     /// unconditionally return `None`. Taking the queue as a parameter avoids
     /// needing mutable access to the constructed `Arc` at all.
-    fn with_frame_duration_and_task_queue(
-        frame_duration: FrameDuration,
+    fn with_budget_target_and_task_queue(
+        budget_target: FrameDuration,
         task_queue: TaskQueue,
     ) -> Self {
-        let target_fps = frame_duration.fps() as u32;
+        let target_fps = budget_target.fps() as u32;
         let inner = Arc::new(SchedulerInner {
             frame: FrameState {
                 scheduler_phase: AtomicU8::new(SchedulerPhase::Idle as u8),
                 current_frame: Mutex::new(None),
                 current_vsync_time: Mutex::new(None),
-                frame_duration: Mutex::new(frame_duration),
                 budget: Mutex::new(FrameBudget::new(target_fps)),
                 frame_scheduled: AtomicBool::new(false),
                 frame_count: AtomicU64::new(0),
                 janky_frame_count: AtomicU64::new(0),
                 warm_up_done: AtomicBool::new(false),
-                frame_skip_policy: AtomicU8::new(FrameSkipPolicy::default() as u8),
-                max_frame_skip: Mutex::new(3),
-                last_frame_end: Mutex::new(None),
-                skipped_frames: AtomicU64::new(0),
                 idle_deadline: Mutex::new(None),
                 completion_waiters: Mutex::new(Vec::new()),
             },
@@ -746,8 +652,11 @@ impl UpdateScheduler {
         // Store vsync time for all tickers to use
         *self.inner.frame.current_vsync_time.lock() = Some(vsync_time);
 
-        // Create frame timing with vsync timestamp
-        let frame_duration = *self.inner.frame.frame_duration.lock();
+        // Create frame timing with vsync timestamp. `FrameTiming` labels its
+        // own stats with the persistent budget's target — the only
+        // frame-duration value this scheduler tracks anywhere (see
+        // `UpdateScheduler::new`'s doc); this does not gate anything.
+        let frame_duration = self.inner.frame.budget.lock().frame_duration();
         let mut timing = FrameTiming::with_duration(frame_duration);
         timing.start_time = vsync_time;
         timing.phase = FramePhase::Build;
@@ -876,7 +785,12 @@ impl UpdateScheduler {
 
         // Animation and Build always run — never gated. Only Idle work is
         // deadline-bounded (see this method's own doc and `drive_frame`).
-        self.inner.task_queue.execute_until(Priority::Animation);
+        // One call drains everything down to `Build` in strict priority
+        // order (UserInput, then Animation, then Build — `execute_until`
+        // pops a priority-ordered queue) — a separate leading
+        // `execute_until(Priority::Animation)` call would drain the exact
+        // same UserInput/Animation tasks first and then leave only Build
+        // tasks for this call, which is indistinguishable from one call.
         self.inner.task_queue.execute_until(Priority::Build);
 
         if !self.is_idle_deadline_passed() {
@@ -984,7 +898,6 @@ impl UpdateScheduler {
                     .scheduler_phase
                     .store(SchedulerPhase::Idle as u8, Ordering::Release);
                 *self.inner.frame.current_vsync_time.lock() = None;
-                *self.inner.frame.last_frame_end.lock() = Some(Instant::now());
                 std::panic::resume_unwind(payload);
             }
         }
@@ -992,9 +905,6 @@ impl UpdateScheduler {
         // Return to idle
         self.set_scheduler_phase(SchedulerPhase::Idle);
         *self.inner.frame.current_vsync_time.lock() = None;
-
-        // Record frame end time for skip calculations
-        *self.inner.frame.last_frame_end.lock() = Some(Instant::now());
     }
 
     /// Abandon the open frame: return to [`SchedulerPhase::Idle`] **without**
@@ -1041,7 +951,6 @@ impl UpdateScheduler {
             .scheduler_phase
             .store(SchedulerPhase::Idle as u8, Ordering::Release);
         *self.inner.frame.current_vsync_time.lock() = None;
-        *self.inner.frame.last_frame_end.lock() = Some(Instant::now());
         self.inner.callbacks.cancelled.clear();
 
         if let Some(timing) = timing {
@@ -1074,9 +983,25 @@ impl UpdateScheduler {
     /// skip the frame itself, and it can never defer `Priority::Animation`
     /// or `Priority::Build` work — those always run to completion,
     /// regardless of `deadline`. A caller with no meaningful deadline yet
-    /// (no `FrameClock` wired in) can pass one far in the future; Idle work
-    /// then always runs, matching this method's behavior before `deadline`
-    /// existed.
+    /// (no `FrameClock` wired in) can pass [`IdleDeadline::far_future`];
+    /// Idle work then always runs, matching this method's behavior before
+    /// `deadline` existed.
+    ///
+    /// # A panicking task never leaks a stale deadline
+    ///
+    /// `deadline` is visible to the private `is_idle_deadline_passed` helper
+    /// only for the duration of `handle_begin_frame` + `handle_draw_frame`,
+    /// immediately below, guarded by an RAII guard whose `Drop` clears it —
+    /// including when it runs *during an unwind*. Without that guard, a
+    /// panicking `Priority::Build`/`Animation` task inside
+    /// `handle_draw_frame` would unwind straight past a plain
+    /// "clear after the call" statement, leaving `Some(already-passed)`
+    /// behind forever: every *later* frame — including one driven by hand
+    /// via `handle_begin_frame`/`handle_draw_frame` directly, skipping
+    /// `drive_frame` entirely, as `HeadlessBinding` does — would then see a
+    /// deadline that has always already passed and defer `Priority::Idle`
+    /// permanently. The guard closes that leak structurally rather than by
+    /// discipline.
     ///
     /// # Errors and panics
     ///
@@ -1093,8 +1018,10 @@ impl UpdateScheduler {
     ///
     /// The recovery runs *between* `catch_unwind` and `resume_unwind` — the panic
     /// payload is already captured, so nothing here executes during unwinding, and
-    /// no `Drop` guard is involved (see `abort_frame` for why a guard would
-    /// `abort` the process). Without this, a panicking pipeline would leave the
+    /// no `Drop` guard is involved for THIS part (see `abort_frame` for why a guard
+    /// would `abort` the process here specifically — the earlier `IdleDeadlineGuard`
+    /// is a different, narrower guard over a plain field, not the phase machine).
+    /// Without this, a panicking pipeline would leave the
     /// frame open at `PersistentCallbacks` and the *next* `handle_begin_frame`
     /// would attempt the illegal `PersistentCallbacks -> TransientCallbacks`
     /// transition.
@@ -1104,19 +1031,27 @@ impl UpdateScheduler {
     pub fn drive_frame<R>(
         &self,
         vsync_time: Instant,
-        deadline: Instant,
+        deadline: IdleDeadline,
         pipeline: impl FnOnce() -> R,
     ) -> R {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-        *self.inner.frame.idle_deadline.lock() = Some(deadline);
+        *self.inner.frame.idle_deadline.lock() = Some(deadline.0);
+        let idle_deadline_guard = IdleDeadlineGuard {
+            slot: &self.inner.frame.idle_deadline,
+        };
+
         self.handle_begin_frame(vsync_time);
         self.handle_draw_frame();
         // The deadline only ever needs to be visible for this frame's own
-        // `handle_draw_frame` call, immediately above; clear it so a caller
+        // `handle_draw_frame` call, immediately above; drop the guard now
+        // (rather than leaving it to this function's own end) so a caller
         // that later drives `handle_begin_frame`/`handle_draw_frame` by hand
-        // (skipping `drive_frame`) never inherits a stale deadline.
-        *self.inner.frame.idle_deadline.lock() = None;
+        // never inherits a stale deadline, and so it is visibly gone before
+        // `pipeline` runs. The guard's `Drop` — not this explicit call alone
+        // — is what still clears the field if `handle_begin_frame` or
+        // `handle_draw_frame` above panics; see this method's own doc.
+        drop(idle_deadline_guard);
 
         match catch_unwind(AssertUnwindSafe(pipeline)) {
             Ok(result) => {
@@ -1438,33 +1373,6 @@ impl UpdateScheduler {
     }
 
     // =========================================================================
-    // Configuration
-    // =========================================================================
-
-    /// Set target FPS
-    pub fn set_target_fps(&self, fps: u32) {
-        let frame_duration = FrameDuration::try_from_fps(fps).expect("fps > 0");
-        *self.inner.frame.frame_duration.lock() = frame_duration;
-        *self.inner.frame.budget.lock() = FrameBudget::new(fps);
-    }
-
-    /// Set frame duration directly
-    pub fn set_frame_duration(&self, frame_duration: FrameDuration) {
-        *self.inner.frame.frame_duration.lock() = frame_duration;
-        *self.inner.frame.budget.lock() = FrameBudget::new(frame_duration.fps() as u32);
-    }
-
-    /// Get target FPS
-    pub fn target_fps(&self) -> u32 {
-        self.inner.frame.frame_duration.lock().fps() as u32
-    }
-
-    /// Get frame duration configuration
-    pub fn frame_duration(&self) -> FrameDuration {
-        *self.inner.frame.frame_duration.lock()
-    }
-
-    // =========================================================================
     // Vsync Timestamp
     // =========================================================================
 
@@ -1550,11 +1458,13 @@ impl UpdateScheduler {
 
     /// Snapshot the current frame budget statistics.
     ///
-    /// Returns an owned, cheap-clone [`FrameBudget`] value rather than a
-    /// live lock guard — the caller cannot deadlock the scheduler by holding
-    /// this past its own scope, and the returned value is a stats snapshot
-    /// only: it does not gate anything (see [`drive_frame`](Self::drive_frame)
-    /// and [`handle_draw_frame`](Self::handle_draw_frame) for the actual
+    /// Returns an owned [`FrameBudget`] value rather than a live lock guard
+    /// — the caller cannot deadlock the scheduler by holding this past its
+    /// own scope. It is one small allocation, not free (`FrameBudget` carries
+    /// a bounded rolling-window frame-time history), and the returned value
+    /// is a stats snapshot only: it does not gate anything (see
+    /// [`drive_frame`](Self::drive_frame) and
+    /// [`handle_draw_frame`](Self::handle_draw_frame) for the actual
     /// Idle-slice deadline gate).
     #[must_use]
     pub fn budget_snapshot(&self) -> FrameBudget {
@@ -1601,93 +1511,6 @@ impl UpdateScheduler {
             .frame
             .janky_frame_count
             .store(0, Ordering::Relaxed);
-    }
-
-    // =========================================================================
-    // Frame Skip Policy
-    // =========================================================================
-
-    /// Set frame skip policy
-    pub fn set_frame_skip_policy(&self, policy: FrameSkipPolicy) {
-        self.inner
-            .frame
-            .frame_skip_policy
-            .store(policy as u8, Ordering::Release);
-    }
-
-    /// Get current frame skip policy
-    pub fn frame_skip_policy(&self) -> FrameSkipPolicy {
-        FrameSkipPolicy::try_from_u8(self.inner.frame.frame_skip_policy.load(Ordering::Acquire))
-            .unwrap_or(FrameSkipPolicy::Never)
-    }
-
-    /// Set maximum frames to skip (for LimitedSkip policy)
-    pub fn set_max_frame_skip(&self, max: u32) {
-        *self.inner.frame.max_frame_skip.lock() = max;
-    }
-
-    /// Get maximum frames to skip
-    pub fn max_frame_skip(&self) -> u32 {
-        *self.inner.frame.max_frame_skip.lock()
-    }
-
-    /// Get count of skipped frames
-    pub fn skipped_frame_count(&self) -> u64 {
-        self.inner.frame.skipped_frames.load(Ordering::Relaxed)
-    }
-
-    /// Calculate frames to skip based on current policy
-    ///
-    /// Call this before rendering to determine if this frame should be skipped.
-    /// Returns the number of frames to skip (0 means render this frame).
-    pub fn should_skip_frames(&self) -> u32 {
-        let last_end = *self.inner.frame.last_frame_end.lock();
-        let Some(last) = last_end else {
-            return 0; // First frame, don't skip
-        };
-
-        let elapsed_ms = last.elapsed().as_secs_f64() * 1000.0;
-        let frame_budget_ms = self.inner.frame.frame_duration.lock().as_ms().value();
-        let policy = FrameSkipPolicy::try_from_u8(
-            self.inner.frame.frame_skip_policy.load(Ordering::Acquire),
-        )
-        .unwrap_or(FrameSkipPolicy::Never);
-        let max_skip = *self.inner.frame.max_frame_skip.lock();
-
-        policy.frames_to_skip(elapsed_ms, frame_budget_ms, max_skip)
-    }
-
-    /// Check if current frame should be skipped and record skip if so
-    ///
-    /// Returns `true` if this frame should be skipped, `false` if it should be
-    /// rendered. If skipping, increments the skipped frame counter.
-    pub fn check_and_skip_frame(&self) -> bool {
-        let skip_count = self.should_skip_frames();
-
-        if skip_count > 0 {
-            self.inner
-                .frame
-                .skipped_frames
-                .fetch_add(skip_count as u64, Ordering::Relaxed);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Clear skip statistics
-    pub fn clear_skip_stats(&self) {
-        self.inner.frame.skipped_frames.store(0, Ordering::Relaxed);
-    }
-
-    /// Get skip rate as percentage
-    pub fn skip_rate(&self) -> f64 {
-        let total = self.frame_count() + self.skipped_frame_count();
-        if total == 0 {
-            0.0
-        } else {
-            (self.skipped_frame_count() as f64 / total as f64) * 100.0
-        }
     }
 
     // =========================================================================
@@ -2208,10 +2031,16 @@ impl TickerProvider for UpdateScheduler {
     }
 }
 
-/// Builder for creating a scheduler with custom configuration
+/// Builder for creating a scheduler with custom configuration.
+///
+/// `budget_target` configures ONLY the internal, stats-only [`FrameBudget`]
+/// (`avg_fps`/jank tracking via [`UpdateScheduler::budget_snapshot`]) — the
+/// scheduler itself never gates on it, and `UpdateScheduler` exposes no way
+/// to read it back. This is the sole place in `flui-scheduler` a fixed
+/// frame-rate default is declared; see [`UpdateScheduler::new`]'s doc.
 #[derive(Debug, Clone)]
 pub struct SchedulerBuilder {
-    frame_duration: FrameDuration,
+    budget_target: FrameDuration,
     task_queue_capacity: Option<usize>,
 }
 
@@ -2219,20 +2048,22 @@ impl SchedulerBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self {
-            frame_duration: FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid"),
+            budget_target: FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid"),
             task_queue_capacity: None,
         }
     }
 
-    /// Set target FPS
+    /// Set the stats budget's target FPS (see this type's own doc — this
+    /// does not configure a scheduler-wide rate).
     pub fn target_fps(mut self, fps: u32) -> Self {
-        self.frame_duration = FrameDuration::try_from_fps(fps).expect("fps > 0");
+        self.budget_target = FrameDuration::try_from_fps(fps).expect("fps > 0");
         self
     }
 
-    /// Set frame duration
+    /// Set the stats budget's target duration directly (see this type's own
+    /// doc — this does not configure a scheduler-wide rate).
     pub fn frame_duration(mut self, duration: FrameDuration) -> Self {
-        self.frame_duration = duration;
+        self.budget_target = duration;
         self
     }
 
@@ -2248,7 +2079,7 @@ impl SchedulerBuilder {
             .task_queue_capacity
             .map_or_else(TaskQueue::new, TaskQueue::with_capacity);
 
-        UpdateScheduler::with_frame_duration_and_task_queue(self.frame_duration, task_queue)
+        UpdateScheduler::with_budget_target_and_task_queue(self.budget_target, task_queue)
     }
 }
 
@@ -2651,12 +2482,15 @@ mod tests {
 
     #[test]
     fn test_scheduler_builder() {
+        // `target_fps` configures only the internal stats budget's label —
+        // UpdateScheduler itself exposes no `target_fps()` accessor; read it
+        // back through `budget_snapshot()` instead.
         let scheduler = SchedulerBuilder::new()
             .target_fps(120)
             .task_queue_capacity(100)
             .build();
 
-        assert!((scheduler.target_fps() as i32 - 120).abs() <= 1);
+        assert!((scheduler.budget_snapshot().target_fps() as i32 - 120).abs() <= 1);
     }
 
     #[test]
@@ -2671,98 +2505,6 @@ mod tests {
         // Second call should be no-op
         scheduler.schedule_warm_up_frame();
         assert_eq!(scheduler.frame_count(), 1);
-    }
-
-    #[test]
-    fn test_frame_duration_setting() {
-        let scheduler = UpdateScheduler::new();
-
-        scheduler.set_frame_duration(FrameDuration::FPS_144);
-        assert!((scheduler.target_fps() as i32 - 144).abs() <= 1);
-
-        scheduler.set_target_fps(30);
-        assert!((scheduler.target_fps() as i32 - 30).abs() <= 1);
-    }
-
-    // Frame Skip Policy Tests
-
-    #[test]
-    fn test_frame_skip_policy_never() {
-        // Never policy should never skip frames
-        assert_eq!(FrameSkipPolicy::Never.frames_to_skip(100.0, 20.0, 3), 0);
-        assert_eq!(FrameSkipPolicy::Never.frames_to_skip(1000.0, 20.0, 3), 0);
-    }
-
-    #[test]
-    fn test_frame_skip_policy_catch_up() {
-        // Under budget - no skip
-        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(15.0, 20.0, 3), 0);
-
-        // Exactly one frame's worth of time - no skip (only 1 frame behind)
-        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(20.0, 20.0, 3), 0);
-
-        // 2 frames behind - skip 1
-        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(40.0, 20.0, 3), 1);
-
-        // 3 frames behind - skip 2
-        assert_eq!(FrameSkipPolicy::CatchUp.frames_to_skip(60.0, 20.0, 3), 2);
-    }
-
-    #[test]
-    fn test_frame_skip_policy_skip_to_latest() {
-        // 50ms elapsed / 20ms per frame = 2.5 = floor to 2 frames behind
-        // Skip 2-1 = 1 frame (keep latest)
-        assert_eq!(
-            FrameSkipPolicy::SkipToLatest.frames_to_skip(50.0, 20.0, 3),
-            1
-        );
-
-        // 100ms / 20ms per frame = 5.0 = floor to 5 frames behind, skip 4
-        assert_eq!(
-            FrameSkipPolicy::SkipToLatest.frames_to_skip(100.0, 20.0, 3),
-            4
-        );
-    }
-
-    #[test]
-    fn test_frame_skip_policy_limited_skip() {
-        // 50ms / 20ms per frame = 2.5 = floor to 2 frames behind, skip 1
-        assert_eq!(
-            FrameSkipPolicy::LimitedSkip.frames_to_skip(50.0, 20.0, 3),
-            1
-        );
-
-        // 200ms / 20ms per frame = 10.0 = floor to 10 frames behind, skip 9, but max 3
-        assert_eq!(
-            FrameSkipPolicy::LimitedSkip.frames_to_skip(200.0, 20.0, 3),
-            3
-        );
-    }
-
-    #[test]
-    fn test_scheduler_frame_skip_policy() {
-        let scheduler = UpdateScheduler::new();
-
-        assert_eq!(scheduler.frame_skip_policy(), FrameSkipPolicy::CatchUp);
-
-        scheduler.set_frame_skip_policy(FrameSkipPolicy::Never);
-        assert_eq!(scheduler.frame_skip_policy(), FrameSkipPolicy::Never);
-
-        scheduler.set_max_frame_skip(5);
-        assert_eq!(scheduler.max_frame_skip(), 5);
-    }
-
-    #[test]
-    fn test_skipped_frame_counter() {
-        let scheduler = UpdateScheduler::new();
-
-        assert_eq!(scheduler.skipped_frame_count(), 0);
-
-        // Execute a frame to set last_frame_end
-        scheduler.execute_frame();
-
-        // Should not skip immediately after a frame
-        assert!(!scheduler.check_and_skip_frame());
     }
 
     // Callback Cancellation Tests
