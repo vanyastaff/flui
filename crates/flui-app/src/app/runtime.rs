@@ -300,6 +300,16 @@ impl RealmRegistry {
         self.slots.is_empty()
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "shared-reference lookup; every production call site so far checks a slot \
+                      out via get_mut (the checkout-based dispatch/visit pattern) -- exercised \
+                      by this crate's own tests, which only need to read a slot back, never \
+                      mutate it"
+        )
+    )]
     pub(super) fn get(&self, id: &RealmId) -> Option<&RealmSlot> {
         self.slots
             .iter()
@@ -490,10 +500,10 @@ impl FrameWakeHandle {
 ///
 /// # Design-for-N
 ///
-/// The realm-facing API is `RealmId`-keyed ([`AppRuntime::realm`]);
-/// *storage* is [`RealmRegistry`], an insertion-ordered map of any number of
-/// hosted realms (issue #555) — `next_identity` above already mints from a
-/// shape that never needed to change for this to land.
+/// The realm-facing API is `RealmId`-keyed: `realms` is [`RealmRegistry`],
+/// an insertion-ordered map of any number of hosted realms (issue #555) —
+/// `next_identity` above already mints from a shape that never needed to
+/// change for this to land.
 #[cfg(not(target_os = "ios"))]
 pub(crate) struct AppRuntime {
     /// Every hosted realm, keyed by `RealmId`, in mount (insertion) order.
@@ -685,23 +695,6 @@ impl AppRuntime {
         self.services.get().is_some()
     }
 
-    /// `RealmId`-keyed lookup: `Some` only when `id` names a currently
-    /// hosted (resident, not checked-out) realm. Storage is
-    /// [`RealmRegistry`], so this scales to however many realms are
-    /// actually installed rather than a single degenerate slot.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "design-for-N accessor; the single production caller \
-                      (per-realm dispatch) still addresses the TLS slot \
-                      directly"
-        )
-    )]
-    pub(crate) fn realm(&self, id: RealmId) -> Option<&UiRealm> {
-        self.realms.get(&id).and_then(|slot| slot.realm.as_ref())
-    }
-
     /// True if `phase` is one of the phases `with_owner_platform`'s fence (c)
     /// forbids: a frame transaction genuinely in flight, as opposed to
     /// `Idle`/`PostFrameCallbacks`, both of which are legitimate times to
@@ -732,32 +725,43 @@ impl AppRuntime {
     /// exact for that case, not merely a fallback. Only once nothing is
     /// checked out does this fall through to scanning `realms` itself, so an
     /// addressed probe (this dispatch's own realm) and the aggregate fence
-    /// both stay correct without duplicating the forbidden-phase list. Reads
-    /// `Some(Idle)` (not `None`) when every resident realm is quiescent,
-    /// matching this function's pre-registry single-slot behavior exactly
-    /// for the common one-realm case.
+    /// both stay correct without duplicating the forbidden-phase list.
+    /// Single-pass, no intermediate allocation: returns the first FORBIDDEN
+    /// phase found, short-circuiting the scan; if none is forbidden, returns
+    /// the first realm's OBSERVED phase honestly (never claimed to be
+    /// specifically `Idle` — a fully quiescent realm can legitimately sit in
+    /// `PostFrameCallbacks` just as validly, and this reads back whichever
+    /// one it actually is) rather than `None`, matching this function's
+    /// pre-registry single-slot behavior for the common one-realm case (a
+    /// realm being installed reads back its own real phase, not a
+    /// vacuous "nothing installed" `None`).
     pub(super) fn installed_realm_phase(&self) -> Option<flui_scheduler::SchedulerPhase> {
         if let Some(scheduler) = self.dispatched_scheduler.as_ref() {
             return Some(scheduler.phase());
         }
-        let phases: Vec<_> = self
-            .realms
-            .iter()
-            .filter_map(|(_, slot)| slot.realm.as_ref())
-            .map(|realm| realm.scheduler().phase())
-            .collect();
-        phases
-            .iter()
-            .copied()
-            .find(|phase| Self::is_frame_transaction_phase(*phase))
-            .or_else(|| phases.first().copied())
+        let mut first_observed = None;
+        for (_, slot) in self.realms.iter() {
+            let Some(realm) = slot.realm.as_ref() else {
+                continue;
+            };
+            let phase = realm.scheduler().phase();
+            if Self::is_frame_transaction_phase(phase) {
+                return Some(phase);
+            }
+            first_observed.get_or_insert(phase);
+        }
+        first_observed
     }
 
     /// The un-deferred application of an `Install` mutation: registers
-    /// `window`'s id in the `WindowRegistry` FIRST, strictly (never
-    /// replacing an existing mapping — an id collision is refused, not
-    /// silently re-routed onto a sibling realm's window), and only inserts
-    /// `slot` into `realms` once that registration succeeds.
+    /// `window` in the `WindowRegistry` FIRST, strictly (never replacing an
+    /// existing mapping — an id collision is refused, not silently
+    /// re-routed onto a sibling realm's window), and only inserts `slot`
+    /// into `realms` once that registration succeeds. Hands `window` to
+    /// [`super::window_registry::WindowRegistry::try_register_window`]
+    /// rather than deriving its id here: `WindowId` is the registry's own
+    /// single-authority concern (ADR-0037 §2) — `AppRuntime` never names or
+    /// touches it directly.
     ///
     /// On `Err`, hands `slot` BACK rather than dropping it here: this method
     /// is always called while some caller's `APP_RUNTIME` `RefCell` borrow is
@@ -774,7 +778,7 @@ impl AppRuntime {
         slot: RealmSlot,
         window: &Arc<dyn PlatformWindow>,
     ) -> Result<(), (RegistryError, Box<RealmSlot>)> {
-        if let Err(error) = self.registry.try_register(window.id(), slot.address) {
+        if let Err(error) = self.registry.try_register_window(window, slot.address) {
             return Err((error, Box::new(slot)));
         }
         self.realms.insert(id, slot);
@@ -942,6 +946,14 @@ impl AppRuntime {
     /// completed. `teardown_platform_realm` asserts this rather than
     /// silently dropping a still-pending mutation (and the `UiRealm` an
     /// `Install` mutation might still be holding) unnoticed.
+    ///
+    /// `cfg`-gated to match that one caller exactly: `teardown_platform_realm`
+    /// is `#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]`
+    /// (the web host never tears down at all — see that function's own
+    /// module doc), so on wasm32 this method has no caller at all and must
+    /// not compile there either, or it is dead code under `wasm-check`'s
+    /// deny-warnings build.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn has_pending_realm_mutations(&self) -> bool {
         !self.pending_realm_mutations.is_empty()
     }
@@ -1201,9 +1213,10 @@ mod app_runtime_tests {
         );
         assert!(
             runtime
-                .realm(RealmId::new_gen(0, NonZeroU32::new(1).unwrap()))
+                .realms
+                .get(&RealmId::new_gen(0, NonZeroU32::new(1).unwrap()))
                 .is_none(),
-            "the RealmId-keyed accessor must return None when no realm is installed"
+            "the RealmId-keyed registry must return None when no realm is installed"
         );
     }
 

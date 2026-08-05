@@ -545,6 +545,13 @@ impl PlatformToUi {
 /// SAME realm — a sibling realm's own applier is untouched. Call once per
 /// realm install, alongside [`install_platform_realm`], from each backend's
 /// bootstrap — never from inside a frame/event dispatch.
+///
+/// `realm_id` not being resident here is always a caller bug, never a
+/// legitimate race: this is called synchronously, immediately alongside the
+/// realm's own install, so the slot must already exist. Loud rather than a
+/// silent no-op, because the failure mode otherwise is silent forever — that
+/// realm's `Resized` events would coalesce onto a `None` applier for its
+/// entire lifetime with nothing ever pointing at why.
 #[cfg(not(target_os = "ios"))]
 fn install_surface_applier(
     realm_id: RealmId,
@@ -553,6 +560,18 @@ fn install_surface_applier(
     APP_RUNTIME.with(|slot| {
         if let Some(realm_slot) = slot.borrow_mut().realms.get_mut(&realm_id) {
             realm_slot.surface_applier = Some(Box::new(applier));
+        } else {
+            debug_assert!(
+                false,
+                "BUG: install_surface_applier called for realm {realm_id:?}, which is not \
+                 resident in the registry -- call this once, synchronously, immediately \
+                 alongside install_platform_realm/install_realm_alongside, never after"
+            );
+            tracing::error!(
+                ?realm_id,
+                "install_surface_applier: realm not found in the registry -- this realm's \
+                 resize handling is silently lost for its whole lifetime"
+            );
         }
     });
 }
@@ -1425,19 +1444,30 @@ fn dispatch_platform_realm(
             );
             return Err(RealmDispatchError::StalePresentation);
         }
-        realm_slot.queue.push_back(event);
+        // Same-realm reentrancy: this realm is already draining (mid its
+        // own drain loop below) or checked out (by its own dispatch, or by
+        // a `for_each_installed_realm` visit) -- always safe to enqueue and
+        // return early; the ongoing drain loop, or the next legitimate
+        // dispatch once the realm is restored, picks the event up.
         if realm_slot.draining || realm_slot.realm.is_none() {
+            realm_slot.queue.push_back(event);
             return Ok(None);
         }
-        // Nested cross-realm dispatch guard (issue #555): reaching here
-        // means THIS realm is neither draining nor checked out (both ruled
-        // out just above), so a `dispatched_realm_id` naming a DIFFERENT
-        // realm can only mean a nested dispatch was attempted while that
-        // other realm's task is still running on this same thread — the one
-        // case `request_realm_install`/`request_realm_uninstall`'s
-        // defer-to-idle discipline exists to make structurally unreachable
-        // in production. Caught loudly in
-        // debug builds; release builds still refuse rather than nest.
+        // Nested cross-realm dispatch guard (issue #555), checked BEFORE
+        // enqueuing `event` anywhere: reaching here means THIS realm is
+        // neither draining nor checked out (both ruled out just above), so
+        // a `dispatched_realm_id` naming a DIFFERENT realm can only mean a
+        // nested dispatch was attempted while that other realm's task is
+        // still running on this same thread — the one case
+        // `request_realm_install`/`request_realm_uninstall`'s defer-to-idle
+        // discipline exists to make structurally unreachable in production.
+        // Checking this BEFORE the enqueue below is load-bearing, not
+        // cosmetic: enqueuing `event` first and rejecting after would leave
+        // it stuck in this realm's queue forever (nothing else ever removes
+        // a rejected event), silently delivered to the next LEGITIMATE
+        // dispatch instead of the genuine rejection this error reports.
+        // Caught loudly in debug builds; release builds still refuse rather
+        // than nest.
         if let Some(dispatched_realm_id) = state.dispatched_realm_id {
             debug_assert!(
                 false,
@@ -1456,6 +1486,7 @@ fn dispatch_platform_realm(
             .realms
             .get_mut(&realm_id)
             .expect("BUG: presence checked above");
+        realm_slot.queue.push_back(event);
         let first = realm_slot
             .queue
             .pop_front()
@@ -2759,6 +2790,63 @@ mod realm_dispatch_tests {
             })),
         )
         .expect("B dispatches independently of A");
+
+        teardown_platform_realm();
+    }
+
+    /// A rejected nested cross-realm dispatch must never smuggle its task
+    /// into the target realm's queue: the task must not run during the
+    /// rejected attempt, AND must not be silently delivered by the NEXT
+    /// legitimate dispatch to that same realm either. Before the ordering
+    /// fix, the event was pushed into realm B's queue BEFORE the
+    /// nested-dispatch guard ran, so nothing ever removed a rejected
+    /// event — the very next legitimate dispatch to B would pop and run it.
+    #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "the nested-dispatch guard fires via debug_assert!(false, ...) in this build; \
+                  release builds return Err without panicking, so realm A's own outer dispatch \
+                  never unwinds and this test's catch_unwind expectation does not apply"
+    )]
+    fn rejected_nested_dispatch_never_delivers_its_task_on_the_next_legitimate_dispatch() {
+        let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+
+        let rejected_ran = Rc::new(Cell::new(false));
+        let rejected_ran_in_task = Rc::clone(&rejected_ran);
+
+        // From inside realm A's own dispatched task, attempt a NESTED
+        // dispatch to realm B -- a DIFFERENT, resident-and-idle realm --
+        // which the nested-cross-realm-dispatch guard must reject before
+        // ever touching B's queue. The guard's debug_assert! panics in this
+        // build; the panic unwinds through A's own dispatch, which this
+        // catch_unwind survives.
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dispatch_platform_realm(
+                dispatcher_a,
+                RealmTask::Frame(Box::new(move |_realm| {
+                    let _ = dispatch_platform_realm(
+                        dispatcher_b,
+                        RealmTask::Frame(Box::new(move |_| {
+                            rejected_ran_in_task.set(true);
+                        })),
+                    );
+                })),
+            )
+        }));
+        assert!(
+            attempt.is_err(),
+            "the nested cross-realm dispatch attempt must panic via the guard's debug_assert!"
+        );
+
+        // A LEGITIMATE, top-level dispatch to realm B, driven afterward.
+        dispatch_platform_realm(dispatcher_b, RealmTask::Frame(Box::new(|_| {})))
+            .expect("realm B still dispatches normally after the rejected nested attempt");
+
+        assert!(
+            !rejected_ran.get(),
+            "the REJECTED task must never run -- not during the rejected attempt, and not \
+             smuggled into realm B's queue for a later legitimate dispatch to deliver"
+        );
 
         teardown_platform_realm();
     }
