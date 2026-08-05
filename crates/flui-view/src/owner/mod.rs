@@ -9,11 +9,18 @@
 
 mod build_owner;
 mod element_owner;
+mod global_key_scope;
 mod inherited_dependencies;
 mod layout_builder;
 mod rebuild_handle;
 
 pub use build_owner::BuildOwner;
+// `OwnerTag`/`claim_and_register`/`release_and_unregister` (ADR-0043) stay
+// crate-internal to `global_key_scope`, reached by `BuildOwner` and
+// `ElementOwner`'s register/unregister paths via the module path directly —
+// never part of the public surface: callers observe conflicts and
+// reclamation through tracing and panics, not by naming an owner's tag.
+pub use global_key_scope::GlobalKeyScope;
 pub use rebuild_handle::RebuildHandle;
 // Moved to flui-foundation (ADR-0040: observation events carry typed
 // causes, and foundation is the only crate below every emitter); re-exported

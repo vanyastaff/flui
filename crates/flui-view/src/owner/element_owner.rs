@@ -47,6 +47,7 @@ use flui_objects::LayoutConstraintsCell;
 
 use super::RebuildReason;
 use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
+use super::global_key_scope::{self, GlobalKeyScope, OwnerTag};
 use super::inherited_dependencies::{InheritedDependencies, ProviderIds};
 use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
@@ -205,30 +206,53 @@ pub struct ElementOwner<'a> {
     /// The binding's owner-local interaction dispatch capability (ADR-0027),
     /// threaded into render-object lifecycle contexts.
     pub(crate) interaction_dispatch: &'a Option<flui_interaction::InteractionDispatchHandle>,
+
+    /// This owner's identity for [`GlobalKeyScope`] claim tagging (ADR-0043).
+    /// `Copy`, so every split-borrow construction site just copies it — no
+    /// second borrow of `BuildOwner` needed.
+    pub(crate) owner_tag: OwnerTag,
+
+    /// Split-borrow view of `BuildOwner::global_key_scope` (ADR-0043), so
+    /// `register_global_key`/`unregister_global_key` can claim/release
+    /// through the shared scope without a full `&mut BuildOwner` borrow.
+    pub(crate) global_key_scope: &'a mut Option<GlobalKeyScope>,
 }
 
 impl ElementOwner<'_> {
     /// Register a `GlobalKey` hash → element mapping.
     ///
     /// Called by `Element::mount` when the mounted element carries a
-    /// `GlobalKey`. Idempotent: re-registering the same hash with the
-    /// same `id` is a no-op; with a different `id` the new mapping
-    /// wins (last-write-wins; conflict detection is a future addition).
-    ///
-    /// `debug_assert!`s that `id` is non-default — an
-    /// `ElementId::INVALID` register slips through release builds with
-    /// a `tracing::warn!` so production doesn't crash on a stray call,
-    /// but tests catch it.
+    /// `GlobalKey`. Idempotent for THIS owner: re-registering the same hash
+    /// with the same `id` is a no-op; with a different `id` the new mapping
+    /// wins (last-write-wins). If a [`GlobalKeyScope`] is installed (or this
+    /// owner's lazily self-owned private one), this first claims `key_hash`
+    /// there: a DIFFERENT owner already holding it is a cross-owner
+    /// collision, traced then panicked (ADR-0043) rather than silently
+    /// aliased.
     pub fn register_global_key(&mut self, key_hash: u64, id: ElementId) {
-        self.global_keys.insert(key_hash, id);
+        global_key_scope::claim_and_register(
+            self.global_key_scope,
+            self.owner_tag,
+            key_hash,
+            id,
+            self.global_keys,
+        );
     }
 
     /// Unregister a `GlobalKey` hash mapping.
     ///
     /// Called by `Element::unmount` when an element carrying a
-    /// `GlobalKey` leaves the tree. No-op if the hash isn't present.
+    /// `GlobalKey` leaves the tree. No-op if the hash isn't present locally.
+    /// Also releases this owner's scope claim on `key_hash`, if one is
+    /// installed — tag-checked, so this is a no-op against a claim a
+    /// different owner has since taken (ADR-0043).
     pub fn unregister_global_key(&mut self, key_hash: u64) {
-        self.global_keys.remove(&key_hash);
+        global_key_scope::release_and_unregister(
+            self.global_key_scope.as_ref(),
+            self.owner_tag,
+            key_hash,
+            self.global_keys,
+        );
     }
 
     /// Look up the element holding a given `GlobalKey` hash.
