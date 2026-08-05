@@ -4,7 +4,7 @@
 # not be acquired from a build / layout / paint / composite body.
 #
 # A lifecycle-only capability lets code affect presentation state outside the
-# build/layout/paint transaction. Five are guarded:
+# build/layout/paint transaction. Six are guarded:
 #
 #   rebuild_handle()    ADR-0018 U1 — `RebuildHandle::schedule()` marks an element
 #                       dirty for the next frame.
@@ -24,14 +24,34 @@
 #                       owner-lane platform work (e.g. `open_window`) mid-frame
 #                       transaction, ahead of trigger #22's other four via the
 #                       same ambient-authority hazard.
+#   pipeline_owner()    PipelineCell port (docs/runtime-contract.toml's
+#                       `semantics-two-phase-borrow` contract and `PipelineCell`
+#                       surface entry) — `BuildContext::pipeline_owner()` returns
+#                       a live `PipelineCell` handle to the whole render tree;
+#                       calling `.with_mut()` on it from inside `build`/`layout`/
+#                       `paint` would reenter the pipeline mid-transaction, which
+#                       `PipelineCell::with_mut`'s own reentrancy guard turns into
+#                       an immediate panic rather than the silent corruption an
+#                       `Arc<RwLock<_>>` shape would have risked. Production call
+#                       sites acquire it in `init_state` and clone it into a
+#                       callback fired later, never touching it synchronously
+#                       inside a guarded body — see `flui-widgets`'s
+#                       `Focus::init_state` (`install_rect_provider`) and
+#                       `InteractiveViewerState::init_state`.
 #
 # The first four are exposed through `BuildContext`; `owner_platform` is a
-# free function in flui-app, not a `BuildContext` method — the scanner is a
-# textual token match, not a method-call parse, so it is caught the same way.
-# All five must be acquired in `ViewState::init_state` / `did_change_dependencies`
-# (the `BuildContext` four) or outside any guarded body entirely
+# free function in flui-app, not a `BuildContext` method; `pipeline_owner` is
+# the sixth `BuildContext` method — the scanner is a textual token match, not
+# a method-call parse, so all three shapes are caught the same way. All six
+# must be acquired in `ViewState::init_state` / `did_change_dependencies` (the
+# five `BuildContext` methods) or outside any guarded body entirely
 # (`owner_platform`, which is composition-root-only, `pub(crate)` to
-# `flui-app`'s app module), stored, and fired later from a callback.
+# `flui-app`'s app module), stored, and fired later from a callback. A stored
+# capability's OWN variable/field name must avoid the literal guarded token
+# too (e.g. `pipeline_cell`, not `pipeline_owner`) — this scanner does not
+# parse method calls, so a mere re-clone of an already-acquired value under
+# the capability's own name inside a guarded body reads identically to a
+# fresh acquisition.
 #
 # Acquiring one inside `build` and scheduling from it is an unbounded rebuild loop
 # (rebuild) or a callback that fires against the very frame that is still running
@@ -58,7 +78,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 guarded_fns='build|build_into_views|perform_layout|layout_node_with_children|paint|paint_raw|run_paint|run_layout|run_compositing|compose|composite'
 
 # The capabilities themselves. Adding one here is the whole cost of guarding it.
-capabilities='rebuild_handle|post_frame_handle|text_input_handle|focus_manager|owner_platform'
+capabilities='rebuild_handle|post_frame_handle|text_input_handle|focus_manager|owner_platform|pipeline_owner'
 
 scan() {
   awk -v guarded="${guarded_fns}" -v caps="${capabilities}" '
@@ -104,17 +124,17 @@ self_test() {
     scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | sed 's/^/  /' || true
     local found
     found=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | wc -l || true)
-    if [[ "${found}" -ne 8 ]]; then
-      echo "  FAIL: expected 8 violations across all five lifecycle-only capability tokens, got ${found}"
+    if [[ "${found}" -ne 9 ]]; then
+      echo "  FAIL: expected 9 violations across all six lifecycle-only capability tokens, got ${found}"
       status=1
     else
-      echo "  ok: 8 violations reported"
+      echo "  ok: 9 violations reported"
     fi
     # Every capability token must actually be named — a scanner can otherwise
     # report the expected count while silently leaving a newer capability open.
     local reported
     reported=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null || true)
-    for cap in rebuild_handle post_frame_handle text_input_handle focus_manager owner_platform; do
+    for cap in rebuild_handle post_frame_handle text_input_handle focus_manager owner_platform pipeline_owner; do
       if ! grep -q "${cap}()" <<<"${reported}"; then
         echo "  FAIL: scanner never reported a ${cap}() violation"
         status=1

@@ -393,6 +393,7 @@ impl StatefulView for InteractiveViewer {
                 pan_start_local: Cell::new(None),
                 current_axis: Cell::new(None),
             }),
+            pipeline_cell: None,
         }
     }
 }
@@ -424,15 +425,31 @@ pub struct InteractiveViewerState {
     /// [`geometry`](Self::geometry) for why one anchor is enough in V1.
     subtree_anchor: SubtreeAnchor,
     gesture: Rc<GestureTracking>,
+    /// Acquired once in [`init_state`](ViewState::init_state), not `build`
+    /// (lifecycle-only capability, port-check trigger #22): `build` runs on
+    /// every rebuild, and the gesture closures below only ever read this
+    /// asynchronously, from a later `on_pan_update`/`on_pointer_signal`
+    /// callback, never synchronously inside `build` itself — the same
+    /// acquire-in-lifecycle-hook, use-from-callback shape
+    /// `FocusState::init_state` uses for its own pipeline handle. Named
+    /// `pipeline_cell`, not `pipeline_owner`: the latter is the guarded
+    /// capability-scope token (trigger #22's scanner is a textual scan, not
+    /// method-call-aware), and this field's own re-clones inside `build`
+    /// would otherwise trip it despite never re-acquiring anything.
+    pipeline_cell: Option<PipelineCell>,
 }
 
 impl ViewState<InteractiveViewer> for InteractiveViewerState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.pipeline_cell = ctx.pipeline_owner();
+    }
+
     #[allow(clippy::too_many_lines)] // one gesture-wiring build(); splitting fragments the callback capture set
-    fn build(&self, view: &InteractiveViewer, ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &InteractiveViewer, _ctx: &dyn BuildContext) -> impl IntoView {
         let controller = view.controller.clone();
         let anchor = self.subtree_anchor.clone();
         let gesture = Rc::clone(&self.gesture);
-        let pipeline_owner = ctx.pipeline_owner();
+        let pipeline_cell = self.pipeline_cell.clone();
         let boundary_margin = view.boundary_margin;
         let min_scale = view.min_scale;
         let max_scale = view.max_scale;
@@ -471,7 +488,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let gesture_update = Rc::clone(&gesture);
             let controller_update = controller.clone();
             let anchor_update = anchor.clone();
-            let pipeline_owner_update = pipeline_owner.clone();
+            let pipeline_cell_update = pipeline_cell.clone();
             let on_update_pan = on_update.clone();
             let pan_update_details = move |details: DragUpdateDetails| {
                 if pan_enabled {
@@ -485,7 +502,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         }
                     }
                     if let Some((viewport, boundary)) = InteractiveViewerState::geometry(
-                        pipeline_owner_update.as_ref(),
+                        pipeline_cell_update.as_ref(),
                         &anchor_update,
                         boundary_margin,
                     ) {
@@ -536,7 +553,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             // -- Wheel scale (Listener::on_pointer_signal) -----------------
             let controller_wheel = controller.clone();
             let anchor_wheel = anchor.clone();
-            let pipeline_owner_wheel = pipeline_owner.clone();
+            let pipeline_cell_wheel = pipeline_cell.clone();
             let on_start_wheel = on_start.clone();
             let on_update_wheel = on_update.clone();
             let on_end_wheel = on_end.clone();
@@ -563,7 +580,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
 
                 if scale_enabled
                     && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
-                        pipeline_owner_wheel.as_ref(),
+                        pipeline_cell_wheel.as_ref(),
                         &anchor_wheel,
                         boundary_margin,
                     )
@@ -641,7 +658,7 @@ impl InteractiveViewerState {
     ///
     /// Associated function rather than a `&self` method: the gesture
     /// closures built in [`build`](ViewState::build) capture
-    /// `pipeline_owner`/`anchor`/`boundary_margin` by clone (they must be
+    /// `pipeline_cell`/`anchor`/`boundary_margin` by clone (they must be
     /// `'static`, so they cannot borrow the `ViewState`), and call this with
     /// those clones instead.
     ///
@@ -655,11 +672,11 @@ impl InteractiveViewerState {
     /// collapses Flutter's two keys (`_parentKey` on the outer `Listener`,
     /// `_childKey` inside `Transform`) into the single `subtree_anchor` field.
     fn geometry(
-        pipeline_owner: Option<&PipelineCell>,
+        pipeline_cell: Option<&PipelineCell>,
         anchor: &SubtreeAnchor,
         boundary_margin: EdgeInsets,
     ) -> Option<(Rect<Pixels>, Rect<Pixels>)> {
-        let owner = pipeline_owner?;
+        let owner = pipeline_cell?;
         let render_id = anchor.get()?;
         let size = owner.with(|owner| owner.box_size(render_id))?;
         let rect = Rect::from_origin_size(Point::new(px(0.0), px(0.0)), size);
