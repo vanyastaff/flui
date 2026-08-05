@@ -22,11 +22,11 @@ use std::sync::Arc;
 /// ```
 /// use flui_animation::{AnimationController, TweenAnimation, Animation};
 /// use flui_animation::FloatTween;
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
@@ -165,12 +165,12 @@ mod tests {
     use super::*;
     use crate::AnimationController;
     use crate::tween_types::FloatTween;
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
     use std::time::Duration;
 
     #[test]
     fn test_tween_animation() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_tween_animation_status() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -218,7 +218,7 @@ mod tests {
         // TweenAnimation must fire when the parent's value changes; previously
         // the combinator never subscribed to its parent, so tween-driven
         // rebuilds silently never happened.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn dropping_tween_removes_parent_subscription() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_animate_helper() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,

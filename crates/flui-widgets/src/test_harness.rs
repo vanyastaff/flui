@@ -379,11 +379,11 @@ impl Harness {
         kids.into_iter().map(|(_, id)| id).collect()
     }
 
-    /// The binding's **own** scheduler — never `Scheduler::instance()`.
+    /// The binding's **own** scheduler — never `UpdateScheduler::instance()`.
     ///
     /// A post-frame callback registered here is drained by `pump_frame`'s
-    /// `Scheduler::drive_frame`, after the pipeline commits layout.
-    pub(crate) fn scheduler(&self) -> &flui_scheduler::Scheduler {
+    /// `UpdateScheduler::drive_frame`, after the pipeline commits layout.
+    pub(crate) fn scheduler(&self) -> &flui_scheduler::UpdateScheduler {
         self.binding.scheduler()
     }
 

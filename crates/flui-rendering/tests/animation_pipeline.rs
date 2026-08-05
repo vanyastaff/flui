@@ -28,14 +28,14 @@ use flui_rendering::{
     constraints::BoxConstraints, hit_testing::HitTestResult, pipeline::PipelineOwner,
     testing::inspect,
 };
-use flui_scheduler::Scheduler;
+use flui_scheduler::UpdateScheduler;
 use flui_types::{Alignment, EdgeInsets, Matrix4, Offset, Size, geometry::px};
 
 type BoxedRenderObject =
     Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
 
 fn controller() -> AnimationController {
-    AnimationController::new(Duration::from_secs(1), &Scheduler::new())
+    AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new())
 }
 
 fn frame(owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {

@@ -32,11 +32,11 @@ enum SwitchMode {
 ///
 /// ```
 /// use flui_animation::{AnimationSwitch, AnimationController, Animation};
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 ///
 /// let controller1 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
@@ -384,11 +384,11 @@ impl fmt::Debug for AnimationSwitch {
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
-    fn create_controller(scheduler: &Scheduler, value: f32) -> Arc<AnimationController> {
+    fn create_controller(scheduler: &UpdateScheduler, value: f32) -> Arc<AnimationController> {
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             scheduler,
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_animation_switch_basic() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = create_controller(&scheduler, 0.5);
 
         let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f32>>, None);
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_animation_switch_with_next() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = create_controller(&scheduler, 0.8);
         let controller2 = create_controller(&scheduler, 0.3);
 
@@ -431,7 +431,7 @@ mod tests {
     fn switch_rebinds_listeners_to_new_current() {
         use std::sync::atomic::AtomicUsize;
 
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = create_controller(&scheduler, 0.8);
         let controller2 = create_controller(&scheduler, 0.3);
 
@@ -493,7 +493,7 @@ mod tests {
         // Status listener ids are minted by the switch itself; they must
         // keep firing after a train-hop and stay removable by the same id
         // (previously they were delegated to the pre-hop `current`).
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = create_controller(&scheduler, 0.8);
         let controller2 = create_controller(&scheduler, 0.3);
 
@@ -538,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_animation_switch_same_initial_value() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = create_controller(&scheduler, 0.5);
         let controller2 = create_controller(&scheduler, 0.5);
 
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn test_animation_switch_callback() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = create_controller(&scheduler, 0.8);
         let controller2 = create_controller(&scheduler, 0.3);
 
@@ -590,7 +590,7 @@ mod tests {
     fn on_switched_fires_exactly_once() {
         use std::sync::atomic::AtomicUsize;
 
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = create_controller(&scheduler, 0.8);
         let controller2 = create_controller(&scheduler, 0.3);
 
@@ -644,7 +644,7 @@ mod tests {
     /// Red-check: delete the `next_listener_id` branch of `AnimationSwitch::dispose`.
     #[test]
     fn dispose_before_a_hop_detaches_from_both_trains() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller1 = create_controller(&scheduler, 0.8);
         let controller2 = create_controller(&scheduler, 0.3);
 
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn test_animation_switch_status() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         // Start at the lower bound so status is genuinely Dismissed: a mid-range
         // set_value now reports Forward per Flutter's _internalSetValue.
         let controller = create_controller(&scheduler, 0.0);
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn test_animation_switch_current() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = create_controller(&scheduler, 0.5);
 
         let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f32>>, None);
@@ -724,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_animation_switch_debug() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = create_controller(&scheduler, 0.5);
 
         let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f32>>, None);

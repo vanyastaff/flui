@@ -101,7 +101,7 @@ use flui_interaction::{
 // tree costs no extra dependency edge.
 use flui_rendering::layer::LayerTree;
 use flui_rendering::pipeline::PipelineCell;
-use flui_scheduler::{BoxedTask, LocalPostFrameLane, Scheduler, TaskToken};
+use flui_scheduler::{BoxedTask, LocalPostFrameLane, TaskToken, UpdateScheduler};
 use flui_types::geometry::{Offset, Pixels};
 use flui_view::{BuildOwner, ElementId, ElementTree, View};
 
@@ -177,11 +177,11 @@ pub struct HeadlessBinding {
     /// gesture-only binding ([`new`](Self::new)); `Some` once tree-bound.
     tree: Option<TreeBinding>,
     /// Owns the frame-driven async task driver. Binding-local — its own
-    /// fresh `Scheduler` value, never shared with any other binding — so
+    /// fresh `UpdateScheduler` value, never shared with any other binding — so
     /// headless tests stay isolated and parallel-safe; the *driver step* is
     /// the same `drive_async_tasks` method a production frame drive calls on
-    /// its own, likewise dedicated, `Scheduler`.
-    scheduler: Scheduler,
+    /// its own, likewise dedicated, `UpdateScheduler`.
+    scheduler: UpdateScheduler,
     /// Owner-affine post-frame callback storage, active across every owner entry.
     local_post_frame: LocalPostFrameLane,
     /// Owner-affine interaction callback storage, active across every owner entry.
@@ -225,7 +225,7 @@ impl HeadlessBinding {
     pub fn try_new() -> Result<Self, InteractionDispatchError> {
         let clock = ManualClock::new();
         let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let local_post_frame = scheduler.local_post_frame_lane();
         let interaction_lane = InteractionLane::try_new()?;
         Ok(Self {
@@ -250,7 +250,7 @@ impl HeadlessBinding {
     /// that first `build_scope` already asks for them. `bind_tree` re-installs for
     /// owners bound afterwards.
     ///
-    /// Naming any OTHER binding's `Scheduler` here — a production realm's, say —
+    /// Naming any OTHER binding's `UpdateScheduler` here — a production realm's, say —
     /// would leave every headless post-frame callback undrained: nothing in this
     /// process drives frames for a scheduler this binding does not itself own and
     /// pump.
@@ -281,7 +281,7 @@ impl HeadlessBinding {
     /// Binding-local: two `HeadlessBinding`s never share a task set, so async
     /// tests stay parallel-safe.
     #[must_use]
-    pub fn scheduler(&self) -> &Scheduler {
+    pub fn scheduler(&self) -> &UpdateScheduler {
         &self.scheduler
     }
 
@@ -343,13 +343,13 @@ impl HeadlessBinding {
     ) {
         // Widgets spawn into the driver this binding's frame step
         // polls — the binding-local one, never some OTHER binding's or
-        // realm's `Scheduler`. Idempotent: installing it again is a no-op if
+        // realm's `UpdateScheduler`. Idempotent: installing it again is a no-op if
         // the caller already did.
         let mut build_owner = build_owner;
         build_owner.set_async_driver(self.scheduler.async_driver().clone());
         // The post-frame capability must name THIS binding's
         // scheduler — the one `pump_frame`'s `drive_frame` drains — never
-        // some other binding's or realm's `Scheduler`, which nothing drives
+        // some other binding's or realm's `UpdateScheduler`, which nothing drives
         // headlessly.
         build_owner.set_post_frame_handle(self.local_post_frame.post_frame_handle());
         build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
@@ -607,7 +607,7 @@ impl HeadlessBinding {
     ///    production already wires
     ///    (`AppBinding::render_frame_entered`,
     ///    `crates/flui-app/src/app/binding.rs`, driven from inside
-    ///    `Scheduler::drive_frame`'s own pipeline closure —
+    ///    `UpdateScheduler::drive_frame`'s own pipeline closure —
     ///    `crates/flui-app/src/app/runner.rs`) right after layout/paint and
     ///    still inside that same closure, mirrored here against this
     ///    binding's own tree-bound `PipelineOwner` rather than a
@@ -674,7 +674,7 @@ impl HeadlessBinding {
                 //   -> end_frame (post-frame callbacks, timing, notify)
                 //   -> Idle
                 //
-                // The desktop / android / wasm runners call the SAME `Scheduler::drive_frame`
+                // The desktop / android / wasm runners call the SAME `UpdateScheduler::drive_frame`
                 // on the production realm's own owned scheduler; this binding calls it on
                 // its binding-local scheduler. A post-frame callback therefore observes THIS
                 // frame's committed layout in both, which is what `HeroController` needs.
@@ -683,7 +683,7 @@ impl HeadlessBinding {
                 // step now. It still runs before `build_scope`, in
                 // `handle_begin_frame`'s mid-frame slot.
                 //
-                // `Scheduler` is `Arc`-backed and `Clone`, so the handle taken here shares
+                // `UpdateScheduler` is `Arc`-backed and `Clone`, so the handle taken here shares
                 // the callback queues with `self.scheduler` — cloning it merely releases
                 // the borrow on `self` for the pipeline closure.
                 let scheduler = scheduler.clone();
@@ -730,7 +730,7 @@ impl HeadlessBinding {
 
     /// The pipeline step: build → layout (with the build-during-layout fixpoint)
     /// → paint, plus the lazy-sliver service pass. Runs inside
-    /// [`Scheduler::drive_frame`]'s persistent slot.
+    /// [`UpdateScheduler::drive_frame`]'s persistent slot.
     ///
     /// Returns the composited [`LayerTree`] this frame produced — `None` for a
     /// gesture-only binding, and `None` when nothing was dirty enough to

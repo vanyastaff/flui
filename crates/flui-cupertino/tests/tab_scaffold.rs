@@ -14,7 +14,7 @@ use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_cupertino::{
     CupertinoTabBar, CupertinoTabBarItem, CupertinoTabController, CupertinoTabScaffold,
 };
-use flui_scheduler::Scheduler;
+use flui_scheduler::UpdateScheduler;
 use flui_types::Color;
 use flui_types::geometry::px;
 use flui_view::ErrorView;
@@ -217,7 +217,7 @@ impl ViewState<AnimationProbe> for AnimationProbeState {
 #[test]
 fn an_inactive_tabs_animation_is_muted_by_ticker_mode() {
     let vsync = Vsync::new();
-    let controller = AnimationController::new(Duration::from_secs(1), &Scheduler::new());
+    let controller = AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new());
     let tab_controller = CupertinoTabController::new(0);
 
     let probe_controller = controller.clone();

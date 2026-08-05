@@ -5,7 +5,7 @@
 //!
 //! **Note**: `wait_for_vsync()` currently uses `thread::sleep` for timing
 //! simulation. Real platform VSync integration comes from `flui-platform` by
-//! routing platform vsync callbacks into `Scheduler::handle_begin_frame` +
+//! routing platform vsync callbacks into `UpdateScheduler::handle_begin_frame` +
 //! `handle_draw_frame` directly.
 //!
 //! ## Type-Safe Timing

@@ -46,11 +46,11 @@
 //! ```
 //! # fn main() -> Result<(), flui_animation::AnimationError> {
 //! use flui_animation::{AnimationController, Animation};
-//! use flui_scheduler::Scheduler;
+//! use flui_scheduler::UpdateScheduler;
 //! use std::time::Duration;
 //!
 //! // Create scheduler and controller
-//! let scheduler = Scheduler::new();
+//! let scheduler = UpdateScheduler::new();
 //! let controller = AnimationController::new(
 //!     Duration::from_millis(300),
 //!     &scheduler,
@@ -152,13 +152,13 @@ pub use tween_types::{
 // Re-export scheduler types for convenience.
 //
 // `SchedulerBinding` was deleted upstream when scheduler binding methods were
-// inlined onto `Scheduler` (see scheduler.rs section "Binding Methods
+// inlined onto `UpdateScheduler` (see scheduler.rs section "Binding Methods
 // (formerly on SchedulerBinding trait)"). The animation crate now uses
-// `Scheduler` directly.
+// `UpdateScheduler` directly.
 pub use flui_scheduler::ticker::TickerState;
 pub use flui_scheduler::{
-    BudgetPolicy, FrameBudget, FramePhase, FrameTiming, Priority, Scheduler, TaskQueue, Ticker,
-    TickerCallback, TickerProvider, VsyncCallback, VsyncScheduler,
+    BudgetPolicy, FrameBudget, FramePhase, FrameTiming, Priority, TaskQueue, Ticker,
+    TickerCallback, TickerProvider, UpdateScheduler, VsyncCallback, VsyncScheduler,
 };
 
 /// Prelude module for convenient imports
@@ -185,6 +185,6 @@ pub mod prelude {
 
     // Re-export scheduler types
     pub use crate::{
-        FrameBudget, FramePhase, Priority, Scheduler, TaskQueue, Ticker, TickerProvider,
+        FrameBudget, FramePhase, Priority, TaskQueue, Ticker, TickerProvider, UpdateScheduler,
     };
 }

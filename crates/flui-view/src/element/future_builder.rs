@@ -357,7 +357,7 @@ mod tests {
     use std::task::{Context, Poll, Waker};
 
     use flui_foundation::ElementId;
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
 
     use crate::view::{ErrorView, ViewExt};
     use crate::{BuildOwner, tree::ElementTree};
@@ -453,14 +453,14 @@ mod tests {
     }
 
     /// Drives the exact steps a binding's frame drives, in the same order:
-    /// `Scheduler::drive_async_tasks()` (the shared async step) then
+    /// `UpdateScheduler::drive_async_tasks()` (the shared async step) then
     /// `BuildOwner::build_scope()`. Not a bespoke loop — it is `pump_frame`'s
     /// body minus the parts (clock, gestures, pipeline) a `FutureBuilder` cannot
     /// observe. `flui-view` cannot depend on `flui-testing` (that would cycle).
     struct Harness {
         owner: BuildOwner,
         tree: ElementTree,
-        scheduler: Scheduler,
+        scheduler: UpdateScheduler,
         root: ElementId,
     }
 
@@ -469,7 +469,7 @@ mod tests {
         where
             K: Clone + PartialEq + Send + Sync + std::fmt::Debug + 'static,
         {
-            let scheduler = Scheduler::new();
+            let scheduler = UpdateScheduler::new();
             let mut owner = BuildOwner::new();
             owner.set_async_driver(scheduler.async_driver().clone());
             let mut tree = ElementTree::new();

@@ -67,7 +67,7 @@ pub use app::{run_app_android, run_app_android_with_config};
 // Bindings re-exports
 pub use bindings::{
     GestureBinding, PaintingBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding,
-    Scheduler, WidgetsBinding,
+    UpdateScheduler, WidgetsBinding,
 };
 // Application identity is part of `AppConfig`; low-level subscriber/filter
 // controls remain in `flui-log` rather than leaking through this API surface.
@@ -98,7 +98,7 @@ pub mod prelude {
     pub use crate::{AppConfig, run_app, run_app_with_config, run_direct};
     // Bindings
     pub use crate::{
-        GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
+        GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, UpdateScheduler,
         WidgetsBinding,
     };
 }

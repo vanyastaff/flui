@@ -43,11 +43,11 @@ pub enum AnimationOperator {
 ///
 /// ```
 /// use flui_animation::{CompoundAnimation, AnimationController, AnimationOperator, Animation};
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 /// let controller1 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
@@ -153,11 +153,11 @@ impl CompoundAnimation {
     ///
     /// ```
     /// use flui_animation::{CompoundAnimation, AnimationController, Animation};
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let controller1 = Arc::new(AnimationController::new(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -254,11 +254,11 @@ impl fmt::Debug for CompoundAnimation {
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
     use std::time::Duration;
 
     fn create_controller(value: f32) -> Arc<AnimationController> {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,

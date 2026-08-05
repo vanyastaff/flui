@@ -828,7 +828,7 @@ impl ViewportOffset for ScrollPosition {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
 
     use super::*;
 
@@ -927,7 +927,7 @@ mod tests {
 
     #[test]
     fn coalesces_multiple_apply_calls_into_one_flushed_notify() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let handle = PostFrameHandle::new(&scheduler);
 
         let mut position = ScrollPosition::zero();
@@ -961,7 +961,7 @@ mod tests {
 
     #[test]
     fn flush_now_consumes_a_pending_flush_so_the_later_frame_does_not_double_notify() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let handle = PostFrameHandle::new(&scheduler);
 
         let mut position = ScrollPosition::zero();

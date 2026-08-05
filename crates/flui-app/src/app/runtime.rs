@@ -34,7 +34,7 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::{PresentationId, RealmId};
-use flui_scheduler::{AsyncDriver, LocalPostFrameLane, Scheduler};
+use flui_scheduler::{AsyncDriver, LocalPostFrameLane, UpdateScheduler};
 
 // `RealmServices` and `next_identity` below are used unconditionally by
 // `ui_realm.rs` (every `UiRealm` constructor resolves its own
@@ -95,7 +95,7 @@ use super::window_registry::{RegistryError, WindowRegistry};
 /// per-window platform seam, not process-global state); only the OS-level,
 /// read-mostly accessibility flags stayed process-scoped, and this struct
 /// now owns that value directly. There is no `scheduler` field here any
-/// more: each realm now owns its own `Scheduler` strong root (see
+/// more: each realm now owns its own `UpdateScheduler` strong root (see
 /// [`RealmServices::construct`]), so there is no process-level scheduler
 /// left for this struct to resolve.
 #[cfg(not(target_os = "ios"))]
@@ -183,26 +183,26 @@ impl SharedEngineServices {
 }
 
 /// What [`UiRealm::construct`](super::ui_realm) needs to wire itself up: a
-/// fresh, realm-owned [`Scheduler`] — the strong root — plus the
+/// fresh, realm-owned [`UpdateScheduler`] — the strong root — plus the
 /// `local_post_frame_lane()` and `async_driver()` handles derived from that
-/// SAME scheduler (formerly `Scheduler::instance()` calls inside
+/// SAME scheduler (formerly `UpdateScheduler::instance()` calls inside
 /// `ui_realm.rs` itself). Resolved once, here — never inside `ui_realm.rs`
 /// itself, so `UiRealm`'s own source performs zero `::instance()` calls.
 pub(crate) struct RealmServices {
     pub(crate) local_post_frame: LocalPostFrameLane,
     pub(crate) async_driver: AsyncDriver,
-    pub(crate) scheduler: Scheduler,
+    pub(crate) scheduler: UpdateScheduler,
 }
 
 impl RealmServices {
-    /// Builds a brand-new `Scheduler` for a realm about to be constructed.
+    /// Builds a brand-new `UpdateScheduler` for a realm about to be constructed.
     /// Every `UiRealm` constructor (`new`, `with_capacity`, `for_test`,
     /// `for_test_with_text_input`) calls this instead of reaching for a
     /// process-global scheduler — each realm gets its OWN strong root, torn
     /// down when the realm drops, none of them taking a process-host
     /// parameter any more (the retired `AppBinding` is gone).
     pub(crate) fn construct() -> Self {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         Self {
             local_post_frame: scheduler.local_post_frame_lane(),
             async_driver: scheduler.async_driver().clone(),
@@ -475,7 +475,7 @@ pub enum ExitPolicy {
 ///
 /// - [`WindowPolicy::SeparateRealms`] (the default): the new window gets its
 ///   own `UiRealm`, its own `GlobalKeyScope`, its own
-///   `Scheduler`. The same `GlobalKey` mounted in both windows' trees is
+///   `UpdateScheduler`. The same `GlobalKey` mounted in both windows' trees is
 ///   fine — N×1, N independent uniqueness domains — because a `UiRealm`'s
 ///   scope is exactly as leak-proof as any two independently-run
 ///   applications: nothing links them but the injected
@@ -487,7 +487,7 @@ pub enum ExitPolicy {
 ///   second mount fails eagerly (ADR-0043's ruling — ADR-0043's
 ///   `GlobalKeyScope` protocol section documents the claim-at-mount /
 ///   release-at-unmount lifetime this collision is checked against). Both
-///   windows also then share one `Scheduler` and one async driver, so a
+///   windows also then share one `UpdateScheduler` and one async driver, so a
 ///   slow frame in either window can delay the other's next pump (ADR-0043
 ///   risk 5) — this policy trades isolation for the cases that genuinely
 ///   want a single logical session split across two presentations (e.g. a
@@ -500,14 +500,14 @@ pub enum ExitPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WindowPolicy {
     /// The new window becomes its own realm — independent `GlobalKeyScope`,
-    /// independent `Scheduler`, sharing nothing but injected
+    /// independent `UpdateScheduler`, sharing nothing but injected
     /// `SharedEngineServices`. The default: a stalled/slow window can never
     /// delay a sibling's frame pump.
     #[default]
     SeparateRealms,
     /// The new window becomes a second presentation inside the first realm
     /// already hosted on this thread — one `GlobalKeyScope`, one
-    /// `Scheduler` shared between both windows.
+    /// `UpdateScheduler` shared between both windows.
     SharedRealm,
 }
 
@@ -623,8 +623,8 @@ pub(crate) struct AppRuntime {
     /// before running any task, including the frame pump that drives the
     /// scheduler through `PersistentCallbacks`. That makes the fence blind
     /// exactly when a frame phase is actually running, which is the one case
-    /// trigger #22 exists to catch. `Scheduler` is a single-`Arc` handle (see
-    /// `flui-scheduler`'s `Scheduler`/`SchedulerInner` split), so cloning it
+    /// trigger #22 exists to catch. `UpdateScheduler` is a single-`Arc` handle (see
+    /// `flui-scheduler`'s `UpdateScheduler`/`SchedulerInner` split), so cloning it
     /// here to survive the checkout is cheap — an `Arc::clone`, not a new
     /// scheduler. Set at checkout, cleared at restore
     /// (`dispatch_platform_realm`), in both cases inside the same
@@ -639,7 +639,7 @@ pub(crate) struct AppRuntime {
     /// dispatch for a DIFFERENT realm is ever attempted while this is
     /// `Some`; `dispatch_platform_realm` debug-asserts that invariant at its
     /// one checkout site.
-    pub(super) dispatched_scheduler: Option<Scheduler>,
+    pub(super) dispatched_scheduler: Option<UpdateScheduler>,
     /// The identity companion to `dispatched_scheduler` above: which realm
     /// is currently checked out, so a nested dispatch attempt targeting a
     /// DIFFERENT realm can be told apart from a legitimate same-realm
@@ -787,7 +787,7 @@ impl AppRuntime {
     /// The installed realm's scheduler phase, or `None` if no realm is
     /// installed on this thread AND no realm is currently checked out for
     /// dispatch either — the replacement for `with_owner_platform`'s fence
-    /// (c), formerly a bare `Scheduler::instance().phase()` read.
+    /// (c), formerly a bare `UpdateScheduler::instance().phase()` read.
     ///
     /// **Design-for-N (issue #555): iterates every resident slot in
     /// `realms`**, rather than assuming a single slot is "the" realm that
@@ -1078,7 +1078,7 @@ impl AppRuntime {
     }
 
     /// A `Send + Sync`, `'static` capability that sets `needs_redraw` and
-    /// pokes the installed window — safe to hand to a `Scheduler` lifecycle
+    /// pokes the installed window — safe to hand to a `UpdateScheduler` lifecycle
     /// hook, an `on_frame_scheduled` hook, or a spawned future's `Waker`,
     /// none of which may resolve this thread-local `AppRuntime` at fire time
     /// (see [`FrameWakeHandle`]'s doc).
@@ -1324,7 +1324,7 @@ mod app_runtime_tests {
     /// than only asserting the struct compiles) is what proves the
     /// resolution seam works, not just that it type-checks. There is no
     /// `scheduler` field to read any more: each realm now owns its own
-    /// `Scheduler` (see `installed_realm_phase_tests`, below).
+    /// `UpdateScheduler` (see `installed_realm_phase_tests`, below).
     #[test]
     fn ensure_services_resolves_both_and_caches_them() {
         let mut runtime = AppRuntime::new();
@@ -1585,7 +1585,7 @@ mod wake_and_clipboard_tests {
     /// `AppRuntime::frame_wake_callback()` must be usable as the install-time
     /// `Send + Sync` handle wired onto a scheduler's `on_frame_scheduled`
     /// hook (what `install_platform_realm` now does against the just-installed
-    /// realm's own `Scheduler` — see that function's doc), never a callback
+    /// realm's own `UpdateScheduler` — see that function's doc), never a callback
     /// that re-resolves this thread-local `AppRuntime` when the hook fires.
     ///
     /// Proof shape: wire the handle onto a scheduler built right here (a
@@ -1610,7 +1610,7 @@ mod wake_and_clipboard_tests {
 
         // Stand-in for a realm's own scheduler; `install_platform_realm`
         // wires this exact handle onto `realm.scheduler()` at install time.
-        let scheduler = flui_scheduler::Scheduler::new();
+        let scheduler = flui_scheduler::UpdateScheduler::new();
         scheduler.set_on_frame_scheduled(Some(runtime.frame_wake_callback()));
 
         let stored_waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));

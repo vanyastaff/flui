@@ -11,7 +11,7 @@
 //!
 //! `flui-scheduler`'s own unit tests already prove the primitive
 //! (`PostFrameHandle::schedule_local` nests and defers correctly against a
-//! bare `Scheduler`). The production question this test answers is different:
+//! bare `UpdateScheduler`). The production question this test answers is different:
 //! does the *binding's* frame-pump entry point (`pump_frame`, which every
 //! runner and this crate's `UiRealm`-analog calls) keep the local lane active
 //! for the *entire* drain, so a callback that reschedules itself from inside

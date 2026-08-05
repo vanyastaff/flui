@@ -38,11 +38,11 @@ fn update_curve_direction(direction: &Mutex<Option<AnimationStatus>>, status: An
 /// ```
 /// use flui_animation::{AnimationController, CurvedAnimation};
 /// use flui_animation::Curves;
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
@@ -193,12 +193,12 @@ mod tests {
     use super::*;
     use crate::AnimationController;
     use crate::curve::{Cubic, Curves};
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
     use std::time::Duration;
 
     #[test]
     fn test_curved_animation() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_curved_animation_status() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -246,7 +246,7 @@ mod tests {
         // B2 regression: a listener on a CurvedAnimation must fire when the
         // parent's value changes. Previously the combinator never subscribed to
         // its parent, so AnimatedBuilder-on-a-curve silently never rebuilt.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -280,7 +280,7 @@ mod tests {
         // mid-run; the reverse curve only applies to a run entered in
         // Reverse. Without the lock, a mid-run `reverse()` would swap curves
         // underneath the value and cause a visual jump.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -330,7 +330,7 @@ mod tests {
         // setter's own `_internalSetValue`, pins the entry direction; a
         // same-run flip (here, `reverse()` with no intervening Dismissed/
         // Completed) keeps that pinned curve to avoid a visual discontinuity.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -362,7 +362,7 @@ mod tests {
         // Flutter `_updateCurveDirection` resets `_curveDirection` to null on
         // Dismissed/Completed, so a run that genuinely starts fresh after
         // settling picks its own curve rather than inheriting a stale pin.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -395,7 +395,7 @@ mod tests {
         // — the seed runs BEFORE the listener is registered, so a
         // `CurvedAnimation` built while the parent is ALREADY mid-run captures
         // the run's entering direction immediately.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,
@@ -430,7 +430,7 @@ mod tests {
         // The shared ParentSubscription must remove its listener from the parent
         // when the last clone drops, so a long-lived controller does not
         // accumulate dead callbacks.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             &scheduler,

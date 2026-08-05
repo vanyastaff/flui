@@ -34,7 +34,7 @@ fn attr_names_test_predicate(attr_text: &str) -> bool {
 /// Lines of `runner.rs`, excluding comments and excluding whole
 /// `#[cfg(test)]`-gated modules.
 ///
-/// A unit test may legitimately drive a throwaway `Scheduler` directly
+/// A unit test may legitimately drive a throwaway `UpdateScheduler` directly
 /// (`scheduler.drive_frame(...)`, `scheduler.drive_async_tasks()`) to prove
 /// a lifecycle transition's effect — that is a test assertion, not a
 /// production "frame site" hand-rolling anything. Excluding `#[cfg(test)]`
@@ -107,7 +107,7 @@ fn every_runner_frame_site_uses_the_shared_drive_frame_helper() {
         assert!(
             !code_lines.iter().any(|l| l.contains(banned)),
             "runner.rs calls `{banned}` directly in production code; every frame site must go \
-             through `Scheduler::drive_frame`, which orders begin → persistent → pipeline → \
+             through `UpdateScheduler::drive_frame`, which orders begin → persistent → pipeline → \
              post-frame → idle"
         );
     }
@@ -119,13 +119,13 @@ fn every_runner_frame_site_uses_the_shared_drive_frame_helper() {
     assert_eq!(
         sites, 3,
         "expected exactly three PRODUCTION frame sites (desktop, android, wasm); found {sites} \
-         — a unit test driving a throwaway `Scheduler` directly is excluded from this count"
+         — a unit test driving a throwaway `UpdateScheduler` directly is excluded from this count"
     );
 }
 
 /// Every `WakeAction::PumpAsync` arm (desktop, Android, web) must actually
 /// pump the async driver, and must consume the `frame_scheduled` latch
-/// FIRST — see `Scheduler::finish_async_pump`'s doc for why a `PumpAsync`
+/// FIRST — see `UpdateScheduler::finish_async_pump`'s doc for why a `PumpAsync`
 /// wake that skips either call silently starves a future indefinitely
 /// (`drive_async_tasks` never runs = the future never advances;
 /// `finish_async_pump` never runs = a LATER, independent wake finds the

@@ -36,7 +36,7 @@ pub use flui_foundation::{
     FrameCallbackId, FrameId, Id, Identifier, Marker, TaskId, TickerId, markers,
 };
 
-/// Scheduler callback ID - alias for `FrameCallbackId` from foundation.
+/// UpdateScheduler callback ID - alias for `FrameCallbackId` from foundation.
 ///
 /// Identifies callbacks (transient, persistent, post-frame) in the scheduler.
 pub type CallbackId = FrameCallbackId;

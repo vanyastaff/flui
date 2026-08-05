@@ -1,7 +1,7 @@
 //! `PostFrameHandle` targets the **binding's own** scheduler, never some
 //! other one.
 //!
-//! `HeadlessBinding` owns a binding-local `Scheduler`. A capability that
+//! `HeadlessBinding` owns a binding-local `UpdateScheduler`. A capability that
 //! silently named a different scheduler would leave headless callbacks
 //! undrained *and* let a headless test "prove" a path it never actually
 //! touched.
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::common::{lay_out, loose, tight};
-use flui_scheduler::Scheduler;
+use flui_scheduler::UpdateScheduler;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
 use parking_lot::Mutex;
@@ -39,7 +39,7 @@ struct PostFrameProbe {
     observations: Observations,
     /// An unrelated scheduler this probe compares its handle against — stands
     /// in for "any scheduler that is not this binding's own".
-    unrelated_scheduler: Scheduler,
+    unrelated_scheduler: UpdateScheduler,
 }
 
 impl View for PostFrameProbe {
@@ -61,7 +61,7 @@ impl StatefulView for PostFrameProbe {
 
 struct PostFrameProbeState {
     observations: Observations,
-    unrelated_scheduler: Scheduler,
+    unrelated_scheduler: UpdateScheduler,
 }
 
 #[derive(Clone)]
@@ -168,7 +168,7 @@ impl ViewState<PostFrameProbe> for PostFrameProbeState {
 #[test]
 fn a_widgets_post_frame_callback_lands_on_the_binding_scheduler_not_an_unrelated_one() {
     // A canary on an unrelated scheduler: if the seam leaks, this is where it lands.
-    let unrelated_scheduler = Scheduler::new();
+    let unrelated_scheduler = UpdateScheduler::new();
     let unrelated_fired = Arc::new(AtomicBool::new(false));
     let unrelated_canary = Arc::clone(&unrelated_fired);
     unrelated_scheduler.add_post_frame_callback(Box::new(move |_| {

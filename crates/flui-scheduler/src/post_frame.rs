@@ -12,7 +12,7 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 
-use crate::{CallbackId, FrameTiming, PostFrameCallback, Scheduler, WeakScheduler};
+use crate::{CallbackId, FrameTiming, PostFrameCallback, UpdateScheduler, WeakUpdateScheduler};
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -35,7 +35,7 @@ pub(crate) struct LocalPostFrameEntry {
 
 struct LocalLaneInner {
     ticket: LaneTicket,
-    scheduler: Scheduler,
+    scheduler: UpdateScheduler,
     queue: RefCell<Vec<LocalPostFrameEntry>>,
 }
 
@@ -56,7 +56,7 @@ pub struct LocalPostFrameLane {
 }
 
 impl LocalPostFrameLane {
-    pub(crate) fn new(scheduler: &Scheduler) -> Self {
+    pub(crate) fn new(scheduler: &UpdateScheduler) -> Self {
         let lane_id = LaneId(
             NEXT_LANE_ID
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
@@ -156,20 +156,20 @@ pub enum LocalPostFrameScheduleError {
 
 /// Schedules work after a completed frame's layout and paint.
 ///
-/// Holds a [`WeakScheduler`], not a strong `Scheduler`: this handle is
+/// Holds a [`WeakUpdateScheduler`], not a strong `UpdateScheduler`: this handle is
 /// `Clone + Send + Sync` and vended into widget capabilities (ADR-0021) that
 /// may legitimately outlive the realm that built them, so a surviving handle
 /// must fail closed instead of pinning a dead realm's scheduler alive.
 #[derive(Clone)]
 pub struct PostFrameHandle {
-    scheduler: WeakScheduler,
+    scheduler: WeakUpdateScheduler,
     local_lane: Option<LaneTicket>,
 }
 
 impl PostFrameHandle {
     /// Construct a handle for `Send` post-frame callbacks.
     #[must_use]
-    pub fn new(scheduler: &Scheduler) -> Self {
+    pub fn new(scheduler: &UpdateScheduler) -> Self {
         Self {
             scheduler: scheduler.downgrade(),
             local_lane: None,
@@ -235,7 +235,7 @@ impl PostFrameHandle {
 
     /// Whether this handle targets `other`.
     #[must_use]
-    pub fn targets_same_scheduler(&self, other: &Scheduler) -> bool {
+    pub fn targets_same_scheduler(&self, other: &UpdateScheduler) -> bool {
         self.scheduler
             .upgrade()
             .is_some_and(|scheduler| scheduler.is_same_instance(other))
@@ -277,13 +277,13 @@ mod tests {
     use super::*;
     use crate::SchedulerPhase;
 
-    assert_impl_all!(Scheduler: Send, Sync);
+    assert_impl_all!(UpdateScheduler: Send, Sync);
     assert_impl_all!(PostFrameHandle: Send, Sync);
     assert_not_impl_any!(LocalPostFrameLane: Send, Sync);
 
     #[test]
     fn mixed_shared_and_local_callbacks_keep_total_registration_order() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let lane = scheduler.local_post_frame_lane();
         let log = Arc::new(Mutex::new(Vec::new()));
 
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn shared_then_local_nested_registration_defers() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let lane = scheduler.local_post_frame_lane();
         let handle = lane.post_frame_handle();
         let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn local_then_shared_nested_registration_defers() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let lane = scheduler.local_post_frame_lane();
         let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         lane.enter(|| {
@@ -352,8 +352,8 @@ mod tests {
 
     #[test]
     fn active_lane_and_scheduler_identity_isolate_local_queues() {
-        let scheduler_a = Scheduler::new();
-        let scheduler_b = Scheduler::new();
+        let scheduler_a = UpdateScheduler::new();
+        let scheduler_b = UpdateScheduler::new();
         let lane_a = scheduler_a.local_post_frame_lane();
         let lane_b = scheduler_a.local_post_frame_lane();
         let lane_other_scheduler = scheduler_b.local_post_frame_lane();
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn nested_different_lane_rejects_inactive_outer_ticket() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let lane_a = scheduler.local_post_frame_lane();
         let lane_b = scheduler.local_post_frame_lane();
         let handle_a = lane_a.post_frame_handle();
@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn wrong_thread_and_stale_lane_are_typed_errors() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let lane = scheduler.local_post_frame_lane();
         let handle = lane.post_frame_handle();
         let threaded = handle.clone();
@@ -427,7 +427,7 @@ mod tests {
 
     #[test]
     fn missing_lane_is_a_typed_error() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         assert_eq!(
             PostFrameHandle::new(&scheduler).schedule_local(|_| {}),
             Err(LocalPostFrameScheduleError::NoLocalLane)
@@ -442,7 +442,7 @@ mod tests {
                 self.0.set(true);
             }
         }
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let lane = scheduler.local_post_frame_lane();
         let dropped = Rc::new(Cell::new(false));
         lane.enter(|| {
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn post_frame_panic_restores_idle_and_later_scheduling_works() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let lane = scheduler.local_post_frame_lane();
         lane.enter(|| {
             lane.post_frame_handle()
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn aborted_pipeline_retains_local_callback_for_next_completed_frame() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let lane = scheduler.local_post_frame_lane();
         let fired = Rc::new(Cell::new(false));
         lane.enter(|| {

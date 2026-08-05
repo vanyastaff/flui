@@ -16,7 +16,7 @@ use std::{
 };
 
 use flui_scheduler::{
-    scheduler::Scheduler,
+    scheduler::UpdateScheduler,
     ticker::{Ticker, TickerFuture},
 };
 
@@ -39,7 +39,7 @@ fn main() {
 }
 
 fn demo_manual_ticker() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let mut ticker = Ticker::new();
 
     let frame_count = Arc::new(AtomicU32::new(0));
@@ -83,7 +83,7 @@ fn demo_manual_ticker() {
 }
 
 fn demo_auto_scheduling_ticker() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     println!("Created auto-scheduling Ticker with ID: {:?}", ticker.id());

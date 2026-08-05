@@ -782,7 +782,7 @@ fn back_gesture_enabled_preserves_page_state_across_a_cancelled_gesture() {
     // tick mechanism — not a `set_value(1.0)` shortcut, which would settle
     // it inline without ever exercising the mid-run rebuilds this test
     // exists to check. Safe to drive directly: this route's controller was
-    // built with its own standalone `Scheduler` (no ambient `VsyncScope` in
+    // built with its own standalone `UpdateScheduler` (no ambient `VsyncScope` in
     // this fixture), so `harness.tick()` — which drives the *harness's*
     // separate binding/scheduler — never independently re-ticks it; nothing
     // races the explicit `tick_at` calls below.

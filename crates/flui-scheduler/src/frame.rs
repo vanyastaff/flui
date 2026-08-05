@@ -45,7 +45,7 @@ fn next_frame_id() -> FrameId {
     FrameId::zip(value)
 }
 
-/// Scheduler phase - which part of the frame lifecycle is executing
+/// UpdateScheduler phase - which part of the frame lifecycle is executing
 ///
 /// This follows Flutter's SchedulerPhase model for proper frame coordination.
 /// The phases execute in order:

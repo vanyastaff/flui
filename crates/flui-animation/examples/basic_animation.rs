@@ -2,7 +2,7 @@
 
 use flui_animation::prelude::*;
 use flui_animation::{ColorTween, FloatTween};
-use flui_scheduler::Scheduler;
+use flui_scheduler::UpdateScheduler;
 use flui_types::styling::Color;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +11,7 @@ fn main() {
     println!("FLUI Animation Example\n");
 
     // Create a scheduler
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // 1. Basic AnimationController
     println!("1. AnimationController:");

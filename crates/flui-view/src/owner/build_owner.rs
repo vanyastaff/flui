@@ -291,8 +291,8 @@ pub struct BuildOwner {
     /// that honestly rather than silently spawning into a driver nobody polls.
     ///
     /// This must be the driver the binding's frame step actually polls:
-    /// `HeadlessBinding` drives its own binding-local `Scheduler`; production
-    /// drives the realm's own owned `Scheduler` (`UiRealm.scheduler`). Reaching
+    /// `HeadlessBinding` drives its own binding-local `UpdateScheduler`; production
+    /// drives the realm's own owned `UpdateScheduler` (`UiRealm.scheduler`). Reaching
     /// for the wrong one from a widget would make headless tests spawn into a
     /// driver that never runs.
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
@@ -436,7 +436,7 @@ impl BuildOwner {
     /// Called once, at wiring time, by `HeadlessBinding` and, in production, by
     /// `UiRealm`'s own wiring. It must name **that binding's** scheduler — the
     /// one whose `drive_frame` drains the queue. Headless owns a binding-local
-    /// `Scheduler`; production drives the realm's own owned `Scheduler`
+    /// `UpdateScheduler`; production drives the realm's own owned `UpdateScheduler`
     /// (`UiRealm.scheduler`) — there is no process-global scheduler singleton
     /// any more.
     pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {

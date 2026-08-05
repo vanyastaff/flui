@@ -1227,7 +1227,7 @@ fn rebuilding_a_hovered_region_down_to_no_callbacks_fires_nothing() {
 }
 
 /// The postframe recheck runs INSIDE [`HeadlessBinding::pump_frame`]'s own
-/// `Scheduler::drive_frame` pipeline closure, in the same
+/// `UpdateScheduler::drive_frame` pipeline closure, in the same
 /// `PersistentCallbacks` slot as layout/paint — not after `drive_frame`
 /// returns. A post-frame callback an enter/exit callback queues must
 /// therefore land in the SAME frame's post-frame phase, matching production
@@ -1242,7 +1242,7 @@ fn rebuilding_a_hovered_region_down_to_no_callbacks_fires_nothing() {
 /// [`HeadlessBinding::pump_frame`] did — would defer that queued callback
 /// to a LATER pump.
 ///
-/// Goes around [`flui_scheduler::Scheduler::add_post_frame_callback`]
+/// Goes around [`flui_scheduler::UpdateScheduler::add_post_frame_callback`]
 /// directly rather than through a `StatefulView` rebuild handle: driving
 /// this same ordering question end-to-end through a real widget rebuild is
 /// exactly the "next postframe" cases' missing

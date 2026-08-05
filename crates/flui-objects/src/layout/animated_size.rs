@@ -79,7 +79,7 @@ pub enum AnimatedSizeState {
 ///
 /// Mirrors Flutter's `RenderAnimatedSize`. See the module docs for the
 /// retarget state machine and the constructor for the controller-injection
-/// contract (this object never builds or sees a `Vsync`/`Scheduler`).
+/// contract (this object never builds or sees a `Vsync`/`UpdateScheduler`).
 pub struct RenderAnimatedSize {
     inner: AligningShiftedBox,
     controller: AnimationController,
@@ -101,7 +101,7 @@ pub struct RenderAnimatedSize {
 impl RenderAnimatedSize {
     /// Creates a render object driven by an **already-built** `controller`
     /// (this object never constructs a controller, and never
-    /// sees a `Vsync`/`Scheduler`; the owning `AnimatedSize` view builds and
+    /// sees a `Vsync`/`UpdateScheduler`; the owning `AnimatedSize` view builds and
     /// registers the controller and passes it in here).
     pub fn new(
         controller: AnimationController,
@@ -464,12 +464,12 @@ impl RenderBox for RenderAnimatedSize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_animation::Scheduler;
+    use flui_animation::UpdateScheduler;
     use flui_rendering::context::intrinsics_test_support::leaf_dry_layout;
     use flui_types::geometry::px;
 
     fn controller(ms: u64) -> AnimationController {
-        AnimationController::new(Duration::from_millis(ms), &Scheduler::new())
+        AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
     }
 
     fn render(ms: u64) -> RenderAnimatedSize {

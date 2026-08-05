@@ -873,7 +873,7 @@ fn a_child_without_a_layout_id_names_the_missing_id_in_the_captured_log() {
 /// (see the "Testing Quirks" section of `AGENTS.md`, and the ambient-reach
 /// ratchet in `docs/runtime-contract.toml` for the named residuals such as
 /// `global_timer_service`/`Registry::global`/`FONT_SYSTEM` — `AppBinding`
-/// and `Scheduler` are no longer singletons at all, so there is no lock left
+/// and `UpdateScheduler` are no longer singletons at all, so there is no lock left
 /// to name for them). This lock still
 /// serializes these two tests against each other as a defensive backstop
 /// (e.g. a future `--test-threads>1` invocation scoped to just this file),

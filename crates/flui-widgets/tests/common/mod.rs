@@ -236,11 +236,11 @@ impl LaidOut {
     /// This binding's own scheduler, for a probe that must observe frame
     /// ordering directly (e.g. whether a callback fired from inside
     /// [`LaidOut::pump_widget`]'s postframe recheck lands in the SAME
-    /// frame's post-frame phase or a later one). `Scheduler` is `Arc`-backed
+    /// frame's post-frame phase or a later one). `UpdateScheduler` is `Arc`-backed
     /// and `Clone`, so cloning it merely shares a handle to the same
     /// binding-local callback queues [`HeadlessBinding::scheduler`] already
     /// owns.
-    pub fn scheduler(&self) -> flui_scheduler::Scheduler {
+    pub fn scheduler(&self) -> flui_scheduler::UpdateScheduler {
         self.binding.scheduler().clone()
     }
 
@@ -439,11 +439,11 @@ impl LaidOut {
         self.binding.pump_frame(dt);
     }
 
-    /// The binding's **own** scheduler — never `Scheduler::instance()`.
+    /// The binding's **own** scheduler — never `UpdateScheduler::instance()`.
     ///
     /// `pump_for` drives this one; a post-frame callback parked anywhere else is
     /// never drained.
-    pub fn binding_scheduler(&self) -> flui_scheduler::Scheduler {
+    pub fn binding_scheduler(&self) -> flui_scheduler::UpdateScheduler {
         self.binding.scheduler().clone()
     }
 

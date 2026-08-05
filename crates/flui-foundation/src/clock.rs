@@ -28,7 +28,7 @@ use web_time::{Duration, Instant};
 ///
 /// The default ([`SystemClock`]) is the OS clock; a headless frame driver uses
 /// [`ManualClock`] to advance a virtual timeline deterministically. Injected once
-/// at construction (mirroring how an `AnimationController` holds its `Scheduler`),
+/// at construction (mirroring how an `AnimationController` holds its `UpdateScheduler`),
 /// so per-call signatures stay unchanged.
 pub trait MonotonicClock: Send + Sync + fmt::Debug {
     /// The current instant on this clock's timeline. Must be non-decreasing

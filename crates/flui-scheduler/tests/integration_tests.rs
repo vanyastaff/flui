@@ -25,20 +25,20 @@ use flui_scheduler::{
     config::PerformanceMode,
     duration::{FrameDuration, Milliseconds},
     frame::{AppLifecycleState, SchedulerPhase},
-    scheduler::{FrameSkipPolicy, Scheduler, SchedulerBuilder},
+    scheduler::{FrameSkipPolicy, SchedulerBuilder, UpdateScheduler},
     task::{Priority, TaskQueue},
     ticker::{Ticker, TickerCanceled, TickerFuture, TickerState},
     vsync::{VsyncMode, VsyncScheduler},
 };
 
 // ============================================================================
-// Scheduler Integration Tests
+// UpdateScheduler Integration Tests
 // ============================================================================
 
 #[test]
 fn test_full_frame_lifecycle() {
     // Test complete frame lifecycle: schedule -> begin -> callbacks -> end
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let transient_called = Arc::new(AtomicU32::new(0));
     let persistent_called = Arc::new(AtomicU32::new(0));
@@ -78,7 +78,7 @@ fn test_full_frame_lifecycle() {
 
 #[test]
 fn test_scheduler_phase_transitions() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Initially idle
     assert_eq!(scheduler.scheduler_phase(), SchedulerPhase::Idle);
@@ -120,7 +120,7 @@ fn test_scheduler_phase_transitions() {
 
 #[test]
 fn test_callback_cancellation() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let called = Arc::new(AtomicU32::new(0));
 
@@ -140,7 +140,7 @@ fn test_callback_cancellation() {
 
 #[test]
 fn test_multiple_frames_with_persistent_callbacks() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let call_count = Arc::new(AtomicU32::new(0));
 
@@ -160,7 +160,7 @@ fn test_multiple_frames_with_persistent_callbacks() {
 
 #[test]
 fn test_app_lifecycle_state_changes() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let states_seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
 
@@ -187,7 +187,7 @@ fn test_app_lifecycle_state_changes() {
 
 #[test]
 fn test_ticker_with_scheduler() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     let tick_count = Arc::new(AtomicU32::new(0));
@@ -208,7 +208,7 @@ fn test_ticker_with_scheduler() {
 
 #[test]
 fn test_ticker_mute_unmute() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     let tick_count = Arc::new(AtomicU32::new(0));
@@ -420,14 +420,14 @@ fn test_frame_budget_jank_detection() {
 }
 
 // ============================================================================
-// Scheduler Binding Integration Tests
+// UpdateScheduler Binding Integration Tests
 // ============================================================================
 
 #[test]
 fn test_scheduler_binding_trait() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
-    // Test scheduler binding methods (now inherent on Scheduler)
+    // Test scheduler binding methods (now inherent on UpdateScheduler)
     assert_eq!(scheduler.scheduler_phase(), SchedulerPhase::Idle);
     assert!(!scheduler.has_scheduled_frame());
 
@@ -438,7 +438,7 @@ fn test_scheduler_binding_trait() {
 
 #[test]
 fn test_performance_mode_request() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Request performance mode
     let handle = scheduler.request_performance_mode(PerformanceMode::Latency);
@@ -492,7 +492,7 @@ fn test_frame_duration_budget_check() {
 
 #[test]
 fn test_scheduler_thread_safety() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let handles: Vec<_> = (0..4)
         .map(|i| {
@@ -538,7 +538,7 @@ fn test_ticker_future_thread_safety() {
 
 #[test]
 fn test_empty_frame_execution() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Execute frame with no callbacks - should not panic
     scheduler.execute_frame();
@@ -550,7 +550,7 @@ fn test_empty_frame_execution() {
 
 #[test]
 fn test_cancel_nonexistent_callback() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Schedule a real callback first
     let id = scheduler.schedule_frame_callback(Box::new(|_| {}));
@@ -589,7 +589,7 @@ fn test_scheduler_builder_configuration() {
         .frame_duration(FrameDuration::try_from_fps(30).expect("fps > 0"))
         .build();
 
-    // Scheduler should be created successfully
+    // UpdateScheduler should be created successfully
     assert_eq!(scheduler.frame_count(), 0);
 }
 
@@ -599,7 +599,7 @@ fn test_scheduler_builder_configuration() {
 
 #[test]
 fn test_warm_up_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let warm_up_called = Arc::new(AtomicU32::new(0));
 
@@ -628,7 +628,7 @@ fn test_warm_up_frame() {
 
 #[test]
 fn test_microtask_execution() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let microtask_called = Arc::new(AtomicU32::new(0));
 
@@ -649,7 +649,7 @@ fn test_microtask_execution() {
 
 #[test]
 fn test_end_of_frame_future() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Get end of frame future
     let _future = scheduler.end_of_frame();
@@ -666,7 +666,7 @@ fn test_end_of_frame_future() {
 
 #[test]
 fn test_frame_skip_policies() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Test default policy
     let default_policy = scheduler.frame_skip_policy();
@@ -691,7 +691,7 @@ fn test_frame_skip_policies() {
 
 #[test]
 fn test_scheduler_binding_frames_enabled() {
-    let mut scheduler = Scheduler::new();
+    let mut scheduler = UpdateScheduler::new();
 
     // Default should be enabled
     assert!(scheduler.frames_enabled());
@@ -707,7 +707,7 @@ fn test_scheduler_binding_frames_enabled() {
 
 #[test]
 fn test_scheduler_binding_schedule_methods() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Test schedule_frame
     scheduler.schedule_frame_if_enabled();
@@ -727,7 +727,7 @@ fn test_scheduler_binding_schedule_methods() {
 
 #[test]
 fn test_scheduler_frame_callback_cancel() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let called = Arc::new(AtomicU32::new(0));
 
     let c = Arc::clone(&called);
@@ -747,7 +747,7 @@ fn test_scheduler_frame_callback_cancel() {
 
 #[test]
 fn test_scheduler_post_frame_callback() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let called = Arc::new(AtomicU32::new(0));
 
     let c = Arc::clone(&called);
@@ -761,7 +761,7 @@ fn test_scheduler_post_frame_callback() {
 
 #[test]
 fn test_scheduler_binding_schedule_task() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let executed = Arc::new(AtomicU32::new(0));
 
     let e = Arc::clone(&executed);
@@ -775,7 +775,7 @@ fn test_scheduler_binding_schedule_task() {
 
 #[test]
 fn test_scheduler_binding_handle_begin_draw_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let called = Arc::new(AtomicU32::new(0));
 
     let c = Arc::clone(&called);
@@ -793,7 +793,7 @@ fn test_scheduler_binding_handle_begin_draw_frame() {
 
 #[test]
 fn test_scheduler_binding_timings_callback() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let timings_received = Arc::new(AtomicU32::new(0));
 
     let t = Arc::clone(&timings_received);
@@ -814,7 +814,7 @@ fn test_scheduler_binding_timings_callback() {
 
 #[test]
 fn test_scheduler_binding_lifecycle_change() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Use scheduler methods directly
     scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Paused);
@@ -826,7 +826,7 @@ fn test_scheduler_binding_lifecycle_change() {
 
 #[test]
 fn test_scheduler_binding_current_timestamps() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Before frame, timestamp should be zero or default
     let ts = scheduler.current_frame_time_stamp();
@@ -840,7 +840,7 @@ fn test_scheduler_binding_current_timestamps() {
 
 #[test]
 fn test_scheduler_binding_reset_epoch() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Reset epoch
     scheduler.reset_epoch();
@@ -851,7 +851,7 @@ fn test_scheduler_binding_reset_epoch() {
 
 #[test]
 fn test_scheduler_binding_debug_asserts() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // No transient callbacks
     assert!(scheduler.debug_assert_no_transient_callbacks("test"));
@@ -871,7 +871,7 @@ fn test_scheduler_binding_debug_asserts() {
 
 #[test]
 fn test_scheduler_binding_debug_assert_no_performance_requests() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // No requests initially
     assert!(scheduler.debug_assert_no_pending_performance_mode_requests("test"));
@@ -893,7 +893,7 @@ fn test_scheduler_binding_debug_assert_no_performance_requests() {
 fn test_scheduler_binding_debug_assert_no_time_dilation() {
     use flui_scheduler::config::set_time_dilation;
 
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Ensure default
     set_time_dilation(1.0).expect("positive finite time dilation");
@@ -914,7 +914,7 @@ fn test_scheduler_binding_debug_assert_no_time_dilation() {
 
 #[test]
 fn test_multiple_performance_mode_requests() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Request multiple modes
     let handle1 = scheduler.request_performance_mode(PerformanceMode::Latency);
@@ -937,7 +937,7 @@ fn test_multiple_performance_mode_requests() {
 
 #[test]
 fn test_performance_mode_handle_dispose() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     let handle = scheduler.request_performance_mode(PerformanceMode::Latency);
     assert!(!scheduler.debug_assert_no_pending_performance_mode_requests("test"));
@@ -1970,7 +1970,7 @@ fn test_ticker_group_extend() {
 
 #[test]
 fn test_auto_scheduling_ticker_debug() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let ticker = Ticker::new_with_scheduler(&scheduler);
 
     let debug = format!("{ticker:?}");
@@ -2532,12 +2532,12 @@ fn test_frame_timing_builder_with_frame_duration() {
 }
 
 // ============================================================================
-// Extended Scheduler Tests (73% -> 80%+)
+// Extended UpdateScheduler Tests (73% -> 80%+)
 // ============================================================================
 
 #[test]
 fn test_scheduler_clone() {
-    let scheduler1 = Scheduler::new();
+    let scheduler1 = UpdateScheduler::new();
     let scheduler2 = scheduler1.clone();
 
     // Both schedulers share state
@@ -2547,7 +2547,7 @@ fn test_scheduler_clone() {
 
 #[test]
 fn test_scheduler_current_vsync_time() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Before frame - might be None
     let _ = scheduler.current_vsync_time();
@@ -2561,7 +2561,7 @@ fn test_scheduler_current_vsync_time() {
 
 #[test]
 fn test_scheduler_should_schedule_frame() {
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Initially true
     assert!(scheduler.should_schedule_frame());
@@ -2617,7 +2617,7 @@ fn test_performance_mode_all_variants() {
 fn test_scheduler_adjust_for_epoch() {
     use flui_scheduler::config::set_time_dilation;
 
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Without dilation
     set_time_dilation(1.0).expect("positive finite time dilation");
@@ -2813,7 +2813,7 @@ fn test_auto_scheduling_ticker_start_typed_works() {
 
     use flui_scheduler::duration::Seconds;
 
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
     let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     let called = Arc::new(AtomicBool::new(false));

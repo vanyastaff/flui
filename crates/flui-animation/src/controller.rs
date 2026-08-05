@@ -7,7 +7,7 @@ use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringT
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_scheduler::config::time_dilation;
-use flui_scheduler::{Scheduler, Ticker};
+use flui_scheduler::{Ticker, UpdateScheduler};
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 use std::fmt;
@@ -78,10 +78,10 @@ const FLING_TOLERANCE: Tolerance = Tolerance {
 ///
 /// ```
 /// use flui_animation::{AnimationController, Animation};
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 /// use std::time::Duration;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 /// let controller = AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
@@ -121,7 +121,7 @@ struct AnimationControllerInner {
     /// Upper bound (default 1.0).
     upper_bound: f32,
 
-    /// Ticker for frame callbacks (auto-scheduling via the attached `Scheduler`).
+    /// Ticker for frame callbacks (auto-scheduling via the attached `UpdateScheduler`).
     ticker: Option<Ticker>,
 
     /// Status listeners, in registration order.
@@ -211,9 +211,9 @@ impl AnimationController {
     /// # Arguments
     ///
     /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - Scheduler the controller's ticker auto-schedules against
+    /// * `scheduler` - UpdateScheduler the controller's ticker auto-schedules against
     #[must_use]
-    pub fn new(duration: Duration, scheduler: &Scheduler) -> Self {
+    pub fn new(duration: Duration, scheduler: &UpdateScheduler) -> Self {
         // 0.0 < 1.0 always holds, so the default-bounds path cannot fail.
         Self::with_bounds(duration, scheduler, 0.0, 1.0)
             .expect("default bounds (0.0, 1.0) satisfy lower < upper")
@@ -222,12 +222,12 @@ impl AnimationController {
     /// Create an animation controller with no ticker at all — bounds `0.0..1.0`.
     ///
     /// This is the shape every FLUI widget-layer controller actually needs:
-    /// production widgets never attach a real, pumped `Scheduler` to their
+    /// production widgets never attach a real, pumped `UpdateScheduler` to their
     /// controllers (`Vsync` — see [`crate::vsync`] — is the real widget-layer
     /// clock seam; a plain `AnimationController` advances only through
     /// external [`Self::tick_at`] calls a `Vsync`-driven caller makes). A
     /// controller built this way behaves identically to one built with
-    /// [`Self::new`] against a private, never-pumped `Scheduler`: neither
+    /// [`Self::new`] against a private, never-pumped `UpdateScheduler`: neither
     /// ever auto-ticks, both advance only via `tick_at`. This constructor
     /// simply doesn't allocate the ticker (and the dead scheduler) that
     /// would have gone unused.
@@ -256,7 +256,7 @@ impl AnimationController {
     }
 
     /// Create an animation controller with a real, but permanently detached,
-    /// ticker — no `Scheduler` at all, bounds `0.0..1.0`.
+    /// ticker — no `UpdateScheduler` at all, bounds `0.0..1.0`.
     ///
     /// [`Self::without_ticker`] skips the `Ticker` field entirely, and
     /// [`AnimationController::is_animating`] is intentionally ticker-based
@@ -266,22 +266,22 @@ impl AnimationController {
     /// `is_animating()` to report correctly but never actually need a live
     /// scheduler to pump anything (`Vsync` — see [`crate::vsync`] — is the
     /// real widget-layer clock seam; nothing ever calls
-    /// `Scheduler::execute_frame` for these controllers' tickers). Before
+    /// `UpdateScheduler::execute_frame` for these controllers' tickers). Before
     /// this constructor existed, those sites built a full, private
-    /// `Scheduler::new()` purely so [`Ticker::new_with_scheduler`] had
+    /// `UpdateScheduler::new()` purely so [`Ticker::new_with_scheduler`] had
     /// something to downgrade — a whole `SchedulerInner` allocation whose
     /// `Weak` was already dead by the end of the constructing statement (the
-    /// `Scheduler` itself was never bound to anything), labeled with a
+    /// `UpdateScheduler` itself was never bound to anything), labeled with a
     /// misleading "real ticker" comment at each call site.
     ///
     /// [`Ticker::new()`] already builds exactly the needed shape: a
     /// manually-driven ticker with no scheduler attached
-    /// (`Ticker`'s own `scheduler: Option<WeakScheduler>` field takes its
+    /// (`Ticker`'s own `scheduler: Option<WeakUpdateScheduler>` field takes its
     /// `None` arm). `start_inner` sets [`TickerState::Active`](flui_scheduler::TickerState::Active) before it
     /// ever attempts to upgrade that `None` scheduler to auto-reschedule, so
     /// `is_animating()`/`Ticker::is_active()` report correctly the instant a
     /// run starts — the ticker simply never fires on its own, exactly like
-    /// the throwaway-`Scheduler` shape it replaces, but without allocating
+    /// the throwaway-`UpdateScheduler` shape it replaces, but without allocating
     /// the scheduler nobody was ever going to pump.
     #[must_use]
     pub fn with_detached_ticker(duration: Duration) -> Self {
@@ -307,7 +307,7 @@ impl AnimationController {
     /// # Arguments
     ///
     /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - Scheduler the controller's ticker auto-schedules against
+    /// * `scheduler` - UpdateScheduler the controller's ticker auto-schedules against
     /// * `lower_bound` - Minimum value (default 0.0)
     /// * `upper_bound` - Maximum value (default 1.0)
     ///
@@ -320,10 +320,10 @@ impl AnimationController {
     /// ```
     /// # fn main() -> Result<(), flui_animation::AnimationError> {
     /// use flui_animation::AnimationController;
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     /// use std::time::Duration;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let controller = AnimationController::with_bounds(
     ///     Duration::from_millis(300),
     ///     &scheduler,
@@ -335,7 +335,7 @@ impl AnimationController {
     /// ```
     pub fn with_bounds(
         duration: Duration,
-        scheduler: &Scheduler,
+        scheduler: &UpdateScheduler,
         lower_bound: f32,
         upper_bound: f32,
     ) -> Result<Self, AnimationError> {
@@ -807,9 +807,9 @@ impl AnimationController {
     ///
     /// ```
     /// # use flui_animation::AnimationController;
-    /// # use flui_scheduler::Scheduler;
+    /// # use flui_scheduler::UpdateScheduler;
     /// # use std::time::Duration;
-    /// # let scheduler = Scheduler::new();
+    /// # let scheduler = UpdateScheduler::new();
     /// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
     /// controller.fling(1.0).unwrap(); // Fling forward
     /// ```
@@ -874,9 +874,9 @@ impl AnimationController {
     /// ```
     /// # use flui_animation::{AnimationController, simulation::SpringSimulation};
     /// # use flui_animation::simulation::SpringDescription;
-    /// # use flui_scheduler::Scheduler;
+    /// # use flui_scheduler::UpdateScheduler;
     /// # use std::time::Duration;
-    /// # let scheduler = Scheduler::new();
+    /// # let scheduler = UpdateScheduler::new();
     /// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
     /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5);
     /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
@@ -1531,7 +1531,7 @@ impl fmt::Debug for AnimationController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::UpdateScheduler;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Several tests assert exact per-tick progress, and `time_dilation_scales_progress`
@@ -1545,13 +1545,13 @@ mod tests {
     }
 
     fn controller(ms: u64) -> AnimationController {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         AnimationController::new(Duration::from_millis(ms), &scheduler)
     }
 
     /// Migration-premise pin: every production
     /// `AnimationController` today is built with a private, never-pumped
-    /// `Arc::new(Scheduler::new())` — the "wall-clock fallback" comments in
+    /// `Arc::new(UpdateScheduler::new())` — the "wall-clock fallback" comments in
     /// `flui-widgets` (`scrollable.rs`, `navigator/binding.rs`) claim the
     /// ticker on that private scheduler fires on its own. It cannot: nothing
     /// ever calls `handle_begin_frame`/`execute_frame` on a scheduler no one
@@ -1569,15 +1569,15 @@ mod tests {
     #[test]
     fn a_controllers_private_unpumped_scheduler_never_advances_without_vsync() {
         let _serial = serial();
-        let private_scheduler = Scheduler::new();
+        let private_scheduler = UpdateScheduler::new();
         let c = AnimationController::new(Duration::from_millis(100), &private_scheduler);
         c.forward().unwrap();
 
         // Drive an UNRELATED, actually-pumped scheduler for many frames —
-        // this is what a real event loop's realm-owned `Scheduler` does
+        // this is what a real event loop's realm-owned `UpdateScheduler` does
         // every frame. It must have zero effect on `c`, which is wired to
         // `private_scheduler` alone.
-        let other_scheduler = Scheduler::new();
+        let other_scheduler = UpdateScheduler::new();
         for _ in 0..120 {
             other_scheduler.execute_frame();
         }
@@ -1586,7 +1586,7 @@ mod tests {
         assert_eq!(
             c.value(),
             0.0,
-            "a controller wired to a private, never-pumped Scheduler must not \
+            "a controller wired to a private, never-pumped UpdateScheduler must not \
              advance no matter how many frames an unrelated scheduler runs — \
              the ticker's callback is registered on `private_scheduler`'s own \
              transient queue, which nothing ever drains"
@@ -1755,7 +1755,7 @@ mod tests {
     #[test]
     fn custom_bounds_clamp() {
         let _serial = serial();
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let c =
             AnimationController::with_bounds(Duration::from_millis(100), &scheduler, 10.0, 20.0)
                 .unwrap();
@@ -1770,7 +1770,7 @@ mod tests {
     #[test]
     fn invalid_bounds_rejected() {
         let _serial = serial();
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let r =
             AnimationController::with_bounds(Duration::from_millis(100), &scheduler, 20.0, 10.0);
         assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
@@ -1779,7 +1779,7 @@ mod tests {
     /// `without_ticker` builds a controller with no scheduler attached at
     /// all — it must still advance via `tick_at` (the widget-layer `Vsync`
     /// driving path), exactly like a controller built against a private,
-    /// never-pumped `Scheduler`.
+    /// never-pumped `UpdateScheduler`.
     #[test]
     fn without_ticker_advances_via_tick_at_only() {
         let _serial = serial();
@@ -1812,7 +1812,7 @@ mod tests {
         c.dispose();
     }
 
-    /// `with_detached_ticker` is the shape the throwaway-`Scheduler` sites
+    /// `with_detached_ticker` is the shape the throwaway-`UpdateScheduler` sites
     /// migrated to: unlike `without_ticker`, this controller has a REAL
     /// `Ticker`, so `is_animating()` reports `true` mid-run exactly as it
     /// would with a live (but never-pumped) scheduler attached — while still
@@ -2130,7 +2130,7 @@ mod tests {
         // itself with the scheduler every frame while active, and only
         // `ticker.stop()` deregisters it.
         let _serial = serial();
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let c = AnimationController::new(Duration::from_millis(100), &scheduler);
 
         c.forward().unwrap();

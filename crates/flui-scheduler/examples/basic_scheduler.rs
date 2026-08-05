@@ -1,4 +1,4 @@
-//! Basic Scheduler Example
+//! Basic UpdateScheduler Example
 //!
 //! This example demonstrates the fundamental usage of the FLUI scheduler,
 //! including frame callbacks, task scheduling, and lifecycle management.
@@ -11,15 +11,15 @@ use std::sync::{
 };
 
 use flui_scheduler::{
-    scheduler::Scheduler,
+    scheduler::UpdateScheduler,
     task::{Priority, TaskQueue},
 };
 
 fn main() {
-    println!("=== FLUI Scheduler Basic Example ===\n");
+    println!("=== FLUI UpdateScheduler Basic Example ===\n");
 
     // Create a new scheduler
-    let scheduler = Scheduler::new();
+    let scheduler = UpdateScheduler::new();
 
     // Track callback invocations
     let transient_count = Arc::new(AtomicU32::new(0));

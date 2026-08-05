@@ -572,7 +572,7 @@ impl StatefulView for Dismissible {
         // drives the actual value ticks deterministically via `tick_at`;
         // `with_detached_ticker` gives this controller a ticker whose
         // `start()`/`stop()` transition real ticker state without needing a
-        // `Scheduler` at all.
+        // `UpdateScheduler` at all.
         let move_controller = AnimationController::with_detached_ticker(self.movement_duration);
         DismissibleState {
             move_controller,

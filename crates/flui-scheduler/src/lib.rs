@@ -1,4 +1,4 @@
-//! # FLUI Scheduler
+//! # FLUI UpdateScheduler
 //!
 //! Frame scheduling, task prioritization, and animation coordination for FLUI.
 //!
@@ -7,7 +7,7 @@
 //! ```text
 //! Application
 //!     ↓
-//! Scheduler (orchestrates frames)
+//! UpdateScheduler (orchestrates frames)
 //!     ├─ FrameScheduler (vsync coordination)
 //!     ├─ TaskQueue (priority-based execution)
 //!     ├─ TickerProvider (animation tickers)
@@ -76,9 +76,9 @@
 //! ## Example Usage
 //!
 //! ```rust
-//! use flui_scheduler::{FrameBudget, Priority, Scheduler};
+//! use flui_scheduler::{FrameBudget, Priority, UpdateScheduler};
 //!
-//! let scheduler = Scheduler::new();
+//! let scheduler = UpdateScheduler::new();
 //!
 //! // Schedule a frame
 //! scheduler.schedule_frame(Box::new(|frame_time| {
@@ -119,7 +119,7 @@
 //! ```rust
 //! use flui_scheduler::prelude::*;
 //!
-//! let scheduler = Scheduler::new();
+//! let scheduler = UpdateScheduler::new();
 //! let budget = FrameBudget::new(60); // 60 FPS target
 //! ```
 //!
@@ -155,7 +155,7 @@ pub use config::{
 pub use post_frame::{LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle};
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
-/// name `Scheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
+/// name `UpdateScheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
 mod post_frame;
 
 pub use web_time::Instant;
@@ -169,7 +169,7 @@ pub use frame::{
 // Re-exports - ID types (unified with flui-foundation)
 pub use id::{CallbackId, Id, IdGenerator, Marker, markers};
 pub use scheduler::{
-    FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder, WeakScheduler,
+    FrameCompletionFuture, FrameSkipPolicy, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler,
 };
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 pub use ticker::{
@@ -182,8 +182,8 @@ pub use vsync::{VsyncCallback, VsyncMode, VsyncScheduler, VsyncStats};
 pub mod prelude {
     pub use crate::{
         BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
-        Priority, Scheduler, SchedulerPhase, Task, TaskId, TaskQueue, Ticker, TickerProvider,
-        TickerState,
+        Priority, SchedulerPhase, Task, TaskId, TaskQueue, Ticker, TickerProvider, TickerState,
+        UpdateScheduler,
         duration::{FrameDuration, Milliseconds, Percentage, Seconds},
     };
 }

@@ -10,7 +10,7 @@
 //!   `PipelineOwner` (`!Send + !Sync`, from flui_rendering); the shape every
 //!   binding here actually stores and clones, `PipelineOwner` being the
 //!   value it wraps
-//! - [`Scheduler`] - Frame scheduling (from flui-scheduler)
+//! - [`UpdateScheduler`] - Frame scheduling (from flui-scheduler)
 //! - [`RenderingFlutterBinding`] - Rendering integration (local); per-window
 //!   semantics enablement/announce/event delivery lives on `SemanticsHost`
 //!   (`crate::app::semantics_host`), not on a process-wide accessibility
@@ -42,7 +42,7 @@ pub use flui_rendering::{
     binding::RendererBinding,
     pipeline::{PipelineCell, PipelineOwner},
 };
-pub use flui_scheduler::Scheduler;
+pub use flui_scheduler::UpdateScheduler;
 pub use flui_view::WidgetsBinding;
 // Re-export the local binding
 pub use renderer_binding::RenderingFlutterBinding;

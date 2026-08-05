@@ -1,6 +1,6 @@
 //! Main scheduler - coordinates frame lifecycle and task execution
 //!
-//! The Scheduler is the central orchestrator for FLUI's rendering pipeline,
+//! The UpdateScheduler is the central orchestrator for FLUI's rendering pipeline,
 //! following Flutter's scheduler model with proper phase separation.
 //!
 //! ## Frame Lifecycle (Flutter-like)
@@ -30,9 +30,9 @@
 //! ## Example
 //!
 //! ```rust
-//! use flui_scheduler::{Priority, Scheduler};
+//! use flui_scheduler::{Priority, UpdateScheduler};
 //!
-//! let scheduler = Scheduler::new();
+//! let scheduler = UpdateScheduler::new();
 //!
 //! // Schedule animation callback (fires during TransientCallbacks)
 //! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -95,7 +95,7 @@ fn next_scheduler_identity() -> u64 {
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
             next.checked_add(1)
         })
-        .expect("BUG: Scheduler identity space exhausted")
+        .expect("BUG: UpdateScheduler identity space exhausted")
 }
 
 /// Cancellable transient callback with ID
@@ -132,15 +132,15 @@ struct FrameCompletionState {
 
 /// Future that resolves when a frame completes
 ///
-/// This is returned by `Scheduler::end_of_frame()` and allows awaiting
+/// This is returned by `UpdateScheduler::end_of_frame()` and allows awaiting
 /// the completion of the current or next frame.
 ///
 /// # Example
 ///
 /// ```rust,no_run
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 ///
-/// async fn do_end_of_frame_work(scheduler: &Scheduler) {
+/// async fn do_end_of_frame_work(scheduler: &UpdateScheduler) {
 ///     // Wait for frame to complete
 ///     let timing = scheduler.end_of_frame().await;
 ///
@@ -412,14 +412,14 @@ struct BindingState {
 
 /// Every piece of scheduler state, unified behind one allocation.
 ///
-/// Before this type existed, `Scheduler` held five independent `Arc` blobs
+/// Before this type existed, `UpdateScheduler` held five independent `Arc` blobs
 /// (`frame`/`callbacks`/`binding`/`task_queue`/`async_driver`) — a "handle"
 /// in spirit, but a double indirection wherever code wanted a single owning
-/// reference to hand out (`create_ticker` allocated a fresh `Arc<Scheduler>`
+/// reference to hand out (`create_ticker` allocated a fresh `Arc<UpdateScheduler>`
 /// over the five already-`Arc` fields just to give the ticker something to
-/// hold). Collapsing them into one `Arc<SchedulerInner>` makes [`Scheduler`]
+/// hold). Collapsing them into one `Arc<SchedulerInner>` makes [`UpdateScheduler`]
 /// a plain cheap-clone handle over ONE allocation, and — the reason this
-/// exists — makes a true, non-owning [`WeakScheduler`] possible: a `Weak`
+/// exists — makes a true, non-owning [`WeakUpdateScheduler`] possible: a `Weak`
 /// over five separate Arcs cannot express "this scheduler is gone", only
 /// "this one piece of it is gone".
 struct SchedulerInner {
@@ -432,7 +432,7 @@ struct SchedulerInner {
     /// Task queue (priority-based, already internally synchronized)
     task_queue: TaskQueue,
     /// Frame-driven async task driver, polled once per frame by
-    /// [`Scheduler::handle_begin_frame`] in the mid-frame slot.
+    /// [`UpdateScheduler::handle_begin_frame`] in the mid-frame slot.
     /// The bindings no longer call it directly.
     async_driver: crate::AsyncDriver,
 }
@@ -444,9 +444,9 @@ struct SchedulerInner {
 /// - PersistentCallbacks: Rendering pipeline
 /// - PostFrameCallbacks: Cleanup
 ///
-/// `Scheduler` is a cheap-clone handle over one `Arc<SchedulerInner>`
-/// allocation — cloning bumps one refcount, not five. [`Scheduler::downgrade`]
-/// vends a [`WeakScheduler`] for a handle that must not keep a dead realm's
+/// `UpdateScheduler` is a cheap-clone handle over one `Arc<SchedulerInner>`
+/// allocation — cloning bumps one refcount, not five. [`UpdateScheduler::downgrade`]
+/// vends a [`WeakUpdateScheduler`] for a handle that must not keep a dead realm's
 /// scheduler alive (see that type's doc).
 ///
 /// ## Callback Cancellation
@@ -455,9 +455,9 @@ struct SchedulerInner {
 /// cancel:
 ///
 /// ```rust
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::UpdateScheduler;
 ///
-/// let scheduler = Scheduler::new();
+/// let scheduler = UpdateScheduler::new();
 ///
 /// // Register a callback and get its ID
 /// let id = scheduler.schedule_frame_callback(Box::new(|_vsync| {
@@ -468,60 +468,60 @@ struct SchedulerInner {
 /// scheduler.cancel_frame_callback(id);
 /// ```
 #[derive(Clone)]
-pub struct Scheduler {
+pub struct UpdateScheduler {
     inner: Arc<SchedulerInner>,
 }
 
-/// A non-owning reference to a [`Scheduler`], obtained via [`Scheduler::downgrade`].
+/// A non-owning reference to a [`UpdateScheduler`], obtained via [`UpdateScheduler::downgrade`].
 ///
 /// Exists so a handle that must outlive its scheduler's *owner* (a `Ticker`
 /// stored on an `AnimationController`, a `PostFrameHandle` vended to a
 /// widget capability) can fail closed instead of keeping the whole scheduler
 /// — and everything it owns — alive. [`upgrade`](Self::upgrade) returns
-/// `None` once the realm that owns the backing `Scheduler` has dropped its
+/// `None` once the realm that owns the backing `UpdateScheduler` has dropped its
 /// last strong reference; every caller here treats that as "silently done",
 /// matching a disposed ticker's own short-circuit.
 ///
-/// `Send + Sync`, same as `Scheduler` — cancellation from a foreign thread
-/// keeps working exactly as it did when `Ticker` held a strong `Arc<Scheduler>`.
+/// `Send + Sync`, same as `UpdateScheduler` — cancellation from a foreign thread
+/// keeps working exactly as it did when `Ticker` held a strong `Arc<UpdateScheduler>`.
 #[derive(Clone)]
-pub struct WeakScheduler {
+pub struct WeakUpdateScheduler {
     inner: std::sync::Weak<SchedulerInner>,
 }
 
-impl Scheduler {
-    /// Obtain a non-owning [`WeakScheduler`] over this scheduler.
+impl UpdateScheduler {
+    /// Obtain a non-owning [`WeakUpdateScheduler`] over this scheduler.
     #[must_use]
-    pub fn downgrade(&self) -> WeakScheduler {
-        WeakScheduler {
+    pub fn downgrade(&self) -> WeakUpdateScheduler {
+        WeakUpdateScheduler {
             inner: Arc::downgrade(&self.inner),
         }
     }
 }
 
-impl WeakScheduler {
-    /// Upgrade to a strong [`Scheduler`] handle, or `None` if every strong
+impl WeakUpdateScheduler {
+    /// Upgrade to a strong [`UpdateScheduler`] handle, or `None` if every strong
     /// reference to the backing scheduler has already been dropped (its
     /// owning realm has torn down).
     #[must_use]
-    pub fn upgrade(&self) -> Option<Scheduler> {
-        self.inner.upgrade().map(|inner| Scheduler { inner })
+    pub fn upgrade(&self) -> Option<UpdateScheduler> {
+        self.inner.upgrade().map(|inner| UpdateScheduler { inner })
     }
 }
 
-impl std::fmt::Debug for WeakScheduler {
+impl std::fmt::Debug for WeakUpdateScheduler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WeakScheduler")
+        f.debug_struct("WeakUpdateScheduler")
             .field("alive", &(self.inner.strong_count() > 0))
             .finish_non_exhaustive()
     }
 }
 
-impl std::fmt::Debug for Scheduler {
+impl std::fmt::Debug for UpdateScheduler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Report lock-free state only (atomics + TaskQueue's atomic len);
         // the callback/binding state is opaque `dyn Fn` storage.
-        f.debug_struct("Scheduler")
+        f.debug_struct("UpdateScheduler")
             .field("phase", &self.phase())
             .field("frame_count", &self.frame_count())
             .field(
@@ -533,14 +533,14 @@ impl std::fmt::Debug for Scheduler {
     }
 }
 
-/// Shared body of [`Scheduler::request_frame`] and the async driver's wake hook.
+/// Shared body of [`UpdateScheduler::request_frame`] and the async driver's wake hook.
 ///
 /// Factored out so both callers can hand it plain field references
 /// (`&FrameState`, `&BindingState`) rather than duplicating the
 /// scheduled-frame coalescing logic. This is a plumbing convenience, not the
-/// cycle-avoidance mechanism itself: `Scheduler` collapsed to one
+/// cycle-avoidance mechanism itself: `UpdateScheduler` collapsed to one
 /// `Arc<SchedulerInner>` (see that type's own doc), so the wake hook's actual
-/// acyclic guarantee lives in `Scheduler::new`'s `Weak<SchedulerInner>`
+/// acyclic guarantee lives in `UpdateScheduler::new`'s `Weak<SchedulerInner>`
 /// capture, not in this function's split parameters — a stale earlier
 /// version of this doc described the hook capturing `Arc<FrameState>` +
 /// `Arc<BindingState>` separately to dodge an `Arc` cycle; that split-Arc
@@ -556,7 +556,7 @@ fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
     }
 }
 
-impl Scheduler {
+impl UpdateScheduler {
     /// Create a new scheduler with 60 FPS target
     pub fn new() -> Self {
         Self::with_frame_duration(FrameDuration::FPS_60)
@@ -635,7 +635,7 @@ impl Scheduler {
         // coalescing path (`frame_scheduled` + `on_frame_scheduled`), so an
         // async completion wakes an idle event loop exactly like `setState`.
         // The hook captures a `Weak<SchedulerInner>`, never a strong
-        // `Scheduler`/`Arc<SchedulerInner>`, to keep
+        // `UpdateScheduler`/`Arc<SchedulerInner>`, to keep
         // `SchedulerInner → AsyncDriver → hook` acyclic — a strong capture
         // here would leak the entire scheduler for as long as any task is
         // pending. Upgrade failure (the scheduler's last strong ref is
@@ -681,7 +681,7 @@ impl Scheduler {
     /// Whether `self` and `other` are clones of the **same** scheduler — the same
     /// callback queues, the same async driver, the same frame.
     ///
-    /// `Scheduler` is `Arc`-backed, so this is pointer identity on the shared
+    /// `UpdateScheduler` is `Arc`-backed, so this is pointer identity on the shared
     /// inner state. It exists because a capability handed to a widget must be
     /// provably pointed at the realm's own scheduler, not some other one.
     #[must_use]
@@ -790,7 +790,7 @@ impl Scheduler {
         // whose id the pipeline's `build_scope` drains — so a completion lands in THIS frame.
         //
         // This lives in the scheduler, not in bindings. The contract is "exactly one
-        // mid-frame poll on the right `Scheduler` instance". Owning it here enforces
+        // mid-frame poll on the right `UpdateScheduler` instance". Owning it here enforces
         // both structurally: `HeadlessBinding` drives its binding-local scheduler and
         // production drives the singleton, and neither can forget the step or run it twice.
         self.drive_async_tasks();
@@ -1012,7 +1012,7 @@ impl Scheduler {
     ///
     /// Every frame driver goes through here — `HeadlessBinding::pump_frame` on its
     /// binding-local scheduler, and the desktop / android / wasm runners on
-    /// the realm's own owned `Scheduler` (`UiRealm.scheduler`, in flui-app —
+    /// the realm's own owned `UpdateScheduler` (`UiRealm.scheduler`, in flui-app —
     /// there is no process-global scheduler singleton any more) — so
     /// headless and production cannot drift.
     ///
@@ -1132,9 +1132,9 @@ impl Scheduler {
     /// # Example
     ///
     /// ```rust
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     /// let id = scheduler.schedule_frame_callback(Box::new(|_| {
     ///     println!("This won't be called!");
     /// }));
@@ -1220,7 +1220,7 @@ impl Scheduler {
     ///
     /// **Called by [`handle_begin_frame`](Self::handle_begin_frame), once per
     /// frame**. Previously, each binding called it directly. The real invariant is
-    /// *one mid-frame poll per frame, on the right `Scheduler` instance*. Moving
+    /// *one mid-frame poll per frame, on the right `UpdateScheduler` instance*. Moving
     /// the call into the scheduler enforces both structurally and lets the pipeline
     /// take the persistent slot it always semantically occupied.
     ///
@@ -1652,9 +1652,9 @@ impl Scheduler {
     /// # Example
     ///
     /// ```rust
-    /// use flui_scheduler::{AppLifecycleState, Scheduler};
+    /// use flui_scheduler::{AppLifecycleState, UpdateScheduler};
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     ///
     /// // Platform notifies app is going to background
     /// scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
@@ -1727,9 +1727,9 @@ impl Scheduler {
     /// ```rust
     /// use std::sync::Arc;
     ///
-    /// use flui_scheduler::{AppLifecycleState, Scheduler};
+    /// use flui_scheduler::{AppLifecycleState, UpdateScheduler};
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     ///
     /// let id = scheduler.add_lifecycle_state_listener(Arc::new(|state| {
     ///     println!("App lifecycle changed to: {}", state);
@@ -1786,9 +1786,9 @@ impl Scheduler {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     ///
-    /// async fn wait_for_frame(scheduler: &Scheduler) {
+    /// async fn wait_for_frame(scheduler: &UpdateScheduler) {
     ///     // Wait for the current/next frame to complete
     ///     let timing = scheduler.end_of_frame().await;
     ///
@@ -2047,9 +2047,9 @@ impl Scheduler {
     /// # Example
     ///
     /// ```rust
-    /// use flui_scheduler::Scheduler;
+    /// use flui_scheduler::UpdateScheduler;
     ///
-    /// let scheduler = Scheduler::new();
+    /// let scheduler = UpdateScheduler::new();
     ///
     /// scheduler.schedule_idle_callback(|| {
     ///     // Do background cleanup work
@@ -2107,13 +2107,13 @@ impl Scheduler {
     }
 }
 
-impl Default for Scheduler {
+impl Default for UpdateScheduler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TickerProvider for Scheduler {
+impl TickerProvider for UpdateScheduler {
     /// Vend an auto-scheduling [`Ticker`](crate::ticker::Ticker) attached to
     /// this scheduler.
     ///
@@ -2122,10 +2122,10 @@ impl TickerProvider for Scheduler {
     /// a transient frame callback on `start`/`unmute` and cancels it on
     /// `stop`/`mute`/`dispose`.
     ///
-    /// The vended ticker stores only a [`WeakScheduler`] (see
+    /// The vended ticker stores only a [`WeakUpdateScheduler`] (see
     /// [`Ticker::new_with_scheduler`](crate::ticker::Ticker::new_with_scheduler)) —
     /// no allocation beyond the ticker itself, and no strong reference back to
-    /// this scheduler's `SchedulerInner`. A strong `Arc<Scheduler>` here would
+    /// this scheduler's `SchedulerInner`. A strong `Arc<UpdateScheduler>` here would
     /// recreate a live cycle: this scheduler's own transient-callback queue
     /// stores the ticker's re-scheduling closure, which would then hold a
     /// strong ref back to the scheduler that owns that very queue.
@@ -2179,12 +2179,12 @@ impl SchedulerBuilder {
     }
 
     /// Build the scheduler
-    pub fn build(self) -> Scheduler {
+    pub fn build(self) -> UpdateScheduler {
         let task_queue = self
             .task_queue_capacity
             .map_or_else(TaskQueue::new, TaskQueue::with_capacity);
         let scheduler =
-            Scheduler::with_frame_duration_and_task_queue(self.frame_duration, task_queue);
+            UpdateScheduler::with_frame_duration_and_task_queue(self.frame_duration, task_queue);
 
         if let Some(refresh_rate) = self.vsync_refresh_rate {
             scheduler.set_vsync(VsyncScheduler::try_new(refresh_rate).expect("refresh > 0"));
@@ -2216,7 +2216,7 @@ mod tests {
     #[test]
     fn handle_begin_frame_polls_async_tasks_once_in_the_mid_frame_phase() {
         use std::sync::atomic::AtomicUsize;
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let observed = Arc::new(Mutex::new(None));
         let polls = Arc::new(AtomicUsize::new(0));
         let observed_for_task = Arc::clone(&observed);
@@ -2249,12 +2249,12 @@ mod tests {
     }
 
     /// The poll happens on **this** scheduler instance, not on a global. Headless
-    /// bindings own a binding-local `Scheduler`; production drives the singleton.
+    /// bindings own a binding-local `UpdateScheduler`; production drives the singleton.
     /// A driver step on the wrong instance would be a divergence between the two.
     #[test]
     fn each_scheduler_instance_polls_only_its_own_async_driver() {
-        let a = Scheduler::new();
-        let b = Scheduler::new();
+        let a = UpdateScheduler::new();
+        let b = UpdateScheduler::new();
         let polled_a = Arc::new(AtomicBool::new(false));
         let polled_a_task = Arc::clone(&polled_a);
         let _token = a.spawn_local(Box::pin(async move {
@@ -2278,7 +2278,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[should_panic(expected = "BUG: the async driver must not poll during build/layout/paint")]
     fn drive_async_tasks_panics_if_called_during_persistent_callbacks() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let probe = scheduler.clone();
         scheduler.add_persistent_frame_callback(Arc::new(move |_timing: &FrameTiming| {
             probe.drive_async_tasks();
@@ -2292,7 +2292,7 @@ mod tests {
     /// binding frame path is decoupled from the scheduler's phase machine.
     #[test]
     fn drive_async_tasks_is_callable_outside_a_scheduler_frame() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let polled = Arc::new(AtomicBool::new(false));
         let polled_for_task = Arc::clone(&polled);
         let _token = scheduler.spawn_local(Box::pin(async move {
@@ -2308,7 +2308,7 @@ mod tests {
     /// coalescing path (`frame_scheduled` + `on_frame_scheduled`).
     #[test]
     fn async_task_wake_requests_a_frame_through_the_scheduler_hook() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let wakes = Arc::new(AtomicU64::new(0));
         let wakes_for_hook = Arc::clone(&wakes);
         scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -2355,7 +2355,7 @@ mod tests {
     fn finish_async_pump_lets_a_later_independent_wake_refire_the_hook() {
         use std::task::Waker;
 
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let hook_fires = Arc::new(AtomicU64::new(0));
         let hook_fires_for_hook = Arc::clone(&hook_fires);
         scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -2402,7 +2402,7 @@ mod tests {
     /// driver step does not drain or reorder it.
     #[test]
     fn drive_async_tasks_does_not_disturb_microtasks() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let ran = Arc::new(AtomicBool::new(false));
         let ran_for_task = Arc::clone(&ran);
         scheduler.schedule_microtask(Box::new(move || {
@@ -2425,7 +2425,7 @@ mod tests {
 
     #[test]
     fn test_scheduler_phase_lifecycle() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 
         let vsync = Instant::now();
@@ -2446,7 +2446,7 @@ mod tests {
 
     #[test]
     fn test_transient_callback_receives_vsync() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let received_time = Arc::new(Mutex::new(None));
 
         let rt = Arc::clone(&received_time);
@@ -2471,7 +2471,7 @@ mod tests {
     fn frame_scheduled_hook_fires_once_per_transition() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let fired = Arc::new(AtomicUsize::new(0));
         let fired_hook = Arc::clone(&fired);
         scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -2500,7 +2500,7 @@ mod tests {
 
     #[test]
     fn test_microtask_execution() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let executed = Arc::new(Mutex::new(false));
 
         let e = Arc::clone(&executed);
@@ -2514,7 +2514,7 @@ mod tests {
 
     #[test]
     fn test_scheduler_frame_lifecycle() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         assert!(!scheduler.is_frame_scheduled());
 
         scheduler.request_frame();
@@ -2527,7 +2527,7 @@ mod tests {
 
     #[test]
     fn test_task_execution_priority() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let counter = Arc::new(Mutex::new(Vec::new()));
 
         let c1 = Arc::clone(&counter);
@@ -2549,7 +2549,7 @@ mod tests {
 
     #[test]
     fn test_post_frame_callback() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let called = Arc::new(Mutex::new(false));
 
         let c = Arc::clone(&called);
@@ -2563,7 +2563,7 @@ mod tests {
 
     #[test]
     fn test_persistent_callback() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let count = Arc::new(Mutex::new(0));
 
         let c = Arc::clone(&count);
@@ -2580,7 +2580,7 @@ mod tests {
 
     #[test]
     fn test_frame_count() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         assert_eq!(scheduler.frame_count(), 0);
 
@@ -2603,7 +2603,7 @@ mod tests {
 
     #[test]
     fn test_warm_up_frame() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         assert_eq!(scheduler.frame_count(), 0);
 
@@ -2617,7 +2617,7 @@ mod tests {
 
     #[test]
     fn test_frame_duration_setting() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         scheduler.set_frame_duration(FrameDuration::FPS_144);
         assert!((scheduler.target_fps() as i32 - 144).abs() <= 1);
@@ -2683,7 +2683,7 @@ mod tests {
 
     #[test]
     fn test_scheduler_frame_skip_policy() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         assert_eq!(scheduler.frame_skip_policy(), FrameSkipPolicy::CatchUp);
 
@@ -2696,7 +2696,7 @@ mod tests {
 
     #[test]
     fn test_skipped_frame_counter() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         assert_eq!(scheduler.skipped_frame_count(), 0);
 
@@ -2711,7 +2711,7 @@ mod tests {
 
     #[test]
     fn test_cancel_transient_callback() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let called = Arc::new(Mutex::new(false));
 
         let c = Arc::clone(&called);
@@ -2735,7 +2735,7 @@ mod tests {
         // frame for the lifetime of the application." FLUI previously
         // diverged with `remove_persistent_frame_callback`; reverted to
         // strict Flutter contract.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let count = Arc::new(Mutex::new(0));
 
         let c = Arc::clone(&count);
@@ -2754,7 +2754,7 @@ mod tests {
     fn test_post_frame_callback_fires_exactly_once() {
         // Flutter parity: binding.dart:802 "Post-frame callbacks ... are
         // called exactly once" and cannot be cancelled before they fire.
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let called = Arc::new(Mutex::new(0));
 
         let c = Arc::clone(&called);
@@ -2771,7 +2771,7 @@ mod tests {
 
     #[test]
     fn test_callback_id_uniqueness() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         let id1 = scheduler.schedule_frame_callback(Box::new(|_| {}));
         let id2 = scheduler.schedule_frame_callback(Box::new(|_| {}));
@@ -2782,7 +2782,7 @@ mod tests {
 
     #[test]
     fn test_cancel_nonexistent_callback() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         // Create an ID for a callback
         let id = scheduler.schedule_frame_callback(Box::new(|_| {}));
@@ -2798,7 +2798,7 @@ mod tests {
 
     #[test]
     fn test_lifecycle_state_default() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         // Default state should be Resumed
         assert_eq!(scheduler.lifecycle_state(), AppLifecycleState::Resumed);
@@ -2807,7 +2807,7 @@ mod tests {
 
     #[test]
     fn test_lifecycle_state_change() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
         assert_eq!(scheduler.lifecycle_state(), AppLifecycleState::Hidden);
@@ -2820,7 +2820,7 @@ mod tests {
 
     #[test]
     fn test_lifecycle_listener() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let received_state = Arc::new(Mutex::new(None));
 
         let rs = Arc::clone(&received_state);
@@ -2843,7 +2843,7 @@ mod tests {
 
     #[test]
     fn test_lifecycle_listener_not_called_on_same_state() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let call_count = Arc::new(Mutex::new(0));
 
         let cc = Arc::clone(&call_count);
@@ -2866,7 +2866,7 @@ mod tests {
     /// otherwise a resumed app never wakes an idle event loop.
     #[test]
     fn lifecycle_reenable_edge_schedules_exactly_one_frame() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let wakes = Arc::new(AtomicU64::new(0));
         let wakes_for_hook = Arc::clone(&wakes);
         scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -2895,7 +2895,7 @@ mod tests {
     /// (re)scheduled by the lifecycle handler itself.
     #[test]
     fn lifecycle_resumed_to_inactive_schedules_nothing() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let wakes = Arc::new(AtomicU64::new(0));
         let wakes_for_hook = Arc::clone(&wakes);
         scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -2912,7 +2912,7 @@ mod tests {
     /// this test targets — no frame (re)scheduled either.
     #[test]
     fn lifecycle_repeated_same_state_schedules_nothing() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let wakes = Arc::new(AtomicU64::new(0));
         let wakes_for_hook = Arc::clone(&wakes);
         scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -2959,7 +2959,7 @@ mod tests {
 
     #[test]
     fn test_end_of_frame_future_creation() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         // Should be able to create multiple futures
         let _future1 = scheduler.end_of_frame();
@@ -2973,7 +2973,7 @@ mod tests {
     fn test_end_of_frame_completes_after_frame() {
         use std::task::Waker;
 
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         // Create a future
         let mut future = scheduler.end_of_frame();
@@ -3011,7 +3011,7 @@ mod tests {
     fn test_multiple_waiters_notified() {
         use std::task::Waker;
 
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
 
         let mut cx = Context::from_waker(Waker::noop());
 
@@ -3042,7 +3042,7 @@ mod tests {
 
     #[test]
     fn test_idle_callback_execution() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let called = Arc::new(Mutex::new(false));
 
         let c = Arc::clone(&called);
@@ -3061,7 +3061,7 @@ mod tests {
 
     #[test]
     fn test_idle_callbacks_skip_when_frame_scheduled() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let called = Arc::new(Mutex::new(false));
 
         let c = Arc::clone(&called);
@@ -3078,7 +3078,7 @@ mod tests {
 
     #[test]
     fn test_idle_callbacks_skip_when_hidden() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let called = Arc::new(Mutex::new(false));
 
         let c = Arc::clone(&called);
@@ -3095,7 +3095,7 @@ mod tests {
 
     #[test]
     fn test_multiple_idle_callbacks() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let counter = Arc::new(Mutex::new(0));
 
         for _ in 0..5 {
@@ -3111,18 +3111,18 @@ mod tests {
     }
 
     // =========================================================================
-    // Teardown pins (scheduler realm-ownership) — `WeakScheduler` must
+    // Teardown pins (scheduler realm-ownership) — `WeakUpdateScheduler` must
     // fail closed once its backing scheduler's last strong reference drops,
     // never observe stale state, and never panic.
     // =========================================================================
 
-    /// After every strong `Scheduler` reference is dropped, a retained
-    /// `WeakScheduler::upgrade()` must return `None` — this is the whole
+    /// After every strong `UpdateScheduler` reference is dropped, a retained
+    /// `WeakUpdateScheduler::upgrade()` must return `None` — this is the whole
     /// point of Q1's shape: a realm's teardown must be observable by every
     /// handle it vended, not just its own owner.
     #[test]
     fn weak_scheduler_upgrade_returns_none_after_the_scheduler_drops() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let weak = scheduler.downgrade();
 
         assert!(
@@ -3134,7 +3134,7 @@ mod tests {
 
         assert!(
             weak.upgrade().is_none(),
-            "WeakScheduler::upgrade() must return None once the backing \
+            "WeakUpdateScheduler::upgrade() must return None once the backing \
              scheduler's last strong reference is gone"
         );
     }
@@ -3145,7 +3145,7 @@ mod tests {
     /// let the scheduler's inner allocation actually go away.
     #[test]
     fn ticker_does_not_keep_a_dropped_schedulers_inner_state_alive() {
-        let scheduler = Scheduler::new();
+        let scheduler = UpdateScheduler::new();
         let weak = scheduler.downgrade();
         let mut ticker = crate::ticker::Ticker::new_with_scheduler(&scheduler);
         let _future = ticker.start(|_| {});

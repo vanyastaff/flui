@@ -259,13 +259,13 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_animation::{AnimationController, Scheduler};
+    use flui_animation::{AnimationController, UpdateScheduler};
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::SliverProtocol;
     use std::time::Duration;
 
     fn controller(ms: u64) -> AnimationController {
-        AnimationController::new(Duration::from_millis(ms), &Scheduler::new())
+        AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
     }
 
     fn render_at(opacity: f32) -> RenderSliverAnimatedOpacity {
