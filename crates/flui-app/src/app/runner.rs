@@ -581,6 +581,28 @@ impl PlatformToUi {
                 tracing::trace!(?size, scale_factor, "realm resize committed");
             }
             Self::WindowFocus(focused) => {
+                // A `false` signal from a presentation that is NOT this
+                // realm's currently ACTIVE one (`FocusCoordinator`) is a
+                // stale, non-authoritative consequence of focus having
+                // already moved to a DIFFERENT presentation of this SAME
+                // realm (the exact scenario a realm hosting more than one
+                // presentation creates) -- applying it to the `focused`
+                // aggregate (still loop-scoped, not yet per-realm; see
+                // `app-runtime-composition-host`'s own documented
+                // limitation) would incorrectly suspend the WHOLE realm
+                // while a sibling window still holds OS focus. Only the
+                // ACTIVE presentation's own focus-loss is authoritative;
+                // every focus GAIN always is, so this check only ever
+                // applies to `focused == false`.
+                if !focused && !realm.is_active_presentation(presentation_id) {
+                    tracing::trace!(
+                        { flui_foundation::diagnostics::PRESENTATION_ID } =
+                            presentation_id.as_u64(),
+                        "dropping a stale WindowFocus(false) from a presentation that is not \
+                         this realm's currently active one"
+                    );
+                    return;
+                }
                 let (old, new) = APP_RUNTIME.with(|slot| {
                     let mut state = slot.borrow_mut();
                     let old = derive_lifecycle_state(state.visible, state.focused);
@@ -1465,6 +1487,16 @@ enum InstallPresentationError {
     /// stated gap rather than a defer-to-idle path.
     #[error("a dispatch or hot-restart visit is in flight on this thread")]
     DispatchInFlight,
+    /// `dispatcher`'s realm is live, but `dispatcher.address` itself is no
+    /// longer registered in `WindowRegistry` — the presentation it was
+    /// minted for closed since, even though a DIFFERENT presentation kept
+    /// the realm alive. The same authorization check
+    /// `dispatch_platform_realm` runs (`registry.contains_address`), applied
+    /// here too: a caller must hold a dispatcher whose exact address is
+    /// CURRENTLY live to authorize installing another presentation
+    /// alongside it, not merely one whose realm happens to still exist.
+    #[error("the presentation this dispatcher was minted for is no longer registered")]
+    StalePresentation,
     /// `window`'s id was already registered to a (possibly different)
     /// address — practically unreachable for a freshly opened window, but
     /// a real, distinct failure mode from `RealmUnavailable`: the realm
@@ -1498,7 +1530,12 @@ enum InstallPresentationError {
 /// # Errors
 ///
 /// [`InstallPresentationError::RealmUnavailable`] if `dispatcher`'s realm no
-/// longer exists. [`InstallPresentationError::WindowAlreadyMapped`] if
+/// longer exists. [`InstallPresentationError::StalePresentation`] if the
+/// realm survives but `dispatcher.address` itself is no longer a live
+/// registered address (its own presentation closed, even though a sibling
+/// kept the realm alive) — the same authorization
+/// `dispatch_platform_realm` requires of every dispatched task, applied to
+/// this mutation too. [`InstallPresentationError::WindowAlreadyMapped`] if
 /// `window`'s id is somehow already registered (practically unreachable: a
 /// freshly opened window has a fresh id by construction) — nothing is
 /// installed into the forest in this case.
@@ -1543,9 +1580,30 @@ fn install_presentation_alongside(
             );
             return Err(InstallPresentationError::DispatchInFlight);
         }
-        let Some(realm_slot) = state.realms.get_mut(&realm_id) else {
+        if !state.realms.contains_key(&realm_id) {
             return Err(InstallPresentationError::RealmUnavailable);
-        };
+        }
+        // Authorization check (mirrors `dispatch_platform_realm`'s own):
+        // the realm existing is not enough -- `dispatcher.address` itself
+        // must still be a LIVE registered address. A realm survives its
+        // sole non-primary presentation closing (a sibling keeps it
+        // alive), so a caller could otherwise still hold a dispatcher for
+        // that now-closed presentation and use it to authorize installing
+        // yet another one alongside -- checked BEFORE borrowing
+        // `state.realms` mutably below, exactly like `dispatch_platform_
+        // realm` checks `state.registry` before `state.realms.get_mut`.
+        if !state.registry.contains_address(dispatcher.address) {
+            tracing::debug!(
+                ?dispatcher,
+                "rejecting install_presentation_alongside: the dispatcher's own presentation is \
+                 no longer registered, even though its realm survives"
+            );
+            return Err(InstallPresentationError::StalePresentation);
+        }
+        let realm_slot = state
+            .realms
+            .get_mut(&realm_id)
+            .expect("BUG: presence just checked above via contains_key");
         let Some(realm) = realm_slot.realm.as_mut() else {
             return Err(InstallPresentationError::RealmUnavailable);
         };
@@ -4337,6 +4395,21 @@ mod realm_dispatch_tests {
                     "WindowFocus(false) must never move the active presentation, regardless \
                      of which presentation it was addressed to"
                 );
+                // The realm-wide lifecycle aggregate must ALSO stay
+                // Resumed: A's focus loss is a normal consequence of focus
+                // having already moved to B (a sibling presentation of
+                // this SAME realm), not a sign that the realm itself lost
+                // focus -- B still holds it. Before the fix, this
+                // non-active-presentation `WindowFocus(false)` flipped the
+                // still loop-scoped `focused` aggregate unconditionally,
+                // incorrectly suspending the whole realm while B was
+                // still focused.
+                assert_eq!(
+                    realm.scheduler().lifecycle_state(),
+                    AppLifecycleState::Resumed,
+                    "a WindowFocus(false) from a non-active presentation must never suspend \
+                     the realm while a sibling presentation still holds focus"
+                );
             })),
         )
         .expect("frame task dispatches");
@@ -4384,6 +4457,73 @@ mod realm_dispatch_tests {
             Some(1),
             "a registration failure must leave the forest exactly as it was -- the \
              assembled-but-unregistered presentation must never have been installed"
+        );
+
+        teardown_platform_realm();
+    }
+
+    /// A `RealmDispatcher` for a presentation that has since CLOSED must be
+    /// refused, even though its realm survives (a sibling presentation kept
+    /// it alive) -- the same authorization `dispatch_platform_realm`
+    /// requires of every dispatched task. Before this fix,
+    /// `install_presentation_alongside` checked only realm existence, so a
+    /// caller still holding A's dispatcher after A closed could use it to
+    /// install a THIRD presentation alongside the survivor.
+    ///
+    /// If reverted (the `registry.contains_address` check removed): this
+    /// fails -- the install succeeds instead of returning
+    /// `StalePresentation`, and `presentation_count()` observes `2` instead
+    /// of `1`.
+    #[test]
+    fn install_presentation_alongside_refuses_a_stale_dispatcher_even_though_its_realm_survives() {
+        // One shared platform instance for every window -- see
+        // `install_two_test_realms`'s doc for why two independent
+        // `headless_platform()` calls would risk an aliased window id.
+        let platform = flui_platform::headless_platform();
+        let window_p = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window p");
+        let window_a = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window a");
+        let window_c = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window c");
+
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        let dispatcher_p = install_platform_realm(realm, &window_p);
+        let dispatcher_a = install_presentation_alongside(dispatcher_p, &window_a)
+            .expect("A installs alongside P with a real window mapping");
+        let a_id = dispatcher_a.address.presentation_id;
+
+        // Close A (non-primary) -- P survives, so the realm itself is
+        // still perfectly live.
+        close_presentation(dispatcher_p, a_id).expect("A closes through the real dispatch seam");
+
+        // `dispatcher_a` is now stale: its own address is no longer
+        // registered, even though `dispatcher_a.address.realm_id` still
+        // names a live realm.
+        let result = install_presentation_alongside(dispatcher_a, &window_c);
+        assert!(
+            matches!(result, Err(InstallPresentationError::StalePresentation)),
+            "a dispatcher for a closed presentation must be refused as StalePresentation, even \
+             though its realm survives, got {result:?}"
+        );
+
+        let count = Rc::new(Cell::new(None));
+        let count_in_task = Rc::clone(&count);
+        dispatch_platform_realm(
+            dispatcher_p,
+            RealmTask::Frame(Box::new(move |realm| {
+                count_in_task.set(Some(realm.presentation_count()));
+            })),
+        )
+        .expect("frame task dispatches");
+        assert_eq!(
+            count.get(),
+            Some(1),
+            "the rejected install must never have installed a third presentation -- only P \
+             survives"
         );
 
         teardown_platform_realm();

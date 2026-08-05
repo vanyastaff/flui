@@ -934,12 +934,23 @@ impl UiRealm {
     ///
     /// `window` becomes this presentation's own native window (cursor,
     /// haptics, redraw-poke — see `PresentationState::new`'s wiring).
+    /// Its pipeline is seeded with `window.scale_factor()` before
+    /// construction — the same DPR-before-first-frame ordering
+    /// [`Self::construct`] uses for this realm's own primary presentation
+    /// (there, the caller reads the window's scale factor and passes it in
+    /// as `device_pixel_ratio`; here, `window` is already in hand, so this
+    /// method reads it directly instead of requiring every caller to
+    /// remember to). Without this, a non-primary presentation's
+    /// `RenderView` and first frame would disagree with its OWN window's
+    /// actual scale — silently defaulting to `1.0` regardless of what
+    /// `window.scale_factor()` actually reports.
     pub(crate) fn assemble_presentation(
         &self,
         window: Arc<dyn PlatformWindow>,
     ) -> PresentationState {
         let (_, presentation_id) = super::runtime::next_identity();
         let pipeline = PipelineCell::new(PipelineOwner::new());
+        pipeline.with_mut(|owner| owner.set_device_pixel_ratio(window.scale_factor() as f32));
         PresentationState::new(
             presentation_id,
             pipeline,
@@ -1001,6 +1012,20 @@ impl UiRealm {
     #[cfg(test)]
     pub(crate) fn active_presentation_for_test(&self) -> PresentationId {
         self.focus_coordinator.active()
+    }
+
+    /// Whether `id` is this realm's currently ACTIVE presentation
+    /// ([`FocusCoordinator`]). Production reader:
+    /// `runner.rs`'s `PlatformToUi::WindowFocus` handling uses this to tell
+    /// an authoritative focus-loss (the active presentation's own window
+    /// losing OS focus) apart from a stale one (a DIFFERENT, non-active
+    /// presentation of this same realm reporting focus loss, a normal
+    /// consequence of focus having already moved elsewhere within this
+    /// realm) — see that call site's own doc for why the distinction
+    /// matters for the realm-wide lifecycle aggregate.
+    #[must_use]
+    pub(crate) fn is_active_presentation(&self, id: PresentationId) -> bool {
+        self.focus_coordinator.active() == id
     }
 
     /// This realm's own scheduler — the strong root. `runner.rs`'s
@@ -6071,6 +6096,96 @@ mod tests {
                 calls_b.load(AtomicOrdering::Relaxed),
                 1,
                 "dirtying B's own pipeline must poke B's own window"
+            );
+        }
+    }
+
+    // ========================================================================
+    // Presentation DPR seeding — a non-primary presentation's pipeline must
+    // be seeded with ITS OWN window's scale factor before construction, the
+    // same DPR-before-first-frame ordering the primary path already gets.
+    // ========================================================================
+    mod presentation_dpr_seeding {
+        use flui_platform::CursorIcon;
+        use flui_platform::traits::{CursorError, WindowId};
+        use flui_types::geometry::{DevicePixels, Pixels};
+
+        use super::*;
+
+        struct ScaledTestWindow {
+            id: WindowId,
+            scale_factor: f64,
+        }
+
+        impl PlatformWindow for ScaledTestWindow {
+            fn id(&self) -> WindowId {
+                self.id
+            }
+
+            fn physical_size(&self) -> Size<DevicePixels> {
+                Size::default()
+            }
+
+            fn logical_size(&self) -> Size<Pixels> {
+                Size::default()
+            }
+
+            fn scale_factor(&self) -> f64 {
+                self.scale_factor
+            }
+
+            fn request_redraw(&self) {}
+
+            fn is_focused(&self) -> bool {
+                false
+            }
+
+            fn is_visible(&self) -> bool {
+                true
+            }
+
+            fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
+                Ok(())
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        /// A non-primary presentation's pipeline must be seeded with ITS
+        /// OWN window's `scale_factor()` before construction — the same
+        /// DPR-before-first-frame ordering `UiRealm::construct` already
+        /// gives this realm's primary presentation (there, the caller reads
+        /// the window's scale factor and passes it in explicitly; here,
+        /// `assemble_presentation` already holds the window, so it reads
+        /// the value directly instead).
+        ///
+        /// If reverted (the `set_device_pixel_ratio` seeding call removed
+        /// from `assemble_presentation`): this fails — the readback
+        /// observes the `PipelineOwner::new()` default (`1.0`) instead of
+        /// the window's real `2.5`.
+        #[test]
+        fn non_primary_presentation_pipeline_is_seeded_with_its_own_windows_scale_factor() {
+            let mut realm = UiRealm::for_test();
+            let window_b: Arc<dyn PlatformWindow> = Arc::new(ScaledTestWindow {
+                id: WindowId(42),
+                scale_factor: 2.5,
+            });
+            let presentation_b = realm.assemble_presentation(window_b);
+            let b_id = realm.install_presentation(presentation_b);
+
+            let dpr = realm
+                .presentations
+                .get(b_id)
+                .expect("B installed")
+                .pipeline()
+                .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio);
+
+            assert_eq!(
+                dpr, 2.5,
+                "B's pipeline must be seeded with its own window's scale factor before \
+                 construction, not the PipelineOwner default"
             );
         }
     }
