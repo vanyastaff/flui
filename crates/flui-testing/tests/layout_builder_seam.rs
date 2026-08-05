@@ -6,14 +6,12 @@
 //! `BuildOwner::run_frame_with_layout_builders`, exactly one of the two would
 //! fail, which is the divergence this pair exists to catch.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::{ElementId, RenderId};
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_view::{BuildOwner, tree::ElementTree};
-use parking_lot::RwLock;
 
 /// A frame must drive `service_layout_builders`, which prunes entries whose
 /// element and render node do not exist.
@@ -32,7 +30,7 @@ fn headless_pump_frame_runs_the_layout_builder_seam() {
     let mut binding = HeadlessBinding::with_tree(
         build_owner,
         ElementTree::new(),
-        Arc::new(RwLock::new(PipelineOwner::new())),
+        PipelineCell::new(PipelineOwner::new()),
     );
 
     binding.pump_frame(Duration::from_millis(16));
@@ -52,7 +50,7 @@ fn headless_pump_frame_with_no_layout_builders_is_inert() {
     let mut binding = HeadlessBinding::with_tree(
         BuildOwner::new(),
         ElementTree::new(),
-        Arc::new(RwLock::new(PipelineOwner::new())),
+        PipelineCell::new(PipelineOwner::new()),
     );
 
     binding.pump_frame(Duration::from_millis(16));
