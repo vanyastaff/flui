@@ -397,30 +397,66 @@ FIRST window already registered). An earlier revision called `WindowOpen::\
 try_ready` directly and surfaced `Pending` as a hard error, so the advertised \
 "open a second window at runtime" flow could never work on the real desktop \
 backend it is meant for. `open_secondary_window_impl` now matches both arms: \
-`Ready` installs inline (unchanged); `Pending` is accepted and its \
-completion is spawned on the first realm hosted on this thread's own \
-`flui_scheduler::AsyncDriver` (`spawn_pending_secondary_window_completion`) \
--- never a hand-rolled busy-loop: the `PendingWindow`'s own wake (fired when \
-the owner lane delivers) requests a fresh frame, and that frame's \
-`Scheduler::drive_async_tasks` polls the task to completion, calling the SAME \
-`finish_open_secondary_window` the `Ready` arm calls inline, so both arms \
-install and wire a window identically. A `Pending` completion's own failure \
-(the resolve itself failing, or `finish_open_secondary_window` failing on the \
-resolved window) is traced, never silently dropped. Tested end-to-end -- \
-Pending -> resolved -> both-window close/exit -- on the headless backend's \
-own new deferred-open test seam (`HeadlessPlatform:: \
-enable_deferred_window_open`, `HeadlessDeferredWindowOpens::resolve_next`; \
-`crates/flui-platform`'s own `deferred_window_open_resolves_via_the_pending_ \
-arm_like_the_real_winit_owner_lane` pins the mechanism in isolation, \
-`crates/flui-app`'s `open_secondary_window_completes_through_the_pending_ \
-arm_like_the_real_winit_owner_lane` pins the full embedder-seam flow). Named \
-residual: this proves the completion seam generically, not a full winit \
-event-loop integration test -- no CI gate exercises the real winit backend \
-end-to-end at all (see `flui-platform`'s own evidence-must-live-outside-the- \
-test-gate constraint), so confidence that `WinitOwnerHooks::open_owner_ \
-window`'s own `Pending` construction and its lane's reply-delivery path \
-compose correctly with this completion is still design-level, not test-level \
--- named honestly rather than silently assumed covered.
+`Ready` installs inline (unchanged, calling `finish_open_secondary_window` \
+directly); `Pending` is accepted and its completion is spawned on the first \
+realm hosted on this thread's own `flui_scheduler::AsyncDriver` \
+(`spawn_pending_secondary_window_completion`) -- never a hand-rolled \
+busy-loop: the `PendingWindow`'s own wake (fired when the owner lane \
+delivers) requests a fresh frame, and that frame's `Scheduler::\
+drive_async_tasks` polls the task to completion.
+
+A first revision of this fix had the spawned future call \
+`finish_open_secondary_window` directly from inside its own poll -- which \
+review caught as broken for `WindowPolicy::SharedRealm` specifically: \
+`Scheduler::drive_async_tasks` always runs from INSIDE a dispatched \
+`RealmTask::Frame` (`dispatched_realm_id` is `Some` for the whole checkout), \
+and `install_presentation_alongside` (SharedRealm's own install primitive) \
+has no defer-to-idle queue of its own -- it hard-refuses \
+(`InstallPresentationError::DispatchInFlight`, a `debug_assert!` panic in \
+debug builds) while a dispatch is in flight, which a `Pending` completion \
+always is. `SeparateRealms` happened to work anyway (`install_realm_\
+alongside` already defers through `AppRuntime::request_realm_install`'s own \
+queue), masking that `SharedRealm` could never complete on the real desktop \
+backend this whole fix targets. The corrected shape: the spawned future \
+never calls `finish_open_secondary_window` itself -- it only enqueues the \
+resolved `(WindowPolicy, window)` pair onto a new thread-local queue \
+(`PENDING_SECONDARY_WINDOW_COMPLETIONS`), drained only once this thread's \
+dispatch/hot-restart-visit checkout state clears (`dispatch_platform_realm`'s \
+own tail, mirroring where `AppRuntime`'s own deferred realm-map mutations \
+already apply; `for_each_installed_realm`'s tail drains it too, for \
+symmetry, though no production driver visits every realm yet). One \
+completion path (`finish_open_secondary_window`) for both `WindowPolicy` \
+variants -- only the trigger point differs between `Ready` (inline) and \
+`Pending` (deferred to the enclosing dispatch's own tail) -- so "both arms \
+install and wire identically" is genuinely true now, not merely for the \
+policy that happened to already have a queue.
+
+Tested end-to-end -- Pending -> resolved -> both-window close/exit -- on \
+the headless backend's own deferred-open test seam (`HeadlessPlatform::\
+enable_deferred_window_open`, `HeadlessDeferredWindowOpens::resolve_next`) \
+for BOTH policies: `crates/flui-platform`'s own `deferred_window_open_\
+resolves_via_the_pending_arm_like_the_real_winit_owner_lane` pins the \
+mechanism in isolation; `crates/flui-app`'s `open_secondary_window_\
+completes_through_the_pending_arm_like_the_real_winit_owner_lane` \
+(`SeparateRealms`) and `shared_realm_completes_through_the_pending_arm_\
+like_the_real_winit_owner_lane` (`SharedRealm` -- the harder case this \
+correction targets, since its own install target IS the realm whose \
+dispatch checkout the completion's poll runs inside of) each pin the full \
+embedder-seam flow; `dead_driver_realm_before_pending_resolution_\
+disclaims_cleanly_without_zombie_installing` additionally pins the \
+fail-closed path when the driver realm dies before its own pending \
+completion resolves (the captured `PendingWindow` drops along with the \
+realm's `AsyncDriver`, disclaiming the request rather than zombie-installing \
+anything later). A `Pending` completion's own failure (the resolve itself \
+failing, or `finish_open_secondary_window` failing on the resolved window) \
+is traced, never silently dropped. Named residual: this proves the \
+completion seam generically, not a full winit event-loop integration test \
+-- no CI gate exercises the real winit backend end-to-end at all (see \
+`flui-platform`'s own evidence-must-live-outside-the-test-gate constraint), \
+so confidence that `WinitOwnerHooks::open_owner_window`'s own `Pending` \
+construction and its lane's reply-delivery path compose correctly with this \
+completion is still design-level, not test-level -- named honestly rather \
+than silently assumed covered.
 
 **Named, deliberately out-of-scope residual:** a window `open_secondary_ \
 window` opens shows no widget content and never renders a frame. Two \
@@ -563,6 +599,9 @@ evidence = [
     { kind = "symbol", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "pub struct HeadlessDeferredWindowOpens" },
     { kind = "test", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn deferred_window_open_resolves_via_the_pending_arm_like_the_real_winit_owner_lane" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn drain_pending_secondary_window_completions" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing" },
 ]
 
 [[contract]]

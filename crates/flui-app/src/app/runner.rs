@@ -2060,6 +2060,15 @@ fn dispatch_platform_realm(
     // Destructors may re-enter platform/framework code — drop only after the
     // TLS borrow above has released.
     drop(removed);
+    // Applies any `open_secondary_window` Pending-arm completion this
+    // realm's own task resolved (see `drain_pending_secondary_window_
+    // completions`'s own doc for why this must run only now, after the
+    // checkout state above is cleared) — same "drain regardless of panic"
+    // discipline as `drain_pending_realm_mutations` above, for the same
+    // reason: a resolved secondary window should not sit unwired forever
+    // just because this dispatch's own task panicked for an unrelated
+    // reason.
+    drain_pending_secondary_window_completions();
     if let Err(payload) = result {
         std::panic::resume_unwind(payload);
     }
@@ -2184,6 +2193,13 @@ fn for_each_installed_realm(mut f: impl FnMut(&super::ui_realm::UiRealm)) {
         state.drain_pending_realm_mutations()
     });
     drop(removed);
+    // Same rationale as `dispatch_platform_realm`'s own tail: a visited
+    // realm's frame callback may have resolved an `open_secondary_window`
+    // Pending completion via `Scheduler::drive_async_tasks`, which cannot
+    // complete mid-visit for the same reason it cannot complete
+    // mid-dispatch (`iterating_all_realms` holds this thread's checkout
+    // state just as `dispatched_realm_id` does).
+    drain_pending_secondary_window_completions();
 
     if let Some(payload) = panic_payload {
         std::panic::resume_unwind(payload);
@@ -4290,6 +4306,296 @@ mod realm_dispatch_tests {
                 quit_calls.load(Ordering::SeqCst),
                 1,
                 "closing the LAST window must allow the exit exactly once"
+            );
+
+            Ok(())
+        }));
+        ready.expect("on_ready must not fail");
+
+        teardown_platform_realm();
+        drop(clear_guard);
+    }
+
+    /// The missing Pending-arm matrix cell: `WindowPolicy::SharedRealm` must
+    /// ALSO complete through the Pending arm, not just `SeparateRealms`
+    /// above — the harder case. `finish_open_secondary_window`'s
+    /// `SharedRealm` branch installs a PRESENTATION into the driver realm
+    /// itself, the exact realm `Scheduler::drive_async_tasks` is called
+    /// from INSIDE a dispatch of (`dispatched_realm_id` is `Some` for the
+    /// whole poll) — and `install_presentation_alongside` has no
+    /// defer-to-idle queue of its own; it hard-refuses with
+    /// `InstallPresentationError::DispatchInFlight` while a dispatch is in
+    /// flight. `spawn_pending_secondary_window_completion`'s own
+    /// deferred-completion queue (drained only once the driver realm's
+    /// dispatch checkout clears, in `dispatch_platform_realm`'s own tail) is
+    /// what makes this arm succeed at all; reverting that deferral
+    /// (completing inline from inside the poll again, as an earlier
+    /// revision did) reproduces exactly the `DispatchInFlight`
+    /// refusal/panic this test exists to rule out.
+    #[test]
+    fn shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use flui_platform::traits::Platform;
+
+        let clear_guard = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let deferred = platform.enable_deferred_window_open();
+        let quit_calls = Arc::new(AtomicUsize::new(0));
+        let quit_calls_for_on_ready = Arc::clone(&quit_calls);
+
+        let ready = Box::new(platform).run(Box::new(move |owner| {
+            install_owner_platform(owner);
+            install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
+
+            let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
+            with_owner_platform(|owner| {
+                owner.shared().on_quit(Box::new(move || {
+                    quit_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                }));
+            });
+
+            // First window: also deferred (see the SeparateRealms probe
+            // above for why) -- resolve it the same way real code resolving
+            // a Pending open would.
+            let mut pending_a = match with_owner_platform(|owner| {
+                owner.open_window(flui_platform::WindowOptions::default())
+            })
+            .expect("BUG: install_owner_platform just ran above")
+            .expect("deferred mode still accepts the request")
+            {
+                flui_platform::WindowOpen::Pending(pending) => pending,
+                flui_platform::WindowOpen::Ready(_) => {
+                    panic!("deferred mode must return Pending, not Ready")
+                }
+            };
+            let resolved_a = deferred
+                .resolve_next()
+                .expect("window A's request is the only one pending");
+            let window_a = pending_a
+                .try_take()
+                .expect("resolve_next delivers synchronously")
+                .expect("mock window creation cannot fail");
+            assert!(
+                Arc::ptr_eq(&resolved_a, &window_a),
+                "resolve_next's own return value must be the SAME window it delivered \
+                 through the PendingWindow"
+            );
+
+            let dispatcher_a =
+                install_platform_realm(super::super::ui_realm::UiRealm::for_test(), &window_a);
+            window_a.on_close(Box::new(move || {
+                close_this_window(dispatcher_a);
+            }));
+
+            // Window B: SharedRealm -- installs a second PRESENTATION of
+            // realm A, never a second realm.
+            let opened =
+                open_secondary_window_impl(AppConfig::default(), WindowPolicy::SharedRealm)
+                    .expect("the Pending arm must be accepted, not treated as an error");
+            assert!(
+                opened.is_none(),
+                "a Pending open must return None -- the install completes asynchronously, \
+                 not inline"
+            );
+
+            let presentation_count_before = APP_RUNTIME.with(|slot| {
+                slot.borrow()
+                    .realms
+                    .get(&dispatcher_a.address.realm_id)
+                    .and_then(|realm_slot| realm_slot.realm.as_ref())
+                    .expect("realm A is resident")
+                    .presentation_count()
+            });
+            assert_eq!(
+                presentation_count_before, 1,
+                "nothing must be installed for window B before its Pending open resolves"
+            );
+
+            // Resolve the deferred open -- delivers the mock window through
+            // the ClaimSlot and hands the SAME window handle back here, so
+            // this test can drive a REAL platform-level close on it later.
+            let window_b = deferred
+                .resolve_next()
+                .expect("exactly one request (window B's) is pending at this point");
+
+            // Drive the driver realm's (realm A's) own frame pump. THIS is
+            // the exact call that used to panic (`debug_assert!` in
+            // `install_presentation_alongside`) / return `DispatchInFlight`
+            // (release builds) before the completion was deferred to this
+            // dispatch's own tail instead of running inline from inside the
+            // poll.
+            dispatch_platform_realm(
+                dispatcher_a,
+                RealmTask::Frame(Box::new(|realm| {
+                    realm.scheduler().drive_async_tasks();
+                })),
+            )
+            .expect("realm A dispatches its own frame pump");
+
+            assert_eq!(
+                APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
+                1,
+                "SharedRealm must route into the SAME realm as the primary, never install a \
+                 second one"
+            );
+            let presentation_count_after = APP_RUNTIME.with(|slot| {
+                slot.borrow()
+                    .realms
+                    .get(&dispatcher_a.address.realm_id)
+                    .and_then(|realm_slot| realm_slot.realm.as_ref())
+                    .expect("realm A is still resident")
+                    .presentation_count()
+            });
+            assert_eq!(
+                presentation_count_after, 2,
+                "the driver realm's own frame pump must have completed window B's presentation \
+                 install -- if the deferred-completion queue is ever bypassed and \
+                 finish_open_secondary_window runs directly from inside the poll again, this \
+                 assertion is never reached (DispatchInFlight panics/errors first)"
+            );
+
+            // Close B through a REAL platform close (`resolve_next`'s own
+            // return value, the SAME handle `finish_open_secondary_window`
+            // wired) -- must remove only itself, never the shared realm.
+            window_b.close();
+            let (realm_count, presentation_count) = APP_RUNTIME.with(|slot| {
+                let state = slot.borrow();
+                let realm_count = state.realms.iter().count();
+                let presentation_count = state
+                    .realms
+                    .get(&dispatcher_a.address.realm_id)
+                    .and_then(|realm_slot| realm_slot.realm.as_ref())
+                    .expect(
+                        "the shared realm must still be resident -- B's own close must not \
+                         have torn down the whole realm out from under the still-open primary",
+                    )
+                    .presentation_count();
+                (realm_count, presentation_count)
+            });
+            assert_eq!(
+                realm_count, 1,
+                "the shared realm must survive B's own close"
+            );
+            assert_eq!(
+                presentation_count, 1,
+                "only B's own presentation must be removed; the primary's survives"
+            );
+            assert_eq!(
+                quit_calls.load(Ordering::SeqCst),
+                0,
+                "the realm (and its primary presentation) still lives -- this must not exit"
+            );
+
+            window_a.close();
+            assert_eq!(
+                APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
+                0,
+                "closing the realm's last surviving presentation must uninstall the whole realm"
+            );
+            assert_eq!(
+                quit_calls.load(Ordering::SeqCst),
+                1,
+                "closing the last presentation of the last realm must allow the exit exactly \
+                 once"
+            );
+
+            Ok(())
+        }));
+        ready.expect("on_ready must not fail");
+
+        teardown_platform_realm();
+        drop(clear_guard);
+    }
+
+    /// Non-blocking correctness lead (not a merge-blocking finding): if the
+    /// driver realm dies BEFORE its own `open_secondary_window` `Pending`
+    /// request ever resolves, the fail-closed path must run cleanly. The
+    /// spawned completion future is owned by the driver realm's own
+    /// `Scheduler`/`AsyncDriver`; tearing that realm down (its sole
+    /// presentation closing) drops the `AsyncDriver`'s task map, which drops
+    /// the future, which drops the `PendingWindow` it captured --
+    /// `ClaimHandle`'s own disclaim-on-drop transitions the request to
+    /// `Abandoned` (see `flui_foundation::claim_slot`'s module doc), never a
+    /// panic or a wedged owner lane. `HeadlessDeferredWindowOpens::
+    /// resolve_next`, called AFTER the realm is gone, still builds and hands
+    /// back a window (nobody was left to deliver it to matters at the
+    /// `ClaimSlot::deliver` level, traced as a debug message, not here) --
+    /// what this test actually pins is that an abandoned request never
+    /// zombie-installs a realm/presentation nobody asked for anymore.
+    #[test]
+    fn dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing() {
+        use flui_platform::traits::Platform;
+
+        let clear_guard = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let deferred = platform.enable_deferred_window_open();
+
+        let ready = Box::new(platform).run(Box::new(move |owner| {
+            install_owner_platform(owner);
+
+            let mut pending_a = match with_owner_platform(|owner| {
+                owner.open_window(flui_platform::WindowOptions::default())
+            })
+            .expect("BUG: install_owner_platform just ran above")
+            .expect("deferred mode still accepts the request")
+            {
+                flui_platform::WindowOpen::Pending(pending) => pending,
+                flui_platform::WindowOpen::Ready(_) => {
+                    panic!("deferred mode must return Pending, not Ready")
+                }
+            };
+            let resolved_a = deferred
+                .resolve_next()
+                .expect("window A's request is the only one pending");
+            let window_a = pending_a
+                .try_take()
+                .expect("resolve_next delivers synchronously")
+                .expect("mock window creation cannot fail");
+            assert!(Arc::ptr_eq(&resolved_a, &window_a));
+
+            let dispatcher_a =
+                install_platform_realm(super::super::ui_realm::UiRealm::for_test(), &window_a);
+            window_a.on_close(Box::new(move || {
+                close_this_window(dispatcher_a);
+            }));
+
+            // Request window B -- Pending, spawns its completion onto realm
+            // A's own AsyncDriver -- but never resolve it.
+            let opened =
+                open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                    .expect("the Pending arm must be accepted, not treated as an error");
+            assert!(opened.is_none());
+
+            // Kill the driver realm BEFORE window B's open ever resolves --
+            // `window_a` is the realm's sole presentation, so this
+            // uninstalls the whole realm, dropping its Scheduler/
+            // AsyncDriver and, with it, the still-pending completion
+            // future.
+            window_a.close();
+            assert_eq!(
+                APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
+                0,
+                "the driver realm must be gone before window B's open ever resolves"
+            );
+
+            // Resolving now must not panic: the ClaimSlot's `deliver` sees
+            // the handle already abandoned (traced, discarded) --
+            // and, crucially, this must never zombie-install a
+            // realm/presentation nobody is left to claim.
+            let resolved = deferred.resolve_next();
+            assert!(
+                resolved.is_some(),
+                "resolve_next still builds and hands back the window even though the request \
+                 was abandoned in the meantime -- abandonment is observed at the ClaimSlot \
+                 level, not by resolve_next refusing to run"
+            );
+            assert_eq!(
+                APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
+                0,
+                "an abandoned Pending request must never zombie-install a realm/presentation \
+                 after the fact -- the completion future that would have done so was dropped \
+                 along with the driver realm's own AsyncDriver, never polled again"
             );
 
             Ok(())
@@ -6502,20 +6808,45 @@ where
 /// hand-rolled busy-loop). Either way the installed topology, wiring, and
 /// this doc's own guarantees are identical — only the timing differs, and a
 /// `Pending` completion's own failure is traced
-/// (`spawn_pending_secondary_window_completion`), not silently dropped.
+/// (`drain_pending_secondary_window_completions`), not silently dropped.
+///
+/// The completion itself never runs from inside the spawned future's own
+/// poll: `Scheduler::drive_async_tasks` (which polls that future) always
+/// runs from INSIDE a dispatched `RealmTask::Frame`, and `WindowPolicy::
+/// SharedRealm`'s own `install_presentation_alongside` has no defer-to-idle
+/// queue of its own — it hard-refuses (`InstallPresentationError::
+/// DispatchInFlight`) while a dispatch is in flight, which is exactly what
+/// running the completion mid-poll would always trigger for that policy.
+/// The future itself only enqueues the resolved window; the ACTUAL
+/// install-and-wire call happens at `dispatch_platform_realm`'s own tail,
+/// once this thread's checkout state clears — the same point-in-time
+/// `AppRuntime`'s own deferred realm-map mutations already apply at. One
+/// completion path, `finish_open_secondary_window`, for both `WindowPolicy`
+/// variants; only the trigger point differs between `Ready` (inline) and
+/// `Pending` (deferred to the enclosing dispatch's tail).
 ///
 /// Tested on the headless backend's own deferred-open probe
-/// (`HeadlessPlatform::enable_deferred_window_open`,
-/// `open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane`)
-/// end-to-end through Pending -> resolved -> both-window close/exit. Named
-/// residual: this proves the completion seam generically, not a full winit
-/// event-loop integration test (no CI gate exercises the real winit backend
-/// end-to-end at all — see `flui-platform`'s own "evidence must live outside
-/// the test gate" constraint) — the winit-specific gap still open is
-/// confidence that `WinitOwnerHooks::open_owner_window`'s own `Pending`
-/// construction and `control.rs`'s reply-delivery path compose correctly
-/// with this completion, not merely that the generic completion mechanism
-/// itself works.
+/// (`HeadlessPlatform::enable_deferred_window_open`) for BOTH policies:
+/// `open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane`
+/// (`SeparateRealms`) and
+/// `shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane`
+/// (`SharedRealm` — the harder case, since its target realm IS the one
+/// whose dispatch checkout the completion's own poll runs inside of) each
+/// drive Pending -> resolved -> both-window close/exit end-to-end.
+/// `dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing`
+/// additionally pins the fail-closed path: a driver realm torn down before
+/// its own pending completion resolves drops the captured `PendingWindow`
+/// along with the realm's `AsyncDriver`, disclaiming the request
+/// (`flui_foundation::claim_slot`'s own `Abandoned` transition) rather than
+/// zombie-installing anything later. Named residual: this proves the
+/// completion seam generically, not a full winit event-loop integration
+/// test (no CI gate exercises the real winit backend end-to-end at all —
+/// see `flui-platform`'s own "evidence must live outside the test gate"
+/// constraint) — the winit-specific gap still open is confidence that
+/// `WinitOwnerHooks::open_owner_window`'s own `Pending` construction and
+/// `control.rs`'s reply-delivery path compose correctly with this
+/// completion, not merely that the generic completion mechanism itself
+/// works.
 ///
 /// # Named limitation (both policies): no widget content, no rendering
 ///
@@ -6581,6 +6912,56 @@ thread_local! {
     /// does not proactively prune settled entries mid-run.
     static PENDING_SECONDARY_WINDOW_OPENS: std::cell::RefCell<Vec<flui_scheduler::TaskToken>> =
         const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Windows resolved from `open_secondary_window`'s `Pending` arm, awaiting
+    /// `finish_open_secondary_window` at the next point this thread's
+    /// dispatch/hot-restart-visit checkout state is clear (see
+    /// [`drain_pending_secondary_window_completions`]). Never drained
+    /// in-place inside the spawned future itself: that future is polled by
+    /// `Scheduler::drive_async_tasks`, which always runs INSIDE a dispatched
+    /// `RealmTask::Frame` (`dispatched_realm_id` is `Some` for the whole
+    /// checkout) — `install_presentation_alongside`'s own
+    /// `DispatchInFlight` refusal (it has no defer-to-idle queue of its own)
+    /// means `WindowPolicy::SharedRealm` could never complete from inside
+    /// that poll. Queuing here and draining once the checkout restores
+    /// applies to BOTH policies uniformly, one completion path rather than a
+    /// policy-specific carve-out.
+    static PENDING_SECONDARY_WINDOW_COMPLETIONS: std::cell::RefCell<
+        Vec<(WindowPolicy, Arc<dyn flui_platform::traits::PlatformWindow>)>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Applies every `open_secondary_window` `Pending`-arm completion queued by
+/// [`spawn_pending_secondary_window_completion`]'s own future, in request
+/// order. Call only from a point where this thread's dispatch/hot-restart-
+/// visit checkout state is already clear (`dispatched_realm_id` and
+/// `iterating_all_realms` both settled back to their idle values) — the same
+/// discipline [`super::runtime::AppRuntime::drain_pending_realm_mutations`]
+/// requires of its own callers, and for the identical reason:
+/// `finish_open_secondary_window` calls `install_presentation_alongside`/
+/// `install_realm_alongside`, both of which need to actually apply rather
+/// than defer (`SharedRealm`'s `install_presentation_alongside` has no
+/// defer-to-idle queue of its own, so calling this before the checkout
+/// clears would just reproduce the same `DispatchInFlight` refusal one level
+/// up).
+///
+/// A completion's own failure is traced (`tracing::error!`), never
+/// propagated: by the time this runs there is no synchronous caller left for
+/// either policy to return an `Err` to.
+#[cfg(not(target_os = "ios"))]
+fn drain_pending_secondary_window_completions() {
+    let pending =
+        PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
+    for (policy, window) in pending {
+        if let Err(error) = finish_open_secondary_window(policy, window) {
+            tracing::error!(
+                ?policy,
+                %error,
+                "open_secondary_window: a Pending-arm completion resolved to a window, but \
+                 installing it failed"
+            );
+        }
+    }
 }
 
 /// [`open_secondary_window`]'s real body, additionally returning the exact
@@ -6658,6 +7039,21 @@ fn open_secondary_window_impl(
 /// task to completion — the same mechanism any other framework-spawned
 /// async task completes through.
 ///
+/// The spawned future itself never calls [`finish_open_secondary_window`]
+/// directly on success — it only enqueues `(policy, window)` onto
+/// [`PENDING_SECONDARY_WINDOW_COMPLETIONS`]. `Scheduler::drive_async_tasks`
+/// (which polls this future to completion) always runs from INSIDE a
+/// dispatched `RealmTask::Frame`, so `dispatched_realm_id` is `Some` for the
+/// poll's entire duration; `WindowPolicy::SharedRealm`'s own
+/// `install_presentation_alongside` has no defer-to-idle queue of its own
+/// and hard-refuses (`InstallPresentationError::DispatchInFlight`) when
+/// called while a dispatch is in flight. Deferring the WHOLE completion (not
+/// just the presentation-install half) to
+/// [`drain_pending_secondary_window_completions`] — run once the enclosing
+/// dispatch's own checkout state clears — sidesteps that wall for both
+/// policies uniformly, through the one completion path
+/// [`finish_open_secondary_window`] already is.
+///
 /// # Errors
 /// If no realm is hosted on this thread to drive the completion on, or if
 /// dispatching to it fails — the pending window is then left unresolved;
@@ -6669,11 +7065,12 @@ fn open_secondary_window_impl(
 /// # Named residual
 /// [`finish_open_secondary_window`]'s own failure, and the pending open's
 /// own resolve-to-`Err` outcome, are both traced (`tracing::error!`) rather
-/// than propagated — by the time the spawned future completes there is no
-/// synchronous caller left to return either to. A richer completion signal
-/// (a callback, or a `Future` the original caller can itself await) is real,
-/// scoped follow-up work, named here rather than silently assumed; today's
-/// contract is "traced, never silently dropped", which this function keeps.
+/// than propagated — by the time the spawned future completes (or the
+/// deferred drain runs) there is no synchronous caller left to return either
+/// to. A richer completion signal (a callback, or a `Future` the original
+/// caller can itself await) is real, scoped follow-up work, named here
+/// rather than silently assumed; today's contract is "traced, never
+/// silently dropped", which this function keeps.
 #[cfg(not(target_os = "ios"))]
 fn spawn_pending_secondary_window_completion(
     policy: WindowPolicy,
@@ -6699,14 +7096,12 @@ fn spawn_pending_secondary_window_completion(
     let future: flui_scheduler::BoxedTask = Box::pin(async move {
         match pending.await {
             Ok(window) => {
-                if let Err(error) = finish_open_secondary_window(policy, window) {
-                    tracing::error!(
-                        ?policy,
-                        %error,
-                        "open_secondary_window: the Pending arm resolved to a window, but \
-                         installing it failed"
-                    );
-                }
+                // Enqueue, never call `finish_open_secondary_window`
+                // directly here -- see this function's own doc for why
+                // (this poll always runs mid-dispatch).
+                PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                    queue.borrow_mut().push((policy, window));
+                });
             }
             Err(error) => {
                 tracing::error!(
