@@ -445,15 +445,26 @@ pub(super) enum PlatformToUi {
 /// One queued unit of owner-thread work: a typed cross-thread
 /// [`PlatformToUi`] event, the co-located frame pump, or a request to close
 /// one presentation out of this realm's forest. `Frame` and
-/// `ClosePresentation` are deliberately NOT part of the cross-thread
-/// vocabulary above — both are same-thread by construction (the
-/// `WrongThread` guard in [`dispatch_platform_realm`] rejects them from
-/// anywhere else); `Frame` carries an owner-local closure, which a
-/// cross-thread payload must never do (ADR-0037 §3 forbids `Box<dyn
-/// FnOnce()>` on that boundary), and `ClosePresentation` carries a plain
-/// `Copy` id specifically so it CAN cross the same `Send` boundary
-/// `PlatformToUi` does if a later slice needs that — nothing about it
-/// requires same-thread delivery the way a closure does.
+/// `ClosePresentation` are both deliberately KEPT OUT of the cross-thread
+/// [`PlatformToUi`] vocabulary above, but for two different reasons — and
+/// this enum, `RealmTask` itself, never crosses a thread either way: it is
+/// owner-thread-only end to end (`AppRuntime`'s per-realm queue lives in
+/// owner-thread-only `RealmSlot` storage, drained only from
+/// [`dispatch_platform_realm`] on that same thread), the same as it was
+/// before `ClosePresentation` existed — `Frame`'s `Box<dyn FnOnce(&UiRealm)>`
+/// alone already makes the enum `!Send` in the general case, so nothing
+/// about adding `ClosePresentation` changes that.
+///
+/// `Frame` carries an owner-local closure, which a cross-thread payload must
+/// never do (ADR-0037 §3 forbids `Box<dyn FnOnce()>` on that boundary) — its
+/// exclusion is load-bearing today. `ClosePresentation`'s payload alone
+/// (`PresentationId`, a plain `Copy` id) happens to satisfy `Send` in
+/// isolation, same as [`PlatformToUi`]'s own fields do — but that is a
+/// property of the ID type, not a claim about this enum or this variant:
+/// `ClosePresentation` is excluded from `PlatformToUi` because
+/// [`dispatch_platform_realm`]'s own drain loop must special-case it (see
+/// below), not because its payload could not cross a thread if some later
+/// slice needed that.
 ///
 /// `ClosePresentation` is handled specially by [`dispatch_platform_realm`]'s
 /// own drain loop, never by [`RealmTask::run`]: closing a presentation needs
@@ -1636,28 +1647,42 @@ fn dispatch_platform_realm(
                         let unregistered = APP_RUNTIME
                             .with(|slot| slot.borrow_mut().registry.remove_presentation(address));
                         drop(unregistered);
-                        realm.close_presentation_entered(id);
+
                         // Re-stamp this realm's tracked routable address
-                        // (`RealmSlot::address`) to the new primary that
-                        // survives the close. Without this, a dispatcher a
-                        // caller minted while `id` was still live would keep
-                        // comparing equal against the slot's now-stale
-                        // `presentation_id` at the top of this very
-                        // function, and a task dispatched through it would
-                        // run against `self.presentations.primary()` --
-                        // which is now the SIBLING, not the closed
-                        // presentation the caller thinks it addressed.
-                        // Re-stamping makes that exact dispatcher fail the
-                        // `StalePresentation` check instead, through the
-                        // SAME comparison every other stale-dispatcher case
-                        // already goes through -- no new gating mechanism,
-                        // just keeping this one fact current.
-                        let new_primary_id = realm.presentation_id();
-                        APP_RUNTIME.with(|slot| {
-                            if let Some(realm_slot) = slot.borrow_mut().realms.get_mut(&realm_id) {
-                                realm_slot.address.presentation_id = new_primary_id;
-                            }
-                        });
+                        // (`RealmSlot::address`) to the surviving primary
+                        // BEFORE running `id`'s own teardown/dispose hooks
+                        // -- not after. `close_presentation_entered`'s step
+                        // 2-3 (below) can run a dispose hook that re-enters
+                        // this exact function with a dispatcher still
+                        // bearing `id`; ordering the re-stamp first means
+                        // that reentrant dispatch's `StalePresentation`
+                        // check (at the top of this function) already
+                        // compares against the NEW primary and correctly
+                        // refuses it right there. Re-stamping AFTER
+                        // disposal instead would leave a window where that
+                        // same reentrant dispatch still compares equal
+                        // (both sides still `id`), gets ACCEPTED by the
+                        // stale check, and is merely enqueued behind the
+                        // same-realm reentrancy guard -- only to run a
+                        // moment later, in this very drain loop, against
+                        // whatever survives the close: silently
+                        // misaddressed rather than refused. See
+                        // `UiRealm::primary_id_excluding`'s own doc for why
+                        // this is computable before the removal happens.
+                        // `None` is unreachable here: this branch runs only
+                        // when `is_sole_presentation(id)` was `false` above,
+                        // so at least one other presentation always exists.
+                        if let Some(surviving_primary_id) = realm.primary_id_excluding(id) {
+                            APP_RUNTIME.with(|slot| {
+                                if let Some(realm_slot) =
+                                    slot.borrow_mut().realms.get_mut(&realm_id)
+                                {
+                                    realm_slot.address.presentation_id = surviving_primary_id;
+                                }
+                            });
+                        }
+
+                        realm.close_presentation_entered(id);
                     }
                 }
                 other => realm.enter(|realm| other.run(realm)),
@@ -3834,6 +3859,133 @@ mod realm_dispatch_tests {
         // here leaks nothing another test could observe -- the process
         // exit itself drops `APP_RUNTIME`, running `UiRealm::Drop`'s
         // best-effort close loop for B as the natural fallback.
+    }
+
+    /// A dispose hook that re-enters `dispatch_platform_realm` DURING the
+    /// very close it is being disposed by -- using the dying presentation's
+    /// OWN dispatcher -- must be refused as stale
+    /// (`RealmDispatchError::StalePresentation`), never silently ACCEPTED
+    /// and enqueued to run later against whatever survives the close.
+    ///
+    /// Ordering-critical: `RealmSlot::address` must re-stamp to the
+    /// surviving primary BEFORE this presentation's own dispose hooks run
+    /// (`close_presentation_entered`'s step 2-3), not after. Re-stamping
+    /// only after disposal would leave a window where a dispose-time
+    /// reentrant dispatch bearing `id` still compares EQUAL against the
+    /// not-yet-updated address, passes the `StalePresentation` check, and
+    /// gets enqueued behind the same-realm reentrancy guard (`realm_slot.
+    /// draining` is `true` for the whole checkout) instead of refused --
+    /// only to run a moment later, in this very drain loop, against
+    /// whichever presentation survives: a task genuinely executing against
+    /// the wrong presentation, not merely an error a caller has to notice.
+    #[test]
+    fn dispose_time_reentrant_dispatch_with_the_dying_presentations_own_dispatcher_is_refused() {
+        #[derive(Clone)]
+        struct ReenterOnDisposeView {
+            dispatcher: Rc<Cell<Option<RealmDispatcher>>>,
+            reentrant_result: Rc<Cell<Option<Result<(), RealmDispatchError>>>>,
+            reentrant_task_ran: Rc<Cell<bool>>,
+        }
+
+        struct ReenterOnDisposeState {
+            dispatcher: Rc<Cell<Option<RealmDispatcher>>>,
+            reentrant_result: Rc<Cell<Option<Result<(), RealmDispatchError>>>>,
+            reentrant_task_ran: Rc<Cell<bool>>,
+        }
+
+        impl flui_view::StatefulView for ReenterOnDisposeView {
+            type State = ReenterOnDisposeState;
+
+            fn create_state(&self) -> Self::State {
+                ReenterOnDisposeState {
+                    dispatcher: Rc::clone(&self.dispatcher),
+                    reentrant_result: Rc::clone(&self.reentrant_result),
+                    reentrant_task_ran: Rc::clone(&self.reentrant_task_ran),
+                }
+            }
+        }
+
+        impl flui_view::ViewState<ReenterOnDisposeView> for ReenterOnDisposeState {
+            fn build(
+                &self,
+                _view: &ReenterOnDisposeView,
+                _ctx: &dyn flui_view::BuildContext,
+            ) -> impl flui_view::IntoView {
+                flui_widgets::SizedBox::new(0.0, 0.0)
+            }
+
+            fn dispose(&mut self) {
+                let dispatcher = self
+                    .dispatcher
+                    .get()
+                    .expect("dispatcher stashed before A's close was requested");
+                let ran = Rc::clone(&self.reentrant_task_ran);
+                let result = dispatch_platform_realm(
+                    dispatcher,
+                    RealmTask::Frame(Box::new(move |_realm| {
+                        ran.set(true);
+                    })),
+                );
+                self.reentrant_result.set(Some(result));
+            }
+        }
+
+        impl View for ReenterOnDisposeView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateful(self)
+            }
+        }
+
+        let mut realm = super::super::ui_realm::UiRealm::for_test();
+        let a_id = realm.presentation_id();
+        let _b_id = realm.install_second_presentation_for_test();
+
+        let dispatcher_slot = Rc::new(Cell::new(None));
+        let reentrant_result = Rc::new(Cell::new(None));
+        let reentrant_task_ran = Rc::new(Cell::new(false));
+        let probe = ReenterOnDisposeView {
+            dispatcher: Rc::clone(&dispatcher_slot),
+            reentrant_result: Rc::clone(&reentrant_result),
+            reentrant_task_ran: Rc::clone(&reentrant_task_ran),
+        };
+        realm
+            .enter(|realm| realm.attach_root_widget(&probe))
+            .expect("A mounts the probe");
+        // `attach_root_widget` only SCHEDULES the initial build -- see
+        // `dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter`'s
+        // own comment for why a real frame must run before the probe's
+        // `State`, and therefore its `dispose()`, actually exists.
+        let _ = realm.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
+            flui_types::Size::new(
+                flui_types::geometry::px(20.0),
+                flui_types::geometry::px(20.0),
+            ),
+        ));
+
+        let dispatcher = install_platform_realm(realm, &test_window());
+        dispatcher_slot.set(Some(dispatcher));
+
+        close_presentation(dispatcher, a_id).expect("A closes through the real dispatch seam");
+
+        assert!(
+            matches!(
+                reentrant_result.get(),
+                Some(Err(RealmDispatchError::StalePresentation))
+            ),
+            "a dispose-time re-dispatch bearing the dying presentation's OWN dispatcher must \
+             be refused as stale, got {:?}",
+            reentrant_result.get()
+        );
+        assert!(
+            !reentrant_task_ran.get(),
+            "the reentrant task must never run -- accepting it (even merely queued for later) \
+             means it eventually executes against whatever survives the close, misaddressed \
+             rather than refused"
+        );
+
+        // No `teardown_platform_realm()` here either, for the identical
+        // reason `closing_a_presentation_unregisters_its_window_mapping`
+        // skips it -- see that test's own closing comment.
     }
 
     /// Closing a realm's SOLE presentation must not leave a live realm with

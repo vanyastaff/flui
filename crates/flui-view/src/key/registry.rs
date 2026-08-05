@@ -31,10 +31,20 @@
 //! active handle and releases the TLS `RefCell` borrow before invoking either
 //! framework or user code.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{cell::RefCell, sync::Arc};
 
 use crate::view::ElementBase;
 use flui_foundation::ElementId;
+
+// `build_composite` (below) is the sole user of `HashMap`/`Rc` — both go
+// unused (and therefore unused-import-warn, `-D warnings`-fail under CI's
+// feature-matrix `cargo-hack` sweep) in a build with neither `test` nor
+// `runtime-internals` active, e.g. `flui-widgets`'s own `--features images`
+// test build, which pulls in `flui-view` with its default feature set only.
+// Gated identically to the function that needs them, not a blanket
+// `#[allow(unused_imports)]`.
+#[cfg(any(test, feature = "runtime-internals"))]
+use std::{collections::HashMap, rc::Rc};
 
 /// Snapshot of the framework's global-key lookup surface that
 /// `GlobalKey::current_element` / `with_current_state` consult.

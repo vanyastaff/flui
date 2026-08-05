@@ -799,6 +799,39 @@ impl UiRealm {
         self.presentations.len() == 1 && self.presentations.get(id).is_some()
     }
 
+    /// The presentation id that would become this realm's PRIMARY if `id`
+    /// were removed right now — WITHOUT actually removing it.
+    ///
+    /// `runner.rs`'s `RealmTask::ClosePresentation` handling reads this
+    /// BEFORE running `id`'s own teardown/dispose hooks (`close_presentation_
+    /// entered`'s step 2-3), not after: `RealmSlot::address.presentation_id`
+    /// must already name the SURVIVING primary by the time a dispose hook
+    /// could re-enter `dispatch_platform_realm` with `id`'s own dispatcher,
+    /// or that reentrant dispatch would still compare EQUAL against the
+    /// not-yet-updated address, pass the `StalePresentation` check, and get
+    /// enqueued (same-realm reentrancy) instead of refused — running later
+    /// in the same drain loop against whatever survives the close, silently
+    /// misaddressed rather than refused outright.
+    ///
+    /// Mirrors exactly what [`PresentationForest::remove`]'s `Vec::remove`
+    /// shift produces: if `id` is the CURRENT primary, the new primary is
+    /// whichever presentation is next in mount order; otherwise removing
+    /// `id` cannot move index 0 at all, so the primary is unchanged.
+    /// `None` only if `id` names the realm's only presentation — unreachable
+    /// from that same dispatch handling, which checks
+    /// [`Self::is_sole_presentation`] first and never reaches this call in
+    /// that case.
+    #[must_use]
+    pub(crate) fn primary_id_excluding(&self, id: PresentationId) -> Option<PresentationId> {
+        if self.presentations.primary().id() != id {
+            return Some(self.presentations.primary().id());
+        }
+        self.presentations
+            .iter()
+            .find(|presentation| presentation.id() != id)
+            .map(PresentationState::id)
+    }
+
     /// This realm's shared cross-tree `GlobalKey` uniqueness domain
     /// (ADR-0043 §1) — for the isolation test suite, which uses it to
     /// assemble a second presentation sharing this realm's exact scope,
@@ -1867,7 +1900,18 @@ impl UiRealm {
             match command {
                 #[cfg(feature = "hot-reload")]
                 UiCommand::HotReload(tier) => {
-                    if self.presentations.primary().apply_hot_reload(tier) {
+                    // Reuse the SAME fan-out `Self::apply_hot_reload` the
+                    // direct `perform_hot_reload_entered` path calls --
+                    // calling `self.presentations.primary().apply_hot_reload`
+                    // here instead (as this arm once did) reassembles only
+                    // the primary and silently skips every other
+                    // presentation, exactly the class of bug
+                    // `reassemble_fans_out_to_all_presentations_in_mount_
+                    // order` exists to catch on the direct path; this
+                    // inbox arm is the untested twin of that same call, and
+                    // the desktop worker's own hot-reload trigger goes
+                    // through THIS arm, not the direct one.
+                    if self.apply_hot_reload(tier) {
                         self.redraw_pending.store(true, Ordering::Release);
                     }
                     report.invoked += 1;
@@ -5009,6 +5053,85 @@ mod tests {
                     .has_pending_builds(),
                 "reassemble must mark B's mounted root dirty too -- fan-out must not skip \
                  or stop at the primary presentation"
+            );
+        }
+
+        /// The SAME fan-out property as `reassemble_fans_out_to_all_
+        /// presentations_in_mount_order`, but driven through the OTHER
+        /// production entry point: the closed-command inbox
+        /// (`command_sender().request_hot_reload` + `drain_commands`), the
+        /// path the desktop worker's own hot-reload trigger actually uses --
+        /// not `apply_hot_reload`/`perform_hot_reload_entered` called
+        /// directly. Before this arm reused `Self::apply_hot_reload`, it
+        /// called `self.presentations.primary().apply_hot_reload(tier)`
+        /// directly, reassembling only the primary and silently skipping
+        /// every sibling — the registry-pinned exploit's exact regression
+        /// class, on its untested twin path. Mutant-verified: reverting
+        /// `drain_commands`'s `UiCommand::HotReload` arm back to
+        /// `self.presentations.primary().apply_hot_reload(tier)` makes this
+        /// test fail on B's `has_pending_builds()` assertion; restoring the
+        /// `self.apply_hot_reload(tier)` fan-out call makes it pass again.
+        #[test]
+        #[cfg(feature = "hot-reload")]
+        fn hot_reload_via_the_command_inbox_fans_out_to_all_presentations_in_mount_order() {
+            use flui_hot_reload::HotReloadTier;
+
+            let mut realm = UiRealm::for_test();
+            let b_id = realm.install_second_presentation_for_test();
+
+            realm
+                .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+                .expect("A mounts");
+            realm
+                .enter(|realm| {
+                    realm
+                        .presentations
+                        .get(b_id)
+                        .expect("B installed")
+                        .widgets()
+                        .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
+                })
+                .expect("B mounts");
+
+            let constraints = BoxConstraints::tight(flui_types::Size::new(px(50.0), px(50.0)));
+            let _ = realm.draw_frame(constraints);
+            assert!(
+                !realm.widgets().has_pending_builds(),
+                "precondition: A's initial build must be drained before reassembling"
+            );
+            assert!(
+                !realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .widgets()
+                    .has_pending_builds(),
+                "precondition: B's initial build must be drained before reassembling"
+            );
+
+            realm
+                .command_sender()
+                .request_hot_reload(HotReloadTier::HotReload)
+                .expect("inbox has room");
+            let report = realm.drain_commands();
+            assert_eq!(
+                report.invoked, 1,
+                "the hot-reload command must be applied, not dropped as stale"
+            );
+
+            assert!(
+                realm.widgets().has_pending_builds(),
+                "the inbox path must mark A's mounted root dirty, exactly like the direct path"
+            );
+            assert!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .widgets()
+                    .has_pending_builds(),
+                "the inbox path must mark B's mounted root dirty too -- it is the SAME \
+                 fan-out as the direct perform_hot_reload_entered path, not a narrower one"
             );
         }
 
