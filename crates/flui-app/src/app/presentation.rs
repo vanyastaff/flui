@@ -200,6 +200,29 @@ pub(crate) struct PresentationState {
     /// `RefCell` borrow and a `None` check per frame. Moved here from the
     /// retired `AppBinding` — per-window stats, not a process-wide concern.
     performance_overlay: RefCell<Option<PerformanceStats>>,
+    /// This presentation's own wake-only redraw mark (ADR-0043 §3's pump
+    /// segment). Set alongside the realm's own coalesced `needs_redraw` flag
+    /// by every presentation-scoped operation that isn't otherwise
+    /// re-derivable from live pipeline/build state (e.g. `attach_root_widget`
+    /// scheduling the very first build); cleared at the START of this
+    /// presentation's pump segment, before dirty is sampled, so a mark
+    /// arriving WHILE the segment runs sets the bit again instead of being
+    /// lost. This bit is wake-only, never the truth by itself: the segment's
+    /// real dirty predicate is `take_redraw_pending() ||
+    /// widgets().has_pending_builds() || <pipeline has_dirty_nodes>`
+    /// (`Self::has_pending_work`) — see `UiRealm::draw_frame_entered`'s
+    /// per-presentation loop.
+    redraw_pending: Cell<bool>,
+    /// Test-only oracle: how many times this presentation's own
+    /// build+layout+paint segment actually ran (`UiRealm::
+    /// draw_frame_for_presentation`), regardless of whether anything was
+    /// rebuilt or a scene reached present. This is the "flush count" the
+    /// isolation suite's sibling-independence tests read — a rebuild count
+    /// would not prove independence (a presentation with a settled, never-
+    /// rebuilding tree still flushes every segment it runs), and a
+    /// present-count would conflate this with GPU backend availability.
+    #[cfg(test)]
+    flush_count: Cell<u32>,
 }
 
 impl PresentationState {
@@ -305,6 +328,9 @@ impl PresentationState {
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
             performance_overlay: RefCell::new(None),
+            redraw_pending: Cell::new(false),
+            #[cfg(test)]
+            flush_count: Cell::new(0),
         };
         state.attach_surface();
         state
@@ -354,6 +380,9 @@ impl PresentationState {
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
             performance_overlay: RefCell::new(None),
+            redraw_pending: Cell::new(false),
+            #[cfg(test)]
+            flush_count: Cell::new(0),
         };
         state.attach_surface();
         state
@@ -530,6 +559,101 @@ impl PresentationState {
     /// Record a frame dropped due to a surface error.
     pub(crate) fn record_frame_dropped(&self) {
         self.frames_dropped.set(self.frames_dropped.get() + 1);
+    }
+
+    // ========================================================================
+    // Pump segment (ADR-0043 §3): per-presentation dirty predicate and wake bit
+    // ========================================================================
+
+    /// Mark this presentation's own wake-only redraw bit. See
+    /// [`Self::redraw_pending`]'s field doc.
+    pub(crate) fn mark_redraw_pending(&self) {
+        self.redraw_pending.set(true);
+    }
+
+    /// Read-and-clear this presentation's wake-only redraw bit — called at
+    /// the START of this presentation's pump segment, before dirty is
+    /// sampled, so a mark that arrives WHILE the segment runs sets the bit
+    /// again rather than being silently absorbed by this read.
+    pub(crate) fn take_redraw_pending(&self) -> bool {
+        self.redraw_pending.replace(false)
+    }
+
+    /// This presentation's own pump dirty predicate: would its build phase
+    /// do anything, or does its render pipeline have a dirty node to flush?
+    /// Deliberately excludes gesture-pending state — ticking gesture
+    /// deadlines happens once per pump, before any presentation's segment
+    /// runs, and gesture state never gates what a segment itself does (only
+    /// whether the OUTER runner wakes the loop at all); including it here
+    /// would not change any segment's observable outcome, only make this
+    /// predicate diverge from the exact condition the pipeline itself uses
+    /// to decide "nothing to flush".
+    #[must_use]
+    pub(crate) fn has_pending_work(&self) -> bool {
+        self.widgets.has_pending_builds()
+            || self.has_pending_layout_builder_work()
+            || self.renderer.root_pipeline_owner().with_mut(|owner| {
+                // Cross-thread dirty requests (`RepaintHandle`/
+                // `PipelineOwnerHandle` producers — background asset
+                // loaders, the frames-reenable redirty) sit in a channel
+                // until drained; `run_frame` itself always drains before its
+                // first phase, so an UNGATED call here would eventually see
+                // them regardless. This gate runs BEFORE `run_frame` now, so
+                // it must drain first or it would read a stale
+                // `has_dirty_nodes() == false` for a request that already
+                // landed in the channel and is sitting there un-applied.
+                // Non-blocking, idempotent (`try_recv`-based) — safe to call
+                // here even though `run_frame`'s own segment drains again
+                // immediately after.
+                owner.drain_pending_dirty();
+                owner.has_dirty_nodes()
+            })
+    }
+
+    /// Whether a registered `LayoutBuilder` seam entry
+    /// (`crates/flui-view/src/owner/layout_builder.rs`) exists.
+    ///
+    /// A live entry is pruned/serviced on every `run_frame_with_layout_
+    /// builders` pass regardless of whether anything else is dirty — a
+    /// stale entry never gets pruned, and a live one never gets its chance
+    /// to rebuild on a constraint change, unless that call still happens
+    /// with zero pending builds and zero dirty render nodes.
+    ///
+    /// Production has no way to populate this registry yet (the widget-side
+    /// entry point, `LayoutBuilder`, has not landed — `BuildOwner::
+    /// layout_builder_count` is a test-only accessor, planted only via
+    /// `register_layout_builder_for_test`), so this is unconditionally
+    /// `false` outside test builds: correct today because the registry is
+    /// provably always empty in production, not because the check is
+    /// skipped for convenience.
+    #[cfg(test)]
+    fn has_pending_layout_builder_work(&self) -> bool {
+        self.widgets
+            .with_build_owner(|owner| owner.layout_builder_count() > 0)
+    }
+
+    #[cfg(not(test))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the &self receiver is intentional: this must stay a method with the \
+                  same signature as its #[cfg(test)] twin above, not an associated \
+                  function, or the two cfg arms would diverge in call-site shape"
+    )]
+    fn has_pending_layout_builder_work(&self) -> bool {
+        false
+    }
+
+    /// Record that this presentation's build+layout+paint segment ran. See
+    /// [`Self::flush_count`]'s field doc for the oracle this backs.
+    #[cfg(test)]
+    pub(crate) fn record_flush(&self) {
+        self.flush_count.set(self.flush_count.get() + 1);
+    }
+
+    /// This presentation's own flush count. Test-only oracle.
+    #[cfg(test)]
+    pub(crate) fn flush_count(&self) -> u32 {
+        self.flush_count.get()
     }
 
     /// Turn the performance overlay on or off. Enabling starts a fresh

@@ -1078,8 +1078,17 @@ impl UiRealm {
     /// Request a redraw (flag only — does not poke the platform window).
     /// See [`Self::needs_redraw`]'s field doc for why this and
     /// [`Self::wake_frame`] share one underlying atomic with `AppRuntime`.
+    ///
+    /// Every current caller is a presentation-scoped operation
+    /// (`attach_root_widget*`, `handle_input_entered`) working on
+    /// `self.presentations.primary()` — no addressed routing exists yet
+    /// (a later slice's job) — so this also marks that presentation's own
+    /// pump wake bit (ADR-0043 §3), the signal
+    /// `UiRealm::draw_frame_entered`'s per-presentation loop reads at
+    /// segment start.
     pub(crate) fn request_redraw(&self) {
         self.needs_redraw.store(true, Ordering::Relaxed);
+        self.presentations.primary().mark_redraw_pending();
     }
 
     /// Whether a redraw is needed.
@@ -1220,19 +1229,19 @@ impl UiRealm {
             .with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
     }
 
-    /// Check if there is pending work: a pending build, pending gesture
-    /// motion/deadlines, or a dirty render node. The runner's wake gate
-    /// (`needs_redraw() || has_pending_work()`) reads this every frame.
+    /// Check if there is pending work in ANY presentation this realm hosts:
+    /// a pending build, pending gesture motion/deadlines, or a dirty render
+    /// node. The runner's wake gate (`needs_redraw() || has_pending_work()`)
+    /// reads this every frame. Production topology is exactly one
+    /// presentation, so this union is behaviorally identical to reading the
+    /// primary's own state directly; it generalizes to the isolation suite's
+    /// N>1 forests without needing a second code path.
     pub(crate) fn has_pending_work(&self) -> bool {
-        self.presentations.primary().widgets().has_pending_builds()
-            || self.gestures().has_pending_motion()
-            || self.gestures().has_pending_deadlines()
-            || self
-                .presentations
-                .primary()
-                .renderer()
-                .root_pipeline_owner()
-                .with(PipelineOwner::has_dirty_nodes)
+        self.presentations.iter().any(|presentation| {
+            presentation.has_pending_work()
+                || presentation.gestures().has_pending_motion()
+                || presentation.gestures().has_pending_deadlines()
+        })
     }
 
     // ========================================================================
@@ -1361,15 +1370,29 @@ impl UiRealm {
 
     /// The complete build+layout+paint pipeline for one frame.
     ///
-    /// **Frame-phase parity (critical):** this ordering — the vsync tick
-    /// block, the gesture-deadline tick, the build phase, the
-    /// layout/paint/scene-creation phase, and the pipeline-failure error
-    /// path — moves VERBATIM from the retired `AppBinding::draw_frame_entered`.
-    /// Reordering any of it is out of scope for the change that moved it
-    /// here; the frame-loop tests below are the parity oracle.
+    /// **Frame-phase parity (critical):** the realm-level pre-phase (vsync
+    /// tick, then gesture-deadline tick) MUST precede every presentation's
+    /// own segment, for the identical ordering argument the retired
+    /// `AppBinding::draw_frame_entered` depended on: both tick calls can
+    /// dirty render/build state a segment's dirty sample needs to observe.
+    /// Reordering the pre-phase is out of scope for the change that
+    /// introduced the per-presentation loop below; the frame-loop tests are
+    /// the parity oracle.
+    ///
+    /// **Per-presentation segment loop (ADR-0043 §3):** presentations are
+    /// processed once each, in mount order. Production topology is exactly
+    /// one presentation (`PresentationForest`'s ratchet), so this loop
+    /// degenerates to exactly today's single unconditional segment — see
+    /// [`Self::draw_frame_for_presentation`]'s doc for the proof that its
+    /// dirty gate cannot skip a segment the old, ungated code would have
+    /// run. Returns the LAST presentation's outcome (matches today's single-
+    /// presentation return value exactly; a genuine multi-presentation
+    /// caller reads each presentation's own render state directly rather
+    /// than this aggregate — addressed per-presentation return values are a
+    /// later slice's job).
     fn draw_frame_entered(&self, constraints: BoxConstraints) -> FramePaintOutcome {
-        // Vsync tick — MUST precede the build phase (Phase 1). See the
-        // retired `AppBinding::draw_frame_entered`'s doc for the full
+        // Vsync tick — MUST precede every presentation's build phase. See
+        // the retired `AppBinding::draw_frame_entered`'s doc for the full
         // disjoint-controller-set argument this ordering depends on.
         let now = self.now_secs();
         {
@@ -1384,11 +1407,16 @@ impl UiRealm {
             }
         }
 
-        // Gesture-deadline tick + keep-alive — also MUST precede the build
-        // phase, for the identical ordering argument as the vsync tick.
-        self.gestures().tick_deadlines();
-        if self.gestures().has_pending_deadlines() {
-            self.wake_frame();
+        // Gesture-deadline tick + keep-alive — also MUST precede every
+        // presentation's build phase, for the identical ordering argument as
+        // the vsync tick. Each presentation owns its own gesture arena, so
+        // this runs once per presentation rather than once per realm; at
+        // N=1 this is exactly today's single `self.gestures()` call.
+        for presentation in self.presentations.iter() {
+            presentation.gestures().tick_deadlines();
+            if presentation.gestures().has_pending_deadlines() {
+                self.wake_frame();
+            }
         }
 
         // The async-driver step lives in `Scheduler::handle_begin_frame`'s
@@ -1399,9 +1427,49 @@ impl UiRealm {
         // frame, on the right `Scheduler` instance, is enforced by the
         // scheduler itself.
 
+        let mut last_outcome = FramePaintOutcome::Idle;
+        for presentation in self.presentations.iter() {
+            // Segment start: clear this presentation's wake bit BEFORE
+            // sampling dirty, so a mark arriving WHILE this segment runs
+            // sets the bit again and lands next pump instead of being lost.
+            let woken = presentation.take_redraw_pending();
+            if !(woken || presentation.has_pending_work()) {
+                // Nothing to flush and nobody asked: skip this presentation's
+                // segment entirely. Bound: each presentation builds and
+                // flushes at most once per pump; this `continue` is what
+                // makes that true rather than merely documented.
+                continue;
+            }
+            last_outcome = Self::draw_frame_for_presentation(presentation, constraints);
+        }
+        last_outcome
+    }
+
+    /// One presentation's build+layout+paint segment — moves VERBATIM from
+    /// the retired `AppBinding::draw_frame_entered`'s Phase 1–4, now
+    /// parameterized by `presentation` instead of hard-wired to
+    /// `self.presentations.primary()`.
+    ///
+    /// **Why the caller's dirty gate cannot skip a segment this body would
+    /// have produced `Painted` for:** `run_frame_with_layout_builders`
+    /// itself returns `None` (this function's `Idle` outcome) whenever
+    /// nothing is dirty — that decision already lived inside the pipeline
+    /// before this loop existed. `Self::has_pending_work` (build pending OR
+    /// a dirty render node) is exactly the union of conditions that
+    /// decision depends on, so gating the CALL on the same union, one level
+    /// up, changes nothing observable: either both agree nothing is dirty
+    /// (skip here, `Idle` there — same outcome, cheaper), or either finds
+    /// real work and the segment runs exactly as it always did.
+    fn draw_frame_for_presentation(
+        presentation: &PresentationState,
+        constraints: BoxConstraints,
+    ) -> FramePaintOutcome {
+        #[cfg(test)]
+        presentation.record_flush();
+
         // Phase 1: Build (WidgetsBinding)
         {
-            let w = self.widgets();
+            let w = presentation.widgets();
             if w.has_pending_builds() {
                 w.draw_frame();
             }
@@ -1411,17 +1479,14 @@ impl UiRealm {
         // typestate-driven orchestrator.
         let mut pipeline_errored = false;
         let (layer_tree, link_registry) = {
-            self.presentations
-                .primary()
+            presentation
                 .renderer()
                 .root_pipeline_owner()
                 .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
-            let result = self
+            let result = presentation
                 .widgets()
-                .run_frame_with_layout_builders(self.presentations.primary().pipeline());
-            let link_registry = self
-                .presentations
-                .primary()
+                .run_frame_with_layout_builders(presentation.pipeline());
+            let link_registry = presentation
                 .renderer()
                 .root_pipeline_owner()
                 .with_mut(PipelineOwner::take_link_registry);
@@ -1438,18 +1503,16 @@ impl UiRealm {
         // Production<->headless convergence point: service lazy-sliver child
         // requests accumulated by `run_frame`'s layout pass.
         {
-            let w = self.widgets();
-            w.service_child_requests(self.presentations.primary().pipeline());
+            let w = presentation.widgets();
+            w.service_child_requests(presentation.pipeline());
         }
 
         // Phase 4: Create Scene from LayerTree
         let size = constraints.constrain(Size::ZERO);
-        let frame_number = self.presentations.primary().frames_rendered() + 1;
+        let frame_number = presentation.frames_rendered() + 1;
 
         if let Some(mut layer_tree) = layer_tree {
-            self.presentations
-                .primary()
-                .attach_performance_overlay(&mut layer_tree);
+            presentation.attach_performance_overlay(&mut layer_tree);
 
             let root = layer_tree.root();
             let scene = Scene::with_links(
@@ -4712,6 +4775,113 @@ mod tests {
             // does not add -- production topology never removes a single
             // member from a live forest today, it only ever drops the whole
             // realm, which is what this test actually exercises.
+        }
+
+        fn segment_constraints() -> BoxConstraints {
+            BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+        }
+
+        /// Oracle: FLUSH COUNTS (`PresentationState::flush_count`), never
+        /// rebuild counts — a presentation with a settled, never-rebuilding
+        /// tree still flushes every segment its own dirty state (or wake
+        /// bit) causes to run, and a presentation that was never dirtied
+        /// must NOT flush just because its sibling did.
+        #[test]
+        fn sibling_presentations_flush_independently() {
+            let mut realm = UiRealm::for_test();
+            let second_id = install_second_presentation_for_test(&mut realm);
+
+            // Mark ONLY the second presentation dirty — reaching its own
+            // wake bit directly, the same seam a later addressed-routing
+            // slice would call through (no addressed entry point exists
+            // yet).
+            realm
+                .presentations
+                .get(second_id)
+                .expect("second presentation installed")
+                .mark_redraw_pending();
+
+            let _ = realm.enter(|realm| realm.draw_frame_entered(segment_constraints()));
+
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                0,
+                "the primary presentation was never marked dirty and must \
+                 not flush just because its sibling did"
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(second_id)
+                    .expect("still installed")
+                    .flush_count(),
+                1,
+                "the second presentation's own wake bit must cause exactly \
+                 one flush"
+            );
+
+            // A second pump with nothing newly dirty must flush neither —
+            // both presentations are now settled.
+            let _ = realm.enter(|realm| realm.draw_frame_entered(segment_constraints()));
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                0,
+                "still never dirtied, still zero flushes"
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(second_id)
+                    .expect("still installed")
+                    .flush_count(),
+                1,
+                "a settled presentation must not flush again with nothing \
+                 new to do"
+            );
+        }
+
+        /// A mark arriving for a presentation while ITS OWN segment is
+        /// running must not be lost: the segment already cleared the bit at
+        /// its own START, so a mark landing anywhere between that clear and
+        /// the next pump's sample must survive to be observed there.
+        ///
+        /// This collapses the timing to a single thread (mark, run the
+        /// segment, mark again immediately after) rather than a literal
+        /// concurrent race — in a single-threaded pump there is no OTHER
+        /// window where a mark could land except between one segment
+        /// ending and the next beginning, or nested inside the segment's
+        /// own build via a real callback; both reduce to the same
+        /// observable property this test checks: the bit set after the
+        /// clear is not silently dropped.
+        #[test]
+        fn cross_presentation_dirty_during_a_segment_sets_wake_bit_and_lands_next_pump() {
+            let realm = UiRealm::for_test();
+            let presentation = realm.presentations.primary();
+
+            presentation.mark_redraw_pending();
+            let _ = realm.enter(|realm| realm.draw_frame_entered(segment_constraints()));
+            assert_eq!(
+                presentation.flush_count(),
+                1,
+                "the armed wake bit must cause exactly one flush"
+            );
+
+            // A mark arrives during (or immediately after) that segment —
+            // nothing else about the presentation is dirty (no widget tree
+            // was ever attached, so no pending builds; the render tree is
+            // empty, so no dirty nodes either): the wake bit is the ONLY
+            // dirty signal in play.
+            presentation.mark_redraw_pending();
+
+            let _ = realm.enter(|realm| realm.draw_frame_entered(segment_constraints()));
+            assert_eq!(
+                presentation.flush_count(),
+                2,
+                "the wake bit set after the first segment cleared its own \
+                 bit must not be lost -- it must cause a second flush on \
+                 the next pump, even though nothing else about the \
+                 presentation is dirty"
+            );
         }
     }
 }

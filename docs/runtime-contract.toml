@@ -966,7 +966,18 @@ installs the realm's `GlobalKeyScope` before any realm-shared dispatch handle \
 and before attach/mount. Addressed routing across a genuine N>1 forest \
 (`PresentationForest::get`/`remove` by id) is wired but has no production \
 entry point yet -- a later addressed-routing slice adds one; lifting the \
-ratchet is deferred to it, not to this contract's ownership shape.\
+ratchet is deferred to it, not to this contract's ownership shape. \
+`UiRealm::draw_frame_entered`'s pump processes every presentation once each, \
+in mount order: each presentation's own wake bit (`PresentationState::
+redraw_pending`) is cleared at the START of its segment, before its dirty \
+predicate (`has_pending_work`: pending build, a live `LayoutBuilder` seam \
+entry, or a dirty render node -- draining the cross-thread dirty-request \
+channel first, since that channel is what `run_frame` itself always drains \
+before deciding) is sampled, so a mark landing anywhere between that clear \
+and the next pump's sample is never lost. At the production ratchet (N=1) \
+this degenerates to exactly one always-run segment, proven identical by the \
+full pre-existing frame-pipeline test suite; the isolation suite proves the \
+skip/wake-bit machinery is real for N>1.\
 """
 state = "partial"
 domain = "realm"
@@ -977,12 +988,15 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "presentations: PresentationForest" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "widgets: WidgetsBinding" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "renderer: RenderingFlutterBinding" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "redraw_pending: Cell<bool>" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "BUG: PresentationForest::install called while the ratchet is" },
     { kind = "test", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "fn install_panics_once_the_forest_already_holds_a_presentation" },
     { kind = "test", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "fn push_for_test_bypasses_the_ratchet" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn push_for_test_bypasses_the_production_ratchet" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn reassemble_fans_out_to_all_presentations_in_mount_order" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropping_the_realm_closes_every_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn sibling_presentations_flush_independently" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_presentation_dirty_during_a_segment_sets_wake_bit_and_lands_next_pump" },
 ]
 
 [[contract]]
