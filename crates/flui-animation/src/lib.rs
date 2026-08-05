@@ -31,7 +31,7 @@
 //! // Create once (outside widget build)
 //! let controller = AnimationController::new(
 //!     Duration::from_millis(300),
-//!     scheduler,
+//!     &scheduler,
 //! );
 //!
 //! // Use many times (in widget build)
