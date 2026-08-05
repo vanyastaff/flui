@@ -6,10 +6,12 @@
 use std::{
     path::PathBuf,
     sync::{Arc, Weak},
+    thread::{self, ThreadId},
 };
 
 use anyhow::Result;
 use cursor_icon::CursorIcon;
+use flui_foundation::{ClaimSlot, claim_slot};
 use flui_types::{
     HapticFeedback,
     geometry::{Bounds, DevicePixels, Pixels, Point, Size},
@@ -21,13 +23,19 @@ use crate::{
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
         Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult,
-        OwnerPlatform, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor,
-        PlatformHaptics, PlatformInput, PlatformReadyCallback, PlatformTextInput, PlatformWindow,
-        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId,
-        WindowOptions,
-        owner::{DirectOwnerHooks, OwnerHooks},
+        OpenWindowError, OwnerPlatform, PendingWindow, Platform, PlatformCapabilities,
+        PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput, PlatformReadyCallback,
+        PlatformTextInput, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
+        WindowBounds, WindowEvent, WindowId, WindowOpen, WindowOptions,
+        owner::{ClosedTransport, DirectOwnerHooks, OwnerHooks, ProxyTransport},
     },
 };
+
+/// The value a deferred (or synchronous) window-open request resolves to —
+/// mirrors the winit backend's own private `OpenWindowResult` alias
+/// (`platforms/winit/control.rs`) so both backends complete a
+/// [`ClaimSlot`]/[`PendingWindow`] pair with an identical shape.
+type OpenWindowResult = Result<Arc<dyn PlatformWindow>, OpenWindowError>;
 
 /// Headless platform for testing
 ///
@@ -58,6 +66,19 @@ struct HeadlessState {
     appearance: WindowAppearance,
     keyboard_layout: String,
     opened_urls: Vec<String>,
+    /// Deferred-window-open test mode (see
+    /// [`HeadlessPlatform::enable_deferred_window_open`]): when `true`,
+    /// `Platform::run` installs `HeadlessDeferredOwnerHooks` instead of
+    /// `DirectOwnerHooks`, so `OwnerPlatform::open_window` enqueues into
+    /// `pending_opens` and returns `WindowOpen::Pending` instead of
+    /// resolving synchronously — exercising the same arm the real winit
+    /// owner lane returns for any call after `on_ready`.
+    deferred_window_open: bool,
+    /// Requests enqueued by `HeadlessDeferredOwnerHooks::open_owner_window`
+    /// while `deferred_window_open` is set, awaiting a manual
+    /// `HeadlessDeferredWindowOpens::resolve_next` call. FIFO order: the
+    /// oldest request resolves first.
+    pending_opens: Vec<(ClaimSlot<OpenWindowResult>, WindowOptions)>,
 }
 
 impl HeadlessPlatform {
@@ -74,11 +95,29 @@ impl HeadlessPlatform {
             appearance: WindowAppearance::default(),
             keyboard_layout: "en-US".to_string(),
             opened_urls: Vec::new(),
+            deferred_window_open: false,
+            pending_opens: Vec::new(),
         };
 
         Self {
             capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(state)),
+        }
+    }
+
+    /// Switches this platform's `OwnerPlatform::open_window` behavior from
+    /// the default synchronous `Ready` resolution to the deferred
+    /// `Pending` arm the real winit owner lane returns for any call after
+    /// `on_ready` — a test-only seam for exercising Pending-arm completion
+    /// paths (e.g. `flui-app`'s `open_secondary_window`) without a real
+    /// event loop. Must be called before [`Platform::run`]; the returned
+    /// [`HeadlessDeferredWindowOpens`] resolves each request in FIFO order,
+    /// on demand, via [`HeadlessDeferredWindowOpens::resolve_next`].
+    #[must_use]
+    pub fn enable_deferred_window_open(&self) -> HeadlessDeferredWindowOpens {
+        self.with_state(|state| state.deferred_window_open = true);
+        HeadlessDeferredWindowOpens {
+            state: Arc::downgrade(&self.state),
         }
     }
 
@@ -111,17 +150,35 @@ impl Platform for HeadlessPlatform {
     fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
         tracing::info!("Starting headless platform (no event loop)");
 
+        // Captured before `*self` moves into the `Arc` below -- same
+        // underlying `Mutex<HeadlessState>`, just a durable handle to it
+        // that survives the move.
+        let state_handle = Arc::clone(&self.state);
+
         self.with_state(|state| {
             state.is_running = true;
         });
 
-        // No owner lane on this backend: every `OwnerPlatform::open_window`
-        // call creates directly and is always `Ready` (ADR-0039 slice 2).
-        // "For the loop's life" means "until the value is dropped" here,
-        // since `run` returns immediately (ADR-0039 §1) -- there is no
-        // later point on this thread to defer to.
+        // Default: no owner lane on this backend, every
+        // `OwnerPlatform::open_window` call creates directly and is always
+        // `Ready` (ADR-0039 slice 2). "For the loop's life" means "until the
+        // value is dropped" here, since `run` returns immediately (ADR-0039
+        // §1) -- there is no later point on this thread to defer to. Test
+        // mode (`enable_deferred_window_open`) opts into the `Pending` arm
+        // instead, so a probe can exercise the same completion path the real
+        // winit owner lane exercises without a real event loop.
+        let deferred_window_open = state_handle.lock().deferred_window_open;
+        let owner_thread = thread::current().id();
+
         let platform: Arc<dyn Platform> = Arc::new(*self);
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)));
+        let hooks: Arc<dyn OwnerHooks> = if deferred_window_open {
+            Arc::new(HeadlessDeferredOwnerHooks {
+                state: state_handle,
+                owner_thread,
+            })
+        } else {
+            Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)))
+        };
 
         // In headless mode, just call on_ready and return immediately. A
         // fallible bootstrap has nowhere else to go on this backend since
@@ -151,21 +208,8 @@ impl Platform for HeadlessPlatform {
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         tracing::info!(?options, "Creating mock window");
 
-        self.with_state(|state| {
-            let window_id = WindowId(state.next_window_id);
-            state.next_window_id += 1;
-            let window = MockWindow::new(window_id, options.clone(), Arc::downgrade(&self.state));
-
-            state.windows.push(window.clone());
-            state.active_window = Some(window_id);
-
-            // Invoke window created event
-            state
-                .handlers
-                .invoke_window_event(WindowEvent::Created(window_id));
-
-            Ok(Arc::new(window) as Arc<dyn PlatformWindow>)
-        })
+        let platform_state = Arc::downgrade(&self.state);
+        Ok(self.with_state(|state| create_mock_window(state, platform_state, options)))
     }
 
     fn active_window(&self) -> Option<WindowId> {
@@ -255,6 +299,136 @@ impl Platform for HeadlessPlatform {
 
     fn app_path(&self) -> Result<PathBuf> {
         Ok(PathBuf::from("/mock/app/path"))
+    }
+}
+
+/// Builds a fresh mock window under an already-locked `state`, threading it
+/// through the same register/activate/emit-`Created` bookkeeping
+/// `Platform::open_window`'s synchronous path uses — shared so the deferred-
+/// open resolution path ([`HeadlessDeferredWindowOpens::resolve_next`]) stays
+/// byte-for-byte consistent with the synchronous one instead of duplicating
+/// it.
+fn create_mock_window(
+    state: &mut HeadlessState,
+    platform_state: Weak<Mutex<HeadlessState>>,
+    options: WindowOptions,
+) -> Arc<dyn PlatformWindow> {
+    let window_id = WindowId(state.next_window_id);
+    state.next_window_id += 1;
+    let window = MockWindow::new(window_id, options, platform_state);
+
+    state.windows.push(window.clone());
+    state.active_window = Some(window_id);
+
+    state
+        .handlers
+        .invoke_window_event(WindowEvent::Created(window_id));
+
+    Arc::new(window) as Arc<dyn PlatformWindow>
+}
+
+/// [`OwnerHooks`] for the headless backend's deferred-open test mode
+/// (installed by `Platform::run` in place of `DirectOwnerHooks` when
+/// [`HeadlessPlatform::enable_deferred_window_open`] was called first).
+/// Exercises the `WindowOpen::Pending` arm of the owner-lane contract
+/// without needing a real winit event loop: every `open_owner_window` call
+/// enqueues a [`ClaimSlot`] request into `HeadlessState::pending_opens`
+/// instead of creating synchronously, and
+/// [`HeadlessDeferredWindowOpens::resolve_next`] completes the oldest one on
+/// demand.
+struct HeadlessDeferredOwnerHooks {
+    state: Arc<Mutex<HeadlessState>>,
+    owner_thread: ThreadId,
+}
+
+impl OwnerHooks for HeadlessDeferredOwnerHooks {
+    fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
+        // No wake-worthy event loop to notify on abandonment (this backend
+        // never parks a real loop on the request) -- see `claim_slot`'s own
+        // doc for why a no-op wake is the correct choice for a generic
+        // caller like this one.
+        let (slot, handle) = claim_slot::<OpenWindowResult>(Arc::new(|| {}));
+        self.state.lock().pending_opens.push((slot, options));
+        Ok(WindowOpen::Pending(PendingWindow::new(
+            handle,
+            self.owner_thread,
+        )))
+    }
+
+    fn transport(&self) -> Arc<dyn ProxyTransport> {
+        // This test mode defers window creation only; it does not add a
+        // cross-thread request lane, so `PlatformProxy` stays permanently
+        // unsupported here exactly as it is under `DirectOwnerHooks`.
+        Arc::new(ClosedTransport::new(self.owner_thread))
+    }
+}
+
+/// Test handle returned by [`HeadlessPlatform::enable_deferred_window_open`]
+/// — resolves the oldest still-pending deferred window-open request,
+/// completing the [`PendingWindow`] a `HeadlessDeferredOwnerHooks` call
+/// returned. `Weak`: this handle must never keep the platform state alive
+/// past the platform's own lifetime (same rationale as
+/// `MockWindow::platform_state`).
+pub struct HeadlessDeferredWindowOpens {
+    state: Weak<Mutex<HeadlessState>>,
+}
+
+impl std::fmt::Debug for HeadlessDeferredWindowOpens {
+    // Manual impl: `HeadlessState` carries no blanket `Debug` (its own
+    // `windows`/`handlers` fields don't derive it either).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessDeferredWindowOpens")
+            .field("platform_alive", &(self.state.upgrade().is_some()))
+            .finish()
+    }
+}
+
+impl HeadlessDeferredWindowOpens {
+    /// Resolves the oldest still-pending deferred open by constructing a
+    /// real mock window and delivering it through that request's
+    /// [`ClaimSlot`] — the same registration/activation/`Created`-event
+    /// bookkeeping the synchronous `Platform::open_window` path performs
+    /// (`create_mock_window`), so a test cannot tell the two paths apart
+    /// except by timing. Returns the same window handle that was delivered
+    /// (a real, live [`PlatformWindow`] a test can drive further — including
+    /// a genuine `.close()` — since the whole point of this test seam is
+    /// that nothing else in the framework hands that handle back once a
+    /// request defers), or `None` if there was nothing pending (the platform
+    /// was dropped, or every request so far has already been resolved).
+    pub fn resolve_next(&self) -> Option<Arc<dyn PlatformWindow>> {
+        let platform_state = self.state.upgrade()?;
+
+        // Pop the request and build its window under one lock acquisition,
+        // then deliver OUTSIDE the lock (same discipline `MockWindow::
+        // notify_closed` uses) -- `deliver`'s injected wake callback is a
+        // no-op here, but a future caller reusing this pattern must not
+        // rely on that.
+        let (slot, window) = {
+            let mut state = platform_state.lock();
+            if state.pending_opens.is_empty() {
+                return None;
+            }
+            let (slot, options) = state.pending_opens.remove(0);
+            let window = create_mock_window(&mut state, Arc::downgrade(&platform_state), options);
+            (slot, window)
+        };
+
+        // The requester may have already abandoned the request (dropped its
+        // `PendingWindow` before this call) -- `deliver`'s `Err` hands the
+        // freshly created window back so it is dropped/unwound instead of
+        // silently leaking a window nothing will ever claim. Either way this
+        // method still returns the SAME window handle to its own caller: a
+        // test driving `resolve_next` directly (rather than through a real
+        // `PendingWindow`) legitimately wants it regardless of whether some
+        // OTHER requester abandoned their own claim to it.
+        if let Err(_unclaimed) = slot.deliver(Ok(Arc::clone(&window))) {
+            tracing::debug!(
+                "resolved a deferred window open whose PendingWindow was \
+                 already abandoned by the requester; the created mock window \
+                 is still handed back to resolve_next's own caller"
+            );
+        }
+        Some(window)
     }
 }
 
@@ -368,17 +542,28 @@ impl MockWindow {
             return;
         };
 
-        let windows_empty = {
+        // Remove this window, then take the hook, in the SAME lock
+        // acquisition that re-checks emptiness — not two separate short
+        // locks. Between two separate acquisitions, another thread (or a
+        // reentrant call this window's own removal triggers) could open a
+        // new window in the gap, leaving a `windows_empty` read from the
+        // first lock stale: true when read, false by the time the hook
+        // actually runs. Re-checking here, still under one lock, closes
+        // that window; the hook/quit callback themselves still run OUTSIDE
+        // the lock (see this function's own doc for why). If the registry
+        // is not actually empty, the hook is left installed untouched
+        // (never taken) for the window close that does empty it.
+        let hook = {
             let mut state = platform_state.lock();
             state.windows.retain(|w| w.id != self.id);
             if state.active_window == Some(self.id) {
                 state.active_window = state.windows.first().map(|w| w.id);
             }
-            state.windows.is_empty()
+            if !state.windows.is_empty() {
+                return;
+            }
+            state.handlers.exit_policy.take()
         };
-        if !windows_empty {
-            return;
-        }
 
         // `is_some_and`, not `is_none_or`: headless's own pre-#555 default
         // is "no hook -> never quit" (matching every headless test/consumer
@@ -388,7 +573,6 @@ impl MockWindow {
         // real native pre-#555 window-close behavior instead. The two
         // backends' defaults are deliberately different; this is not a
         // typo.
-        let hook = platform_state.lock().handlers.exit_policy.take();
         let should_quit = hook.as_ref().is_some_and(|hook| hook());
         // Restore only if nothing fresher was installed meanwhile -- the
         // hook is not one-shot, unlike `quit` below: a veto here must leave
@@ -868,6 +1052,66 @@ impl Clipboard for MockClipboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Drives `OwnerPlatform::open_window` through the exact arm the real
+    /// winit owner lane returns for any call outside `on_ready`
+    /// (`WindowOpen::Pending`) instead of the default synchronous `Ready`
+    /// this backend otherwise always returns — the probe
+    /// `HeadlessPlatform::enable_deferred_window_open` exists for: without
+    /// it, nothing in this backend ever exercises the `Pending` completion
+    /// path a caller like `flui-app`'s `open_secondary_window` must handle.
+    #[test]
+    fn deferred_window_open_resolves_via_the_pending_arm_like_the_real_winit_owner_lane() {
+        let platform = HeadlessPlatform::new();
+        let deferred = platform.enable_deferred_window_open();
+
+        let opened: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>> = Arc::new(Mutex::new(None));
+        let opened_for_ready = Arc::clone(&opened);
+
+        Box::new(platform)
+            .run(Box::new(move |owner: OwnerPlatform| {
+                let open = owner
+                    .open_window(WindowOptions::default())
+                    .expect("deferred mode still accepts the request");
+                let mut pending = match open {
+                    WindowOpen::Pending(pending) => pending,
+                    WindowOpen::Ready(_) => {
+                        panic!("deferred mode must return Pending, not Ready")
+                    }
+                };
+
+                assert!(
+                    pending.try_take().is_none(),
+                    "nothing delivered before resolve_next runs"
+                );
+                let resolved_window = deferred
+                    .resolve_next()
+                    .expect("exactly one request was pending");
+                assert!(
+                    deferred.resolve_next().is_none(),
+                    "a second resolve_next has nothing left to resolve"
+                );
+
+                let delivered_window = pending
+                    .try_take()
+                    .expect("resolve_next delivers synchronously")
+                    .expect("mock window creation cannot fail");
+                assert!(
+                    Arc::ptr_eq(&resolved_window, &delivered_window),
+                    "resolve_next's own return value must be the SAME window it delivered \
+                     through the PendingWindow, not a second, different one"
+                );
+                *opened_for_ready.lock() = Some(delivered_window);
+
+                Ok(())
+            }))
+            .expect("run succeeds");
+
+        assert!(
+            opened.lock().is_some(),
+            "the Pending request resolved to a real mock window"
+        );
+    }
 
     #[test]
     fn test_headless_platform_creation() {

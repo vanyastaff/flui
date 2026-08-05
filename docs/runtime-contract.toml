@@ -136,7 +136,7 @@ declarations = [
     "pub use platforms::IOSPlatform;",
     "pub use platforms::LinuxPlatform;",
     "pub use platforms::MacOSPlatform;",
-    "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessPlatform};",
+    "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform};",
     "pub use platforms::WebPlatform;",
     "pub use platforms::WindowsPlatform;",
     "pub use platforms::WinitPlatform;",
@@ -387,6 +387,41 @@ outcome, and says so in its own name and doc); the tracked fix is to \
 re-consult the hook once a deferred realm-map mutation actually applies, \
 e.g. at each dispatch's own tail, not attempted here.
 
+**A second product gap this required fixing: `open_secondary_window` \
+assumed `OwnerPlatform::open_window` always resolves `Ready`.** It does, \
+inside `on_ready`, and on the headless backend (no owner lane at all) -- but \
+the real winit backend defers any call after `on_ready` \
+(`WinitOwnerHooks::open_owner_window`), which is exactly the calling \
+convention this function's own doc names as its intended use (a callback the \
+FIRST window already registered). An earlier revision called `WindowOpen::\
+try_ready` directly and surfaced `Pending` as a hard error, so the advertised \
+"open a second window at runtime" flow could never work on the real desktop \
+backend it is meant for. `open_secondary_window_impl` now matches both arms: \
+`Ready` installs inline (unchanged); `Pending` is accepted and its \
+completion is spawned on the first realm hosted on this thread's own \
+`flui_scheduler::AsyncDriver` (`spawn_pending_secondary_window_completion`) \
+-- never a hand-rolled busy-loop: the `PendingWindow`'s own wake (fired when \
+the owner lane delivers) requests a fresh frame, and that frame's \
+`Scheduler::drive_async_tasks` polls the task to completion, calling the SAME \
+`finish_open_secondary_window` the `Ready` arm calls inline, so both arms \
+install and wire a window identically. A `Pending` completion's own failure \
+(the resolve itself failing, or `finish_open_secondary_window` failing on the \
+resolved window) is traced, never silently dropped. Tested end-to-end -- \
+Pending -> resolved -> both-window close/exit -- on the headless backend's \
+own new deferred-open test seam (`HeadlessPlatform:: \
+enable_deferred_window_open`, `HeadlessDeferredWindowOpens::resolve_next`; \
+`crates/flui-platform`'s own `deferred_window_open_resolves_via_the_pending_ \
+arm_like_the_real_winit_owner_lane` pins the mechanism in isolation, \
+`crates/flui-app`'s `open_secondary_window_completes_through_the_pending_ \
+arm_like_the_real_winit_owner_lane` pins the full embedder-seam flow). Named \
+residual: this proves the completion seam generically, not a full winit \
+event-loop integration test -- no CI gate exercises the real winit backend \
+end-to-end at all (see `flui-platform`'s own evidence-must-live-outside-the- \
+test-gate constraint), so confidence that `WinitOwnerHooks::open_owner_ \
+window`'s own `Pending` construction and its lane's reply-delivery path \
+compose correctly with this completion is still design-level, not test-level \
+-- named honestly rather than silently assumed covered.
+
 **Named, deliberately out-of-scope residual:** a window `open_secondary_ \
 window` opens shows no widget content and never renders a frame. Two \
 distinct reasons, neither papered over. First, rendering in this crate is \
@@ -427,7 +462,7 @@ own doc comment:** `AppRuntime.visible`/`.focused` (`runtime.rs`) are still \
 LOOP-scoped, not per-realm -- with more than one hosted REALM, a \
 focus/visibility change on any one window's OS signal drives the SAME \
 `AppLifecycleState` derivation for every realm on this loop. Issue #555's \
-addressed-routing slice (PR-4/#608) narrowed this for the WITHIN-one-realm \
+addressed-routing slice (#608) narrowed this for the WITHIN-one-realm \
 case (`WindowPolicy::SharedRealm`'s more-than-one-presentation shape): a \
 non-active presentation's own window losing OS focus no longer suspends its \
 realm (`UiRealm::is_active_presentation` gates it). The remaining gap is \
@@ -522,6 +557,12 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn separate_realms_secondary_window_input_reaches_its_own_realm_not_the_primarys" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_exit_today" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn lease_exit_policy_hook" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn spawn_pending_secondary_window_completion" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn finish_open_secondary_window" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn enable_deferred_window_open" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "pub struct HeadlessDeferredWindowOpens" },
+    { kind = "test", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn deferred_window_open_resolves_via_the_pending_arm_like_the_real_winit_owner_lane" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
 ]
 
 [[contract]]
@@ -1159,8 +1200,8 @@ own stale copy. `runner.rs::install_presentation_alongside` mints a second \
 presentation's registry mapping alongside an existing one, in the same call \
 that installs it into the forest (`UiRealm::install_presentation`), so no \
 hosted presentation is ever forest-resident without a registry mapping of \
-its own. `runner.rs::open_secondary_window` (issue #555's PR-5) is now that \
-real embedder call site: it opens a genuine second native window and mints \
+its own. `runner.rs::open_secondary_window` (issue #555's final slice) is \
+now that real embedder call site: it opens a genuine second native window and mints \
 its registry mapping in production, for both `install_realm_alongside` and \
 `install_presentation_alongside`, closing the "no real caller yet" half of \
 this remainder. Still not the public surface: this stays `AppRuntime`'s own \
@@ -1278,7 +1319,7 @@ registry that is mid-teardown anyway. \
 Flips to "implemented": the ratchet lift and the addressed routing it \
 unblocks are both real and exercised, and the native-lifecycle gap this \
 entry used to name is now closed by `runner.rs::open_secondary_window` \
-(issue #555's PR-5) — a real production embedder call site that opens a \
+(issue #555's final slice) — a real production embedder call site that opens a \
 genuine second native window and installs a second presentation through \
 this exact path under `WindowPolicy::SharedRealm` \
 (`one_realm_two_windows_policy_routes_by_presentation`). Named residual, \
@@ -1832,7 +1873,11 @@ classification = "experimental"
 thread_affinity = "Send (statically asserted); wait() type-refuses the owner thread via WaitError::WouldBlockOwner rather than deadlocking on the lane it drains"
 owner = "the requester that received it from OwnerPlatform::open_window or PlatformProxy::open_window"
 failure_semantics = "dropping it disclaims the request (guard-like): the owner skips creation (not yet delivered) or unwinds the created window (already delivered) -- see ClaimSlot's module docs"
-consumers = ["winit lane deferred-open path"]
+consumers = [
+    "winit lane deferred-open path",
+    "flui-app's open_secondary_window Pending-arm completion (issue #555's final slice)",
+    "flui-platform's headless HeadlessDeferredOwnerHooks (test-only Pending-arm probe, no real event loop)",
+]
 owner_issue = 551
 
 [[surface]]
@@ -1845,7 +1890,11 @@ classification = "experimental"
 thread_affinity = "returned by OwnerPlatform::open_window; Ready always holds inside on_ready"
 owner = "OwnerPlatform::open_window's caller"
 failure_semantics = "exhaustive by design (Ready/Pending is the load-bearing two-state deferral model; a third state is a redesign); try_ready() converts Pending into the typed OpenWindowError::NotReady"
-consumers = ["every bootstrap_* function", "examples"]
+consumers = [
+    "every bootstrap_* function",
+    "examples",
+    "flui-app's open_secondary_window_impl, which matches both arms directly instead of calling try_ready (issue #555's final slice closed the prior Ready-only gap on this exact call site)",
+]
 owner_issue = 551
 
 [[surface]]
@@ -1866,7 +1915,7 @@ path = "flui_platform backend types (WinitPlatform, WindowsPlatform, MacOSPlatfo
 crate = "flui-platform"
 kind = "type"
 declared_in = "crates/flui-platform/src/lib.rs"
-contains = "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessPlatform}"
+contains = "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform}"
 classification = "transitional"
 thread_affinity = "construct and run on the thread that owns (or will own) the event loop; MacOSPlatform carries unsafe impl Send/Sync by AppKit convention"
 owner = "per-OS event-loop backends"

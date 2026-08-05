@@ -34,7 +34,7 @@ pub mod winit;
 // Re-exports
 #[cfg(target_os = "android")]
 pub use android::AndroidPlatform;
-pub use headless::{FakeHaptics, FakeTextInput, HeadlessPlatform};
+pub use headless::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform};
 #[cfg(target_os = "ios")]
 pub use ios::IOSPlatform;
 #[cfg(target_os = "linux")]
