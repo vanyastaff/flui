@@ -2,7 +2,7 @@
 //!
 //! These tests prove that the seams built for measurement — `box_size` / `transform_to`,
 //! post-frame after layout, observer attachment, `RouteSubtree`,
-//! `PostFrameHandle`, notification outside the history lock, and the
+//! `LocalPostFrameHandle`, notification outside the history lock, and the
 //! offstage animation proxies — **compose** into a destination rect.
 //!
 //! They do not prove the flight overlay itself; `hero_flight_tests` owns that layer.
@@ -543,11 +543,22 @@ fn without_a_post_frame_capability_the_destination_is_left_onstage() {
     assert!(controller.measurements().is_empty());
 }
 
-/// A present but inactive owner-local capability is also a typed scheduling
+/// A present but DEAD owner-local capability is also a typed scheduling
 /// failure. The controller must enqueue successfully before hiding the route;
-/// otherwise an owner-scope mistake would strand the destination offstage.
+/// otherwise a capability that outlived its binding would strand the
+/// destination offstage.
+///
+/// `LocalPostFrameHandle` addresses its lane directly (a `Weak` pointer,
+/// checked at every `schedule_local` call) rather than through a
+/// thread-local "is this the active lane" resolution — there is no more
+/// "wrong scope" failure mode, only "the lane (or its scheduler) is gone".
+/// Dropping the whole harness after the navigator captured its handle in
+/// `init_state` is what makes that handle's backing lane and scheduler both
+/// unreachable, while `navigator`/`modal` (independent, `Arc`-backed values)
+/// remain queryable — the same shape a leaked, stale capability would produce
+/// in production.
 #[test]
-fn inactive_local_lane_never_strands_the_destination_offstage() {
+fn dead_local_lane_never_strands_the_destination_offstage() {
     let navigator = seeded_navigator();
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
@@ -557,15 +568,19 @@ fn inactive_local_lane_never_strands_the_destination_offstage() {
 
     let second = page_route();
     let modal = second.modal_handle();
-    let _second = navigator.push(second); // deliberately outside the owner scope
+
+    // Tear down the binding that minted the navigator's captured
+    // `LocalPostFrameHandle`. The handle field on `navigator` survives (it is
+    // only cleared by `dispose`), but both its `Weak`s now fail to upgrade.
+    drop(harness);
+
+    let _second = navigator.push(second);
 
     assert_eq!(controller.scheduled_count(), 0);
     assert!(
         !modal.offstage(),
-        "InactiveLane must be handled before the destination is hidden"
+        "a dead local lane must be handled before the destination is hidden"
     );
-    harness.tick();
-    assert!(!modal.offstage());
 }
 
 // ============================================================================

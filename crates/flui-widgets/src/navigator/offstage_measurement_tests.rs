@@ -19,8 +19,9 @@
 //! (`routes.dart:1951-1962`, `:2221-2231`), marking the route's subtree dirty, and
 //! the frame's build + layout then runs before the post-frame phase.
 //!
-//! If FLUI's frame order does not deliver that, the `PostFrameHandle` seam would be
-//! built on a false assumption and every flight would start from a stale rect.
+//! If FLUI's frame order does not deliver that, the `LocalPostFrameHandle` seam
+//! would be built on a false assumption and every flight would start from a
+//! stale rect.
 //!
 //! # Why the route under test is a *newly pushed* one
 //!

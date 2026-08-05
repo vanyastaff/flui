@@ -81,15 +81,18 @@ pub(crate) enum TextInputCapability {
     Absent,
 }
 
-/// Whether the binding hands `BuildContext` a [`PostFrameHandle`] at all.
+/// Whether the binding hands `BuildContext` a [`PostFrameHandle`]/
+/// [`LocalPostFrameHandle`] at all — `Absent` withholds both, together.
 ///
-/// `BuildContext::post_frame_handle()` returns an `Option`, so "no post-frame
-/// capability" is a real, reachable configuration — an embedder that drives frames
-/// itself, or any binding that simply never calls `install_build_capabilities`.
-/// Code that acquires the handle must behave when it is absent, and the only way to
-/// test that is to mount without one.
+/// `BuildContext::post_frame_handle()`/`local_post_frame_handle()` return an
+/// `Option`, so "no post-frame capability" is a real, reachable configuration
+/// — an embedder that drives frames itself, or any binding that simply never
+/// calls `install_build_capabilities`. Code that acquires either handle must
+/// behave when it is absent, and the only way to test that is to mount
+/// without one.
 ///
 /// [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
+/// [`LocalPostFrameHandle`]: flui_scheduler::LocalPostFrameHandle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PostFrameCapability {
     Installed,
@@ -397,11 +400,11 @@ impl Harness {
     /// `BuildOwner`, so a test can `schedule_local` a callback that captures
     /// the (`!Send`) [`PipelineCell`] — `add_post_frame_callback`'s `Send`
     /// bound cannot carry it.
-    pub(crate) fn post_frame_handle(&mut self) -> flui_scheduler::PostFrameHandle {
+    pub(crate) fn post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
         self.binding
             .build_owner_mut()
-            .post_frame_handle()
-            .expect("post-frame handle installed by mount_with_capabilities")
+            .local_post_frame_handle()
+            .expect("owner-local post-frame handle installed by mount_with_capabilities")
             .clone()
     }
 

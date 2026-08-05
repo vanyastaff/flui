@@ -50,7 +50,7 @@
 //! | `toRoute.offstage = …` (`:967`) | [`ModalHandle::set_offstage`] via the navigator's modal registry |
 //! | `didChangeTop` (`navigator.dart:4590-4596`) | `Notification::TopChanged`, delivered outside the history lock |
 //! | offstage ⇒ `animation.value == 1.0` (`routes.dart:1958`) | the `ModalRoute` animation proxies |
-//! | `addPostFrameCallback` (`:968`) | [`PostFrameHandle`] |
+//! | `addPostFrameCallback` (`:968`) | [`LocalPostFrameHandle`] |
 //! | the callback runs *after* layout commits | `UpdateScheduler::drive_frame` |
 //! | `to.subtreeContext` (`:1014`) | [`RouteSubtree`] |
 //! | `subtreeContext.findRenderObject()!.size` (`:952`) | `PipelineOwner::box_size` |
@@ -94,7 +94,7 @@
 //! (`_HeroFlight._handleAnimationUpdate`, `:622-650`).
 //!
 //! [`ModalHandle::set_offstage`]: super::modal_route::ModalHandle::set_offstage
-//! [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
+//! [`LocalPostFrameHandle`]: flui_scheduler::LocalPostFrameHandle
 //! [`RouteSubtree`]: super::subtree::RouteSubtree
 
 // A `Navigator` now auto-attaches a `HeroController` in production, so the

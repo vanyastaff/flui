@@ -136,7 +136,7 @@ struct NavigatorShared {
     /// `None` when the navigator is unmounted, or when the binding installed no
     /// post-frame handle — a `HeroController` then simply never measures, which is
     /// Flutter's `if (navigator == null) return;` (`heroes.dart:970`).
-    post_frame: Mutex<Option<flui_scheduler::PostFrameHandle>>,
+    post_frame: Mutex<Option<flui_scheduler::LocalPostFrameHandle>>,
     render_tree: Mutex<Option<flui_rendering::pipeline::PipelineCell>>,
 
     /// Whether the mounted `NavigatorState` currently holds the observers
@@ -1337,7 +1337,7 @@ impl NavigatorHandle {
     ///
     /// `None` before mount and after unmount, so a stale `HeroController` schedules
     /// nothing. Acquired in `init_state`; never in `build`/layout/paint (trigger #22).
-    pub(crate) fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+    pub(crate) fn post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
         self.shared.post_frame.lock().clone()
     }
 
@@ -1550,7 +1550,7 @@ impl ViewState<Navigator> for NavigatorState {
 
         // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.
-        *self.shared.post_frame.lock() = ctx.post_frame_handle();
+        *self.shared.post_frame.lock() = ctx.local_post_frame_handle();
         *self.shared.render_tree.lock() = ctx.pipeline_owner();
 
         // Resolve the ambient `HeroControllerScope` and settle which

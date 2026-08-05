@@ -102,8 +102,8 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         *self.rebuild.lock() = Some(ctx.rebuild_handle());
         let handle = ctx
-            .post_frame_handle()
-            .expect("the binding must install a PostFrameHandle");
+            .local_post_frame_handle()
+            .expect("the binding must install a LocalPostFrameHandle");
         let pipeline = self.pipeline.clone();
         let observed = Arc::clone(&self.observed_committed_geometry);
         let owner_local = Rc::new(Cell::new(false));
