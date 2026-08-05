@@ -1,6 +1,6 @@
-//! Pinned end-state invariants for issue #556 PR-B (the `UpdateScheduler`
-//! reshape: hard rename off `Scheduler`, `drive_frame(now, deadline, ..)`,
-//! `budget()` guard retired, `VsyncScheduler` deleted).
+//! Pinned end-state invariants for issue #556's `UpdateScheduler` reshape:
+//! hard rename off `Scheduler`, `drive_frame(now, deadline, ..)`,
+//! `budget()` guard retired, `VsyncScheduler` deleted.
 //!
 //! These are mutant-first exploits: each one is written to *fail* against
 //! the pre-reshape shape, not merely to pass against the current one.
@@ -130,8 +130,8 @@ fn no_deadline_set_means_idle_work_is_never_deferred() {
     );
 }
 
-/// End-state registry sweep (mutant-first, red-exploit for the PR-B
-/// reshape): `flui-scheduler`'s own source must contain none of —
+/// End-state registry sweep (mutant-first, red-exploit for this reshape):
+/// `flui-scheduler`'s own source must contain none of —
 ///
 /// - `FPS_60` — the deleted fixed 60fps default constant/constructor
 ///   assumption (`FrameDuration::try_from_fps(60)` is fine; the *named*

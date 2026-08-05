@@ -6222,7 +6222,7 @@ mod desktop_pacing_tests {
 }
 
 /// Placeholder Idle-slice deadline for `UpdateScheduler::drive_frame`
-/// (`flui-scheduler`'s #556 PR-B reshape) until a real one exists.
+/// (added by issue #556's scheduler reshape) until a real one exists.
 ///
 /// No `FrameClock` is wired into any backend yet (that split lands in a
 /// later #556 slice) — every backend's `drive_frame` call passes a deadline
