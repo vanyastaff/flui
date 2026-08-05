@@ -2067,7 +2067,16 @@ fn dispatch_platform_realm(
     // discipline as `drain_pending_realm_mutations` above, for the same
     // reason: a resolved secondary window should not sit unwired forever
     // just because this dispatch's own task panicked for an unrelated
-    // reason.
+    // reason. This function itself (`dispatch_platform_realm`) compiles on
+    // every backend (only `not(target_os = "ios")`), but the drain helper
+    // and everything it touches exist only on the desktop-only
+    // `open_secondary_window` family's own cfg -- gate the call site to
+    // match, not the function.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     drain_pending_secondary_window_completions();
     if let Err(payload) = result {
         std::panic::resume_unwind(payload);
@@ -2198,7 +2207,15 @@ fn for_each_installed_realm(mut f: impl FnMut(&super::ui_realm::UiRealm)) {
     // Pending completion via `Scheduler::drive_async_tasks`, which cannot
     // complete mid-visit for the same reason it cannot complete
     // mid-dispatch (`iterating_all_realms` holds this thread's checkout
-    // state just as `dispatched_realm_id` does).
+    // state just as `dispatched_realm_id` does). This function itself
+    // compiles on every backend (only `not(target_os = "ios")`) -- gate the
+    // call site to the desktop-only `open_secondary_window` family's own
+    // cfg, not the function.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     drain_pending_secondary_window_completions();
 
     if let Some(payload) = panic_payload {
@@ -6899,7 +6916,19 @@ pub fn open_secondary_window(config: AppConfig, policy: WindowPolicy) -> anyhow:
     open_secondary_window_impl(config, policy).map(|_| ())
 }
 
-#[cfg(not(target_os = "ios"))]
+// Same cfg as `open_secondary_window`/`open_secondary_window_impl`/
+// `finish_open_secondary_window` themselves (desktop-only) -- both statics
+// exist only to serve that family, and `PENDING_SECONDARY_WINDOW_COMPLETIONS`
+// names `WindowPolicy`, which is imported under this exact cfg expression
+// (see this module's own `use super::runtime::WindowPolicy` above). A
+// narrower cfg here (e.g. `not(target_os = "ios")` alone) leaves this type
+// annotation referencing an import that does not exist on android/wasm32,
+// a hard compile error there, not merely dead code.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 thread_local! {
     /// The pending-completion registry for `open_secondary_window`'s
     /// `Pending` arm (see [`spawn_pending_secondary_window_completion`]) —
@@ -6948,7 +6977,11 @@ thread_local! {
 /// A completion's own failure is traced (`tracing::error!`), never
 /// propagated: by the time this runs there is no synchronous caller left for
 /// either policy to return an `Err` to.
-#[cfg(not(target_os = "ios"))]
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 fn drain_pending_secondary_window_completions() {
     let pending =
         PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
@@ -7071,7 +7104,11 @@ fn open_secondary_window_impl(
 /// caller can itself await) is real, scoped follow-up work, named here
 /// rather than silently assumed; today's contract is "traced, never
 /// silently dropped", which this function keeps.
-#[cfg(not(target_os = "ios"))]
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 fn spawn_pending_secondary_window_completion(
     policy: WindowPolicy,
     pending: flui_platform::PendingWindow,
