@@ -496,8 +496,7 @@ pub enum AttachError {
 }
 
 /// A realm-level `GlobalKey` registry spanning several [`WidgetsBinding`]s —
-/// one per presentation sharing a realm's `GlobalKeyScope` (ADR-0043 §1
-/// RULING 1b).
+/// one per presentation sharing a realm's `GlobalKeyScope` (ADR-0043 §1).
 ///
 /// Assembled once over the presentations installed at the time
 /// [`Self::assemble`] runs, tried in the given order (a realm's mount

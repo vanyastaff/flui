@@ -385,17 +385,18 @@ pub(crate) struct UiRealm {
     /// installed into every presentation's `BuildOwner` at assembly time
     /// (`PresentationState::new`). Retained here (not just handed off once)
     /// so a later-installed presentation can share the same scope; read back
-    /// by [`Self::global_key_scope`] for the isolation test suite, which
-    /// bypasses `PresentationForest`'s production ratchet to assemble a
-    /// second presentation sharing this exact scope.
+    /// by the `cfg(test)`-only `global_key_scope` accessor below for the
+    /// isolation test suite, which bypasses `PresentationForest`'s production
+    /// ratchet to assemble a second presentation sharing this exact scope.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "no production reader until a presentation-install path \
-                      (#555 PR-4/5) needs to hand this same scope to a newly \
-                      assembled presentation; the isolation test suite reads \
-                      it back today via Self::global_key_scope"
+            reason = "no production reader until a later addressed-routing \
+                      slice's presentation-install path needs to hand this \
+                      same scope to a newly assembled presentation; the \
+                      isolation test suite reads it back today via \
+                      Self::global_key_scope"
         )
     )]
     global_key_scope: GlobalKeyScope,
@@ -836,7 +837,7 @@ impl UiRealm {
     /// Enter this realm's owner scope.
     ///
     /// A composite `GlobalKey` registry spanning every presentation this
-    /// realm hosts (ADR-0043 §1 RULING 1b) is active for the entire dynamic
+    /// realm hosts (ADR-0043 §1) is active for the entire dynamic
     /// extent of `f`, including lifecycle/build callbacks — whole-frame,
     /// exactly as a single presentation's own registry always was: post-frame
     /// callbacks, command drains, deferred arena resolutions, and hot-reload
@@ -1832,10 +1833,10 @@ mod tests {
     /// `GlobalKeyScope` and realm-level dispatch handles.
     ///
     /// Bypasses `PresentationForest`'s production ratchet
-    /// (`PresentationForest::push_for_test`) deliberately — this is the
-    /// isolation-suite seam #555 PR-3's plan names: a genuine
-    /// multi-presentation realm ahead of the addressed routing (#555
-    /// PR-4/5) that makes doing so safe in production.
+    /// (`PresentationForest::push_for_test`) deliberately — the
+    /// isolation-suite seam for exercising a genuine multi-presentation
+    /// realm ahead of the addressed routing that makes doing so safe in
+    /// production.
     fn install_second_presentation_for_test(realm: &mut UiRealm) -> PresentationId {
         let (_, presentation_id) = crate::app::runtime::next_identity();
         let pipeline = PipelineCell::new(PipelineOwner::new());
@@ -4556,7 +4557,7 @@ mod tests {
     }
 
     // ========================================================================
-    // Presentation forest — isolation suite (ADR-0043 §1, #555 PR-3)
+    // Presentation forest — isolation suite (ADR-0043 §1)
     //
     // Production topology is exactly one presentation per realm
     // (`PresentationForest`'s `install` ratchet); these tests bypass it via
@@ -4581,7 +4582,7 @@ mod tests {
             );
         }
 
-        /// The realm composite `enter()` activates (ADR-0043 §1 RULING 1b)
+        /// The realm composite `enter()` activates (ADR-0043 §1)
         /// must resolve a `GlobalKey` registered in EITHER presentation's own
         /// tree, not just the primary one — the correctness property
         /// `GlobalKeyRegistryComposite` exists for.
@@ -4693,13 +4694,13 @@ mod tests {
             // Drop (each PresentationState transitions to Closed on its own
             // drop -- see PresentationState::close/Drop); nothing left to
             // assert on here beyond "this did not panic", since the values
-            // themselves are gone. The meaningful oracle is
-            // `closing_presentation_a_leaves_sibling_layer_tree_identical`-
-            // style structural isolation, which the single-presentation
-            // production path already covers via existing render-frame
-            // tests; a genuine N>1 close-one-keep-one-running scenario needs
-            // the addressed teardown path #555 PR-4/5 adds and is out of
-            // this slice's scope.
+            // themselves are gone. Proving that closing ONE presentation
+            // structurally cannot disturb a SURVIVING sibling's own layer
+            // tree needs an addressed per-presentation teardown path (close
+            // exactly one member, keep the rest running) that this slice
+            // does not add -- production topology never removes a single
+            // member from a live forest today, it only ever drops the whole
+            // realm, which is what this test actually exercises.
         }
     }
 }

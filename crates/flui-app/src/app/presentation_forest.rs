@@ -3,13 +3,13 @@
 //!
 //! Production topology is exactly one presentation per realm today: opening
 //! a second independent window installs a second REALM (`AppRuntime`'s
-//! `RealmId`-keyed map, #555 PR-1), not a second presentation inside an
-//! existing one. This type exists so that shape — the realm-level composite
-//! `GlobalKey` registry, the per-presentation pump/teardown/reassemble
-//! machinery — is written once, generally, over `Vec<PresentationState>`
-//! rather than hand-specialized to "exactly one", so a later slice (window
-//! grouping / `WindowPolicy`, #555 PR-4/5) can lift the ratchet below
-//! without re-deriving this plumbing.
+//! `RealmId`-keyed map), not a second presentation inside an existing one.
+//! This type exists so that shape — the realm-level composite `GlobalKey`
+//! registry, the per-presentation pump/teardown/reassemble machinery — is
+//! written once, generally, over `Vec<PresentationState>` rather than
+//! hand-specialized to "exactly one", so a later addressed-routing slice
+//! (window grouping / `WindowPolicy`) can lift the ratchet below without
+//! re-deriving this plumbing.
 //!
 //! Iteration order is insertion (mount) order: a plain `Vec`, never
 //! reordered. Pump, reassemble fan-out, and the composite registry all rely
@@ -29,8 +29,9 @@ use super::presentation::PresentationState;
 /// (`multi-presentation-forest-gate`, `docs/runtime-contract.toml`) as the
 /// mechanical 1×N ratchet: production topology stays exactly one
 /// presentation per realm until a later slice's addressed routing lifts it.
-/// [`Self::push_for_test`] is the only bypass, and only compiles under
-/// `cfg(test)`.
+/// `push_for_test` is the only bypass, and only compiles under `cfg(test)`
+/// (not linked from this doc: a plain `cfg(test)` item has no stable link
+/// target in a non-test doc build).
 pub(crate) struct PresentationForest {
     presentations: Vec<PresentationState>,
 }
@@ -50,13 +51,13 @@ impl PresentationForest {
     /// — there is no production call site for this today (opening a second
     /// window installs a second realm, not a second presentation), so this
     /// exists to fail loudly the moment one is added ahead of the addressed
-    /// routing (#555 PR-4/5) that makes a true forest safe to drive.
+    /// routing that makes a true forest safe to drive.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
             reason = "no production caller until the len()<=1 ratchet lifts \
-                      (#555 PR-4/5's addressed routing); push_for_test is the \
+                      (a later addressed-routing slice); push_for_test is the \
                       isolation-suite bypass"
         )
     )]
@@ -65,8 +66,8 @@ impl PresentationForest {
             self.presentations.is_empty(),
             "BUG: PresentationForest::install called while the ratchet is \
              still closed -- production topology is exactly one presentation \
-             per realm until #555 PR-4/5 lifts the len()<=1 gate; tests use \
-             push_for_test to bypass it deliberately"
+             per realm until a later addressed-routing slice lifts the \
+             len()<=1 gate; tests use push_for_test to bypass it deliberately"
         );
         self.presentations.push(presentation);
     }
@@ -106,7 +107,7 @@ impl PresentationForest {
         expect(
             dead_code,
             reason = "addressed lookup by id has no production caller until \
-                      #555 PR-4's addressed entry points land"
+                      a later addressed-routing slice's entry points land"
         )
     )]
     pub(crate) fn get(&self, id: PresentationId) -> Option<&PresentationState> {
@@ -118,10 +119,11 @@ impl PresentationForest {
         not(test),
         expect(
             dead_code,
-            reason = "no production caller until a presentation-close path \
-                      (#555 PR-4/5) removes a member from a genuine N>1 forest; \
-                      teardown of the realm's SOLE presentation today drops \
-                      the whole forest instead of removing a member from it"
+            reason = "no production caller until a later addressed-routing \
+                      slice's presentation-close path removes a member from \
+                      a genuine N>1 forest; teardown of the realm's SOLE \
+                      presentation today drops the whole forest instead of \
+                      removing a member from it"
         )
     )]
     pub(crate) fn remove(&mut self, id: PresentationId) -> Option<PresentationState> {

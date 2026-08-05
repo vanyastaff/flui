@@ -786,12 +786,17 @@ impl AppRuntime {
     }
 
     /// The un-deferred application of an `Uninstall` mutation.
+    ///
+    /// Registry removal runs first, matching `window_registry.rs`'s
+    /// module-doc invariant and `teardown_platform_realm`'s own ordering:
+    /// stop new routing before the returned `RealmSlot`'s queued
+    /// old-generation events are ever dropped (whenever the caller
+    /// eventually drops it — see this module's TLS-borrow-reentrancy
+    /// discipline for why that drop happens outside this function, not
+    /// inside it).
     fn apply_uninstall(&mut self, id: RealmId) -> Option<RealmSlot> {
-        let removed = self.realms.remove(&id);
-        if removed.is_some() {
-            self.registry.remove_realm(id);
-        }
-        removed
+        self.registry.remove_realm(id);
+        self.realms.remove(&id)
     }
 
     /// Requests installing a newly-constructed realm, registering `window`'s

@@ -592,18 +592,36 @@ evidence = [
 [[contract]]
 key = "globalkey-realm-scoped"
 statement = """
-GlobalKey identity is realm-scoped through a realm-entry activation stack, \
-not a process-global active registry. Deliberate divergence from Flutter's \
-process-global registry, sanctioned by the leapfrog-zone governance.\
+GlobalKey identity is realm-scoped, split across two authorities (ADR-0043 \
+§1): `BuildOwner.global_keys` is the intra-tree RETAKE authority (key hash \
+-> ElementId in that owner's own tree; `element_tree.rs`'s reparent/retake \
+machinery reads and writes only this map and is scope-blind by design). \
+`GlobalKeyScope` is the cross-tree UNIQUENESS authority shared by every \
+presentation in a realm (key hash -> which owner currently holds it) -- a \
+cross-owner duplicate mount fails eagerly, traced before the panic, naming \
+both owners. RESOLUTION for `GlobalKey::current_element`/`with_current_state` \
+goes through neither authority directly: `UiRealm::enter()` activates one \
+`GlobalKeyRegistryComposite` (flui-view) assembled over every presentation's \
+own `WidgetsBinding` registry, whole-frame, exactly as a single \
+presentation's own registry always was -- so post-frame callbacks, command \
+drains, deferred arena resolutions, and hot-reload reassemble all resolve \
+keys realm-wide regardless of which presentation's own segment is running. \
+Deliberate divergence from Flutter's process-global registry, sanctioned by \
+the leapfrog-zone governance.\
 """
 state = "implemented"
 domain = "realm"
 mechanical = true
 mechanism = "test existence pinned here"
 evidence = [
+    { kind = "symbol", file = "crates/flui-view/src/owner/global_key_scope.rs", contains = "pub struct GlobalKeyScope" },
+    { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "pub struct GlobalKeyRegistryComposite" },
+    { kind = "symbol", file = "crates/flui-view/src/key/registry.rs", contains = "pub(crate) fn build_composite" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn realm_id" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn realm_entry_activates_its_global_key_registry" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn whole_frame_event_keeps_realm_global_key_scope_active" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn composite_registry_resolves_keys_registered_in_either_presentation" },
+    { kind = "test", file = "crates/flui-view/src/key/registry.rs", contains = "fn composite_routes_with_element_to_the_member_that_resolved_the_lookup" },
 ]
 
 [[contract]]
@@ -934,19 +952,37 @@ evidence = [
 [[contract]]
 key = "multi-presentation-forest-gate"
 statement = """
-One-realm/multi-presentation support is gated on a verified element forest; \
-until then a realm holds at most one live `PresentationState`. The gate \
-holds structurally today — `UiRealm` stores exactly one `PresentationState` \
-by value, so a second attachment is unrepresentable. The forest itself is \
-future work.\
+`UiRealm` hosts an insertion-ordered `PresentationForest` (ADR-0043 §1), not \
+a single `PresentationState` field — but production topology stays gated at \
+exactly one presentation per realm through the forest's own mechanical \
+ratchet: `PresentationForest::install` panics with `BUG:` if the forest \
+already holds a presentation, and has no production caller (opening a second \
+independent window installs a second REALM instead, through the multi-realm \
+`AppRuntime`). `push_for_test` is the isolation suite's only bypass, \
+`cfg(test)`-gated. Every presentation is its own bundle (own \
+`WidgetsBinding`, `RenderingFlutterBinding`, focus/IME/gestures/semantics) \
+assembled via `PresentationState::new`'s `RealmCapabilities` parameter, which \
+installs the realm's `GlobalKeyScope` before any realm-shared dispatch handle \
+and before attach/mount. Addressed routing across a genuine N>1 forest \
+(`PresentationForest::get`/`remove` by id) is wired but has no production \
+entry point yet -- a later addressed-routing slice adds one; lifting the \
+ratchet is deferred to it, not to this contract's ownership shape.\
 """
 state = "partial"
 domain = "realm"
 owner_issue = 555
 mechanical = true
-mechanism = "single-field storage pinned by symbol check; a second slot or Vec would change the string"
+mechanism = "PresentationForest symbol + its install-ratchet panic message pinned; a lifted ratchet or renamed panic would change these strings"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "presentation: PresentationState" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "presentations: PresentationForest" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "widgets: WidgetsBinding" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "renderer: RenderingFlutterBinding" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "BUG: PresentationForest::install called while the ratchet is" },
+    { kind = "test", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "fn install_panics_once_the_forest_already_holds_a_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "fn push_for_test_bypasses_the_ratchet" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn push_for_test_bypasses_the_production_ratchet" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn reassemble_fans_out_to_all_presentations_in_mount_order" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropping_the_realm_closes_every_presentation" },
 ]
 
 [[contract]]

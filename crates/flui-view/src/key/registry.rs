@@ -116,7 +116,7 @@ impl GlobalKeyRegistryHandle {
 }
 
 /// Build one composite handle spanning `members`, consulted in the given
-/// order (ADR-0043 §1 RULING 1b's realm composite, over per-presentation
+/// order (ADR-0043 §1's realm composite, over per-presentation
 /// `WidgetsBinding` registries).
 ///
 /// `GlobalKeyScope`'s uniqueness invariant guarantees at most one member ever
@@ -321,7 +321,7 @@ mod tests {
     }
 
     // ========================================================================
-    // `build_composite` — the realm composite (ADR-0043 §1 RULING 1b)
+    // `build_composite` — the realm composite (ADR-0043 §1)
     // ========================================================================
 
     /// A member whose lookup/visit are driven by a plain `HashMap` the test
