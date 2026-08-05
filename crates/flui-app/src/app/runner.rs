@@ -4320,13 +4320,27 @@ mod realm_dispatch_tests {
     /// dispatched for a presentation moves the active presentation to it;
     /// `WindowFocus(false)` dispatched for a DIFFERENT, non-active
     /// presentation never moves it away from whichever presentation is
-    /// currently active.
+    /// currently active, and must NOT suspend the realm-wide lifecycle
+    /// either (a sibling presentation still holds focus). The FINAL step
+    /// pins the other half of that same guard: `WindowFocus(false)`
+    /// dispatched for the presentation that IS currently active must still
+    /// suspend the realm normally -- the guard drops only NON-active
+    /// focus-loss, never focus-loss in general.
     ///
-    /// Mutant: `PlatformToUi::run`'s `WindowFocus` arm calls
-    /// `notify_presentation_focus_gained` inside `if focused { .. }` --
-    /// removing that guard (calling it unconditionally, so `WindowFocus(false)`
-    /// also moves active) makes this fail: the final assertion would observe
-    /// A active instead of B.
+    /// Mutants, both confirmed to make this fail:
+    /// - `PlatformToUi::run`'s `WindowFocus` arm calling
+    ///   `notify_presentation_focus_gained` inside `if focused { .. }`
+    ///   unconditionally (removing that guard, so `WindowFocus(false)` also
+    ///   moves active) -- the active-presentation assertion after B gains
+    ///   focus would observe A instead of B.
+    /// - The polarity mutant `if !focused { return; }` in place of
+    ///   `if !focused && !realm.is_active_presentation(presentation_id) { return; }`
+    ///   -- dropping EVERY focus loss unconditionally, so the realm can
+    ///   never suspend at all. This one is invisible to the middle
+    ///   assertions (A's focus loss is already supposed to be dropped) and
+    ///   is caught ONLY by the final step below, where B -- the ACTUALLY
+    ///   active presentation -- loses focus and the realm must still
+    ///   suspend.
     #[test]
     fn window_focus_true_moves_active_presentation_end_to_end_and_false_does_not() {
         // One shared platform instance for both windows -- see
@@ -4409,6 +4423,29 @@ mod realm_dispatch_tests {
                     AppLifecycleState::Resumed,
                     "a WindowFocus(false) from a non-active presentation must never suspend \
                      the realm while a sibling presentation still holds focus"
+                );
+            })),
+        )
+        .expect("frame task dispatches");
+
+        // WindowFocus(false) dispatched for B -- the presentation that IS
+        // currently active -- pins the OTHER half of the guard: dropping
+        // non-active focus-loss must never widen into dropping ALL
+        // focus-loss. The realm must actually suspend here.
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Event(PlatformToUi::WindowFocus(false)),
+        )
+        .expect("WindowFocus(false) for B dispatches");
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_ne!(
+                    realm.scheduler().lifecycle_state(),
+                    AppLifecycleState::Resumed,
+                    "WindowFocus(false) from the presentation that IS currently active must \
+                     still suspend the realm -- the guard drops only NON-active focus-loss, \
+                     never focus-loss unconditionally"
                 );
             })),
         )

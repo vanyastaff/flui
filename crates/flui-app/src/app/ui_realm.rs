@@ -709,11 +709,16 @@ impl UiRealm {
     /// (`PipelineOwner::new`'s own default applies) — preserved exactly,
     /// not silently changed to an explicit `1.0`.
     ///
-    /// Assembles this realm's SOLE (production ratchet: `PresentationForest`
-    /// enforces `len() <= 1`) presentation via [`PresentationState::new`],
-    /// which installs the scope, the realm's shared dispatch handles, and
-    /// this presentation's own focus/IME before anything attaches or mounts
-    /// (ADR-0043 §1).
+    /// Assembles this realm's INITIAL presentation via
+    /// [`PresentationState::new`], which installs the scope, the realm's
+    /// shared dispatch handles, and this presentation's own focus/IME
+    /// before anything attaches or mounts (ADR-0043 §1). Production
+    /// topology is no longer limited to this one presentation:
+    /// `PresentationForest`'s former `len()<=1` ratchet is lifted (issue
+    /// #555's addressed-routing slice) — [`Self::install_presentation`]
+    /// (paired with [`Self::assemble_presentation`]) is how a realm grows
+    /// PAST this initial presentation, once the realm itself already
+    /// exists.
     fn construct(
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
