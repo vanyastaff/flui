@@ -610,13 +610,13 @@ jobs:
   # it is stable and in-budget — then drop the line, same playbook as
   # gpu-test.
   #
-  # SCOPE widened (#554 PR-2): `pipeline::owner::subtree_arena` ->
-  # `pipeline::owner`, picking up `cell.rs`'s PipelineCell checkout tests
-  # and two new real-NodePtr walks (an owner-local full run_frame, and a
+  # SCOPE widened: `pipeline::owner::subtree_arena` -> `pipeline::owner`,
+  # picking up `cell.rs`'s PipelineCell checkout tests and two new
+  # real-NodePtr walks (an owner-local full run_frame, and a
   # reentrant-layout mid-layout child-request) alongside the original
   # subtree_arena suite -- see the `miri` recipe's doc-comment in the
   # justfile for the full breakdown. Measured 55 tests / ~21s wall, in
-  # budget (PR-2 SPIKE evidence).
+  # budget.
   # ─────────────────────────────────────────────────────────────────────────
   miri:
     name: miri (flui-rendering pipeline::owner)

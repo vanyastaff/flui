@@ -221,7 +221,7 @@ deny:
     cargo deny check
 
 # SCOPE: widened from `pipeline::owner::subtree_arena` to `pipeline::owner`
-# (#554 PR-2) to pick up `cell.rs`'s PipelineCell checkout tests and two new
+# to pick up `cell.rs`'s PipelineCell checkout tests and two new
 # real-NodePtr walks alongside the original subtree_arena suite. The
 # `subtree_arena` unit tests still include the two pre-existing real-NodePtr
 # walks that drive `layout_dirty_root` through every reborrow phase of
@@ -232,8 +232,8 @@ deny:
 # run_frame over a real 3-node tree, driven through PipelineCell::with_mut)
 # and a reentrant-layout walk (a Sliver child that issues a mid-layout
 # child-build request against the checked-out owner, then mark_needs_layout
-# right after). Measured at 55 tests / ~21s wall (SPIKE evidence, PR-2 notes)
-# — in budget. Still narrow: only `pipeline::owner`, only box + leaf-sliver
+# right after). Measured at 55 tests / ~21s wall, in budget. Still narrow:
+# only `pipeline::owner`, only box + leaf-sliver
 # layout — deeper sliver walks and intrinsics queries are not interpreted
 # here.
 [group("test")]

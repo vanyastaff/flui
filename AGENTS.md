@@ -174,7 +174,7 @@ workflow file does *not* tell you, and what you will misjudge without it:
   not link — no link, no tests, and `flui-platform` is excluded from the `test` job. Green means
   "compiles", nothing more. Before this job existed those backends were only ever compiled by
   whoever happened to develop on that OS, and the Windows one did not compile at all.
-- **miri covers `pipeline::owner` (widened from `pipeline::owner::subtree_arena` in #554 PR-2)** —
+- **miri covers `pipeline::owner` (widened from `pipeline::owner::subtree_arena`)** —
   this now runs every unit test under that module, including `cell.rs`'s `PipelineCell` checkout
   tests and two real-`NodePtr` walks driving `layout_dirty_root` through every reborrow phase of
   `layout_subtree_borrowed_impl` (one straight pass, one cyclic edge exercising the baseline

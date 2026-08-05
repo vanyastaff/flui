@@ -135,10 +135,11 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 ///
 /// # The layout-child callback a `perform_layout` body receives is the same shape
 ///
-/// `#554` PR-2 deleted `NodePtr`'s manual `unsafe impl Send`/`unsafe impl
-/// Sync` (`flui_rendering::pipeline::owner::subtree_arena`) and the
-/// `SubtreeArena::check_thread` runtime assert that used to backstop it --
-/// both are private to `flui-rendering`, so this doctest exercises the
+/// `NodePtr`'s manual `unsafe impl Send`/`unsafe impl Sync`
+/// (`flui_rendering::pipeline::owner::subtree_arena`) and the
+/// `SubtreeArena::check_thread` runtime assert that used to backstop it were
+/// both deleted once nothing required `NodePtr: Send + Sync` any more --
+/// both types are private to `flui-rendering`, so this doctest exercises the
 /// nearest *public* type with the identical never-`Send` shape instead:
 /// [`flui_rendering::protocol::box_protocol::LayoutChildCallback`] is `&'a
 /// dyn Fn(RenderId, BoxConstraints) -> Size`, a trait-object reference with
