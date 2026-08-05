@@ -24,9 +24,17 @@ pub(crate) mod window_registry;
 
 pub use config::{AppConfig, DiagnosticsProfile};
 pub use direct::run_direct;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use runner::open_secondary_window;
 #[cfg(target_os = "android")]
 pub use runner::{run_app_android, run_app_android_with_config};
 pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};
+#[cfg(not(target_os = "ios"))]
+pub use runtime::{ExitPolicy, WindowPolicy};
 
 // Re-export RootRenderView and RootRenderElement from flui-view
 pub use flui_view::{RootRenderElement, RootRenderView};

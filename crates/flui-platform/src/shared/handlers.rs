@@ -44,6 +44,20 @@ pub struct PlatformHandlers {
 
     /// Called when keyboard layout changes
     pub keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
+
+    /// Consulted when this platform's own window bookkeeping believes every
+    /// window it tracks has just closed, before it decides whether to end
+    /// the run loop (winit) or mark itself not-running (headless).
+    ///
+    /// `true` allows the exit; `false` vetoes it (e.g. because the embedder
+    /// has an "open another window" request queued outside this platform's
+    /// own window map — issue #555's `AppRuntime::should_exit`
+    /// drain-before-decide rule). A backend that never calls
+    /// [`PlatformHandlers::invoke_exit_policy`] is unaffected by this field
+    /// at all; a backend that does but finds it unset gets `true` (the
+    /// pre-#555 unconditional "last window closed -> exit" default), so an
+    /// embedder that never registers a hook sees no behavior change.
+    pub exit_policy: Option<Box<dyn Fn() -> bool + Send>>,
 }
 
 impl PlatformHandlers {
@@ -55,6 +69,7 @@ impl PlatformHandlers {
             window_event: None,
             open_urls: None,
             keyboard_layout_changed: None,
+            exit_policy: None,
         }
     }
 
@@ -97,6 +112,13 @@ impl PlatformHandlers {
             handler();
         }
     }
+
+    /// Consult the exit-policy hook (see [`Self::exit_policy`]'s doc). `true`
+    /// when unset — the pre-#555 unconditional default.
+    #[inline]
+    pub fn invoke_exit_policy(&self) -> bool {
+        self.exit_policy.as_ref().is_none_or(|hook| hook())
+    }
 }
 
 impl Default for PlatformHandlers {
@@ -116,6 +138,7 @@ impl std::fmt::Debug for PlatformHandlers {
                 "keyboard_layout_changed",
                 &self.keyboard_layout_changed.is_some(),
             )
+            .field("exit_policy", &self.exit_policy.is_some())
             .finish()
     }
 }

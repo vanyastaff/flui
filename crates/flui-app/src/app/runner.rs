@@ -20,17 +20,14 @@ use flui_foundation::RealmId;
 use flui_scheduler::AppLifecycleState;
 
 #[cfg(not(target_os = "ios"))]
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "ExitPolicy is exercised by this module's own tests only until a future \
-                  embedder wires it through AppConfig (issue #555's native-lifecycle slice)"
-    )
-)]
-use super::runtime::ExitPolicy;
-#[cfg(not(target_os = "ios"))]
-use super::runtime::{AppRuntime, RealmSlot};
+use super::runtime::{AppRuntime, ExitPolicy, RealmSlot};
+// `WindowPolicy` is named only by `open_secondary_window` (desktop-only) and
+// this module's own tests.
+#[cfg(all(
+    not(target_os = "ios"),
+    any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))
+))]
+use super::runtime::WindowPolicy;
 
 /// A fresh clone of the loop-scoped platform wake capability — see
 /// `AppRuntime::frame_wake_callback`'s doc. `APP_RUNTIME` must not be
@@ -159,6 +156,42 @@ thread_local! {
 pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
     APP_RUNTIME.with(|slot| {
         slot.borrow_mut().owner_platform = Some(owner);
+    });
+}
+
+/// Installs the exit-policy hook this thread's `AppRuntime` consults instead
+/// of letting a platform backend decide, alone, whether "every window this
+/// backend tracks just closed" means "exit" — the live-loop wiring `issue
+/// #555`'s `ExitPolicy`/`AppRuntime::should_exit` names as its own
+/// deliberately-deferred follow-up (see `ExitPolicy`'s own doc). Call once,
+/// immediately after [`install_owner_platform`], from every backend that
+/// wants this: today, that is `run_desktop` only — Android/web bootstraps
+/// never call this (their platforms don't override
+/// [`flui_platform::traits::Platform::set_exit_policy_hook`] either, so it
+/// would be inert there anyway; wiring the hook itself into those backends
+/// is unrelated to whether flui-app installs it).
+///
+/// The hook itself re-enters `APP_RUNTIME` only when the PLATFORM calls it
+/// later (a window closing) — never synchronously from this function, which
+/// only registers it — so this does not violate `with_owner_platform`'s "no
+/// host re-entry" rule.
+#[cfg(not(target_os = "ios"))]
+#[cfg_attr(
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    expect(
+        dead_code,
+        reason = "run_desktop (its one caller) is desktop-only -- android/wasm32 bootstraps \
+                  never call this"
+    )
+)]
+fn install_exit_policy_hook(policy: ExitPolicy) {
+    with_owner_platform(|owner| {
+        owner.shared().set_exit_policy_hook(Box::new(move || {
+            let (should_exit, removed) =
+                APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
+            drop(removed);
+            should_exit
+        }));
     });
 }
 
@@ -1413,19 +1446,18 @@ fn install_platform_realm(
 /// `AppRuntime::drain_pending_realm_mutations`), since the caller has
 /// already returned by the time a deferred mutation applies.
 ///
-/// No production embedder call site yet: today's bootstrap
-/// (`run_desktop`/`run_android`/`run_web`) still only ever opens one window
-/// through `install_platform_realm`. This is the multi-realm mechanism
-/// (issue #555); wiring a real second-window embedder entry point
-/// through it is a follow-up (tracked as this issue's native-lifecycle
-/// slice). Exercised directly by this module's own tests in the meantime.
+/// Production caller: [`open_secondary_window`] under
+/// [`super::runtime::WindowPolicy::SeparateRealms`] — the embedder-facing
+/// seam issue #555 adds. Also exercised directly by this module's own
+/// tests.
+///
 #[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(test),
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
     expect(
         dead_code,
-        reason = "design-for-N install path; no production embedder entry point opens a \
-                  second window yet -- exercised by this module's own tests"
+        reason = "open_secondary_window (its production caller) is desktop-only -- android/wasm32 \
+                  have no caller outside this module's own tests"
     )
 )]
 fn install_realm_alongside(
@@ -1476,6 +1508,14 @@ fn install_realm_alongside(
 /// mislabeling that as `RealmUnavailable` (the pre-fix shape) told a caller
 /// the wrong thing about what actually went wrong.
 #[cfg(not(target_os = "ios"))]
+#[cfg_attr(
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    expect(
+        dead_code,
+        reason = "install_presentation_alongside (its only producer) is desktop-only -- \
+                  android/wasm32 have no caller outside this module's own tests"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 enum InstallPresentationError {
     /// `dispatcher`'s realm no longer exists (a newer realm replaced it, or
@@ -1543,20 +1583,21 @@ enum InstallPresentationError {
 /// hot-restart visit is currently in flight on this thread: **named gap,
 /// not a silent one** — unlike [`install_realm_alongside`]/
 /// [`uninstall_platform_realm`], this path does not yet defer to loop idle
-/// through `AppRuntime::pending_realm_mutations`; no production embedder
-/// call site opens a second presentation from inside a running callback
-/// yet, so there is nothing forcing that generalization today. Extending
-/// the deferral queue to presentation-install requests is follow-up work,
-/// not silently skipped: this refuses loudly (a `debug_assert!` in debug
-/// builds) rather than corrupting `AppRuntime` state.
+/// through `AppRuntime::pending_realm_mutations`; [`open_secondary_window`]
+/// (its production caller, under
+/// [`super::runtime::WindowPolicy::SharedRealm`]) never calls this from
+/// inside a dispatched callback, so there is nothing forcing that
+/// generalization today. Extending the deferral queue to
+/// presentation-install requests is follow-up work, not silently skipped:
+/// this refuses loudly (a `debug_assert!` in debug builds) rather than
+/// corrupting `AppRuntime` state.
 #[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(test),
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
     expect(
         dead_code,
-        reason = "design-for-N presentation-install path; no production embedder call site \
-                  opens a second presentation of an existing realm yet -- exercised by this \
-                  module's own tests"
+        reason = "open_secondary_window (its production caller) is desktop-only -- android/wasm32 \
+                  have no caller outside this module's own tests"
     )
 )]
 fn install_presentation_alongside(
@@ -1640,17 +1681,19 @@ fn install_presentation_alongside(
 /// arriving mid-dispatch or mid-hot-restart-visit defers to loop idle
 /// instead of mutating the registry another operation is still walking.
 ///
-/// No production embedder call site yet — no backend currently detects a
-/// single window closing among several (that needs the hop-1/hop-2 routing
-/// this issue's later slices add); exercised directly by this module's own
-/// tests in the meantime.
+/// Production caller: `run_desktop`'s `window.on_close` (desktop-only) —
+/// every window close uninstalls exactly its own realm, before the
+/// exit-policy hook (`install_exit_policy_hook`) decides whether the
+/// platform loop should exit (see that callback's own doc for why the
+/// ordering is load-bearing, not just bookkeeping). Also exercised directly
+/// by this module's own tests.
 #[cfg(not(target_os = "ios"))]
 #[cfg_attr(
-    not(test),
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
     expect(
         dead_code,
-        reason = "design-for-N uninstall path; no production embedder call site detects a \
-                  single window closing among several yet -- exercised by this module's own tests"
+        reason = "run_desktop's window.on_close (its one production caller) is desktop-only -- \
+                  android/wasm32 have no caller outside this module's own tests"
     )
 )]
 fn uninstall_platform_realm(realm_id: RealmId) {
@@ -3488,6 +3531,298 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
+    /// Installs realm A via the legacy single-window path (mirroring
+    /// `install_test_realm`), through a REAL `OwnerPlatform` (unlike
+    /// `install_test_realm`/`install_two_test_realms`, which never install
+    /// one) — both windows this helper and its caller open come from the
+    /// SAME headless platform instance, so their native window identities
+    /// cannot collide once both are registered in the one `WindowRegistry`.
+    fn install_realm_a_through_a_real_owner_platform() -> (RealmDispatcher, OwnerHostClearGuard) {
+        use std::{cell::Cell, rc::Rc};
+
+        let clear_guard = OwnerHostClearGuard::arm();
+        let platform = flui_platform::headless_platform();
+        let dispatcher_a_slot: Rc<Cell<Option<RealmDispatcher>>> = Rc::new(Cell::new(None));
+        let dispatcher_a_slot_for_on_ready = Rc::clone(&dispatcher_a_slot);
+        let ready = platform.run(Box::new(move |owner| {
+            install_owner_platform(owner);
+            let window_a = with_owner_platform(|owner| {
+                owner.open_window(flui_platform::WindowOptions::default())
+            })
+            .expect("BUG: install_owner_platform just ran above")
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("headless open_window is always Ready");
+            dispatcher_a_slot_for_on_ready.set(Some(install_platform_realm(
+                super::super::ui_realm::UiRealm::for_test(),
+                &window_a,
+            )));
+            Ok(())
+        }));
+        ready.expect("installing realm A must not fail");
+        (
+            dispatcher_a_slot.get().expect("set inside on_ready above"),
+            clear_guard,
+        )
+    }
+
+    /// `WindowPolicy::SeparateRealms`, driven through the REAL embedder seam
+    /// (`open_secondary_window`) rather than a direct
+    /// `install_realm_alongside` call — proves the POLICY-driven fork itself
+    /// routes to the share-nothing path, not just the underlying primitive
+    /// (`two_window_realms_share_no_ui_state_through_app_runtime` already
+    /// covers that). Same oracle: a pointer dispatched only to realm A must
+    /// leave realm B's gesture arena completely untouched.
+    #[test]
+    fn two_realms_via_separate_windows_policy_share_nothing() {
+        let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+
+        open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms)
+            .expect("WindowPolicy::SeparateRealms must install a second realm cleanly");
+
+        let dispatcher_b = APP_RUNTIME
+            .with(|slot| {
+                let state = slot.borrow();
+                let (_, slot_b) = state
+                    .realms
+                    .iter()
+                    .find(|(id, _)| *id != dispatcher_a.address.realm_id)?;
+                Some(RealmDispatcher {
+                    owner_thread: state.owner_thread?,
+                    address: slot_b.address,
+                })
+            })
+            .expect("open_secondary_window(SeparateRealms) must install a second, distinct realm");
+
+        assert_ne!(
+            dispatcher_a.address.realm_id, dispatcher_b.address.realm_id,
+            "WindowPolicy::SeparateRealms must install a genuinely distinct realm, never \
+             displace or merge into realm A"
+        );
+
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(|realm| {
+                let down = down_input(4.0);
+                if let PlatformInput::Pointer(event) = down {
+                    realm
+                        .gestures()
+                        .handle_pointer_event(&event, |_| HitTestResult::new());
+                }
+                assert_eq!(
+                    realm.gestures().active_pointer_count(),
+                    1,
+                    "realm A observes its own pointer"
+                );
+            })),
+        )
+        .expect("A dispatches");
+
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Frame(Box::new(|realm| {
+                assert_eq!(
+                    realm.gestures().active_pointer_count(),
+                    0,
+                    "the policy-driven secondary realm must share no gesture-arena state with \
+                     realm A -- open_secondary_window(SeparateRealms) must route through \
+                     install_realm_alongside, never a path that merges state with a sibling"
+                );
+            })),
+        )
+        .expect("B dispatches independently of A");
+
+        teardown_platform_realm();
+    }
+
+    /// `WindowPolicy::SharedRealm`, driven through the REAL embedder seam
+    /// (`open_secondary_window`) — proves this really is forest-membership
+    /// routing (a second PRESENTATION of the SAME realm), not a second realm
+    /// in disguise: the hosted-realm count must stay at one, while the
+    /// realm's own presentation count grows from one to two.
+    #[test]
+    fn one_realm_two_windows_policy_routes_by_presentation() {
+        let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+
+        let (realm_count_before, presentation_count_before) = APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            let realm_count = state.realms.iter().count();
+            let presentation_count = state
+                .realms
+                .get(&dispatcher_a.address.realm_id)
+                .and_then(|slot| slot.realm.as_ref())
+                .expect("realm A is resident")
+                .presentation_count();
+            (realm_count, presentation_count)
+        });
+        assert_eq!(realm_count_before, 1);
+        assert_eq!(presentation_count_before, 1);
+
+        open_secondary_window(AppConfig::default(), WindowPolicy::SharedRealm).expect(
+            "WindowPolicy::SharedRealm must install a second presentation into realm A cleanly",
+        );
+
+        let (realm_count_after, presentation_count_after) = APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            let realm_count = state.realms.iter().count();
+            let presentation_count = state
+                .realms
+                .get(&dispatcher_a.address.realm_id)
+                .and_then(|slot| slot.realm.as_ref())
+                .expect("realm A is still resident -- SharedRealm must not have replaced it")
+                .presentation_count();
+            (realm_count, presentation_count)
+        });
+        assert_eq!(
+            realm_count_after, realm_count_before,
+            "WindowPolicy::SharedRealm must NOT install a second realm -- it routes into the \
+             existing one via a second presentation"
+        );
+        assert_eq!(
+            presentation_count_after, 2,
+            "WindowPolicy::SharedRealm must install a genuine second presentation into realm \
+             A's forest -- real forest-membership routing, not a second realm in disguise"
+        );
+
+        teardown_platform_realm();
+    }
+
+    /// The live-loop counterpart of `closing_one_of_two_windows_does_not_
+    /// exit_the_loop` (which drives `AppRuntime::should_exit` directly).
+    /// This one goes through the REAL platform seam end to end:
+    /// `install_exit_policy_hook` installs the hook exactly like
+    /// `run_desktop`'s bootstrap does, and `window.close()` on each REAL
+    /// (headless) native window drives flui-platform's own
+    /// `notify_closed`/`CloseRequested`-equivalent bookkeeping — THAT is
+    /// what consults the hook, never a direct call into `AppRuntime`.
+    /// `uninstall_platform_realm` before each `close()` mirrors
+    /// `run_desktop`'s own `on_close` ordering exactly (see that callback's
+    /// doc for why the ordering is load-bearing): the registry must already
+    /// reflect the closing window's realm being gone by the time the hook
+    /// reads it. Closing one of two windows must not fire the platform's
+    /// own `quit` callback; closing the last one must fire it exactly once.
+    #[test]
+    fn closing_one_of_two_windows_does_not_exit_through_the_real_platform_hook_closing_both_does() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let platform = flui_platform::headless_platform();
+        let quit_calls = Arc::new(AtomicUsize::new(0));
+        let quit_calls_for_on_ready = Arc::clone(&quit_calls);
+        let ready = platform.run(Box::new(move |owner| {
+            install_owner_platform(owner);
+            install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
+
+            let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
+            with_owner_platform(|owner| {
+                owner.shared().on_quit(Box::new(move || {
+                    quit_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                }));
+            });
+
+            let window_a = with_owner_platform(|owner| {
+                owner.open_window(flui_platform::WindowOptions::default())
+            })
+            .expect("owner installed above")
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("headless open_window is always Ready");
+            let window_b = with_owner_platform(|owner| {
+                owner.open_window(flui_platform::WindowOptions::default())
+            })
+            .expect("owner installed above")
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("headless open_window is always Ready");
+
+            let dispatcher_a =
+                install_platform_realm(super::super::ui_realm::UiRealm::for_test(), &window_a);
+            let dispatcher_b =
+                install_realm_alongside(super::super::ui_realm::UiRealm::for_test(), &window_b)
+                    .expect("realm B installs alongside realm A cleanly");
+
+            // Close A: realm B is still resident, so the hook must veto.
+            uninstall_platform_realm(dispatcher_a.address.realm_id);
+            window_a.close();
+            assert_eq!(
+                quit_calls_for_on_ready.load(Ordering::SeqCst),
+                0,
+                "closing one of two windows must not fire the platform's own quit callback"
+            );
+
+            // Close B (the last one): the registry is now empty, so the
+            // hook must allow the exit and the platform's own quit must
+            // fire exactly once.
+            uninstall_platform_realm(dispatcher_b.address.realm_id);
+            window_b.close();
+            assert_eq!(
+                quit_calls_for_on_ready.load(Ordering::SeqCst),
+                1,
+                "closing the LAST window must fire the platform's own quit callback exactly once"
+            );
+
+            Ok(())
+        }));
+        ready.expect("on_ready must not fail");
+
+        teardown_platform_realm();
+    }
+
+    /// Hot-restart's own visit primitive (`for_each_installed_realm`) must
+    /// see exactly what each `WindowPolicy` claims to have installed --
+    /// proven for both modes, each opened through the REAL
+    /// `open_secondary_window` seam (not a direct
+    /// `install_realm_alongside`/`install_presentation_alongside` call).
+    #[test]
+    fn hot_restart_with_two_realms_and_with_two_presentations() {
+        // Mode 1: WindowPolicy::SeparateRealms -- hot-restart must visit TWO
+        // distinct realms.
+        {
+            let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+            open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms)
+                .expect("WindowPolicy::SeparateRealms must install a second realm cleanly");
+
+            let mut visited_realms = Vec::new();
+            for_each_installed_realm(|realm| {
+                visited_realms.push(realm.realm_id());
+            });
+
+            assert_eq!(
+                visited_realms.len(),
+                2,
+                "hot-restart must visit both policy-installed realms"
+            );
+            assert!(
+                visited_realms.contains(&dispatcher_a.address.realm_id),
+                "hot-restart's visit must include realm A"
+            );
+
+            teardown_platform_realm();
+        }
+
+        // Mode 2: WindowPolicy::SharedRealm -- hot-restart must visit
+        // exactly ONE realm, carrying BOTH presentations.
+        {
+            let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+            open_secondary_window(AppConfig::default(), WindowPolicy::SharedRealm).expect(
+                "WindowPolicy::SharedRealm must install a second presentation into realm A \
+                 cleanly",
+            );
+
+            let mut visited: Vec<(RealmId, usize)> = Vec::new();
+            for_each_installed_realm(|realm| {
+                visited.push((realm.realm_id(), realm.presentation_count()));
+            });
+
+            assert_eq!(
+                visited,
+                vec![(dispatcher_a.address.realm_id, 2)],
+                "hot-restart must visit exactly the one SharedRealm-hosted realm, carrying both \
+                 presentations through the visit -- never split into two realms"
+            );
+
+            teardown_platform_realm();
+        }
+    }
+
     /// The drain-before-decide rule: closing the splash realm and installing
     /// the main realm in the very same batch must never exit the loop --
     /// the surviving main realm keeps it alive. Drives the deferral through
@@ -5063,6 +5398,14 @@ where
         let clipboard = owner_platform_installed(|owner| owner.shared().clipboard());
         APP_RUNTIME.with(|slot| slot.borrow().set_platform_clipboard(clipboard));
 
+        // 0b. Wire the exit-policy hook (issue #555's native-lifecycle
+        // wiring): the winit backend's `CloseRequested` handling consults
+        // this instead of deciding from its own native window count alone,
+        // so a queued "open the main window" install (this same thread's
+        // `AppRuntime`, invisible to the platform layer) can veto an exit
+        // the backend would otherwise take unconditionally.
+        install_exit_policy_hook(config.exit_policy);
+
         // 1. Open window now that the event loop is running. Window creation is
         // an environment failure (display server hiccup, resource exhaustion),
         // not a `BUG:` invariant, and — unlike platform init above — this DOES
@@ -5388,10 +5731,26 @@ where
             }));
         });
 
-        // Window close -> log and let the platform handle quit
-        // (Windows window proc already calls PostQuitMessage on WM_DESTROY)
+        // Window close -> uninstall THIS realm before the platform decides
+        // whether to exit. Load-bearing ordering, not just bookkeeping
+        // hygiene: the winit backend's `CloseRequested` handling calls a
+        // window's `on_close` (this callback) BEFORE it consults the
+        // exit-policy hook `install_exit_policy_hook` installs above
+        // (`AppRuntime::should_exit`, which decides purely from
+        // `AppRuntime`'s own realm registry, never this backend's native
+        // window count). Without this call, closing this app's only window
+        // would leave the realm registry non-empty forever — nothing else
+        // ever removes it — and the exit-policy hook would report "don't
+        // exit" on every subsequent window close, including the very last
+        // one, silently hanging the app open with no window left at all.
+        // `uninstall_platform_realm` (not full `teardown_platform_realm`):
+        // a window closing while siblings survive removes only ITS OWN
+        // realm; the tail `teardown_platform_realm()` call still runs once
+        // `Platform::run` actually returns, for the clipboard/redraw-window
+        // cleanup this call does not perform.
         window.on_close(Box::new(move || {
             tracing::info!("Window closed");
+            uninstall_platform_realm(realm_dispatch.address.realm_id);
         }));
 
         // Window should-close -> allow by default
@@ -5488,6 +5847,197 @@ where
     if let Err(err) = result {
         panic!("desktop bootstrap failed: {err:?}");
     }
+}
+
+// ============================================================================
+// Multi-window embedder seam (issue #555's `WindowPolicy`)
+// ============================================================================
+
+/// Opens an additional top-level window while the platform loop
+/// `run_app`/`run_app_with_config` started is already running — the
+/// embedder-facing seam issue #555's [`WindowPolicy`] governs which
+/// realm/presentation topology the new window becomes. Must be called from
+/// the owner thread while a loop is live (mirrors `bootstrap_desktop`'s own
+/// `OwnerPlatform` access constraint: reachable only from inside, or after,
+/// `on_ready` — e.g. from a `window.on_input`/`window.on_should_close`
+/// callback the FIRST window already registered).
+///
+/// # [`WindowPolicy::SeparateRealms`]
+///
+/// Opens a fully independent second realm: its own `UiRealm`, its own
+/// `GlobalKeyScope`, its own `Scheduler` — installed via
+/// `install_realm_alongside`, never `install_platform_realm`'s displacing
+/// legacy path. `two_realms_via_separate_windows_policy_share_nothing` pins
+/// the "share nothing but `SharedEngineServices`" guarantee this policy
+/// claims. Input/close/should-close/focus/visibility/resize dispatch are
+/// wired and addressed to this new realm exactly like the FIRST window's
+/// own dispatch.
+///
+/// # [`WindowPolicy::SharedRealm`]
+///
+/// Installs a second PRESENTATION into the FIRST realm hosted on this
+/// thread (via `install_presentation_alongside`) — real forest membership,
+/// a real `WindowRegistry` mapping, real addressed
+/// input/close/should-close/focus/visibility dispatch.
+/// `one_realm_two_windows_policy_routes_by_presentation` pins that this
+/// really is forest-membership routing, not a second realm in disguise.
+///
+/// # Named limitation (both policies): no widget content, no rendering
+///
+/// This window shows nothing — no root widget is mounted, no GPU renderer
+/// is constructed, `window.on_request_frame` is never registered. Two
+/// independent gaps, neither papered over:
+///
+/// - **Rendering is one-canonical-closure-per-BACKEND today, not
+///   per-window.** `runner_frame_ordering.rs`'s own mechanical guards
+///   (`every_runner_frame_site_uses_the_shared_drive_frame_helper`,
+///   `every_pump_async_arm_calls_finish_then_drive_async_tasks`) pin
+///   exactly three production `Scheduler::drive_frame`/`finish_async_pump`/
+///   `drive_async_tasks` call sites — desktop, Android, web — precisely to
+///   catch a hand-rolled fourth copy drifting from the canonical ordering.
+///   Adding a real, independently-rendering second window means
+///   generalizing those three sites into one shared per-window frame-tick
+///   helper (touching every existing backend's bootstrap, and this guard's
+///   own pinned count) — real, scoped work belonging to its own reviewed
+///   slice, not folded silently into this one under time pressure.
+/// - **`UiRealm::attach_root_widget` is wired to a realm's PRIMARY
+///   presentation only** (gesture arena, focus root, vsync scope all read
+///   `self.presentations.primary()`); extending it to an arbitrary
+///   addressed presentation is follow-up work neither the forest slice
+///   (#607) nor the routing slice (#608) added — relevant to
+///   `SharedRealm` specifically, `SeparateRealms`' own new presentation
+///   IS its realm's primary, so that half doesn't block it, but the
+///   rendering gap above still does.
+///
+/// What IS real and independently verifiable regardless of this gap: the
+/// window opens, is live-addressed, and its registry/forest membership and
+/// event dispatch (input/close/focus/visibility/resize) are genuine,
+/// policy-driven, and exactly as isolated (or shared) as [`WindowPolicy`]'s
+/// own doc claims.
+///
+/// # Errors
+///
+/// Window creation and (`SeparateRealms` only) `UiRealm` construction
+/// surface as `Err` exactly like `bootstrap_desktop`'s own first-window
+/// failures — this call does not tear down or exit the loop on failure,
+/// unlike a first-window bootstrap failure (which propagates out of
+/// `Platform::run` and ends the loop): the caller decides what a failed
+/// secondary-window open means for their app. `SharedRealm` additionally
+/// fails if no realm is hosted on this thread yet to share with.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub fn open_secondary_window(config: AppConfig, policy: WindowPolicy) -> anyhow::Result<()> {
+    use flui_platform::WindowOptions;
+    use flui_platform::traits::{DispatchEventResult, PlatformInput};
+
+    let options: WindowOptions = (&config).into();
+    let window = with_owner_platform(|owner| owner.open_window(options))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "open_secondary_window called with no OwnerPlatform installed on this thread -- \
+                 call only from inside, or after, a running Platform::run's on_ready"
+            )
+        })?
+        .and_then(flui_platform::WindowOpen::try_ready)
+        .map_err(|error| anyhow::Error::from(error).context("secondary window creation failed"))?;
+
+    let realm_dispatch = match policy {
+        WindowPolicy::SharedRealm => {
+            let shared_with = APP_RUNTIME
+                .with(|slot| {
+                    let state = slot.borrow();
+                    let (_, first_slot) = state.realms.iter().next()?;
+                    let owner_thread = state.owner_thread?;
+                    Some(RealmDispatcher {
+                        owner_thread,
+                        address: first_slot.address,
+                    })
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "WindowPolicy::SharedRealm requires an already-hosted realm to share \
+                         with; none is installed on this thread"
+                    )
+                })?;
+            install_presentation_alongside(shared_with, &window).map_err(|error| {
+                anyhow::Error::from(error).context("installing the secondary presentation failed")
+            })?
+        }
+        WindowPolicy::SeparateRealms => {
+            let scale_factor = window.scale_factor() as f32;
+            let wake = runtime_wake_callback();
+            let ui_realm = super::ui_realm::UiRealm::new(
+                Arc::clone(&wake),
+                Arc::clone(&window),
+                scale_factor,
+                runtime_needs_redraw_handle(),
+            )
+            .map_err(|error| {
+                anyhow::anyhow!(error).context("secondary UiRealm construction failed")
+            })?;
+            install_realm_alongside(ui_realm, &window).map_err(|error| {
+                anyhow::anyhow!(error).context("installing the secondary realm failed")
+            })?
+        }
+    };
+
+    tracing::warn!(
+        ?policy,
+        ?realm_dispatch,
+        "open_secondary_window: installed a live, addressed window with no widget content and no \
+         renderer -- see this function's own doc for the two named, scoped-out gaps"
+    );
+
+    window.on_input(Box::new(move |input: PlatformInput| {
+        let _ =
+            dispatch_platform_realm(realm_dispatch, RealmTask::Event(PlatformToUi::Input(input)));
+        DispatchEventResult::resolved(false, true)
+    }));
+
+    window.on_resize(Box::new(move |size, scale_factor| {
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
+        );
+    }));
+
+    // Window close/should-close: no `on_quit` registration here — that is a
+    // single platform-level callback slot the FIRST window's bootstrap
+    // already owns (`Platform::on_quit`/`SharedPlatform::on_quit` replace,
+    // never stack); registering a second one here would silently steal the
+    // first window's Detached-lifecycle notification on process quit
+    // instead of adding to it. Generalizing quit notification to visit
+    // every hosted realm (`for_each_installed_realm`) is follow-up work,
+    // named here, not silently skipped.
+    window.on_close(Box::new(move || {
+        tracing::info!(?realm_dispatch, "Secondary window closed");
+    }));
+    window.on_should_close(Box::new(|| {
+        tracing::debug!("Secondary window close requested, allowing");
+        true
+    }));
+    window.on_active_status_change(Box::new(move |focused| {
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+        );
+    }));
+    window.on_visibility_status_change(Box::new(move |visible| {
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::WindowVisibility(visible)),
+        );
+    }));
+
+    let _ = dispatch_platform_realm(
+        realm_dispatch,
+        RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+    );
+
+    Ok(())
 }
 
 // ============================================================================

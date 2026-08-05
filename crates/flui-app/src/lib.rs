@@ -47,6 +47,20 @@ pub use app::{
     AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config,
     run_direct,
 };
+// Multi-window policy knobs (issue #555's embedder-facing seam) — not
+// available on iOS, where `AppRuntime`/`UiRealm`'s realm-hosting machinery
+// itself is not compiled (see `runtime::ExitPolicy`'s own doc).
+#[cfg(not(target_os = "ios"))]
+pub use app::{ExitPolicy, WindowPolicy};
+// `open_secondary_window` additionally needs the desktop GPU renderer path,
+// so it is narrower than the policy enums above: desktop only (matching
+// `run_desktop`'s own cfg gate).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use app::open_secondary_window;
 // Android-specific entry points
 #[cfg(target_os = "android")]
 pub use app::{run_app_android, run_app_android_with_config};

@@ -738,7 +738,7 @@ impl ApplicationHandler for WinitApp {
                 });
                 drop(handler);
 
-                let (should_exit, transfer) = self.platform.with_state(|state| {
+                let (windows_empty, transfer) = self.platform.with_state(|state| {
                     // Remove window from tracking
                     state.window_id_map.retain(|_, v| *v != platform_id);
                     state.windows.remove(&platform_id);
@@ -750,6 +750,20 @@ impl ApplicationHandler for WinitApp {
                 // Retire any drag session addressed at this window; parked
                 // deliveries resolve SourceGone (ADR-0038 offer lifecycle).
                 transfer.forget_window(platform_id);
+
+                // This backend's own window map is not the only ledger:
+                // an embedder hosting more than one top-level window (issue
+                // #555's `WindowPolicy`) tracks realms/presentations this
+                // platform layer cannot see. `windows_empty` alone would
+                // exit even while a queued "open another window" request
+                // is still in flight (e.g. a splash screen's own close
+                // handler asking for the main window) -- the exit-policy
+                // hook, when installed, gets the final word; unset, this
+                // is the exact pre-#555 unconditional behavior.
+                let should_exit = windows_empty
+                    && self
+                        .platform
+                        .with_state(|state| state.handlers.invoke_exit_policy());
 
                 if should_exit {
                     self.request_exit(event_loop);
@@ -1273,6 +1287,12 @@ impl Platform for WinitPlatform {
         if let Some(control) = control {
             control.request_quit();
         }
+    }
+
+    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
+        self.with_state(|state| {
+            state.handlers.exit_policy = Some(hook);
+        });
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
@@ -1828,6 +1848,31 @@ mod tests {
                 .control_for_open_window(owner_thread)
                 .expect_err("the owner must never block waiting on its own event loop"),
             OpenWindowStateError::OwnerWouldBlock
+        );
+    }
+
+    /// `set_exit_policy_hook` must land in the same `PlatformHandlers` slot
+    /// the `CloseRequested` path reads via `invoke_exit_policy` -- not a
+    /// second, disconnected storage location. Storage-only: driving a real
+    /// `WinitWindowEvent::CloseRequested` through a live `ActiveEventLoop`
+    /// is not exercised anywhere in this test module (every test here
+    /// bypasses `EventLoop::run_app`, this one included) -- see this
+    /// backend's own `AGENTS.md`/PR notes for that stated, not silently
+    /// assumed, gap.
+    #[test]
+    fn set_exit_policy_hook_installs_into_the_shared_handler_slot() {
+        let platform = WinitPlatform::new();
+        assert!(
+            platform.with_state(|state| state.handlers.exit_policy.is_none()),
+            "no hook installed yet"
+        );
+
+        platform.set_exit_policy_hook(Box::new(|| false));
+
+        let vetoes_exit = platform.with_state(|state| state.handlers.invoke_exit_policy());
+        assert!(
+            !vetoes_exit,
+            "the installed hook's answer must be exactly what invoke_exit_policy returns"
         );
     }
 

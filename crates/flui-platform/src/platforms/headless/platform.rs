@@ -3,7 +3,10 @@
 //! This platform implementation runs without any actual windowing system,
 //! making it ideal for unit tests and CI environments.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Weak},
+};
 
 use anyhow::Result;
 use cursor_icon::CursorIcon;
@@ -45,6 +48,13 @@ struct HeadlessState {
     active_window: Option<WindowId>,
     is_running: bool,
     windows: Vec<MockWindow>,
+    /// Monotonic window-id source. `windows.len()` used to double as this
+    /// counter, which was only safe as long as a closed window was never
+    /// removed from `windows` -- issue #555's real close-driven exit-policy
+    /// consultation (`MockWindow::notify_closed`) DOES remove it now, so a
+    /// fresh counter is required: reusing `len()` after a removal would
+    /// mint an id already held by a surviving window.
+    next_window_id: u64,
     appearance: WindowAppearance,
     keyboard_layout: String,
     opened_urls: Vec<String>,
@@ -60,6 +70,7 @@ impl HeadlessPlatform {
             active_window: None,
             is_running: false,
             windows: Vec::new(),
+            next_window_id: 0,
             appearance: WindowAppearance::default(),
             keyboard_layout: "en-US".to_string(),
             opened_urls: Vec::new(),
@@ -131,12 +142,19 @@ impl Platform for HeadlessPlatform {
         });
     }
 
+    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
+        self.with_state(|state| {
+            state.handlers.exit_policy = Some(hook);
+        });
+    }
+
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         tracing::info!(?options, "Creating mock window");
 
         self.with_state(|state| {
-            let window_id = WindowId(state.windows.len() as u64);
-            let window = MockWindow::new(window_id, options.clone());
+            let window_id = WindowId(state.next_window_id);
+            state.next_window_id += 1;
+            let window = MockWindow::new(window_id, options.clone(), Arc::downgrade(&self.state));
 
             state.windows.push(window.clone());
             state.active_window = Some(window_id);
@@ -253,6 +271,13 @@ struct MockWindow {
     callbacks: Arc<WindowCallbacks>,
     text_input: Arc<FakeTextInput>,
     haptics: Arc<FakeHaptics>,
+    /// Back-reference to the platform this window was opened on, so
+    /// closing it can remove its own entry from `HeadlessState::windows`
+    /// and — only once every tracked window is gone — consult the
+    /// exit-policy hook exactly like the winit backend's `CloseRequested`
+    /// handling does (see `notify_closed`). `Weak`: a window must never
+    /// keep the platform state alive past the platform's own lifetime.
+    platform_state: Weak<Mutex<HeadlessState>>,
 }
 
 /// Mutable state for headless MockWindow
@@ -289,7 +314,11 @@ impl Clone for MockWindowState {
 }
 
 impl MockWindow {
-    fn new(id: WindowId, options: WindowOptions) -> Self {
+    fn new(
+        id: WindowId,
+        options: WindowOptions,
+        platform_state: Weak<Mutex<HeadlessState>>,
+    ) -> Self {
         Self {
             id,
             state: Arc::new(Mutex::new(MockWindowState {
@@ -311,6 +340,36 @@ impl MockWindow {
             callbacks: Arc::new(WindowCallbacks::new()),
             text_input: Arc::new(FakeTextInput::new()),
             haptics: Arc::new(FakeHaptics::new()),
+            platform_state,
+        }
+    }
+
+    /// Removes this window from the platform's own tracking and, only once
+    /// every window this platform knows about is gone, consults the
+    /// exit-policy hook (see [`crate::shared::PlatformHandlers::exit_policy`])
+    /// exactly as the winit backend's `CloseRequested` handling does. A
+    /// caller that never installed a hook sees no behavior change: this is
+    /// a no-op unless [`crate::traits::Platform::set_exit_policy_hook`] was
+    /// called first, matching every other headless test/consumer that
+    /// predates this mechanism.
+    fn notify_closed(&self) {
+        let Some(platform_state) = self.platform_state.upgrade() else {
+            return;
+        };
+        let mut state = platform_state.lock();
+        state.windows.retain(|w| w.id != self.id);
+        if state.active_window == Some(self.id) {
+            state.active_window = state.windows.first().map(|w| w.id);
+        }
+        let should_quit = state.windows.is_empty()
+            && state
+                .handlers
+                .exit_policy
+                .as_ref()
+                .is_some_and(|hook| hook());
+        if should_quit {
+            state.is_running = false;
+            state.handlers.invoke_quit();
         }
     }
 
@@ -349,12 +408,16 @@ impl MockWindow {
     }
 
     /// Simulate close request for testing.
-    /// Fires `on_should_close`, then `on_close` if allowed.
+    /// Fires `on_should_close`, then `on_close` if allowed, then (real,
+    /// production behavior — not a test-only shortcut) removes this window
+    /// from the platform's tracking and consults the exit-policy hook if
+    /// every tracked window is now gone. See [`Self::notify_closed`].
     #[allow(dead_code)]
     pub fn simulate_close(&self) -> bool {
         let should = self.callbacks.dispatch_should_close();
         if should {
             self.callbacks.dispatch_close();
+            self.notify_closed();
         }
         should
     }
@@ -502,6 +565,7 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn close(&self) {
         self.callbacks.dispatch_close();
+        self.notify_closed();
     }
 
     fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
@@ -812,7 +876,7 @@ mod tests {
 
         use crate::traits::{DispatchEventResult, PlatformInput};
 
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
 
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
@@ -841,7 +905,7 @@ mod tests {
     fn test_on_resize_callback() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
 
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
@@ -858,7 +922,7 @@ mod tests {
 
     #[test]
     fn test_on_should_close_veto() {
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
 
         // Register a callback that vetoes close
         window.on_should_close(Box::new(|| false));
@@ -871,7 +935,7 @@ mod tests {
     fn test_on_close_callback() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
 
         let closed = Arc::new(AtomicBool::new(false));
         let closed_clone = closed.clone();
@@ -889,7 +953,7 @@ mod tests {
     fn test_on_active_status_change() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
 
         let focused = Arc::new(AtomicBool::new(false));
         let focused_clone = focused.clone();
@@ -909,7 +973,7 @@ mod tests {
     fn test_on_visibility_status_change() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
 
         let visible = Arc::new(AtomicBool::new(true));
         let visible_clone = visible.clone();
@@ -935,6 +999,7 @@ mod tests {
                 title: "Original".to_string(),
                 ..Default::default()
             },
+            Weak::new(),
         );
 
         assert_eq!(window.get_title(), "Original");
@@ -952,6 +1017,7 @@ mod tests {
                 size: Size::new(px(800.0), px(600.0)),
                 ..Default::default()
             },
+            Weak::new(),
         );
 
         let bounds = window.bounds();
@@ -968,7 +1034,7 @@ mod tests {
 
     #[test]
     fn test_maximize_restore_fullscreen() {
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
 
         assert!(!window.is_maximized());
         assert!(!window.is_fullscreen());
@@ -998,14 +1064,14 @@ mod tests {
     fn test_resize() {
         use flui_types::geometry::px;
 
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
         window.resize(Size::new(px(1920.0), px(1080.0)));
         assert_eq!(window.logical_size(), Size::new(px(1920.0), px(1080.0)));
     }
 
     #[test]
     fn test_display_query() {
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
         let display = window.display();
         assert!(display.is_some());
         assert!(display.unwrap().is_primary());
@@ -1015,7 +1081,7 @@ mod tests {
     fn text_input_reaches_the_same_fake_across_calls_and_records_delivered_values() {
         use flui_types::geometry::{Bounds, Point, Size, px};
 
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
         let fake = Arc::clone(&window.text_input);
         let text_input = window.text_input().expect("headless backend supports IME");
 
@@ -1057,7 +1123,7 @@ mod tests {
 
     #[test]
     fn haptics_reaches_the_same_fake_across_calls() {
-        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
         let haptics = window.haptics().expect("headless backend supports haptics");
 
         haptics.perform(HapticFeedback::LightImpact);
@@ -1085,8 +1151,8 @@ mod tests {
 
     #[test]
     fn cursor_state_is_owned_by_each_exact_window() {
-        let first = MockWindow::new(WindowId(1), WindowOptions::default());
-        let second = MockWindow::new(WindowId(2), WindowOptions::default());
+        let first = MockWindow::new(WindowId(1), WindowOptions::default(), Weak::new());
+        let second = MockWindow::new(WindowId(2), WindowOptions::default(), Weak::new());
 
         first
             .set_cursor(CursorIcon::Pointer)

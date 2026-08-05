@@ -247,6 +247,30 @@ pub trait Platform: Send + Sync + 'static {
     /// exit.
     fn quit(&self);
 
+    /// Install the hook this platform consults before it would otherwise
+    /// exit unconditionally because its own window bookkeeping believes
+    /// every window it tracks has just closed (see
+    /// [`crate::shared::PlatformHandlers::exit_policy`]'s doc for the exact
+    /// contract: `true` allows the exit it was about to take anyway, `false`
+    /// vetoes it).
+    ///
+    /// This is the embedder-facing seam issue #555's `ExitPolicy` /
+    /// `AppRuntime::should_exit` wire through: an embedder that hosts more
+    /// than one top-level window installs a hook here that consults its own
+    /// realm registry (which the platform layer cannot see — `flui-app`
+    /// depends on `flui-platform`, never the reverse) instead of letting
+    /// this backend's native window count decide alone.
+    ///
+    /// Default no-op: a backend that never overrides this (every backend
+    /// except `winit` and `headless` today — Win32/AppKit/Android/Web/iOS
+    /// remain cross-typecheck-only for this specific mechanism, stated
+    /// honestly rather than silently assumed) keeps its pre-existing
+    /// unconditional "last window closed -> exit" behavior exactly as
+    /// before; installing a hook there is inert.
+    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
+        let _ = hook;
+    }
+
     // ==================== Window Management ====================
 
     /// Create and open a new window

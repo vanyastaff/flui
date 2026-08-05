@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use flui_log::AppIdentity;
 use flui_types::{Size, geometry::px};
 
+#[cfg(not(target_os = "ios"))]
+use super::runtime::ExitPolicy;
+
 /// Default diagnostics policy for a managed application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiagnosticsProfile {
@@ -142,6 +145,16 @@ pub struct AppConfig {
     /// CLI compatibility.
     #[cfg(feature = "hot-reload")]
     pub worker_plugin_path: Option<PathBuf>,
+
+    /// Governs when the platform loop exits once every hosted window has
+    /// closed. See [`ExitPolicy`]'s own doc for the drain-before-decide
+    /// rule; `run_desktop`'s bootstrap installs this into the live winit
+    /// event loop (issue #555's native-lifecycle wiring). Not present on
+    /// iOS: [`ExitPolicy`]/`AppRuntime` are themselves not compiled there
+    /// (`run_ios` never reads any field of this config beyond ignoring it
+    /// entirely — see that function's own doc).
+    #[cfg(not(target_os = "ios"))]
+    pub exit_policy: ExitPolicy,
 }
 
 impl Default for AppConfig {
@@ -163,6 +176,8 @@ impl Default for AppConfig {
             debug_paint: false,
             #[cfg(feature = "hot-reload")]
             worker_plugin_path: None,
+            #[cfg(not(target_os = "ios"))]
+            exit_policy: ExitPolicy::default(),
         }
     }
 }
@@ -249,6 +264,14 @@ impl AppConfig {
     /// Enable debug paint.
     pub fn with_debug_paint(mut self, enabled: bool) -> Self {
         self.debug_paint = enabled;
+        self
+    }
+
+    /// Set the policy governing when the platform loop exits once every
+    /// hosted window has closed. See [`ExitPolicy`]'s own doc.
+    #[cfg(not(target_os = "ios"))]
+    pub fn with_exit_policy(mut self, policy: ExitPolicy) -> Self {
+        self.exit_policy = policy;
         self
     }
 

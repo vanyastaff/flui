@@ -441,6 +441,14 @@ pub(crate) struct UiRealm {
     /// addressed-routing slice) and its `install_second_presentation_for_test`
     /// counterpart (the isolation test suite) read it back to assemble a
     /// second presentation sharing this exact scope.
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "read back only by assemble_presentation, reachable only through \
+                      runner.rs::install_presentation_alongside, itself desktop-only"
+        )
+    )]
     global_key_scope: GlobalKeyScope,
     /// The insertion-ordered set of UI-owner presentation domains this realm
     /// hosts (ADR-0043 §1 — `PresentationForest`). Production topology
@@ -949,6 +957,14 @@ impl UiRealm {
     /// `RenderView` and first frame would disagree with its OWN window's
     /// actual scale — silently defaulting to `1.0` regardless of what
     /// `window.scale_factor()` actually reports.
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "reachable only through runner.rs::install_presentation_alongside, itself \
+                      desktop-only"
+        )
+    )]
     pub(crate) fn assemble_presentation(
         &self,
         window: Arc<dyn PlatformWindow>,
@@ -986,6 +1002,14 @@ impl UiRealm {
     /// (`cfg(test)`-only, no stable link target in a non-test doc build) is
     /// the test-only counterpart for `UiRealm`-only tests that never touch
     /// `AppRuntime`/`WindowRegistry` at all.
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "reachable only through runner.rs::install_presentation_alongside, itself \
+                      desktop-only"
+        )
+    )]
     pub(crate) fn install_presentation(
         &mut self,
         presentation: PresentationState,
