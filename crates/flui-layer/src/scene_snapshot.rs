@@ -97,9 +97,18 @@ impl SceneSnapshot {
 #[cfg(test)]
 mod tests {
     use flui_types::Size;
+    use static_assertions::assert_impl_all;
 
     use super::*;
     use crate::CanvasLayer;
+
+    // The retained-seam boundary value moved from the (owner-thread-confined)
+    // rendering side to the raster/present side -- must stay `Send`
+    // independent of `PipelineCell`'s `!Send` upstream. Not `Sync`: `Scene`
+    // carries `Box<dyn FnOnce() + Send>` composition callbacks, which are
+    // `Send` but never `Sync`, and a snapshot is moved across the boundary
+    // (one owner at a time), never shared by reference.
+    assert_impl_all!(SceneSnapshot: Send);
 
     #[test]
     fn new_packages_all_fields() {
