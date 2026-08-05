@@ -199,6 +199,10 @@ pub struct ElementOwner<'a> {
     /// `BuildCtx` so a `ViewState` can acquire it from a lifecycle hook.
     pub(crate) post_frame_handle: &'a Option<flui_scheduler::PostFrameHandle>,
 
+    /// The binding's owner-local post-frame capability, threaded into every
+    /// `BuildCtx` the same way `post_frame_handle` is.
+    pub(crate) local_post_frame_handle: &'a Option<flui_scheduler::LocalPostFrameHandle>,
+
     /// The binding's IME/text-input attach-detach capability, threaded into
     /// every `BuildCtx` the same way `post_frame_handle` is.
     pub(crate) text_input_handle: &'a Option<flui_interaction::TextInputHandle>,

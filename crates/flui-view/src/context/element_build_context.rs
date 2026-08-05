@@ -236,6 +236,10 @@ impl BuildContext for ElementBuildContext {
         self.owner.read().post_frame_handle().cloned()
     }
 
+    fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
+        self.owner.read().local_post_frame_handle().cloned()
+    }
+
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.owner.read().text_input_handle().cloned()
     }
@@ -638,6 +642,8 @@ pub(crate) struct BuildCapabilities {
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
     /// The binding's post-frame capability.
     pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+    /// The binding's owner-local post-frame capability.
+    pub(crate) local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
     /// The binding's IME/text-input attach-detach capability.
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
     /// The render tree this element is mounted in, cloned from its own
@@ -741,6 +747,10 @@ impl BuildContext for BuildCtx<'_> {
 
     fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
         self.capabilities.post_frame_handle.clone()
+    }
+
+    fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
+        self.capabilities.local_post_frame_handle.clone()
     }
 
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
@@ -1288,6 +1298,7 @@ mod tests {
                 focus_manager: FocusManager::new(),
                 async_driver: None,
                 post_frame_handle: None,
+                local_post_frame_handle: None,
                 text_input_handle: None,
                 pipeline_owner: None,
             },
@@ -1310,6 +1321,7 @@ mod tests {
                 focus_manager: Rc::clone(&focus_manager),
                 async_driver: None,
                 post_frame_handle: None,
+                local_post_frame_handle: None,
                 text_input_handle: None,
                 pipeline_owner: None,
             },

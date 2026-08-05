@@ -302,6 +302,12 @@ pub struct BuildOwner {
     /// absence rather than silently scheduling onto a global.
     pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
 
+    /// The binding's OWNER-LOCAL post-frame capability — see
+    /// `BuildContext::local_post_frame_handle`'s doc for why this is a
+    /// separate handle rather than a second field on `PostFrameHandle`
+    /// itself. `None` under the same conditions as `post_frame_handle`.
+    pub(crate) local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
+
     /// The binding's IME/text-input attach-detach capability. `None` when no
     /// binding installed one, which makes `BuildContext::text_input_handle`
     /// report the absence rather than a widget silently having no way to
@@ -399,6 +405,7 @@ impl BuildOwner {
             focus_manager,
             async_driver: None,
             post_frame_handle: None,
+            local_post_frame_handle: None,
             text_input_handle: None,
             interaction_dispatch: None,
             owner_tag: OwnerTag::fresh(),
@@ -441,6 +448,15 @@ impl BuildOwner {
     /// any more.
     pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
         self.post_frame_handle = Some(handle);
+    }
+
+    /// Install the binding's owner-local post-frame capability.
+    ///
+    /// Called once, at wiring time, alongside [`Self::set_post_frame_handle`] —
+    /// same binding, same underlying scheduler, but a handle that can capture
+    /// `Rc`/`RefCell` state because it addresses its lane directly.
+    pub fn set_local_post_frame_handle(&mut self, handle: flui_scheduler::LocalPostFrameHandle) {
+        self.local_post_frame_handle = Some(handle);
     }
 
     /// Install the binding's IME/text-input attach-detach capability.
@@ -538,6 +554,12 @@ impl BuildOwner {
     #[must_use]
     pub fn post_frame_handle(&self) -> Option<&flui_scheduler::PostFrameHandle> {
         self.post_frame_handle.as_ref()
+    }
+
+    /// The binding's owner-local post-frame capability, if one was installed.
+    #[must_use]
+    pub fn local_post_frame_handle(&self) -> Option<&flui_scheduler::LocalPostFrameHandle> {
+        self.local_post_frame_handle.as_ref()
     }
 
     /// The binding's IME/text-input attach-detach capability, if one was
@@ -660,6 +682,7 @@ impl BuildOwner {
             focus_manager: &self.focus_manager,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
+            local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             interaction_dispatch: &self.interaction_dispatch,
             global_key_scope: &mut self.global_key_scope,
@@ -948,6 +971,7 @@ impl BuildOwner {
                     focus_manager: &self.focus_manager,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
+                    local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     interaction_dispatch: &self.interaction_dispatch,
                     global_key_scope: &mut self.global_key_scope,
@@ -1027,6 +1051,7 @@ impl BuildOwner {
                 focus_manager: &self.focus_manager,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
+                local_post_frame_handle: &self.local_post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 interaction_dispatch: &self.interaction_dispatch,
                 global_key_scope: &mut self.global_key_scope,
@@ -1196,6 +1221,7 @@ impl BuildOwner {
                 focus_manager: &self.focus_manager,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
+                local_post_frame_handle: &self.local_post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 interaction_dispatch: &self.interaction_dispatch,
                 global_key_scope: &mut self.global_key_scope,
@@ -1329,6 +1355,7 @@ impl BuildOwner {
             focus_manager: &self.focus_manager,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
+            local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             interaction_dispatch: &self.interaction_dispatch,
             global_key_scope: &mut self.global_key_scope,
