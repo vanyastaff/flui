@@ -84,14 +84,20 @@ use crate::{
 
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
 
-/// How many extra `Priority::Build` reentrancy drain passes
-/// [`UpdateScheduler::handle_draw_frame`] runs in one frame before giving up
-/// and tracing a warning instead of looping forever. Generous relative to
-/// any legitimate reentrant chain (a widget rebuild enqueuing one more
-/// rebuild is not expected to nest more than a handful of levels deep in a
-/// single frame); a task that hits this is re-enqueuing itself every pass,
-/// which is a task bug this cap turns into a diagnosable trace instead of a
-/// hung frame.
+/// Total `Priority::Build` drain passes — including the frame's first,
+/// non-reentrant drain — [`UpdateScheduler::handle_draw_frame`] runs before
+/// giving up on a chain and tracing a warning. The counter increments on
+/// that first ordinary drain too, so this permits 31 *extra* reentrant
+/// passes beyond it, not 32. Generous relative to any legitimate reentrant
+/// chain (a widget rebuild enqueuing one more rebuild is not expected to
+/// nest more than a handful of levels deep in a single frame).
+///
+/// This cap bounds reentrancy *depth*, not frame time: Animation and Build
+/// tasks running to completion in the frame that enqueues them is the
+/// documented invariant (only Idle-priority work is deadline-bounded — see
+/// `is_idle_deadline_passed`). A task that hits this cap is re-enqueuing
+/// itself every single pass, which is a task bug this cap turns into a
+/// diagnosable trace rather than an unbounded loop.
 const MAX_BUILD_REENTRY_PASSES: usize = 32;
 
 fn next_scheduler_identity() -> u64 {

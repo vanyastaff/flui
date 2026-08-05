@@ -48,7 +48,7 @@ let controller = AnimationController::new(
 // Or with builder for full control
 let controller = AnimationController::builder(duration, &scheduler)
     .bounds(0.0, 1.0)?
-    .initial_value(0.5)?
+    .initial_value(0.5)
     .reverse_duration(Duration::from_millis(200))
     .build()?;
 ```
