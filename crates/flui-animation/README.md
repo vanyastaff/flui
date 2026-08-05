@@ -42,11 +42,11 @@ The primary driver. Holds a value in `[lower_bound, upper_bound]` (default 0.0â€
 ```rust
 let controller = AnimationController::new(
     Duration::from_millis(300),
-    scheduler.clone(),
+    &scheduler,
 );
 
 // Or with builder for full control
-let controller = AnimationController::builder(duration, scheduler)
+let controller = AnimationController::builder(duration, &scheduler)
     .bounds(0.0, 1.0)?
     .initial_value(0.5)?
     .reverse_duration(Duration::from_millis(200))

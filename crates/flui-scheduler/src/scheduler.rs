@@ -84,6 +84,16 @@ use crate::{
 
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
 
+/// How many extra `Priority::Build` reentrancy drain passes
+/// [`UpdateScheduler::handle_draw_frame`] runs in one frame before giving up
+/// and tracing a warning instead of looping forever. Generous relative to
+/// any legitimate reentrant chain (a widget rebuild enqueuing one more
+/// rebuild is not expected to nest more than a handful of levels deep in a
+/// single frame); a task that hits this is re-enqueuing itself every pass,
+/// which is a task bug this cap turns into a diagnosable trace instead of a
+/// hung frame.
+const MAX_BUILD_REENTRY_PASSES: usize = 32;
+
 fn next_scheduler_identity() -> u64 {
     static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
     // Relaxed: pure ID allocation — uniqueness comes from the RMW's own
@@ -785,13 +795,40 @@ impl UpdateScheduler {
 
         // Animation and Build always run — never gated. Only Idle work is
         // deadline-bounded (see this method's own doc and `drive_frame`).
-        // One call drains everything down to `Build` in strict priority
-        // order (UserInput, then Animation, then Build — `execute_until`
-        // pops a priority-ordered queue) — a separate leading
-        // `execute_until(Priority::Animation)` call would drain the exact
-        // same UserInput/Animation tasks first and then leave only Build
-        // tasks for this call, which is indistinguishable from one call.
-        self.inner.task_queue.execute_until(Priority::Build);
+        //
+        // `TaskQueue::execute_until` snapshots the queue once under a
+        // single lock acquisition, then runs the batch OUTSIDE that lock
+        // (see its own doc) — it does not loop until the queue is
+        // exhausted. A Priority::Animation (or Priority::UserInput) task
+        // that itself calls `add_task` with Build-or-higher priority while
+        // it runs is invisible to that same snapshot: the freshly-queued
+        // work would otherwise sit until the *next* frame's
+        // `handle_draw_frame`, silently deferred a whole frame for no
+        // reason this method's own doc promises (a deadline bounds Idle
+        // work only). Loop until a pass finds nothing new, so reentrant
+        // Build work runs THIS frame. Bounded: a task that re-enqueues
+        // itself every single pass is a task bug (an unbounded reentrant
+        // chain), not a reason to hang this frame — cap the passes and
+        // trace loudly if the cap is hit, rather than looping forever.
+        let mut reentry_passes = 0usize;
+        loop {
+            let executed = self.inner.task_queue.execute_until(Priority::Build);
+            if executed == 0 {
+                break;
+            }
+            reentry_passes += 1;
+            if reentry_passes >= MAX_BUILD_REENTRY_PASSES {
+                tracing::warn!(
+                    reentry_passes,
+                    "Priority::Build (or higher) task queue kept yielding new \
+                     work across {MAX_BUILD_REENTRY_PASSES} reentrant drain \
+                     passes in one frame -- a task is likely re-enqueuing \
+                     itself every pass; stopping here rather than hanging \
+                     this frame"
+                );
+                break;
+            }
+        }
 
         if !self.is_idle_deadline_passed() {
             self.inner.task_queue.execute_until(Priority::Idle);

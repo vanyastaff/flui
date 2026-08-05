@@ -796,7 +796,7 @@ fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLi
 /// stream driving both `SchedulerBinding` and `WidgetsBinding` from the same
 /// synthesized sequence of states.
 ///
-/// Installed as a direct call in the same `PlatformToUi` handler (never a
+/// Installed as a direct call in the same `PlatformToUi` handler (never an
 /// `UpdateScheduler`-listener closure): a listener captured at bootstrap time
 /// would have to resolve `realm`/`WidgetsBinding` lazily at fire time,
 /// which is unsound here specifically because every production caller of
@@ -3083,7 +3083,7 @@ mod realm_dispatch_tests {
     /// `PlatformToUi::Lifecycle` event through `dispatch_platform_realm`,
     /// which takes the realm OUT of `APP_RUNTIME` for the duration of the
     /// dispatch and only restores it after `emit_lifecycle_transition`
-    /// returns. A fire-time `APP_RUNTIME` lookup (a `UpdateScheduler` lifecycle
+    /// returns. A fire-time `APP_RUNTIME` lookup (an `UpdateScheduler` lifecycle
     /// listener, the previous shape of this fix) can never see the realm
     /// during that exact window — driving a throwaway `UpdateScheduler` directly,
     /// the previous version of this test's approach, never exercises that
@@ -4629,7 +4629,7 @@ mod realm_dispatch_tests {
     /// before the realm and its `UpdateScheduler` are gone (the same reason
     /// `on_quit`'s own Detached dispatch exists, generalized to per-realm
     /// teardown so it fires from an ordinary window close too, not only a
-    /// process-wide quit). Observed via a `UpdateScheduler` lifecycle listener
+    /// process-wide quit). Observed via an `UpdateScheduler` lifecycle listener
     /// registered BEFORE the close: the listener's own `Arc` survives the
     /// realm's eventual drop, so it remains checkable after `close_this_
     /// window` returns even though the realm itself is gone by then.

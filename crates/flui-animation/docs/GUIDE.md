@@ -24,13 +24,13 @@ let scheduler = Arc::new(UpdateScheduler::new());
 // Simple
 let controller = AnimationController::new(
     Duration::from_millis(300),
-    scheduler.clone(),
+    &scheduler,
 );
 
 // With custom bounds
 let controller = AnimationController::with_bounds(
     Duration::from_millis(300),
-    scheduler.clone(),
+    &scheduler,
     0.0,
     100.0,
 )?;
@@ -38,7 +38,7 @@ let controller = AnimationController::with_bounds(
 // With builder (full control)
 let controller = AnimationController::builder(
     Duration::from_millis(300),
-    scheduler.clone(),
+    &scheduler,
 )
 .bounds(0.0, 100.0)?
 .initial_value(50.0)?
@@ -481,7 +481,7 @@ fn animate() -> Result<(), AnimationError> {
 ### Always Dispose
 
 ```rust
-let controller = AnimationController::new(duration, scheduler);
+let controller = AnimationController::new(duration, &scheduler);
 // ... use controller ...
 controller.dispose();  // Required
 ```

@@ -78,7 +78,7 @@ use std::sync::Arc;
 use flui_scheduler::{UpdateScheduler, Ticker};
 
 let scheduler = Arc::new(UpdateScheduler::new());
-let mut ticker = Ticker::new_with_scheduler(Arc::clone(&scheduler));
+let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
 let future = ticker.start(|elapsed| {
     let progress = (elapsed % 2.0) / 2.0; // 2-second loop

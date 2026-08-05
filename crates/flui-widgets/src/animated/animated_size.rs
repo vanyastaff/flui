@@ -163,7 +163,7 @@ impl StatefulView for AnimatedSize {
         // true`. `VsyncScope` still drives the actual value ticks
         // deterministically via `tick_at`; `with_detached_ticker` gives this
         // controller a ticker whose `start()`/`stop()`/`mute()` transition
-        // real ticker state without needing a `UpdateScheduler` at all — no
+        // real ticker state without needing an `UpdateScheduler` at all — no
         // allocation for something nothing was ever going to pump.
         let controller = AnimationController::with_detached_ticker(self.duration);
         if let Some(reverse_duration) = self.reverse_duration {

@@ -321,8 +321,8 @@ controller.add_status_listener(|status| {
 ```rust
 // Good: single scheduler drives all
 let scheduler = Arc::new(UpdateScheduler::new());
-let ctrl1 = AnimationController::new(d, scheduler.clone());
-let ctrl2 = AnimationController::new(d, scheduler.clone());
+let ctrl1 = AnimationController::new(d, &scheduler);
+let ctrl2 = AnimationController::new(d, &scheduler);
 // Both tick on same frame callback
 ```
 

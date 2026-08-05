@@ -1260,7 +1260,7 @@ impl UiRealm {
     /// content instead of finding nothing to do — called directly from
     /// `runner.rs`'s `emit_lifecycle_transition` on the frames-disabled->
     /// enabled edge (that call site already has this realm in scope; see
-    /// its own doc for why the redirty lives there and not in a `UpdateScheduler`
+    /// its own doc for why the redirty lives there and not in an `UpdateScheduler`
     /// lifecycle listener). FLUI has no retained-scene layer to fall back
     /// on, so a `Hidden`/`Paused` -> `Resumed`/`Inactive` transition needs
     /// the same explicit re-dirty `allow_first_frame` needs after a

@@ -89,6 +89,46 @@ fn tiny_deadline_defers_idle_but_never_defers_build_or_animation() {
     );
 }
 
+/// Reentrancy exploit: `TaskQueue::execute_until` snapshots the queue once
+/// under a single lock acquisition and runs the batch OUTSIDE that lock
+/// (see its own doc in `task.rs`) — it does not loop to exhaustion. A
+/// Priority::Animation task that itself enqueues Priority::Build work
+/// during that same pass is invisible to a single `execute_until(Build)`
+/// call: the freshly-queued Build task lands in the queue only in time for
+/// the NEXT frame. Kills a regression in `handle_draw_frame` that collapses
+/// the Animation/Build drain into one non-reentrant pass — reentrant
+/// Build work must still run THIS frame, not next, and an already-passed
+/// Idle deadline must not matter to that (it only ever bounds Idle work).
+#[test]
+fn build_work_enqueued_reentrantly_by_an_animation_task_runs_this_frame() {
+    let scheduler = UpdateScheduler::new();
+    let build_ran = Arc::new(AtomicBool::new(false));
+
+    {
+        let reentrant_scheduler = scheduler.clone();
+        let flag = Arc::clone(&build_ran);
+        scheduler.add_task(Priority::Animation, move || {
+            reentrant_scheduler.add_task(Priority::Build, move || {
+                flag.store(true, Ordering::SeqCst);
+            });
+        });
+    }
+
+    let now = Instant::now();
+    // An already-passed Idle deadline is part of the exploit: it proves the
+    // reentrant Build work ran because of the Animation/Build drain, not
+    // because a generous deadline let a *later* Idle-priority pass pick it
+    // up by coincidence.
+    scheduler.drive_frame(now, IdleDeadline(now), || {});
+
+    assert!(
+        build_ran.load(Ordering::SeqCst),
+        "Build work enqueued by an Animation task during the same \
+         handle_draw_frame pass must run in THIS frame, not be silently \
+         deferred a whole frame"
+    );
+}
+
 /// The converse: a deadline far in the future defers nothing — Idle work
 /// runs too. Anti-vacuous pair for the exploit above (a scheduler that
 /// *never* runs Idle work would also pass the first assertion above by

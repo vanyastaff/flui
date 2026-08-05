@@ -1078,7 +1078,7 @@ impl AppRuntime {
     }
 
     /// A `Send + Sync`, `'static` capability that sets `needs_redraw` and
-    /// pokes the installed window — safe to hand to a `UpdateScheduler` lifecycle
+    /// pokes the installed window — safe to hand to an `UpdateScheduler` lifecycle
     /// hook, an `on_frame_scheduled` hook, or a spawned future's `Waker`,
     /// none of which may resolve this thread-local `AppRuntime` at fire time
     /// (see [`FrameWakeHandle`]'s doc).
