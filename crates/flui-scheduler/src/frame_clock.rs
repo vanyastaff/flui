@@ -779,36 +779,62 @@ mod tests {
     // ----------------------------------------------------------------
     // Determinism: the same script twice yields identical decisions and
     // timestamps -- kills a stray `Instant::now()` inside poll.
+    //
+    // A bare `run() == run()` self-comparison is NOT enough for this: a
+    // wall-clock read swapped in for the caller-supplied `now` is
+    // consistently wrong in BOTH runs (each run's `Instant::now()` calls
+    // land at slightly different wall-clock instants than the other run's,
+    // but within a single run the decisions it drives are still internally
+    // self-consistent), so `first == second` can still hold even though
+    // `now` was never actually the value the test advanced the manual clock
+    // to. `now` must be made LOAD-BEARING in the decision -- a configured
+    // throttle is what `in_flight_and_throttle_are_independent_backpressure_
+    // sources`/`throttled_interval_skips_with_backpressure_reason` above
+    // already use for exactly this reason -- and the expectation must be an
+    // ABSOLUTE, hand-computed sequence, not just "the two runs agree".
     // ----------------------------------------------------------------
 
     #[test]
-    fn the_same_script_replayed_twice_is_byte_identical() {
-        // Compared by ELAPSED duration, not the absolute `Instant`: two
-        // separate `ManualClock`s each anchor `base` to the real wall clock
-        // at construction (a nanosecond apart between the two runs), so the
-        // raw `Instant` values themselves legitimately differ even though
-        // the clock is deterministic -- what must be identical is how far
-        // each poll's `now` sits from this run's own start, and the decision
-        // made there.
-        fn run() -> Vec<(PollDecision, Duration)> {
+    fn the_same_script_replayed_twice_matches_an_absolute_throttled_sequence() {
+        fn run() -> Vec<PollDecision> {
             let (clock, manual) = manual();
+            clock.set_min_produce_interval(Some(Duration::from_millis(33)));
             let mut trace = Vec::new();
-            for step in 0..5 {
-                if step % 2 == 0 {
-                    clock.mark_demand(DemandKind::Dirty);
-                }
+            for _ in 0..5 {
+                clock.mark_demand(DemandKind::Dirty);
                 manual.advance(Duration::from_millis(16));
-                let now = clock.now();
-                trace.push((clock.poll(now), manual.elapsed()));
+                trace.push(clock.poll(clock.now()));
             }
             trace
         }
 
+        // Hand-computed against a 33ms throttle and a fixed 16ms step, from
+        // a `None` `last_produce_at` (first poll always has capacity):
+        //   t=16ms: no prior produce                    -> Produce (last=16)
+        //   t=32ms: 32-16=16ms  < 33ms                   -> Skip(Backpressure)
+        //   t=48ms: 48-16=32ms  < 33ms                   -> Skip(Backpressure)
+        //   t=64ms: 64-16=48ms >= 33ms                    -> Produce (last=64)
+        //   t=80ms: 80-64=16ms  < 33ms                   -> Skip(Backpressure)
+        let expected = vec![
+            PollDecision::Produce,
+            PollDecision::Skip(SkipReason::Backpressure),
+            PollDecision::Skip(SkipReason::Backpressure),
+            PollDecision::Produce,
+            PollDecision::Skip(SkipReason::Backpressure),
+        ];
+
         let first = run();
+        assert_eq!(
+            first, expected,
+            "the exact produce/skip sequence must match the scripted throttle timing -- \
+             a clock reading real wall-clock time instead of the caller-supplied `now` \
+             would not reliably reproduce this exact pattern"
+        );
+
         let second = run();
         assert_eq!(
             first, second,
-            "identical scripts must produce identical traces"
+            "identical scripts must also produce identical traces run to run"
         );
     }
 

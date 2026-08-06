@@ -894,6 +894,31 @@ impl HeadlessBinding {
         entry.clock.mark_demand(kind);
     }
 
+    /// Configure a minimum interval between produces on `id`'s own clock —
+    /// scripting a throttle (e.g. a target frame rate lower than the
+    /// pumped cadence) for a test that needs `poll`'s capacity gate to be
+    /// load-bearing in its own right, not just the demand mask. `None`
+    /// (the default) imposes no throttle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` was never registered — see
+    /// [`mark_presentation_demand`](Self::mark_presentation_demand)'s doc
+    /// for the rationale.
+    pub fn set_presentation_min_produce_interval(
+        &self,
+        id: PresentationId,
+        interval: Option<Duration>,
+    ) {
+        let entry = self.presentation_clocks.get(&id).unwrap_or_else(|| {
+            panic!(
+                "set_presentation_min_produce_interval: no clock installed for {id:?} -- call \
+                 install_presentation_clock first"
+            )
+        });
+        entry.clock.set_min_produce_interval(interval);
+    }
+
     /// How many frames `id`'s own clock has granted a produce for, total.
     ///
     /// # Panics

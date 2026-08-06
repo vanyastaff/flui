@@ -149,77 +149,74 @@ fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independe
     b_controller.dispose();
 }
 
-/// Determinism: the same script run twice yields identical produce counts,
-/// tick timestamps (via animation value, its externally observable proxy),
-/// and produce decisions — kills a stray wall-clock read inside the clock
-/// or the registry.
+/// Determinism, with `now` genuinely LOAD-BEARING in the decision: a
+/// throttle is configured so the produce/skip choice depends on how far
+/// apart consecutive polls actually are, and the expectation is an
+/// ABSOLUTE, hand-computed sequence — not merely "the two runs agree with
+/// each other".
+///
+/// A bare `run() == run()` self-comparison with no throttle configured is
+/// NOT sufficient to kill a stray wall-clock read inside `poll`: a `now`
+/// read from the real OS clock in a tight loop is *consistently* wrong in
+/// both runs (each run's sequence of real-clock reads is internally
+/// self-consistent, just not equal to the scripted virtual timeline), so
+/// `first == second` can still hold even though `poll` never looked at the
+/// caller-supplied `now` at all. This is exactly why the equivalent
+/// `flui-scheduler` unit tests that configure a throttle catch that mutant
+/// and a bare self-comparison does not — see
+/// `frame_clock.rs::tests::the_same_script_replayed_twice_matches_an_
+/// absolute_throttled_sequence`, this test's unit-level twin.
 #[test]
-fn the_same_interleaved_script_replayed_twice_is_byte_identical() {
-    fn run() -> (u64, u64, f32, f32) {
-        let mut binding = HeadlessBinding::new();
-        let a = presentation(0);
-        let b = presentation(1);
-        let a_vsync = binding.install_presentation_clock(a);
-        let b_vsync = binding.install_presentation_clock(b);
-
-        let a_controller =
-            AnimationController::new(Duration::from_millis(500), &UpdateScheduler::new());
-        let b_controller =
-            AnimationController::new(Duration::from_millis(300), &UpdateScheduler::new());
-        a_vsync.register(a_controller.clone());
-        b_vsync.register(b_controller.clone());
-        a_controller.forward().expect("fresh controller forwards");
-        b_controller.forward().expect("fresh controller forwards");
-
-        for step in 0..30 {
-            binding.pump_presentation(a, Duration::from_millis(10));
-            if step % 2 == 0 {
-                binding.pump_presentation(b, Duration::from_millis(15));
-            }
+fn the_same_interleaved_script_replayed_twice_matches_an_absolute_throttled_sequence() {
+    /// Whether each of 5 scripted pumps of `id` produced, derived from
+    /// `presentation_produced_count`'s running total (the only per-pump
+    /// observable `HeadlessBinding`'s public API exposes) rather than a raw
+    /// decision -- a produce increments the counter, a skip does not, so
+    /// the delta sequence is exactly isomorphic to the produce/skip
+    /// sequence itself.
+    fn produce_sequence(binding: &HeadlessBinding, id: PresentationId) -> Vec<bool> {
+        let mut sequence = Vec::new();
+        let mut previous = binding.presentation_produced_count(id);
+        for _ in 0..5 {
+            binding.mark_presentation_demand(id, DemandKind::Dirty);
+            binding.pump_presentation(id, Duration::from_millis(16));
+            let now = binding.presentation_produced_count(id);
+            sequence.push(now > previous);
+            previous = now;
         }
-
-        let result = (
-            binding.presentation_produced_count(a),
-            binding.presentation_produced_count(b),
-            a_controller.value(),
-            b_controller.value(),
-        );
-        a_controller.dispose();
-        b_controller.dispose();
-        result
+        sequence
     }
 
+    fn run() -> Vec<bool> {
+        let mut binding = HeadlessBinding::new();
+        let a = presentation(0);
+        let _vsync = binding.install_presentation_clock(a);
+        binding.set_presentation_min_produce_interval(a, Some(Duration::from_millis(33)));
+        produce_sequence(&binding, a)
+    }
+
+    // Hand-computed against a 33ms throttle and a fixed 16ms step, from a
+    // fresh clock (first poll always has capacity) -- the identical
+    // reasoning as the flui-scheduler unit twin cited above:
+    //   t=16ms: no prior produce                     -> produce (true)
+    //   t=32ms: 32-16=16ms  < 33ms                    -> skip   (false)
+    //   t=48ms: 48-16=32ms  < 33ms                    -> skip   (false)
+    //   t=64ms: 64-16=48ms >= 33ms                    -> produce (true), last=64
+    //   t=80ms: 80-64=16ms  < 33ms                    -> skip   (false)
+    let expected = vec![true, false, false, true, false];
+
     let first = run();
-    // Positive control: the trace must be non-trivial BEFORE comparing runs,
-    // or this test passes vacuously against a no-op `pump_presentation` (both
-    // runs would yield the same all-zero tuple) and survives a mutant
-    // `Instant::now()` injected at the top of `poll` (a wall-clock read would
-    // still leave produced counts/values non-deterministic across the TWO
-    // runs below, but a single run's own trace being all-zero can't show
-    // that on its own).
-    let (produced_a, produced_b, value_a, value_b) = first;
-    assert!(
-        produced_a > 0,
-        "A must have produced something real: {first:?}"
-    );
-    assert!(
-        produced_b > 0,
-        "B must have produced something real: {first:?}"
-    );
-    assert!(
-        value_a > 0.0,
-        "A's controller must have genuinely advanced: {first:?}"
-    );
-    assert!(
-        value_b > 0.0,
-        "B's controller must have genuinely advanced: {first:?}"
+    assert_eq!(
+        first, expected,
+        "the exact produce/skip sequence must match the scripted throttle timing -- a clock \
+         reading real wall-clock time instead of the caller-supplied `now` would not reliably \
+         reproduce this exact pattern"
     );
 
     let second = run();
     assert_eq!(
         first, second,
-        "identical scripts must produce identical (produced_count_a, produced_count_b, \
-         value_a, value_b) tuples"
+        "identical scripts must also produce identical traces run to run"
     );
 }
 
