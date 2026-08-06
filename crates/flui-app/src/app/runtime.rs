@@ -829,6 +829,49 @@ impl AppRuntime {
         first_observed
     }
 
+    /// The earliest wall-clock instant this loop's platform event loop
+    /// should wake at instead of blocking forever (issue #556's wall-clock
+    /// wake) — the min over every hosted realm's own
+    /// [`super::ui_realm::UiRealm::next_wake`] (which itself is the min over
+    /// that realm's own presentations' armed gesture-arena deadlines),
+    /// alongside [`flui_interaction::global_timer_service`]'s own next
+    /// deadline. `None` when nothing anywhere needs a wall-clock wake —
+    /// the loop falls back to blocking indefinitely, exactly as before this
+    /// mechanism existed.
+    ///
+    /// **Design-for-N (N realms on one loop thread):** iterates every
+    /// resident slot, same discipline as [`Self::installed_realm_phase`] —
+    /// a realm currently checked out for dispatch (`slot.realm` is `None`)
+    /// contributes nothing to this call, which is correct: this is only
+    /// ever consulted from `about_to_wait`, after every dispatch for this
+    /// iteration has already returned and every realm slot is back in
+    /// place.
+    ///
+    /// **Honest scope on the global timer service:** `global_timer_service`
+    /// has zero production callers today (see
+    /// `dropping_realm_a_cannot_wake_realm_b`'s doc, `ui_realm.rs`) — no
+    /// realm or recognizer schedules through it, so its contribution here is
+    /// always `None` in this workspace's actual wiring. Folding it in is
+    /// forward-composing, not aspirational: an embedder or a future
+    /// recognizer that DOES register a timer through it is honored without
+    /// a second wiring pass, at zero cost while nothing does.
+    #[must_use]
+    pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
+        let realms_wake = self
+            .realms
+            .iter()
+            .filter_map(|(_, slot)| slot.realm.as_ref())
+            .filter_map(super::ui_realm::UiRealm::next_wake)
+            .min();
+        let timer_wake = flui_interaction::global_timer_service().next_deadline();
+        match (realms_wake, timer_wake) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+
     /// The un-deferred application of an `Install` mutation: registers
     /// `window` in the `WindowRegistry` FIRST, strictly (never replacing an
     /// existing mapping — an id collision is refused, not silently

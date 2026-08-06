@@ -1033,6 +1033,17 @@ impl UiRealm {
         self.focus_coordinator.active()
     }
 
+    /// Whether `id`'s own [`FrameClock`](flui_scheduler::FrameClock) is
+    /// currently marked hidden — for
+    /// the isolation suite (`runner.rs`) proving `WindowVisibility` events
+    /// gate exactly the presentation they were addressed to, never a
+    /// sibling's. `None` if `id` is not resident (already closed, or a
+    /// forged/mixed address).
+    #[cfg(test)]
+    pub(crate) fn presentation_hidden_for_test(&self, id: PresentationId) -> Option<bool> {
+        self.presentations.get(id).map(|p| p.clock().is_hidden())
+    }
+
     /// Whether `id` is this realm's currently ACTIVE presentation
     /// ([`FocusCoordinator`]). Production reader:
     /// `runner.rs`'s `PlatformToUi::WindowFocus` handling uses this to tell
@@ -1640,6 +1651,25 @@ impl UiRealm {
                 || presentation.gestures().has_pending_motion()
                 || presentation.gestures().has_pending_deadlines()
         })
+    }
+
+    /// The earliest wall-clock instant ANY presentation this realm hosts
+    /// needs the platform loop to wake at, if any — the min over every
+    /// presentation's own armed gesture-arena
+    /// deadline (`GestureBinding::next_deadline`, e.g. a long-press hold or
+    /// a double-tap give-up). This is genuinely INDEPENDENT of every
+    /// presentation's `FrameClock` state: a gated presentation's pending
+    /// input-correctness deadline (per this issue's own rule — arena
+    /// deadlines are input correctness, not frame production) still needs
+    /// the loop to wake and re-drive a pump so `tick_deadlines` can resolve
+    /// it, even though that pump will render nothing for the gated
+    /// presentation itself.
+    #[must_use]
+    pub(crate) fn next_wake(&self) -> Option<web_time::Instant> {
+        self.presentations
+            .iter()
+            .filter_map(|presentation| presentation.gestures().next_deadline())
+            .min()
     }
 
     // ========================================================================
@@ -2311,6 +2341,47 @@ impl UiRealm {
             return;
         }
         self.focus_coordinator.note_focus_gained(presentation_id);
+    }
+
+    /// Gate `presentation_id`'s own
+    /// [`FrameClock`](flui_scheduler::FrameClock) on a real visibility
+    /// signal — the presentation-level counterpart of the
+    /// realm-wide `AppLifecycleState` derivation
+    /// `PlatformToUi::WindowVisibility` (`runner.rs`) also drives. A stale
+    /// or unknown `presentation_id` (already closed, or a forged/mixed
+    /// address) is a
+    /// traced no-op, matching [`Self::notify_presentation_focus_gained`]'s
+    /// own discipline.
+    ///
+    /// While hidden,
+    /// [`FrameClock::poll`](flui_scheduler::FrameClock::poll) returns
+    /// `Skip(Hidden)` for this
+    /// presentation: `draw_frame_entered`'s segment loop skips its
+    /// build/layout/paint/submit entirely, demand retained. Becoming visible
+    /// again does NOT self-produce — nothing wakes an idle platform loop on
+    /// its own — so this is also the ungate→wake edge: with a nonzero
+    /// retained mask, this call wakes the realm unconditionally rather than
+    /// consulting
+    /// [`FrameClock::try_arm_redraw_request`](flui_scheduler::FrameClock::try_arm_redraw_request).
+    /// That latch cannot
+    /// be trusted here: it may already be armed from a demand mark that
+    /// occurred BEFORE this presentation went hidden (a poke the platform
+    /// loop already delivered and wasted, since `poll` returned `Skip(Hidden)`
+    /// for it) — reading `try_arm_redraw_request()`'s return value would
+    /// incorrectly stay silent in that sequence and strand the presentation
+    /// gated forever with demand nobody ever wakes for.
+    pub(crate) fn set_presentation_hidden(&self, presentation_id: PresentationId, hidden: bool) {
+        let Some(presentation) = self.presentations.get(presentation_id) else {
+            tracing::debug!(
+                { flui_foundation::diagnostics::PRESENTATION_ID } = presentation_id.as_u64(),
+                "dropping a visibility change for a presentation this realm no longer hosts"
+            );
+            return;
+        };
+        presentation.clock().set_hidden(hidden);
+        if !hidden && !presentation.clock().demand_mask().is_empty() {
+            self.wake_frame();
+        }
     }
 
     /// Consume the coalesced redraw request, if any.
@@ -7452,6 +7523,459 @@ mod tests {
                 realm.presentations.primary().clock().produced_count(),
                 produced_while_settled + 1,
                 "exactly one additional produce -- no wake-to-first-frame delay"
+            );
+        }
+
+        // ================================================================
+        // Hidden-surface gating: `FrameClock::set_hidden` wired to
+        // `UiRealm::set_presentation_hidden`, and the ungate->wake edge
+        // that keeps a demand mark from stranding the presentation.
+        // ================================================================
+
+        /// A raster backend that always presents, counting how many times
+        /// `render_scene` actually ran -- the "zero GPU submits" oracle for
+        /// the tests below. Distinct from the sibling `frame_pipeline_and_
+        /// vsync` module's own `CountingRasterBackend`, which is private to
+        /// that module.
+        struct HiddenGateCountingBackend {
+            render_scene_calls: u32,
+        }
+
+        impl HiddenGateCountingBackend {
+            fn new() -> Self {
+                Self {
+                    render_scene_calls: 0,
+                }
+            }
+        }
+
+        impl RasterBackend for HiddenGateCountingBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                self.render_scene_calls += 1;
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        /// END-STATE INVARIANT: a hidden presentation's segment never runs
+        /// and its backend never receives a submit, however many times it
+        /// is dirtied and pumped.
+        #[test]
+        fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden() {
+            let realm = mount_root_here();
+            let presentation_id = realm.presentations.primary().id();
+            let mut backend = HiddenGateCountingBackend::new();
+
+            // Settle the initial attach paint first, so the assertions below
+            // isolate exactly what happens WHILE hidden -- baselines
+            // captured AFTER settling, not absolute zero (the settle itself
+            // is one legitimate submit).
+            let _ = realm.render_frame_entered(&mut backend);
+            realm.set_presentation_hidden(presentation_id, true);
+            let flush_count_before = realm.presentations.primary().flush_count();
+            let produced_before = realm.presentations.primary().clock().produced_count();
+            let submits_before = backend.render_scene_calls;
+
+            for pump in 0..10 {
+                realm.set_now_secs_for_test(f64::from(pump) * 0.016);
+                // Dirty the tree every pump -- demand exists, but the
+                // presentation-level gate must still withhold the segment.
+                realm.presentations.primary().pipeline().with_mut(|owner| {
+                    if let Some(root_id) = owner.root_id() {
+                        owner.mark_needs_paint(root_id);
+                    }
+                });
+                let presented = realm.render_frame_entered(&mut backend);
+                assert!(
+                    !presented,
+                    "pump {pump}: a hidden presentation must never present"
+                );
+            }
+
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                flush_count_before,
+                "a hidden presentation's segment must never run, however often it is dirtied"
+            );
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                produced_before,
+                "a hidden presentation must never grant a produce"
+            );
+            assert_eq!(
+                backend.render_scene_calls, submits_before,
+                "a hidden presentation must never reach the raster backend -- zero GPU submits"
+            );
+        }
+
+        /// A running controller (`Animation` demand, marked unconditionally
+        /// every pump per the vsync-continuation wiring) must not spin a
+        /// hidden presentation: the gate short-circuits before the demand
+        /// mask is even consulted. Kills "a gated presentation with a
+        /// running controller keeps producing".
+        #[test]
+        fn gated_and_animating_presentation_does_not_spin() {
+            use std::time::Duration;
+
+            use flui_animation::AnimationController;
+
+            let realm = UiRealm::for_test();
+            let presentation_id = realm.presentations.primary().id();
+            let controller = AnimationController::new(
+                Duration::from_secs(1),
+                &flui_scheduler::UpdateScheduler::new(),
+            );
+            realm.vsync().register(controller.clone());
+            controller.forward().expect("fresh controller forwards");
+
+            realm.set_presentation_hidden(presentation_id, true);
+
+            for pump in 0..20 {
+                realm.set_now_secs_for_test(f64::from(pump) * 0.01);
+                let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            }
+
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                0,
+                "a gated presentation with a running controller must not spin -- \
+                 its segment must never run"
+            );
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                0,
+                "and must never grant a produce"
+            );
+
+            controller.dispose();
+        }
+
+        /// The liveness-critical ungate->wake edge: a demand mark that
+        /// arrives while hidden is retained by the mask but produces
+        /// nothing; unhiding must both (a) let the very next pump produce
+        /// exactly once, and (b) actually WAKE the platform loop itself --
+        /// not merely be observable if some unrelated caller happens to
+        /// pump again. Without the unconditional wake in
+        /// `set_presentation_hidden`, this demand would strand: nothing
+        /// self-wakes an idle `ControlFlow::Wait` loop.
+        #[test]
+        fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once() {
+            let (wake, wake_count) = super::counting_wake();
+            let realm = super::new_runtime(wake).expect("runtime");
+            realm
+                .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+                .expect("attach succeeds");
+            let presentation_id = realm.presentations.primary().id();
+            let mut backend = HiddenGateCountingBackend::new();
+
+            // Settle the attach's own first paint.
+            realm.set_now_secs_for_test(0.0);
+            let _ = realm.render_frame_entered(&mut backend);
+            let produced_before = realm.presentations.primary().clock().produced_count();
+            let submits_before = backend.render_scene_calls;
+
+            realm.set_presentation_hidden(presentation_id, true);
+            wake_count.store(0, Ordering::Relaxed);
+
+            // Dirty the real render tree once while hidden -- a genuine
+            // repaint demand, not just the wake-only redraw bit, so the
+            // eventual unhide pump below actually has something to paint.
+            // This ALSO fires the render pipeline's own independent,
+            // pre-existing wake wire (`PipelineOwner::
+            // set_on_need_visual_update` -> the realm's `wake` directly,
+            // unrelated to this slice's FrameClock gate) exactly once for
+            // this clean->dirty transition -- expected, not the property
+            // under test. What IS under test is the DELTA at unhide below:
+            // one MORE wake beyond whatever this mark already caused.
+            realm.presentations.primary().pipeline().with_mut(|owner| {
+                if let Some(root_id) = owner.root_id() {
+                    owner.mark_needs_paint(root_id);
+                }
+            });
+
+            for pump in 1..=3 {
+                realm.set_now_secs_for_test(0.016 * f64::from(pump));
+                let presented = realm.render_frame_entered(&mut backend);
+                assert!(!presented, "pump {pump}: must not present while hidden");
+            }
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                produced_before,
+                "zero produces while hidden, however many times pumped"
+            );
+            assert_eq!(
+                backend.render_scene_calls, submits_before,
+                "zero submits while hidden"
+            );
+            let wake_count_before_unhide = wake_count.load(Ordering::Relaxed);
+
+            // Unocclude: the retained demand must wake the platform loop
+            // exactly one MORE time (the ungate edge) beyond whatever the
+            // dirty mark's own independent wake already contributed...
+            realm.set_presentation_hidden(presentation_id, false);
+            assert_eq!(
+                wake_count.load(Ordering::Relaxed),
+                wake_count_before_unhide + 1,
+                "unhiding with retained demand must wake the platform loop exactly once more"
+            );
+
+            // ...and produce exactly once on the very next pump, with no
+            // further external input.
+            realm.set_now_secs_for_test(0.1);
+            let presented = realm.render_frame_entered(&mut backend);
+            assert!(presented, "the unhide pump must present");
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                produced_before + 1,
+                "exactly one produce after unhiding -- no lost frame, no extra one"
+            );
+            assert_eq!(
+                backend.render_scene_calls,
+                submits_before + 1,
+                "exactly one submit after unhiding"
+            );
+
+            // Settling: a further pump with nothing newly dirtied produces
+            // nothing more.
+            realm.set_now_secs_for_test(0.2);
+            let _ = realm.render_frame_entered(&mut backend);
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                produced_before + 1,
+                "no further produce once the retained demand is consumed"
+            );
+        }
+
+        /// Unhiding with an EMPTY mask (nothing was ever dirtied while
+        /// hidden) must not spuriously wake the platform -- the wake is
+        /// conditioned on retained demand, not unconditional on every
+        /// unhide.
+        #[test]
+        fn unoccluding_an_undirtied_presentation_does_not_wake() {
+            let (wake, wake_count) = super::counting_wake();
+            let realm = super::new_runtime(wake).expect("runtime");
+            let presentation_id = realm.presentations.primary().id();
+
+            realm.set_presentation_hidden(presentation_id, true);
+            wake_count.store(0, Ordering::Relaxed);
+
+            realm.set_presentation_hidden(presentation_id, false);
+
+            assert_eq!(
+                wake_count.load(Ordering::Relaxed),
+                0,
+                "unhiding an idle (never-dirtied) presentation must not wake the platform"
+            );
+        }
+
+        /// Gesture-arena deadlines are input-correctness, not frame
+        /// production (plan-level rule): they remain a realm pre-segment
+        /// step that runs on every logical pump regardless of this
+        /// presentation's own `FrameClock` gate. A gated presentation with
+        /// an in-flight long-press must still resolve it, through the
+        /// arena's own callback, with zero GPU submits -- kills "deadline
+        /// rides the produce gate".
+        #[test]
+        fn gated_long_press_resolves_through_the_arenas_own_callback_with_zero_submits() {
+            use std::time::Duration;
+
+            use flui_interaction::{
+                GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
+            };
+
+            let realm = mount_root_here();
+            let presentation_id = realm.presentations.primary().id();
+            let mut backend = HiddenGateCountingBackend::new();
+
+            // Settle the attach's own first paint before gating -- baselines
+            // captured AFTER settling, not absolute zero.
+            let _ = realm.render_frame_entered(&mut backend);
+            realm.set_presentation_hidden(presentation_id, true);
+            let flush_count_before = realm.presentations.primary().flush_count();
+            let produced_before = realm.presentations.primary().clock().produced_count();
+            let submits_before = backend.render_scene_calls;
+
+            // Arm a real long-press against the SAME arena
+            // `draw_frame_entered`'s gesture-deadline tick polls -- not a
+            // scripted stand-in.
+            let arena = realm.presentations.primary().gestures().arena().clone();
+            let fired = Arc::new(AtomicBool::new(false));
+            let fired_for_callback = Arc::clone(&fired);
+            let recognizer = LongPressGestureRecognizer::with_settings(
+                arena,
+                GestureSettings::touch_defaults()
+                    .with_long_press_timeout(Duration::from_millis(30)),
+            )
+            .with_on_long_press(move || fired_for_callback.store(true, Ordering::SeqCst));
+            let pointer = PointerId::new(2).expect("nonzero pointer id");
+            recognizer.add_pointer(pointer, flui_types::Offset::new(px(10.0), px(10.0)));
+
+            // Real wall-clock wait past the deadline: the arena's own clock
+            // is the real OS clock here (`GestureBinding::new()`), same as
+            // production.
+            std::thread::sleep(Duration::from_millis(60));
+
+            // Pump while still hidden: `draw_frame_entered`'s gesture tick
+            // runs unconditionally, resolving the long-press through its
+            // OWN callback, even though the segment gate skips this
+            // presentation's build/layout/paint/submit entirely.
+            for pump in 0..3 {
+                realm.set_now_secs_for_test(f64::from(pump) * 0.016);
+                let presented = realm.render_frame_entered(&mut backend);
+                assert!(!presented, "pump {pump}: must not present while hidden");
+            }
+
+            assert!(
+                fired.load(Ordering::SeqCst),
+                "the long-press must fire through the arena's own poll_deadlines tick even \
+                 though this presentation is gated"
+            );
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                flush_count_before,
+                "the gated presentation's segment must never run"
+            );
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                produced_before,
+                "the gated presentation must never grant a produce"
+            );
+            assert_eq!(
+                backend.render_scene_calls, submits_before,
+                "zero GPU submits -- the long-press resolves through the arena's own \
+                 callback, never through the produce path"
+            );
+        }
+
+        /// The idle/instant-response headline, adaptive on-demand pacing:
+        /// over a real wall-clock window with a LIVE
+        /// realm (the async driver polled every pump, a gesture-arena
+        /// deadline armed but not yet due), an idle presentation produces
+        /// and submits exactly zero frames -- counted, not sampled -- and
+        /// the first dirty mark after that window produces within the very
+        /// next pump.
+        #[test]
+        fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly() {
+            use std::time::{Duration, Instant};
+
+            use flui_interaction::{
+                GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
+            };
+
+            let realm = mount_root_here();
+            let mut backend = HiddenGateCountingBackend::new();
+            let scheduler = realm.scheduler();
+
+            // Settle the attach's own first paint.
+            realm.set_now_secs_for_test(0.0);
+            let pump_once =
+                |realm: &UiRealm, backend: &mut HiddenGateCountingBackend, now_secs: f64| {
+                    realm.set_now_secs_for_test(now_secs);
+                    scheduler.drive_frame_with_lane(
+                        flui_scheduler::Instant::now(),
+                        flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                        || {
+                            let _ = realm.render_frame_entered(backend);
+                        },
+                        realm.local_post_frame_lane(),
+                    );
+                };
+            pump_once(&realm, &mut backend, 0.0);
+            let produced_before = realm.presentations.primary().clock().produced_count();
+            let submits_before = backend.render_scene_calls;
+
+            // A live async task, polled every pump exactly like production
+            // (`UpdateScheduler::handle_begin_frame`'s mid-frame slot) --
+            // it never touches demand/dirty state.
+            let async_polls = Arc::new(AtomicUsize::new(0));
+            let async_polls_for_task = Arc::clone(&async_polls);
+            let _token = scheduler.spawn_local(Box::pin(async move {
+                async_polls_for_task.fetch_add(1, Ordering::Release);
+            }));
+
+            // A gesture-arena deadline armed but NOT yet due (timeout well
+            // past the idle window below) -- "timers armed" without ever
+            // firing during the measured window.
+            let arena = realm.presentations.primary().gestures().arena().clone();
+            let long_press_fired = Arc::new(AtomicBool::new(false));
+            let fired_for_callback = Arc::clone(&long_press_fired);
+            let recognizer = LongPressGestureRecognizer::with_settings(
+                arena,
+                GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_secs(5)),
+            )
+            .with_on_long_press(move || fired_for_callback.store(true, Ordering::SeqCst));
+            let pointer = PointerId::new(2).expect("nonzero pointer id");
+            recognizer.add_pointer(pointer, flui_types::Offset::new(px(10.0), px(10.0)));
+
+            let window = Duration::from_millis(150);
+            let start = Instant::now();
+            let mut pump = 1u32;
+            while start.elapsed() < window {
+                pump_once(&realm, &mut backend, 0.016 * f64::from(pump));
+                pump += 1;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                produced_before,
+                "an idle presentation over a real wall-clock window must produce exactly zero \
+                 additional frames"
+            );
+            assert_eq!(
+                backend.render_scene_calls, submits_before,
+                "and submit exactly zero additional frames to the raster backend"
+            );
+            // A `spawn_local` future completes on its first poll (a
+            // one-shot task, not a periodic one) -- proving the async
+            // driver's mid-frame poll step genuinely ran at least once
+            // during the idle window is the right bar here, not that this
+            // SAME task ran every pump (nothing re-arms it after it
+            // completes).
+            assert_eq!(
+                async_polls.load(Ordering::Acquire),
+                1,
+                "the async driver's mid-frame poll must have genuinely run the spawned task \
+                 during the idle window, not been skipped alongside the produce gate"
+            );
+            assert!(
+                !long_press_fired.load(Ordering::SeqCst),
+                "the armed-but-not-due deadline must not have fired yet"
+            );
+
+            // Instant response: dirty the tree now, one more pump must
+            // produce -- within the very next pump, not "eventually".
+            realm.presentations.primary().pipeline().with_mut(|owner| {
+                if let Some(root_id) = owner.root_id() {
+                    owner.mark_needs_paint(root_id);
+                }
+            });
+            pump_once(&realm, &mut backend, 0.016 * f64::from(pump));
+
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                produced_before + 1,
+                "the first dirty mark after the idle window must produce within the very next \
+                 pump"
+            );
+            assert_eq!(
+                backend.render_scene_calls,
+                submits_before + 1,
+                "and that pump must actually reach the raster backend"
             );
         }
     }

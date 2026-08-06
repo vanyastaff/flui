@@ -195,6 +195,39 @@ fn install_exit_policy_hook(policy: ExitPolicy) {
     });
 }
 
+/// Installs the wall-clock-wake hook this thread's platform
+/// backend consults, once per idle iteration, for the earliest instant it
+/// should wake at instead of blocking forever — see
+/// [`flui_platform::traits::Platform::set_wake_deadline_hook`]'s doc for the
+/// full contract. Call once, alongside [`install_exit_policy_hook`], from
+/// every backend that wants this: today, that is `run_desktop` only —
+/// Android/web bootstraps never call this (their platforms don't override
+/// that trait method either, so it would be inert there anyway).
+///
+/// The hook itself re-enters `APP_RUNTIME` only when the PLATFORM calls it
+/// later (`about_to_wait`) — never synchronously from this function, which
+/// only registers it — so this does not violate `with_owner_platform`'s "no
+/// host re-entry" rule. Read-only (`AppRuntime::next_wake` takes `&self`),
+/// unlike `install_exit_policy_hook`'s `&mut self` — no deferred-mutation
+/// drain needed here, since computing a wake deadline never touches the
+/// realm registry itself.
+#[cfg(not(target_os = "ios"))]
+#[cfg_attr(
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    expect(
+        dead_code,
+        reason = "run_desktop (its one caller) is desktop-only -- android/wasm32 bootstraps \
+                  never call this"
+    )
+)]
+fn install_wake_deadline_hook() {
+    with_owner_platform(|owner| {
+        owner.shared().set_wake_deadline_hook(Box::new(|| {
+            APP_RUNTIME.with(|slot| slot.borrow().next_wake())
+        }));
+    });
+}
+
 /// Borrow-style access to the loop-scoped owner-platform capability.
 /// `None` if no `OwnerPlatform` is currently installed on this thread
 /// (before `on_ready`, or after the host was cleared).
@@ -652,6 +685,20 @@ impl PlatformToUi {
                 emit_lifecycle_transition(realm, old, new);
             }
             Self::WindowVisibility(visible) => {
+                // Presentation-level `FrameClock` gate — finer
+                // grained than the loop-scoped `AppLifecycleState` derivation
+                // below: `set_presentation_hidden` gates exactly the
+                // presentation this event was stamped for, addressed by its
+                // own `presentation_id`, independent of whether any OTHER
+                // signal also flips the coarser realm-wide lifecycle state.
+                // Ordered before the lifecycle derivation so an unhide's
+                // wake (if any) is requested before, not after, the
+                // frames-reenable redirty below might also request one —
+                // `wake_frame` is idempotent to call twice in the same
+                // dispatch, so this ordering is a clarity choice, not a
+                // correctness requirement.
+                realm.set_presentation_hidden(presentation_id, !visible);
+
                 let (old, new) = APP_RUNTIME.with(|slot| {
                     let mut state = slot.borrow_mut();
                     let old = derive_lifecycle_state(state.visible, state.focused);
@@ -3342,6 +3389,100 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
+    /// `AppRuntime::next_wake` (the wall-clock wake seam) computes the
+    /// MIN wake deadline across every hosted realm on this loop thread — an
+    /// idle realm with an earlier-armed deadline must win over a busier
+    /// sibling with a later one, regardless of install order. Realm A gets
+    /// a far (5s) long-press timeout; realm B (installed second) gets a
+    /// near (50ms) one — the aggregate must reflect B's, not A's, and not
+    /// merely "whichever realm happens to be dispatched last".
+    ///
+    /// The recognizers are kept alive in `recognizers` for the whole test:
+    /// `GestureArena`'s deadline registry holds only a `Weak` reference, so
+    /// a recognizer dropped at the end of its own dispatch closure would
+    /// silently vanish from `next_deadline`'s snapshot before this test ever
+    /// reads it.
+    #[test]
+    fn next_wake_is_the_min_deadline_across_every_installed_realm() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use flui_interaction::{
+            GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
+        };
+
+        let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+        // `Rc`, not `Arc`: `LongPressGestureRecognizer` is owner-thread-affine
+        // (`!Send`/`!Sync`, like every gesture recognizer), and this vec
+        // never needs to cross a thread -- both dispatches below run on this
+        // same test thread.
+        let recognizers: Rc<RefCell<Vec<Arc<LongPressGestureRecognizer>>>> =
+            Rc::new(RefCell::new(Vec::new()));
+
+        let recognizers_a = Rc::clone(&recognizers);
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                let arena = realm.gestures().arena().clone();
+                let recognizer = LongPressGestureRecognizer::with_settings(
+                    arena,
+                    GestureSettings::touch_defaults()
+                        .with_long_press_timeout(std::time::Duration::from_secs(5)),
+                )
+                .with_on_long_press(|| {});
+                let pointer = PointerId::new(2).expect("nonzero pointer id");
+                recognizer.add_pointer(
+                    pointer,
+                    flui_types::Offset::new(
+                        flui_types::geometry::px(10.0),
+                        flui_types::geometry::px(10.0),
+                    ),
+                );
+                recognizers_a.borrow_mut().push(recognizer);
+            })),
+        )
+        .expect("A dispatches");
+
+        let before_b = std::time::Instant::now();
+        let recognizers_b = Rc::clone(&recognizers);
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Frame(Box::new(move |realm| {
+                let arena = realm.gestures().arena().clone();
+                let recognizer = LongPressGestureRecognizer::with_settings(
+                    arena,
+                    GestureSettings::touch_defaults()
+                        .with_long_press_timeout(std::time::Duration::from_millis(50)),
+                )
+                .with_on_long_press(|| {});
+                let pointer = PointerId::new(3).expect("nonzero pointer id");
+                recognizer.add_pointer(
+                    pointer,
+                    flui_types::Offset::new(
+                        flui_types::geometry::px(20.0),
+                        flui_types::geometry::px(20.0),
+                    ),
+                );
+                recognizers_b.borrow_mut().push(recognizer);
+            })),
+        )
+        .expect("B dispatches");
+
+        let next_wake = APP_RUNTIME
+            .with(|slot| slot.borrow().next_wake())
+            .expect("two armed deadlines pending -- next_wake must be Some");
+
+        let until_wake = next_wake.saturating_duration_since(before_b);
+        assert!(
+            until_wake < std::time::Duration::from_secs(1),
+            "next_wake must reflect realm B's near (50ms) deadline, not realm A's far (5s) \
+             one -- got {until_wake:?} until wake"
+        );
+
+        drop(recognizers);
+        teardown_platform_realm();
+    }
+
     /// A rejected nested cross-realm dispatch must never smuggle its task
     /// into the target realm's queue: the task must not run during the
     /// rejected attempt, AND must not be silently delivered by the NEXT
@@ -5711,6 +5852,97 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
+    /// `PlatformToUi::WindowVisibility` (hidden-surface gating) is
+    /// per-presentation, addressed to exactly the presentation
+    /// that produced it — never the realm-wide aggregate alone. Driven
+    /// through the REAL dispatch seam (`dispatch_platform_realm`), not a
+    /// direct `UiRealm::set_presentation_hidden` call, so this exercises
+    /// `PlatformToUi::run`'s actual `WindowVisibility` arm.
+    ///
+    /// Mutant, confirmed to make this fail: removing
+    /// `realm.set_presentation_hidden(presentation_id, !visible)` from that
+    /// arm (leaving only the pre-existing loop-scoped `AppLifecycleState`
+    /// derivation) -- both presentations' clocks would stay unhidden
+    /// regardless of which one the event was addressed to.
+    #[test]
+    fn window_visibility_gates_exactly_the_addressed_presentations_clock() {
+        let platform = flui_platform::headless_platform();
+        let window_a = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window a");
+        let window_b = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window b");
+
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        let dispatcher_a = install_platform_realm(realm, &window_a);
+        let a_id = dispatcher_a.address.presentation_id;
+        let dispatcher_b = install_presentation_alongside(dispatcher_a, &window_b)
+            .expect("B installs alongside A with a real window mapping");
+        let b_id = dispatcher_b.address.presentation_id;
+
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_eq!(
+                    realm.presentation_hidden_for_test(a_id),
+                    Some(false),
+                    "precondition: neither presentation starts hidden"
+                );
+                assert_eq!(realm.presentation_hidden_for_test(b_id), Some(false));
+            })),
+        )
+        .expect("precondition frame task dispatches");
+
+        // WindowVisibility(false) (occluded) dispatched for B only.
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Event(PlatformToUi::WindowVisibility(false)),
+        )
+        .expect("WindowVisibility(false) for B dispatches");
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_eq!(
+                    realm.presentation_hidden_for_test(b_id),
+                    Some(true),
+                    "WindowVisibility(false) dispatched through the real production path must \
+                     hide exactly the presentation it was addressed to"
+                );
+                assert_eq!(
+                    realm.presentation_hidden_for_test(a_id),
+                    Some(false),
+                    "a sibling presentation's own clock must be untouched by an event \
+                     addressed to a DIFFERENT presentation"
+                );
+            })),
+        )
+        .expect("frame task dispatches");
+
+        // WindowVisibility(true) (unoccluded) dispatched for B undoes it,
+        // still leaving A untouched.
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Event(PlatformToUi::WindowVisibility(true)),
+        )
+        .expect("WindowVisibility(true) for B dispatches");
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_eq!(
+                    realm.presentation_hidden_for_test(b_id),
+                    Some(false),
+                    "WindowVisibility(true) must unhide exactly the presentation it was \
+                     addressed to"
+                );
+                assert_eq!(realm.presentation_hidden_for_test(a_id), Some(false));
+            })),
+        )
+        .expect("frame task dispatches");
+
+        teardown_platform_realm();
+    }
+
     /// If `window`'s id is already registered (forced here by reusing A's
     /// OWN window as the "second" presentation's window), the forest must
     /// be left EXACTLY as it was -- no presentation resident without a
@@ -6458,6 +6690,14 @@ where
         // `AppRuntime`, invisible to the platform layer) can veto an exit
         // the backend would otherwise take unconditionally.
         install_exit_policy_hook(config.exit_policy);
+
+        // 0c. Wire the wall-clock-wake hook: the winit
+        // backend's `about_to_wait` consults this every idle iteration
+        // instead of blocking forever, so a pending gesture-arena deadline
+        // (a long-press hold, a double-tap give-up) still wakes the loop
+        // at the right instant even while nothing else is dirty and no
+        // animation is running.
+        install_wake_deadline_hook();
 
         // 1. Open window now that the event loop is running. Window creation is
         // an environment failure (display server hiccup, resource exhaustion),
