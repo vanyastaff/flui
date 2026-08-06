@@ -140,14 +140,16 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 
 **Read the reference for *what* and *why*, then write Rust from that understanding — do not transcribe.** Loyalty is to observable behavior (output, edge cases, ordering), not to Dart's structure, naming, or file layout. Confirm the match before reporting done — see [Definition of Done](#definition-of-done-anti-cheating).
 
-**The references are gitignored local clones, so they can be absent — check before citing one.** `ls .flutter` costs nothing and a missing reference has already produced hollow "verified against Flutter" claims here. Restore with a sparse shallow clone (~62 MB):
+**Both references are gitignored local clones, so either can be absent — check before citing one.** `ls .flutter` costs nothing and a missing reference has already produced hollow "verified against Flutter" claims here. Restore `.flutter/` with a sparse shallow clone (~62 MB):
 
 ```bash
 git clone --depth 1 --filter=blob:none --sparse https://github.com/flutter/flutter.git .flutter
 cd .flutter && git sparse-checkout set packages/flutter/lib packages/flutter/test
 ```
 
-If the reference is unavailable, say so explicitly instead of reasoning from memory — an unverified parity claim is worse than a stated gap.
+`.gpui/` is the same kind of local clone (from the Zed repository) and is consulted far less often; restore it only when a task actually calls for it.
+
+If a reference is unavailable, say so explicitly instead of reasoning from memory — an unverified parity claim is worse than a stated gap.
 
 ## Documentation
 
