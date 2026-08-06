@@ -330,12 +330,18 @@ impl GestureTimerService {
     /// FLUI's actual long-press/double-tap deadlines run through each
     /// realm's own gesture arena (`GestureBinding::next_deadline`), never
     /// through this ambient process-global service (see
-    /// `dropping_realm_a_cannot_wake_realm_b`'s doc in `flui-app`). A
-    /// wall-clock-wake computation that folds this method's answer in
-    /// alongside the arena's is therefore composing with something that
-    /// returns `None` in every production run today — inert but present, so
-    /// an embedder or a future recognizer that *does* schedule through this
-    /// service is honored without a second wiring pass.
+    /// `dropping_realm_a_cannot_wake_realm_b`'s doc in `flui-app`).
+    ///
+    /// **This answer is deliberately NOT folded into the runtime's
+    /// wall-clock wake.** Scheduling a timer here does not cause the event
+    /// loop to wake at its instant: nothing on the wake path calls
+    /// [`check_timers`](Self::check_timers), so a past-due entry would be
+    /// re-offered as the earliest deadline on every loop iteration and the
+    /// loop would spin instead of sleeping (measured in the hundreds of
+    /// thousands of iterations per second). `AppRuntime::next_wake`
+    /// therefore aggregates only sources it also drains. Folding this back
+    /// in requires giving the service a real drain call on that same wake
+    /// cycle first.
     pub fn next_deadline(&self) -> Option<Instant> {
         let timers = self.timers.lock();
         timers
