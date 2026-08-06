@@ -616,30 +616,59 @@ bounds `Priority::Idle` task execution ONLY (`Priority::Animation`/`Build` \
 always run, regardless of the deadline), `budget()`'s `MutexGuard` accessor \
 is replaced by the owned-value `budget_snapshot()`, and the fixed-rate \
 `VsyncScheduler` simulator family is deleted outright. This narrowed what \
-`UpdateScheduler` does; PR-C1 lands the second owner: `FrameClock` (issue #556 \
-§1b) is a pure, platform-free per-presentation state machine -- a `DemandMask` \
+`UpdateScheduler` does; the second owner now exists: `FrameClock` (issue #556) \
+is a pure, platform-free per-presentation state machine -- a `DemandMask` \
 (`Dirty`/`Animation`/`Host`) plus three produce gates (hidden, first-frame \
 deferral, in-flight/throttle capacity) -- now the sole one-per-presentation \
 field on `PresentationState`, replacing `UiRealm`'s former realm-wide `vsync_slot` \
 (the `Vsync` controller registry moved to per-presentation storage in the same \
 slice) and gating `UiRealm::draw_frame_entered`'s per-presentation segment: \
 the realm feeds `take_redraw_pending() || has_pending_work()` in as `Dirty` \
-demand and lets `clock.poll` decide, provably N=1-equivalent to the direct \
-predicate it replaces (six pre-existing pinned deferral/vsync tests pass \
-unedited bar one panic-message string). First-frame deferral folds into the \
-same clock as `SkipReason::Deferred`, replacing `RenderingFlutterBinding`'s \
-former counter at the `UiRealm`-forwarded call sites (`defer_first_frame`/ \
-`allow_first_frame`/`send_frames_to_engine`); `RenderingFlutterBinding`'s own \
-independent standalone defer/allow API (used only by its own `draw_frame()` \
-convenience method, with no `UiRealm` involvement) is untouched. The third \
-owner -- raster backpressure as its own owner reporting into `FrameClock`'s \
-in-flight/throttle knobs -- is still unbuilt (issue #556 PR-E); the pump \
-also stays wake-channel-driven (`RedrawRequested` still drives nothing, \
-issue #556 PR-C2), and hidden-surface gating is not yet wired to a real \
-visibility signal (issue #556 PR-D). `flui-testing` gained an additive, \
-independent multi-presentation clock registry (`HeadlessBinding::\
-install_presentation_clock`/`pump_presentation`/`pump_all`, issue #556 §13) \
-alongside the untouched single-view `pump_frame`.\
+demand and lets `clock.poll` decide via `PollDecision::should_run_segment()`, \
+provably equivalent to the direct predicate it replaces for EVERY reachable \
+combination of demand and first-frame-deferral state (deferral is orthogonal \
+to whether the segment runs -- see the next sentence -- so the equivalence \
+holds unconditionally, not only in a not-deferred subspace); six \
+pre-existing pinned deferral/vsync tests pass unedited bar one panic-message \
+string, plus a strengthened assertion on one of them and several new tests \
+proving the segment genuinely still runs while deferred. First-frame \
+deferral folds into the same clock, but withholds ONLY the submit, never \
+the segment -- Flutter's own contract \
+(`.flutter/packages/flutter/lib/src/rendering/binding.dart:582-599`, \
+`RendererBinding.deferFirstFrame`'s doc: "the framework will still do all \
+the work to produce frames, but those frames are never sent to the \
+engine") -- so `poll` returns `PollDecision::ProduceWithheld` (segment runs, \
+mask clears, submit must be withheld) rather than a `Skip`, and \
+`UiRealm::render_frame_entered` re-checks `FrameClock::is_deferred()` at its \
+own, separate submit point (mirroring the old two-gate shape: a segment \
+gate and an independent submit gate, not one gate doing both jobs). \
+Because FLUI has no retained-scene layer to fall back on the way Flutter's \
+`scheduleWarmUpFrame` re-composites the retained layer tree, \
+`UiRealm::allow_first_frame` re-dirties the root whenever it actually lifts \
+an active deferral, mirroring the pre-#556 `RenderingFlutterBinding`-based \
+design's own `redirty_root_for_represent` call. "First frame confirmed \
+sent" latches only on a segment-confirmed, unwithheld, unerrored `Produce` \
+-- not on an idle no-demand pump and not on a withheld produce -- a \
+deliberate timing decision (an idle pump latching would let a \
+`defer_first_frame` issued only after it become permanently inert), pinned \
+by its own test. This replaces `RenderingFlutterBinding`'s former counter \
+at the `UiRealm`-forwarded call sites (`defer_first_frame`/`allow_first_frame`/ \
+`send_frames_to_engine`); `RenderingFlutterBinding`'s own independent \
+standalone defer/allow API (used only by its own `draw_frame()` convenience \
+method, with no `UiRealm` involvement) is untouched. The third owner -- \
+raster backpressure as its own owner reporting into `FrameClock`'s \
+in-flight/throttle knobs -- is still unbuilt; the pump also stays \
+wake-channel-driven (`RedrawRequested` still drives nothing), and \
+hidden-surface gating is not yet wired to a real visibility signal. \
+`flui-testing` gained an additive, independent multi-presentation clock \
+registry (`HeadlessBinding::install_presentation_clock`/`pump_presentation`/ \
+`pump_all`) alongside the untouched single-view `pump_frame`; unlike \
+production (which deliberately does not mark `Animation` demand from a \
+running controller, to keep the segment-gate equivalence exact), this \
+registry's own `pump_presentation` DOES mark `Animation` demand whenever a \
+tick leaves a controller still running -- a documented divergence between \
+the test harness's produce policy and the production wiring, not a second \
+copy of the same policy.\
 """
 state = "partial"
 domain = "realm"
@@ -653,6 +682,10 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn closing_a_presentation_mid_animation_stops_its_ticks_without_panicking_or_touching_the_sibling" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_presentation_produces_and_flushes_exactly_zero_over_many_pumps" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn segment_still_runs_by_the_same_predicate_while_deferred" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_pump_while_deferred_does_not_latch_first_frame_sent" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn a_wake_bit_marked_before_deferral_is_consumed_by_exactly_one_flush" },
     { kind = "test", file = "crates/flui-testing/tests/multi_presentation_clock.rs", contains = "fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independently" },
 ]
 

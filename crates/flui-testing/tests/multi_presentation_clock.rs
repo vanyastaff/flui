@@ -1,4 +1,4 @@
-//! The deterministic multi-presentation clock (issue #556 §13) — the
+//! The deterministic multi-presentation clock (issue #556) — the
 //! headline capability `HeadlessBinding`'s single-view `pump_frame` cannot
 //! provide on its own: each registered [`PresentationId`] gets its OWN
 //! [`FrameClock`] over its OWN virtual clock and its OWN `Vsync` registry,
@@ -190,6 +190,31 @@ fn the_same_interleaved_script_replayed_twice_is_byte_identical() {
     }
 
     let first = run();
+    // Positive control: the trace must be non-trivial BEFORE comparing runs,
+    // or this test passes vacuously against a no-op `pump_presentation` (both
+    // runs would yield the same all-zero tuple) and survives a mutant
+    // `Instant::now()` injected at the top of `poll` (a wall-clock read would
+    // still leave produced counts/values non-deterministic across the TWO
+    // runs below, but a single run's own trace being all-zero can't show
+    // that on its own).
+    let (produced_a, produced_b, value_a, value_b) = first;
+    assert!(
+        produced_a > 0,
+        "A must have produced something real: {first:?}"
+    );
+    assert!(
+        produced_b > 0,
+        "B must have produced something real: {first:?}"
+    );
+    assert!(
+        value_a > 0.0,
+        "A's controller must have genuinely advanced: {first:?}"
+    );
+    assert!(
+        value_b > 0.0,
+        "B's controller must have genuinely advanced: {first:?}"
+    );
+
     let second = run();
     assert_eq!(
         first, second,
@@ -210,21 +235,36 @@ fn an_installed_presentation_with_no_demand_and_no_running_controller_never_prod
     let a = presentation(0);
     let _vsync = binding.install_presentation_clock(a);
 
+    // Positive control FIRST: this binding's own produce path genuinely
+    // works for `a` (not an uninstalled id, a broken install, or a dead
+    // `pump_presentation` -- any of which would ALSO leave the idle
+    // assertion below vacuously true).
+    binding.mark_presentation_demand(a, DemandKind::Host);
+    binding.pump_presentation(a, Duration::from_millis(16));
+    assert_eq!(
+        binding.presentation_produced_count(a),
+        1,
+        "sanity: this binding's produce path must work at all for `a`"
+    );
+
+    // Now the actual claim: ten more pumps with nothing marked and no
+    // controller registered must grant exactly zero ADDITIONAL produces.
     for _ in 0..10 {
         binding.pump_presentation(a, Duration::from_millis(16));
     }
 
     assert_eq!(
         binding.presentation_produced_count(a),
-        0,
-        "no demand was ever marked and no controller was ever registered -- ten pumps must \
-         still grant zero produces"
+        1,
+        "no demand was ever marked and no controller was ever registered after the sanity \
+         produce above -- ten more pumps must grant zero additional produces"
     );
 }
 
 /// A settled controller (naturally reaching `Completed`) stops re-arming
 /// `Animation` demand — produces stop within one frame of settle, the same
-/// invariant §15's idle-under-a-hidden-sibling exploit relies on.
+/// demand-driven-idle invariant a sibling-under-a-hidden-presentation
+/// scenario relies on.
 #[test]
 fn a_settled_controller_stops_producing_new_frames_once_completed() {
     let mut binding = HeadlessBinding::new();

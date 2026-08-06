@@ -1,5 +1,5 @@
 //! Criterion benchmark: the per-presentation segment gate, before vs. after
-//! issue #556 PR-C1's `FrameClock` replacement.
+//! issue #556's `FrameClock` replacement.
 //!
 //! Before: `UiRealm::draw_frame_entered` read
 //! `take_redraw_pending() || has_pending_work()` directly. After: the same
@@ -76,8 +76,9 @@ fn segment_gate_dirty(c: &mut Criterion) {
 
 /// The regime where a presentation is genuinely settled: nothing marks
 /// demand and the old predicate's `has_pending_work` stand-in stays
-/// `false` — the far more common case in a demand-driven engine (issue
-/// #556 §15).
+/// `false` — the far more common case in a demand-driven engine, where
+/// an idle presentation burns zero frames while staying instantly
+/// responsive (issue #556).
 fn segment_gate_idle(c: &mut Criterion) {
     let mut group = c.benchmark_group("segment_gate_idle");
 

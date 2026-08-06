@@ -205,7 +205,7 @@ pub struct HeadlessBinding {
     /// composites nothing, so it also leaves `None` — the field reports what the
     /// last frame produced, not a cached last-known-good tree.
     last_layer_tree: Option<LayerTree>,
-    /// The deterministic multi-presentation clock registry (issue #556 §13)
+    /// The deterministic multi-presentation clock registry (issue #556)
     /// — additive to, and independent of, this binding's own single
     /// [`clock`](Self)/[`vsync`](Self::vsync) pair `pump_frame` drives.
     /// Empty until [`install_presentation_clock`](Self::install_presentation_clock)
@@ -819,7 +819,7 @@ impl HeadlessBinding {
     }
 }
 
-/// The deterministic multi-presentation clock (issue #556 §13).
+/// The deterministic multi-presentation clock (issue #556).
 ///
 /// [`HeadlessBinding::pump_frame`] above is the FLUI-native equivalent of
 /// Flutter's `WidgetTester.pump` — and, like Flutter's, it is single-view:
@@ -875,26 +875,45 @@ impl HeadlessBinding {
 
     /// Mark direct demand on `id`'s own clock — for scripting a produce with
     /// no controller involved (a `Host`/`Dirty` demand a real embedder or
-    /// widget layer would otherwise supply). A no-op (traced) for an
-    /// unregistered `id`.
+    /// widget layer would otherwise supply).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` was never registered via
+    /// [`install_presentation_clock`](Self::install_presentation_clock) —
+    /// this is a test harness, where a typo'd or never-installed id must
+    /// fail loudly rather than silently do nothing (a vacuously "passing"
+    /// assertion downstream is worse than a panic here).
     pub fn mark_presentation_demand(&self, id: PresentationId, kind: DemandKind) {
-        let Some(entry) = self.presentation_clocks.get(&id) else {
-            tracing::warn!(
-                ?id,
-                "mark_presentation_demand: no clock installed for this id"
-            );
-            return;
-        };
+        let entry = self.presentation_clocks.get(&id).unwrap_or_else(|| {
+            panic!(
+                "mark_presentation_demand: no clock installed for {id:?} -- call \
+                 install_presentation_clock first"
+            )
+        });
         entry.clock.mark_demand(kind);
     }
 
-    /// How many frames `id`'s own clock has granted `Produce` for, total.
-    /// `0` for an unregistered `id`.
+    /// How many frames `id`'s own clock has granted a produce for, total.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` was never registered — see
+    /// [`mark_presentation_demand`](Self::mark_presentation_demand)'s doc
+    /// for why a missing id fails loudly here rather than returning `0`
+    /// indistinguishably from "installed but never produced".
     #[must_use]
     pub fn presentation_produced_count(&self, id: PresentationId) -> u64 {
         self.presentation_clocks
             .get(&id)
-            .map_or(0, |entry| entry.clock.produced_count())
+            .unwrap_or_else(|| {
+                panic!(
+                    "presentation_produced_count: no clock installed for {id:?} -- call \
+                     install_presentation_clock first"
+                )
+            })
+            .clock
+            .produced_count()
     }
 
     /// Advance exactly `id`'s own clock and controller registry by `dt`,
@@ -905,14 +924,18 @@ impl HeadlessBinding {
     /// No wall-clock read reaches this call: every timestamp
     /// [`FrameClock::poll`] sees traces back to this `advance`, on THIS
     /// presentation's own clock only — a sibling `id`'s clock, mask, and
-    /// `Vsync` are untouched. A no-op (traced) for an `id`
-    /// [`install_presentation_clock`](Self::install_presentation_clock) has
-    /// not registered.
-    pub fn pump_presentation(&mut self, id: PresentationId, dt: Duration) {
-        let Some(entry) = self.presentation_clocks.get(&id) else {
-            tracing::warn!(?id, "pump_presentation: no clock installed for this id");
-            return;
-        };
+    /// `Vsync` are untouched.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` was never registered — see
+    /// [`mark_presentation_demand`](Self::mark_presentation_demand)'s doc
+    /// for the rationale (a test harness must fail loudly on a wiring bug,
+    /// not silently pump nothing).
+    pub fn pump_presentation(&self, id: PresentationId, dt: Duration) {
+        let entry = self.presentation_clocks.get(&id).unwrap_or_else(|| {
+            panic!("pump_presentation: no clock installed for {id:?} -- call install_presentation_clock first")
+        });
         entry.clock.advance(dt);
         let now = entry.clock.now();
         let now_secs = entry.virtual_clock.elapsed().as_secs_f64();
@@ -926,10 +949,10 @@ impl HeadlessBinding {
     /// [`pump_presentation`](Self::pump_presentation) for every currently
     /// registered id, each advanced by the SAME `dt` — still fully
     /// independent: each clock advances and polls purely against its own
-    /// state, sharing no timeline or mask with any other.
-    pub fn pump_all(&mut self, dt: Duration) {
-        let ids: Vec<PresentationId> = self.presentation_clocks.keys().copied().collect();
-        for id in ids {
+    /// state, sharing no timeline or mask with any other. A no-op if
+    /// nothing is registered (there is no id list to fail loudly about).
+    pub fn pump_all(&self, dt: Duration) {
+        for id in self.presentation_clocks.keys().copied() {
             self.pump_presentation(id, dt);
         }
     }

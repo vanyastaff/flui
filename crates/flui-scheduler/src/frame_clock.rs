@@ -1,5 +1,5 @@
 //! [`FrameClock`] — the per-presentation, platform-free physical-time policy
-//! state machine (issue #556, ADR-0044).
+//! state machine (issue #556).
 //!
 //! # The three-owner split
 //!
@@ -22,6 +22,20 @@
 //! [`DemandMask`] plus three orthogonal gates (hidden, deferred, capacity) —
 //! "idle" is simply the empty mask, not a state a caller sets.
 //!
+//! # First-frame deferral withholds the SUBMIT, never the segment
+//!
+//! `.flutter/packages/flutter/lib/src/rendering/binding.dart`'s
+//! `RendererBinding.deferFirstFrame` is explicit: "the framework will still
+//! do all the work to produce frames, but those frames are never sent to the
+//! engine and will not appear on screen" (binding.dart:582-599's
+//! `sendFramesToEngine` doc: "Whether frames produced by `drawFrame` are sent
+//! to the engine"). Deferral gates the **submit** only. [`FrameClock::poll`]
+//! honors this: while deferred, a nonzero demand mask still runs the
+//! caller's segment ([`PollDecision::ProduceWithheld`]) — build/layout/paint
+//! happen exactly as they would undeferred — and only the separate
+//! [`FrameClock::is_deferred`] query, consulted by the caller at its own
+//! submit point, withholds the result from the engine.
+//!
 //! # The deterministic test clock
 //!
 //! [`ClockSource::Manual`] wraps a [`ManualClock`]:
@@ -43,10 +57,10 @@ bitflags::bitflags! {
     /// The set of reasons a presentation currently wants a frame.
     ///
     /// Sampled once per [`FrameClock::poll`] call and cleared on a granted
-    /// [`PollDecision::Produce`] — a persistent demand (a still-running
-    /// animation) is re-armed by its own owner every pump via
-    /// [`FrameClock::mark_demand`], never retained by the clock itself across
-    /// a produce.
+    /// [`PollDecision::Produce`]/[`PollDecision::ProduceWithheld`] — a
+    /// persistent demand (a still-running animation) is re-armed by its own
+    /// owner every pump via [`FrameClock::mark_demand`], never retained by
+    /// the clock itself across a produce.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     pub struct DemandMask: u8 {
         /// A pending widget build or a dirty render node.
@@ -58,7 +72,7 @@ bitflags::bitflags! {
         /// `RedrawRequested`, or an explicit embedder request) with no
         /// framework-side dirty state of its own.
         const HOST = 1 << 2;
-        // Bit 3 is reserved for a future `Media` demand kind (§1d) —
+        // Bit 3 is reserved for a future media/video-frame demand kind —
         // deliberately unassigned until a consumer needs it.
     }
 }
@@ -68,7 +82,7 @@ bitflags::bitflags! {
 /// accept, folded into a [`DemandMask`] bit.
 ///
 /// `#[non_exhaustive]`: this is the demand *vocabulary*, not a mode — adding
-/// `Media` later is additive, not a breaking match.
+/// a media/video-frame kind later is additive, not a breaking match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DemandKind {
@@ -94,6 +108,10 @@ impl From<DemandKind> for DemandMask {
 ///
 /// `#[non_exhaustive]`: a caller matches the reasons it cares about and
 /// falls through on the rest; a new reason is additive, not breaking.
+///
+/// First-frame deferral is deliberately NOT a variant here: it withholds
+/// only the submit, never the segment, so it is never a reason to skip
+/// running the segment at all — see [`PollDecision::ProduceWithheld`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SkipReason {
@@ -109,26 +127,41 @@ pub enum SkipReason {
     /// ([`FrameClock::set_min_produce_interval`]) has not yet elapsed.
     /// Demand is retained.
     Backpressure,
-    /// The first-frame deferral gate is active
-    /// ([`FrameClock::defer`]/[`FrameClock::lift`]); demand is retained, so
-    /// lifting the gate with a nonzero mask produces on the very next poll
-    /// with no separate re-arm call.
-    Deferred,
 }
 
 /// [`FrameClock::poll`]'s produce/skip decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PollDecision {
-    /// Produce a frame now. The mask has been cleared and this poll's `now`
-    /// recorded as the last produce instant.
+    /// Run the segment now, and the result should reach the engine. The
+    /// mask has been cleared and this poll's `now` recorded as the last
+    /// produce instant.
     Produce,
-    /// Do not produce this poll, for the given reason.
+    /// Run the segment now (build/layout/paint, exactly as for `Produce` —
+    /// the mask clears the same way) but the caller must WITHHOLD the
+    /// result from the engine: first-frame deferral
+    /// ([`FrameClock::defer`]) is active. See the module doc's `.flutter/`
+    /// citation — deferral withholds the submit, never the pipeline work.
+    /// A caller checks [`FrameClock::is_deferred`] at its own submit point;
+    /// `poll` itself does not repeat that check on a later call once the
+    /// mask it already cleared here is gone.
+    ProduceWithheld,
+    /// Do not run anything this poll, for the given reason.
     Skip(SkipReason),
 }
 
 impl PollDecision {
-    /// Shorthand for `matches!(self, PollDecision::Produce)`.
+    /// Whether the caller should run its segment (build/layout/paint) for
+    /// this poll — true for both `Produce` and `ProduceWithheld`.
+    #[must_use]
+    pub fn should_run_segment(self) -> bool {
+        matches!(self, PollDecision::Produce | PollDecision::ProduceWithheld)
+    }
+
+    /// Whether this decision is an unconditional `Produce` — the segment
+    /// ran AND the result should reach the engine. `false` for
+    /// `ProduceWithheld`, whose result must be withheld regardless of
+    /// whether the segment succeeded.
     #[must_use]
     pub fn is_produce(self) -> bool {
         matches!(self, PollDecision::Produce)
@@ -183,9 +216,9 @@ pub struct FrameClock {
 }
 
 /// The default in-flight capacity before any raster-owner wiring configures
-/// it explicitly — matches `RasterOptions::max_frames_in_flight`'s own
-/// documented default (§8), so a `FrameClock` constructed with no explicit
-/// call to [`FrameClock::set_max_in_flight`] already agrees with it.
+/// it explicitly — matches the raster owner's own documented default, so a
+/// `FrameClock` constructed with no explicit call to
+/// [`FrameClock::set_max_in_flight`] already agrees with it.
 const DEFAULT_MAX_IN_FLIGHT: u8 = 2;
 
 impl FrameClock {
@@ -228,14 +261,22 @@ impl FrameClock {
         }
     }
 
-    /// Move a [`ClockSource::Manual`] clock forward by `dt`. A no-op (traced
-    /// at `debug`) under [`ClockSource::Platform`] — advancing the real
-    /// clock is not a thing a caller does.
+    /// Move a [`ClockSource::Manual`] clock forward by `dt`.
+    ///
+    /// # Panics
+    ///
+    /// Panics under [`ClockSource::Platform`] — advancing the real clock is
+    /// not a thing a caller does, and a test harness that tries almost
+    /// certainly has a wiring bug (an id installed with the wrong source, or
+    /// never installed at all) that must fail loudly rather than silently
+    /// do nothing.
     pub fn advance(&self, dt: Duration) {
         match &self.source {
             ClockSource::Platform => {
-                tracing::debug!(
-                    "FrameClock::advance called on a ClockSource::Platform clock; no-op"
+                panic!(
+                    "FrameClock::advance called on a ClockSource::Platform clock -- \
+                     advancing the real clock is not a thing a caller does; construct \
+                     this FrameClock with ClockSource::Manual if it needs to be driven"
                 );
             }
             ClockSource::Manual(clock) => clock.advance(dt),
@@ -291,15 +332,20 @@ impl FrameClock {
     }
 
     // ------------------------------------------------------------------
-    // First-frame deferral (R2 — folds `send_frames_to_engine`'s old
-    // counter into this clock's own produce-gate vocabulary)
+    // First-frame deferral — withholds the submit, never the segment; see
+    // the module doc's `.flutter/` citation.
     // ------------------------------------------------------------------
 
-    /// Defer producing until a matching [`lift`](Self::lift). Stacks: two
-    /// `defer` calls need two `lift` calls before demand can produce again.
-    /// A no-op count-wise once the first frame has ever produced — mirrors
-    /// the oracle's "first-frame" naming: this gate cannot re-arm after a
-    /// frame has shipped.
+    /// Defer sending a produced frame to the engine until a matching
+    /// [`lift`](Self::lift). Stacks: two `defer` calls need two `lift`
+    /// calls before a produce is no longer withheld. A no-op count-wise
+    /// once the first frame has ever been confirmed sent — mirrors the
+    /// oracle's "first-frame" naming: this gate cannot re-arm after a frame
+    /// has shipped.
+    ///
+    /// Deferring does NOT stop [`poll`](Self::poll) from running the
+    /// segment: a nonzero demand mask still returns
+    /// [`PollDecision::ProduceWithheld`], never a `Skip`.
     pub fn defer(&self) {
         self.deferred_count.set(self.deferred_count.get() + 1);
     }
@@ -317,15 +363,15 @@ impl FrameClock {
         self.deferred_count.set(prev - 1);
     }
 
-    /// Whether the first-frame deferral gate currently blocks a produce.
+    /// Whether a produced frame must currently be withheld from the engine.
     #[must_use]
     pub fn is_deferred(&self) -> bool {
         self.deferred_count.get() > 0 && !self.first_frame_sent.get()
     }
 
-    /// Whether this clock has ever produced a frame while undeferred (the
-    /// oracle's `_firstFrameSent`). Once `true`, further [`defer`](Self::defer)
-    /// calls cannot block a produce.
+    /// Whether this clock has ever confirmed a frame sent to the engine
+    /// while undeferred (the oracle's `_firstFrameSent`). Once `true`,
+    /// further [`defer`](Self::defer) calls cannot withhold a produce.
     #[must_use]
     pub fn has_sent_first_frame(&self) -> bool {
         self.first_frame_sent.get()
@@ -339,37 +385,27 @@ impl FrameClock {
     }
 
     /// Latch that the first frame has been sent — the caller's job, not
-    /// `poll`'s: `poll` grants `Produce` before the segment it gates has
+    /// `poll`'s: `poll` grants a produce before the segment it gates has
     /// actually run, so it cannot yet know whether that segment will
-    /// succeed. Call this AFTER a granted produce's segment completes
-    /// without error (mirroring `RenderingFlutterBinding::mark_first_frame_sent`'s
-    /// old `!errored` guard) — an errored first attempt must not latch, or a
-    /// later `defer` could never block it again. Idempotent.
+    /// succeed, and it cannot know whether the caller actually submitted
+    /// (a `ProduceWithheld` result never should be). Call this AFTER a
+    /// `Produce` (not `ProduceWithheld`) segment completes without error —
+    /// an errored or withheld attempt must not latch, or a later `defer`
+    /// could never block a genuine future produce again. Idempotent.
     pub fn mark_first_frame_sent(&self) {
         self.first_frame_sent.set(true);
     }
 
-    /// Whether a presentation should hand its produced frame to the engine
-    /// right now — `true` once the first frame has ever shipped, or while no
-    /// deferral is active. Exactly `!is_deferred()`; kept as its own named
-    /// query because it answers a different question a caller asks at a
-    /// different point (before deciding whether to submit, not before
-    /// deciding whether to produce).
-    #[must_use]
-    pub fn should_send_to_engine(&self) -> bool {
-        !self.is_deferred()
-    }
-
     // ------------------------------------------------------------------
     // Produce capacity (in-flight threshold + optional throttle) — the
-    // knobs a raster owner's backpressure (§8, PR-E) reports through;
-    // this clock never reaches into a GPU queue itself.
+    // knobs a raster owner's backpressure reports through; this clock
+    // never reaches into a GPU queue itself.
     // ------------------------------------------------------------------
 
-    /// Configure the in-flight capacity threshold (`RasterOptions.
-    /// max_frames_in_flight`'s clock-side counterpart, §8). Clamped to at
-    /// least 1 — a zero threshold would make `poll` permanently
-    /// non-producing with no way to ever recover.
+    /// Configure the in-flight capacity threshold (the raster owner's
+    /// clock-side counterpart). Clamped to at least 1 — a zero threshold
+    /// would make `poll` permanently non-producing with no way to ever
+    /// recover.
     pub fn set_max_in_flight(&self, max: u8) {
         self.max_in_flight.set(max.max(1));
     }
@@ -380,8 +416,8 @@ impl FrameClock {
     }
 
     /// Record that a submitted frame retired — presented, errored, or
-    /// dropped at shutdown/device-loss (§8's three decrement sites, all
-    /// funneled through one RAII ticket upstream of this call).
+    /// dropped at shutdown/device-loss, all funneled through one RAII
+    /// ticket upstream of this call.
     pub fn record_retire(&self) {
         self.in_flight.set(self.in_flight.get().saturating_sub(1));
     }
@@ -393,9 +429,9 @@ impl FrameClock {
     }
 
     /// Configure a minimum interval between produces (a self-imposed
-    /// throttle, independent of GPU in-flight capacity — e.g. a
-    /// `target_frame_rate` pace lower than the demand cadence, §8/PR-E).
-    /// `None` (the default) imposes no throttle.
+    /// throttle, independent of GPU in-flight capacity — e.g. a target
+    /// frame rate lower than the demand cadence). `None` (the default)
+    /// imposes no throttle.
     pub fn set_min_produce_interval(&self, interval: Option<Duration>) {
         self.min_produce_interval.set(interval);
     }
@@ -417,11 +453,11 @@ impl FrameClock {
     // The produce decision
     // ------------------------------------------------------------------
 
-    /// How many frames this clock has ever granted `Produce` for. A plain
-    /// counter, always available (not a test-only oracle) — the same
-    /// per-presentation accounting `PresentationState::frames_rendered`
-    /// keeps at the render-result layer, kept here at the produce-decision
-    /// layer instead.
+    /// How many times this clock has ever granted a produce (`Produce` OR
+    /// `ProduceWithheld` — a pipeline-run count, the same "ran regardless
+    /// of whether anything reached the screen" semantics
+    /// `PresentationState::flush_count` uses at the app layer). A plain
+    /// counter, always available (not a test-only oracle).
     #[must_use]
     pub fn produced_count(&self) -> u64 {
         self.produced.get()
@@ -430,14 +466,14 @@ impl FrameClock {
     /// The produce/skip decision for physical instant `now`.
     ///
     /// Checked in this order: hidden, then capacity (in-flight/throttle),
-    /// then first-frame deferral, then the demand mask. A granted
-    /// [`PollDecision::Produce`] clears the mask and records `now` as the
-    /// last produce instant — it does NOT latch
-    /// [`has_sent_first_frame`](Self::has_sent_first_frame); see
-    /// [`mark_first_frame_sent`](Self::mark_first_frame_sent)'s doc for why
-    /// that is the caller's job. Every `Skip` reason except
-    /// [`SkipReason::NoDemand`] retains the mask untouched (there is
-    /// nothing to retain for `NoDemand` — it IS the empty mask).
+    /// then the demand mask. A nonzero mask always runs the segment
+    /// (clearing the mask and recording `now` as the last produce instant)
+    /// — first-frame deferral does NOT change whether the segment runs; it
+    /// only changes which of [`PollDecision::Produce`]/
+    /// [`PollDecision::ProduceWithheld`] comes back, so the caller knows
+    /// whether it may submit the result. Every `Skip` reason retains the
+    /// mask untouched, except [`SkipReason::NoDemand`] — there is nothing
+    /// to retain there, it IS the empty mask.
     ///
     /// `now` is the caller's own responsibility to obtain from
     /// [`Self::now`] (or a shared instant several clocks/tickers observe
@@ -451,9 +487,6 @@ impl FrameClock {
         if !self.has_capacity(now) {
             return PollDecision::Skip(SkipReason::Backpressure);
         }
-        if self.is_deferred() {
-            return PollDecision::Skip(SkipReason::Deferred);
-        }
         if self.demand.get().is_empty() {
             return PollDecision::Skip(SkipReason::NoDemand);
         }
@@ -461,7 +494,12 @@ impl FrameClock {
         self.demand.set(DemandMask::empty());
         self.last_produce_at.set(Some(now));
         self.produced.set(self.produced.get() + 1);
-        PollDecision::Produce
+
+        if self.is_deferred() {
+            PollDecision::ProduceWithheld
+        } else {
+            PollDecision::Produce
+        }
     }
 }
 
@@ -614,38 +652,60 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // Deferred (first-frame) — retains the mask; lift with retained mask
-    // produces exactly once, immediately (kills "lift without re-arm").
+    // First-frame deferral: the segment still runs (`ProduceWithheld`),
+    // never a `Skip` -- see the module doc's `.flutter/` citation. Lift
+    // with retained demand produces exactly once, immediately (kills "lift
+    // without re-arm").
     // ----------------------------------------------------------------
 
     #[test]
-    fn deferred_skips_and_lift_with_retained_demand_produces_exactly_once() {
+    fn deferred_runs_the_segment_withheld_and_lift_with_retained_demand_produces_exactly_once() {
         let (clock, manual) = manual();
         clock.defer();
 
         clock.mark_demand(DemandKind::Dirty);
         assert_eq!(
             clock.poll(manual.now()),
-            PollDecision::Skip(SkipReason::Deferred)
+            PollDecision::ProduceWithheld,
+            "deferred must still run the segment, just withhold the result"
         );
         manual.advance(Duration::from_millis(16));
         clock.mark_demand(DemandKind::Host);
         assert_eq!(
             clock.poll(manual.now()),
-            PollDecision::Skip(SkipReason::Deferred),
-            "still deferred: dirty marks accumulate but never produce"
+            PollDecision::ProduceWithheld,
+            "still deferred: the segment keeps running on new demand, still withheld"
         );
 
         clock.lift();
+        clock.mark_demand(DemandKind::Dirty);
         assert_eq!(
             clock.poll(manual.now()),
             PollDecision::Produce,
-            "lift with retained demand must produce on the very next poll, no re-arm call"
+            "lifted: the next poll with demand produces unwithheld"
         );
         assert_eq!(
             clock.poll(manual.now()),
             PollDecision::Skip(SkipReason::NoDemand),
             "and exactly once -- the produce already cleared the mask"
+        );
+    }
+
+    #[test]
+    fn lift_with_no_new_demand_marked_finds_nothing_to_do() {
+        // A `ProduceWithheld` poll already clears the mask (the segment DID
+        // run) -- lifting afterward with nothing freshly marked must not
+        // conjure a produce out of nothing.
+        let (clock, manual) = manual();
+        clock.defer();
+        clock.mark_demand(DemandKind::Dirty);
+        assert_eq!(clock.poll(manual.now()), PollDecision::ProduceWithheld);
+
+        clock.lift();
+        assert_eq!(
+            clock.poll(manual.now()),
+            PollDecision::Skip(SkipReason::NoDemand),
+            "the mask was already cleared by the ProduceWithheld poll above"
         );
     }
 
@@ -666,11 +726,12 @@ mod tests {
         clock.lift();
         assert_eq!(
             clock.poll(manual.now()),
-            PollDecision::Skip(SkipReason::Deferred),
-            "one lift against two defers must still block"
+            PollDecision::ProduceWithheld,
+            "one lift against two defers must still withhold"
         );
 
         clock.lift();
+        clock.mark_demand(DemandKind::Dirty);
         assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
     }
 
@@ -825,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn produced_count_tracks_granted_produces_only() {
+    fn produced_count_tracks_granted_produces_including_withheld_ones() {
         let (clock, manual) = manual();
         assert_eq!(clock.produced_count(), 0);
 
@@ -839,23 +900,28 @@ mod tests {
             PollDecision::Skip(SkipReason::NoDemand)
         );
         assert_eq!(clock.produced_count(), 1);
+
+        // A withheld produce still counts -- the segment genuinely ran.
+        clock.defer();
+        clock.mark_demand(DemandKind::Dirty);
+        assert_eq!(clock.poll(manual.now()), PollDecision::ProduceWithheld);
+        assert_eq!(clock.produced_count(), 2);
     }
 
     #[test]
-    fn advance_on_a_platform_source_is_a_harmless_no_op() {
+    #[should_panic(expected = "ClockSource::Platform")]
+    fn advance_on_a_platform_source_panics() {
         let clock = FrameClock::new();
-        // Must not panic; must not affect anything observable.
         clock.advance(Duration::from_millis(16));
-        assert!(matches!(clock.source(), ClockSource::Platform));
     }
 
     // ----------------------------------------------------------------
-    // `should_send_to_engine` / `mark_first_frame_sent` — the caller-driven
-    // latch a segment's own success (not `poll`'s produce grant) controls.
+    // `is_deferred` / `mark_first_frame_sent` — the caller-driven latch a
+    // segment's own success (not `poll`'s produce grant) controls.
     // ----------------------------------------------------------------
 
     #[test]
-    fn an_unconfirmed_produce_does_not_latch_should_send_to_engine() {
+    fn an_unconfirmed_produce_does_not_latch_is_deferred_open() {
         let (clock, manual) = manual();
         clock.mark_demand(DemandKind::Dirty);
         assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
@@ -864,7 +930,7 @@ mod tests {
         // this were genuinely the first attempt.
         clock.defer();
         assert!(
-            !clock.should_send_to_engine(),
+            clock.is_deferred(),
             "an unconfirmed produce must not have latched first_frame_sent"
         );
     }
@@ -875,18 +941,18 @@ mod tests {
         clock.mark_demand(DemandKind::Dirty);
         assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
         clock.mark_first_frame_sent();
-        assert!(clock.should_send_to_engine());
+        assert!(!clock.is_deferred());
 
         clock.defer();
         assert!(
-            clock.should_send_to_engine(),
+            !clock.is_deferred(),
             "a defer issued after the confirmed first frame must not re-close the gate"
         );
     }
 
     #[test]
-    fn should_send_to_engine_is_true_by_default_with_no_deferral_ever_registered() {
+    fn is_deferred_is_false_by_default_with_no_deferral_ever_registered() {
         let (clock, _manual) = manual();
-        assert!(clock.should_send_to_engine());
+        assert!(!clock.is_deferred());
     }
 }

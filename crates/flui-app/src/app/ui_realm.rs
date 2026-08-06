@@ -1289,7 +1289,7 @@ impl UiRealm {
     /// last running controller, on any presentation, completes.
     ///
     /// Moved from this realm's own `vsync_slot` to per-presentation storage
-    /// (issue #556 §2: each surface paces its own animations independently)
+    /// (issue #556: each surface paces its own animations independently)
     /// — this forwarder to `self.presentations.primary()` keeps every
     /// existing single-presentation caller and test unchanged; a genuine
     /// multi-presentation caller reads
@@ -1456,15 +1456,16 @@ impl UiRealm {
 
     // ========================================================================
     // First-frame deferral and frame accounting (moved from the retired
-    // `AppBinding`; issue #556 R2 re-homed the deferral gate itself from
+    // `AppBinding`; the deferral gate itself is re-homed from
     // `RenderingFlutterBinding`'s own counter onto the primary presentation's
-    // `FrameClock` as `SkipReason::Deferred` — see `draw_frame_entered`'s
-    // segment loop, which is the actual production consumer now)
+    // `FrameClock` — see `render_frame_entered`'s own doc for the submit-gate
+    // check that is the actual production consumer now)
     // ========================================================================
 
-    /// Defer this realm's primary presentation from producing until a
-    /// matching [`Self::allow_first_frame`]. See
-    /// [`FrameClock::defer`](flui_scheduler::FrameClock::defer).
+    /// Defer this realm's primary presentation from sending a produced
+    /// frame to the engine until a matching [`Self::allow_first_frame`].
+    /// Does NOT stop that presentation's segment from running — see
+    /// [`FrameClock::defer`](flui_scheduler::FrameClock::defer)'s own doc.
     #[cfg_attr(
         not(test),
         expect(
@@ -1478,13 +1479,20 @@ impl UiRealm {
         self.presentations.primary().clock().defer();
     }
 
-    /// Undo one [`Self::defer_first_frame`]. Because the clock retains its
-    /// demand mask across a `Skip(Deferred)`, lifting the gate with any
-    /// already-marked demand produces on the very next pump — no separate
-    /// re-dirty call needed (the retired `RenderingFlutterBinding`-based
-    /// design needed one; see `allow_first_frame`'s old doc in that struct
-    /// for the gap this closes). See
+    /// Undo one [`Self::defer_first_frame`]. See
     /// [`FrameClock::lift`](flui_scheduler::FrameClock::lift).
+    ///
+    /// A deferred pump's segment already ran and produced a real (withheld)
+    /// scene — see `FrameClock`'s module doc's `.flutter/` citation — so
+    /// `poll` already cleared that demand; there is nothing retained for a
+    /// bare `lift()` alone to produce from. FLUI has no retained-scene
+    /// layer to fall back on the way Flutter's `scheduleWarmUpFrame`
+    /// re-composites the retained layer tree (see
+    /// `RenderingFlutterBinding::redirty_root_for_represent`'s own doc for
+    /// the identical problem that method exists to solve), so this method
+    /// re-dirties the root itself whenever it actually lifts an active
+    /// deferral — the withheld work does not sit blank until some UNRELATED
+    /// input dirties the tree.
     #[cfg_attr(
         not(test),
         expect(
@@ -1493,28 +1501,37 @@ impl UiRealm {
         )
     )]
     pub(crate) fn allow_first_frame(&self) {
-        self.presentations.primary().clock().lift();
+        let clock = self.presentations.primary().clock();
+        let was_deferred = clock.is_deferred();
+        clock.lift();
+        if was_deferred {
+            crate::bindings::redirty_pipeline_root(
+                self.presentations
+                    .primary()
+                    .renderer()
+                    .root_pipeline_owner(),
+            );
+        }
     }
 
     /// Whether the primary presentation should hand a produced frame to the
-    /// engine right now. See
-    /// [`FrameClock::should_send_to_engine`](flui_scheduler::FrameClock::should_send_to_engine).
+    /// engine right now — exactly `!is_deferred()`. See
+    /// [`FrameClock::is_deferred`](flui_scheduler::FrameClock::is_deferred).
     ///
-    /// `render_frame_entered` no longer consults this itself (issue #556
-    /// R2 — see that method's own doc): the segment gate already prevents a
-    /// deferred presentation from ever producing a `Painted` outcome, so
-    /// there is nothing left to double-gate at the submit site. Kept as a
-    /// direct query for tests exercising the deferral contract end to end.
+    /// `render_frame_entered` consults the SAME query directly at its own
+    /// submit point (see that method's own doc); this forwarder exists for
+    /// tests exercising the deferral contract end to end through `UiRealm`'s
+    /// own API rather than reaching into the presentation's clock directly.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "no production caller since render_frame_entered stopped \
-                      double-gating on this (issue #556 R2) -- see this method's own doc"
+            reason = "render_frame_entered reads presentation.clock().is_deferred() directly, \
+                      not through this wrapper; kept for tests and future external callers"
         )
     )]
     pub(crate) fn send_frames_to_engine(&self) -> bool {
-        self.presentations.primary().clock().should_send_to_engine()
+        !self.presentations.primary().clock().is_deferred()
     }
 
     /// Total frames rendered successfully by this presentation.
@@ -1723,7 +1740,7 @@ impl UiRealm {
     /// introduced the per-presentation loop below; the frame-loop tests are
     /// the parity oracle.
     ///
-    /// **Per-presentation segment loop (ADR-0043 §3; issue #556 §1b/§9-C1):**
+    /// **Per-presentation segment loop (ADR-0043 §3; issue #556):**
     /// presentations are processed once each, in mount order. Each
     /// presentation's own [`FrameClock`](flui_scheduler::FrameClock) —
     /// replacing the old `take_redraw_pending() || has_pending_work()`
@@ -1731,26 +1748,30 @@ impl UiRealm {
     /// The clock never inspects the tree itself (ownership rule: it never
     /// knows phases, callbacks, or element trees), so the exact union the
     /// old predicate read is marked as `Dirty` demand and the clock's
-    /// `poll` makes the call. Production topology is exactly one
-    /// presentation (`PresentationForest`'s ratchet) with a clock that is
-    /// never hidden, never backpressured, and only ever deferred by an
-    /// explicit `defer_first_frame` — so this reduces to exactly today's
-    /// single unconditional segment; see [`Self::draw_frame_for_presentation`]'s
-    /// doc for the proof that the gate cannot skip a segment the old,
-    /// ungated code would have run. Returns the LAST presentation's outcome
-    /// (matches today's single-presentation return value exactly; a genuine
-    /// multi-presentation caller reads each presentation's own render state
-    /// directly rather than this aggregate — addressed per-presentation
-    /// return values are a later slice's job).
+    /// `poll` makes the call: `PollDecision::should_run_segment` is
+    /// EXACTLY that same `woken || has_pending_work()` union (hidden/
+    /// backpressure aside — unwired in production today), independent of
+    /// first-frame deferral, which never gates the segment (see
+    /// `FrameClock`'s own module doc's `.flutter/` citation — deferral
+    /// withholds only the submit). Production topology is exactly one
+    /// presentation (`PresentationForest`'s ratchet), so this reduces to
+    /// exactly today's single unconditional segment; see
+    /// [`Self::draw_frame_for_presentation`]'s doc for the proof that the
+    /// gate cannot skip a segment the old, ungated code would have run.
+    /// Returns the LAST presentation's outcome (matches today's single-
+    /// presentation return value exactly; a genuine multi-presentation
+    /// caller reads each presentation's own render state directly rather
+    /// than this aggregate — addressed per-presentation return values are a
+    /// later slice's job).
     fn draw_frame_entered(&self, constraints: BoxConstraints) -> FramePaintOutcome {
         // Vsync tick + gesture-deadline tick — MUST precede every
         // presentation's build phase. See the retired `AppBinding::
         // draw_frame_entered`'s doc for the full disjoint-controller-set
         // argument this ordering depends on. Each presentation ticks its OWN
-        // registry now (issue #556 §2: the registry moved off this realm's
-        // former `vsync_slot`, one per surface), off the SAME
-        // realm-relative `now` every presentation observes, so there is no
-        // clock drift between siblings sharing this one pump.
+        // registry now (the registry moved off this realm's former
+        // `vsync_slot`, one per surface), off the SAME realm-relative `now`
+        // every presentation observes, so there is no clock drift between
+        // siblings sharing this one pump.
         let now = self.now_secs();
         for presentation in self.presentations.iter() {
             let vsync = presentation.vsync();
@@ -1759,14 +1780,14 @@ impl UiRealm {
             // Frame continuation: if any controller is still running after
             // this tick, request the NEXT frame so the runner gate stays
             // open for the full animation duration. This deliberately does
-            // NOT mark demand on `presentation.clock()`: C1 keeps the pump
-            // wake-channel-driven (issue #556 §1c) and a controller with no
+            // NOT mark demand on `presentation.clock()`: the pump stays
+            // wake-channel-driven for now, and a controller with no
             // tree-visible effect must not force THIS pump's segment to run
             // by itself — only the render/dirty state a listener actually
             // sets does that, via `has_pending_work` below. Marking Animation
-            // demand directly from this signal is C2's job (the compositor-
-            // paced `RedrawRequested` integration), once it cannot silently
-            // widen the segment gate past the predicate it replaces.
+            // demand directly from this signal is a later slice's job (the
+            // actuator/driver integration), once it cannot silently widen
+            // the segment gate past the predicate it replaces.
             if vsync.has_running() {
                 self.wake_frame();
             }
@@ -1797,26 +1818,33 @@ impl UiRealm {
                 presentation.clock().mark_demand(DemandKind::Dirty);
             }
 
-            if !presentation
-                .clock()
-                .poll(presentation.clock().now())
-                .is_produce()
-            {
+            let decision = presentation.clock().poll(presentation.clock().now());
+            if !decision.should_run_segment() {
                 // Nothing to flush and nobody asked, or a gate (hidden /
-                // backpressure / first-frame deferral) is closed: skip this
-                // presentation's segment entirely. Bound: each presentation
-                // builds and flushes at most once per pump; this `continue`
-                // is what makes that true rather than merely documented.
+                // backpressure) is closed: skip this presentation's segment
+                // entirely. Bound: each presentation builds and flushes at
+                // most once per pump; this `continue` is what makes that
+                // true rather than merely documented. First-frame deferral
+                // is NOT one of these reasons — see `FrameClock`'s module
+                // doc: deferral withholds only the submit, never the
+                // segment (`.flutter/packages/flutter/lib/src/rendering/
+                // binding.dart:582-599`), so a deferred-but-demanded
+                // presentation always reaches `should_run_segment() ==
+                // true` (`PollDecision::ProduceWithheld`) below.
                 continue;
             }
 
             let result = Self::draw_frame_for_presentation(presentation, constraints);
-            // Mirrors the old `RenderingFlutterBinding::mark_first_frame_sent`'s
-            // `!errored` guard: an errored attempt must not latch
-            // `should_send_to_engine` -- `poll` itself cannot know this
-            // before the segment runs, so confirming success is this call
-            // site's job.
-            if !matches!(result, FramePaintOutcome::Errored) {
+            // Latch "first frame confirmed sent" only for an unconditional
+            // `Produce` that didn't error -- mirrors the old
+            // `RenderingFlutterBinding::mark_first_frame_sent`'s `!errored`
+            // guard, now also excluding `ProduceWithheld`: a withheld
+            // result was never sent, by construction, so confirming it as
+            // sent would be self-contradictory and would wrongly disarm a
+            // later `defer_first_frame` call. `render_frame_entered` below
+            // separately re-checks `is_deferred()` at its own submit point
+            // before honoring whatever this segment produced.
+            if decision.is_produce() && !matches!(result, FramePaintOutcome::Errored) {
                 presentation.clock().mark_first_frame_sent();
             }
             last_outcome = result;
@@ -1928,16 +1956,20 @@ impl UiRealm {
     /// whose owner boundary could not finish (e.g. after a panic); flush
     /// coalesced pointer moves; draw the frame ([`Self::draw_frame_entered`]);
     /// re-hit-test stationary pointing devices against the freshly laid-out
-    /// tree; then mark full-repaint damage and hand the scene to
-    /// `renderer.render_scene`. The first-frame deferral gate no longer
-    /// needs a second check here (issue #556 R2): `draw_frame_entered`'s
-    /// segment loop already consults the SAME `FrameClock` this method would
-    /// have re-checked, so a deferred presentation's segment never ran and
-    /// `outcome` is `Idle`, not `Painted` — there is nothing withheld to
-    /// gate a second time. `SurfaceLost`/`DeviceLost`/`SurfaceValidation`
-    /// and any other render error all count as a dropped (not settled)
-    /// frame, arming a retry via [`Self::wake_frame`] instead of
-    /// [`Self::mark_rendered`]'s idle-clear.
+    /// tree; then, gated by the primary presentation's own
+    /// `FrameClock::is_deferred`, mark full-repaint damage and hand the
+    /// scene to `renderer.render_scene`. This submit gate is DELIBERATELY
+    /// separate from `draw_frame_entered`'s own segment gate: first-frame
+    /// deferral withholds only the submit, never the build/layout/paint
+    /// work (`.flutter/packages/flutter/lib/src/rendering/binding.dart:582-599`
+    /// — `RendererBinding.deferFirstFrame`'s own doc: "the framework will
+    /// still do all the work to produce frames, but those frames are never
+    /// sent to the engine"), so a deferred presentation's segment can very
+    /// much have produced a real `Painted` outcome here, and this check is
+    /// what keeps it off the engine. `SurfaceLost`/`DeviceLost`/
+    /// `SurfaceValidation` and any other render error all count as a
+    /// dropped (not settled) frame, arming a retry via
+    /// [`Self::wake_frame`] instead of [`Self::mark_rendered`]'s idle-clear.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
         self.gestures().drain_deferred_arena_resolutions();
@@ -1966,10 +1998,16 @@ impl UiRealm {
             });
 
         let errored = matches!(outcome, FramePaintOutcome::Errored);
+        // The submit gate: withheld while the primary presentation's first
+        // frame is deferred -- see this method's own doc for why this is a
+        // SEPARATE check from `draw_frame_entered`'s segment gate, not a
+        // redundant re-check of the same decision.
+        let should_send = !self.presentations.primary().clock().is_deferred();
 
         let mut presented = false;
         let mut retry_needed = errored;
-        if let FramePaintOutcome::Painted(ref scene) = outcome
+        if should_send
+            && let FramePaintOutcome::Painted(ref scene) = outcome
             && scene.has_content()
         {
             renderer.mark_full_repaint();
@@ -4943,6 +4981,20 @@ mod tests {
                 !realm.needs_redraw(),
                 "deferred is not errored: it must not spam a retry wake"
             );
+            // The property this test's own NAME claims, actually asserted:
+            // the pipeline (build/layout/paint) really did run -- Flutter
+            // parity, `.flutter/packages/flutter/lib/src/rendering/binding.dart:582-599`
+            // (`RendererBinding.deferFirstFrame`'s own doc: "the framework
+            // will still do all the work to produce frames"). Without this
+            // assertion a regression that skips the WHOLE segment while
+            // deferred (not just the submit) would still pass every check
+            // above -- `render_scene_calls == 0` and `frames_rendered ==
+            // 0` are also exactly what a fully-skipped segment produces.
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                1,
+                "the segment must have actually run while deferred, not been skipped outright"
+            );
         }
 
         #[test]
@@ -6728,8 +6780,8 @@ mod tests {
         }
     }
 
-    /// Issue #556 PR-C1's own red-exploits: the segment gate's poll-decision
-    /// equivalence table, the close-mid-animation probe, and the §15
+    /// Issue #556's own red-exploits: the segment gate's poll-decision
+    /// equivalence table, the close-mid-animation probe, and the
     /// zero-produce (demand-driven idle) invariant. Distinct from
     /// `frame_pipeline_and_vsync` (which pins the PRE-EXISTING deferral/vsync
     /// behavior unedited) — these are the NEW clock-level guarantees this
@@ -6741,13 +6793,58 @@ mod tests {
             BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
         }
 
-        /// END-STATE INVARIANT (issue #556 §2/§9-PR-C1): at N=1 -- a clock
-        /// that is never hidden, never backpressured, and deferred only by
-        /// an explicit `defer_first_frame` (unexercised here) -- the segment
-        /// gate's decision (`clock.poll`, fed `Dirty` demand from
-        /// `take_redraw_pending() || has_pending_work()`) is equivalent to
-        /// that same union read directly, the predicate it replaces, over
-        /// every reachable combination of the two inputs:
+        /// A realm with a minimal root widget already attached -- this
+        /// module's own copy: `frame_pipeline_and_vsync::mount_root` is
+        /// private to that sibling module.
+        fn mount_root_here() -> UiRealm {
+            let realm = UiRealm::for_test();
+            realm
+                .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(1.0, 1.0)))
+                .expect("attach succeeds");
+            realm
+        }
+
+        /// A raster backend that always reports a successful present --
+        /// this module's own minimal double (the sibling
+        /// `frame_pipeline_and_vsync` module's `ScriptedRasterBackend` is
+        /// private to it).
+        struct AlwaysPresentBackend;
+
+        impl RasterBackend for AlwaysPresentBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        /// END-STATE INVARIANT (issue #556): at N=1 -- a clock that is
+        /// never hidden and never backpressured -- the segment gate's
+        /// decision (`clock.poll().should_run_segment()`, fed `Dirty`
+        /// demand from `take_redraw_pending() || has_pending_work()`) is
+        /// equivalent to that same union read directly, the predicate it
+        /// replaces, over every reachable combination of the two inputs.
+        /// This table covers the NOT-deferred subspace; first-frame
+        /// deferral is a THIRD, orthogonal axis that does not perturb it —
+        /// `should_run_segment()` is `true` for both `Produce` and
+        /// `ProduceWithheld`, so a deferred presentation reaches the exact
+        /// same "did the segment run" answer as an undeferred one with the
+        /// same demand (see `segment_still_runs_by_the_same_predicate_while_
+        /// deferred` below for that companion proof; deferral only changes
+        /// whether `render_frame_entered` may submit the result):
         ///
         /// | woken | pending build | segment runs |
         /// |-------|---------------|---------------|
@@ -6804,7 +6901,108 @@ mod tests {
             assert_eq!(realm.presentations.primary().flush_count(), 0);
         }
 
-        /// Close-mid-animation probe (issue #556 §2): a presentation closing
+        /// The equivalence table above only varies `woken`/`has_pending_work`
+        /// with an undeferred clock; this proves first-frame deferral does
+        /// not perturb the segment-runs answer for the SAME demand -- the
+        /// regression this exact companion exists to catch is a `poll`
+        /// that treats deferral as a reason to skip the segment (it must
+        /// only ever withhold the submit; see `.flutter/packages/flutter/
+        /// lib/src/rendering/binding.dart:582-599`).
+        #[test]
+        fn segment_still_runs_by_the_same_predicate_while_deferred() {
+            let realm = mount_root_here();
+            realm.presentations.primary().clock().defer();
+
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                1,
+                "attach's own pending build must still run the segment even though deferred"
+            );
+        }
+
+        /// Item 8 (wake-bit -> clock-latch survival across a full
+        /// defer/lift round trip): a wake bit marked before deferral begins
+        /// is consumed by the very next (withheld) pump -- the segment
+        /// genuinely runs on it -- and neither an already-settled pump
+        /// during the deferral, nor lifting with nothing newly dirty,
+        /// produces a second, spurious flush.
+        #[test]
+        fn a_wake_bit_marked_before_deferral_is_consumed_by_exactly_one_flush() {
+            let realm = UiRealm::for_test(); // no attach: the wake bit is the ONLY demand source
+            let presentation = realm.presentations.primary();
+
+            presentation.mark_redraw_pending();
+            presentation.clock().defer();
+
+            // Deferred, but the segment still runs on the marked wake bit
+            // (Flutter parity) -- this pump's demand is consumed here.
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert_eq!(
+                presentation.flush_count(),
+                1,
+                "the wake bit marked before deferral must be consumed by exactly one flush"
+            );
+
+            // Nothing newly dirty: settled, still deferred.
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert_eq!(
+                presentation.flush_count(),
+                1,
+                "still deferred and settled -- no new flush"
+            );
+
+            presentation.clock().lift();
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert_eq!(
+                presentation.flush_count(),
+                1,
+                "lifting with nothing newly marked must not conjure a spurious extra flush -- \
+                 the earlier withheld poll already consumed the only demand there was"
+            );
+        }
+
+        /// Item 9 (the `mark_first_frame_sent` timing decision, pinned): an
+        /// idle pump (genuinely nothing dirty, so the segment never even
+        /// runs) must NOT latch "first frame confirmed sent" -- only a
+        /// real, successful `Produce` does. If an idle pump wrongly
+        /// latched, a `defer_first_frame` issued only AFTER that idle pump
+        /// would already be permanently inert; this proves it is not.
+        #[test]
+        fn an_idle_pump_while_deferred_does_not_latch_first_frame_sent() {
+            let realm = UiRealm::for_test(); // nothing attached: no demand at all
+            realm.defer_first_frame();
+
+            let mut backend = AlwaysPresentBackend;
+            let presented = realm.render_frame_entered(&mut backend);
+            assert!(!presented, "nothing to present with no root attached");
+
+            // If the idle pump above had (wrongly) latched first_frame_sent,
+            // this deferral would already be permanently inert. Attach a
+            // root now (real demand) and confirm it is STILL deferred.
+            realm
+                .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(1.0, 1.0)))
+                .expect("attach succeeds");
+            let presented = realm.render_frame_entered(&mut backend);
+            assert!(
+                !presented,
+                "the earlier idle pump must not have latched first_frame_sent -- this \
+                 presentation is still deferred"
+            );
+            // But the segment DID run (Flutter parity): the attach's own
+            // pending build was serviced even though withheld.
+            assert_eq!(realm.presentations.primary().flush_count(), 1);
+
+            realm.allow_first_frame();
+            let presented = realm.render_frame_entered(&mut backend);
+            assert!(
+                presented,
+                "lifting must finally let the withheld content through"
+            );
+        }
+
+        /// Close-mid-animation probe (issue #556): a presentation closing
         /// while a controller registered on ITS OWN `Vsync` is still running
         /// must not panic, must stop ticking that controller immediately
         /// (its registry dies with the presentation), and must leave a
@@ -6893,12 +7091,12 @@ mod tests {
             controller.dispose();
         }
 
-        /// END-STATE INVARIANT (issue #556 §15, C1 half): with an empty
-        /// demand mask and no gating, `poll` returns `Skip(NoDemand)` every
-        /// pump and the segment never runs -- zero produces, zero pipeline
-        /// flushes -- no matter how many times the realm is pumped for
-        /// purely logical reasons (no attach, no redraw request, nothing
-        /// ever dirtied).
+        /// END-STATE INVARIANT (issue #556, the demand-driven-idle headline):
+        /// with an empty demand mask and no gating, `poll` returns
+        /// `Skip(NoDemand)` every pump and the segment never runs -- zero
+        /// produces, zero pipeline flushes -- no matter how many times the
+        /// realm is pumped for purely logical reasons (no attach, no
+        /// redraw request, nothing ever dirtied).
         #[test]
         fn an_idle_presentation_produces_and_flushes_exactly_zero_over_many_pumps() {
             let realm = UiRealm::for_test();

@@ -219,21 +219,23 @@ pub(crate) struct PresentationState {
     /// per-presentation loop.
     redraw_pending: Cell<bool>,
     /// This presentation's own controller registry for implicit animations
-    /// (moved from the realm-level `UiRealm::vsync_slot`, issue #556 §2:
-    /// each surface paces its own animations independently). `RefCell`, not
-    /// a plain field — mirrors `UiRealm::vsync_slot`'s old `Mutex`: `Self::
+    /// (moved from the realm-level `UiRealm::vsync_slot`, issue #556: each
+    /// surface paces its own animations independently). `RefCell`, not a
+    /// plain field — mirrors `UiRealm::vsync_slot`'s old `Mutex`: `Self::
     /// set_vsync` replaces the whole handle through `&self`, and the
     /// per-frame `tick_all`/`has_running` calls operate on a cloned `Vsync`
     /// handle (sharing the inner `Arc<Mutex<VsyncInner>>`), so this cell is
     /// only ever borrowed for the length of a clone or a swap.
     vsync: RefCell<Vsync>,
     /// This presentation's own physical-time produce-gate state machine
-    /// (issue #556 §1b) — the per-presentation half of the `UpdateScheduler`/
+    /// (issue #556) — the per-presentation half of the `UpdateScheduler`/
     /// `FrameClock`/raster three-owner split. `UiRealm::draw_frame_entered`'s
     /// per-presentation segment loop polls this instead of the old
     /// `take_redraw_pending() || has_pending_work()` predicate directly;
     /// first-frame deferral (`RenderingFlutterBinding::send_frames_to_engine`'s
-    /// old counter) folds into this same clock as `SkipReason::Deferred`.
+    /// old counter) folds into this same clock, withholding only the
+    /// submit — see `FrameClock`'s own module doc for the `.flutter/`
+    /// citation that pins this.
     clock: FrameClock,
     /// Test-only oracle: how many times this presentation's own
     /// build+layout+paint segment actually ran (`UiRealm::
@@ -483,7 +485,7 @@ impl PresentationState {
     /// registry. `Vsync` is `Arc`-backed, so this is cheap and every clone
     /// observes the same registry — the same handle shape
     /// `UiRealm::vsync()` used to hand out from its own realm-level slot
-    /// (issue #556 §2: the registry moved here, one per presentation).
+    /// (issue #556: the registry moved here, one per presentation).
     #[must_use]
     pub(crate) fn vsync(&self) -> Vsync {
         self.vsync.borrow().clone()
@@ -503,8 +505,8 @@ impl PresentationState {
     }
 
     /// This presentation's own physical-time produce-gate state machine
-    /// (issue #556 §1b). See [`FrameClock`]'s own doc for the produce
-    /// decision it makes.
+    /// (issue #556). See [`FrameClock`]'s own doc for the produce decision
+    /// it makes.
     #[must_use]
     pub(crate) fn clock(&self) -> &FrameClock {
         &self.clock
