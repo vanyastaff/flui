@@ -167,7 +167,7 @@ fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independe
 /// `frame_clock.rs::tests::the_same_script_replayed_twice_matches_an_
 /// absolute_throttled_sequence`, this test's unit-level twin.
 #[test]
-fn the_same_interleaved_script_replayed_twice_matches_an_absolute_throttled_sequence() {
+fn the_same_throttled_script_replayed_twice_matches_an_absolute_sequence() {
     /// Whether each of 5 scripted pumps of `id` produced, derived from
     /// `presentation_produced_count`'s running total (the only per-pump
     /// observable `HeadlessBinding`'s public API exposes) rather than a raw

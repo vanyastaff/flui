@@ -662,7 +662,8 @@ wake-channel-driven (`RedrawRequested` still drives nothing), and \
 hidden-surface gating is not yet wired to a real visibility signal. \
 `flui-testing` gained an additive, independent multi-presentation clock \
 registry (`HeadlessBinding::install_presentation_clock`/`pump_presentation`/ \
-`pump_all`) alongside the untouched single-view `pump_frame`; unlike \
+`pump_all`/`set_presentation_min_produce_interval`) alongside the untouched \
+single-view `pump_frame`; unlike \
 production (which deliberately does not mark `Animation` demand from a \
 running controller, to keep the segment-gate equivalence exact), this \
 registry's own `pump_presentation` DOES mark `Animation` demand whenever a \
