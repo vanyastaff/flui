@@ -1847,6 +1847,7 @@ name = "flui-scheduler"
 version = "0.2.0"
 dependencies = [
  "bitflags 2.13.1",
+ "criterion",
  "dashmap",
  "event-listener",
  "flui-foundation",
