@@ -23,6 +23,9 @@ workspace = true
 [dependencies]
 # The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline polling).
 flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
+# PresentationId (the multi-presentation clock registry's key) and the
+# ManualClock/MonotonicClock pair FrameClock's ClockSource::Manual reuses.
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 # Canonical hit-test positions accepted by the production input pipeline.
 flui-types = { path = "../flui-types", version = "0.2.0" }
 # The element tree + build owner this binding drives each frame (`build_scope`
@@ -52,7 +55,6 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0", features =
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out
 # of release builds.
 flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
-flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 # The end-to-end observation-seam test (ADR-0040) drives a real tree
 # against the devtools inspector — this crate is the one that links both
 # halves (acyclic: flui-devtools depends only on flui-foundation).
