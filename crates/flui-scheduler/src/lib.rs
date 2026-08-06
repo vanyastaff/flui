@@ -139,6 +139,7 @@
 pub mod budget;
 pub mod config;
 pub mod frame;
+pub mod frame_clock;
 pub mod scheduler;
 pub mod task;
 pub mod ticker;
@@ -157,6 +158,7 @@ pub use config::{
     PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, TimingsCallback,
     set_time_dilation, time_dilation,
 };
+pub use frame_clock::{ClockSource, DemandKind, DemandMask, FrameClock, PollDecision, SkipReason};
 pub use post_frame::{
     LocalPostFrameHandle, LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle,
 };

@@ -85,11 +85,13 @@
 // Ship bar (wave 3): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
+use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{AnimationController, Vsync};
+use flui_foundation::PresentationId;
 use flui_interaction::ManualClock;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::routing::MouseTracker;
@@ -101,7 +103,9 @@ use flui_interaction::{
 // tree costs no extra dependency edge.
 use flui_rendering::layer::LayerTree;
 use flui_rendering::pipeline::PipelineCell;
-use flui_scheduler::{BoxedTask, LocalPostFrameLane, TaskToken, UpdateScheduler};
+use flui_scheduler::{
+    BoxedTask, ClockSource, DemandKind, FrameClock, LocalPostFrameLane, TaskToken, UpdateScheduler,
+};
 use flui_types::geometry::{Offset, Pixels};
 use flui_view::{BuildOwner, ElementId, ElementTree, View};
 
@@ -201,6 +205,32 @@ pub struct HeadlessBinding {
     /// composites nothing, so it also leaves `None` — the field reports what the
     /// last frame produced, not a cached last-known-good tree.
     last_layer_tree: Option<LayerTree>,
+    /// The deterministic multi-presentation clock registry (issue #556)
+    /// — additive to, and independent of, this binding's own single
+    /// [`clock`](Self)/[`vsync`](Self::vsync) pair `pump_frame` drives.
+    /// Empty until [`install_presentation_clock`](Self::install_presentation_clock)
+    /// registers an id; see that method's own doc.
+    presentation_clocks: HashMap<PresentationId, PresentationClockEntry>,
+}
+
+/// One presentation's own independent clock + controller registry, keyed by
+/// [`PresentationId`] in [`HeadlessBinding::presentation_clocks`] — the piece
+/// that makes [`HeadlessBinding::pump_presentation`]/[`pump_all`](HeadlessBinding::pump_all)
+/// genuinely per-presentation rather than a second view onto the binding's
+/// single default clock.
+#[derive(Debug)]
+struct PresentationClockEntry {
+    /// This presentation's own implicit-animation controller registry.
+    vsync: Vsync,
+    /// This presentation's own produce-gate state machine, reading
+    /// `virtual_clock` through a [`ClockSource::Manual`].
+    clock: FrameClock,
+    /// The same virtual clock `clock`'s [`ClockSource::Manual`] wraps, kept
+    /// as its own handle so [`HeadlessBinding::pump_presentation`] can read
+    /// [`ManualClock::elapsed`] directly (the seconds
+    /// [`Vsync::tick_all`](flui_animation::Vsync::tick_all) wants) without
+    /// reaching back through `clock`'s `ClockSource`.
+    virtual_clock: ManualClock,
 }
 
 impl HeadlessBinding {
@@ -237,6 +267,7 @@ impl HeadlessBinding {
             local_post_frame,
             interaction_lane,
             last_layer_tree: None,
+            presentation_clocks: HashMap::new(),
         })
     }
 
@@ -645,6 +676,7 @@ impl HeadlessBinding {
             local_post_frame,
             interaction_lane,
             last_layer_tree,
+            ..
         } = self;
         interaction_lane.enter(|| {
             // 1. Advance the virtual clock. Every subsequent read sees the new instant.
@@ -784,6 +816,200 @@ impl HeadlessBinding {
             .service_child_requests(&mut tree_binding.tree, &tree_binding.pipeline_owner);
 
         layer_tree
+    }
+}
+
+/// The deterministic multi-presentation clock (issue #556).
+///
+/// [`HeadlessBinding::pump_frame`] above is the FLUI-native equivalent of
+/// Flutter's `WidgetTester.pump` — and, like Flutter's, it is single-view:
+/// one virtual clock, one `Vsync`. This is the multi-presentation version:
+/// each [`PresentationId`] a caller registers via
+/// [`install_presentation_clock`](HeadlessBinding::install_presentation_clock)
+/// gets its OWN [`FrameClock`] over its OWN [`ClockSource::Manual`] clock and
+/// its OWN [`Vsync`] registry, so a test can pump presentation A three times
+/// while B sits untouched, or drive A at a scripted 144 Hz cadence and B at
+/// 60 Hz in one interleaved script — a table `pump_frame`'s single clock
+/// cannot produce. `pump_frame` itself is unmigrated and keeps its exact
+/// meaning; this is purely additive.
+///
+/// This is not a public pacing mode: the manual source replaces the timing
+/// INPUT a presentation's clock reads, never the produce policy —
+/// `poll`/`DemandMask`/gating are the exact same code path
+/// [`ClockSource::Platform`] runs.
+impl HeadlessBinding {
+    /// Register a fresh, independent [`FrameClock`] + [`Vsync`] pair for
+    /// `id`. Returns the `Vsync` clone a caller wraps a `VsyncScope` around
+    /// for that presentation's own widget subtree (or registers a bare
+    /// [`AnimationController`] into directly).
+    ///
+    /// Re-registering an already-installed `id` replaces its pair with a
+    /// fresh one — any controller registered on the old `Vsync` handle is
+    /// simply no longer reachable from this binding (the same "no
+    /// accumulate-across-installs" shape [`HeadlessBinding::new`] gives the
+    /// binding's own default clock).
+    pub fn install_presentation_clock(&mut self, id: PresentationId) -> Vsync {
+        let virtual_clock = ManualClock::new();
+        let clock = FrameClock::with_source(ClockSource::Manual(virtual_clock.clone()));
+        let vsync = Vsync::new();
+        self.presentation_clocks.insert(
+            id,
+            PresentationClockEntry {
+                vsync: vsync.clone(),
+                clock,
+                virtual_clock,
+            },
+        );
+        vsync
+    }
+
+    /// `id`'s own registered `Vsync` clone, if
+    /// [`install_presentation_clock`](Self::install_presentation_clock) has
+    /// registered it.
+    #[must_use]
+    pub fn presentation_vsync(&self, id: PresentationId) -> Option<Vsync> {
+        self.presentation_clocks
+            .get(&id)
+            .map(|entry| entry.vsync.clone())
+    }
+
+    /// Mark direct demand on `id`'s own clock — for scripting a produce with
+    /// no controller involved (a `Host`/`Dirty` demand a real embedder or
+    /// widget layer would otherwise supply).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` was never registered via
+    /// [`install_presentation_clock`](Self::install_presentation_clock) —
+    /// this is a test harness, where a typo'd or never-installed id must
+    /// fail loudly rather than silently do nothing (a vacuously "passing"
+    /// assertion downstream is worse than a panic here).
+    pub fn mark_presentation_demand(&self, id: PresentationId, kind: DemandKind) {
+        let entry = self.presentation_clocks.get(&id).unwrap_or_else(|| {
+            panic!(
+                "mark_presentation_demand: no clock installed for {id:?} -- call \
+                 install_presentation_clock first"
+            )
+        });
+        entry.clock.mark_demand(kind);
+    }
+
+    /// Configure a minimum interval between produces on `id`'s own clock —
+    /// scripting a throttle (e.g. a target frame rate lower than the
+    /// pumped cadence) for a test that needs `poll`'s capacity gate to be
+    /// load-bearing in its own right, not just the demand mask. `None`
+    /// (the default) imposes no throttle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` was never registered — see
+    /// [`mark_presentation_demand`](Self::mark_presentation_demand)'s doc
+    /// for the rationale.
+    pub fn set_presentation_min_produce_interval(
+        &self,
+        id: PresentationId,
+        interval: Option<Duration>,
+    ) {
+        let entry = self.presentation_clocks.get(&id).unwrap_or_else(|| {
+            panic!(
+                "set_presentation_min_produce_interval: no clock installed for {id:?} -- call \
+                 install_presentation_clock first"
+            )
+        });
+        entry.clock.set_min_produce_interval(interval);
+    }
+
+    /// How many frames `id`'s own clock has granted a produce for, total.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` was never registered — see
+    /// [`mark_presentation_demand`](Self::mark_presentation_demand)'s doc
+    /// for why a missing id fails loudly here rather than returning `0`
+    /// indistinguishably from "installed but never produced".
+    #[must_use]
+    pub fn presentation_produced_count(&self, id: PresentationId) -> u64 {
+        self.presentation_clocks
+            .get(&id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "presentation_produced_count: no clock installed for {id:?} -- call \
+                     install_presentation_clock first"
+                )
+            })
+            .clock
+            .produced_count()
+    }
+
+    /// Advance exactly `id`'s own clock and controller registry by `dt`,
+    /// deterministically — ticks its `Vsync` (marking `Animation` demand if
+    /// a controller was still running at the START of this tick), then
+    /// polls its `FrameClock`.
+    ///
+    /// Demand is sampled BEFORE `tick_all`, not after: the tick that
+    /// carries a controller across its completion threshold must still be
+    /// treated as real animation work, even though `has_running()` already
+    /// reports `false` by the time that same tick returns. This matches the
+    /// oracle's own contract — `.flutter/packages/flutter/lib/src/scheduler/
+    /// ticker.dart`'s `_tick` invokes `_onTick` unconditionally (deciding
+    /// whether to *reschedule* only afterward), and `.flutter/packages/
+    /// flutter/lib/src/animation/animation_controller.dart`'s own `_tick`
+    /// clamps the value to the endpoint, flips the status to `Completed`,
+    /// calls `stop()`, and ONLY THEN calls `notifyListeners()`/
+    /// `_checkStatusChanged()` — the completing tick still delivers the
+    /// final value and fires the status listener. Sampling `has_running()`
+    /// after `tick_all` would silently drop the one pump that carries that
+    /// final value/status, because by then the controller has already
+    /// stopped.
+    ///
+    /// No wall-clock read reaches this call: every timestamp
+    /// [`FrameClock::poll`] sees traces back to this `advance`, on THIS
+    /// presentation's own clock only — a sibling `id`'s clock, mask, and
+    /// `Vsync` are untouched.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` was never registered — see
+    /// [`mark_presentation_demand`](Self::mark_presentation_demand)'s doc
+    /// for the rationale (a test harness must fail loudly on a wiring bug,
+    /// not silently pump nothing).
+    pub fn pump_presentation(&self, id: PresentationId, dt: Duration) {
+        let entry = self.presentation_clocks.get(&id).unwrap_or_else(|| {
+            panic!("pump_presentation: no clock installed for {id:?} -- call install_presentation_clock first")
+        });
+        entry.clock.advance(dt);
+        let now = entry.clock.now();
+        let now_secs = entry.virtual_clock.elapsed().as_secs_f64();
+        let was_running = entry.vsync.has_running();
+        entry.vsync.tick_all(now_secs);
+        if was_running {
+            entry.clock.mark_demand(DemandKind::Animation);
+        }
+        let _ = entry.clock.poll(now);
+    }
+
+    /// [`pump_presentation`](Self::pump_presentation) for every currently
+    /// registered id, each advanced by the SAME `dt` — still fully
+    /// independent: each clock advances and polls purely against its own
+    /// state, sharing no timeline or mask with any other. A no-op if
+    /// nothing is registered (there is no id list to fail loudly about).
+    ///
+    /// **The iteration order is defined and stable: ascending `PresentationId`
+    /// order, not insertion or hash order.** This registry is keyed in a
+    /// `HashMap`, whose iteration order is randomized per process (and
+    /// varies between `HeadlessBinding` instances within one process); on a
+    /// binding whose whole purpose is a deterministic, reproducible test
+    /// clock, letting `pump_all` fan out in hash order would be a
+    /// self-inflicted source of nondeterminism — two presentations'
+    /// controllers publishing into shared listener state (a test's own
+    /// tracking `Vec`, say) would then see a different callback interleaving
+    /// on every run.
+    pub fn pump_all(&self, dt: Duration) {
+        let mut ids: Vec<PresentationId> = self.presentation_clocks.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            self.pump_presentation(id, dt);
+        }
     }
 }
 
