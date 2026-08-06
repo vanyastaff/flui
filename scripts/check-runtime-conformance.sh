@@ -344,11 +344,18 @@ elif "experimental" not in direct_rs.read_text().lower():
 
 # ---------------------------------------------------------------------------
 # Known advisory / unwired configuration must never look stable.
+#
+# `vsync`/`target_fps` used to live here as required advisory fields (they
+# governed nothing real, so they were registered instead of left silently
+# misleading). Issue #556 §5 removed both fields outright — the
+# must-*exist* mechanism below has no more work to do for them, and the
+# `forbidden_pattern` table further down (a must-NOT-exist mode this
+# checker already had for retired identifiers, e.g. `HasInstance`,
+# `REALM_CLAIMED`) enforces their absence instead: re-adding
+# `pub vsync: bool` or `pub target_fps: u32` to `AppConfig` fails
+# conformance without a second checker mode being built for it.
 # ---------------------------------------------------------------------------
 VALID_CONFIG_STATUSES = {"unwired", "advisory", "partially-wired"}
-# vsync does not control the present mode; target_fps is advisory. These two
-# must be registered and must not be classified as working stable config.
-REQUIRED_ADVISORY_FIELDS = {"vsync", "target_fps"}
 
 config_fields: dict[str, dict] = {}
 for index, entry in enumerate(table_array("config_field")):
@@ -373,13 +380,6 @@ for index, entry in enumerate(table_array("config_field")):
         fail(f"{label} is {status!r} yet classified `stable-candidate` — configuration that does not govern behavior is never stable")
     check_citation(entry.get("file"), entry.get("contains"), f"{label} field pin")
     check_owner_issue(entry, label, required=True)
-
-for required in sorted(REQUIRED_ADVISORY_FIELDS):
-    if required not in config_fields:
-        fail(
-            f"{registry_rel} must register config_field `{required}` — it is a known advisory/unwired "
-            "field and removing its entry requires actually wiring or deleting the field first"
-        )
 
 # ---------------------------------------------------------------------------
 # Ambient singleton net: every impl_binding_singleton!/manual instance() in

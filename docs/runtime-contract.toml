@@ -1728,33 +1728,29 @@ evidence = [
 ]
 
 [[contract]]
-key = "target-fps-advisory-documented"
+key = "frame-config-effective-or-removed"
 statement = """
-`AppConfig::target_fps` is documented as advisory with a full consumer \
-audit, and `AppConfig::vsync` is documented as not controlling the present \
-mode. Neither field governs the pacing model; the config_field gate below \
-prevents either from being classified as working stable configuration.\
+Public frame configuration is wired end to end or removed. `AppConfig` \
+carried `vsync` (unwired) and `target_fps` (advisory-only) — neither ever \
+governed the real presentation clock. Issue #556 removed both fields \
+outright rather than wire them to something they were never designed to \
+control: the effective, tested frame-pacing configuration is \
+`flui_engine::RasterOptions` (`target_frame_rate`, `max_frames_in_flight`), \
+consumed at the raster boundary a `FrameClock` reads. The superseded \
+`target-fps-advisory-documented` contract (which pinned the two fields' \
+advisory doc strings) is retired in the same commit that deletes the \
+fields it was pinning — its evidence would otherwise cite text this change \
+deletes.\
 """
 state = "implemented"
 domain = "application"
 mechanical = true
-mechanism = "config_field entries below; the checker hard-requires vsync/target_fps to be registered as not-stable"
+mechanism = "forbidden_pattern entries below assert both fields are absent from AppConfig; RasterOptions is the sole config surface for frame pacing"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/config.rs", contains = "Advisory target frame rate (FPS)" },
-    { kind = "source-gate", file = "crates/flui-app/src/app/runner.rs", contains = "target_fps_advisory" },
+    { kind = "symbol", file = "crates/flui-engine/src/raster_options.rs", contains = "pub struct RasterOptions" },
+    { kind = "symbol", file = "crates/flui-app/src/app/config.rs", contains = "issue #556 removed the unwired" },
+    { kind = "test", file = "crates/flui-app/src/app/config.rs", contains = "fn test_default_config" },
 ]
-
-[[contract]]
-key = "frame-config-effective-or-removed"
-statement = """
-Public frame configuration is wired end to end or removed. `vsync` is unwired \
-and `target_fps` is advisory; neither governs the real presentation clock.\
-"""
-state = "planned"
-domain = "application"
-owner_issue = 556
-mechanical = true
-mechanism = "config_field entries below pin each field's non-stable classification"
 
 [[contract]]
 key = "non-frame-app-config-effective-or-removed"
@@ -2547,29 +2543,14 @@ owner_issue = 553
 # Known advisory / unwired public configuration
 # =============================================================================
 #
-# The checker hard-requires `vsync` and `target_fps` to be present here and
-# to carry a non-stable classification — they must never be presented as
-# working stable configuration (the effective-configuration contract).
-
-[[config_field]]
-name = "vsync"
-path = "flui_app::AppConfig::vsync"
-file = "crates/flui-app/src/app/config.rs"
-contains = "pub vsync: bool"
-status = "unwired"
-classification = "transitional"
-owner_issue = 556
-notes = "Dropped by From<&AppConfig> for WindowOptions; select_present_mode always chooses Fifo. UiRealm::vsync()/VsyncScope is an unrelated animation registry."
-
-[[config_field]]
-name = "target_fps"
-path = "flui_app::AppConfig::target_fps"
-file = "crates/flui-app/src/app/config.rs"
-contains = "pub target_fps: u32"
-status = "advisory"
-classification = "transitional"
-owner_issue = 556
-notes = "Logged at startup only; pacing comes from the blocking Fifo present. The no-present fallback is a fixed constant, deliberately not derived from this field."
+# `vsync` and `target_fps` used to be registered here (present, but pinned to
+# a non-stable classification, so neither could be presented as working
+# stable configuration). Issue #556 removed both fields from `AppConfig`
+# outright instead of leaving them permanently unwired — see the
+# `frame-config-effective-or-removed` contract above. Their absence is now
+# enforced by the `forbidden_pattern` entries further down this file
+# (a must-NOT-exist check, the mirror image of the must-exist check a
+# `config_field` entry performs).
 
 [[config_field]]
 name = "fullscreen"
@@ -3027,6 +3008,34 @@ comments that used to justify them cited the same `LayoutChildCallback` / \
 protection covers `Sync` as its own literal substring rather than relying \
 on the `Send` entry alone to catch a `Sync`-only reintroduction. See the \
 `Send` entry's `why` for the full rationale.\
+"""
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "pub vsync: bool"
+scope = "crates/flui-app/src/app/config.rs"
+why = """
+the frame-config-effective-or-removed contract: `AppConfig::vsync` never \
+controlled the present mode (`select_present_mode` always chose `Fifo`) and \
+was removed rather than left permanently unwired -- issue #556. Re-adding \
+this field brings back the exact shape the removal was for: a config field \
+a caller can reasonably expect to work but that governs nothing. Scoped to \
+`config.rs` rather than every crate, since `pub vsync: bool` is a plausible \
+field name a different, unrelated struct could legitimately use elsewhere.\
+"""
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "pub target_fps: u32"
+scope = "crates/flui-app/src/app/config.rs"
+why = """
+companion to the `pub vsync: bool` entry above: `AppConfig::target_fps` was \
+advisory-only (logged, never fed into the real present cadence) and was \
+removed for the same reason -- issue #556. The effective frame-pacing \
+config is `flui_engine::RasterOptions::target_frame_rate`; this scope is \
+`config.rs` specifically because `flui-devtools`'s own `DevToolsConfig` and \
+`flui-scheduler`'s `FrameBudget`/`FrameTiming` builders legitimately use the \
+same field/method name for an unrelated, still-effective concept.\
 """
 allow_files = []
 
