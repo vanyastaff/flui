@@ -244,8 +244,9 @@ fn the_scheduled_callback_observes_this_frames_committed_layout() {
 
     // `PipelineCell` is `!Send`, so this callback cannot go through
     // `PostFrameHandle::schedule` (its `Send` bound is for cross-thread
-    // wake). `schedule_local` enforces same-thread execution at runtime
-    // instead — same pattern as the `editable_text.rs` IME cursor loop.
+    // wake). `schedule_local` takes a `!Send` handle, so same-thread use is
+    // a compile-time guarantee — same pattern as `editable_text.rs`'s IME
+    // cursor loop.
     let post_frame_handle = laid.local_post_frame_handle();
     laid.enter_owner_scope(|| {
         post_frame_handle
