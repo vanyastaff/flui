@@ -6,14 +6,41 @@
 //! [`UpdateScheduler`](crate::UpdateScheduler) owns *logical* time (phases,
 //! callback queues, the priority task queue) and makes no refresh-rate,
 //! display, or surface assumption. `FrameClock` owns *physical* time for
-//! **one presentation**: demand coalescing, first-frame deferral, visibility
-//! gating, a produce-capacity threshold, and frame timestamps. It answers
-//! exactly one question — "does this surface produce a frame now?" — and
-//! never touches a phase, a callback, or an element tree. Raster capacity
-//! (whether the GPU will accept another frame) is a third, still-separate
-//! owner; `FrameClock`'s in-flight/throttle knobs exist so that owner has
-//! somewhere to report backpressure, not so this clock reaches into a GPU
-//! queue itself.
+//! **one presentation**: demand coalescing, actuator-edge coalescing
+//! ([`try_arm_redraw_request`](FrameClock::try_arm_redraw_request)),
+//! compositor pacing feedback
+//! ([`record_compositor_tick`](FrameClock::record_compositor_tick)),
+//! first-frame deferral, visibility gating, a produce-capacity threshold,
+//! and frame timestamps. It answers exactly one question — "does this
+//! surface produce a frame now?" — and never touches a phase, a callback,
+//! or an element tree, and never reaches out to read an actual display or
+//! window: every physical-time fact it reasons about (a compositor tick,
+//! a produce capacity signal) is fed in by a caller that owns the real
+//! surface. Raster capacity (whether the GPU will accept another frame)
+//! is a third, still-separate owner; `FrameClock`'s in-flight/throttle
+//! knobs exist so that owner has somewhere to report backpressure, not so
+//! this clock reaches into a GPU queue itself.
+//!
+//! # The driver-loop hybrid
+//!
+//! Two distinct signals exist, and this clock keeps them separate rather
+//! than conflating them. The demand mask ([`DemandMask`]) is the ONLY
+//! input [`poll`](FrameClock::poll) ever reads — a tree/animation demand
+//! mark (`Dirty`/`Animation`) drives it via
+//! [`mark_demand`](FrameClock::mark_demand), exactly as it always has.
+//! [`record_compositor_tick`](FrameClock::record_compositor_tick) is a
+//! SEPARATE, demand-free channel: it records when a compositor/platform-
+//! paced tick arrived (for pacing feedback only — see its own doc for why
+//! it does not, and structurally cannot, mark demand from inside this
+//! method). What the actuator side gains is
+//! [`try_arm_redraw_request`](FrameClock::try_arm_redraw_request): whichever
+//! platform mechanism ends up poking `request_redraw()` (a compositor-
+//! paced tick where the platform paces one, an immediate self-wake where
+//! it does not) consults this method first, so N demand marks that land
+//! before the next produce collapse into exactly one poke instead of a
+//! storm of redundant ones. See `flui-app`'s own driver wiring and
+//! `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for
+//! which concrete mechanism plays which role on each backend.
 //!
 //! # No public mode enum
 //!
@@ -191,7 +218,7 @@ pub enum ClockSource {
     Manual(ManualClock),
 }
 
-/// The per-presentation physical-time policy state machine (issue #556).
+/// The per-presentation physical-time policy state machine.
 ///
 /// Pure and platform-free: it owns no window, no GPU handle, no element
 /// tree, and runs no callback — it only tracks demand and three produce
@@ -213,6 +240,20 @@ pub struct FrameClock {
     min_produce_interval: Cell<Option<Duration>>,
     last_produce_at: Cell<Option<Instant>>,
     produced: Cell<u64>,
+    /// Set by [`try_arm_redraw_request`](Self::try_arm_redraw_request) the
+    /// first time it grants an actuation edge for the current demand mask;
+    /// cleared by [`poll`](Self::poll) on a granted produce. See that
+    /// method's doc for the full coalescing contract.
+    redraw_requested: Cell<bool>,
+    /// The instant [`record_compositor_tick`](Self::record_compositor_tick)
+    /// last recorded, if any — the pacing-feedback sample this clock's
+    /// owner (never this clock itself) feeds from an actual compositor-paced
+    /// signal.
+    last_compositor_tick: Cell<Option<Instant>>,
+    /// The interval between the two most recent
+    /// [`record_compositor_tick`](Self::record_compositor_tick) calls —
+    /// `None` until at least two ticks have been recorded.
+    last_compositor_tick_interval: Cell<Option<Duration>>,
 }
 
 /// The default in-flight capacity before any raster-owner wiring configures
@@ -245,6 +286,9 @@ impl FrameClock {
             min_produce_interval: Cell::new(None),
             last_produce_at: Cell::new(None),
             produced: Cell::new(0),
+            redraw_requested: Cell::new(false),
+            last_compositor_tick: Cell::new(None),
+            last_compositor_tick_interval: Cell::new(None),
         }
     }
 
@@ -303,14 +347,148 @@ impl FrameClock {
     /// source settles (e.g. an `AnimationController` completing clears its
     /// own [`DemandKind::Animation`] bit) without waiting for the next
     /// produce to clear the whole mask.
+    ///
+    /// If this clears the LAST remaining bit, also clears
+    /// [`try_arm_redraw_request`](Self::try_arm_redraw_request)'s armed
+    /// latch, not just the mask: a caller that marks demand (arming the
+    /// latch), then settles it away via this method before a `poll` ever
+    /// runs, has left nothing for a produce to consume and clear the latch
+    /// through — without this, the next GENUINELY new mark would find the
+    /// latch still armed from the settled-away demand and silently
+    /// withhold its own platform-facing poke, stranding the actuator with
+    /// no `poll` ever reachable to un-strand it (a `poll` call needs
+    /// nonzero demand to grant a produce in the first place). Clearing to
+    /// a still-nonzero mask leaves the latch exactly as it was — this is
+    /// not a general "settling anything re-arms everything" rule, only
+    /// the one case that would otherwise leak.
     pub fn clear_demand(&self, kind: DemandKind) {
-        self.demand.set(self.demand.get() & !DemandMask::from(kind));
+        let cleared = self.demand.get() & !DemandMask::from(kind);
+        self.demand.set(cleared);
+        if cleared.is_empty() {
+            self.redraw_requested.set(false);
+        }
     }
 
     /// The current demand mask, unmodified.
     #[must_use]
     pub fn demand_mask(&self) -> DemandMask {
         self.demand.get()
+    }
+
+    // ------------------------------------------------------------------
+    // Actuator edge — the platform-facing `request_redraw()` poke a caller
+    // makes in response to demand, coalesced against this clock's own
+    // mask so N marks between two produces collapse into exactly one
+    // poke.
+    // ------------------------------------------------------------------
+
+    /// Test-and-set: returns `true` at most once per pending demand mask —
+    /// the edge a caller should react to by poking the platform's
+    /// `request_redraw()` — and `false` on every following call until the
+    /// next granted [`poll`](Self::poll) produce (which clears both the
+    /// mask and this latch) re-arms it. Also `false` while
+    /// [`is_hidden`](Self::is_hidden) or with an empty mask — there is
+    /// nothing to poke for.
+    ///
+    /// This is what turns N repeated demand marks (several ticks landing
+    /// before a produce clears the mask — under backpressure, inside a
+    /// [`set_min_produce_interval`](Self::set_min_produce_interval) window,
+    /// or just several dirty marks in a row) into exactly one
+    /// platform-facing request instead of a storm of redundant ones: a
+    /// caller marks demand via [`mark_demand`](Self::mark_demand) as
+    /// always, then separately consults this method whenever it is about
+    /// to decide whether to poke the platform.
+    ///
+    /// Mutates on a `true` return (arms the latch) — reading it twice in a
+    /// row without an intervening `poll` therefore returns `true` then
+    /// `false`, never `true` twice.
+    ///
+    /// **Reaching `poll` is necessary but not sufficient to disarm this
+    /// latch — say so honestly rather than claim it is handled.** Only a
+    /// GRANTED produce (`poll` returning `Produce`/`ProduceWithheld`)
+    /// clears the latch (alongside the mask, in the same call); a `poll`
+    /// that returns `Skip(Hidden)` or `Skip(Backpressure)` retains BOTH
+    /// the mask and this latch untouched, so a caller stuck on either of
+    /// those two reasons stays armed-but-withheld until *something*
+    /// causes a produce to actually succeed. This clock has no mechanism
+    /// of its own to make that happen: the two edges that would close the
+    /// gap structurally — a raster retire waking the owner once capacity
+    /// frees (in-flight backpressure), and an unhide waking the owner once
+    /// visibility returns (the hidden gate) — are the raster-owner and
+    /// hidden-surface-gating work this issue's later slices own, and
+    /// neither exists yet. Today, in this workspace's actual production
+    /// wiring, this dependency is dormant rather than a live bug: nothing
+    /// yet calls [`set_hidden`](Self::set_hidden) or
+    /// [`set_max_in_flight`](Self::set_max_in_flight)/[`record_submit`](Self::record_submit)
+    /// against a real presentation's clock, so `poll` never actually
+    /// returns either `Skip` reason in production — but wiring either
+    /// knob into production BEFORE the corresponding wake edge lands would
+    /// turn this dormant dependency into a real stall. A caller that
+    /// settles its OWN demand away without ever reaching a produce (rather
+    /// than being blocked by hidden/backpressure) is a different, already-
+    /// handled case: see [`clear_demand`](Self::clear_demand)'s doc.
+    pub fn try_arm_redraw_request(&self) -> bool {
+        if self.hidden.get() || self.demand.get().is_empty() || self.redraw_requested.get() {
+            return false;
+        }
+        self.redraw_requested.set(true);
+        true
+    }
+
+    // ------------------------------------------------------------------
+    // Compositor pacing feedback — a caller that owns an actual display
+    // surface feeds this clock the instants a compositor-paced signal (a
+    // Wayland frame callback delivering `RedrawRequested`, for instance)
+    // arrived. Bookkeeping ONLY: this clock never reaches out to read a
+    // display's refresh rate itself, and recording a tick NEVER marks
+    // demand — a tick fires on every production pump on the desktop
+    // backends (see `record_compositor_tick`'s own doc for why marking
+    // `DemandKind::Host` here was tried and reverted), so it cannot be
+    // allowed to be sufficient demand on its own without making the
+    // demand-mask gate — the entire point of this clock —
+    // inert on every platform that calls it.
+    // ------------------------------------------------------------------
+
+    /// Records that a compositor/platform-paced tick arrived at `now` —
+    /// the pacing-feedback half of the driver-loop hybrid.
+    /// Updates [`last_compositor_tick_interval`](Self::last_compositor_tick_interval)
+    /// from the previous recorded tick (if any). Marks NO demand: an
+    /// earlier version of this method also marked `DemandKind::Host`
+    /// ("the host platform asked for a frame directly", per that
+    /// variant's own doc) on the theory that the compositor only ever
+    /// delivers this tick in response to an earlier `request_redraw()`
+    /// call already made for a real reason — which is true for a
+    /// self-triggered tick, but FALSE in general: winit also delivers
+    /// `RedrawRequested` for OS-driven signals this clock's caller never
+    /// asked for (an expose/damage event, a resize-triggered redraw), and
+    /// nothing at this call site can tell a self-triggered tick apart
+    /// from an unsolicited one. Since this method fires on every
+    /// production pump on desktop, marking demand there made `poll`
+    /// unable to ever return `Skip(NoDemand)` on that path — the
+    /// demand-mask gate this whole clock exists to provide would have
+    /// been inert on every backend that calls this method. If a genuinely
+    /// unsolicited tick ever needs to become its own demand source, that
+    /// requires the caller to distinguish "unsolicited" from
+    /// "consequence of our own `request_redraw()`" BEFORE calling this
+    /// method (this clock cannot do it from inside `record_compositor_tick`
+    /// itself, since by the time this runs the two cases are
+    /// indistinguishable) and mark `DemandKind::Host` itself, explicitly,
+    /// only in the unsolicited case — not a change made here.
+    pub fn record_compositor_tick(&self, now: Instant) {
+        if let Some(last) = self.last_compositor_tick.get() {
+            self.last_compositor_tick_interval
+                .set(Some(now.duration_since(last)));
+        }
+        self.last_compositor_tick.set(Some(now));
+    }
+
+    /// The interval between the two most recent
+    /// [`record_compositor_tick`](Self::record_compositor_tick) calls —
+    /// `None` until at least two ticks have been recorded. Diagnostic/
+    /// telemetry data only; no produce decision reads this.
+    #[must_use]
+    pub fn last_compositor_tick_interval(&self) -> Option<Duration> {
+        self.last_compositor_tick_interval.get()
     }
 
     // ------------------------------------------------------------------
@@ -518,6 +696,7 @@ impl FrameClock {
         }
 
         self.demand.set(DemandMask::empty());
+        self.redraw_requested.set(false);
         self.last_produce_at.set(Some(now));
         self.produced.set(self.produced.get() + 1);
 
@@ -1079,5 +1258,334 @@ mod tests {
     fn is_deferred_is_false_by_default_with_no_deferral_ever_registered() {
         let (clock, _manual) = manual();
         assert!(!clock.is_deferred());
+    }
+
+    // ----------------------------------------------------------------
+    // `try_arm_redraw_request` — the driver-loop hybrid's actuator edge.
+    // Anti-vacuous: an empty/hidden clock never arms, one arm per pending
+    // mask, re-armed only after a genuine produce.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn an_empty_mask_never_arms_a_redraw_request() {
+        let (clock, _manual) = manual();
+        assert!(!clock.try_arm_redraw_request());
+    }
+
+    #[test]
+    fn a_hidden_clock_never_arms_a_redraw_request_even_with_demand() {
+        let (clock, _manual) = manual();
+        clock.set_hidden(true);
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(
+            !clock.try_arm_redraw_request(),
+            "no reason to poke the platform for a surface that cannot produce"
+        );
+    }
+
+    #[test]
+    fn one_mark_arms_exactly_once_and_reads_false_after() {
+        let (clock, _manual) = manual();
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(clock.try_arm_redraw_request(), "the first call is the edge");
+        assert!(
+            !clock.try_arm_redraw_request(),
+            "the SAME pending mask must not arm a second poke"
+        );
+        assert!(
+            !clock.try_arm_redraw_request(),
+            "reading it again changes nothing further -- it is not a toggle"
+        );
+    }
+
+    /// The named exploit: N demand marks landing before a produce collapse
+    /// into exactly one armed edge; a produce re-arms it. Scripted via
+    /// backpressure so the mask genuinely survives several `poll` calls
+    /// without clearing -- the realistic shape a caller sees under GPU
+    /// backpressure or a throttle window, not just "call mark_demand
+    /// twice with no poll in between".
+    #[test]
+    fn n_demands_before_a_produce_collapse_into_exactly_one_armed_request_then_rearm() {
+        let (clock, manual) = manual();
+        clock.set_max_in_flight(1);
+        clock.record_submit(); // at capacity from the start -- every poll below skips
+
+        // N=5 marks, each followed by a poll that skips (Backpressure) and
+        // retains the mask -- only the FIRST arms.
+        let mut armed_count = 0;
+        for _ in 0..5 {
+            clock.mark_demand(DemandKind::Dirty);
+            if clock.try_arm_redraw_request() {
+                armed_count += 1;
+            }
+            assert_eq!(
+                clock.poll(manual.now()),
+                PollDecision::Skip(SkipReason::Backpressure),
+                "capacity never freed in this loop -- every poll must skip"
+            );
+        }
+        assert_eq!(
+            armed_count, 1,
+            "exactly one of the five marks may arm a redraw request"
+        );
+
+        // Free capacity: the next poll produces, clearing both the mask
+        // and the armed latch.
+        clock.record_retire();
+        assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+
+        // Re-armed: a fresh mark after the produce arms again.
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(
+            clock.try_arm_redraw_request(),
+            "a produce must re-arm the next genuinely new demand"
+        );
+    }
+
+    #[test]
+    fn skip_no_demand_never_arms_and_never_needed_to() {
+        let (clock, manual) = manual();
+        assert!(!clock.try_arm_redraw_request());
+        assert_eq!(
+            clock.poll(manual.now()),
+            PollDecision::Skip(SkipReason::NoDemand)
+        );
+        assert!(!clock.try_arm_redraw_request());
+    }
+
+    // ----------------------------------------------------------------
+    // `record_compositor_tick` — pacing feedback.
+    // ----------------------------------------------------------------
+
+    /// The demand-mask gate's own load-bearing regression test: a
+    /// compositor tick, alone, with no other demand ever marked, must
+    /// leave `poll` reading `Skip(NoDemand)` -- proving
+    /// `record_compositor_tick` marks no demand of its own. An earlier
+    /// version of this method marked `DemandKind::Host` unconditionally,
+    /// which -- because this method fires on every production pump on
+    /// every desktop backend -- made `poll` permanently unable to return
+    /// `Skip(NoDemand)` there, i.e. made the entire demand-mask gate
+    /// inert on the one path that calls it. Repeats the tick 5 times
+    /// (not just once) to rule out a one-shot exception.
+    #[test]
+    fn record_compositor_tick_alone_marks_no_demand_and_never_produces() {
+        let (clock, manual) = manual();
+        for _ in 0..5 {
+            manual.advance(Duration::from_millis(16));
+            clock.record_compositor_tick(manual.now());
+            assert_eq!(
+                clock.poll(manual.now()),
+                PollDecision::Skip(SkipReason::NoDemand),
+                "a compositor tick alone must never be sufficient demand on its own"
+            );
+        }
+        assert_eq!(clock.produced_count(), 0);
+    }
+
+    #[test]
+    fn compositor_tick_interval_is_none_until_a_second_tick_then_tracks_the_gap() {
+        let (clock, manual) = manual();
+        assert_eq!(clock.last_compositor_tick_interval(), None);
+
+        clock.record_compositor_tick(manual.now());
+        assert_eq!(
+            clock.last_compositor_tick_interval(),
+            None,
+            "one tick alone has no interval to report yet"
+        );
+
+        manual.advance(Duration::from_millis(16));
+        clock.record_compositor_tick(manual.now());
+        assert_eq!(
+            clock.last_compositor_tick_interval(),
+            Some(Duration::from_millis(16))
+        );
+
+        manual.advance(Duration::from_millis(7));
+        clock.record_compositor_tick(manual.now());
+        assert_eq!(
+            clock.last_compositor_tick_interval(),
+            Some(Duration::from_millis(7)),
+            "the interval tracks only the two most recent ticks, not a running average"
+        );
+    }
+
+    /// Criterion 1 at the clock level: two independent clocks fed
+    /// compositor ticks at different scripted cadences (60 Hz vs 144 Hz)
+    /// over the identical wall-clock span produce proportionally --
+    /// exactly the multi-refresh-rate independence a single shared clock
+    /// could never reproduce (companion to `flui-testing`'s own
+    /// multi-presentation cadence test, at the bare-clock level with no
+    /// realm/vsync machinery at all). Demand is marked explicitly each
+    /// iteration (`record_compositor_tick` marks none of its own, per the
+    /// fix above) -- this mirrors production, where a compositor tick
+    /// never arrives except in response to a `request_redraw()` already
+    /// made for a real `Dirty`/`Animation` reason. The produce-count
+    /// assertions below are therefore evidence about the demand mark, not
+    /// about `record_compositor_tick`; what IS specific to
+    /// `record_compositor_tick` -- and is asserted, not just exercised --
+    /// is that `last_compositor_tick_interval` ends up matching each
+    /// feed's own distinct cadence, proving the two clocks' pacing
+    /// feedback stays independent, not just their produce counts.
+    #[test]
+    fn scripted_60hz_and_144hz_feeds_produce_independently_proportional_counts() {
+        let (clock_60, manual_60) = manual();
+        let (clock_144, manual_144) = manual();
+
+        let span = Duration::from_secs(1);
+        let step_60 = Duration::from_nanos(1_000_000_000 / 60);
+        let step_144 = Duration::from_nanos(1_000_000_000 / 144);
+
+        let mut elapsed = Duration::ZERO;
+        let mut ticks_60 = 0u32;
+        while elapsed + step_60 <= span {
+            manual_60.advance(step_60);
+            elapsed += step_60;
+            clock_60.record_compositor_tick(manual_60.now());
+            clock_60.mark_demand(DemandKind::Dirty);
+            assert_eq!(clock_60.poll(manual_60.now()), PollDecision::Produce);
+            ticks_60 += 1;
+        }
+
+        let mut elapsed = Duration::ZERO;
+        let mut ticks_144 = 0u32;
+        while elapsed + step_144 <= span {
+            manual_144.advance(step_144);
+            elapsed += step_144;
+            clock_144.record_compositor_tick(manual_144.now());
+            clock_144.mark_demand(DemandKind::Dirty);
+            assert_eq!(clock_144.poll(manual_144.now()), PollDecision::Produce);
+            ticks_144 += 1;
+        }
+
+        assert_eq!(ticks_60, 60);
+        assert_eq!(ticks_144, 144);
+        assert_eq!(clock_60.produced_count(), 60);
+        assert_eq!(clock_144.produced_count(), 144);
+        assert!(
+            clock_144.produced_count() > clock_60.produced_count() * 2,
+            "144 Hz must produce well over double the 60 Hz count across the identical span \
+             (got 60Hz={}, 144Hz={})",
+            clock_60.produced_count(),
+            clock_144.produced_count()
+        );
+
+        // The property `record_compositor_tick` itself actually added:
+        // each clock's own pacing feedback matches its own scripted
+        // cadence exactly, independent of the other clock's.
+        assert_eq!(
+            clock_60.last_compositor_tick_interval(),
+            Some(step_60),
+            "the 60Hz clock's own recorded interval must match its own step exactly"
+        );
+        assert_eq!(
+            clock_144.last_compositor_tick_interval(),
+            Some(step_144),
+            "the 144Hz clock's own recorded interval must match its own step exactly"
+        );
+        assert!(
+            clock_144.last_compositor_tick_interval() < clock_60.last_compositor_tick_interval(),
+            "the 144Hz clock's own recorded interval must be shorter than the 60Hz clock's \
+             (144Hz={:?}, 60Hz={:?})",
+            clock_144.last_compositor_tick_interval(),
+            clock_60.last_compositor_tick_interval()
+        );
+    }
+
+    /// Compositor-freeze loyalty: a scripted feed that stops delivering
+    /// ticks must stop producing -- this clock has no background thread
+    /// and no timer of its own, so "pausing the feed" and "pausing
+    /// production" are the same fact, but this pins it so a future
+    /// regression (e.g. a stray internal re-arm) would be caught rather
+    /// than assumed.
+    #[test]
+    fn a_paused_compositor_feed_pauses_production_and_resuming_resumes_it() {
+        let (clock, manual) = manual();
+
+        // Demand is marked alongside the tick each iteration -- see the
+        // 60/144Hz test's own doc for why `record_compositor_tick` alone
+        // is never sufficient.
+        for _ in 0..10 {
+            manual.advance(Duration::from_millis(16));
+            clock.record_compositor_tick(manual.now());
+            clock.mark_demand(DemandKind::Dirty);
+            assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+        }
+        assert_eq!(clock.produced_count(), 10);
+
+        // The feed "freezes" -- nothing calls record_compositor_tick,
+        // mark_demand, or poll for a long virtual stretch. Advancing the
+        // manual clock alone (no tick, no mark, no poll) must not move
+        // produced_count.
+        manual.advance(Duration::from_secs(5));
+        assert_eq!(
+            clock.produced_count(),
+            10,
+            "advancing wall-clock time alone, with no delivered tick and no poll, must not \
+             produce a frame"
+        );
+
+        // Resume: the feed starts delivering ticks again.
+        for _ in 0..3 {
+            manual.advance(Duration::from_millis(16));
+            clock.record_compositor_tick(manual.now());
+            clock.mark_demand(DemandKind::Dirty);
+            assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+        }
+        assert_eq!(clock.produced_count(), 13);
+    }
+
+    // ----------------------------------------------------------------
+    // `clear_demand` disarming the actuator latch -- the
+    // caller-contract gap `try_arm_redraw_request`'s own doc names: a
+    // mark-then-settle-without-a-poll sequence must not permanently
+    // strand a later, genuinely new mark.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn clear_demand_emptying_the_mask_disarms_the_latch() {
+        let (clock, _manual) = manual();
+        clock.mark_demand(DemandKind::Animation);
+        assert!(
+            clock.try_arm_redraw_request(),
+            "the first mark arms the latch"
+        );
+
+        // Settled away with no intervening poll -- the only path that
+        // could otherwise leave the latch stranded.
+        clock.clear_demand(DemandKind::Animation);
+        assert!(
+            clock.demand_mask().is_empty(),
+            "sanity: the mask is genuinely empty after clearing the only marked kind"
+        );
+
+        // A later, genuinely new demand must be able to arm a fresh
+        // request -- this is exactly what would fail if `clear_demand`
+        // left the latch armed from the settled-away demand.
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(
+            clock.try_arm_redraw_request(),
+            "a fresh mark after the mask emptied via clear_demand (not via poll) must still \
+             be able to arm a new request -- clear_demand must disarm the stale latch"
+        );
+    }
+
+    #[test]
+    fn clear_demand_leaving_the_mask_nonempty_does_not_disturb_the_latch() {
+        let (clock, _manual) = manual();
+        clock.mark_demand(DemandKind::Animation);
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(clock.try_arm_redraw_request());
+
+        // Clears only ONE of the two marked kinds -- the mask stays
+        // nonempty, so the already-armed latch must stay armed (a pending
+        // request is still genuinely pending).
+        clock.clear_demand(DemandKind::Animation);
+        assert!(!clock.demand_mask().is_empty());
+        assert!(
+            !clock.try_arm_redraw_request(),
+            "clearing one of two demand kinds, with the mask still nonempty, must not \
+             re-arm an already-pending request"
+        );
     }
 }
