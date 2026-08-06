@@ -6727,4 +6727,244 @@ mod tests {
             );
         }
     }
+
+    /// Issue #556 PR-C1's own red-exploits: the segment gate's poll-decision
+    /// equivalence table, the close-mid-animation probe, and the §15
+    /// zero-produce (demand-driven idle) invariant. Distinct from
+    /// `frame_pipeline_and_vsync` (which pins the PRE-EXISTING deferral/vsync
+    /// behavior unedited) — these are the NEW clock-level guarantees this
+    /// slice adds.
+    mod frame_clock_segment_gate {
+        use super::*;
+
+        fn table_constraints() -> BoxConstraints {
+            BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+        }
+
+        /// END-STATE INVARIANT (issue #556 §2/§9-PR-C1): at N=1 -- a clock
+        /// that is never hidden, never backpressured, and deferred only by
+        /// an explicit `defer_first_frame` (unexercised here) -- the segment
+        /// gate's decision (`clock.poll`, fed `Dirty` demand from
+        /// `take_redraw_pending() || has_pending_work()`) is equivalent to
+        /// that same union read directly, the predicate it replaces, over
+        /// every reachable combination of the two inputs:
+        ///
+        /// | woken | pending build | segment runs |
+        /// |-------|---------------|---------------|
+        /// | false | false         | false         |
+        /// | true  | false         | true          |
+        /// | false | true          | true          |
+        /// | true  | true          | true          |
+        #[test]
+        fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table() {
+            for (case, woken, attach_root, expect_segment_runs) in [
+                ("neither", false, false, false),
+                ("woken_only", true, false, true),
+                ("pending_work_only", false, true, true),
+                ("both", true, true, true),
+            ] {
+                let realm = UiRealm::for_test();
+                if attach_root {
+                    realm
+                        .enter(|realm| {
+                            realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
+                        })
+                        .expect("attach succeeds");
+                }
+                // `attach_root_widget` itself calls `request_redraw()`,
+                // which marks the wake bit too -- normalize it to exactly
+                // this case's own `woken` input so the two axes stay
+                // independent, rather than whatever attaching happened to
+                // leave behind.
+                let _ = realm.presentations.primary().take_redraw_pending();
+                if woken {
+                    realm.presentations.primary().mark_redraw_pending();
+                }
+
+                let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+
+                assert_eq!(
+                    realm.presentations.primary().flush_count() == 1,
+                    expect_segment_runs,
+                    "case {case}: woken={woken} attach_root={attach_root} -- whether the \
+                     segment ran must equal woken || has_pending_work"
+                );
+            }
+        }
+
+        /// Companion: with nothing dirty a second pump must not re-run the
+        /// segment either (the table's `false/false` row still holds after
+        /// a settled first frame, not just from a fresh realm).
+        #[test]
+        fn a_settled_presentation_stays_at_zero_flushes_across_repeated_idle_pumps() {
+            let realm = UiRealm::for_test();
+            for _ in 0..5 {
+                let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            }
+            assert_eq!(realm.presentations.primary().flush_count(), 0);
+        }
+
+        /// Close-mid-animation probe (issue #556 §2): a presentation closing
+        /// while a controller registered on ITS OWN `Vsync` is still running
+        /// must not panic, must stop ticking that controller immediately
+        /// (its registry dies with the presentation), and must leave a
+        /// SIBLING presentation's own clock producing exactly as before.
+        #[test]
+        fn closing_a_presentation_mid_animation_stops_its_ticks_without_panicking_or_touching_the_sibling()
+         {
+            use std::time::Duration;
+
+            use flui_animation::{Animation, AnimationController};
+
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+
+            let controller = AnimationController::new(
+                Duration::from_millis(200),
+                &flui_scheduler::UpdateScheduler::new(),
+            );
+            {
+                let b = realm.presentations.get(b_id).expect("B installed");
+                b.vsync().register(controller.clone());
+            }
+            controller.forward().expect("fresh controller forwards");
+
+            realm.set_now_secs_for_test(0.0);
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            realm.set_now_secs_for_test(0.05);
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            let value_before_close = controller.value();
+            assert!(
+                value_before_close > 0.0,
+                "sanity: the controller must have advanced before B closes"
+            );
+
+            // A produces independently of B -- establish the baseline this
+            // probe checks survives B's teardown.
+            let a = realm.presentations.get(a_id).expect("A installed");
+            a.mark_redraw_pending();
+            let a_produced_before = a.clock().produced_count();
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert!(
+                realm
+                    .presentations
+                    .get(a_id)
+                    .expect("A installed")
+                    .clock()
+                    .produced_count()
+                    > a_produced_before,
+                "sanity: A's own clock must produce independently of B before the close"
+            );
+
+            assert!(
+                realm.close_presentation_entered(b_id),
+                "B must have been installed and removable -- no panic reaching this line \
+                 is itself part of the probe"
+            );
+
+            // B is gone from the forest; nothing ticks its controller
+            // further, no matter how far the virtual clock advances.
+            realm.set_now_secs_for_test(0.5);
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert_eq!(
+                controller.value(),
+                value_before_close,
+                "B's own Vsync registry died with its presentation -- the controller must \
+                 not be ticked any further, not even to completion"
+            );
+
+            // A's own clock is unaffected by B's teardown.
+            let a = realm.presentations.get(a_id).expect("A installed");
+            a.mark_redraw_pending();
+            let a_produced_before_second = a.clock().produced_count();
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert!(
+                realm
+                    .presentations
+                    .get(a_id)
+                    .expect("A installed")
+                    .clock()
+                    .produced_count()
+                    > a_produced_before_second,
+                "A's own clock must keep producing normally after B's presentation closes"
+            );
+
+            controller.dispose();
+        }
+
+        /// END-STATE INVARIANT (issue #556 §15, C1 half): with an empty
+        /// demand mask and no gating, `poll` returns `Skip(NoDemand)` every
+        /// pump and the segment never runs -- zero produces, zero pipeline
+        /// flushes -- no matter how many times the realm is pumped for
+        /// purely logical reasons (no attach, no redraw request, nothing
+        /// ever dirtied).
+        #[test]
+        fn an_idle_presentation_produces_and_flushes_exactly_zero_over_many_pumps() {
+            let realm = UiRealm::for_test();
+
+            for pump in 0..50 {
+                realm.set_now_secs_for_test(f64::from(pump) * 0.016);
+                let outcome = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+                assert!(
+                    matches!(outcome, FramePaintOutcome::Idle),
+                    "pump {pump}: an idle presentation must never produce anything but Idle"
+                );
+            }
+
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                0,
+                "an idle presentation's clock must grant zero produces over any number of pumps"
+            );
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                0,
+                "an idle presentation's segment must never run -- zero pipeline flushes"
+            );
+        }
+
+        /// The instant-response half of the same invariant: after an idle
+        /// stretch with a settled tree, dirtying the root render node
+        /// produces exactly one frame on the very next pump -- kills
+        /// "wake-to-first-frame costs an extra pump".
+        #[test]
+        fn a_single_dirty_mark_after_an_idle_stretch_produces_on_the_very_next_pump() {
+            let realm = UiRealm::for_test();
+            realm
+                .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+                .expect("attach succeeds");
+            // Settle: the attach itself is one produce: the FIRST pump below
+            // paints it, and every pump after that finds the tree quiescent.
+            for pump in 0..20 {
+                realm.set_now_secs_for_test(f64::from(pump) * 0.016);
+                let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            }
+            let produced_while_settled = realm.presentations.primary().clock().produced_count();
+            assert_eq!(
+                produced_while_settled, 1,
+                "sanity: exactly the attach's own first paint, then genuinely idle"
+            );
+
+            // Dirty the root render node directly (the same real signal
+            // `has_pending_work` reads), then pump exactly once more.
+            realm.presentations.primary().pipeline().with_mut(|owner| {
+                if let Some(root_id) = owner.root_id() {
+                    owner.mark_needs_paint(root_id);
+                }
+            });
+            let outcome = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+
+            assert!(
+                matches!(outcome, FramePaintOutcome::Painted(_)),
+                "the very next pump after the dirty mark must produce a painted frame, \
+                 not merely go dirty and wait"
+            );
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                produced_while_settled + 1,
+                "exactly one additional produce -- no wake-to-first-frame delay"
+            );
+        }
+    }
 }
