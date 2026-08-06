@@ -687,16 +687,42 @@ otherwise-silent controller, by design, matching Flutter's own \
 now edge-triggered: `FrameClock::try_arm_redraw_request` is a test-and-set \
 latch (armed by the first demand mark after an empty mask, consumed by \
 the next granted `poll` produce, and also disarmed by `clear_demand` when \
-it empties the mask outside a produce) that `draw_frame_entered`'s \
-continuation check consults before calling `UiRealm::wake_frame()`, so N \
-ticks that land before a produce clears the mask (GPU backpressure, a \
-throttle window) collapse into exactly one platform-facing wake instead \
-of one per tick. Honest limitation: a `poll` that skips for `Hidden` or \
-`Backpressure` retains the latch un-disarmed, and the wake edges that \
-would resolve that (an unhide, a raster retire) belong to the two named \
-gaps above and do not exist yet -- dormant today because neither gap is \
-wired into production, but a liveness dependency the day either is, \
-ahead of its own wake edge. `FrameClock::record_compositor_tick` is the \
+it empties the mask outside a produce) that `UiRealm::render_frame_entered` \
+consults before calling `UiRealm::wake_frame()`, so N ticks that land \
+before a produce clears the mask (GPU backpressure, a throttle window) \
+collapse into exactly one platform-facing wake instead of one per tick. \
+\
+**Continuation-wake placement (a real, probe-confirmed production stall, \
+not a hypothetical):** the continuation check runs in \
+`render_frame_entered`, AFTER `mark_rendered()`/the retry check, NOT \
+inside `draw_frame_entered`'s vsync loop where an earlier version of this \
+same driver-loop work placed it. `mark_rendered()` unconditionally clears \
+`needs_redraw` to `false`; a `wake_frame()` call made earlier in the SAME \
+callback (inside `draw_frame_entered`) gets silently clobbered by that \
+clear before the callback returns. On the real desktop path, where the \
+NEXT platform callback's own dirty gate (`wake_action`, `runner.rs`) reads \
+`needs_redraw()`/`has_pending_work()` fresh -- neither of which a bare \
+running controller with no other tree-visible effect keeps true -- that \
+clobber silently stalled the controller after its anchor frame: reproduced \
+with a production-sequence probe driving the exact `record_compositor_tick` \
+-> `wake_action` -> `render_frame_entered` sequence `bootstrap_desktop`'s \
+closure uses (`crates/flui-app/src/app/runner.rs`'s \
+`a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate`, \
+which showed 1 render then 39 consecutive skips out of 40 simulated \
+callbacks, final animation value stuck at 0, before the fix; every \
+pre-existing pinned test called `draw_frame_entered` directly and so never \
+exercised `wake_action` at all, which is why none of them caught this). \
+Fixed by moving the continuation check to run after `mark_rendered()`, \
+marking a fresh `Animation` demand there specifically so \
+`try_arm_redraw_request` has something nonempty to arm (this pump's own \
+mask was already cleared by the produce that just ran) -- a genuinely \
+different concern from the before-tick mark in `draw_frame_entered`, which \
+still feeds only THIS pump's own segment. One observable consequence of \
+the move, pinned rather than left implicit: the SAME callback that frees \
+backpressure capacity and produces now also re-arms and wakes again in \
+that same callback (the check runs after `poll()` already reset the \
+latch), where it previously waited for a separate, later callback. \
+`FrameClock::record_compositor_tick` is the \
 companion pacing-feedback method: `flui-app`'s desktop frame-request \
 callback (`bootstrap_desktop`'s `window.on_request_frame` closure, fired \
 by every backend's routed `RedrawRequested` -- compositor-paced on \
@@ -750,6 +776,7 @@ evidence = [
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn record_compositor_tick_alone_marks_no_demand_and_never_produces" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_presentation_stays_idle_through_the_production_call_sequence_with_compositor_ticks" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn clear_demand_emptying_the_mask_disarms_the_latch" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate" },
 ]
 
 [[contract]]

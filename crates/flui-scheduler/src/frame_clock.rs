@@ -21,7 +21,7 @@
 //! knobs exist so that owner has somewhere to report backpressure, not so
 //! this clock reaches into a GPU queue itself.
 //!
-//! # The driver-loop hybrid (issue #556)
+//! # The driver-loop hybrid
 //!
 //! Two distinct signals exist, and this clock keeps them separate rather
 //! than conflating them. The demand mask ([`DemandMask`]) is the ONLY
@@ -218,7 +218,7 @@ pub enum ClockSource {
     Manual(ManualClock),
 }
 
-/// The per-presentation physical-time policy state machine (issue #556).
+/// The per-presentation physical-time policy state machine.
 ///
 /// Pure and platform-free: it owns no window, no GPU handle, no element
 /// tree, and runs no callback — it only tracks demand and three produce
@@ -379,7 +379,7 @@ impl FrameClock {
     // Actuator edge — the platform-facing `request_redraw()` poke a caller
     // makes in response to demand, coalesced against this clock's own
     // mask so N marks between two produces collapse into exactly one
-    // poke (issue #556's driver-loop hybrid).
+    // poke.
     // ------------------------------------------------------------------
 
     /// Test-and-set: returns `true` at most once per pending demand mask —
@@ -445,12 +445,12 @@ impl FrameClock {
     // backends (see `record_compositor_tick`'s own doc for why marking
     // `DemandKind::Host` here was tried and reverted), so it cannot be
     // allowed to be sufficient demand on its own without making the
-    // demand-mask gate — the entire point of this clock, and of #556 —
+    // demand-mask gate — the entire point of this clock —
     // inert on every platform that calls it.
     // ------------------------------------------------------------------
 
     /// Records that a compositor/platform-paced tick arrived at `now` —
-    /// the pacing-feedback half of issue #556's driver-loop hybrid.
+    /// the pacing-feedback half of the driver-loop hybrid.
     /// Updates [`last_compositor_tick_interval`](Self::last_compositor_tick_interval)
     /// from the previous recorded tick (if any). Marks NO demand: an
     /// earlier version of this method also marked `DemandKind::Host`
@@ -1261,9 +1261,9 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // `try_arm_redraw_request` — the driver-loop hybrid's actuator edge
-    // (issue #556). Anti-vacuous: an empty/hidden clock never arms,
-    // one arm per pending mask, re-armed only after a genuine produce.
+    // `try_arm_redraw_request` — the driver-loop hybrid's actuator edge.
+    // Anti-vacuous: an empty/hidden clock never arms, one arm per pending
+    // mask, re-armed only after a genuine produce.
     // ----------------------------------------------------------------
 
     #[test]
@@ -1354,7 +1354,7 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // `record_compositor_tick` — pacing feedback (issue #556).
+    // `record_compositor_tick` — pacing feedback.
     // ----------------------------------------------------------------
 
     /// The demand-mask gate's own load-bearing regression test: a
@@ -1536,7 +1536,7 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // `clear_demand` disarming the actuator latch (issue #556) -- the
+    // `clear_demand` disarming the actuator latch -- the
     // caller-contract gap `try_arm_redraw_request`'s own doc names: a
     // mark-then-settle-without-a-poll sequence must not permanently
     // strand a later, genuinely new mark.

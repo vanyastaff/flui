@@ -6221,6 +6221,136 @@ mod desktop_pacing_tests {
              capped) — a busy-spin without it would rack up orders of magnitude more",
         );
     }
+
+    /// Reviewer probe (issue #556): does a running controller with no other
+    /// tree-visible effect survive `on_request_frame`'s OWN dirty gate
+    /// across many platform callbacks, or does it stall after its anchor
+    /// frame?
+    ///
+    /// The question this settles: `draw_frame_entered`'s vsync-continuation
+    /// loop calls `wake_frame()` — which sets `needs_redraw = true` — BEFORE
+    /// the segment that renders the frame; `render_frame_entered`'s own
+    /// tail then calls `mark_rendered()` — which sets `needs_redraw =
+    /// false` — once that render succeeds with no retry needed. Both run
+    /// inside the SAME production callback, so `needs_redraw` reads `false`
+    /// again by the time this callback returns. The open question was
+    /// whether `wake_action`'s dirty check on the NEXT callback (computed
+    /// from `needs_redraw()`/`has_pending_work()`, sampled BEFORE
+    /// `draw_frame_entered` ever runs, i.e. before the controller gets a
+    /// chance to tick again and re-mark demand) would read `Skip` and never
+    /// call `draw_frame_entered` at all — silently stalling the controller
+    /// after one frame, forever, in production.
+    ///
+    /// This is deliberately the exact sequence `bootstrap_desktop`'s
+    /// `on_request_frame` closure runs, minus the owner-inbox drain (this
+    /// probe has nothing in the inbox) and the actual GPU/platform calls
+    /// (`record_compositor_tick` -> the `dirty`/`wake_action` gate ->
+    /// `render_frame_entered` -> repeat), not `draw_frame_entered` called
+    /// directly the way the segment-gate unit tests do — a direct call
+    /// bypasses the exact gate this probe exists to settle.
+    #[test]
+    fn a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate()
+     {
+        use flui_animation::{Animation, AnimationController, AnimationStatus};
+        use flui_engine::{EngineError, RasterBackend};
+        use flui_layer::Scene;
+
+        struct AlwaysPresentsProbeBackend;
+
+        impl RasterBackend for AlwaysPresentsProbeBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        let controller = AnimationController::new(
+            Duration::from_millis(100),
+            &flui_scheduler::UpdateScheduler::new(),
+        );
+        realm.vsync().register(controller.clone());
+        controller.forward().expect("fresh controller forwards");
+        // The anchor: starting a controller does not itself wake anything
+        // (`AnimationController::forward`/`Vsync::register` are pure
+        // state mutations with no coupling to a realm's wake capability —
+        // confirmed by reading both, neither calls anything wake-shaped).
+        // In production SOMETHING external always establishes the first
+        // wake before a freshly-started controller's own continuation
+        // logic can keep the loop going (the gesture/build code path that
+        // called `.forward()` in the first place almost always also
+        // dirties the tree or explicitly redraws) — simulated here as one
+        // `request_redraw()` call, the same flag `wake_action`'s dirty
+        // check reads, without needing a real platform window to poke.
+        realm.request_redraw();
+
+        let mut backend = AlwaysPresentsProbeBackend;
+        let mut now = Instant::now();
+        let mut render_calls = 0u32;
+        let mut skip_calls = 0u32;
+
+        // 40 simulated platform callbacks at ~16ms apart -- comfortably
+        // past the controller's 100ms duration, so a genuine stall shows
+        // up as `status() != Completed` at the end, not just a slow test.
+        for callback in 0..40u32 {
+            now += Duration::from_millis(16);
+            realm.set_now_secs_for_test(f64::from(callback) * 0.016);
+
+            // Exactly what `bootstrap_desktop`'s closure does, in order:
+            // record the compositor tick first (pacing feedback only, marks
+            // no demand -- see `FrameClock::record_compositor_tick`'s own
+            // doc), THEN read the dirty gate `wake_action` decides from.
+            realm.record_compositor_tick(now);
+            let dirty = realm.needs_redraw() || realm.has_pending_work();
+            match wake_action(
+                realm.scheduler().frames_enabled(),
+                dirty,
+                realm.scheduler().is_frame_scheduled(),
+            ) {
+                WakeAction::Skip => {
+                    skip_calls += 1;
+                    continue;
+                }
+                WakeAction::PumpAsync => panic!(
+                    "frames must stay enabled for this probe -- a PumpAsync wake would mean \
+                     something else broke lifecycle state, not the property under test"
+                ),
+                WakeAction::Render => {}
+            }
+            let _presented = realm.render_frame_entered(&mut backend);
+            render_calls += 1;
+        }
+
+        assert_eq!(
+            controller.status(),
+            AnimationStatus::Completed,
+            "a running controller with no other dirty state must reach completion across \
+             real platform callbacks gated by wake_action -- {render_calls} renders, \
+             {skip_calls} skips out of 40 callbacks, final value={}",
+            controller.value()
+        );
+        assert!(
+            render_calls > 1,
+            "sanity: completion in exactly one render would not distinguish this from a \
+             single-anchor-frame stall followed by the loop simply running out of callbacks"
+        );
+
+        controller.dispose();
+    }
 }
 
 #[cfg(all(
@@ -6497,11 +6627,12 @@ where
         // feedback is about observing the PLATFORM's own delivery timing,
         // independent of whether this particular delivery ends up idle.
         // `now` is read ONCE here and reused ~60 lines below at this
-        // closure's `drive_frame_with_lane(now, ...)` call (search this
-        // function for "reused below, not a fresh read" to find it) — this
-        // pump's pacing-feedback sample and its own frame-drive instant
-        // must agree, the same single-`now`-per-pump discipline every
-        // other call site in this closure already follows.
+        // closure's `drive_frame_with_lane(now, ...)` call, past the
+        // `wake_action` match below (that later call site's own comment
+        // points back to this one) — this pump's pacing-feedback sample
+        // and its own frame-drive instant must agree, the same
+        // single-`now`-per-pump discipline every other call site in this
+        // closure already follows.
             let now = web_time::Instant::now();
             realm.record_compositor_tick(now);
 
@@ -6560,9 +6691,10 @@ where
                 WakeAction::Render => {}
             }
 
-        // `now` here is reused below, not a fresh read -- it is the SAME
-        // instant already recorded into `record_compositor_tick` near the
-        // top of this closure (see the comment at its `let now` binding).
+        // The `now` used below is the SAME instant bound near the top of
+        // this closure and already recorded into `record_compositor_tick`
+        // there (see the comment at that earlier `let now` binding) --
+        // reused here, not re-read fresh.
         // UpdateScheduler callbacks (animations). NOTE: the global `UpdateScheduler` is driven
         // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
         // (`UiRealm::draw_frame`) ticks off the realm's own `start` origin —

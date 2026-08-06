@@ -1289,7 +1289,7 @@ impl UiRealm {
     /// last running controller, on any presentation, completes.
     ///
     /// Moved from this realm's own `vsync_slot` to per-presentation storage
-    /// (issue #556: each surface paces its own animations independently)
+    /// (each surface paces its own animations independently)
     /// — this forwarder to `self.presentations.primary()` keeps every
     /// existing single-presentation caller and test unchanged; a genuine
     /// multi-presentation caller reads
@@ -1812,35 +1812,29 @@ impl UiRealm {
         let now = self.now_secs();
         for presentation in self.presentations.iter() {
             let vsync = presentation.vsync();
-            // TWO deliberately different samples of `has_running`, for two
-            // deliberately different questions — not an accident of
-            // ordering, and not interchangeable:
+            // Sampled BEFORE `tick_all`, not after: the tick that completes
+            // a controller still delivers that controller's final value and
+            // status change (`.flutter/packages/flutter/lib/src/scheduler/
+            // ticker.dart:272-285`'s `_tick` calls `_onTick` unconditionally,
+            // THEN checks whether to schedule another one), so a controller
+            // that WAS running when this tick started must still mark
+            // demand for THIS exact pump even though it may have just
+            // settled -- the identical before/after-tick question
+            // `flui-testing`'s own `pump_presentation` had to fix (see its
+            // doc), just never wired at this layer before this slice.
             //
-            // 1. `was_running`, sampled BEFORE `tick_all`, answers "does
-            //    THIS pump's own segment need to run": the tick that
-            //    completes a controller still delivers that controller's
-            //    final value and status change
-            //    (`.flutter/packages/flutter/lib/src/scheduler/ticker.dart:
-            //    272-285`'s `_tick` calls `_onTick` unconditionally, THEN
-            //    checks whether to schedule another one), so a controller
-            //    that WAS running when this tick started must still mark
-            //    demand for this exact pump even though it may have just
-            //    settled -- the identical before/after-tick question
-            //    `flui-testing`'s own `pump_presentation` had to fix (see
-            //    its doc), just never wired at this layer before this
-            //    slice.
-            // 2. `vsync.has_running()`, sampled AFTER `tick_all` (below),
-            //    answers a DIFFERENT question: "does the NEXT pump need to
-            //    be scheduled" -- Flutter's own `shouldScheduleTick`,
-            //    checked after `_onTick`, which is why it is unchanged from
-            //    before this slice.
-            //
-            // Using the same sample for both would be wrong in both
-            // directions: sampling only before would keep requesting a
-            // next pump one tick after the controller has already settled;
-            // sampling only after would silently drop the completing
-            // tick's own flush (the exact bug this before-sample exists to
-            // avoid).
+            // The "does the NEXT pump need to be scheduled" question
+            // (Flutter's own `shouldScheduleTick`, sampled AFTER the tick)
+            // is answered separately, in `render_frame_entered`, AFTER the
+            // segment this demand mark feeds has actually rendered and
+            // `mark_rendered()`/the retry check has run -- NOT here. See
+            // that method's own comment for why: raising the continuation
+            // wake here, before this same pump's `mark_rendered()` clears
+            // `needs_redraw`, silently clobbers it within the SAME
+            // callback -- a real, probe-confirmed stall (not hypothetical)
+            // for a controller with no other tree-visible effect, since
+            // nothing else keeps `needs_redraw`/`has_pending_work()` true
+            // once that clobber happens.
             let was_running = vsync.has_running();
             vsync.tick_all(now);
 
@@ -1853,29 +1847,6 @@ impl UiRealm {
                 // state to also be present. This closes a gap the previous
                 // slice on this issue explicitly named and deferred.
                 presentation.clock().mark_demand(DemandKind::Animation);
-            }
-
-            // PINNED INVARIANT: a running controller keeps the runner gate
-            // open for its own next pump, sampled directly (not merely
-            // inferred from the two conditions below) at an anchor pump
-            // and again mid-run, then asserted CLOSED once the controller
-            // settles -- see `vsync_continuation_keeps_gate_open_while_
-            // running_and_closes_on_settle` (`frame_pipeline_and_vsync`
-            // below). `has_running()` here (AFTER the tick -- see the
-            // comment above) is Flutter's own `shouldScheduleTick` signal:
-            // still running means the gate must stay open regardless of
-            // this presentation's own demand-mask state.
-            //
-            // The platform poke itself is edge-triggered against that
-            // demand mask (`FrameClock::try_arm_redraw_request`), so
-            // several ticks that land before a produce clears it
-            // (backpressure, a throttle window) collapse into exactly one
-            // platform-facing wake instead of one per tick -- this is why
-            // `wake_frame()` now rides BOTH the clock's mask state and this
-            // latch, not `has_running()` alone the way it did before this
-            // slice.
-            if vsync.has_running() && presentation.clock().try_arm_redraw_request() {
-                self.wake_frame();
             }
 
             presentation.gestures().tick_deadlines();
@@ -2142,6 +2113,48 @@ impl UiRealm {
             self.wake_frame();
         } else {
             self.mark_rendered();
+        }
+
+        // Animation continuation wake — deliberately placed AFTER
+        // `mark_rendered()`/the retry check above, not inside
+        // `draw_frame_entered`'s vsync loop where an earlier version of
+        // this method raised it. Reason, found by a production-sequence
+        // probe rather than assumed:
+        // `draw_frame_entered`'s own tick already ran (this method called
+        // it above), so `presentation.vsync().has_running()` here reads
+        // the SAME post-tick state Flutter's own `shouldScheduleTick`
+        // reads — but `mark_rendered()` unconditionally clears
+        // `needs_redraw` to `false`, and a `wake_frame()` call made BEFORE
+        // that point (inside `draw_frame_entered`) gets silently clobbered
+        // within this SAME callback. On the real desktop path, where the
+        // next platform callback's own dirty gate (`wake_action`, in
+        // `runner.rs`) reads `needs_redraw()`/`has_pending_work()` fresh —
+        // neither of which a bare running controller with no other
+        // tree-visible effect keeps true — that clobber is a genuine,
+        // silent stall: the controller never receives another tick after
+        // its anchor frame. Confirmed red before this fix, green after, by
+        // `runner.rs`'s
+        // `a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate`,
+        // which drives the exact `record_compositor_tick` -> dirty-gate ->
+        // `render_frame_entered` sequence `bootstrap_desktop`'s closure
+        // uses, not `draw_frame_entered` called directly (which never
+        // exercises `wake_action` at all and could not have caught this).
+        //
+        // Marks a fresh `Animation` demand here (this pump's own mask was
+        // already cleared by the produce above) specifically so
+        // `try_arm_redraw_request` has something nonempty to arm — this is
+        // demand for the NEXT pump, a different concern from the
+        // before-tick mark in `draw_frame_entered` that feeds THIS pump's
+        // own segment. Still edge-triggered (coalesces repeated callbacks
+        // under backpressure into one wake, same as before this move) —
+        // only the ordering relative to `mark_rendered()` changed.
+        for presentation in self.presentations.iter() {
+            if presentation.vsync().has_running() {
+                presentation.clock().mark_demand(DemandKind::Animation);
+                if presentation.clock().try_arm_redraw_request() {
+                    self.wake_frame();
+                }
+            }
         }
 
         presented
@@ -4664,6 +4677,19 @@ mod tests {
         /// registered in the realm's Vsync must keep the runner gate
         /// schedulable across every mid-animation frame, and the gate must
         /// go idle once the controller completes.
+        ///
+        /// Drives `render_frame_entered` (a fresh `ScriptedRasterBackend`
+        /// per call, since it is single-shot), not the bare `draw_frame`
+        /// this test used before — the continuation wake this test pins is
+        /// now raised in `render_frame_entered`, AFTER `mark_rendered()`
+        /// runs, not inside `draw_frame_entered` (a reviewer
+        /// probe found that raising it before `mark_rendered()` let the
+        /// SAME callback's own `mark_rendered()` clobber it, silently
+        /// stalling a controller with no other tree-visible effect on the
+        /// real desktop path — see `render_frame_entered`'s own comment).
+        /// `draw_frame` alone no longer implies a continuation wake by
+        /// design; only `render_frame_entered` does, matching what
+        /// production always actually calls.
         #[test]
         fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle() {
             use flui_animation::{Animation, AnimationStatus};
@@ -4675,11 +4701,25 @@ mod tests {
             vsync.register(controller.clone());
             controller.forward().expect("fresh controller forwards");
 
-            let constraints = test_constraints();
-
             realm.set_now_secs_for_test(0.0);
             realm.mark_rendered();
-            let _ = realm.draw_frame(constraints);
+            let mut backend = ScriptedRasterBackend::new(Ok(true));
+            let _ = realm.render_frame_entered(&mut backend);
+            // `needs_redraw()` is what actually carries this assertion in
+            // this test, not `has_pending_work()`: no widget is attached
+            // (a pure-animation scenario, matching this test's own point —
+            // the controller alone keeps the gate open), so nothing ever
+            // dirties the pipeline and `has_pending_work()` reads `false`
+            // for the entire test (checked directly, not assumed).
+            // `needs_redraw()` is `true` here because `render_frame_entered`'s
+            // post-`mark_rendered()` continuation-wake step (see that
+            // method's own comment) called `wake_frame()` for this still-
+            // running controller. The `||` stays as the real production
+            // predicate this test also exercises through the FrameClock
+            // segment gate (`has_pending_work()` DOES carry other tests,
+            // e.g. any widget-driven dirty state) — kept here for parity
+            // with that predicate, not because this specific scenario
+            // needs it.
             assert!(
                 realm.needs_redraw() || realm.has_pending_work(),
                 "V1: the runner gate must be open after an anchor frame",
@@ -4687,7 +4727,8 @@ mod tests {
 
             realm.set_now_secs_for_test(0.05);
             realm.mark_rendered();
-            let _ = realm.draw_frame(constraints);
+            let mut backend = ScriptedRasterBackend::new(Ok(true));
+            let _ = realm.render_frame_entered(&mut backend);
             assert!(
                 realm.needs_redraw() || realm.has_pending_work(),
                 "V1: runner gate must remain open at t=0.05s",
@@ -4700,7 +4741,8 @@ mod tests {
 
             realm.set_now_secs_for_test(0.20);
             realm.mark_rendered();
-            let _ = realm.draw_frame(constraints);
+            let mut backend = ScriptedRasterBackend::new(Ok(true));
+            let _ = realm.render_frame_entered(&mut backend);
             assert_eq!(controller.status(), AnimationStatus::Completed);
 
             assert!(
@@ -5136,7 +5178,7 @@ mod tests {
         }
 
         #[test]
-        // The panic message changed with issue #556's migration from
+        // The panic message changed with the migration from
         // `RenderingFlutterBinding`'s own counter to `FrameClock::lift` --
         // same caller-contract panic, new mechanism's own wording.
         #[should_panic(expected = "FrameClock::lift called without a matching defer")]
@@ -6866,7 +6908,7 @@ mod tests {
         }
     }
 
-    /// Issue #556's own red-exploits: the segment gate's poll-decision
+    /// This module's own red-exploits: the segment gate's poll-decision
     /// equivalence table, the close-mid-animation probe, and the
     /// zero-produce (demand-driven idle) invariant. Distinct from
     /// `frame_pipeline_and_vsync` (which pins the PRE-EXISTING deferral/vsync
@@ -6917,7 +6959,7 @@ mod tests {
             }
         }
 
-        /// END-STATE INVARIANT (issue #556): at N=1 -- a clock that is
+        /// END-STATE INVARIANT: at N=1 -- a clock that is
         /// never hidden and never backpressured -- the segment gate's
         /// decision (`clock.poll().should_run_segment()`, fed `Dirty`
         /// demand from `take_redraw_pending() || has_pending_work()`) is
@@ -7088,7 +7130,7 @@ mod tests {
             );
         }
 
-        /// Close-mid-animation probe (issue #556): a presentation closing
+        /// Close-mid-animation probe: a presentation closing
         /// while a controller registered on ITS OWN `Vsync` is still running
         /// must not panic, must stop ticking that controller immediately
         /// (its registry dies with the presentation), and must leave a
@@ -7177,7 +7219,7 @@ mod tests {
             controller.dispose();
         }
 
-        /// Driver-loop hybrid (issue #556): a running controller with
+        /// Driver-loop hybrid: a running controller with
         /// NO other tree-visible dirty state must still flush the segment
         /// on every tick it's running -- Flutter's own `Ticker`-driven
         /// `scheduleFrame` behavior, where the running ticker alone is
@@ -7222,15 +7264,26 @@ mod tests {
             controller.dispose();
         }
 
-        /// Edge-trigger discipline, end to end (issue #556): N ticks
+        /// Edge-trigger discipline, end to end: N ticks
         /// of a running controller that land while capacity never frees
         /// must collapse into exactly one platform-facing wake, through
-        /// the REAL production call site (`draw_frame_entered`'s
-        /// vsync-continuation loop) — not just
+        /// the REAL production call site — not just
         /// `FrameClock::try_arm_redraw_request` in isolation (see
         /// flui-scheduler's own unit test for that, at the bare-clock
-        /// level). A produce (capacity freed, then one more tick) must
-        /// re-arm it.
+        /// level). A produce (capacity freed) must re-arm it.
+        ///
+        /// Drives `render_frame_entered`, not the bare `draw_frame_entered`
+        /// this test used before: the continuation-wake check now runs
+        /// AFTER `mark_rendered()`, inside `render_frame_entered`, not
+        /// inside `draw_frame_entered`'s vsync loop — see that
+        /// method's own comment for why the move was necessary: raising
+        /// the wake before `mark_rendered()` let the SAME callback silently
+        /// clobber it). One consequence, pinned here rather than left
+        /// implicit: the callback that frees capacity and produces ALSO
+        /// re-arms and wakes again in that SAME callback now (the check
+        /// runs after `poll()` already reset the latch), not on a
+        /// SEPARATE, later callback the way it did when the check ran
+        /// before `poll()`.
         #[test]
         fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm() {
             use std::time::Duration;
@@ -7251,9 +7304,11 @@ mod tests {
             clock.record_submit(); // at capacity for the whole loop below
             wake_count.store(0, Ordering::Relaxed);
 
+            let mut backend = AlwaysPresentBackend;
+
             for tick in 1..=5 {
                 realm.set_now_secs_for_test(0.01 * f64::from(tick));
-                let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+                let _ = realm.render_frame_entered(&mut backend);
             }
             assert_eq!(
                 wake_count.load(Ordering::Relaxed),
@@ -7262,33 +7317,26 @@ mod tests {
                  one platform-facing wake"
             );
 
-            // Free capacity: THIS pump's own segment produces (clearing the
-            // mask and the armed latch), but the wake decision it made
-            // happens BEFORE that same pump's `poll` — so it still observes
-            // the stale armed-from-before latch and correctly wakes zero
-            // additional times here.
+            // Free capacity: THIS SAME callback's `render_frame_entered`
+            // now both produces (`poll()` grants a produce, clearing the
+            // mask and the armed latch) AND re-arms a fresh wake for the
+            // controller's continuation in its own post-render step --
+            // the two are no longer split across two separate callbacks.
             clock.record_retire();
             realm.set_now_secs_for_test(0.10);
-            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
-            assert_eq!(
-                wake_count.load(Ordering::Relaxed),
-                1,
-                "the produce-clearing pump itself needs no fresh wake -- it already ran"
-            );
-
-            // The NEXT tick sees a freshly-cleared mask/latch and re-arms.
-            realm.set_now_secs_for_test(0.11);
-            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            let _ = realm.render_frame_entered(&mut backend);
             assert_eq!(
                 wake_count.load(Ordering::Relaxed),
                 2,
-                "a fresh tick after the produce must wake the platform again"
+                "the produce-and-continue callback re-arms in the SAME callback now that the \
+                 continuation check runs after mark_rendered(), which itself runs after \
+                 poll() already reset the latch"
             );
 
             controller.dispose();
         }
 
-        /// END-STATE INVARIANT (issue #556, the demand-driven-idle headline):
+        /// END-STATE INVARIANT (the demand-driven-idle headline):
         /// with an empty demand mask and no gating, `poll` returns
         /// `Skip(NoDemand)` every pump and the segment never runs -- zero
         /// produces, zero pipeline flushes -- no matter how many times the
@@ -7328,8 +7376,8 @@ mod tests {
         /// `DemandKind::Host` unconditionally, which -- because this
         /// exact sequence runs on every desktop pump -- made `poll`
         /// permanently unable to return `Skip(NoDemand)` there: the
-        /// demand-mask gate, #556's entire point, was inert on the one
-        /// path that matters. This test is what would have caught that;
+        /// demand-mask gate, the entire point of this clock, was inert on
+        /// the one path that matters. This test is what would have caught that;
         /// the test above alone does not, because it never calls
         /// `record_compositor_tick`.
         #[test]
