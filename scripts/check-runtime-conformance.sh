@@ -72,12 +72,19 @@ VALID_CLASSIFICATIONS = {"stable-candidate", "experimental", "transitional", "re
 # dumping ground for anything that lacks a home.
 VALID_DOMAINS = {"application", "realm", "presentation", "raster", "platform", "shared-engine", "workspace"}
 VALID_EVIDENCE_KINDS = {"symbol", "test", "compile-time", "source-gate"}
-# 551-565 is the Runtime.1 epic this registry was created to track. #619 is
-# a genuinely separate, later-numbered follow-up issue (the app-level
-# wall-clock-timeout consumer residual `timer-service-for-frozen-tickers`
-# hands off to once issue #556 itself closes) -- widened rather than
-# creating a second owner-issue range mechanism for one entry.
-OWNER_ISSUE_MIN, OWNER_ISSUE_MAX = 551, 619
+# 551-565 is the Runtime.1 epic this registry was created to track. Widening
+# this range to admit one later-numbered issue would silently admit every
+# number in between too -- a one-element allowlist below names the specific
+# exception instead.
+OWNER_ISSUE_MIN, OWNER_ISSUE_MAX = 551, 565
+
+# Owner issues outside the Runtime.1 epic range above, admitted individually
+# rather than by widening that range (which would silently admit every
+# number in between too). #619 is a genuinely separate, later-numbered
+# follow-up issue the app-level wall-clock-timeout consumer residual
+# `timer-service-for-frozen-tickers` hands off to once issue #556 itself
+# closes.
+OWNER_ISSUE_ALLOWLIST: set[int] = {619}
 
 # Runtime crates covered by the singleton and lock-surface nets.
 RUNTIME_CRATES = ["flui-app", "flui-scheduler", "flui-platform", "flui-engine"]
@@ -114,10 +121,12 @@ def check_owner_issue(entry: dict, label: str, required: bool) -> None:
     issue = entry.get("owner_issue")
     if issue is None:
         if required:
-            fail(f"{label} has no owning issue; partial/planned/transitional work needs exactly one owner in #{OWNER_ISSUE_MIN}-#{OWNER_ISSUE_MAX}")
+            fail(f"{label} has no owning issue; partial/planned/transitional work needs exactly one owner in #{OWNER_ISSUE_MIN}-#{OWNER_ISSUE_MAX} or {sorted(OWNER_ISSUE_ALLOWLIST)}")
         return
-    if isinstance(issue, bool) or not isinstance(issue, int) or not (OWNER_ISSUE_MIN <= issue <= OWNER_ISSUE_MAX):
-        fail(f"{label} declares owner_issue {issue!r}; expected an integer in {OWNER_ISSUE_MIN}-{OWNER_ISSUE_MAX}")
+    in_range = isinstance(issue, int) and not isinstance(issue, bool) and (OWNER_ISSUE_MIN <= issue <= OWNER_ISSUE_MAX)
+    in_allowlist = isinstance(issue, int) and not isinstance(issue, bool) and issue in OWNER_ISSUE_ALLOWLIST
+    if not (in_range or in_allowlist):
+        fail(f"{label} declares owner_issue {issue!r}; expected an integer in {OWNER_ISSUE_MIN}-{OWNER_ISSUE_MAX} or {sorted(OWNER_ISSUE_ALLOWLIST)}")
 
 
 def check_citation(file_value: object, contains_value: object, label: str, *, forbid_docs: bool = False) -> None:
