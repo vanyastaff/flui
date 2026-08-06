@@ -149,7 +149,7 @@ bon = "3.8"
 # DX TOOLING - flui-cli / flui-build / flui-devtools
 indicatif = "0.17" # progress bars (build/cli)
 tempfile = "3"     # scratch dirs/files (build/cli tests)
-which = "7"        # locate toolchain executables (build/cli)
+which = "8"        # locate toolchain executables (build/cli)
 
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros", version = "0.2.0" }
