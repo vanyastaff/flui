@@ -2555,6 +2555,49 @@ mod tests {
     }
 
     #[test]
+    fn a_pump_that_retires_nothing_never_wakes() {
+        // The wake guard is armed only when the pump actually took a frame
+        // (`armed: frame.is_some()`). Arming unconditionally would fire the
+        // hook on every idle pump, turning a poll-driven consumer into a
+        // wake-poll-wake storm — a wake that never quiets is the same defect
+        // shape as a gate that never closes.
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+        let wake_count = Arc::new(AtomicU32::new(0));
+        {
+            let wake_count = Arc::clone(&wake_count);
+            handle.set_wake_hook(Some(Arc::new(move || {
+                wake_count.fetch_add(1, Ordering::SeqCst);
+            })));
+        }
+
+        // Idle pumps: nothing submitted, nothing to retire.
+        for _ in 0..2 {
+            let _ = owner.pump();
+        }
+        // A resize with no frame behind it still retires nothing.
+        handle.resize(64, 64);
+        let _ = owner.pump();
+        assert_eq!(
+            wake_count.load(Ordering::SeqCst),
+            0,
+            "a pump that retires no frame must not wake the consumer"
+        );
+
+        // The hook is live, not merely unreachable: a real retire wakes once.
+        handle
+            .submit(test_frame(FrameEpoch::ZERO.next(), SurfaceGeneration::ZERO))
+            .expect("submit");
+        let _ = owner.pump();
+        assert_eq!(
+            wake_count.load(Ordering::SeqCst),
+            1,
+            "a retiring pump must wake exactly once -- proves the zero above \
+             is the guard staying disarmed, not a dead hook"
+        );
+        drop(owner);
+    }
+
+    #[test]
     fn wake_hook_fires_exactly_once_on_pump_completion_retire() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         let wake_count = Arc::new(AtomicU32::new(0));
