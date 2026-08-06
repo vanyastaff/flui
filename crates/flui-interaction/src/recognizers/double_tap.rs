@@ -552,6 +552,19 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
         self.gesture_state.lock().phase == DoubleTapPhase::WaitingForSecond
     }
 
+    fn next_deadline(&self) -> Option<Instant> {
+        // Same guard as `has_pending_deadline`. The deadline is exactly what
+        // `check_timeout` compares `now` against: `first_tap_time +
+        // double_tap_timeout()`.
+        let state = self.gesture_state.lock();
+        if state.phase != DoubleTapPhase::WaitingForSecond {
+            return None;
+        }
+        state
+            .first_tap_time
+            .map(|first_time| first_time + self.double_tap_timeout())
+    }
+
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
         if let Some(pos) = self.state.initial_position() {
@@ -825,6 +838,43 @@ mod tests {
         arena.poll_deadlines();
         assert!(!recognizer.has_pending_deadline());
         assert!(!arena.has_pending_deadlines());
+    }
+
+    /// `next_deadline` must name the SAME instant `check_timeout`/`poll_deadline`
+    /// actually fire at — a value assertion, not just a `has_pending_deadline`
+    /// presence check (which a stubbed-`Some`-with-wrong-value implementation
+    /// would still pass). Driven off a `ManualClock` so the expected deadline
+    /// is computed with no wall-clock read.
+    #[test]
+    fn next_deadline_names_the_exact_give_up_instant() {
+        let clock = flui_foundation::ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+        let recognizer =
+            DoubleTapGestureRecognizer::new(arena.clone()).with_on_double_tap_cancel(|_| {});
+
+        // No tap yet: nothing armed, agrees with `has_pending_deadline`.
+        assert_eq!(recognizer.next_deadline(), None);
+        assert_eq!(arena.next_deadline(), None);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(px(10.0), px(10.0));
+        let first_tap_time = arena.now();
+        recognizer.add_pointer(pointer, position);
+        recognizer.handle_event(&make_up_event(position, PointerType::Touch));
+
+        let expected = first_tap_time + recognizer.double_tap_timeout();
+        assert_eq!(
+            recognizer.next_deadline(),
+            Some(expected),
+            "the give-up deadline must be exactly first_tap_time + double_tap_timeout"
+        );
+        assert_eq!(arena.next_deadline(), Some(expected));
+
+        // Advance past it and poll: the give-up fires, disarming both.
+        clock.advance(recognizer.double_tap_timeout() + Duration::from_millis(1));
+        arena.poll_deadlines();
+        assert_eq!(recognizer.next_deadline(), None);
+        assert_eq!(arena.next_deadline(), None);
     }
 
     #[test]

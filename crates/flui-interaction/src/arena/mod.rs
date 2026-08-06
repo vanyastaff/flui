@@ -168,6 +168,20 @@ pub trait GestureArenaMember: crate::sealed::arena_member::Sealed {
     fn has_pending_deadline(&self) -> bool {
         false
     }
+
+    /// The absolute instant this member's armed deadline will fire, if any.
+    ///
+    /// A caller scheduling a WALL-CLOCK wake (a platform event loop deciding
+    /// `ControlFlow::WaitUntil` instead of blocking forever) needs more than
+    /// [`has_pending_deadline`](Self::has_pending_deadline)'s boolean — it
+    /// needs to know *when*. Must agree with `has_pending_deadline`: armed
+    /// (`Some`) iff `has_pending_deadline` is `true`. Pure state read, same
+    /// discipline as `has_pending_deadline` — must not invoke user callbacks
+    /// or call back into the arena. The default is `None`; only
+    /// deadline-driven recognizers (long press, double tap) override it.
+    fn next_deadline(&self) -> Option<web_time::Instant> {
+        None
+    }
 }
 
 // ============================================================================
@@ -1532,6 +1546,25 @@ impl GestureArena {
                 .is_none_or(|id| self.deadlines.contains(id))
                 && poll.member.has_pending_deadline()
         })
+    }
+
+    /// The earliest instant any live member's armed deadline will fire, if
+    /// any — the wall-clock-wake counterpart of
+    /// [`has_pending_deadlines`](Self::has_pending_deadlines). A caller
+    /// computing a `ControlFlow::WaitUntil` target reads this instead of the
+    /// boolean so a fully idle-but-armed presentation (nothing dirty, no
+    /// running animation) still wakes at the right instant to resolve the
+    /// deadline, rather than only lazily on the next unrelated event. Same
+    /// snapshot/locking discipline as `has_pending_deadlines`.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.deadline_members_snapshot()
+            .into_iter()
+            .filter(|poll| {
+                poll.registration
+                    .is_none_or(|id| self.deadlines.contains(id))
+            })
+            .filter_map(|poll| poll.member.next_deadline())
+            .min()
     }
 
     /// Get the number of active arenas.

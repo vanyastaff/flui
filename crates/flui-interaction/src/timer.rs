@@ -320,6 +320,30 @@ impl GestureTimerService {
         timers.iter().any(|e| !e.is_cancelled())
     }
 
+    /// The absolute instant the earliest pending (non-cancelled) timer will
+    /// fire, if any — the wall-clock-wake counterpart of
+    /// [`time_until_next`](Self::time_until_next). Peeks the already-sorted
+    /// entry's own deadline directly rather than reading `Instant::now()`
+    /// and adding it back, so this is a pure lookup with no clock read.
+    ///
+    /// **Today's honest scope:** this service has no production caller —
+    /// FLUI's actual long-press/double-tap deadlines run through each
+    /// realm's own gesture arena (`GestureBinding::next_deadline`), never
+    /// through this ambient process-global service (see
+    /// `dropping_realm_a_cannot_wake_realm_b`'s doc in `flui-app`). A
+    /// wall-clock-wake computation that folds this method's answer in
+    /// alongside the arena's is therefore composing with something that
+    /// returns `None` in every production run today — inert but present, so
+    /// an embedder or a future recognizer that *does* schedule through this
+    /// service is honored without a second wiring pass.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        let timers = self.timers.lock();
+        timers
+            .iter()
+            .find(|e| !e.is_cancelled())
+            .map(|e| e.deadline)
+    }
+
     /// Get the number of pending timers.
     pub fn pending_count(&self) -> usize {
         let timers = self.timers.lock();
@@ -530,6 +554,37 @@ mod tests {
         let time = service.time_until_next();
         assert!(time.is_some());
         assert!(time.unwrap() <= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_next_deadline() {
+        let service = GestureTimerService::new();
+
+        // No timers.
+        assert_eq!(service.next_deadline(), None);
+
+        // The earliest-deadline entry's own absolute instant comes back
+        // unchanged — not `now() + duration` recomputed, which a caller
+        // reading this alongside `time_until_next` at a slightly later
+        // instant could observe drift from.
+        let before_schedule = Instant::now();
+        service.schedule(Duration::from_millis(100), || {});
+        let deadline = service.next_deadline().expect("one pending timer");
+        assert!(deadline >= before_schedule + Duration::from_millis(100));
+        assert!(deadline <= Instant::now() + Duration::from_millis(100));
+
+        // A later, farther-out schedule does not move the earliest deadline.
+        service.schedule(Duration::from_secs(10), || {});
+        assert_eq!(
+            service.next_deadline(),
+            Some(deadline),
+            "next_deadline must stay the EARLIEST pending deadline, not the latest scheduled"
+        );
+
+        // Firing the earliest timer advances next_deadline to the remaining one.
+        std::thread::sleep(Duration::from_millis(110));
+        service.check_timers();
+        assert!(service.next_deadline().is_some_and(|d| d > deadline));
     }
 
     #[test]

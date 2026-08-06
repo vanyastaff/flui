@@ -647,6 +647,21 @@ impl GestureArenaMember for LongPressGestureRecognizer {
         state.phase == LongPressPhase::Possible && state.down_time.is_some()
     }
 
+    fn next_deadline(&self) -> Option<Instant> {
+        // Same guard as `has_pending_deadline`: `down_time` is only
+        // meaningful while still `Possible`. The deadline itself is exactly
+        // what `try_fire_timer`/`check_timer` compare `now` against —
+        // `down_time + long_press_duration()` — computed here without
+        // reading the clock, so this stays a pure state read.
+        let state = self.gesture_state.lock();
+        if state.phase != LongPressPhase::Possible {
+            return None;
+        }
+        state
+            .down_time
+            .map(|down_time| down_time + self.long_press_duration())
+    }
+
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
         self.stop_deadline_polling();
@@ -977,6 +992,47 @@ mod tests {
         recognizer.poll_deadline();
         assert!(!recognizer.has_pending_deadline());
         assert!(!arena.has_pending_deadlines());
+    }
+
+    /// `next_deadline` must name the SAME instant `poll_deadline`/`check_timer`
+    /// actually compare against — a value assertion, not just the boolean
+    /// `has_pending_deadline` presence check (which a stubbed-`Some`
+    /// implementation with the wrong value would still pass).
+    #[test]
+    fn next_deadline_names_the_exact_hold_instant() {
+        use std::time::Duration;
+
+        let clock = flui_foundation::ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+        let timeout = Duration::from_millis(500);
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena.clone(),
+            GestureSettings::touch_defaults().with_long_press_timeout(timeout),
+        )
+        .with_on_long_press(|| {});
+
+        // No contact: nothing armed, agrees with `has_pending_deadline`.
+        assert_eq!(recognizer.next_deadline(), None);
+        assert_eq!(arena.next_deadline(), None);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(Pixels(50.0), Pixels(50.0));
+        let down_time = arena.now();
+        recognizer.add_pointer(pointer, position);
+
+        let expected = down_time + timeout;
+        assert_eq!(
+            recognizer.next_deadline(),
+            Some(expected),
+            "the hold deadline must be exactly down_time + long_press_timeout"
+        );
+        assert_eq!(arena.next_deadline(), Some(expected));
+
+        // Cross the deadline and poll: the gesture fires and disarms both.
+        clock.advance(timeout + Duration::from_millis(100));
+        recognizer.poll_deadline();
+        assert_eq!(recognizer.next_deadline(), None);
+        assert_eq!(arena.next_deadline(), None);
     }
 
     #[test]
