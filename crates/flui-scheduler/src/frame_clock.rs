@@ -1636,7 +1636,7 @@ mod tests {
         let step_144 = Duration::from_nanos(1_000_000_000 / 144);
         let span = Duration::from_secs(1);
 
-        let wall_clock_start = std::time::Instant::now();
+        let wall_clock_start = Instant::now();
 
         let mut elapsed = Duration::ZERO;
         let mut ticks = 0u32;
