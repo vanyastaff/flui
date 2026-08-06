@@ -6129,6 +6129,91 @@ mod realm_dispatch_tests {
 // a backgrounded app (`wake_action`), and a frame that ran the pipeline but
 // never reached `present()` (`no_present_fallback_pace`).
 
+/// The sync device-rebuild seam the frame driver needs from its renderer.
+///
+/// [`flui_engine::RasterBackend`] deliberately excludes recovery — it is
+/// async and window-handle-specific (see `flui-engine/src/raster.rs`'s
+/// trait doc) — so the runners narrow the concrete renderer to this seam
+/// instead of widening the public trait. The production impl wraps
+/// `Renderer::recover` in `pollster::block_on`; test fakes script the
+/// outcome. `is_device_lost` is NOT duplicated here — it already lives on
+/// `RasterBackend`, and every consumer bounds on both traits.
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+trait DeviceRecovery {
+    /// Attempt to rebuild the lost device synchronously on the runner
+    /// thread.
+    fn try_recover_device(&mut self) -> Result<(), flui_engine::EngineError>;
+}
+
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+impl DeviceRecovery for flui_engine::wgpu::Renderer {
+    fn try_recover_device(&mut self) -> Result<(), flui_engine::EngineError> {
+        // `pollster` is already a dep and safe to use here — the
+        // desktop/Android runners own synchronous platform callbacks, not
+        // an async executor.
+        pollster::block_on(self.recover())
+    }
+}
+
+/// Attempt to rebuild a lost GPU device on the runner thread, arming a
+/// retry wake in BOTH outcomes — `Ok` so the recovered renderer renders
+/// again on a quiescent loop, `Err` because the driver may still be
+/// resetting and the next wake must try the recovery again (without the
+/// wake, a parked loop — no input, no animations — retries never).
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn recover_device_and_arm_retry<R: DeviceRecovery>(
+    renderer: &mut R,
+    realm: &super::ui_realm::UiRealm,
+) {
+    match renderer.try_recover_device() {
+        Ok(()) => {
+            tracing::warn!("GPU device lost — recovered successfully");
+        }
+        Err(e) => {
+            tracing::error!(
+                error = ?e,
+                "GPU device recovery failed; retry armed for the next wake"
+            );
+        }
+    }
+    // `wake_frame` (not `request_redraw`) so an idle winit loop actually
+    // queues a `RedrawRequested`: device loss is detected on a quiescent
+    // loop, where only flipping the `needs_redraw` flag would leave the
+    // renderer idle until the next external input/resize.
+    realm.wake_frame();
+}
+
+/// Drive one frame through `realm` against `renderer`, rebuilding a lost
+/// device around it.
+///
+/// A device already lost at frame start is recovered BEFORE
+/// [`super::ui_realm::UiRealm::render_frame_entered`] so a dead device
+/// never pays build/layout/paint; a device lost mid-frame (the wgpu
+/// device-lost callback firing during the render) is recovered after.
+/// Returns whether the frame reached `present()`; a still-lost device
+/// produces no frame at all (`false`), with its retry armed by
+/// [`recover_device_and_arm_retry`].
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn render_frame_with_device_recovery<R>(realm: &super::ui_realm::UiRealm, renderer: &mut R) -> bool
+where
+    R: flui_engine::RasterBackend + DeviceRecovery,
+{
+    if renderer.is_device_lost() {
+        recover_device_and_arm_retry(renderer, realm);
+        if renderer.is_device_lost() {
+            // Still lost (driver still resetting): skip the frame build
+            // entirely; the retry armed above tries the recovery again on
+            // the next wake.
+            return false;
+        }
+    }
+    let presented = realm.render_frame_entered(renderer);
+    if renderer.is_device_lost() {
+        recover_device_and_arm_retry(renderer, realm);
+    }
+    presented
+}
+
 /// What a platform wake should do: run the full frame pipeline, pump only
 /// the async driver, or nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6879,6 +6964,234 @@ mod desktop_pacing_tests {
     }
 }
 
+/// The device-loss recovery contract of [`super::render_frame_with_device_recovery`]
+/// against scripted backends: a pre-frame loss recovers BEFORE the frame
+/// build (or skips it entirely when the recovery fails), a mid-frame loss
+/// recovers after, and EVERY recovery outcome arms the retry wake.
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod device_recovery_tests {
+    use flui_engine::{EngineError, RasterBackend};
+
+    use super::{DeviceRecovery, render_frame_with_device_recovery};
+
+    #[derive(Clone)]
+    struct LeafView;
+
+    impl flui_view::RenderView for LeafView {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+        ) -> flui_objects::RenderSizedBox {
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+            render_object: &mut flui_objects::RenderSizedBox,
+        ) {
+            *render_object = flui_objects::RenderSizedBox::shrink();
+        }
+    }
+
+    impl flui_view::View for LeafView {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::render_variable(self)
+        }
+    }
+
+    fn mount_root() -> super::super::ui_realm::UiRealm {
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        realm
+            .enter(|realm| realm.attach_root_widget(&LeafView))
+            .expect("attach succeeds");
+        realm
+    }
+
+    struct ScriptedDeviceBackend {
+        /// Current device-lost flag (what `RasterBackend::is_device_lost` reports).
+        lost: bool,
+        /// `render_scene` outcome once the scene reaches it (`take`n —
+        /// `EngineError` is not `Clone`).
+        scene_outcome: Option<Result<bool, EngineError>>,
+        /// `try_recover_device` outcome (`take`n, same reason).
+        recover_outcome: Option<Result<(), EngineError>>,
+        /// Whether a successful recovery clears the lost flag (a failing
+        /// driver reset leaves it set).
+        recover_clears_lost: bool,
+        /// Flip the lost flag from INSIDE `render_scene` — the wgpu
+        /// device-lost callback firing mid-frame.
+        lose_on_render: bool,
+        render_calls: u32,
+        recover_attempts: u32,
+    }
+
+    impl ScriptedDeviceBackend {
+        fn healthy() -> Self {
+            Self {
+                lost: false,
+                scene_outcome: Some(Ok(true)),
+                recover_outcome: Some(Ok(())),
+                recover_clears_lost: true,
+                lose_on_render: false,
+                render_calls: 0,
+                recover_attempts: 0,
+            }
+        }
+    }
+
+    impl RasterBackend for ScriptedDeviceBackend {
+        fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<bool, EngineError> {
+            self.render_calls += 1;
+            if self.lose_on_render {
+                self.lost = true;
+            }
+            self.scene_outcome
+                .take()
+                .expect("render_scene called more than once in a single-frame test")
+        }
+        fn resize(&mut self, _width: u32, _height: u32) {}
+        fn is_device_lost(&self) -> bool {
+            self.lost
+        }
+        fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+        fn mark_full_repaint(&mut self) {}
+        fn has_damage(&self) -> bool {
+            true
+        }
+        fn size(&self) -> (u32, u32) {
+            (800, 600)
+        }
+        fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    impl DeviceRecovery for ScriptedDeviceBackend {
+        fn try_recover_device(&mut self) -> Result<(), EngineError> {
+            self.recover_attempts += 1;
+            let outcome = self
+                .recover_outcome
+                .take()
+                .expect("try_recover_device called more than once in a single-frame test");
+            if outcome.is_ok() && self.recover_clears_lost {
+                self.lost = false;
+            }
+            outcome
+        }
+    }
+
+    #[test]
+    fn a_healthy_device_renders_without_any_recovery() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend::healthy();
+        realm.mark_rendered();
+
+        let presented = render_frame_with_device_recovery(&realm, &mut backend);
+
+        assert!(presented, "Ok(true) reaches present()");
+        assert_eq!(backend.render_calls, 1, "the scene reached render_scene");
+        assert_eq!(
+            backend.recover_attempts, 0,
+            "no recovery on a healthy device"
+        );
+        assert!(
+            !realm.needs_redraw(),
+            "a successful frame clears the redraw flag"
+        );
+    }
+
+    #[test]
+    fn a_pre_frame_loss_with_a_successful_recovery_renders_the_same_frame() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend {
+            lost: true,
+            ..ScriptedDeviceBackend::healthy()
+        };
+        realm.mark_rendered();
+
+        let presented = render_frame_with_device_recovery(&realm, &mut backend);
+
+        assert_eq!(
+            backend.recover_attempts, 1,
+            "the pre-frame loss is recovered"
+        );
+        assert!(
+            !backend.lost,
+            "the scripted successful recovery cleared the lost flag"
+        );
+        assert_eq!(
+            backend.render_calls, 1,
+            "after a successful recovery the SAME frame renders — no extra wake needed"
+        );
+        assert!(presented, "the recovered frame reaches present()");
+    }
+
+    #[test]
+    fn a_pre_frame_loss_with_a_failing_recovery_skips_the_frame_and_arms_the_retry() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend {
+            lost: true,
+            recover_outcome: Some(Err(EngineError::DeviceLost)),
+            recover_clears_lost: false,
+            ..ScriptedDeviceBackend::healthy()
+        };
+        realm.mark_rendered();
+
+        let presented = render_frame_with_device_recovery(&realm, &mut backend);
+
+        assert!(!presented, "a still-lost device presents nothing");
+        assert_eq!(backend.recover_attempts, 1, "the recovery was attempted");
+        assert_eq!(
+            backend.render_calls, 0,
+            "a dead device must not pay build/layout/paint — the frame build is \
+             skipped entirely"
+        );
+        assert!(
+            realm.needs_redraw(),
+            "the failed recovery must arm the retry wake: on a quiescent loop — no \
+             input, no animations — nothing else would ever schedule the next \
+             recovery attempt"
+        );
+    }
+
+    #[test]
+    fn a_mid_frame_loss_recovers_after_render_and_arms_the_retry() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend {
+            lose_on_render: true,
+            ..ScriptedDeviceBackend::healthy()
+        };
+        realm.mark_rendered();
+
+        let presented = render_frame_with_device_recovery(&realm, &mut backend);
+
+        assert_eq!(
+            backend.render_calls, 1,
+            "the frame rendered before the loss landed"
+        );
+        assert!(presented, "the frame that rendered still reaches present()");
+        assert_eq!(
+            backend.recover_attempts, 1,
+            "the mid-frame loss is recovered after the render"
+        );
+        assert!(
+            realm.needs_redraw(),
+            "the post-render recovery wake must survive render_frame_entered's own \
+             mark_rendered(), so the recovered renderer renders again on a \
+             quiescent loop"
+        );
+    }
+}
+
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -7144,160 +7457,149 @@ where
         let renderer_frame = Arc::clone(&renderer);
         let worker_reload_frame = worker_reload.clone();
         window.on_request_frame(Box::new(move || {
-        let renderer_frame = Arc::clone(&renderer_frame);
-        let worker_reload_frame = worker_reload_frame.clone();
-        let _ = dispatch_platform_realm(realm_dispatch, RealmTask::Frame(Box::new(move |realm| {
-            worker_reload_frame.poll_and_apply(realm);
+            let renderer_frame = Arc::clone(&renderer_frame);
+            let worker_reload_frame = worker_reload_frame.clone();
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Frame(Box::new(move |realm| {
+                    worker_reload_frame.poll_and_apply(realm);
 
-            let scheduler = realm.scheduler();
+                    let scheduler = realm.scheduler();
 
-        // Every fire of this callback is a genuine platform-delivered
-        // frame-request signal on this backend (`WinitWindowEvent::
-        // RedrawRequested` -> `dispatch_request_frame` -> here; see
-        // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
-        // pace this via the compositor vs. deliver it immediately).
-        // Recorded unconditionally, before the dirty/wake_action gate below
-        // decides whether anything actually runs this pump: pacing
-        // feedback is about observing the PLATFORM's own delivery timing,
-        // independent of whether this particular delivery ends up idle.
-        // `now` is read ONCE here and reused ~60 lines below at this
-        // closure's `drive_frame_with_lane(now, ...)` call, past the
-        // `wake_action` match below (that later call site's own comment
-        // points back to this one) — this pump's pacing-feedback sample
-        // and its own frame-drive instant must agree, the same
-        // single-`now`-per-pump discipline every other call site in this
-        // closure already follows.
-            let now = web_time::Instant::now();
-            realm.record_compositor_tick(now);
+                    // Every fire of this callback is a genuine platform-delivered
+                    // frame-request signal on this backend (`WinitWindowEvent::
+                    // RedrawRequested` -> `dispatch_request_frame` -> here; see
+                    // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
+                    // pace this via the compositor vs. deliver it immediately).
+                    // Recorded unconditionally, before the dirty/wake_action gate below
+                    // decides whether anything actually runs this pump: pacing
+                    // feedback is about observing the PLATFORM's own delivery timing,
+                    // independent of whether this particular delivery ends up idle.
+                    // `now` is read ONCE here and reused ~60 lines below at this
+                    // closure's `drive_frame_with_lane(now, ...)` call, past the
+                    // `wake_action` match below (that later call site's own comment
+                    // points back to this one) — this pump's pacing-feedback sample
+                    // and its own frame-drive instant must agree, the same
+                    // single-`now`-per-pump discipline every other call site in this
+                    // closure already follows.
+                    let now = web_time::Instant::now();
+                    realm.record_compositor_tick(now);
 
-        // Owner-inbox drain: commands and worker results
-        // commit HERE, at the frame boundary while the scheduler phase is
-        // Idle — never inside the frame transaction below. Runs before the
-        // dirty gate so a command-driven redraw request is observed by the
-        // very frame its wake produced.
-        //
-        // The runtime is TAKEN out of the slot for the drain (and restored
-        // after) so drained user closures never run under the RefCell
-        // borrow: a command that re-enters this frame callback through a
-        // nested platform pump then finds an empty slot and skips the
-        // drain, instead of panicking the borrow.
-            let inbox_redraw = drain_owner_inbox(realm);
-
-            let dirty =
-                inbox_redraw || realm.needs_redraw() || realm.has_pending_work();
-            match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled()) {
-                WakeAction::Skip => return,
-                WakeAction::PumpAsync => {
-                    // Frames disabled (Hidden/Paused/Detached): the mid-frame
-                    // `drive_async_tasks` poll inside `handle_begin_frame`
-                    // never runs because no frame runs at all — this
-                    // explicit call is the ONLY thing keeping a spawned
-                    // future progressing while backgrounded. No begin/draw
-                    // frame, no tickers, no pipeline, no present.
+                    // Owner-inbox drain: commands and worker results
+                    // commit HERE, at the frame boundary while the scheduler phase is
+                    // Idle — never inside the frame transaction below. Runs before the
+                    // dirty gate so a command-driven redraw request is observed by the
+                    // very frame its wake produced.
                     //
-                    // `finish_async_pump` MUST run first, not after: nothing
-                    // else ever clears the scheduler's `frame_scheduled`
-                    // latch on this path (only `handle_begin_frame` does,
-                    // and it never runs here), so without this call a LATER,
-                    // independent wake (a network response's `Waker::wake`,
-                    // arriving after this pump cycle returns) would find the
-                    // latch already set, never re-fire `on_frame_scheduled`,
-                    // and never wake this loop again — see
-                    // `UpdateScheduler::finish_async_pump`'s doc for the full
-                    // starvation hazard and why the ordering matters.
-                    scheduler.finish_async_pump();
-                    scheduler.drive_async_tasks();
-                    // Reuse the existing no-present throttle: a backgrounded
-                    // wake with dirty/pending work re-requesting another
-                    // wake every loop tick has the identical busy-spin risk
-                    // an un-presented frame with an open gate has, and
-                    // nothing else paces it while frames are disabled.
+                    // The runtime is TAKEN out of the slot for the drain (and restored
+                    // after) so drained user closures never run under the RefCell
+                    // borrow: a command that re-enters this frame callback through a
+                    // nested platform pump then finds an empty slot and skips the
+                    // drain, instead of panicking the borrow.
+                    let inbox_redraw = drain_owner_inbox(realm);
+
+                    let dirty = inbox_redraw || realm.needs_redraw() || realm.has_pending_work();
+                    match wake_action(
+                        scheduler.frames_enabled(),
+                        dirty,
+                        scheduler.is_frame_scheduled(),
+                    ) {
+                        WakeAction::Skip => return,
+                        WakeAction::PumpAsync => {
+                            // Frames disabled (Hidden/Paused/Detached): the mid-frame
+                            // `drive_async_tasks` poll inside `handle_begin_frame`
+                            // never runs because no frame runs at all — this
+                            // explicit call is the ONLY thing keeping a spawned
+                            // future progressing while backgrounded. No begin/draw
+                            // frame, no tickers, no pipeline, no present.
+                            //
+                            // `finish_async_pump` MUST run first, not after: nothing
+                            // else ever clears the scheduler's `frame_scheduled`
+                            // latch on this path (only `handle_begin_frame` does,
+                            // and it never runs here), so without this call a LATER,
+                            // independent wake (a network response's `Waker::wake`,
+                            // arriving after this pump cycle returns) would find the
+                            // latch already set, never re-fire `on_frame_scheduled`,
+                            // and never wake this loop again — see
+                            // `UpdateScheduler::finish_async_pump`'s doc for the full
+                            // starvation hazard and why the ordering matters.
+                            scheduler.finish_async_pump();
+                            scheduler.drive_async_tasks();
+                            // Reuse the existing no-present throttle: a backgrounded
+                            // wake with dirty/pending work re-requesting another
+                            // wake every loop tick has the identical busy-spin risk
+                            // an un-presented frame with an open gate has, and
+                            // nothing else paces it while frames are disabled.
+                            let keeps_gate_open = keeps_frame_gate_open(
+                                realm.needs_redraw(),
+                                scheduler.is_frame_scheduled(),
+                                realm.has_pending_work(),
+                            );
+                            if let Some(pace) = no_present_fallback_pace(false, keeps_gate_open) {
+                                std::thread::sleep(pace);
+                            }
+                            return;
+                        }
+                        WakeAction::Render => {}
+                    }
+
+                    // The `now` used below is the SAME instant bound near the top of
+                    // this closure and already recorded into `record_compositor_tick`
+                    // there (see the comment at that earlier `let now` binding) --
+                    // reused here, not re-read fresh.
+                    // UpdateScheduler callbacks (animations). NOTE: the global `UpdateScheduler` is driven
+                    // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
+                    // (`UiRealm::draw_frame`) ticks off the realm's own `start` origin —
+                    // two separate clocks ON PURPOSE: the controller sets are disjoint (implicit
+                    // animations register with `Vsync`; plain controllers carry a private
+                    // `UpdateScheduler` ticker, never the global one), so the origins never need to
+                    // agree and no controller is advanced twice.
+                    // The ONE shared frame ordering — begin (transient +
+                    // microtasks + the single async-driver poll) -> persistent callbacks ->
+                    // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
+                    // drives the same helper on its binding-local scheduler.
+                    let presented = scheduler.drive_frame_with_lane(
+                        now,
+                        flui_scheduler::IdleDeadline::far_future(now),
+                        || {
+                            // Render frame via the realm, rebuilding a lost GPU device
+                            // around it: BEFORE the frame build when the loss predates the
+                            // frame (a dead device never pays build/layout/paint), and
+                            // AFTER when the wgpu device-lost callback fired mid-frame —
+                            // see `render_frame_with_device_recovery`.
+                            let mut r = renderer_frame.lock();
+                            render_frame_with_device_recovery(realm, &mut *r)
+                        },
+                        realm.local_post_frame_lane(),
+                    );
+
+                    // No-present fallback throttle. Fifo present (the default, see
+                    // `select_present_mode`) blocks every PRESENTED frame at display
+                    // cadence — that IS the steady-state pacing, which is why the fixed
+                    // frame-budget sleep this replaced is gone. A frame that never
+                    // reaches `present()` (no damage, occluded surface, surface lost)
+                    // gets none of that blocking, so if nothing else is going to wake
+                    // this loop, an unpaced wake is harmless: the loop falls back to
+                    // `ControlFlow::Wait` and blocks on the next real event. The
+                    // busy-spin this guards against (observed: ~30 000 fps) only
+                    // happens when a ticker/animation keeps re-requesting a frame every
+                    // wake with nothing pacing it — `no_present_fallback_pace` fires
+                    // only in exactly that combination.
                     let keeps_gate_open = keeps_frame_gate_open(
                         realm.needs_redraw(),
                         scheduler.is_frame_scheduled(),
                         realm.has_pending_work(),
                     );
-                    if let Some(pace) = no_present_fallback_pace(false, keeps_gate_open) {
+                    if let Some(pace) = no_present_fallback_pace(presented, keeps_gate_open) {
+                        // This runs on the platform event-loop thread, so the sleep
+                        // blocks input dispatch for its duration — acceptable here
+                        // because this path only fires for an occluded/undamaged
+                        // window with a ticker still running, not an interactive one.
                         std::thread::sleep(pace);
                     }
-                    return;
-                }
-                WakeAction::Render => {}
-            }
-
-        // The `now` used below is the SAME instant bound near the top of
-        // this closure and already recorded into `record_compositor_tick`
-        // there (see the comment at that earlier `let now` binding) --
-        // reused here, not re-read fresh.
-        // UpdateScheduler callbacks (animations). NOTE: the global `UpdateScheduler` is driven
-        // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
-        // (`UiRealm::draw_frame`) ticks off the realm's own `start` origin —
-        // two separate clocks ON PURPOSE: the controller sets are disjoint (implicit
-        // animations register with `Vsync`; plain controllers carry a private
-        // `UpdateScheduler` ticker, never the global one), so the origins never need to
-        // agree and no controller is advanced twice.
-        // The ONE shared frame ordering — begin (transient +
-        // microtasks + the single async-driver poll) -> persistent callbacks ->
-        // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
-        // drives the same helper on its binding-local scheduler.
-            let presented = scheduler.drive_frame_with_lane(now, flui_scheduler::IdleDeadline::far_future(now), || {
-            // Render frame via the realm
-            let mut r = renderer_frame.lock();
-                let did_present = realm.render_frame_entered(&mut *r);
-
-            // GPU device-loss recovery: if the device was lost during this frame
-            // (detected by the wgpu callback that fired between render_frame calls),
-            // attempt a synchronous rebuild on the runner thread. `pollster` is
-            // already a dep and safe to use here — the desktop runner owns this
-            // synchronous callback, not an async executor.
-            if r.is_device_lost() {
-                match pollster::block_on(r.recover()) {
-                    Ok(()) => {
-                        tracing::warn!("GPU device lost — recovered successfully");
-                        // `wake_frame` (not `request_redraw`) so an idle winit loop
-                        // actually queues a `RedrawRequested`: device loss is
-                        // detected on a quiescent loop, where only flipping the
-                        // `needs_redraw` flag would leave the recovered renderer
-                        // idle until the next external input/resize.
-                        realm.wake_frame();
-                    }
-                    Err(e) => {
-                        // Driver may still be resetting. Log and let the next frame
-                        // retry; the device-lost flag remains set so recover() will
-                        // be tried again.
-                        tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
-                    }
-                }
-            }
-                did_present
-            }, realm.local_post_frame_lane());
-
-        // No-present fallback throttle. Fifo present (the default, see
-        // `select_present_mode`) blocks every PRESENTED frame at display
-        // cadence — that IS the steady-state pacing, which is why the fixed
-        // frame-budget sleep this replaced is gone. A frame that never
-        // reaches `present()` (no damage, occluded surface, surface lost)
-        // gets none of that blocking, so if nothing else is going to wake
-        // this loop, an unpaced wake is harmless: the loop falls back to
-        // `ControlFlow::Wait` and blocks on the next real event. The
-        // busy-spin this guards against (observed: ~30 000 fps) only
-        // happens when a ticker/animation keeps re-requesting a frame every
-        // wake with nothing pacing it — `no_present_fallback_pace` fires
-        // only in exactly that combination.
-            let keeps_gate_open = keeps_frame_gate_open(
-                realm.needs_redraw(),
-                scheduler.is_frame_scheduled(),
-                realm.has_pending_work(),
+                })),
             );
-            if let Some(pace) = no_present_fallback_pace(presented, keeps_gate_open) {
-                // This runs on the platform event-loop thread, so the sleep
-                // blocks input dispatch for its duration — acceptable here
-                // because this path only fires for an occluded/undamaged
-                // window with a ticker still running, not an interactive one.
-                std::thread::sleep(pace);
-            }
-        })));
-    }));
+        }));
 
         // 7. Register resize callback -> typed Resized event; the applier
         // installed above (not this closure) actually touches the renderer.
@@ -8224,8 +8526,11 @@ where
                     let has_pending = realm.has_pending_work();
                     let dirty = inbox_redraw || realm.needs_redraw() || has_pending;
                     let scheduler = realm.scheduler();
-                    match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
-                    {
+                    match wake_action(
+                        scheduler.frames_enabled(),
+                        dirty,
+                        scheduler.is_frame_scheduled(),
+                    ) {
                         WakeAction::Skip => return,
                         WakeAction::PumpAsync => {
                             // Frames disabled: pump only the async driver — no
@@ -8254,22 +8559,18 @@ where
                     // UpdateScheduler callbacks and rendering share ONE `UiRealm::enter`
                     // dynamic extent; callbacks may legally resolve realm-local
                     // capabilities throughout the complete frame transaction.
-                    scheduler.drive_frame_with_lane(now, flui_scheduler::IdleDeadline::far_future(now), || {
-                        let mut r = renderer_frame.lock();
-                        realm.render_frame_entered(&mut *r);
-
-                        if r.is_device_lost() {
-                            match pollster::block_on(r.recover()) {
-                                Ok(()) => {
-                                    tracing::warn!("GPU device lost — recovered successfully");
-                                    realm.wake_frame();
-                                }
-                                Err(e) => {
-                                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
-                                }
-                            }
-                        }
-                    }, realm.local_post_frame_lane());
+                    scheduler.drive_frame_with_lane(
+                        now,
+                        flui_scheduler::IdleDeadline::far_future(now),
+                        || {
+                            // Device-loss recovery around the frame, same shape
+                            // as the desktop path — see
+                            // `render_frame_with_device_recovery`.
+                            let mut r = renderer_frame.lock();
+                            let _ = render_frame_with_device_recovery(realm, &mut *r);
+                        },
+                        realm.local_post_frame_lane(),
+                    );
                 })),
             );
         }));
@@ -8635,7 +8936,18 @@ where
                                         wake();
                                     }
                                     Err(e) => {
-                                        tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                                        // Driver may still be resetting. Arm
+                                        // the retry wake in the failure arm
+                                        // too — RAF alone re-pumps an ACTIVE
+                                        // tab, but a backgrounded tab's RAF
+                                        // is suspended, and without this wake
+                                        // the recovery is never retried once
+                                        // the tab comes back to the front.
+                                        tracing::error!(
+                                            error = ?e,
+                                            "GPU device recovery failed; retry armed for the next wake"
+                                        );
+                                        wake();
                                     }
                                 }
                             });

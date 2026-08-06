@@ -2131,14 +2131,32 @@ impl UiRealm {
                 }
                 Err(EngineError::DeviceLost) => {
                     self.presentations.primary().record_frame_dropped();
+                    // Retry armed: rebuilding the device is the renderer
+                    // owner's job (the platform runner attempts `recover()`
+                    // on the wake this retry arms), but WITHOUT the wake a
+                    // quiescent loop — no input, no animations — would park
+                    // forever on the lost device and never retry the
+                    // recovery at all.
+                    retry_needed = true;
                     tracing::warn!(
-                        "GPU device lost — recovery will be attempted by the platform runner"
+                        "GPU device lost; frame dropped — retry armed, recovery \
+                         is attempted by the renderer owner"
                     );
                 }
                 Err(EngineError::SurfaceValidation) => {
                     self.presentations.primary().record_frame_dropped();
+                    // The engine already reconfigured the surface and
+                    // retried once inside this very acquire (see
+                    // `EngineError::SurfaceValidation`'s doc); what surfaces
+                    // here is the still-failing case. Arm the retry anyway:
+                    // the NEXT wake pays another reconfigure+retry pass,
+                    // which is how a transient driver/display-state hiccup
+                    // heals — dropping the frame without a wake would park a
+                    // misconfigured surface forever on a quiescent loop.
+                    retry_needed = true;
                     tracing::error!(
-                        "Surface validation error — surface misconfig; external reconfigure required"
+                        "Surface validation error persisted through one \
+                         reconfigure+retry — retry armed for the next wake"
                     );
                 }
                 Err(e) => {
@@ -5117,6 +5135,52 @@ mod tests {
                 realm.needs_redraw(),
                 "a dropped SurfaceLost frame must re-arm needs_redraw so the next wake \
                  actually retries"
+            );
+        }
+
+        #[test]
+        fn device_lost_keeps_needs_redraw_armed_for_a_retry() {
+            let realm = mount_root();
+            let mut backend = ScriptedRasterBackend::new(Err(EngineError::DeviceLost));
+
+            realm.mark_rendered();
+            let presented = realm.render_frame_entered(&mut backend);
+
+            assert!(!presented, "a DeviceLost frame never reaches present()");
+            assert_eq!(
+                backend.render_scene_calls, 1,
+                "precondition: the mounted scene actually reached render_scene"
+            );
+            assert!(
+                realm.needs_redraw(),
+                "a dropped DeviceLost frame must re-arm needs_redraw: rebuilding the \
+                 device is the renderer owner's job, but on a quiescent loop nothing \
+                 else would ever wake the owner to retry the recovery"
+            );
+        }
+
+        #[test]
+        fn surface_validation_keeps_needs_redraw_armed_for_a_retry() {
+            let realm = mount_root();
+            let mut backend = ScriptedRasterBackend::new(Err(EngineError::SurfaceValidation));
+
+            realm.mark_rendered();
+            let presented = realm.render_frame_entered(&mut backend);
+
+            assert!(
+                !presented,
+                "a SurfaceValidation frame never reaches present()"
+            );
+            assert_eq!(
+                backend.render_scene_calls, 1,
+                "precondition: the mounted scene actually reached render_scene"
+            );
+            assert!(
+                realm.needs_redraw(),
+                "a dropped SurfaceValidation frame must re-arm needs_redraw: the engine \
+                 reconfigured once inside the failing acquire, and the armed retry is \
+                 what gives the NEXT acquire its reconfigure+retry pass instead of \
+                 parking the misconfigured surface forever"
             );
         }
 

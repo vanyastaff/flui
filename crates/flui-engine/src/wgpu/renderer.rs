@@ -1295,13 +1295,23 @@ impl Renderer {
             wgpu::CurrentSurfaceTexture::Validation => {
                 // Validation error — the surface texture could not be produced
                 // due to a validation failure (surface misconfig: incompatible
-                // format/usage/present mode). This is NOT a recoverable
-                // SurfaceLost: retrying `get_current_texture` without
-                // reconfiguring loops forever. Log and surface a distinct
-                // non-recoverable error so the caller drops the frame and
-                // reconfigures on the next pass.
-                tracing::error!("Surface texture validation error");
-                Err(EngineError::SurfaceValidation)
+                // format/usage/present mode). Retrying `get_current_texture`
+                // WITHOUT reconfiguring loops forever, so reconfigure ONCE and
+                // retry — mirroring the Outdated/Lost arm above. A SECOND
+                // Validation means the misconfig survived a fresh configure
+                // built from the surface's own capabilities: surface the
+                // distinct error instead of looping again. The caller is
+                // expected to arm a retry so a later wake gets another
+                // reconfigure+retry pass (a transient driver/display-state
+                // hiccup then heals instead of parking the surface forever).
+                tracing::warn!("Surface texture validation error; reconfiguring and retrying once");
+                self.reconfigure_surface()?;
+                let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
+                match surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Ok(Some(frame)),
+                    _ => Err(EngineError::SurfaceValidation),
+                }
             }
         }
     }
