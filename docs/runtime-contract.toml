@@ -615,18 +615,46 @@ FPS_60` is deleted), `drive_frame` takes an explicit `deadline: IdleDeadline` th
 bounds `Priority::Idle` task execution ONLY (`Priority::Animation`/`Build` \
 always run, regardless of the deadline), `budget()`'s `MutexGuard` accessor \
 is replaced by the owned-value `budget_snapshot()`, and the fixed-rate \
-`VsyncScheduler` simulator family is deleted outright. This narrows what \
-`UpdateScheduler` does, but the three-owner split itself is NOT complete: \
-`UpdateScheduler` -- owned by the realm, no longer a process-global \
-singleton -- still combines logical scheduling with what will become the \
-presentation-owned `FrameClock`'s physical-pacing concern (no `FrameClock` \
-exists yet); splitting that out, and raster backpressure into its own owner, \
-is the follow-up this contract tracks.\
+`VsyncScheduler` simulator family is deleted outright. This narrowed what \
+`UpdateScheduler` does; PR-C1 lands the second owner: `FrameClock` (issue #556 \
+§1b) is a pure, platform-free per-presentation state machine -- a `DemandMask` \
+(`Dirty`/`Animation`/`Host`) plus three produce gates (hidden, first-frame \
+deferral, in-flight/throttle capacity) -- now the sole one-per-presentation \
+field on `PresentationState`, replacing `UiRealm`'s former realm-wide `vsync_slot` \
+(the `Vsync` controller registry moved to per-presentation storage in the same \
+slice) and gating `UiRealm::draw_frame_entered`'s per-presentation segment: \
+the realm feeds `take_redraw_pending() || has_pending_work()` in as `Dirty` \
+demand and lets `clock.poll` decide, provably N=1-equivalent to the direct \
+predicate it replaces (six pre-existing pinned deferral/vsync tests pass \
+unedited bar one panic-message string). First-frame deferral folds into the \
+same clock as `SkipReason::Deferred`, replacing `RenderingFlutterBinding`'s \
+former counter at the `UiRealm`-forwarded call sites (`defer_first_frame`/ \
+`allow_first_frame`/`send_frames_to_engine`); `RenderingFlutterBinding`'s own \
+independent standalone defer/allow API (used only by its own `draw_frame()` \
+convenience method, with no `UiRealm` involvement) is untouched. The third \
+owner -- raster backpressure as its own owner reporting into `FrameClock`'s \
+in-flight/throttle knobs -- is still unbuilt (issue #556 PR-E); the pump \
+also stays wake-channel-driven (`RedrawRequested` still drives nothing, \
+issue #556 PR-C2), and hidden-surface gating is not yet wired to a real \
+visibility signal (issue #556 PR-D). `flui-testing` gained an additive, \
+independent multi-presentation clock registry (`HeadlessBinding::\
+install_presentation_clock`/`pump_presentation`/`pump_all`, issue #556 §13) \
+alongside the untouched single-view `pump_frame`.\
 """
-state = "planned"
+state = "partial"
 domain = "realm"
 owner_issue = 556
 mechanical = false
+evidence = [
+    { kind = "symbol", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "pub struct FrameClock" },
+    { kind = "symbol", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "pub fn poll(&self, now: Instant) -> PollDecision" },
+    { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "clock: FrameClock," },
+    { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn manual_and_platform_sources_agree_on_every_matrix_cell" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn closing_a_presentation_mid_animation_stops_its_ticks_without_panicking_or_touching_the_sibling" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_presentation_produces_and_flushes_exactly_zero_over_many_pumps" },
+    { kind = "test", file = "crates/flui-testing/tests/multi_presentation_clock.rs", contains = "fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independently" },
+]
 
 [[contract]]
 key = "idle-only-commit-points"
