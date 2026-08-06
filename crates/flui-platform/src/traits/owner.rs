@@ -269,6 +269,17 @@ impl SharedPlatform {
         self.platform.set_exit_policy_hook(hook);
     }
 
+    /// Installs the hook this platform consults, once per idle iteration,
+    /// for the earliest wall-clock instant it should wake at instead of
+    /// blocking forever — see [`Platform::set_wake_deadline_hook`]'s doc for
+    /// the full contract.
+    pub fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
+        self.platform.set_wake_deadline_hook(hook);
+    }
+
     /// Registers a callback for URLs opened by the system.
     pub fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {
         self.platform.on_open_urls(callback);

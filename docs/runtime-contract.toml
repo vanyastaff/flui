@@ -663,9 +663,13 @@ at the `UiRealm`-forwarded call sites (`defer_first_frame`/`allow_first_frame`/ 
 standalone defer/allow API (used only by its own `draw_frame()` convenience \
 method, with no `UiRealm` involvement) is untouched. The third owner -- \
 raster backpressure as its own owner reporting into `FrameClock`'s \
-in-flight/throttle knobs -- is still unbuilt, and hidden-surface gating is \
-not yet wired to a real visibility signal (both remain named gaps, tracked \
-on the same issue). `flui-testing` gained an additive, independent \
+in-flight/throttle knobs -- is still unbuilt (named gap, tracked on the \
+same issue). Hidden-surface gating IS now wired to a real visibility \
+signal (#556): `UiRealm::set_presentation_hidden` calls \
+`FrameClock::set_hidden`, addressed to exactly the presentation \
+`PlatformToUi::WindowVisibility` was stamped for — see the \
+`hidden-surface-gating` contract below for the full statement, including \
+its compositor-conditional honesty scope. `flui-testing` gained an additive, independent \
 multi-presentation clock registry (`HeadlessBinding::install_presentation_clock`/ \
 `pump_presentation`/`pump_all`/`set_presentation_min_produce_interval`) \
 alongside the untouched single-view `pump_frame`. \
@@ -777,6 +781,63 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_presentation_stays_idle_through_the_production_call_sequence_with_compositor_ticks" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn clear_demand_emptying_the_mask_disarms_the_latch" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate" },
+]
+
+[[contract]]
+key = "hidden-surface-gating"
+statement = """
+A presentation whose surface is hidden/minimized/occluded produces zero \
+frames and issues zero GPU submissions, while wall-clock services (async \
+driver, gesture-arena deadlines, timers) keep running (#556). \
+`UiRealm::set_presentation_hidden(presentation_id, hidden)` calls \
+`FrameClock::set_hidden` on exactly the addressed presentation and is \
+wired from `PlatformToUi::WindowVisibility`'s real production dispatch \
+path, using the `presentation_id` every `PlatformToUi` event is already \
+stamped with at enqueue time — never the coarser, pre-existing loop-scoped \
+`AppLifecycleState` derivation, which this slice does not touch. While \
+hidden, `FrameClock::poll` returns `Skip(Hidden)` (mask retained, segment \
+skipped, zero submits); becoming visible with a nonzero retained mask \
+produces exactly once on the very next pump. \
+\
+**The ungate→wake edge (closes ADR-0044 §2's own honest liveness gap for \
+the `Hidden` skip reason):** `set_presentation_hidden`'s unhide branch \
+wakes the platform loop UNCONDITIONALLY when the retained mask is \
+nonempty — not gated on `FrameClock::try_arm_redraw_request`'s own return \
+value, because that latch may already be armed from a demand mark that \
+occurred BEFORE this presentation went hidden (a poke the loop already \
+delivered and wasted, since `poll` returned `Skip(Hidden)` for it); \
+consulting the latch here would incorrectly stay silent in that sequence \
+and strand the presentation gated forever. An idle (never-dirtied) \
+presentation's unhide correctly does NOT wake (no demand to retain). \
+\
+**Honest scope, backend-conditional (criterion 2 restated, not \
+overclaimed):** occlusion delivery comes from winit's \
+`WindowEvent::Occluded`, whose own documentation lists \
+`Android / Wayland / Windows / Orbital: Unsupported` \
+(`traits/window.rs:309-329`). The only emitters are X11 (on \
+`VisibilityFullyObscured`), macOS, iOS and Web — **Wayland delivers nothing \
+today**, so on a Wayland session this presentation's clock is never hidden \
+and behavior is unchanged from before this slice; on X11 it requires FULL \
+obscuration, which a compositing window manager does not produce. The \
+gating machinery is therefore exercised by injected signals here, not by a \
+live desktop: `flui-platform`'s own CI runs under \
+`FLUI_HEADLESS=1`/`xvfb-run` (X11), and a live minimize/restore pass is not \
+claimed as automated proof.\
+"""
+state = "partial"
+domain = "realm"
+owner_issue = 556
+mechanical = false
+evidence = [
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn set_presentation_hidden(&self, presentation_id: PresentationId, hidden: bool)" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "realm.set_presentation_hidden(presentation_id, !visible);" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn window_visibility_gates_exactly_the_addressed_presentations_clock" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_and_animating_presentation_does_not_spin" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn unoccluding_an_undirtied_presentation_does_not_wake" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn unhide_wakes_on_retained_demand_even_when_the_latch_was_armed_before_the_hide" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
 ]
 
 [[contract]]
@@ -1600,20 +1661,34 @@ evidence = [
 [[contract]]
 key = "control-flow-wait-pinned"
 statement = """
-`WinitApp::about_to_wait` sets `ControlFlow::Wait` explicitly every \
-iteration as a defensive pin against a future winit default change. \
-flui-platform's Linux-runnable suite runs in CI, but no test in that \
-suite drives a real winit event loop through `about_to_wait` and \
-asserts the resulting control flow — the pin is still source-level \
-only.\
+`WinitApp::about_to_wait` no longer sets `ControlFlow::Wait` \
+UNCONDITIONALLY (#556's wall-clock wake corrects this earlier, \
+now-falsified statement): it consults the registered wake-deadline hook \
+(`Platform::set_wake_deadline_hook`, `PlatformHandlers::invoke_wake_deadline`) \
+fresh every iteration and sets `ControlFlow::WaitUntil(deadline)` when that \
+hook answers `Some` — a pending gesture-arena deadline (long-press hold, \
+double-tap give-up) armed on any hosted presentation, aggregated across \
+every realm this loop hosts by `AppRuntime::next_wake`. `ControlFlow::Wait` \
+remains the fallback, still re-asserted every iteration, exactly when \
+nothing anywhere needs a wall-clock wake (`None`) — the pre-#556 behavior \
+for that case, unchanged. flui-platform's Linux-runnable suite runs in CI, \
+but no test in that suite drives a real winit event loop through \
+`about_to_wait` and asserts the resulting `ControlFlow` value itself — the \
+storage-level seam (`set_wake_deadline_hook` lands in the same \
+`PlatformHandlers` slot `about_to_wait` reads) is what \
+`set_wake_deadline_hook_installs_into_the_shared_handler_slot` pins; the \
+`WaitUntil`-vs-`Wait` branch itself stays source-level only, same \
+limitation as before this slice.\
 """
 state = "implemented"
 domain = "platform"
 mechanical = true
 mechanism = "source-gate pins the set_control_flow call"
 evidence = [
-    { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "set_control_flow(winit::event_loop::ControlFlow::Wait)" },
-    { kind = "source-gate", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "set_control_flow(winit::event_loop::ControlFlow::Wait)" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn set_wake_deadline_hook" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "ControlFlow::WaitUntil(deadline)" },
+    { kind = "source-gate", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "ControlFlow::WaitUntil(deadline)" },
+    { kind = "test", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn set_wake_deadline_hook_installs_into_the_shared_handler_slot" },
 ]
 
 [[contract]]
@@ -1697,12 +1772,96 @@ key = "timer-service-for-frozen-tickers"
 statement = """
 Time-based UX (timeout-shaped animations) must not silently freeze with the \
 frame gate; a wall-clock timer service independent of the frame tick is the \
-named correctness seam. This is not solved by frame pacing.\
+named correctness seam. This is not solved by frame pacing. \
+\
+**Closed for gesture-arena deadlines specifically (#556), design + code, \
+NOT automated-test-covered end to end — kept `planned`, not flipped to \
+`partial`, until it is.** `UiRealm::draw_frame_entered`'s gesture-deadline \
+tick (`presentation.gestures().tick_deadlines()`) always ran \
+unconditionally, before the per-presentation `FrameClock` segment gate is \
+even consulted — so a presentation gated (`FrameClock::set_hidden`) still \
+resolves an in-flight long-press/double-tap deadline through the arena's \
+own callback, with zero GPU submits \
+(`gated_long_press_resolves_through_the_arenas_own_callback_with_zero_\
+submits`, automated). The WALL-CLOCK half — `GestureBinding::next_deadline`/ \
+`GestureArena::next_deadline` feeding `UiRealm::next_wake`/`AppRuntime::\
+next_wake`, which the winit backend's `about_to_wait` consults every idle \
+iteration — is implemented, and its DECISION logic (the gate-driven pump, \
+`AppRuntime::next_wake`'s min-aggregation) is automated-tested \
+(`idle_presentation_over_a_real_wall_clock_window_produces_zero_then_\
+responds_instantly`, `next_wake_is_the_min_deadline_across_every_installed_\
+realm`, and the two single-realm/single-arena variants below). What is NOT \
+automated-tested: the winit-level ACTUATOR — `WinitApp::new_events`'s \
+`StartCause::ResumeTimeReached` handling turning a `ControlFlow::WaitUntil` \
+expiry into a real `request_redraw()`/`RedrawRequested` — because this \
+slice DID NOT write a live-loop test for it, not because one is impossible: \
+`flui-platform`'s own `build_test_event_loop` builds a real `EventLoop` off \
+the main thread via `EventLoopBuilderExtX11::with_any_thread` (Linux and \
+Windows; `#[ignore]`d on macOS, which does require the main thread), and \
+four tests already drive `run_app` on it under `xvfb-run`. The real \
+constraints are one `EventLoop` per process — which nextest's \
+process-per-test satisfies — and macOS affinity. Closing this contract \
+means writing that test. The actuator was verified with a STANDALONE, manual \
+probe instead (a throwaway winit 0.30.13 binary outside this repo's \
+automated suite): un-actuated, ~657k-678k `about_to_wait` iterations per \
+500ms (an unbounded spin); actuated, 6 iterations per 500ms with the \
+armed deadline resolving 14-78µs after its own instant. Full detail in \
+`docs/adr/ADR-0044-driver-loop-hybrid.md` §7. This state stays `planned` \
+because the bar for `partial`/`implemented` in this registry is automated \
+regression coverage, and the one piece that closes this contract's own \
+"must not silently freeze" claim end to end — the real winit actuator — \
+has none; flip it only once a genuine live-loop test lands (tracked as \
+future work, not attempted here as a workaround). \
+\
+**Two named residual gaps, not silently closed:** (1) `GestureTimerService` \
+(`flui-interaction`'s standalone timer utility, distinct from the gesture \
+arena) still has ZERO production callers, and `AppRuntime::next_wake` \
+deliberately does NOT fold in `GestureTimerService::next_deadline` — an \
+earlier version composed it in anyway ("forward-composition at zero \
+cost"), but nothing on the wake path this aggregate feeds ever drains it \
+(`check_timers()` has no caller reachable from `draw_frame_entered`/ \
+`tick_deadlines`), so a timer scheduled through the public \
+`global_timer_service()` API would arm a `WaitUntil` that stays undrained \
+and therefore stays in the past once its instant elapses — the identical \
+unbounded-spin shape the winit actuator (above) closed, arriving from the \
+timer side. Caught in review, fixed by excluding the source from the \
+aggregate rather than inventing a drain call into a per-realm loop for a \
+service nothing schedules through; standalone-probe-measured: ~310K–390K \
+`about_to_wait` iterations per 500ms with the fold-in and the actuator \
+both present, vs. 6 excluded (same figure as the actuator fix's own \
+measurement) — pinned by \
+`next_wake_never_surfaces_the_global_timer_services_undrained_deadline` \
+(`crates/flui-app/src/app/runner.rs`), mutant-confirmed (restoring the \
+fold-in fails the test red). A hypothetical app-level "timeout animation" \
+that isn't a gesture-arena recognizer still has no wall-clock wake of its \
+own — composing this service back in is future work, gated on it gaining \
+a real drain call on this thread's own wake cycle first. (2) A REALM fully \
+backgrounded via the pre-existing, coarser `AppLifecycleState::Hidden`/ \
+`Paused`/`Detached` `frames_enabled` gate routes through \
+`WakeAction::PumpAsync`, which never calls `draw_frame_entered` at all — \
+so `tick_deadlines` does not run in THAT case either; fixing it would mean \
+touching the pre-#556 `PumpAsync` arm, a different, larger, unscoped \
+change this issue does not attempt.\
 """
 state = "planned"
 domain = "application"
 owner_issue = 556
 mechanical = false
+evidence = [
+    { kind = "symbol", file = "crates/flui-interaction/src/arena/mod.rs", contains = "fn next_deadline(&self) -> Option<Instant>" },
+    { kind = "symbol", file = "crates/flui-interaction/src/binding.rs", contains = "pub fn next_deadline(&self) -> Option<web_time::Instant>" },
+    { kind = "symbol", file = "crates/flui-interaction/src/timer.rs", contains = "pub fn next_deadline(&self) -> Option<Instant>" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn next_wake(&self) -> Option<web_time::Instant>" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(super) fn next_wake(&self) -> Option<web_time::Instant>" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_wake_deadline_hook" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_long_press_resolves_through_the_arenas_own_callback_with_zero_submits" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn next_wake_is_the_min_deadline_across_every_installed_realm" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn next_wake_is_the_min_deadline_across_two_presentations_of_one_realm" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena" },
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn new_events" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn next_wake_never_surfaces_the_global_timer_services_undrained_deadline" },
+]
 
 # Event-loop affinity capability
 

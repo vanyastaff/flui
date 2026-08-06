@@ -829,6 +829,64 @@ impl AppRuntime {
         first_observed
     }
 
+    /// The earliest wall-clock instant this loop's platform event loop
+    /// should wake at instead of blocking forever (issue #556's wall-clock
+    /// wake) — the min over every hosted realm's own
+    /// [`super::ui_realm::UiRealm::next_wake`] (which itself is the min over
+    /// that realm's own presentations' armed gesture-arena deadlines).
+    /// `None` when nothing anywhere needs a wall-clock wake — the loop
+    /// falls back to blocking indefinitely, exactly as before this
+    /// mechanism existed.
+    ///
+    /// **Design-for-N (N realms on one loop thread):** iterates every
+    /// resident slot, same discipline as [`Self::installed_realm_phase`] —
+    /// a realm currently checked out for dispatch (`slot.realm` is `None`)
+    /// contributes nothing to this call, which is correct: this is only
+    /// ever consulted from `about_to_wait`, after every dispatch for this
+    /// iteration has already returned and every realm slot is back in
+    /// place.
+    ///
+    /// **Deliberately does NOT fold in
+    /// [`flui_interaction::global_timer_service`]'s own next deadline —
+    /// caught in review, not before.** An earlier version of this method
+    /// composed `global_timer_service().next_deadline()` into the `.min()`
+    /// on the reasoning that the service has zero production callers today
+    /// (see `dropping_realm_a_cannot_wake_realm_b`'s doc, `ui_realm.rs`), so
+    /// folding it in was "forward-composing at zero cost while nothing
+    /// does". That reasoning was wrong: nothing on the wake path this
+    /// aggregate feeds ever calls
+    /// [`GestureTimerService::check_timers`](flui_interaction::GestureTimerService::check_timers) —
+    /// the realm frame callback ticks gesture-arena deadlines
+    /// (`presentation.gestures().tick_deadlines()`, near
+    /// `UiRealm::draw_frame_entered`'s first per-presentation loop) but
+    /// never touches this separate, process-global service. A timer
+    /// scheduled through the public `global_timer_service()` API — the
+    /// service is deliberately ambient by design, not realm-scoped, so any
+    /// caller anywhere can reach it — would arm a `WaitUntil` that, once its
+    /// instant passes, stays undrained and therefore stays in the past:
+    /// the very next `about_to_wait` would recompute the SAME past instant
+    /// forever, the identical unbounded-spin shape that motivated
+    /// `WinitApp::new_events`'s own actuator fix on the redraw side
+    /// (arming a `WaitUntil` deadline is not enough on its own — something
+    /// has to advance it, or a stale-but-real instant re-arms itself
+    /// forever). Standalone-probe-measured, not asserted: with
+    /// the fold-in and an actuator present, ~310K–390K `about_to_wait`
+    /// iterations per 500ms (vs. 6 with this method staying as it is now)
+    /// — see `next_wake_never_surfaces_the_global_timer_services_undrained_
+    /// deadline` (`runner.rs`) for the automated regression pin.
+    /// [`GestureTimerService::next_deadline`](flui_interaction::GestureTimerService::next_deadline)
+    /// itself is unaffected — it stays a correct, independently-tested
+    /// lookup — this method simply does not consult it until the service
+    /// gains a real drain path on this thread's own wake cycle.
+    #[must_use]
+    pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
+        self.realms
+            .iter()
+            .filter_map(|(_, slot)| slot.realm.as_ref())
+            .filter_map(super::ui_realm::UiRealm::next_wake)
+            .min()
+    }
+
     /// The un-deferred application of an `Install` mutation: registers
     /// `window` in the `WindowRegistry` FIRST, strictly (never replacing an
     /// existing mapping — an id collision is refused, not silently

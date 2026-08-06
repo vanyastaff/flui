@@ -195,6 +195,39 @@ fn install_exit_policy_hook(policy: ExitPolicy) {
     });
 }
 
+/// Installs the wall-clock-wake hook this thread's platform
+/// backend consults, once per idle iteration, for the earliest instant it
+/// should wake at instead of blocking forever — see
+/// [`flui_platform::traits::Platform::set_wake_deadline_hook`]'s doc for the
+/// full contract. Call once, alongside [`install_exit_policy_hook`], from
+/// every backend that wants this: today, that is `run_desktop` only —
+/// Android/web bootstraps never call this (their platforms don't override
+/// that trait method either, so it would be inert there anyway).
+///
+/// The hook itself re-enters `APP_RUNTIME` only when the PLATFORM calls it
+/// later (`about_to_wait`) — never synchronously from this function, which
+/// only registers it — so this does not violate `with_owner_platform`'s "no
+/// host re-entry" rule. Read-only (`AppRuntime::next_wake` takes `&self`),
+/// unlike `install_exit_policy_hook`'s `&mut self` — no deferred-mutation
+/// drain needed here, since computing a wake deadline never touches the
+/// realm registry itself.
+#[cfg(not(target_os = "ios"))]
+#[cfg_attr(
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+    expect(
+        dead_code,
+        reason = "run_desktop (its one caller) is desktop-only -- android/wasm32 bootstraps \
+                  never call this"
+    )
+)]
+fn install_wake_deadline_hook() {
+    with_owner_platform(|owner| {
+        owner.shared().set_wake_deadline_hook(Box::new(|| {
+            APP_RUNTIME.with(|slot| slot.borrow().next_wake())
+        }));
+    });
+}
+
 /// Borrow-style access to the loop-scoped owner-platform capability.
 /// `None` if no `OwnerPlatform` is currently installed on this thread
 /// (before `on_ready`, or after the host was cleared).
@@ -652,6 +685,20 @@ impl PlatformToUi {
                 emit_lifecycle_transition(realm, old, new);
             }
             Self::WindowVisibility(visible) => {
+                // Presentation-level `FrameClock` gate — finer
+                // grained than the loop-scoped `AppLifecycleState` derivation
+                // below: `set_presentation_hidden` gates exactly the
+                // presentation this event was stamped for, addressed by its
+                // own `presentation_id`, independent of whether any OTHER
+                // signal also flips the coarser realm-wide lifecycle state.
+                // Ordered before the lifecycle derivation so an unhide's
+                // wake (if any) is requested before, not after, the
+                // frames-reenable redirty below might also request one —
+                // `wake_frame` is idempotent to call twice in the same
+                // dispatch, so this ordering is a clarity choice, not a
+                // correctness requirement.
+                realm.set_presentation_hidden(presentation_id, !visible);
+
                 let (old, new) = APP_RUNTIME.with(|slot| {
                     let mut state = slot.borrow_mut();
                     let old = derive_lifecycle_state(state.visible, state.focused);
@@ -3342,6 +3389,160 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
+    /// `AppRuntime::next_wake` (the wall-clock wake seam) computes the
+    /// MIN wake deadline across every hosted realm on this loop thread — an
+    /// idle realm with an earlier-armed deadline must win over a busier
+    /// sibling with a later one, regardless of install order. Realm A gets
+    /// a far (5s) long-press timeout; realm B (installed second) gets a
+    /// near (50ms) one — the aggregate must reflect B's, not A's, and not
+    /// merely "whichever realm happens to be dispatched last".
+    ///
+    /// The recognizers are kept alive in `recognizers` for the whole test:
+    /// `GestureArena`'s deadline registry holds only a `Weak` reference, so
+    /// a recognizer dropped at the end of its own dispatch closure would
+    /// silently vanish from `next_deadline`'s snapshot before this test ever
+    /// reads it.
+    #[test]
+    fn next_wake_is_the_min_deadline_across_every_installed_realm() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use flui_interaction::{
+            GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
+        };
+
+        let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+        // `Rc`, not `Arc`: `LongPressGestureRecognizer` is owner-thread-affine
+        // (`!Send`/`!Sync`, like every gesture recognizer), and this vec
+        // never needs to cross a thread -- both dispatches below run on this
+        // same test thread.
+        let recognizers: Rc<RefCell<Vec<Arc<LongPressGestureRecognizer>>>> =
+            Rc::new(RefCell::new(Vec::new()));
+
+        let recognizers_a = Rc::clone(&recognizers);
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                let arena = realm.gestures().arena().clone();
+                let recognizer = LongPressGestureRecognizer::with_settings(
+                    arena,
+                    GestureSettings::touch_defaults()
+                        .with_long_press_timeout(std::time::Duration::from_secs(5)),
+                )
+                .with_on_long_press(|| {});
+                let pointer = PointerId::new(2).expect("nonzero pointer id");
+                recognizer.add_pointer(
+                    pointer,
+                    flui_types::Offset::new(
+                        flui_types::geometry::px(10.0),
+                        flui_types::geometry::px(10.0),
+                    ),
+                );
+                recognizers_a.borrow_mut().push(recognizer);
+            })),
+        )
+        .expect("A dispatches");
+
+        let before_b = std::time::Instant::now();
+        let recognizers_b = Rc::clone(&recognizers);
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Frame(Box::new(move |realm| {
+                let arena = realm.gestures().arena().clone();
+                let recognizer = LongPressGestureRecognizer::with_settings(
+                    arena,
+                    GestureSettings::touch_defaults()
+                        .with_long_press_timeout(std::time::Duration::from_millis(50)),
+                )
+                .with_on_long_press(|| {});
+                let pointer = PointerId::new(3).expect("nonzero pointer id");
+                recognizer.add_pointer(
+                    pointer,
+                    flui_types::Offset::new(
+                        flui_types::geometry::px(20.0),
+                        flui_types::geometry::px(20.0),
+                    ),
+                );
+                recognizers_b.borrow_mut().push(recognizer);
+            })),
+        )
+        .expect("B dispatches");
+
+        let next_wake = APP_RUNTIME
+            .with(|slot| slot.borrow().next_wake())
+            .expect("two armed deadlines pending -- next_wake must be Some");
+
+        let until_wake = next_wake.saturating_duration_since(before_b);
+        assert!(
+            until_wake < std::time::Duration::from_secs(1),
+            "next_wake must reflect realm B's near (50ms) deadline, not realm A's far (5s) \
+             one -- got {until_wake:?} until wake"
+        );
+
+        drop(recognizers);
+        teardown_platform_realm();
+    }
+
+    /// Regression pin, driving the real production sequence: `AppRuntime::
+    /// next_wake` must never surface a deadline that nothing on the wake
+    /// path drains. `GestureTimerService` (`flui_interaction::
+    /// global_timer_service`) has no production caller of
+    /// `check_timers()` reachable from `UiRealm::draw_frame_entered`/
+    /// `tick_deadlines` — an earlier version of `next_wake` folded its
+    /// `next_deadline()` into the aggregate anyway, so a timer scheduled
+    /// through the public `global_timer_service()` API could arm a
+    /// `WaitUntil` that, once past, never gets cleared: the very next
+    /// `about_to_wait` recomputes the identical past instant, the same
+    /// unbounded-spin shape the missing-actuator finding closed from the
+    /// other direction. A standalone winit probe (kept outside this
+    /// repo's automated suite) measured ~310K–390K `about_to_wait`
+    /// iterations per 500ms with the fold-in and an actuator present, vs.
+    /// 6 with the source excluded (this method's current shape).
+    ///
+    /// This test installs a realm with zero armed deadlines of its own,
+    /// schedules an already-due timer directly on the ambient
+    /// `global_timer_service()`, and asserts `next_wake()` answers `None`
+    /// — the due, undrained timer must never surface into the wall-clock
+    /// wake computation at all.
+    #[test]
+    fn next_wake_never_surfaces_the_global_timer_services_undrained_deadline() {
+        let dispatcher = install_test_realm();
+        dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_realm| {})))
+            .expect("realm dispatches with nothing armed");
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_in_timer = Arc::clone(&fired);
+        let timer = flui_interaction::global_timer_service().schedule(
+            std::time::Duration::ZERO,
+            move || {
+                fired_in_timer.store(true, std::sync::atomic::Ordering::SeqCst);
+            },
+        );
+
+        let next_wake = APP_RUNTIME.with(|slot| slot.borrow().next_wake());
+        assert!(
+            next_wake.is_none(),
+            "a due timer on the ambient global_timer_service() must not surface into \
+             next_wake() -- nothing on the wake path drains it, so folding it in would \
+             re-arm the same past instant on every about_to_wait forever"
+        );
+
+        // Drain it explicitly so this test doesn't leak a live, still-armed
+        // timer into whatever runs next in this process — `global_timer_
+        // service()` is process-global BY DESIGN (see `ui_realm.rs`'s
+        // `dropping_realm_a_cannot_wake_realm_b`), so under `cargo test`'s
+        // shared-process parallelism (never under `cargo nextest run`,
+        // which gives this test its own process) it may already have been
+        // drained by a concurrently-running test; either way, this call is
+        // idempotent and the callback firing (or not, if raced away) is not
+        // itself under test here.
+        flui_interaction::global_timer_service().check_timers();
+        let _ = fired.load(std::sync::atomic::Ordering::SeqCst);
+        drop(timer);
+
+        teardown_platform_realm();
+    }
+
     /// A rejected nested cross-realm dispatch must never smuggle its task
     /// into the target realm's queue: the task must not run during the
     /// rejected attempt, AND must not be silently delivered by the NEXT
@@ -5711,6 +5912,97 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
+    /// `PlatformToUi::WindowVisibility` (hidden-surface gating) is
+    /// per-presentation, addressed to exactly the presentation
+    /// that produced it — never the realm-wide aggregate alone. Driven
+    /// through the REAL dispatch seam (`dispatch_platform_realm`), not a
+    /// direct `UiRealm::set_presentation_hidden` call, so this exercises
+    /// `PlatformToUi::run`'s actual `WindowVisibility` arm.
+    ///
+    /// Mutant, confirmed to make this fail: removing
+    /// `realm.set_presentation_hidden(presentation_id, !visible)` from that
+    /// arm (leaving only the pre-existing loop-scoped `AppLifecycleState`
+    /// derivation) -- both presentations' clocks would stay unhidden
+    /// regardless of which one the event was addressed to.
+    #[test]
+    fn window_visibility_gates_exactly_the_addressed_presentations_clock() {
+        let platform = flui_platform::headless_platform();
+        let window_a = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window a");
+        let window_b = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window b");
+
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        let dispatcher_a = install_platform_realm(realm, &window_a);
+        let a_id = dispatcher_a.address.presentation_id;
+        let dispatcher_b = install_presentation_alongside(dispatcher_a, &window_b)
+            .expect("B installs alongside A with a real window mapping");
+        let b_id = dispatcher_b.address.presentation_id;
+
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_eq!(
+                    realm.presentation_hidden_for_test(a_id),
+                    Some(false),
+                    "precondition: neither presentation starts hidden"
+                );
+                assert_eq!(realm.presentation_hidden_for_test(b_id), Some(false));
+            })),
+        )
+        .expect("precondition frame task dispatches");
+
+        // WindowVisibility(false) (occluded) dispatched for B only.
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Event(PlatformToUi::WindowVisibility(false)),
+        )
+        .expect("WindowVisibility(false) for B dispatches");
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_eq!(
+                    realm.presentation_hidden_for_test(b_id),
+                    Some(true),
+                    "WindowVisibility(false) dispatched through the real production path must \
+                     hide exactly the presentation it was addressed to"
+                );
+                assert_eq!(
+                    realm.presentation_hidden_for_test(a_id),
+                    Some(false),
+                    "a sibling presentation's own clock must be untouched by an event \
+                     addressed to a DIFFERENT presentation"
+                );
+            })),
+        )
+        .expect("frame task dispatches");
+
+        // WindowVisibility(true) (unoccluded) dispatched for B undoes it,
+        // still leaving A untouched.
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Event(PlatformToUi::WindowVisibility(true)),
+        )
+        .expect("WindowVisibility(true) for B dispatches");
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert_eq!(
+                    realm.presentation_hidden_for_test(b_id),
+                    Some(false),
+                    "WindowVisibility(true) must unhide exactly the presentation it was \
+                     addressed to"
+                );
+                assert_eq!(realm.presentation_hidden_for_test(a_id), Some(false));
+            })),
+        )
+        .expect("frame task dispatches");
+
+        teardown_platform_realm();
+    }
+
     /// If `window`'s id is already registered (forced here by reusing A's
     /// OWN window as the "second" presentation's window), the forest must
     /// be left EXACTLY as it was -- no presentation resident without a
@@ -6351,6 +6643,240 @@ mod desktop_pacing_tests {
 
         controller.dispose();
     }
+
+    /// The idle/instant-response headline (adaptive on-demand pacing),
+    /// driven through the SAME real dirty-gate every other production wake
+    /// goes through -- `wake_action`, `keeps_frame_gate_open`, and
+    /// `no_present_fallback_pace` -- not a bare fixed-interval poll loop.
+    ///
+    /// This distinction is load-bearing, not stylistic: `has_pending_work`
+    /// includes `gestures().has_pending_deadlines()`, so a pending
+    /// gesture-arena deadline keeps `dirty == true` for the ENTIRE time it
+    /// is armed. An earlier version of this test called
+    /// `drive_frame_with_lane` on a fixed 5ms interval regardless of this
+    /// gate, which made "zero produces" true but hid a real cost: driven
+    /// through the real gate, ANY wake while the deadline is
+    /// armed-but-not-due reads `dirty == true` -> `WakeAction::Render` ->
+    /// a full (unpainting) pump -> `presented == false`, and with the gate
+    /// still open afterward, `no_present_fallback_pace` would sleep on the
+    /// calling thread. What keeps this genuinely idle is that NOTHING
+    /// wakes the loop until the deadline's own instant (`UiRealm::next_wake`,
+    /// standing in for the real winit `about_to_wait`/`new_events`
+    /// actuator this crate cannot drive with a live event loop under its
+    /// own test harness) -- so there is exactly ONE real callback over the
+    /// whole window, not many, and the fallback sleep never engages.
+    #[test]
+    fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use flui_engine::{EngineError, RasterBackend};
+        use flui_interaction::{
+            GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
+        };
+        use flui_layer::Scene;
+
+        struct CountingProbeBackend {
+            render_scene_calls: u32,
+        }
+
+        impl RasterBackend for CountingProbeBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                self.render_scene_calls += 1;
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        realm
+            .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+            .expect("attach succeeds");
+        let mut backend = CountingProbeBackend {
+            render_scene_calls: 0,
+        };
+
+        // Settle the attach's own first paint, through the real gate --
+        // so the "instant response" check at the end has real content to
+        // actually submit, not a vacuous zero-widget tree.
+        let now = Instant::now();
+        realm.record_compositor_tick(now);
+        let dirty = realm.needs_redraw() || realm.has_pending_work();
+        assert_eq!(
+            wake_action(
+                realm.scheduler().frames_enabled(),
+                dirty,
+                realm.scheduler().is_frame_scheduled()
+            ),
+            WakeAction::Render,
+            "precondition: the attach's own pending build must render"
+        );
+        realm.scheduler().drive_frame_with_lane(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {
+                let _ = realm.render_frame_entered(&mut backend);
+            },
+            realm.local_post_frame_lane(),
+        );
+
+        // A live async task, polled through the scheduler's real mid-frame
+        // slot whenever a pump actually runs -- it never touches
+        // demand/dirty state.
+        let async_polls = Arc::new(AtomicUsize::new(0));
+        let async_polls_for_task = Arc::clone(&async_polls);
+        let _token = realm.scheduler().spawn_local(Box::pin(async move {
+            async_polls_for_task.fetch_add(1, Ordering::Release);
+        }));
+
+        // A real, in-flight gesture-arena deadline, due 100ms from now.
+        let arena = realm.gestures().arena().clone();
+        let long_press_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fired_for_callback = Arc::clone(&long_press_fired);
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena,
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(100)),
+        )
+        .with_on_long_press(move || fired_for_callback.store(true, Ordering::SeqCst));
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        recognizer.add_pointer(
+            pointer,
+            flui_types::Offset::new(
+                flui_types::geometry::px(10.0),
+                flui_types::geometry::px(10.0),
+            ),
+        );
+
+        let produced_before = realm.primary_produced_count_for_test();
+        let submits_before = backend.render_scene_calls;
+
+        // Drive the loop waking ONLY at `next_wake`'s own computed instant
+        // -- no artificial fixed-interval polling.
+        let window_end = Instant::now() + Duration::from_millis(300);
+        let mut render_calls = 0u32;
+        let mut skip_calls = 0u32;
+        // `next_wake() == None` means production would genuinely fall back
+        // to `ControlFlow::Wait` here (nothing left to wait for) -- once the
+        // one callback below resolves the deadline, that is the expected,
+        // successful end of the simulated window, not a bug, so the loop
+        // condition itself ends it.
+        while let Some(next_wake) = realm.next_wake() {
+            if next_wake >= window_end {
+                break;
+            }
+            let wait = next_wake.saturating_duration_since(Instant::now());
+            if !wait.is_zero() {
+                std::thread::sleep(wait);
+            }
+            let now = Instant::now();
+            realm.record_compositor_tick(now);
+            let dirty = realm.needs_redraw() || realm.has_pending_work();
+            match wake_action(
+                realm.scheduler().frames_enabled(),
+                dirty,
+                realm.scheduler().is_frame_scheduled(),
+            ) {
+                WakeAction::Skip => {
+                    skip_calls += 1;
+                    continue;
+                }
+                WakeAction::PumpAsync => panic!(
+                    "frames must stay enabled for this probe -- a PumpAsync wake would mean \
+                     something else broke lifecycle state, not the property under test"
+                ),
+                WakeAction::Render => {}
+            }
+            // Wrapped in `drive_frame_with_lane`, exactly like
+            // `bootstrap_desktop`'s `on_request_frame` closure -- this is
+            // the ONLY call site that actually polls the async driver's
+            // mid-frame slot; `render_frame_entered` alone does not.
+            realm.scheduler().drive_frame_with_lane(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                || {
+                    let presented = realm.render_frame_entered(&mut backend);
+                    let keeps_gate_open = keeps_frame_gate_open(
+                        realm.needs_redraw(),
+                        realm.scheduler().is_frame_scheduled(),
+                        realm.has_pending_work(),
+                    );
+                    if let Some(pace) = no_present_fallback_pace(presented, keeps_gate_open) {
+                        std::thread::sleep(pace);
+                    }
+                },
+                realm.local_post_frame_lane(),
+            );
+            render_calls += 1;
+        }
+
+        assert_eq!(
+            realm.primary_produced_count_for_test(),
+            produced_before,
+            "an idle presentation, driven through the real wake_action gate, must produce \
+             exactly zero additional frames over the wall-clock window -- {render_calls} \
+             render callbacks, {skip_calls} skips"
+        );
+        assert_eq!(
+            backend.render_scene_calls, submits_before,
+            "and submit exactly zero additional frames to the raster backend"
+        );
+        assert_eq!(
+            render_calls, 1,
+            "exactly ONE real callback over the whole idle window -- the deadline's own wake, \
+             nothing polled it more often than that (render_calls={render_calls}, \
+             skip_calls={skip_calls})"
+        );
+        assert_eq!(
+            async_polls.load(Ordering::Acquire),
+            1,
+            "the async driver's mid-frame poll must have genuinely run the spawned task, at \
+             the one real callback that occurred"
+        );
+        assert!(
+            long_press_fired.load(Ordering::SeqCst),
+            "the deadline must have resolved by the end of the window"
+        );
+
+        // Instant response: dirty the tree now and drive exactly one more
+        // real callback through the same gate -- must produce.
+        realm.request_redraw();
+        let dirty = realm.needs_redraw() || realm.has_pending_work();
+        assert_eq!(
+            wake_action(
+                realm.scheduler().frames_enabled(),
+                dirty,
+                realm.scheduler().is_frame_scheduled()
+            ),
+            WakeAction::Render,
+            "precondition: the fresh redraw request must render"
+        );
+        let _ = realm.render_frame_entered(&mut backend);
+
+        assert_eq!(
+            realm.primary_produced_count_for_test(),
+            produced_before + 1,
+            "the first dirty mark after the idle window must produce within the very next \
+             real callback"
+        );
+        assert_eq!(
+            backend.render_scene_calls, 1,
+            "and that callback must actually reach the raster backend"
+        );
+    }
 }
 
 #[cfg(all(
@@ -6458,6 +6984,14 @@ where
         // `AppRuntime`, invisible to the platform layer) can veto an exit
         // the backend would otherwise take unconditionally.
         install_exit_policy_hook(config.exit_policy);
+
+        // 0c. Wire the wall-clock-wake hook: the winit
+        // backend's `about_to_wait` consults this every idle iteration
+        // instead of blocking forever, so a pending gesture-arena deadline
+        // (a long-press hold, a double-tap give-up) still wakes the loop
+        // at the right instant even while nothing else is dirty and no
+        // animation is running.
+        install_wake_deadline_hook();
 
         // 1. Open window now that the event loop is running. Window creation is
         // an environment failure (display server hiccup, resource exhaustion),
@@ -6851,10 +7385,12 @@ where
 
         // Window focus/visibility -> the `(visible, focused)`
         // `AppLifecycleState` derivation. `on_visibility_status_change`
-        // rides winit's `Occluded` event; Wayland delivery is
-        // compositor-conditional (see that callback's doc) — where a
-        // compositor never sends it, the window is treated as always
-        // visible (the same as before this callback existed).
+        // rides winit's `Occluded` event, which winit 0.30 only emits on
+        // X11/macOS/iOS/Web (see that callback's own doc, verified against
+        // winit's source) — winit has NO Wayland emitter for this event at
+        // all, so on this workspace's own Wayland desktop reference the
+        // window is always treated as visible (the same as before this
+        // callback existed).
         window.on_active_status_change(Box::new(move |focused| {
             let _ = dispatch_platform_realm(
                 realm_dispatch,

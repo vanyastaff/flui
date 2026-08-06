@@ -411,22 +411,33 @@ impl FrameClock {
     /// the mask and this latch untouched, so a caller stuck on either of
     /// those two reasons stays armed-but-withheld until *something*
     /// causes a produce to actually succeed. This clock has no mechanism
-    /// of its own to make that happen: the two edges that would close the
-    /// gap structurally — a raster retire waking the owner once capacity
-    /// frees (in-flight backpressure), and an unhide waking the owner once
-    /// visibility returns (the hidden gate) — are the raster-owner and
-    /// hidden-surface-gating work this issue's later slices own, and
-    /// neither exists yet. Today, in this workspace's actual production
-    /// wiring, this dependency is dormant rather than a live bug: nothing
-    /// yet calls [`set_hidden`](Self::set_hidden) or
-    /// [`set_max_in_flight`](Self::set_max_in_flight)/[`record_submit`](Self::record_submit)
-    /// against a real presentation's clock, so `poll` never actually
-    /// returns either `Skip` reason in production — but wiring either
-    /// knob into production BEFORE the corresponding wake edge lands would
-    /// turn this dormant dependency into a real stall. A caller that
-    /// settles its OWN demand away without ever reaching a produce (rather
-    /// than being blocked by hidden/backpressure) is a different, already-
-    /// handled case: see [`clear_demand`](Self::clear_demand)'s doc.
+    /// of its own to make that happen — the two edges that close the gap
+    /// structurally live in the caller, not here.
+    ///
+    /// **`Hidden` is now wired and closed:** `flui-app`'s
+    /// `UiRealm::set_presentation_hidden` calls
+    /// [`set_hidden`](Self::set_hidden) from production
+    /// (`PlatformToUi::WindowVisibility`), and its own unhide branch is the
+    /// closing edge — it wakes the platform loop UNCONDITIONALLY when the
+    /// retained mask is nonempty, deliberately NOT gated on this latch's own
+    /// return value (the latch may already be armed from a mark that
+    /// predates the hide, a poke the loop already delivered and wasted
+    /// against a `Skip(Hidden)` poll — trusting it here would incorrectly
+    /// stay silent and strand the presentation). So a caller stuck on
+    /// `Skip(Hidden)` today is bounded: it un-strands at the next unhide,
+    /// not "whenever something else happens to wake the loop".
+    ///
+    /// **`Backpressure` remains open** — no raster owner exists yet, so
+    /// nothing calls [`set_max_in_flight`](Self::set_max_in_flight)/
+    /// [`record_submit`](Self::record_submit) against a real presentation's
+    /// clock, and `poll` never actually returns `Skip(Backpressure)` in
+    /// production. Wiring either knob into production ahead of a real
+    /// retire→wake edge (the raster-owner work this issue's later slice
+    /// owns) would turn this dormant half into a real stall, the same shape
+    /// `Hidden` had before it was closed. A caller that settles its OWN
+    /// demand away without ever reaching a produce (rather than being
+    /// blocked by hidden/backpressure) is a different, already-handled
+    /// case: see [`clear_demand`](Self::clear_demand)'s doc.
     pub fn try_arm_redraw_request(&self) -> bool {
         if self.hidden.get() || self.demand.get().is_empty() || self.redraw_requested.get() {
             return false;

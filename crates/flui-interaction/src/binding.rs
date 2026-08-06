@@ -867,6 +867,18 @@ impl GestureBinding {
         self.arena.has_pending_deadlines()
     }
 
+    /// The earliest instant any armed recognizer deadline in this binding's
+    /// arena will fire, if any — the wall-clock-wake counterpart of
+    /// [`has_pending_deadlines`](Self::has_pending_deadlines). A caller
+    /// computing a platform `ControlFlow::WaitUntil` target reads this so a
+    /// presentation with nothing else scheduled (no dirty tree, no running
+    /// animation) still wakes at the right instant to resolve an in-flight
+    /// long-press/double-tap deadline, rather than only lazily on the next
+    /// unrelated event.
+    pub fn next_deadline(&self) -> Option<web_time::Instant> {
+        self.arena.next_deadline()
+    }
+
     // ========================================================================
     // Internal Methods
     // ========================================================================

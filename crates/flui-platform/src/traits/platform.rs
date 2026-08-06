@@ -271,6 +271,38 @@ pub trait Platform: Send + Sync + 'static {
         let _ = hook;
     }
 
+    /// Install the hook this platform consults, once per idle iteration,
+    /// for the earliest wall-clock instant something upstream needs the
+    /// loop to wake at — a wired-through
+    /// [`ControlFlow::WaitUntil`](https://docs.rs/winit/latest/winit/event_loop/enum.ControlFlow.html)
+    /// deadline instead of blocking forever on
+    /// `ControlFlow::Wait`. `None` (no upstream deadline pending) keeps the
+    /// unconditional-`Wait` behavior exactly as before this hook existed.
+    ///
+    /// This is issue #556's wall-clock-wake seam: a gesture recognizer's
+    /// armed hold/give-up deadline (long-press, double-tap) or a pending
+    /// timer needs the loop to wake and re-drive a frame pump at the right
+    /// instant even when nothing else is dirty and no animation is
+    /// running — otherwise an idle `ControlFlow::Wait` loop never calls
+    /// back in to resolve it. `flui-app` computes the earliest such instant
+    /// across every realm it hosts on this thread (the platform layer
+    /// cannot see realms — `flui-app` depends on `flui-platform`, never the
+    /// reverse) and installs this hook once, the same seam
+    /// [`set_exit_policy_hook`](Self::set_exit_policy_hook) uses.
+    ///
+    /// Default no-op: a backend that never overrides this (every backend
+    /// except `winit` today — headless has no idle-blocking event loop to
+    /// wake, and Win32/AppKit/Android/Web/iOS remain cross-typecheck-only
+    /// for this mechanism, stated honestly rather than silently assumed)
+    /// keeps its pre-existing behavior exactly as before; installing a hook
+    /// there is inert.
+    fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
+        let _ = hook;
+    }
+
     // ==================== Window Management ====================
 
     /// Create and open a new window

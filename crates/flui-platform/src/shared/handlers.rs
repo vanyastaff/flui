@@ -8,6 +8,7 @@
 //! - [`WindowCallbacks`]: Per-window callbacks (input, resize, close, etc.)
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use flui_types::geometry::{Pixels, Size};
 use parking_lot::Mutex;
@@ -59,6 +60,32 @@ pub struct PlatformHandlers {
     /// pre-#555 unconditional "last window closed -> exit" default), so an
     /// embedder that never registers a hook sees no behavior change.
     pub exit_policy: Option<Box<dyn Fn() -> bool + Send>>,
+
+    /// Consulted once per idle event-loop iteration for the earliest
+    /// wall-clock instant the loop should wake at (issue #556's wall-clock
+    /// wake seam) — `None` (unset, or the hook itself answers `None`) keeps
+    /// the unconditional `ControlFlow::Wait` behavior exactly as before this
+    /// field existed. A backend that never reads this field at all is
+    /// unaffected by it.
+    ///
+    /// `Arc`, not `Box`: the hook itself re-enters `flui-app` (it walks
+    /// every hosted realm and takes gesture-arena locks), so a caller
+    /// holding this platform's own state lock must clone the `Arc` out and
+    /// invoke it AFTER releasing that lock (ADR-0038 §5's discipline) —
+    /// a `Box` would force either an in-lock call or a full field swap.
+    ///
+    /// The winit backend's `about_to_wait` is this field's one live
+    /// consumer today, and it reads the field DIRECTLY —
+    /// `state.handlers.wake_deadline.clone()` inside `with_state`, then
+    /// calls the cloned `Arc` after the lock guard has dropped — rather
+    /// than going through [`PlatformHandlers::invoke_wake_deadline`]. That
+    /// method takes `&self` and would need the lock held for its own
+    /// entire call, invoking the re-entrant hook while the lock is still
+    /// live and violating the exact discipline described above;
+    /// `invoke_wake_deadline` stays a convenience method for the
+    /// storage-level test that exercises this field in isolation, not a
+    /// production call site.
+    pub wake_deadline: Option<Arc<dyn Fn() -> Option<web_time::Instant> + Send + Sync>>,
 }
 
 impl PlatformHandlers {
@@ -71,6 +98,7 @@ impl PlatformHandlers {
             open_urls: None,
             keyboard_layout_changed: None,
             exit_policy: None,
+            wake_deadline: None,
         }
     }
 
@@ -130,6 +158,23 @@ impl PlatformHandlers {
     pub fn invoke_exit_policy(&self) -> bool {
         self.exit_policy.as_ref().is_none_or(|hook| hook())
     }
+
+    /// Consult the wake-deadline hook (see [`Self::wake_deadline`]'s doc).
+    /// `None` when unset — the previously-unconditional-`Wait` default. A
+    /// public method with no production caller: the winit backend's
+    /// `about_to_wait` (this field's one live production consumer) clones
+    /// the `Arc` directly out of [`Self::wake_deadline`] instead, because
+    /// this method takes `&self` and calling it would keep the platform
+    /// state lock held for the hook's entire re-entrant call — see
+    /// [`Self::wake_deadline`]'s own doc for why that ordering matters.
+    /// Only a storage-level test calls this directly today
+    /// (`set_wake_deadline_hook_installs_into_the_shared_handler_slot`,
+    /// `flui-platform/src/platforms/winit/platform.rs`), the same posture
+    /// [`Self::invoke_exit_policy`] documents for itself above.
+    #[inline]
+    pub fn invoke_wake_deadline(&self) -> Option<web_time::Instant> {
+        self.wake_deadline.as_ref().and_then(|hook| hook())
+    }
 }
 
 impl Default for PlatformHandlers {
@@ -150,6 +195,7 @@ impl std::fmt::Debug for PlatformHandlers {
                 &self.keyboard_layout_changed.is_some(),
             )
             .field("exit_policy", &self.exit_policy.is_some())
+            .field("wake_deadline", &self.wake_deadline.is_some())
             .finish()
     }
 }
@@ -204,11 +250,13 @@ pub struct WindowCallbacks {
     /// unfocused (Flutter's `AppLifecycleState::Inactive`), or focused but
     /// not visible (unusual, but not excluded). Feeds the `AppLifecycleState`
     /// derivation `ADR-0035` documents; winit's `WindowEvent::Occluded`
-    /// drives it on desktop. Wayland compositors deliver occlusion via the
-    /// xdg-shell v6 `suspended` state, a compositor-conditional extension;
-    /// where a compositor never sends it, this callback simply never fires
-    /// — the window is treated as always visible (the same behavior as
-    /// before this callback existed).
+    /// drives it on desktop, but only on X11 (Xlib's
+    /// `VisibilityFullyObscured` — full obscuration only), macOS, iOS, and
+    /// Web — winit 0.30 has no Wayland emitter for this event at all
+    /// ("Android / Wayland / Windows / Orbital: Unsupported", per winit's
+    /// own `WindowEvent::Occluded` doc). Where it is never delivered, this
+    /// callback simply never fires — the window is treated as always
+    /// visible (the same behavior as before this callback existed).
     pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the mouse enters or leaves the window. Parameter:
