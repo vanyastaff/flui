@@ -3483,6 +3483,66 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
+    /// Regression pin, driving the real production sequence: `AppRuntime::
+    /// next_wake` must never surface a deadline that nothing on the wake
+    /// path drains. `GestureTimerService` (`flui_interaction::
+    /// global_timer_service`) has no production caller of
+    /// `check_timers()` reachable from `UiRealm::draw_frame_entered`/
+    /// `tick_deadlines` — an earlier version of `next_wake` folded its
+    /// `next_deadline()` into the aggregate anyway, so a timer scheduled
+    /// through the public `global_timer_service()` API could arm a
+    /// `WaitUntil` that, once past, never gets cleared: the very next
+    /// `about_to_wait` recomputes the identical past instant, the same
+    /// unbounded-spin shape the missing-actuator finding closed from the
+    /// other direction. A standalone winit probe (kept outside this
+    /// repo's automated suite) measured ~310K–390K `about_to_wait`
+    /// iterations per 500ms with the fold-in and an actuator present, vs.
+    /// 6 with the source excluded (this method's current shape).
+    ///
+    /// This test installs a realm with zero armed deadlines of its own,
+    /// schedules an already-due timer directly on the ambient
+    /// `global_timer_service()`, and asserts `next_wake()` answers `None`
+    /// — the due, undrained timer must never surface into the wall-clock
+    /// wake computation at all.
+    #[test]
+    fn next_wake_never_surfaces_the_global_timer_services_undrained_deadline() {
+        let dispatcher = install_test_realm();
+        dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_realm| {})))
+            .expect("realm dispatches with nothing armed");
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_in_timer = Arc::clone(&fired);
+        let timer = flui_interaction::global_timer_service().schedule(
+            std::time::Duration::ZERO,
+            move || {
+                fired_in_timer.store(true, std::sync::atomic::Ordering::SeqCst);
+            },
+        );
+
+        let next_wake = APP_RUNTIME.with(|slot| slot.borrow().next_wake());
+        assert!(
+            next_wake.is_none(),
+            "a due timer on the ambient global_timer_service() must not surface into \
+             next_wake() -- nothing on the wake path drains it, so folding it in would \
+             re-arm the same past instant on every about_to_wait forever"
+        );
+
+        // Drain it explicitly so this test doesn't leak a live, still-armed
+        // timer into whatever runs next in this process — `global_timer_
+        // service()` is process-global BY DESIGN (see `ui_realm.rs`'s
+        // `dropping_realm_a_cannot_wake_realm_b`), so under `cargo test`'s
+        // shared-process parallelism (never under `cargo nextest run`,
+        // which gives this test its own process) it may already have been
+        // drained by a concurrently-running test; either way, this call is
+        // idempotent and the callback firing (or not, if raced away) is not
+        // itself under test here.
+        flui_interaction::global_timer_service().check_timers();
+        let _ = fired.load(std::sync::atomic::Ordering::SeqCst);
+        drop(timer);
+
+        teardown_platform_realm();
+    }
+
     /// A rejected nested cross-realm dispatch must never smuggle its task
     /// into the target realm's queue: the task must not run during the
     /// rejected attempt, AND must not be silently delivered by the NEXT
