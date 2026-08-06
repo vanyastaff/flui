@@ -1534,6 +1534,34 @@ impl UiRealm {
         !self.presentations.primary().clock().is_deferred()
     }
 
+    /// Records a compositor/platform-delivered frame-request signal — a
+    /// native `RedrawRequested` the platform actually paces (Wayland's
+    /// per-surface frame callbacks; see `docs/adr/ADR-0044-driver-loop-hybrid.md`'s
+    /// per-platform table for which backends genuinely deliver one) —
+    /// against the primary presentation's
+    /// [`FrameClock`](flui_scheduler::FrameClock). See
+    /// [`FrameClock::record_compositor_tick`](flui_scheduler::FrameClock::record_compositor_tick)
+    /// for what this feeds (pacing feedback plus a `Host`-demand safety
+    /// net). Single-presentation-addressed for the same reason
+    /// [`Self::vsync`] is — production topology's current ratchet is
+    /// exactly one presentation per realm.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "run_web's own RAF-driven frame-pump closure does not call this yet -- \
+                      wiring the web backend's compositor-tick feedback is deferred, stated \
+                      honestly in docs/adr/ADR-0044-driver-loop-hybrid.md's per-platform table \
+                      (RAF-driven produce is deferred; web keeps the wake-channel driver)"
+        )
+    )]
+    pub(crate) fn record_compositor_tick(&self, now: web_time::Instant) {
+        self.presentations
+            .primary()
+            .clock()
+            .record_compositor_tick(now);
+    }
+
     /// Total frames rendered successfully by this presentation.
     #[cfg_attr(
         not(test),
@@ -1775,20 +1803,40 @@ impl UiRealm {
         let now = self.now_secs();
         for presentation in self.presentations.iter() {
             let vsync = presentation.vsync();
+            // Sampled BEFORE the tick, not after: the tick that completes a
+            // controller still delivers that controller's final value and
+            // status change (`.flutter/packages/flutter/lib/src/scheduler/
+            // ticker.dart:272-285`'s `_tick` calls `_onTick` unconditionally,
+            // THEN checks whether to schedule another one), so THIS pump's
+            // own segment must still run to flush it — the identical
+            // before/after-tick question `flui-testing`'s own
+            // `pump_presentation` had to fix (see its doc), just never wired
+            // at this layer before this slice.
+            let was_running = vsync.has_running();
             vsync.tick_all(now);
 
-            // Frame continuation: if any controller is still running after
-            // this tick, request the NEXT frame so the runner gate stays
-            // open for the full animation duration. This deliberately does
-            // NOT mark demand on `presentation.clock()`: the pump stays
-            // wake-channel-driven for now, and a controller with no
-            // tree-visible effect must not force THIS pump's segment to run
-            // by itself — only the render/dirty state a listener actually
-            // sets does that, via `has_pending_work` below. Marking Animation
-            // demand directly from this signal is a later slice's job (the
-            // actuator/driver integration), once it cannot silently widen
-            // the segment gate past the predicate it replaces.
-            if vsync.has_running() {
+            if was_running {
+                // Marks demand for THIS pump's own segment (issue #556
+                // PR-C2 — the actuator/driver integration slice this was
+                // deliberately deferred to; see the removed comment this
+                // replaces). A running controller with no OTHER tree-visible
+                // effect now genuinely produces every tick, matching
+                // Flutter's own `Ticker`-driven `scheduleFrame`, rather than
+                // silently relying on some unrelated dirty state to also be
+                // present.
+                presentation.clock().mark_demand(DemandKind::Animation);
+            }
+
+            // Frame continuation: if still running AFTER this tick, keep
+            // the runner gate open for the NEXT pump — unchanged signal
+            // from before this slice (Flutter's own `shouldScheduleTick`,
+            // checked after the tick). What's new: this poke is
+            // edge-triggered against the demand mask
+            // (`FrameClock::try_arm_redraw_request`), so several ticks that
+            // land before a produce clears it (backpressure, a throttle
+            // window) collapse into exactly one platform-facing wake
+            // instead of one per tick.
+            if vsync.has_running() && presentation.clock().try_arm_redraw_request() {
                 self.wake_frame();
             }
 
@@ -7086,6 +7134,117 @@ mod tests {
                     .produced_count()
                     > a_produced_before_second,
                 "A's own clock must keep producing normally after B's presentation closes"
+            );
+
+            controller.dispose();
+        }
+
+        /// Driver-loop hybrid (issue #556 PR-C2): a running controller with
+        /// NO other tree-visible dirty state must still flush the segment
+        /// on every tick it's running -- Flutter's own `Ticker`-driven
+        /// `scheduleFrame` behavior, where the running ticker alone is
+        /// sufficient (a listener's own `notifyListeners` is not required
+        /// for the frame to be scheduled). Before this slice, `Animation`
+        /// demand was never marked in production wiring (`draw_frame_
+        /// entered`'s vsync-continuation loop only called `wake_frame()`,
+        /// never `presentation.clock().mark_demand`), so a bare running
+        /// controller with nothing else dirty would silently never flush
+        /// -- this is the regression this test exists to catch.
+        #[test]
+        fn a_running_controller_with_no_other_dirty_state_still_flushes_every_tick() {
+            use std::time::Duration;
+
+            use flui_animation::AnimationController;
+
+            let realm = UiRealm::for_test();
+            let controller = AnimationController::new(
+                Duration::from_millis(100),
+                &flui_scheduler::UpdateScheduler::new(),
+            );
+            realm.vsync().register(controller.clone());
+            controller.forward().expect("fresh controller forwards");
+
+            realm.set_now_secs_for_test(0.0);
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                1,
+                "a running controller alone, with no widget tree attached and no other \
+                 dirty state, must still flush this pump's segment"
+            );
+
+            realm.set_now_secs_for_test(0.05);
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                2,
+                "and again on the next mid-run tick"
+            );
+
+            controller.dispose();
+        }
+
+        /// Edge-trigger discipline, end to end (issue #556 PR-C2): N ticks
+        /// of a running controller that land while capacity never frees
+        /// must collapse into exactly one platform-facing wake, through
+        /// the REAL production call site (`draw_frame_entered`'s
+        /// vsync-continuation loop) — not just
+        /// `FrameClock::try_arm_redraw_request` in isolation (see
+        /// flui-scheduler's own unit test for that, at the bare-clock
+        /// level). A produce (capacity freed, then one more tick) must
+        /// re-arm it.
+        #[test]
+        fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm() {
+            use std::time::Duration;
+
+            use flui_animation::AnimationController;
+
+            let (wake, wake_count) = super::counting_wake();
+            let realm = super::new_runtime(wake).expect("runtime");
+            let controller = AnimationController::new(
+                Duration::from_secs(1),
+                &flui_scheduler::UpdateScheduler::new(),
+            );
+            realm.vsync().register(controller.clone());
+            controller.forward().expect("fresh controller forwards");
+
+            let clock = realm.presentations.primary().clock();
+            clock.set_max_in_flight(1);
+            clock.record_submit(); // at capacity for the whole loop below
+            wake_count.store(0, Ordering::Relaxed);
+
+            for tick in 1..=5 {
+                realm.set_now_secs_for_test(0.01 * f64::from(tick));
+                let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            }
+            assert_eq!(
+                wake_count.load(Ordering::Relaxed),
+                1,
+                "five ticks landing while capacity never frees must collapse into exactly \
+                 one platform-facing wake"
+            );
+
+            // Free capacity: THIS pump's own segment produces (clearing the
+            // mask and the armed latch), but the wake decision it made
+            // happens BEFORE that same pump's `poll` — so it still observes
+            // the stale armed-from-before latch and correctly wakes zero
+            // additional times here.
+            clock.record_retire();
+            realm.set_now_secs_for_test(0.10);
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert_eq!(
+                wake_count.load(Ordering::Relaxed),
+                1,
+                "the produce-clearing pump itself needs no fresh wake -- it already ran"
+            );
+
+            // The NEXT tick sees a freshly-cleared mask/latch and re-arms.
+            realm.set_now_secs_for_test(0.11);
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            assert_eq!(
+                wake_count.load(Ordering::Relaxed),
+                2,
+                "a fresh tick after the produce must wake the platform again"
             );
 
             controller.dispose();

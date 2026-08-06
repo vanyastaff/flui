@@ -6487,6 +6487,18 @@ where
 
             let scheduler = realm.scheduler();
 
+        // Every fire of this callback is a genuine platform-delivered
+        // frame-request signal on this backend (`WinitWindowEvent::
+        // RedrawRequested` -> `dispatch_request_frame` -> here; see
+        // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
+        // pace this via the compositor vs. deliver it immediately).
+        // Recorded unconditionally, before the dirty/wake_action gate below
+        // decides whether anything actually runs this pump: pacing
+        // feedback is about observing the PLATFORM's own delivery timing,
+        // independent of whether this particular delivery ends up idle.
+            let now = web_time::Instant::now();
+            realm.record_compositor_tick(now);
+
         // Owner-inbox drain: commands and worker results
         // commit HERE, at the frame boundary while the scheduler phase is
         // Idle — never inside the frame transaction below. Runs before the
@@ -6542,8 +6554,11 @@ where
                 WakeAction::Render => {}
             }
 
-            let now = web_time::Instant::now();
-
+        // `now` is the SAME instant recorded into `record_compositor_tick`
+        // above, not a fresh read — this pump's pacing-feedback sample and
+        // its own frame-drive instant must agree, the same single-`now`-
+        // per-pump discipline every other call site in this closure
+        // already follows.
         // UpdateScheduler callbacks (animations). NOTE: the global `UpdateScheduler` is driven
         // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
         // (`UiRealm::draw_frame`) ticks off the realm's own `start` origin —
