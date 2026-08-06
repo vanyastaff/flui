@@ -338,10 +338,27 @@ impl FrameClock {
 
     /// Defer sending a produced frame to the engine until a matching
     /// [`lift`](Self::lift). Stacks: two `defer` calls need two `lift`
-    /// calls before a produce is no longer withheld. A no-op count-wise
-    /// once the first frame has ever been confirmed sent — mirrors the
-    /// oracle's "first-frame" naming: this gate cannot re-arm after a frame
-    /// has shipped.
+    /// calls before a produce is no longer withheld.
+    ///
+    /// The count is incremented UNCONDITIONALLY, even after the first frame
+    /// has already been confirmed sent — this call never becomes a no-op.
+    /// What changes is [`is_deferred`](Self::is_deferred)'s observable
+    /// answer: once [`has_sent_first_frame`](Self::has_sent_first_frame) is
+    /// `true`, it stays masked (`false`) regardless of the retained count,
+    /// so a `defer` issued after the first frame has shipped is retained
+    /// but has no effect — until
+    /// [`reset_first_frame_sent`](Self::reset_first_frame_sent)
+    /// deliberately un-masks it, at which
+    /// point every `defer` ever called (including ones issued after the
+    /// first frame shipped) becomes active again. This is exactly the
+    /// oracle's own contract, not a simplification of it:
+    /// `.flutter/packages/flutter/lib/src/rendering/binding.dart` —
+    /// `deferFirstFrame` (:603-606) increments `_firstFrameDeferredCount`
+    /// with no check on `_firstFrameSent` at all; `sendFramesToEngine`
+    /// (:591) is `_firstFrameSent || _firstFrameDeferredCount == 0` (the
+    /// count is masked, not cleared); `resetFirstFrameSent` (:627-634)
+    /// exists specifically so a test's later `deferFirstFrame`/
+    /// `allowFirstFrame` calls have an effect again.
     ///
     /// Deferring does NOT stop [`poll`](Self::poll) from running the
     /// segment: a nonzero demand mask still returns
@@ -465,15 +482,24 @@ impl FrameClock {
 
     /// The produce/skip decision for physical instant `now`.
     ///
-    /// Checked in this order: hidden, then capacity (in-flight/throttle),
-    /// then the demand mask. A nonzero mask always runs the segment
-    /// (clearing the mask and recording `now` as the last produce instant)
-    /// — first-frame deferral does NOT change whether the segment runs; it
-    /// only changes which of [`PollDecision::Produce`]/
-    /// [`PollDecision::ProduceWithheld`] comes back, so the caller knows
-    /// whether it may submit the result. Every `Skip` reason retains the
-    /// mask untouched, except [`SkipReason::NoDemand`] — there is nothing
-    /// to retain there, it IS the empty mask.
+    /// Checked in this order: hidden, then the demand mask, then capacity
+    /// (in-flight/throttle). An empty mask is ALWAYS `Skip(NoDemand)`,
+    /// regardless of whether a throttle or in-flight limit happens to be
+    /// configured — capacity is a reason to defer demand that exists, not a
+    /// reason to invent a demand that doesn't; checking it before the mask
+    /// would misreport an idle clock (no demand at all) as backpressured
+    /// whenever a caller had ALSO configured a throttle, which is wrong on
+    /// its own terms and would undermine the demand-driven-idle invariant
+    /// this clock exists to prove (idle must read `Skip(NoDemand)` on every
+    /// pump, never `Skip(Backpressure)`, however capacity happens to be
+    /// configured). A nonzero mask always runs the segment (clearing the
+    /// mask and recording `now` as the last produce instant) — first-frame
+    /// deferral does NOT change whether the segment runs; it only changes
+    /// which of [`PollDecision::Produce`]/[`PollDecision::ProduceWithheld`]
+    /// comes back, so the caller knows whether it may submit the result.
+    /// Every `Skip` reason retains the mask untouched, except
+    /// [`SkipReason::NoDemand`] — there is nothing to retain there, it IS
+    /// the empty mask.
     ///
     /// `now` is the caller's own responsibility to obtain from
     /// [`Self::now`] (or a shared instant several clocks/tickers observe
@@ -484,11 +510,11 @@ impl FrameClock {
         if self.hidden.get() {
             return PollDecision::Skip(SkipReason::Hidden);
         }
-        if !self.has_capacity(now) {
-            return PollDecision::Skip(SkipReason::Backpressure);
-        }
         if self.demand.get().is_empty() {
             return PollDecision::Skip(SkipReason::NoDemand);
+        }
+        if !self.has_capacity(now) {
+            return PollDecision::Skip(SkipReason::Backpressure);
         }
 
         self.demand.set(DemandMask::empty());
@@ -648,6 +674,44 @@ mod tests {
             clock.poll(manual.now()),
             PollDecision::Produce,
             "40ms after the last produce, past the 33ms window, must produce"
+        );
+    }
+
+    /// The unit-matrix cell that distinguishes checking demand before vs.
+    /// after capacity: an EMPTY mask must read `Skip(NoDemand)`, never
+    /// `Skip(Backpressure)`, regardless of whether a throttle or in-flight
+    /// limit happens to be configured. Capacity is a reason to defer
+    /// demand that exists, not a reason to invent demand that doesn't --
+    /// and this is exactly the cell the demand-driven-idle invariant
+    /// depends on (an idle clock must read `NoDemand` on every pump no
+    /// matter how capacity is configured).
+    #[test]
+    fn empty_mask_with_capacity_configured_is_still_no_demand_not_backpressure() {
+        // Throttle sub-case: a throttle with no prior produce is a no-op
+        // capacity-wise either way (there is nothing to measure the window
+        // against yet), so establish a real produce FIRST to arm the
+        // window, then poll again with an EMPTY mask while still inside
+        // it -- only THIS shape actually distinguishes checking demand
+        // before vs. after capacity.
+        let (throttled, throttled_clock) = manual();
+        throttled.set_min_produce_interval(Some(Duration::from_millis(33)));
+        throttled.mark_demand(DemandKind::Dirty);
+        assert_eq!(throttled.poll(throttled_clock.now()), PollDecision::Produce);
+        throttled_clock.advance(Duration::from_millis(10)); // still inside the 33ms window
+        assert_eq!(
+            throttled.poll(throttled_clock.now()),
+            PollDecision::Skip(SkipReason::NoDemand),
+            "an empty mask inside an active throttle window must still report NoDemand, \
+             not Backpressure"
+        );
+
+        let (at_capacity, at_capacity_clock) = manual();
+        at_capacity.set_max_in_flight(1);
+        at_capacity.record_submit();
+        assert_eq!(
+            at_capacity.poll(at_capacity_clock.now()),
+            PollDecision::Skip(SkipReason::NoDemand),
+            "an empty mask with the in-flight limit already reached must still report NoDemand"
         );
     }
 
@@ -973,6 +1037,41 @@ mod tests {
         assert!(
             !clock.is_deferred(),
             "a defer issued after the confirmed first frame must not re-close the gate"
+        );
+    }
+
+    /// The retained-not-cleared half of the same contract
+    /// (`.flutter/packages/flutter/lib/src/rendering/binding.dart:627-634`'s
+    /// `resetFirstFrameSent`, deliberately for tests that want a later
+    /// `defer`/`lift` pair to matter again): a `defer` issued after the
+    /// first frame shipped is retained, not discarded, so once
+    /// `reset_first_frame_sent` un-masks it, the deferral becomes active.
+    #[test]
+    fn a_defer_issued_after_sent_is_retained_and_becomes_active_again_after_reset() {
+        let (clock, manual) = manual();
+        clock.mark_demand(DemandKind::Dirty);
+        assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+        clock.mark_first_frame_sent();
+
+        // Masked, not discarded: `defer` here is retained even though it
+        // has no observable effect yet.
+        clock.defer();
+        assert!(
+            !clock.is_deferred(),
+            "masked while first_frame_sent holds -- not yet observable"
+        );
+
+        clock.reset_first_frame_sent();
+        assert!(
+            clock.is_deferred(),
+            "the earlier defer() must have been retained, not discarded -- reset un-masks it"
+        );
+
+        clock.mark_demand(DemandKind::Dirty);
+        assert_eq!(
+            clock.poll(manual.now()),
+            PollDecision::ProduceWithheld,
+            "the now-active retained deferral must withhold this produce"
         );
     }
 

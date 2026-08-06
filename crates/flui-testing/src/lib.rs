@@ -943,8 +943,24 @@ impl HeadlessBinding {
 
     /// Advance exactly `id`'s own clock and controller registry by `dt`,
     /// deterministically — ticks its `Vsync` (marking `Animation` demand if
-    /// a controller is still running after the tick), then polls its
-    /// `FrameClock`.
+    /// a controller was still running at the START of this tick), then
+    /// polls its `FrameClock`.
+    ///
+    /// Demand is sampled BEFORE `tick_all`, not after: the tick that
+    /// carries a controller across its completion threshold must still be
+    /// treated as real animation work, even though `has_running()` already
+    /// reports `false` by the time that same tick returns. This matches the
+    /// oracle's own contract — `.flutter/packages/flutter/lib/src/scheduler/
+    /// ticker.dart`'s `_tick` invokes `_onTick` unconditionally (deciding
+    /// whether to *reschedule* only afterward), and `.flutter/packages/
+    /// flutter/lib/src/animation/animation_controller.dart`'s own `_tick`
+    /// clamps the value to the endpoint, flips the status to `Completed`,
+    /// calls `stop()`, and ONLY THEN calls `notifyListeners()`/
+    /// `_checkStatusChanged()` — the completing tick still delivers the
+    /// final value and fires the status listener. Sampling `has_running()`
+    /// after `tick_all` would silently drop the one pump that carries that
+    /// final value/status, because by then the controller has already
+    /// stopped.
     ///
     /// No wall-clock read reaches this call: every timestamp
     /// [`FrameClock::poll`] sees traces back to this `advance`, on THIS
@@ -964,8 +980,9 @@ impl HeadlessBinding {
         entry.clock.advance(dt);
         let now = entry.clock.now();
         let now_secs = entry.virtual_clock.elapsed().as_secs_f64();
+        let was_running = entry.vsync.has_running();
         entry.vsync.tick_all(now_secs);
-        if entry.vsync.has_running() {
+        if was_running {
             entry.clock.mark_demand(DemandKind::Animation);
         }
         let _ = entry.clock.poll(now);
@@ -976,8 +993,21 @@ impl HeadlessBinding {
     /// independent: each clock advances and polls purely against its own
     /// state, sharing no timeline or mask with any other. A no-op if
     /// nothing is registered (there is no id list to fail loudly about).
+    ///
+    /// **The iteration order is defined and stable: ascending `PresentationId`
+    /// order, not insertion or hash order.** This registry is keyed in a
+    /// `HashMap`, whose iteration order is randomized per process (and
+    /// varies between `HeadlessBinding` instances within one process); on a
+    /// binding whose whole purpose is a deterministic, reproducible test
+    /// clock, letting `pump_all` fan out in hash order would be a
+    /// self-inflicted source of nondeterminism — two presentations'
+    /// controllers publishing into shared listener state (a test's own
+    /// tracking `Vec`, say) would then see a different callback interleaving
+    /// on every run.
     pub fn pump_all(&self, dt: Duration) {
-        for id in self.presentation_clocks.keys().copied() {
+        let mut ids: Vec<PresentationId> = self.presentation_clocks.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
             self.pump_presentation(id, dt);
         }
     }

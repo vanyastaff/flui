@@ -8,10 +8,11 @@
 //! cannot write.
 
 use std::num::NonZeroU32;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus, UpdateScheduler};
-use flui_foundation::PresentationId;
+use flui_foundation::{Listenable, PresentationId};
 use flui_scheduler::DemandKind;
 use flui_testing::HeadlessBinding;
 
@@ -327,4 +328,125 @@ fn reinstalling_a_presentation_id_starts_a_fresh_pair() {
     );
 
     controller.dispose();
+}
+
+/// The pump that completes a controller must still produce -- Flutter's own
+/// contract (`.flutter/packages/flutter/lib/src/scheduler/ticker.dart`'s
+/// `_tick` invokes `_onTick` unconditionally, deciding whether to
+/// *reschedule* only afterward; `.flutter/packages/flutter/lib/src/
+/// animation/animation_controller.dart`'s own `_tick` clamps the value to
+/// the endpoint, flips the status to `Completed`, calls `stop()`, and ONLY
+/// THEN notifies listeners) delivers the final value and status in the SAME
+/// tick that crosses the completion threshold. Sampling `has_running()`
+/// AFTER ticking (rather than before) would silently drop exactly that
+/// pump's demand, since by then the controller has already stopped.
+#[test]
+fn a_controller_completing_mid_pump_still_produces_the_final_frame() {
+    let mut binding = HeadlessBinding::new();
+    let a = presentation(0);
+    let vsync = binding.install_presentation_clock(a);
+
+    let controller = AnimationController::new(Duration::from_millis(50), &UpdateScheduler::new());
+    vsync.register(controller.clone());
+    controller.forward().expect("fresh controller forwards");
+
+    // The first pump is the registry's own "detection tick" (anchors
+    // t=0 to the current instant; the value does not move yet -- see
+    // `Vsync::tick_all`'s own doc). Every pump after that advances the
+    // real elapsed-since-anchor.
+    binding.pump_presentation(a, Duration::from_millis(10));
+    assert_eq!(controller.status(), AnimationStatus::Forward);
+
+    // Cross the 50ms duration in the very next pump -- this is the exact
+    // pump this test is about.
+    let produced_before_completion = binding.presentation_produced_count(a);
+    binding.pump_presentation(a, Duration::from_millis(60));
+
+    assert_eq!(controller.status(), AnimationStatus::Completed);
+    assert!(
+        (controller.value() - 1.0).abs() < 1e-4,
+        "the final frame's value must be the endpoint, got {}",
+        controller.value()
+    );
+    assert_eq!(
+        binding.presentation_produced_count(a),
+        produced_before_completion + 1,
+        "the pump that completes the controller must itself still produce -- it carries the \
+         final value/status the oracle delivers in that same tick, not the pump after"
+    );
+
+    controller.dispose();
+}
+
+/// `pump_all`'s iteration order is defined and stable (ascending
+/// `PresentationId`), not `HashMap` hash order -- on a binding whose whole
+/// purpose is a deterministic, reproducible clock, two presentations
+/// publishing into shared listener state must interleave identically on
+/// every run, in every process. Each presentation's own controller appends
+/// its OWN id to a single shared, ordered log via a plain value listener
+/// (fired on every tick, per-tick, not just on a status change), and both
+/// are installed in DESCENDING id order so an insertion-order (or
+/// hash-order) bug would show up as `[1, 0]` rather than the required
+/// ascending `[0, 1]`.
+#[test]
+fn pump_all_visits_presentations_in_stable_ascending_id_order() {
+    fn run() -> Vec<u32> {
+        let mut binding = HeadlessBinding::new();
+        let high = presentation(1);
+        let low = presentation(0);
+        // Installed high-id-first: insertion order alone would visit
+        // `high` before `low`, the opposite of the required order.
+        let high_vsync = binding.install_presentation_clock(high);
+        let low_vsync = binding.install_presentation_clock(low);
+
+        let log: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let high_controller =
+            AnimationController::new(Duration::from_secs(10), &UpdateScheduler::new());
+        let high_log = Arc::clone(&log);
+        high_controller.add_listener(Arc::new(move || high_log.lock().unwrap().push(1)));
+        high_vsync.register(high_controller.clone());
+        high_controller
+            .forward()
+            .expect("fresh controller forwards");
+
+        let low_controller =
+            AnimationController::new(Duration::from_secs(10), &UpdateScheduler::new());
+        let low_log = Arc::clone(&log);
+        low_controller.add_listener(Arc::new(move || low_log.lock().unwrap().push(0)));
+        low_vsync.register(low_controller.clone());
+        low_controller.forward().expect("fresh controller forwards");
+
+        // Even the first pump's "detection tick" (see `Vsync::tick_all`'s
+        // own doc) still ticks -- and therefore notifies -- both
+        // registered controllers, so this single `pump_all` call already
+        // exercises the visit order this test is about.
+        binding.pump_all(Duration::from_millis(5));
+
+        high_controller.dispose();
+        low_controller.dispose();
+
+        log.lock().unwrap().clone()
+    }
+
+    let first = run();
+    assert_eq!(
+        first,
+        vec![0, 1],
+        "pump_all must visit ascending PresentationId order (low before high), not \
+         insertion order"
+    );
+
+    // Repeat within this process to rule out a fluke; `HashMap`'s hash-seed
+    // randomization is picked once per process, so re-running here does not
+    // by itself prove cross-process stability, but a stable, ascending-id
+    // iteration MECHANISM (not reading `HashMap`'s own key order at all) is
+    // exactly what makes it stable across processes too.
+    for _ in 0..5 {
+        assert_eq!(
+            run(),
+            vec![0, 1],
+            "the order must be stable across repeated runs within this process too"
+        );
+    }
 }
