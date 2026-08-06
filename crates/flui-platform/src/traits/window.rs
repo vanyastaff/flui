@@ -315,10 +315,18 @@ pub trait PlatformWindow: Send + Sync {
     /// can be visible but unfocused, or occluded while still nominally
     /// focused.
     ///
-    /// Delivery is compositor/backend-conditional — on Wayland this rides
-    /// the xdg-shell v6 `suspended` state, which not every compositor
-    /// sends; where it is never delivered, this callback simply never
-    /// fires (the window is treated as always visible, today's behavior).
+    /// Delivery is backend-conditional, verified against winit 0.30's own
+    /// `WindowEvent::Occluded` documentation and `platform_impl` source
+    /// (not assumed): the emitting backends are **X11** (via Xlib's
+    /// `VisibilityFullyObscured` — fires only on FULL obscuration, never
+    /// partial), **macOS**, **iOS**, and **Web**. Winit's own doc states
+    /// plainly: "Android / Wayland / Windows / Orbital: Unsupported." —
+    /// there is no Wayland emitter anywhere in `platform_impl` at all, not
+    /// merely a compositor-dependent one. On a Wayland compositor (this
+    /// workspace's own primary desktop reference session), this callback
+    /// never fires and the window is always treated as visible; on X11 it
+    /// only fires when a window is fully covered, which a compositing
+    /// window manager may rarely or never produce.
     fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         let _ = callback;
     }

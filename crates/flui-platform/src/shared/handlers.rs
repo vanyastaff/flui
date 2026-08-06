@@ -8,6 +8,7 @@
 //! - [`WindowCallbacks`]: Per-window callbacks (input, resize, close, etc.)
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use flui_types::geometry::{Pixels, Size};
 use parking_lot::Mutex;
@@ -67,7 +68,13 @@ pub struct PlatformHandlers {
     /// field existed. A backend that never calls
     /// [`PlatformHandlers::invoke_wake_deadline`] is unaffected by this
     /// field at all.
-    pub wake_deadline: Option<Box<dyn Fn() -> Option<web_time::Instant> + Send>>,
+    ///
+    /// `Arc`, not `Box`: the hook itself re-enters `flui-app` (it walks
+    /// every hosted realm and takes gesture-arena locks), so a caller
+    /// holding this platform's own state lock must clone the `Arc` out and
+    /// invoke it AFTER releasing that lock (ADR-0038 §5's discipline) —
+    /// a `Box` would force either an in-lock call or a full field swap.
+    pub wake_deadline: Option<Arc<dyn Fn() -> Option<web_time::Instant> + Send + Sync>>,
 }
 
 impl PlatformHandlers {
@@ -222,11 +229,13 @@ pub struct WindowCallbacks {
     /// unfocused (Flutter's `AppLifecycleState::Inactive`), or focused but
     /// not visible (unusual, but not excluded). Feeds the `AppLifecycleState`
     /// derivation `ADR-0035` documents; winit's `WindowEvent::Occluded`
-    /// drives it on desktop. Wayland compositors deliver occlusion via the
-    /// xdg-shell v6 `suspended` state, a compositor-conditional extension;
-    /// where a compositor never sends it, this callback simply never fires
-    /// — the window is treated as always visible (the same behavior as
-    /// before this callback existed).
+    /// drives it on desktop, but only on X11 (Xlib's
+    /// `VisibilityFullyObscured` — full obscuration only), macOS, iOS, and
+    /// Web — winit 0.30 has no Wayland emitter for this event at all
+    /// ("Android / Wayland / Windows / Orbital: Unsupported", per winit's
+    /// own `WindowEvent::Occluded` doc). Where it is never delivered, this
+    /// callback simply never fires — the window is treated as always
+    /// visible (the same behavior as before this callback existed).
     pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the mouse enters or leaves the window. Parameter:

@@ -296,7 +296,10 @@ pub trait Platform: Send + Sync + 'static {
     /// for this mechanism, stated honestly rather than silently assumed)
     /// keeps its pre-existing behavior exactly as before; installing a hook
     /// there is inert.
-    fn set_wake_deadline_hook(&self, hook: Box<dyn Fn() -> Option<web_time::Instant> + Send>) {
+    fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
         let _ = hook;
     }
 

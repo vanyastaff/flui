@@ -31,18 +31,40 @@
 //!
 //! # Vsync pacing
 //!
-//! [`WinitApp::about_to_wait`] pins the event loop's control flow to
-//! `ControlFlow::Wait` explicitly every iteration, even though `Wait` is
-//! winit's documented default when nothing sets it. This is deliberate,
-//! not decorative: `flui-app`'s frame loop is wake-driven (a redraw is
-//! requested only from `UiRealm::wake_frame`/`request_redraw`, never
-//! polled), and steady-state pacing for a frame that DOES present comes
-//! entirely from the GPU-side blocking Fifo present in `flui-engine`'s
-//! `Renderer::render_scene` (see the frame-pacing ADR). If a future winit
-//! release changed its own default away from `Wait` (e.g. to `Poll`), that
-//! pacing model would silently regress into a busy-spin with no compile or
-//! CI signal — pinning the value here turns an upstream default change
-//! into a one-line diff to review instead of a surprise.
+//! [`WinitApp::about_to_wait`] pins the event loop's control flow every
+//! iteration rather than trusting winit's own default: `ControlFlow::Wait`
+//! when nothing needs a wall-clock wake, `ControlFlow::WaitUntil(deadline)`
+//! when the registered wake-deadline hook (issue #556) answers `Some`. This
+//! is deliberate, not decorative: `flui-app`'s frame loop is wake-driven (a
+//! redraw is requested only from `UiRealm::wake_frame`/`request_redraw`,
+//! never polled), and steady-state pacing for a frame that DOES present
+//! comes entirely from the GPU-side blocking Fifo present in
+//! `flui-engine`'s `Renderer::render_scene` (see the frame-pacing ADR). If
+//! a future winit release changed its own default away from `Wait` (e.g.
+//! to `Poll`), that pacing model would silently regress into a busy-spin
+//! with no compile or CI signal — pinning the value here turns an upstream
+//! default change into a one-line diff to review instead of a surprise.
+//!
+//! # Wall-clock wake actuation
+//!
+//! `ControlFlow::WaitUntil` alone does not run a pump: when the deadline
+//! expires, winit calls [`WinitApp::new_events`] with
+//! `StartCause::ResumeTimeReached`, but nothing about that call delivers a
+//! `WindowEvent` — no window is dirty, nothing requested a redraw. Without
+//! an explicit actuator, `about_to_wait` would run again immediately,
+//! re-consult the SAME hook (nothing has changed, so it answers the same
+//! now-past deadline), and re-arm `WaitUntil` at an instant already behind
+//! `Instant::now()` — winit fires it again on the very next loop
+//! iteration, forever: a wall-clock wake with no actuator on the other
+//! side degenerates into an unbounded busy-spin, not a wake. `new_events`
+//! closes this: on `ResumeTimeReached` it calls `request_redraw()` on
+//! every window this platform currently tracks, which queues a REAL
+//! `WindowEvent::RedrawRequested` for the next iteration — the exact same
+//! `dispatch_request_frame`/`on_request_frame`/`wake_action` path every
+//! other wake in this backend already goes through, so a deadline that
+//! resolves nothing new (nothing was actually due, or the realm has no
+//! other demand) still costs at most one extra `wake_action::Skip`, never
+//! a second spin.
 
 use std::{
     cell::Cell,
@@ -59,8 +81,8 @@ use keyboard_types::Modifiers as KeyboardModifiers;
 use parking_lot::Mutex;
 use winit::{
     application::ApplicationHandler,
-    event::WindowEvent as WinitWindowEvent,
-    event_loop::{ActiveEventLoop, EventLoop},
+    event::{StartCause, WindowEvent as WinitWindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{WindowAttributes, WindowId as WinitWindowId},
 };
 
@@ -681,6 +703,29 @@ impl Drop for OpenWindowReplyGuard {
 }
 
 impl ApplicationHandler for WinitApp {
+    /// Actuates a wall-clock wake (issue #556): `ControlFlow::WaitUntil`
+    /// expiring delivers `StartCause::ResumeTimeReached` here with no
+    /// accompanying `WindowEvent` — nothing else in this backend turns that
+    /// bare wake into a pump. Poke every currently tracked window's
+    /// `request_redraw()`, which queues a real
+    /// `WindowEvent::RedrawRequested` for the very next iteration and so
+    /// re-enters `dispatch_request_frame`/`on_request_frame`/`wake_action`
+    /// exactly like any other wake — never a second, parallel produce path
+    /// (see the module doc's "Wall-clock wake actuation" section for why an
+    /// un-actuated `WaitUntil` degenerates into an unbounded spin instead).
+    /// Every other `StartCause` (`Init`, `Poll`, `WaitCancelled`) is a
+    /// documented no-op here — `Poll`/`WaitCancelled` never fire without a
+    /// caller setting `ControlFlow::Poll`, which this backend never does.
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. }) {
+            self.platform.with_state(|state| {
+                for window in state.windows.values() {
+                    window.inner().request_redraw();
+                }
+            });
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         tracing::info!("Application resumed");
 
@@ -1044,12 +1089,20 @@ impl ApplicationHandler for WinitApp {
         // the previously-unconditional `Wait` — re-asserted every iteration
         // so an upstream winit default change can't silently turn the
         // wake-driven frame loop into a busy poll.
-        let wake_deadline = self
+        //
+        // Lock discipline (ADR-0038 §5, the same rule this module's
+        // `CursorMoved`/`HoveredFileCancelled` arms already follow): the
+        // hook itself re-enters `flui-app`, walking every hosted realm and
+        // taking gesture-arena locks — it must never run while this
+        // platform's own state mutex is held. Clone the `Arc` out, drop the
+        // lock, THEN call it.
+        let wake_deadline_hook = self
             .platform
-            .with_state(|state| state.handlers.invoke_wake_deadline());
+            .with_state(|state| state.handlers.wake_deadline.clone());
+        let wake_deadline = wake_deadline_hook.and_then(|hook| hook());
         let control_flow = match wake_deadline {
-            Some(deadline) => winit::event_loop::ControlFlow::WaitUntil(deadline),
-            None => winit::event_loop::ControlFlow::Wait,
+            Some(deadline) => ControlFlow::WaitUntil(deadline),
+            None => ControlFlow::Wait,
         };
         event_loop.set_control_flow(control_flow);
     }
@@ -1359,9 +1412,19 @@ impl Platform for WinitPlatform {
         });
     }
 
-    fn set_wake_deadline_hook(&self, hook: Box<dyn Fn() -> Option<web_time::Instant> + Send>) {
+    fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
         self.with_state(|state| {
-            state.handlers.wake_deadline = Some(hook);
+            // `Arc::from(Box<dyn Trait>)` is a real, sanctioned std
+            // conversion, not a smuggled second allocation strategy: the
+            // caller-facing API stays `Box`-based (matching
+            // `set_exit_policy_hook`'s exact ergonomics), and this is the
+            // one place that converts to the clone-able-out-of-the-lock
+            // `Arc` storage `about_to_wait` needs (see `PlatformHandlers::
+            // wake_deadline`'s own doc for why).
+            state.handlers.wake_deadline = Some(Arc::from(hook));
         });
     }
 

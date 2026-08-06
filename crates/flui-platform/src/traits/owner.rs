@@ -273,7 +273,10 @@ impl SharedPlatform {
     /// for the earliest wall-clock instant it should wake at instead of
     /// blocking forever — see [`Platform::set_wake_deadline_hook`]'s doc for
     /// the full contract.
-    pub fn set_wake_deadline_hook(&self, hook: Box<dyn Fn() -> Option<web_time::Instant> + Send>) {
+    pub fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
         self.platform.set_wake_deadline_hook(hook);
     }
 
