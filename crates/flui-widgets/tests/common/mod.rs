@@ -253,11 +253,11 @@ impl LaidOut {
     /// `BuildOwner`, so a test can `schedule_local` a callback that captures
     /// the (`!Send`) [`PipelineCell`] — `PostFrameHandle::schedule`'s `Send`
     /// bound cannot carry it.
-    pub fn post_frame_handle(&mut self) -> flui_scheduler::PostFrameHandle {
+    pub fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
         self.binding
             .build_owner_mut()
-            .post_frame_handle()
-            .expect("post-frame handle installed by install_build_capabilities")
+            .local_post_frame_handle()
+            .expect("owner-local post-frame handle installed by install_build_capabilities")
             .clone()
     }
     /// The render id of the root widget's render object.

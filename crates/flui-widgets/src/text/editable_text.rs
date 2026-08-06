@@ -284,7 +284,7 @@ pub struct EditableTextState {
     /// `build`). `None` under a binding that installs no post-frame handle —
     /// the loop then simply never starts (warned, not panicked; see
     /// `init_state`'s IME focus listener).
-    post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+    local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
     /// The current IME attach's cursor-area loop alive-flag, if a loop is
     /// currently running. `None` when no loop is running (never attached,
     /// or already blurred/disposed).
@@ -332,7 +332,7 @@ impl StatefulView for EditableText {
             ime_focus_transition: None,
             ime_handle: None,
             ime_token: Rc::new(RefCell::new(None)),
-            post_frame_handle: None,
+            local_post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
         }
     }
@@ -404,14 +404,14 @@ impl ViewState<EditableText> for EditableTextState {
         //    acquired here, in `init_state`, never in `build` (see
         //    `BuildContext::text_input_handle`'s doc) — and stored so the
         //    focus-listener closure below (which cannot borrow `&mut self`)
-        //    and `dispose` can both reach it. `post_frame_handle()` and
+        //    and `dispose` can both reach it. `local_post_frame_handle()` and
         //    `pipeline_owner()` are acquired alongside it for the same
         //    reason — the IME cursor-area loop (ADR-0032) they drive is
         //    started/stopped by that same closure.
         self.ime_handle = ctx.text_input_handle();
-        self.post_frame_handle = ctx.post_frame_handle();
+        self.local_post_frame_handle = ctx.local_post_frame_handle();
         let ime_handle_for_focus = self.ime_handle.clone();
-        let post_frame_handle_for_focus = self.post_frame_handle.clone();
+        let post_frame_handle_for_focus = self.local_post_frame_handle.clone();
         let pipeline_owner_for_focus = ctx.pipeline_owner();
         let inner_anchor_for_focus = self.inner_anchor.clone();
         let controller_for_ime = self.controller.clone();
@@ -725,13 +725,13 @@ fn apply_ime_event(controller: &TextEditingController, event: &ImeEvent) {
 /// itself for the next completed frame — Flutter's own
 /// `_schedulePeriodicPostFrameCallbacks` cadence (`editable_text.dart`, tag
 /// `3.44.0`), dormant whenever no frame runs. `Clone` because
-/// [`flui_scheduler::PostFrameHandle::schedule_local`] takes an `FnOnce`, so the only way to
+/// [`flui_scheduler::LocalPostFrameHandle::schedule_local`] takes an `FnOnce`, so the only way to
 /// make it self-rescheduling without boxing a trait object is for each
 /// firing to consume `self` and, if still alive, construct the next firing's
 /// closure from a fresh clone of the same capture.
 #[derive(Clone)]
 struct CursorAreaLoop {
-    post_frame: flui_scheduler::PostFrameHandle,
+    post_frame: flui_scheduler::LocalPostFrameHandle,
     pipeline_owner: Option<PipelineCell>,
     /// The `EditableTextRenderView`'s own inner anchor (ADR-0032) — see
     /// `EditableTextState::inner_anchor`'s doc.
@@ -752,7 +752,7 @@ struct CursorAreaLoop {
 
 #[cfg(test)]
 thread_local! {
-    /// Test-only probe: counts every successful `PostFrameHandle::
+    /// Test-only probe: counts every successful `LocalPostFrameHandle::
     /// schedule_local` registration `CursorAreaLoop::schedule` makes.
     ///
     /// This exists because "no new `cursor_area_calls`" is NOT sufficient
@@ -1550,17 +1550,19 @@ mod tests {
     // ------------------------------------------------------------------
     // IME cursor-area tracking (ADR-0032)
     //
-    // Focusing/blurring in these tests runs inside `harness.
-    // enter_owner_scope(...)`, unlike the IME-composition tests above:
-    // the cursor-area loop's `PostFrameHandle::schedule_local` call only
-    // succeeds while the harness's local post-frame lane is the active
-    // top of the lane stack — exactly the shape `HeadlessBinding::
-    // pump_frame` and production's `realm.enter` share (see
-    // `CursorAreaLoop`'s doc). A focus change dispatched with no active
-    // lane still attaches/detaches the IME client correctly (that part
-    // needs no lane), it just never starts the loop — which is why the
-    // composition tests above, which never call `enter_owner_scope`,
-    // still pass unaffected by this feature.
+    // `CursorAreaLoop`'s `LocalPostFrameHandle::schedule_local` call
+    // addresses the harness's lane directly (a `Weak` pointer, minted once
+    // by `install_build_capabilities`) — it does not need `enter_owner_scope`
+    // active to succeed, only the lane and its scheduler to still be alive.
+    // These tests still wrap focusing/blurring in `harness.
+    // enter_owner_scope(...)` for parity with production's `realm.enter`
+    // shape, but that wrapping is no longer load-bearing for the loop
+    // itself; a focus change dispatched outside it starts the loop exactly
+    // the same way. A focus change with the harness's binding already
+    // dropped would still attach/detach the IME client correctly (that part
+    // needs no lane at all), it would just never start the loop — the
+    // `LocalPostFrameScheduleError::LaneClosed` path `CursorAreaLoop::schedule`
+    // warns on rather than panicking over.
     //
     // Transient-`None` resilience (a fully in-place red-check for "skip
     // the send, keep the loop alive" — one of `CursorAreaLoop::fire`'s

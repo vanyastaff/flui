@@ -317,7 +317,7 @@ impl BackGestureRuntime {
             return;
         }
         let navigator = self.navigator.clone();
-        match navigator.post_frame_handle() {
+        match navigator.local_post_frame_handle() {
             Some(post_frame) => {
                 let deferred = navigator.clone();
                 let schedule_result = post_frame.schedule_local(move |_timing| {

@@ -122,12 +122,12 @@
 //!   queue and schedule further rebuilds *after* this build's siblings have
 //!   already built against the pre-mutation tree, silently.
 //!   `MessengerCore::pop_and_advance` instead defers the fire through the
-//!   [`flui_scheduler::PostFrameHandle`] acquired in
+//!   [`flui_scheduler::LocalPostFrameHandle`] acquired in
 //!   [`ScaffoldMessengerState::init_state`] (ADR-0021) — the callback runs
 //!   after this frame's build/layout/paint have committed, its own reentrant
 //!   `show_snack_bar`/etc. call landing squarely in a safe, ordinary
-//!   event-handler-shaped window. If no `PostFrameHandle` is available (the
-//!   messenger was never `attach`ed — a bare unit test constructing
+//!   event-handler-shaped window. If no `LocalPostFrameHandle` is available
+//!   (the messenger was never `attach`ed — a bare unit test constructing
 //!   [`ScaffoldMessengerHandle`] directly), the fire falls back to
 //!   synchronous, the same as `Direct`, rather than silently dropping the
 //!   callback.
@@ -209,7 +209,7 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
 };
 use flui_foundation::ElementId;
-use flui_scheduler::PostFrameHandle;
+use flui_scheduler::LocalPostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
 use flui_widgets::animated::VsyncScope;
@@ -355,7 +355,7 @@ struct MessengerCore {
     /// ADR-0021/trigger #22). `None` until then, or if no binding installed
     /// one — see the module docs' "Deferring `on_closed` out of the build
     /// phase" section for the synchronous fallback that implies.
-    post_frame: RefCell<Option<PostFrameHandle>>,
+    post_frame: RefCell<Option<LocalPostFrameHandle>>,
     queue: RefCell<VecDeque<Rc<QueuedEntry>>>,
     last_entry_status: Cell<AnimationStatus>,
     last_duration_status: Cell<AnimationStatus>,
@@ -456,7 +456,7 @@ impl MessengerCore {
     /// Fires `entry`'s `on_closed` per `origin` — immediately for
     /// [`ReconcileOrigin::Direct`], or deferred through [`Self::post_frame`]
     /// for [`ReconcileOrigin::Build`] (falling back to immediate if no
-    /// [`PostFrameHandle`] is available). See the module docs' "Deferring
+    /// [`LocalPostFrameHandle`] is available). See the module docs' "Deferring
     /// `on_closed` out of the build phase" section.
     fn complete_entry(&self, entry: Rc<QueuedEntry>, origin: ReconcileOrigin) {
         if origin == ReconcileOrigin::Direct {
@@ -640,7 +640,7 @@ impl ScaffoldMessengerHandle {
                 rebuild_for_listener.schedule(flui_view::RebuildReason::AnimationTick);
             }));
         *self.shared.rebuild.borrow_mut() = Some(rebuild);
-        *self.shared.post_frame.borrow_mut() = ctx.post_frame_handle();
+        *self.shared.post_frame.borrow_mut() = ctx.local_post_frame_handle();
 
         let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
         if let Some(vsync) = &vsync {

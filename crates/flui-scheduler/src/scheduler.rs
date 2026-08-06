@@ -77,7 +77,7 @@ use crate::{
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
-    post_frame::{LocalPostFrameEntry, OwnerPostFrameCallback, drain_active_lane},
+    post_frame::{LocalPostFrameEntry, OwnerPostFrameCallback},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
 };
@@ -99,17 +99,6 @@ use crate::{
 /// itself every single pass, which is a task bug this cap turns into a
 /// diagnosable trace rather than an unbounded loop.
 const MAX_BUILD_REENTRY_PASSES: usize = 32;
-
-fn next_scheduler_identity() -> u64 {
-    static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
-    // Relaxed: pure ID allocation — uniqueness comes from the RMW's own
-    // atomicity; no data is published through this counter.
-    NEXT_IDENTITY
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-            next.checked_add(1)
-        })
-        .expect("BUG: UpdateScheduler identity space exhausted")
-}
 
 /// Cancellable transient callback with ID
 struct CancellableTransientCallback {
@@ -302,8 +291,6 @@ struct FrameState {
 
 /// Callback registration and cancellation state
 struct CallbackState {
-    /// Globally unique identity for owner-local lane tickets.
-    identity: u64,
     /// Linearizes shared/local post-frame registration with frame snapshots.
     post_frame_registration: Mutex<()>,
     /// Transient callbacks - animation tickers
@@ -545,7 +532,6 @@ impl UpdateScheduler {
                 completion_waiters: Mutex::new(Vec::new()),
             },
             callbacks: CallbackState {
-                identity: next_scheduler_identity(),
                 post_frame_registration: Mutex::new(()),
                 transient: Mutex::new(Vec::new()),
                 cancelled: DashMap::new(),
@@ -630,8 +616,15 @@ impl UpdateScheduler {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    pub(crate) fn identity(&self) -> u64 {
-        self.inner.callbacks.identity
+    /// A stable, opaque identity for tracing/diagnostics only.
+    ///
+    /// Never used for equality — [`is_same_instance`](Self::is_same_instance)
+    /// owns that comparison. This exists so a scheduler-mismatch trace (e.g.
+    /// draining a [`crate::LocalPostFrameLane`] with the wrong
+    /// `UpdateScheduler`) can name both sides without printing the whole
+    /// internal state the `Debug` impl shows.
+    pub(crate) fn debug_ptr(&self) -> usize {
+        Arc::as_ptr(&self.inner) as usize
     }
 
     pub(crate) fn with_post_frame_registration<R>(
@@ -642,10 +635,19 @@ impl UpdateScheduler {
         callback(self.inner.callbacks.id_gen.next())
     }
 
-    /// Create an owner-affine local post-frame lane for a binding/runtime.
+    /// Create a FRESH owner-affine local post-frame lane for a binding/runtime.
+    ///
+    /// Named `new_*`, not `local_post_frame_lane`, so it cannot be confused
+    /// with `UiRealm::local_post_frame_lane()` — that one is an ACCESSOR
+    /// returning the realm's existing lane; this one is a CONSTRUCTOR that
+    /// mints a brand-new, empty one. Both are in scope at every drive site
+    /// (a `UiRealm` holds both a `scheduler: UpdateScheduler` and a
+    /// `local_post_frame: LocalPostFrameLane` field), so a same-named pair
+    /// would let `scheduler.local_post_frame_lane()` compile at a drive site
+    /// and silently drain a lane nothing ever schedules into, forever.
     #[doc(hidden)]
     #[must_use]
-    pub fn local_post_frame_lane(&self) -> crate::LocalPostFrameLane {
+    pub fn new_local_post_frame_lane(&self) -> crate::LocalPostFrameLane {
         crate::LocalPostFrameLane::new(self)
     }
 
@@ -871,6 +873,12 @@ impl UpdateScheduler {
     ///
     /// Each callback runs **exactly once** — the queue is drained, not iterated.
     ///
+    /// This drains the **shared** post-frame queue only. A caller that also owns
+    /// a [`crate::LocalPostFrameLane`] must use
+    /// [`end_frame_with_lane`](Self::end_frame_with_lane) instead, or that lane's
+    /// callbacks never run — there is no ambient lookup that finds it for you
+    /// (see the `post_frame` module docs for why).
+    ///
     /// # Panics
     ///
     /// Debug-asserts an illegal phase transition unless the scheduler is in
@@ -879,6 +887,22 @@ impl UpdateScheduler {
     /// [`abort_frame`](Self::abort_frame).
     #[tracing::instrument(skip(self))]
     pub fn end_frame(&self) {
+        self.end_frame_impl(None);
+    }
+
+    /// [`end_frame`](Self::end_frame), additionally draining `lane`'s owner-local
+    /// queue into the **same** total order as the shared queue — one
+    /// `CallbackId` sequence, interleaving well-defined: both queues are
+    /// combined into one snapshot and sorted by registration order before any
+    /// callback runs, so it does not matter which queue a given callback landed
+    /// in, only when it was registered. A widget author reads this on
+    /// [`crate::LocalPostFrameHandle::schedule_local`], not here.
+    #[tracing::instrument(skip(self, lane))]
+    pub fn end_frame_with_lane(&self, lane: &crate::LocalPostFrameLane) {
+        self.end_frame_impl(Some(lane));
+    }
+
+    fn end_frame_impl(&self, lane: Option<&crate::LocalPostFrameLane>) {
         // Phase 4: PostFrameCallbacks
         self.set_scheduler_phase(SchedulerPhase::PostFrameCallbacks);
 
@@ -904,7 +928,32 @@ impl UpdateScheduler {
             self.inner.binding.pending_timings.lock().push(timing);
 
             // Drain BEFORE invoking: a post-frame callback that registers another
-            // one must not have it run in this same frame.
+            // one must not have it run in this same frame. `lane.take_queue_for(self)`
+            // runs in here, inside the "a frame was actually open" branch, not
+            // unconditionally at the top of this function — taking the lane's
+            // queue on a no-open-frame call (no preceding `handle_begin_frame`/
+            // `handle_draw_frame`, or a second `end_frame_with_lane` call with
+            // nothing new to close) would silently drop every already-queued
+            // local entry: they'd be taken out of the lane here, never folded
+            // into `callbacks` below since that only happens inside this same
+            // `Some(timing)` arm, and then dropped un-run when this function
+            // returns. Keeping the take() and the invoke() in the same branch
+            // means a queue that isn't drained this call is simply left alone,
+            // still in the lane, for whenever a real frame next closes.
+            //
+            // `take_queue_for` also verifies the lane actually belongs to
+            // `self` before draining it — restoring the identity check the
+            // retired thread-local ticket registry's `scheduler_identity`
+            // filter used to provide. A lane minted by a DIFFERENT scheduler
+            // (a binding wiring the wrong realm's lane, now that every
+            // `UiRealm` mints its own) must not be drained here: its
+            // callbacks would get this frame's `FrameTiming`, be removed
+            // before their own scheduler's frame ever runs, and its
+            // `CallbackId`s — meaningless in this scheduler's sequence —
+            // would corrupt the sort below. On a mismatch `take_queue_for`
+            // itself traces the error and returns `Err`; this treats that
+            // exactly like "no lane was passed" for this call, leaving the
+            // lane's queue untouched.
             let mut callbacks: Vec<LocalPostFrameEntry> = {
                 let _registration = self.inner.callbacks.post_frame_registration.lock();
                 let mut cbs = self.inner.callbacks.post_frame.lock();
@@ -915,7 +964,11 @@ impl UpdateScheduler {
                         callback: entry.callback as OwnerPostFrameCallback,
                     })
                     .collect();
-                snapshot.extend(drain_active_lane(self.identity()));
+                if let Some(lane) = lane
+                    && let Ok(local_entries) = lane.take_queue_for(self)
+                {
+                    snapshot.extend(local_entries);
+                }
                 snapshot
             };
 
@@ -1077,6 +1130,30 @@ impl UpdateScheduler {
         deadline: IdleDeadline,
         pipeline: impl FnOnce() -> R,
     ) -> R {
+        self.drive_frame_impl(vsync_time, deadline, pipeline, None)
+    }
+
+    /// [`drive_frame`](Self::drive_frame), additionally draining `lane`'s
+    /// owner-local queue into the same total order as the shared queue when the
+    /// frame completes. See [`end_frame_with_lane`](Self::end_frame_with_lane)
+    /// for the ordering guarantee.
+    pub fn drive_frame_with_lane<R>(
+        &self,
+        vsync_time: Instant,
+        deadline: IdleDeadline,
+        pipeline: impl FnOnce() -> R,
+        lane: &crate::LocalPostFrameLane,
+    ) -> R {
+        self.drive_frame_impl(vsync_time, deadline, pipeline, Some(lane))
+    }
+
+    fn drive_frame_impl<R>(
+        &self,
+        vsync_time: Instant,
+        deadline: IdleDeadline,
+        pipeline: impl FnOnce() -> R,
+        lane: Option<&crate::LocalPostFrameLane>,
+    ) -> R {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
         *self.inner.frame.idle_deadline.lock() = Some(deadline.0);
@@ -1098,7 +1175,10 @@ impl UpdateScheduler {
 
         match catch_unwind(AssertUnwindSafe(pipeline)) {
             Ok(result) => {
-                self.end_frame();
+                match lane {
+                    Some(lane) => self.end_frame_with_lane(lane),
+                    None => self.end_frame(),
+                }
                 result
             }
             Err(payload) => {
@@ -1123,6 +1203,17 @@ impl UpdateScheduler {
         let frame_id = self.handle_begin_frame(vsync_time);
         self.handle_draw_frame();
         self.end_frame();
+        frame_id
+    }
+
+    /// [`execute_frame`](Self::execute_frame), additionally draining `lane`'s
+    /// owner-local queue in the same total order as the shared queue.
+    #[tracing::instrument(skip(self, lane))]
+    pub fn execute_frame_with_lane(&self, lane: &crate::LocalPostFrameLane) -> FrameId {
+        let vsync_time = Instant::now();
+        let frame_id = self.handle_begin_frame(vsync_time);
+        self.handle_draw_frame();
+        self.end_frame_with_lane(lane);
         frame_id
     }
 

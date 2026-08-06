@@ -59,7 +59,7 @@ use flui_animation::{
 };
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId, RenderId};
 use flui_geometry::Rect;
-use flui_scheduler::PostFrameHandle;
+use flui_scheduler::LocalPostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
@@ -631,7 +631,7 @@ pub(crate) struct FlightPlan {
 /// under. Dart's GC makes this a non-question.
 ///
 /// So `finish` never drops: it moves the flight into [`retired`](Self::retired) and
-/// schedules a drain through the binding's [`PostFrameHandle`]. That runs at
+/// schedules a drain through the binding's [`LocalPostFrameHandle`]. That runs at
 /// **end-of-frame** — after the status listener has returned and `fan_out_status` has
 /// unwound, but within the same turn — so a single transition cleans up after itself
 /// without waiting for an unrelated hero measurement. The drain is coalesced: many
@@ -648,7 +648,7 @@ pub(crate) struct FlightManager {
     /// flight schedules its own end-of-frame drain through this, so cleanup does not
     /// wait for the next transition. `None` before the first launch or on an unmounted
     /// navigator — then the measurement-head backstop is the only path.
-    post_frame: Mutex<Option<PostFrameHandle>>,
+    post_frame: Mutex<Option<LocalPostFrameHandle>>,
     /// One drain per frame: set when a drain is scheduled, cleared when it runs.
     drain_scheduled: AtomicBool,
     /// How many drains this manager has actually scheduled — for the coalescing test.
@@ -668,7 +668,7 @@ impl FlightManager {
     /// Capture the binding's post-frame capability, so a finished flight can schedule
     /// its own drain. Set from the controller's measurement pass, where the navigator
     /// still resolves it.
-    pub(crate) fn set_post_frame(&self, handle: Option<PostFrameHandle>) {
+    pub(crate) fn set_post_frame(&self, handle: Option<LocalPostFrameHandle>) {
         *self.post_frame.lock() = handle;
     }
 
@@ -687,7 +687,7 @@ impl FlightManager {
 
     /// Queue a single end-of-frame drain of [`retired`](Self::retired).
     ///
-    /// **Not re-entrant.** `PostFrameHandle::schedule` only pushes onto the scheduler's
+    /// **Not re-entrant.** `LocalPostFrameHandle::schedule_local` only pushes onto the lane's
     /// post-frame queue; the closure runs at `end_frame`, long after `fan_out_status`
     /// has returned, so nothing here drops a flight while its listener is still on the
     /// stack. The closure holds a `Weak`: a manager dropped before the frame ends

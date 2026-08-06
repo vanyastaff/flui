@@ -1,30 +1,26 @@
 //! Binding-scoped post-frame capabilities.
 //!
-//! Shared callbacks remain `Send` and live in the scheduler's synchronized queue.
-//! Owner-local callbacks live in [`LocalPostFrameLane`]'s `Rc` queue and are only
-//! reachable while that lane is active on its owner thread. Handles carry a
-//! Send-safe identity ticket, never an `Rc` or a non-`Send` callback.
+//! Shared callbacks remain `Send` and live in the scheduler's synchronized queue,
+//! reached through [`PostFrameHandle`]. Owner-local callbacks live in
+//! [`LocalPostFrameLane`]'s `Rc` queue and are reached through
+//! [`LocalPostFrameHandle`], a `!Send` handle holding a `Weak` pointer straight at
+//! its lane's storage.
+//!
+//! There is no thread-local registry and no "currently active lane" concept:
+//! earlier revisions resolved a `Send`-safe ticket against a thread-local map and
+//! an activation stack, because a `Clone + Send + Sync` handle cannot hold an
+//! `Rc` directly. `LocalPostFrameHandle` is `!Send` precisely so it CAN hold that
+//! `Rc` (as a `Weak`) directly — it always addresses the one lane it was minted
+//! from, so nothing needs to look up "the" active lane on the calling thread, and
+//! there is no other lane it could be confused with. The frame drive drains a
+//! lane by receiving it as an explicit parameter
+//! ([`UpdateScheduler::end_frame_with_lane`] and friends), never by reading
+//! ambient state.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread::{self, ThreadId};
 
 use crate::{CallbackId, FrameTiming, PostFrameCallback, UpdateScheduler, WeakUpdateScheduler};
-
-static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct LaneId(u64);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct LaneTicket {
-    lane_id: LaneId,
-    owner: ThreadId,
-    scheduler_identity: u64,
-}
 
 pub(crate) type OwnerPostFrameCallback = Box<dyn FnOnce(&FrameTiming) + 'static>;
 
@@ -34,127 +30,191 @@ pub(crate) struct LocalPostFrameEntry {
 }
 
 struct LocalLaneInner {
-    ticket: LaneTicket,
-    scheduler: UpdateScheduler,
     queue: RefCell<Vec<LocalPostFrameEntry>>,
-}
-
-thread_local! {
-    static LOCAL_LANES: RefCell<HashMap<LaneId, Weak<LocalLaneInner>>> =
-        RefCell::new(HashMap::new());
-    static ACTIVE_LANES: RefCell<Vec<LaneTicket>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Owner-affine queue for post-frame callbacks that are not required to be `Send`.
 ///
 /// This runtime-internal type is public only because bindings live in sibling
 /// crates. It is intentionally absent from the prelude and structurally
-/// `!Send + !Sync` through its `Rc` storage.
+/// `!Send + !Sync` through its `Rc` storage. `Clone` shares the same
+/// underlying queue (an `Rc` clone, not a fresh lane) — the same shape
+/// `UpdateScheduler`'s own `Clone` has over its `Arc`.
+#[derive(Clone)]
 #[doc(hidden)]
 pub struct LocalPostFrameLane {
+    scheduler: WeakUpdateScheduler,
     inner: Rc<LocalLaneInner>,
 }
 
 impl LocalPostFrameLane {
     pub(crate) fn new(scheduler: &UpdateScheduler) -> Self {
-        let lane_id = LaneId(
-            NEXT_LANE_ID
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                    next.checked_add(1)
-                })
-                .expect("BUG: LocalPostFrameLane identity space exhausted"),
-        );
-        let inner = Rc::new(LocalLaneInner {
-            ticket: LaneTicket {
-                lane_id,
-                owner: thread::current().id(),
-                scheduler_identity: scheduler.identity(),
-            },
-            scheduler: scheduler.clone(),
-            queue: RefCell::new(Vec::new()),
-        });
-        LOCAL_LANES.with(|registry| {
-            registry.borrow_mut().insert(lane_id, Rc::downgrade(&inner));
-        });
-        Self { inner }
-    }
-
-    /// Create a `Send + Sync` handle carrying this lane's identity ticket.
-    #[must_use]
-    pub fn post_frame_handle(&self) -> PostFrameHandle {
-        PostFrameHandle {
-            scheduler: self.inner.scheduler.downgrade(),
-            local_lane: Some(self.inner.ticket),
+        Self {
+            scheduler: scheduler.downgrade(),
+            inner: Rc::new(LocalLaneInner {
+                queue: RefCell::new(Vec::new()),
+            }),
         }
     }
 
-    /// Activate this lane for the dynamic extent of `callback`.
-    pub fn enter<R>(&self, callback: impl FnOnce() -> R) -> R {
-        ACTIVE_LANES.with(|active| active.borrow_mut().push(self.inner.ticket));
-        let _activation = LocalLaneActivation {
-            ticket: self.inner.ticket,
-            _borrow: PhantomData,
+    /// Create a `!Send` handle addressed directly at this lane's storage.
+    ///
+    /// The returned handle never needs "is this lane active" resolution: it
+    /// holds a `Weak` pointer straight at [`LocalLaneInner`], so scheduling
+    /// through it always reaches the correct queue, regardless of what else is
+    /// happening on the owner thread.
+    #[must_use]
+    pub fn local_handle(&self) -> LocalPostFrameHandle {
+        LocalPostFrameHandle {
+            scheduler: self.scheduler.clone(),
+            lane: Rc::downgrade(&self.inner),
+        }
+    }
+
+    /// Drain this lane's queue, unconditionally. Private: every caller must
+    /// go through [`take_queue_for`](Self::take_queue_for), which verifies
+    /// the lane actually belongs to the scheduler asking to drain it before
+    /// ever reaching this.
+    fn take_queue(&self) -> Vec<LocalPostFrameEntry> {
+        self.inner.queue.take()
+    }
+
+    /// Drain this lane's queue for `scheduler`'s frame drive — but only if
+    /// `scheduler` is genuinely the one this lane was minted from.
+    ///
+    /// Called with the lane passed explicitly by [`UpdateScheduler::end_frame_with_lane`]
+    /// (and the `execute_frame_with_lane`/`drive_frame_with_lane` convenience
+    /// wrappers) — drain-by-parameter, never an ambient lookup. The identity
+    /// check restores what the retired thread-local ticket registry's
+    /// `scheduler_identity` filter used to guarantee: a lane minted by
+    /// scheduler B, handed by mistake to scheduler A's drive, must not be
+    /// drained by A. Draining it anyway would hand B's callbacks A's
+    /// `FrameTiming`, remove them before B's own frame ever runs them, and
+    /// interleave B's `CallbackId`s — which mean nothing in A's registration
+    /// sequence — into A's sort, corrupting the one-total-order guarantee
+    /// this slice exists to provide. On mismatch (or a since-dropped owning
+    /// scheduler) this returns `Err` and leaves the lane's queue untouched,
+    /// still there for its own scheduler's next drive.
+    pub(crate) fn take_queue_for(
+        &self,
+        scheduler: &UpdateScheduler,
+    ) -> Result<Vec<LocalPostFrameEntry>, LocalPostFrameScheduleError> {
+        let Some(owner) = self.scheduler.upgrade() else {
+            tracing::error!(
+                driving_scheduler = scheduler.debug_ptr(),
+                "a LocalPostFrameLane's owning scheduler is already gone; refusing to \
+                 drain it from this (necessarily unrelated) frame drive"
+            );
+            return Err(LocalPostFrameScheduleError::LaneClosed);
         };
-        callback()
+        if !owner.is_same_instance(scheduler) {
+            tracing::error!(
+                lane_owner_scheduler = owner.debug_ptr(),
+                driving_scheduler = scheduler.debug_ptr(),
+                "a LocalPostFrameLane was handed to a frame drive on a scheduler that does \
+                 not own it; refusing to drain it — its own scheduler's next drive still \
+                 delivers it"
+            );
+            return Err(LocalPostFrameScheduleError::WrongScheduler);
+        }
+        Ok(self.take_queue())
     }
 }
 
 impl std::fmt::Debug for LocalPostFrameLane {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalPostFrameLane")
-            .field("lane_id", &self.inner.ticket.lane_id)
-            .field("owner", &self.inner.ticket.owner)
+            .field("pending", &self.inner.queue.borrow().len())
             .finish_non_exhaustive()
     }
 }
 
-impl Drop for LocalPostFrameLane {
-    fn drop(&mut self) {
-        let removed = LOCAL_LANES
-            .try_with(|registry| registry.borrow_mut().remove(&self.inner.ticket.lane_id))
-            .ok()
-            .flatten();
-        drop(removed);
-        let queued = self.inner.queue.take();
-        drop(queued);
-    }
-}
-
-struct LocalLaneActivation<'lane> {
-    ticket: LaneTicket,
-    _borrow: PhantomData<&'lane LocalPostFrameLane>,
-}
-
-impl Drop for LocalLaneActivation<'_> {
-    fn drop(&mut self) {
-        let _ = ACTIVE_LANES.try_with(|active| {
-            let popped = active.borrow_mut().pop();
-            if popped != Some(self.ticket) {
-                tracing::error!("local post-frame activation stack was not LIFO");
-            }
-        });
-    }
-}
-
-/// Why an owner-local post-frame callback could not be registered.
+/// Why an owner-local post-frame callback could not be registered, or a
+/// lane's queue could not be drained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum LocalPostFrameScheduleError {
-    /// This handle only supports `Send` callbacks.
-    #[error("this PostFrameHandle has no owner-local lane")]
-    NoLocalLane,
-    /// The handle was used away from its lane's owner thread.
-    #[error("owner-local post-frame callback scheduled from the wrong thread")]
-    WrongThread,
-    /// Another lane is active, or this lane is not currently active.
-    #[error("the handle's owner-local lane is not the active lane")]
-    InactiveLane,
-    /// The owning lane has already been dropped.
+    /// The owning [`LocalPostFrameLane`] (or its backing scheduler) has
+    /// already been dropped — there is no frame left for the callback to
+    /// observe, and it is guaranteed never to run.
     #[error("the handle's owner-local lane is closed")]
     LaneClosed,
+    /// A [`LocalPostFrameLane`] was handed to a frame drive
+    /// (`end_frame_with_lane`/`execute_frame_with_lane`/`drive_frame_with_lane`)
+    /// on a different `UpdateScheduler` than the one it was minted from.
+    /// Draining it anyway would hand its callbacks a foreign frame's
+    /// `FrameTiming`, remove them before their own scheduler's frame ever
+    /// runs, and interleave `CallbackId`s from a different id sequence into
+    /// a sort where they carry no meaning — so the drive refuses to drain it
+    /// at all. The lane's queue is untouched: its own scheduler's next drive
+    /// still delivers it.
+    #[error("the lane belongs to a different UpdateScheduler than the one draining it")]
+    WrongScheduler,
 }
 
-/// Schedules work after a completed frame's layout and paint.
+/// Schedules owner-local work after a completed frame's layout and paint.
+///
+/// `!Send`: holds a [`Weak`] pointer directly at its lane's `Rc` storage, so it
+/// can capture non-`Send` state (`Rc`/`RefCell`) in the callbacks it schedules.
+/// Moving one to another thread is a compile error, not a runtime check — see
+/// the module docs for why that structural guarantee replaces the older
+/// thread-local ticket registry outright rather than augmenting it.
+#[derive(Clone)]
+pub struct LocalPostFrameHandle {
+    scheduler: WeakUpdateScheduler,
+    lane: Weak<LocalLaneInner>,
+}
+
+impl LocalPostFrameHandle {
+    /// Schedule an owner-local callback after the next completed frame.
+    ///
+    /// The callback may capture `Rc`/`RefCell` state. On error (the owning
+    /// lane or its scheduler is gone) the callback is dropped without
+    /// running — provably: nothing retains it once this call returns `Err`.
+    ///
+    /// Runs in the same total order as every [`PostFrameHandle::schedule`]
+    /// callback registered for this frame — by registration order, across
+    /// both handle types, not "all local callbacks, then all shared" or the
+    /// reverse.
+    pub fn schedule_local(
+        &self,
+        callback: impl FnOnce(&FrameTiming) + 'static,
+    ) -> Result<(), LocalPostFrameScheduleError> {
+        let lane = self
+            .lane
+            .upgrade()
+            .ok_or(LocalPostFrameScheduleError::LaneClosed)?;
+        let scheduler = self
+            .scheduler
+            .upgrade()
+            .ok_or(LocalPostFrameScheduleError::LaneClosed)?;
+        scheduler.with_post_frame_registration(|id| {
+            lane.queue.borrow_mut().push(LocalPostFrameEntry {
+                id,
+                callback: Box::new(callback),
+            });
+        });
+        Ok(())
+    }
+
+    /// Whether this handle targets `other`.
+    #[must_use]
+    pub fn targets_same_scheduler(&self, other: &UpdateScheduler) -> bool {
+        self.scheduler
+            .upgrade()
+            .is_some_and(|scheduler| scheduler.is_same_instance(other))
+    }
+}
+
+impl std::fmt::Debug for LocalPostFrameHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalPostFrameHandle")
+            .field("lane_alive", &(self.lane.strong_count() > 0))
+            .finish_non_exhaustive()
+    }
+}
+
+/// Schedules `Send` work after the next completed frame.
 ///
 /// Holds a [`WeakUpdateScheduler`], not a strong `UpdateScheduler`: this handle is
 /// `Clone + Send + Sync` and vended into widget capabilities (ADR-0021) that
@@ -163,7 +223,6 @@ pub enum LocalPostFrameScheduleError {
 #[derive(Clone)]
 pub struct PostFrameHandle {
     scheduler: WeakUpdateScheduler,
-    local_lane: Option<LaneTicket>,
 }
 
 impl PostFrameHandle {
@@ -172,7 +231,6 @@ impl PostFrameHandle {
     pub fn new(scheduler: &UpdateScheduler) -> Self {
         Self {
             scheduler: scheduler.downgrade(),
-            local_lane: None,
         }
     }
 
@@ -192,47 +250,6 @@ impl PostFrameHandle {
         scheduler.add_post_frame_callback(boxed);
     }
 
-    /// Schedule an owner-local callback after the next completed frame.
-    ///
-    /// The callback may capture `Rc`/`RefCell` state. Registration succeeds only
-    /// while this handle's lane is the active top scope on its owner thread. On
-    /// error the callback is dropped without running; stale handles cannot
-    /// recreate a lane.
-    pub fn schedule_local(
-        &self,
-        callback: impl FnOnce(&FrameTiming) + 'static,
-    ) -> Result<(), LocalPostFrameScheduleError> {
-        let ticket = self
-            .local_lane
-            .ok_or(LocalPostFrameScheduleError::NoLocalLane)?;
-        if thread::current().id() != ticket.owner {
-            return Err(LocalPostFrameScheduleError::WrongThread);
-        }
-        let Some(scheduler) = self.scheduler.upgrade() else {
-            return Err(LocalPostFrameScheduleError::LaneClosed);
-        };
-        let lane = LOCAL_LANES.with(|registry| {
-            registry
-                .borrow()
-                .get(&ticket.lane_id)
-                .and_then(Weak::upgrade)
-        });
-        let Some(lane) = lane else {
-            return Err(LocalPostFrameScheduleError::LaneClosed);
-        };
-        let is_active = ACTIVE_LANES.with(|active| active.borrow().last().copied() == Some(ticket));
-        if !is_active {
-            return Err(LocalPostFrameScheduleError::InactiveLane);
-        }
-        scheduler.with_post_frame_registration(|id| {
-            lane.queue.borrow_mut().push(LocalPostFrameEntry {
-                id,
-                callback: Box::new(callback),
-            });
-        });
-        Ok(())
-    }
-
     /// Whether this handle targets `other`.
     #[must_use]
     pub fn targets_same_scheduler(&self, other: &UpdateScheduler) -> bool {
@@ -244,25 +261,8 @@ impl PostFrameHandle {
 
 impl std::fmt::Debug for PostFrameHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PostFrameHandle")
-            .field("has_local_lane", &self.local_lane.is_some())
-            .finish_non_exhaustive()
+        f.debug_struct("PostFrameHandle").finish_non_exhaustive()
     }
-}
-
-pub(crate) fn drain_active_lane(scheduler_identity: u64) -> Vec<LocalPostFrameEntry> {
-    let ticket = ACTIVE_LANES.with(|active| active.borrow().last().copied());
-    let Some(ticket) = ticket.filter(|ticket| ticket.scheduler_identity == scheduler_identity)
-    else {
-        return Vec::new();
-    };
-    let lane = LOCAL_LANES.with(|registry| {
-        registry
-            .borrow()
-            .get(&ticket.lane_id)
-            .and_then(Weak::upgrade)
-    });
-    lane.map_or_else(Vec::new, |lane| lane.queue.take())
 }
 
 #[cfg(test)]
@@ -280,162 +280,220 @@ mod tests {
     assert_impl_all!(UpdateScheduler: Send, Sync);
     assert_impl_all!(PostFrameHandle: Send, Sync);
     assert_not_impl_any!(LocalPostFrameLane: Send, Sync);
+    assert_not_impl_any!(LocalPostFrameHandle: Send, Sync);
 
     #[test]
     fn mixed_shared_and_local_callbacks_keep_total_registration_order() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         let log = Arc::new(Mutex::new(Vec::new()));
 
-        lane.enter(|| {
-            let shared = Arc::clone(&log);
-            scheduler.add_post_frame_callback(Box::new(move |_| {
-                shared.lock().expect("log mutex").push(1);
-            }));
-            let local = Arc::clone(&log);
-            lane.post_frame_handle()
-                .schedule_local(move |_| local.lock().expect("log mutex").push(2))
-                .expect("lane is active");
-            let shared = Arc::clone(&log);
-            scheduler.add_post_frame_callback(Box::new(move |_| {
-                shared.lock().expect("log mutex").push(3);
-            }));
-            scheduler.execute_frame();
-        });
+        let shared = Arc::clone(&log);
+        scheduler.add_post_frame_callback(Box::new(move |_| {
+            shared.lock().expect("log mutex").push(1);
+        }));
+        let local = Arc::clone(&log);
+        lane.local_handle()
+            .schedule_local(move |_| local.lock().expect("log mutex").push(2))
+            .expect("lane is alive");
+        let shared = Arc::clone(&log);
+        scheduler.add_post_frame_callback(Box::new(move |_| {
+            shared.lock().expect("log mutex").push(3);
+        }));
+        scheduler.execute_frame_with_lane(&lane);
 
         assert_eq!(*log.lock().expect("log mutex"), [1, 2, 3]);
     }
 
+    /// A local callback that re-registers another LOCAL callback (the direct
+    /// same-lane case, distinct from `local_then_shared` below): the queue is
+    /// taken from the lane before any callback in this frame's snapshot runs,
+    /// so the re-registration lands in the lane's now-empty queue and fires
+    /// only on the *next* drive, never in the frame that scheduled it. A
+    /// `!Send` `LocalPostFrameHandle` cannot be captured into a `Send`-bound
+    /// shared callback at all (a compile error, not a runtime check) — that
+    /// structurally rules out the "shared schedules local" direction the
+    /// thread-local ticket registry used to have to arbitrate at runtime.
     #[test]
-    fn shared_then_local_nested_registration_defers() {
+    fn local_then_local_nested_registration_defers() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
-        let handle = lane.post_frame_handle();
-        let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        lane.enter(|| {
-            let nested = Arc::clone(&fired);
-            scheduler.add_post_frame_callback(Box::new(move |_| {
-                handle
+        let lane = scheduler.new_local_post_frame_lane();
+        let handle = lane.local_handle();
+        let fired = Rc::new(Cell::new(0));
+        let nested_handle = handle.clone();
+        let nested = Rc::clone(&fired);
+        handle
+            .schedule_local(move |_| {
+                nested_handle
                     .schedule_local(move |_| {
-                        nested.fetch_add(1, Ordering::SeqCst);
+                        nested.set(nested.get() + 1);
                     })
-                    .expect("lane remains active for the whole frame");
-            }));
-            scheduler.execute_frame();
-            assert_eq!(fired.load(Ordering::SeqCst), 0);
-            scheduler.execute_frame();
-        });
-        assert_eq!(fired.load(Ordering::SeqCst), 1);
+                    .expect("lane outlives this frame");
+            })
+            .expect("lane alive");
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(fired.get(), 0, "re-registration must not run this frame");
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(fired.get(), 1, "it must run on the very next frame");
     }
 
     #[test]
     fn local_then_shared_nested_registration_defers() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        lane.enter(|| {
-            let nested_scheduler = scheduler.clone();
-            let nested = Arc::clone(&fired);
-            lane.post_frame_handle()
-                .schedule_local(move |_| {
-                    nested_scheduler.add_post_frame_callback(Box::new(move |_| {
-                        nested.fetch_add(1, Ordering::SeqCst);
-                    }));
-                })
-                .expect("lane is active");
-            scheduler.execute_frame();
-            assert_eq!(fired.load(Ordering::SeqCst), 0);
-            scheduler.execute_frame();
-        });
-        assert_eq!(fired.load(Ordering::SeqCst), 1);
+        let nested_scheduler = scheduler.clone();
+        let nested = Arc::clone(&fired);
+        lane.local_handle()
+            .schedule_local(move |_| {
+                nested_scheduler.add_post_frame_callback(Box::new(move |_| {
+                    nested.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }));
+            })
+            .expect("lane is alive");
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 0);
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
+    /// Two lanes on the same scheduler, both with handles held concurrently:
+    /// each handle addresses its own lane directly (a `Weak` straight at its
+    /// `LocalLaneInner`), so there is no "active lane" ambiguity to resolve —
+    /// this is the property that let the thread-local ticket registry retire.
     #[test]
-    fn active_lane_and_scheduler_identity_isolate_local_queues() {
-        let scheduler_a = UpdateScheduler::new();
-        let scheduler_b = UpdateScheduler::new();
-        let lane_a = scheduler_a.local_post_frame_lane();
-        let lane_b = scheduler_a.local_post_frame_lane();
-        let lane_other_scheduler = scheduler_b.local_post_frame_lane();
+    fn concurrent_lanes_on_one_scheduler_never_cross_queues() {
+        let scheduler = UpdateScheduler::new();
+        let lane_a = scheduler.new_local_post_frame_lane();
+        let lane_b = scheduler.new_local_post_frame_lane();
         let fired_a = Rc::new(Cell::new(0));
         let fired_b = Rc::new(Cell::new(0));
-        let fired_other = Rc::new(Cell::new(0));
 
-        lane_a.enter(|| {
-            let fired = Rc::clone(&fired_a);
-            lane_a
-                .post_frame_handle()
-                .schedule_local(move |_| fired.set(1))
-                .expect("lane A active");
-        });
-        lane_b.enter(|| {
-            let fired = Rc::clone(&fired_b);
-            lane_b
-                .post_frame_handle()
-                .schedule_local(move |_| fired.set(1))
-                .expect("lane B active");
-            scheduler_a.execute_frame();
-        });
-        assert_eq!(fired_a.get(), 0);
+        let fired = Rc::clone(&fired_a);
+        lane_a
+            .local_handle()
+            .schedule_local(move |_| fired.set(1))
+            .expect("lane A alive");
+        let fired = Rc::clone(&fired_b);
+        lane_b
+            .local_handle()
+            .schedule_local(move |_| fired.set(1))
+            .expect("lane B alive");
+
+        // Draining lane A must not touch lane B's still-queued callback.
+        scheduler.execute_frame_with_lane(&lane_a);
+        assert_eq!(fired_a.get(), 1);
+        assert_eq!(fired_b.get(), 0);
+
+        scheduler.execute_frame_with_lane(&lane_b);
         assert_eq!(fired_b.get(), 1);
-
-        lane_other_scheduler.enter(|| {
-            let fired = Rc::clone(&fired_other);
-            lane_other_scheduler
-                .post_frame_handle()
-                .schedule_local(move |_| fired.set(1))
-                .expect("other scheduler lane active");
-            scheduler_a.execute_frame();
-            assert_eq!(fired_other.get(), 0);
-            scheduler_b.execute_frame();
-        });
-        assert_eq!(fired_other.get(), 1);
     }
 
+    /// The weak case: A is driven with NO lane parameter at all, so it never
+    /// even looks at B's lane. `draining_the_wrong_schedulers_lane_leaves_it_untouched`
+    /// below is the strong case this one does not cover — B's lane handed to
+    /// A's drive AS THE PARAMETER, which is the actual misuse
+    /// `take_queue_for`'s identity check exists to refuse.
     #[test]
-    fn nested_different_lane_rejects_inactive_outer_ticket() {
-        let scheduler = UpdateScheduler::new();
-        let lane_a = scheduler.local_post_frame_lane();
-        let lane_b = scheduler.local_post_frame_lane();
-        let handle_a = lane_a.post_frame_handle();
-        lane_a.enter(|| {
-            lane_b.enter(|| {
-                assert_eq!(
-                    handle_a.schedule_local(|_| {}),
-                    Err(LocalPostFrameScheduleError::InactiveLane)
-                );
-            });
-        });
+    fn other_scheduler_lane_is_untouched_by_a_different_scheduler_drive() {
+        let scheduler_a = UpdateScheduler::new();
+        let scheduler_b = UpdateScheduler::new();
+        let lane_b = scheduler_b.new_local_post_frame_lane();
+        let fired = Rc::new(Cell::new(0));
+
+        let probe = Rc::clone(&fired);
+        lane_b
+            .local_handle()
+            .schedule_local(move |_| probe.set(1))
+            .expect("lane B alive");
+
+        // Scheduler A completing a frame has no lane of its own here and must
+        // not observe lane B's queue.
+        scheduler_a.execute_frame();
+        assert_eq!(fired.get(), 0);
+
+        scheduler_b.execute_frame_with_lane(&lane_b);
+        assert_eq!(fired.get(), 1);
     }
 
+    /// The retired thread-local ticket registry filtered a lane's drain by
+    /// `scheduler_identity`; `take_queue_for` restores that check for the
+    /// direct-parameter shape the new design uses. With per-realm schedulers
+    /// now real (every `UiRealm` mints its own via `new_local_post_frame_lane`),
+    /// a binding wiring the wrong realm's lane into a drive call is a
+    /// reachable mistake, not a theoretical one — this is the exact
+    /// misuse `other_scheduler_lane_is_untouched_by_a_different_scheduler_drive`
+    /// above does not exercise (that one never hands B's lane to A's drive at
+    /// all).
+    ///
+    /// Mutant this kills: dropping the `is_same_instance` check from
+    /// `take_queue_for` (or calling the private `take_queue` directly, as the
+    /// pre-fix code did) — B's callback would run inside A's frame, with A's
+    /// `FrameTiming`, be removed from B's queue, and never fire again.
     #[test]
-    fn wrong_thread_and_stale_lane_are_typed_errors() {
-        let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
-        let handle = lane.post_frame_handle();
-        let threaded = handle.clone();
-        let wrong_thread = std::thread::spawn(move || threaded.schedule_local(|_| {}))
-            .join()
-            .expect("worker should not panic");
-        assert_eq!(wrong_thread, Err(LocalPostFrameScheduleError::WrongThread));
-        drop(lane);
-        assert_eq!(
-            handle.schedule_local(|_| {}),
-            Err(LocalPostFrameScheduleError::LaneClosed)
+    fn draining_the_wrong_schedulers_lane_leaves_it_untouched() {
+        let scheduler_a = UpdateScheduler::new();
+        let scheduler_b = UpdateScheduler::new();
+        let lane_b = scheduler_b.new_local_post_frame_lane();
+        let fired_b = Rc::new(Cell::new(false));
+        let callback = Rc::clone(&fired_b);
+        lane_b
+            .local_handle()
+            .schedule_local(move |_| callback.set(true))
+            .expect("lane alive");
+
+        // A's own shared-queue callback, so the exploit can also prove the
+        // mismatch does not collaterally break A's real work.
+        let fired_a = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cb_a = Arc::clone(&fired_a);
+        scheduler_a.add_post_frame_callback(Box::new(move |_| {
+            cb_a.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        // The mistake: hand B's lane to A's drive.
+        scheduler_a.execute_frame_with_lane(&lane_b);
+        assert!(!fired_b.get(), "B's callback must NOT run inside A's frame");
+        assert!(
+            fired_a.load(std::sync::atomic::Ordering::SeqCst),
+            "A's own shared-queue callback must be unaffected by the mismatch"
+        );
+
+        // Not just "didn't run" — still there, unremoved: B's own next frame
+        // must still deliver it.
+        scheduler_b.execute_frame_with_lane(&lane_b);
+        assert!(
+            fired_b.get(),
+            "B's own frame must still run its own lane's callback \
+             (proves the entry was refused, not silently dropped)"
+        );
+    }
+
+    /// The mismatch is a typed, observable error — not merely an absence of
+    /// effect — and the correct scheduler is unaffected by a prior failed
+    /// attempt from the wrong one.
+    #[test]
+    fn take_queue_for_the_wrong_scheduler_is_a_typed_error() {
+        let scheduler_a = UpdateScheduler::new();
+        let scheduler_b = UpdateScheduler::new();
+        let lane_b = scheduler_b.new_local_post_frame_lane();
+
+        assert!(matches!(
+            lane_b.take_queue_for(&scheduler_a),
+            Err(LocalPostFrameScheduleError::WrongScheduler)
+        ));
+
+        lane_b
+            .local_handle()
+            .schedule_local(|_| {})
+            .expect("lane alive");
+        assert!(
+            lane_b.take_queue_for(&scheduler_b).is_ok(),
+            "the failed attempt from the wrong scheduler must not have corrupted the lane"
         );
     }
 
     #[test]
-    fn missing_lane_is_a_typed_error() {
-        let scheduler = UpdateScheduler::new();
-        assert_eq!(
-            PostFrameHandle::new(&scheduler).schedule_local(|_| {}),
-            Err(LocalPostFrameScheduleError::NoLocalLane)
-        );
-    }
-
-    #[test]
-    fn dropping_lane_drops_queued_owner_capture() {
+    fn dropped_lane_is_a_typed_error_and_the_callback_never_runs() {
         struct DropProbe(Rc<Cell<bool>>);
         impl Drop for DropProbe {
             fn drop(&mut self) {
@@ -443,60 +501,135 @@ mod tests {
             }
         }
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
+        let handle = lane.local_handle();
         let dropped = Rc::new(Cell::new(false));
-        lane.enter(|| {
-            let probe = DropProbe(Rc::clone(&dropped));
-            lane.post_frame_handle()
-                .schedule_local(move |_| drop(probe))
-                .expect("lane active");
-        });
+        let ran = Rc::new(Cell::new(false));
+
+        let probe = DropProbe(Rc::clone(&dropped));
+        let ran_flag = Rc::clone(&ran);
+        handle
+            .schedule_local(move |_| {
+                ran_flag.set(true);
+                drop(probe);
+            })
+            .expect("lane alive");
+
         drop(lane);
-        assert!(dropped.get());
+        assert!(dropped.get(), "queued capture must drop with its dead lane");
+
+        // The handle itself now fails closed — a typed error, not a panic or
+        // silent success.
+        assert_eq!(
+            handle.schedule_local(|_| {}),
+            Err(LocalPostFrameScheduleError::LaneClosed)
+        );
+        // And the original callback is provably never invoked: it was
+        // dropped, not run, when its lane died.
+        assert!(!ran.get());
+    }
+
+    #[test]
+    fn dead_scheduler_is_also_a_typed_error() {
+        let scheduler = UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let handle = lane.local_handle();
+        drop(scheduler);
+        assert_eq!(
+            handle.schedule_local(|_| {}),
+            Err(LocalPostFrameScheduleError::LaneClosed)
+        );
     }
 
     #[test]
     fn post_frame_panic_restores_idle_and_later_scheduling_works() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
-        lane.enter(|| {
-            lane.post_frame_handle()
-                .schedule_local(|_| panic!("post-frame probe"))
-                .expect("lane active");
-            assert!(catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame())).is_err());
-            assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-            let fired = Rc::new(Cell::new(false));
-            let callback = Rc::clone(&fired);
-            lane.post_frame_handle()
-                .schedule_local(move |_| callback.set(true))
-                .expect("gate remains usable");
-            scheduler.execute_frame();
-            assert!(fired.get());
-        });
+        let lane = scheduler.new_local_post_frame_lane();
+        lane.local_handle()
+            .schedule_local(|_| panic!("post-frame probe"))
+            .expect("lane alive");
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame_with_lane(&lane))).is_err()
+        );
+        assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
+        let fired = Rc::new(Cell::new(false));
+        let callback = Rc::clone(&fired);
+        lane.local_handle()
+            .schedule_local(move |_| callback.set(true))
+            .expect("gate remains usable");
+        scheduler.execute_frame_with_lane(&lane);
+        assert!(fired.get());
     }
 
     #[test]
     fn aborted_pipeline_retains_local_callback_for_next_completed_frame() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         let fired = Rc::new(Cell::new(false));
-        lane.enter(|| {
-            let callback = Rc::clone(&fired);
-            lane.post_frame_handle()
-                .schedule_local(move |_| callback.set(true))
-                .expect("lane active");
-            assert!(
-                catch_unwind(AssertUnwindSafe(|| {
-                    let now = crate::Instant::now();
-                    scheduler.drive_frame(now, crate::IdleDeadline::far_future(now), || {
-                        panic!("pipeline probe")
-                    });
-                }))
-                .is_err()
-            );
-            assert!(!fired.get());
-            scheduler.execute_frame();
-        });
+        let callback = Rc::clone(&fired);
+        lane.local_handle()
+            .schedule_local(move |_| callback.set(true))
+            .expect("lane alive");
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let now = crate::Instant::now();
+                scheduler.drive_frame_with_lane(
+                    now,
+                    crate::IdleDeadline::far_future(now),
+                    || panic!("pipeline probe"),
+                    &lane,
+                );
+            }))
+            .is_err()
+        );
+        assert!(!fired.get());
+        scheduler.execute_frame_with_lane(&lane);
         assert!(fired.get());
+    }
+
+    /// `end_frame_with_lane` on a scheduler with no open frame must not
+    /// silently drop the lane's queued entries. The mutant this kills: taking
+    /// `lane.take_queue()` unconditionally, ahead of the `if let Some(timing)`
+    /// guard, instead of inside it — the taken entries would then never be
+    /// folded into `callbacks` (that only happens inside the same
+    /// `Some(timing)` arm) and would be dropped, un-run, when the call
+    /// returns.
+    ///
+    /// `#[cfg(not(debug_assertions))]`, deliberately: reaching this call with
+    /// no open frame ALSO means the current phase cannot legally transition
+    /// to `PostFrameCallbacks` (`current_frame` and the phase machine are
+    /// always advanced together — see `handle_begin_frame`/`handle_draw_frame`
+    /// — so the only way to decouple them is a misuse call, e.g. a second
+    /// `end_frame_with_lane` after the frame it was meant to close already
+    /// closed). `set_scheduler_phase`'s own `debug_assert!` catches that
+    /// misuse first in a debug/test build, panicking before this function
+    /// ever reaches `current_frame.lock().take()` — which is exactly why the
+    /// reviewer who asked for this test also called the bug "not reachable
+    /// today". It IS reachable the moment `debug_assertions` are off (a
+    /// release build, where that assert compiles out), which is what this
+    /// test pins; it cannot run under the debug-assertions-on profile this
+    /// workspace tests with, and is gated accordingly rather than pretending
+    /// otherwise.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn end_frame_with_lane_without_an_open_frame_does_not_drop_the_queued_entry() {
+        let scheduler = UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let fired = Rc::new(Cell::new(false));
+        let callback = Rc::clone(&fired);
+        lane.local_handle()
+            .schedule_local(move |_| callback.set(true))
+            .expect("lane alive");
+
+        // No frame is open: nothing runs, and nothing must be lost.
+        scheduler.end_frame_with_lane(&lane);
+        assert!(!fired.get(), "no open frame means nothing to close");
+
+        // The entry must still be queued for the next REAL frame close.
+        scheduler.execute_frame_with_lane(&lane);
+        assert!(
+            fired.get(),
+            "the queued entry must survive a no-open-frame end_frame_with_lane call"
+        );
     }
 }

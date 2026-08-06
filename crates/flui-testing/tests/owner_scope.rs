@@ -23,8 +23,9 @@ fn pointer_route_runs_inside_the_binding_owner_scope() {
     let mut owner = BuildOwner::new();
     binding.install_build_capabilities(&mut owner);
     let handle = owner
-        .post_frame_handle()
-        .expect("the binding installs its post-frame capability");
+        .local_post_frame_handle()
+        .expect("the binding installs its owner-local post-frame capability")
+        .clone();
     let fired = Rc::new(Cell::new(false));
     let callback_fired = Rc::clone(&fired);
     let event = pointer_down(Offset::new(px(4.0), px(7.0)), device_kind_from_button(0));

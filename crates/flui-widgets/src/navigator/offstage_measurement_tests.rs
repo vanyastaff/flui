@@ -19,8 +19,9 @@
 //! (`routes.dart:1951-1962`, `:2221-2231`), marking the route's subtree dirty, and
 //! the frame's build + layout then runs before the post-frame phase.
 //!
-//! If FLUI's frame order does not deliver that, the `PostFrameHandle` seam would be
-//! built on a false assumption and every flight would start from a stale rect.
+//! If FLUI's frame order does not deliver that, the `LocalPostFrameHandle` seam
+//! would be built on a false assumption and every flight would start from a
+//! stale rect.
 //!
 //! # Why the route under test is a *newly pushed* one
 //!
@@ -109,9 +110,9 @@ fn a_route_forced_offstage_has_committed_geometry_in_the_same_frames_post_frame_
     let observed_cb = Arc::clone(&observed);
     let owner_cb = owner.clone();
     // `PipelineCell` is `!Send`, so this callback must go through
-    // `schedule_local` (same-thread, runtime-checked) rather than
+    // `schedule_local` (same-thread by a compile-time `!Send` bound) rather than
     // `add_post_frame_callback` (`Send`-bound, for cross-thread wake).
-    let post_frame_handle = harness.post_frame_handle();
+    let post_frame_handle = harness.local_post_frame_handle();
     harness.enter_owner_scope(|| {
         post_frame_handle
             .schedule_local(move |_timing| {
@@ -172,7 +173,7 @@ fn the_offstage_routes_committed_geometry_is_real_not_zero() {
     let observed: Arc<Mutex<Option<Size>>> = Arc::new(Mutex::new(None));
     let observed_cb = Arc::clone(&observed);
     let owner_cb = owner.clone();
-    let post_frame_handle = harness.post_frame_handle();
+    let post_frame_handle = harness.local_post_frame_handle();
     harness.enter_owner_scope(|| {
         post_frame_handle
             .schedule_local(move |_| {

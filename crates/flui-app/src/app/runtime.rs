@@ -204,7 +204,7 @@ impl RealmServices {
     pub(crate) fn construct() -> Self {
         let scheduler = UpdateScheduler::new();
         Self {
-            local_post_frame: scheduler.local_post_frame_lane(),
+            local_post_frame: scheduler.new_local_post_frame_lane(),
             async_driver: scheduler.async_driver().clone(),
             scheduler,
         }

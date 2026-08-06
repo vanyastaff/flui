@@ -535,7 +535,7 @@ fn route_subtree_ids_are_published_before_layout_commits() {
     let owner_cb = owner.clone();
     let navigator_cb = navigator.clone();
     let post_frame = navigator
-        .post_frame_handle()
+        .local_post_frame_handle()
         .expect("mounted navigator publishes an owner-local post-frame handle");
     harness.enter_owner_scope(|| {
         post_frame

@@ -5059,20 +5059,28 @@ mod realm_dispatch_tests {
             install_realm_alongside(super::super::ui_realm::UiRealm::for_test(), &window_a)
                 .expect("realm A installs alongside the idle realm B cleanly");
 
-        let scheduler_a = APP_RUNTIME.with(|slot| {
-            slot.borrow()
+        let (scheduler_a, local_post_frame_a) = APP_RUNTIME.with(|slot| {
+            let borrowed = slot.borrow();
+            let realm = borrowed
                 .realms
                 .get(&dispatcher_a.address.realm_id)
                 .and_then(|realm_slot| realm_slot.realm.as_ref())
-                .expect("realm A installed above")
-                .scheduler()
-                .clone()
+                .expect("realm A installed above");
+            (
+                realm.scheduler().clone(),
+                realm.local_post_frame_lane().clone(),
+            )
         });
 
         let now = web_time::Instant::now();
-        scheduler_a.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
-            let _ = with_owner_platform(|_owner| ());
-        });
+        scheduler_a.drive_frame_with_lane(
+            now,
+            flui_scheduler::IdleDeadline::far_future(now),
+            || {
+                let _ = with_owner_platform(|_owner| ());
+            },
+            &local_post_frame_a,
+        );
     }
 
     /// The presentation-close dispatch seam (`close_presentation` ->
@@ -6547,7 +6555,7 @@ where
         // microtasks + the single async-driver poll) -> persistent callbacks ->
         // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
         // drives the same helper on its binding-local scheduler.
-            let presented = scheduler.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
+            let presented = scheduler.drive_frame_with_lane(now, flui_scheduler::IdleDeadline::far_future(now), || {
             // Render frame via the realm
             let mut r = renderer_frame.lock();
                 let did_present = realm.render_frame_entered(&mut *r);
@@ -6577,7 +6585,7 @@ where
                 }
             }
                 did_present
-            });
+            }, realm.local_post_frame_lane());
 
         // No-present fallback throttle. Fifo present (the default, see
         // `select_present_mode`) blocks every PRESENTED frame at display
@@ -7559,7 +7567,7 @@ where
                     // UpdateScheduler callbacks and rendering share ONE `UiRealm::enter`
                     // dynamic extent; callbacks may legally resolve realm-local
                     // capabilities throughout the complete frame transaction.
-                    scheduler.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
+                    scheduler.drive_frame_with_lane(now, flui_scheduler::IdleDeadline::far_future(now), || {
                         let mut r = renderer_frame.lock();
                         realm.render_frame_entered(&mut *r);
 
@@ -7574,7 +7582,7 @@ where
                                 }
                             }
                         }
-                    });
+                    }, realm.local_post_frame_lane());
                 })),
             );
         }));
@@ -7912,7 +7920,7 @@ where
 
                     let now = web_time::Instant::now();
                     // UpdateScheduler callbacks and rendering share one realm entry.
-                    scheduler.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
+                    scheduler.drive_frame_with_lane(now, flui_scheduler::IdleDeadline::far_future(now), || {
                         let mut slot = renderer_frame.lock();
                         let Some(r) = slot.as_mut() else {
                             return;
@@ -7945,7 +7953,7 @@ where
                                 }
                             });
                         }
-                    });
+                    }, realm.local_post_frame_lane());
                 })),
             );
         }));
@@ -8361,14 +8369,17 @@ mod tests {
         // half: the realm checked OUT for a dispatched task, where
         // `installed_realm_phase` must fall back to `dispatched_scheduler`
         // instead of reading the resident slot directly.
-        let scheduler = APP_RUNTIME.with(|slot| {
-            slot.borrow()
+        let (scheduler, local_post_frame) = APP_RUNTIME.with(|slot| {
+            let borrowed = slot.borrow();
+            let realm = borrowed
                 .realms
                 .get(&dispatcher.address.realm_id)
                 .and_then(|realm_slot| realm_slot.realm.as_ref())
-                .expect("just installed above")
-                .scheduler()
-                .clone()
+                .expect("just installed above");
+            (
+                realm.scheduler().clone(),
+                realm.local_post_frame_lane().clone(),
+            )
         });
 
         // `drive_frame` leaves the scheduler in `PersistentCallbacks` for the
@@ -8377,9 +8388,14 @@ mod tests {
         // to `Idle` via `abort_frame()` before the panic resumes, so this
         // test's own `#[should_panic]` unwind leaves the scheduler clean.
         let now = web_time::Instant::now();
-        scheduler.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
-            let _ = with_owner_platform(|_owner| ());
-        });
+        scheduler.drive_frame_with_lane(
+            now,
+            flui_scheduler::IdleDeadline::far_future(now),
+            || {
+                let _ = with_owner_platform(|_owner| ());
+            },
+            &local_post_frame,
+        );
     }
 
     /// The through-dispatch half of the fence-(c) pin above: `with_owner_platform`
@@ -8429,12 +8445,13 @@ mod tests {
             dispatcher,
             RealmTask::Frame(Box::new(|realm| {
                 let now = web_time::Instant::now();
-                realm.scheduler().drive_frame(
+                realm.scheduler().drive_frame_with_lane(
                     now,
                     flui_scheduler::IdleDeadline::far_future(now),
                     || {
                         let _ = with_owner_platform(|_owner| ());
                     },
+                    realm.local_post_frame_lane(),
                 );
             })),
         );

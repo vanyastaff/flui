@@ -25,7 +25,7 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineOwner;
-use flui_scheduler::{AsyncDriver, PostFrameHandle, UpdateScheduler};
+use flui_scheduler::{AsyncDriver, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler};
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding};
@@ -47,8 +47,10 @@ pub(crate) struct RealmCapabilities<'a> {
     /// realm-level; see the presentation-teardown contract for the
     /// consequence of that when this presentation closes).
     pub(crate) async_driver: AsyncDriver,
-    /// The realm's local post-frame callback lane.
-    pub(crate) post_frame_handle: PostFrameHandle,
+    /// The realm's owner-local post-frame callback capability — addresses
+    /// the realm's [`flui_scheduler::LocalPostFrameLane`] directly, so it can
+    /// capture `Rc`/`RefCell` widget state.
+    pub(crate) local_post_frame_handle: LocalPostFrameHandle,
     /// The realm's interaction dispatch lane.
     pub(crate) interaction_dispatch_handle: InteractionDispatchHandle,
     /// The realm's own scheduler — borrowed only for the duration of
@@ -290,7 +292,8 @@ impl PresentationState {
         widgets.with_build_owner_mut(|owner| {
             owner.set_global_key_scope(capabilities.global_key_scope);
             owner.set_async_driver(capabilities.async_driver);
-            owner.set_post_frame_handle(capabilities.post_frame_handle);
+            owner.set_post_frame_handle(PostFrameHandle::new(capabilities.scheduler));
+            owner.set_local_post_frame_handle(capabilities.local_post_frame_handle);
             owner.set_interaction_dispatch_handle(capabilities.interaction_dispatch_handle);
             owner.set_text_input_handle(text_input.handle());
         });

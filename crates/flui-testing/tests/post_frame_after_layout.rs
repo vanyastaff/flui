@@ -100,25 +100,22 @@ fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
     let pipeline_cb = pipeline.clone();
     // `PipelineCell` is `!Send`, so this callback cannot go through
     // `add_post_frame_callback` (its `Box<dyn Fn() + Send + Sync>` bound is for
-    // cross-thread wake, not owner-local frame callbacks). `schedule_local`
-    // enforces same-thread execution at runtime instead, matching the
-    // `editable_text.rs` IME cursor-loop pattern. It also requires its lane
-    // to be the active top scope at registration time, hence
-    // `enter_owner_scope`; the handle is cloned out first (it is
-    // `Clone + Send + Sync`) so the scope closure need not re-borrow `binding`.
+    // cross-thread wake, not owner-local frame callbacks). `LocalPostFrameHandle::
+    // schedule_local` accepts it instead, matching the `editable_text.rs` IME
+    // cursor-loop pattern: the handle is `!Send` and addresses its lane directly
+    // (a `Weak` pointer), so there is no "active lane" requirement to satisfy —
+    // only the lane and its scheduler need to still be alive.
     let post_frame_handle = binding
         .build_owner_mut()
-        .post_frame_handle()
-        .expect("post-frame handle installed by with_tree/bind_tree")
+        .local_post_frame_handle()
+        .expect("owner-local post-frame handle installed by with_tree/bind_tree")
         .clone();
-    binding.enter_owner_scope(|| {
-        post_frame_handle
-            .schedule_local(move |_timing| {
-                calls_cb.fetch_add(1, Ordering::SeqCst);
-                *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
-            })
-            .expect("schedule_local must succeed on the owner thread");
-    });
+    post_frame_handle
+        .schedule_local(move |_timing| {
+            calls_cb.fetch_add(1, Ordering::SeqCst);
+            *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
+        })
+        .expect("the lane outlives this call");
 
     binding.pump_frame(Duration::from_millis(16));
 
