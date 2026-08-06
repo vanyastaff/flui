@@ -6496,6 +6496,12 @@ where
         // decides whether anything actually runs this pump: pacing
         // feedback is about observing the PLATFORM's own delivery timing,
         // independent of whether this particular delivery ends up idle.
+        // `now` is read ONCE here and reused ~60 lines below at this
+        // closure's `drive_frame_with_lane(now, ...)` call (search this
+        // function for "reused below, not a fresh read" to find it) — this
+        // pump's pacing-feedback sample and its own frame-drive instant
+        // must agree, the same single-`now`-per-pump discipline every
+        // other call site in this closure already follows.
             let now = web_time::Instant::now();
             realm.record_compositor_tick(now);
 
@@ -6554,11 +6560,9 @@ where
                 WakeAction::Render => {}
             }
 
-        // `now` is the SAME instant recorded into `record_compositor_tick`
-        // above, not a fresh read — this pump's pacing-feedback sample and
-        // its own frame-drive instant must agree, the same single-`now`-
-        // per-pump discipline every other call site in this closure
-        // already follows.
+        // `now` here is reused below, not a fresh read -- it is the SAME
+        // instant already recorded into `record_compositor_tick` near the
+        // top of this closure (see the comment at its `let now` binding).
         // UpdateScheduler callbacks (animations). NOTE: the global `UpdateScheduler` is driven
         // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
         // (`UiRealm::draw_frame`) ticks off the realm's own `start` origin —

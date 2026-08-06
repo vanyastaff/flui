@@ -628,7 +628,13 @@ demand and lets `clock.poll` decide via `PollDecision::should_run_segment()`, \
 provably equivalent to the direct predicate it replaces for EVERY reachable \
 combination of demand and first-frame-deferral state (deferral is orthogonal \
 to whether the segment runs -- see the next sentence -- so the equivalence \
-holds unconditionally, not only in a not-deferred subspace); six \
+holds unconditionally, not only in a not-deferred subspace) -- THIS \
+equivalence claim is scoped to the `Dirty` demand source specifically \
+(the union this sentence names); the driver-loop hybrid paragraph below \
+adds a SEPARATE, `Animation`-only demand source that deliberately widens \
+the overall segment-gate behavior beyond this scoped predicate, and says \
+so explicitly rather than leaving the two paragraphs looking contradictory. \
+Six \
 pre-existing pinned deferral/vsync tests pass unedited bar one panic-message \
 string, plus a strengthened assertion on one of them and several new tests \
 proving the segment genuinely still runs while deferred. First-frame \
@@ -658,13 +664,13 @@ standalone defer/allow API (used only by its own `draw_frame()` convenience \
 method, with no `UiRealm` involvement) is untouched. The third owner -- \
 raster backpressure as its own owner reporting into `FrameClock`'s \
 in-flight/throttle knobs -- is still unbuilt, and hidden-surface gating is \
-not yet wired to a real visibility signal (both remain named gaps, PR-E \
-and PR-D). `flui-testing` gained an additive, independent multi-presentation \
-clock registry (`HeadlessBinding::install_presentation_clock`/ \
+not yet wired to a real visibility signal (both remain named gaps, tracked \
+on the same issue). `flui-testing` gained an additive, independent \
+multi-presentation clock registry (`HeadlessBinding::install_presentation_clock`/ \
 `pump_presentation`/`pump_all`/`set_presentation_min_produce_interval`) \
 alongside the untouched single-view `pump_frame`. \
 \
-**Driver-loop hybrid (#556 PR-C2):** production now DOES mark `Animation` \
+**Driver-loop hybrid (#556):** production now DOES mark `Animation` \
 demand from a running controller -- `draw_frame_entered`'s vsync-\
 continuation loop samples `Vsync::has_running()` BEFORE each tick (so the \
 tick that completes a controller still marks demand and flushes that \
@@ -673,28 +679,49 @@ ticker.dart:272-285`'s unconditional `_onTick` call before `\
 shouldScheduleTick` is even consulted) and marks `DemandKind::Animation` \
 whenever it was; this closes the divergence the previous paragraph used to \
 describe against `flui-testing`'s own `pump_presentation`, which already \
-did this. The platform-facing actuator itself is now edge-triggered: \
-`FrameClock::try_arm_redraw_request` is a test-and-set latch (armed by the \
-first demand mark after an empty mask, consumed by the next granted \
-`poll` produce) that `draw_frame_entered`'s continuation check consults \
-before calling `UiRealm::wake_frame()`, so N ticks that land before a \
-produce clears the mask (GPU backpressure, a throttle window) collapse \
-into exactly one platform-facing wake instead of one per tick. \
-`FrameClock::record_compositor_tick` is the companion pacing-feedback \
-half: `flui-app`'s desktop frame-request callback (`bootstrap_desktop`'s \
-`window.on_request_frame` closure, fired by every backend's routed \
-`RedrawRequested` -- compositor-paced on Wayland, delivered immediately \
-on X11/Windows/macOS) records the tick unconditionally, before the \
-existing dirty/`wake_action` gate decides whether anything runs this \
-pump, and marks `DemandKind::Host` as a safety net (the compositor only \
-ever delivers this tick in response to an earlier `request_redraw()` call \
-already made for a genuine `Dirty`/`Animation` reason, so this rarely \
-changes the produce decision on its own). Neither addition is a second, \
-parallel produce path: both simply mark the same `DemandMask` the existing \
-`clock.poll` call already decides from -- the per-platform table (which \
-platform mechanism plays which of "compositor-paced actuator" vs. \
-"wake-channel fallback") is `docs/adr/ADR-0044-driver-loop-hybrid.md`'s \
-own deliverable, not duplicated here.\
+did this, and is exactly the scoped WIDENING the equivalence sentence \
+above now names explicitly -- the segment gate is no longer equivalent to \
+the bare `Dirty`-only predicate on a presentation with a running, \
+otherwise-silent controller, by design, matching Flutter's own \
+`Ticker`-driven `scheduleFrame`. The platform-facing actuator itself is \
+now edge-triggered: `FrameClock::try_arm_redraw_request` is a test-and-set \
+latch (armed by the first demand mark after an empty mask, consumed by \
+the next granted `poll` produce, and also disarmed by `clear_demand` when \
+it empties the mask outside a produce) that `draw_frame_entered`'s \
+continuation check consults before calling `UiRealm::wake_frame()`, so N \
+ticks that land before a produce clears the mask (GPU backpressure, a \
+throttle window) collapse into exactly one platform-facing wake instead \
+of one per tick. Honest limitation: a `poll` that skips for `Hidden` or \
+`Backpressure` retains the latch un-disarmed, and the wake edges that \
+would resolve that (an unhide, a raster retire) belong to the two named \
+gaps above and do not exist yet -- dormant today because neither gap is \
+wired into production, but a liveness dependency the day either is, \
+ahead of its own wake edge. `FrameClock::record_compositor_tick` is the \
+companion pacing-feedback method: `flui-app`'s desktop frame-request \
+callback (`bootstrap_desktop`'s `window.on_request_frame` closure, fired \
+by every backend's routed `RedrawRequested` -- compositor-paced on \
+Wayland, delivered immediately on X11/Windows/macOS) records the tick \
+unconditionally, before the existing dirty/`wake_action` gate decides \
+whether anything runs this pump, and marks NO demand: an earlier version \
+marked `DemandKind::Host` unconditionally, which -- because this method \
+fires on every production pump on desktop -- made `poll` permanently \
+unable to return `Skip(NoDemand)` there, i.e. made the demand-mask gate \
+inert on every platform that calls it; caught with a direct probe (an \
+idle `UiRealm` that calls `record_compositor_tick` then \
+`draw_frame_entered` produced every pump under the mutant, zero pumps \
+after the fix), pinned by \
+`an_idle_presentation_stays_idle_through_the_production_call_sequence_with_compositor_ticks` \
+(`crates/flui-app/src/app/ui_realm.rs`) -- deliberately a DIFFERENT test \
+from the pre-existing `an_idle_presentation_produces_and_flushes_exactly_zero_over_many_pumps`, \
+which never calls `record_compositor_tick` and could not have caught \
+this. Neither the `Animation` mark nor `record_compositor_tick` is a \
+second, parallel produce path: the former marks the same `DemandMask` \
+the existing `clock.poll` call already decides from (widening which \
+inputs feed it, not adding a second decision mechanism); the latter marks \
+nothing at all -- the per-platform table (which platform mechanism plays \
+which of "compositor-paced actuator" vs. "wake-channel fallback") is \
+`docs/adr/ADR-0044-driver-loop-hybrid.md`'s own deliverable, not \
+duplicated here.\
 """
 state = "partial"
 domain = "realm"
@@ -720,6 +747,9 @@ evidence = [
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn a_paused_compositor_feed_pauses_production_and_resuming_resumes_it" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn a_running_controller_with_no_other_dirty_state_still_flushes_every_tick" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm" },
+    { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn record_compositor_tick_alone_marks_no_demand_and_never_produces" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_presentation_stays_idle_through_the_production_call_sequence_with_compositor_ticks" },
+    { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn clear_demand_emptying_the_mask_disarms_the_latch" },
 ]
 
 [[contract]]

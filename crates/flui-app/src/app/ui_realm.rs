@@ -1541,18 +1541,27 @@ impl UiRealm {
     /// against the primary presentation's
     /// [`FrameClock`](flui_scheduler::FrameClock). See
     /// [`FrameClock::record_compositor_tick`](flui_scheduler::FrameClock::record_compositor_tick)
-    /// for what this feeds (pacing feedback plus a `Host`-demand safety
-    /// net). Single-presentation-addressed for the same reason
-    /// [`Self::vsync`] is — production topology's current ratchet is
-    /// exactly one presentation per realm.
+    /// for what this feeds — pacing-feedback bookkeeping ONLY; this marks
+    /// no demand of its own (see that method's own doc for why that was
+    /// tried and reverted). Single-presentation-addressed for the same
+    /// reason [`Self::vsync`] is — production topology's current ratchet
+    /// is exactly one presentation per realm.
     #[cfg_attr(
-        target_arch = "wasm32",
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
         expect(
             dead_code,
-            reason = "run_web's own RAF-driven frame-pump closure does not call this yet -- \
-                      wiring the web backend's compositor-tick feedback is deferred, stated \
-                      honestly in docs/adr/ADR-0044-driver-loop-hybrid.md's per-platform table \
-                      (RAF-driven produce is deferred; web keeps the wake-channel driver)"
+            reason = "this method's only caller, bootstrap_desktop's on_request_frame \
+                      closure (runner.rs), is cfg'd to exactly the desktop targets this \
+                      predicate excludes -- android has no build here (no NDK toolchain: \
+                      `cargo check -p flui-app --target aarch64-linux-android` fails at the \
+                      cc-detection step before reaching this file), ios likewise (no Xcode \
+                      SDK: fails in the psm build script before reaching this file), and \
+                      wasm32 (run_web's own RAF-driven frame-pump closure does not call this \
+                      yet) DOES build clean here and was verified dead_code-free with this \
+                      predicate. Wiring each backend's own compositor-tick feedback is \
+                      deferred, stated honestly in docs/adr/ADR-0044-driver-loop-hybrid.md's \
+                      per-platform table (none of android/ios/web get compositor pacing in \
+                      this slice; all three keep the wake-channel driver)."
         )
     )]
     pub(crate) fn record_compositor_tick(&self, now: web_time::Instant) {
@@ -1803,39 +1812,68 @@ impl UiRealm {
         let now = self.now_secs();
         for presentation in self.presentations.iter() {
             let vsync = presentation.vsync();
-            // Sampled BEFORE the tick, not after: the tick that completes a
-            // controller still delivers that controller's final value and
-            // status change (`.flutter/packages/flutter/lib/src/scheduler/
-            // ticker.dart:272-285`'s `_tick` calls `_onTick` unconditionally,
-            // THEN checks whether to schedule another one), so THIS pump's
-            // own segment must still run to flush it — the identical
-            // before/after-tick question `flui-testing`'s own
-            // `pump_presentation` had to fix (see its doc), just never wired
-            // at this layer before this slice.
+            // TWO deliberately different samples of `has_running`, for two
+            // deliberately different questions — not an accident of
+            // ordering, and not interchangeable:
+            //
+            // 1. `was_running`, sampled BEFORE `tick_all`, answers "does
+            //    THIS pump's own segment need to run": the tick that
+            //    completes a controller still delivers that controller's
+            //    final value and status change
+            //    (`.flutter/packages/flutter/lib/src/scheduler/ticker.dart:
+            //    272-285`'s `_tick` calls `_onTick` unconditionally, THEN
+            //    checks whether to schedule another one), so a controller
+            //    that WAS running when this tick started must still mark
+            //    demand for this exact pump even though it may have just
+            //    settled -- the identical before/after-tick question
+            //    `flui-testing`'s own `pump_presentation` had to fix (see
+            //    its doc), just never wired at this layer before this
+            //    slice.
+            // 2. `vsync.has_running()`, sampled AFTER `tick_all` (below),
+            //    answers a DIFFERENT question: "does the NEXT pump need to
+            //    be scheduled" -- Flutter's own `shouldScheduleTick`,
+            //    checked after `_onTick`, which is why it is unchanged from
+            //    before this slice.
+            //
+            // Using the same sample for both would be wrong in both
+            // directions: sampling only before would keep requesting a
+            // next pump one tick after the controller has already settled;
+            // sampling only after would silently drop the completing
+            // tick's own flush (the exact bug this before-sample exists to
+            // avoid).
             let was_running = vsync.has_running();
             vsync.tick_all(now);
 
             if was_running {
-                // Marks demand for THIS pump's own segment (issue #556
-                // PR-C2 — the actuator/driver integration slice this was
-                // deliberately deferred to; see the removed comment this
-                // replaces). A running controller with no OTHER tree-visible
-                // effect now genuinely produces every tick, matching
-                // Flutter's own `Ticker`-driven `scheduleFrame`, rather than
-                // silently relying on some unrelated dirty state to also be
-                // present.
+                // A running controller with no OTHER tree-visible effect
+                // now genuinely marks demand -- and therefore flushes --
+                // every tick, matching Flutter's own `Ticker`-driven
+                // `scheduleFrame` (the running ticker alone is sufficient),
+                // rather than silently relying on some unrelated dirty
+                // state to also be present. This closes a gap the previous
+                // slice on this issue explicitly named and deferred.
                 presentation.clock().mark_demand(DemandKind::Animation);
             }
 
-            // Frame continuation: if still running AFTER this tick, keep
-            // the runner gate open for the NEXT pump — unchanged signal
-            // from before this slice (Flutter's own `shouldScheduleTick`,
-            // checked after the tick). What's new: this poke is
-            // edge-triggered against the demand mask
-            // (`FrameClock::try_arm_redraw_request`), so several ticks that
-            // land before a produce clears it (backpressure, a throttle
-            // window) collapse into exactly one platform-facing wake
-            // instead of one per tick.
+            // PINNED INVARIANT: a running controller keeps the runner gate
+            // open for its own next pump, sampled directly (not merely
+            // inferred from the two conditions below) at an anchor pump
+            // and again mid-run, then asserted CLOSED once the controller
+            // settles -- see `vsync_continuation_keeps_gate_open_while_
+            // running_and_closes_on_settle` (`frame_pipeline_and_vsync`
+            // below). `has_running()` here (AFTER the tick -- see the
+            // comment above) is Flutter's own `shouldScheduleTick` signal:
+            // still running means the gate must stay open regardless of
+            // this presentation's own demand-mask state.
+            //
+            // The platform poke itself is edge-triggered against that
+            // demand mask (`FrameClock::try_arm_redraw_request`), so
+            // several ticks that land before a produce clears it
+            // (backpressure, a throttle window) collapse into exactly one
+            // platform-facing wake instead of one per tick -- this is why
+            // `wake_frame()` now rides BOTH the clock's mask state and this
+            // latch, not `has_running()` alone the way it did before this
+            // slice.
             if vsync.has_running() && presentation.clock().try_arm_redraw_request() {
                 self.wake_frame();
             }
@@ -7139,7 +7177,7 @@ mod tests {
             controller.dispose();
         }
 
-        /// Driver-loop hybrid (issue #556 PR-C2): a running controller with
+        /// Driver-loop hybrid (issue #556): a running controller with
         /// NO other tree-visible dirty state must still flush the segment
         /// on every tick it's running -- Flutter's own `Ticker`-driven
         /// `scheduleFrame` behavior, where the running ticker alone is
@@ -7184,7 +7222,7 @@ mod tests {
             controller.dispose();
         }
 
-        /// Edge-trigger discipline, end to end (issue #556 PR-C2): N ticks
+        /// Edge-trigger discipline, end to end (issue #556): N ticks
         /// of a running controller that land while capacity never frees
         /// must collapse into exactly one platform-facing wake, through
         /// the REAL production call site (`draw_frame_entered`'s
@@ -7278,6 +7316,51 @@ mod tests {
                 realm.presentations.primary().flush_count(),
                 0,
                 "an idle presentation's segment must never run -- zero pipeline flushes"
+            );
+        }
+
+        /// The SAME invariant as the test above, but through the actual
+        /// PRODUCTION call sequence rather than `draw_frame_entered` alone:
+        /// `bootstrap_desktop`'s `on_request_frame` closure calls
+        /// `UiRealm::record_compositor_tick` unconditionally, on every
+        /// single pump, before ever reaching `draw_frame_entered`. An
+        /// earlier version of `FrameClock::record_compositor_tick` marked
+        /// `DemandKind::Host` unconditionally, which -- because this
+        /// exact sequence runs on every desktop pump -- made `poll`
+        /// permanently unable to return `Skip(NoDemand)` there: the
+        /// demand-mask gate, #556's entire point, was inert on the one
+        /// path that matters. This test is what would have caught that;
+        /// the test above alone does not, because it never calls
+        /// `record_compositor_tick`.
+        #[test]
+        fn an_idle_presentation_stays_idle_through_the_production_call_sequence_with_compositor_ticks()
+         {
+            let realm = UiRealm::for_test();
+            let mut now = web_time::Instant::now();
+
+            for pump in 0..50 {
+                realm.set_now_secs_for_test(f64::from(pump) * 0.016);
+                now += std::time::Duration::from_millis(16);
+                realm.record_compositor_tick(now);
+                let outcome = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+                assert!(
+                    matches!(outcome, FramePaintOutcome::Idle),
+                    "pump {pump}: recording a compositor tick every single pump, exactly as \
+                     production does, must not by itself make an idle presentation produce \
+                     anything but Idle"
+                );
+            }
+
+            assert_eq!(
+                realm.presentations.primary().clock().produced_count(),
+                0,
+                "recording a compositor tick every pump, through the real production \
+                 sequence, must not grant a single produce on an otherwise-idle presentation"
+            );
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                0,
+                "and must never run the segment either"
             );
         }
 
