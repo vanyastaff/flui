@@ -41,6 +41,7 @@ serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 static_assertions.workspace = true
+criterion = { workspace = true }
 
 [lib]
 name = "flui_scheduler"
@@ -49,6 +50,10 @@ path = "src/lib.rs"
 [features]
 default = []
 serde = ["dep:serde"]
+
+[[bench]]
+name = "frame_clock_gate"
+harness = false
 
 [lints]
 workspace = true
