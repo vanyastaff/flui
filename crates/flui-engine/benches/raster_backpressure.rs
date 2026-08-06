@@ -3,10 +3,20 @@
 //! (`flui_engine::raster_owner::RasterOwner`).
 //!
 //! Two shapes:
-//! - `submit_pump_retire_cycle`: the uncontended cost the hot
-//!   submit→pump→retire path pays for the `InFlightTicket`/wake-hook
-//!   plumbing this issue added, isolated with a no-op backend and no wake
-//!   hook registered (the common case today: nothing has wired one yet).
+//! - `submit_pump_retire_cycle`: the uncontended submit→pump→retire cost,
+//!   with `SceneSnapshot`/`Scene`/`Layer` construction moved to
+//!   `iter_batched`'s untimed setup closure so the ALLOCATION half of that
+//!   construction is excluded from the timed routine. Honest caveat: the
+//!   matching DEALLOCATION still runs inside the timed routine, since
+//!   `RasterOwner::pump` takes ownership of the pending frame and drops it
+//!   as part of retiring — there is no way to hand that ownership back out
+//!   through `pump`'s public signature without changing it, which is out of
+//!   this bench's scope. So this is not a pure zero-construction number; it
+//!   is the closest delta this API shape allows, not a whole-cycle figure
+//!   mislabeled as plumbing-only. For context: constructing AND dropping
+//!   one `bench_frame` in its own timed closure, with nothing else
+//!   running, measures at ~70ns on its own. No-op backend, no wake hook
+//!   registered (the common case today: nothing has wired one yet).
 //! - `in_flight_read_under_retire_storm`: a background thread continuously
 //!   submits and pumps ("a retire storm") while the timed loop repeatedly
 //!   reads `RasterHandle::in_flight()` from a different thread — the
@@ -87,18 +97,27 @@ fn bench_frame(epoch: FrameEpoch) -> SceneSnapshot {
 }
 
 /// Uncontended baseline: one thread doing submit→pump→retire in a tight
-/// loop, no wake hook registered.
+/// loop, no wake hook registered. `iter_batched` separates the untimed
+/// per-batch setup (constructing the `SceneSnapshot` `submit` will consume)
+/// from the timed routine (`submit` + `pump` alone), so this measures the
+/// marginal plumbing cost, not frame construction.
 fn submit_pump_retire_cycle(c: &mut Criterion) {
     let (mut owner, handle, _ack_rx, _shutdown_complete_rx) =
         RasterOwner::new(NoOpBackend, bench_address());
     let mut epoch = FrameEpoch::ZERO;
 
     c.bench_function("submit_pump_retire_cycle", |b| {
-        b.iter(|| {
-            epoch = epoch.next();
-            handle.submit(bench_frame(epoch)).expect("submit");
-            let _ = black_box(owner.pump());
-        });
+        b.iter_batched(
+            || {
+                epoch = epoch.next();
+                bench_frame(epoch)
+            },
+            |frame| {
+                handle.submit(frame).expect("submit");
+                black_box(owner.pump())
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 }
 
