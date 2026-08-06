@@ -65,15 +65,26 @@ pub struct PlatformHandlers {
     /// wall-clock instant the loop should wake at (issue #556's wall-clock
     /// wake seam) — `None` (unset, or the hook itself answers `None`) keeps
     /// the unconditional `ControlFlow::Wait` behavior exactly as before this
-    /// field existed. A backend that never calls
-    /// [`PlatformHandlers::invoke_wake_deadline`] is unaffected by this
-    /// field at all.
+    /// field existed. A backend that never reads this field at all is
+    /// unaffected by it.
     ///
     /// `Arc`, not `Box`: the hook itself re-enters `flui-app` (it walks
     /// every hosted realm and takes gesture-arena locks), so a caller
     /// holding this platform's own state lock must clone the `Arc` out and
     /// invoke it AFTER releasing that lock (ADR-0038 §5's discipline) —
     /// a `Box` would force either an in-lock call or a full field swap.
+    ///
+    /// The winit backend's `about_to_wait` is this field's one live
+    /// consumer today, and it reads the field DIRECTLY —
+    /// `state.handlers.wake_deadline.clone()` inside `with_state`, then
+    /// calls the cloned `Arc` after the lock guard has dropped — rather
+    /// than going through [`PlatformHandlers::invoke_wake_deadline`]. That
+    /// method takes `&self` and would need the lock held for its own
+    /// entire call, invoking the re-entrant hook while the lock is still
+    /// live and violating the exact discipline described above;
+    /// `invoke_wake_deadline` stays a convenience method for the
+    /// storage-level test that exercises this field in isolation, not a
+    /// production call site.
     pub wake_deadline: Option<Arc<dyn Fn() -> Option<web_time::Instant> + Send + Sync>>,
 }
 
@@ -149,7 +160,17 @@ impl PlatformHandlers {
     }
 
     /// Consult the wake-deadline hook (see [`Self::wake_deadline`]'s doc).
-    /// `None` when unset — the previously-unconditional-`Wait` default.
+    /// `None` when unset — the previously-unconditional-`Wait` default. A
+    /// public method with no production caller: the winit backend's
+    /// `about_to_wait` (this field's one live production consumer) clones
+    /// the `Arc` directly out of [`Self::wake_deadline`] instead, because
+    /// this method takes `&self` and calling it would keep the platform
+    /// state lock held for the hook's entire re-entrant call — see
+    /// [`Self::wake_deadline`]'s own doc for why that ordering matters.
+    /// Only a storage-level test calls this directly today
+    /// (`set_wake_deadline_hook_installs_into_the_shared_handler_slot`,
+    /// `flui-platform/src/platforms/winit/platform.rs`), the same posture
+    /// [`Self::invoke_exit_policy`] documents for itself above.
     #[inline]
     pub fn invoke_wake_deadline(&self) -> Option<web_time::Instant> {
         self.wake_deadline.as_ref().and_then(|hook| hook())

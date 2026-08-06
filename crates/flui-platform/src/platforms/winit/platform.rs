@@ -2010,12 +2010,19 @@ mod tests {
     }
 
     /// `set_wake_deadline_hook` must land in the same `PlatformHandlers` slot
-    /// `about_to_wait` clones the hook out of before dropping the state guard
-    /// (`invoke_wake_deadline` itself is now test-only) — the storage-level
-    /// counterpart of `set_exit_policy_hook_installs_into_the_shared_handler_slot`
-    /// above. Storage-only: driving a real `about_to_wait` through a live
-    /// `ActiveEventLoop` is not exercised anywhere in this test module (same
-    /// stated gap as that test).
+    /// `about_to_wait` clones the hook out of before dropping the state
+    /// guard — the storage-level counterpart of
+    /// `set_exit_policy_hook_installs_into_the_shared_handler_slot` above.
+    /// This test reaches that slot through `PlatformHandlers::
+    /// invoke_wake_deadline` for convenience; `about_to_wait` itself does
+    /// NOT call that method in production (it takes `&self` and would hold
+    /// the platform state lock for the hook's whole re-entrant call —
+    /// see `PlatformHandlers::wake_deadline`'s own doc), so
+    /// `invoke_wake_deadline` is a public method with no production caller
+    /// in this backend, not a `cfg(test)`-gated one. Storage-only: driving
+    /// a real `about_to_wait` through a live `ActiveEventLoop` is not
+    /// exercised anywhere in this test module (same stated gap as that
+    /// test).
     #[test]
     fn set_wake_deadline_hook_installs_into_the_shared_handler_slot() {
         let platform = WinitPlatform::new();
