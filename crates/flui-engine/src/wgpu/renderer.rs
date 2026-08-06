@@ -476,6 +476,25 @@ impl Renderer {
             // window size as tightly as possible. A latency of 2 lets the present
             // queue hold frames rendered for an older size, which the compositor
             // then stretches to the current window → visible resize jitter.
+            //
+            // Pinned regardless of `flui_engine::RasterOptions::max_frames_in_flight`
+            // (issue #556): that number is a CLOCK-side produce-capacity threshold
+            // only (`flui_scheduler::FrameClock::set_max_in_flight`) — it is never
+            // threaded into this field, and this field is never derived from it.
+            // Re-coupling the two is a separate decision that needs its own
+            // resize-jitter regression test, not something to slip in by widening
+            // this literal. Two implementer notes worth having in one place: (a)
+            // wgpu ignores `desired_maximum_frame_latency` entirely on the GL
+            // backend (live here — `Backends::GL` is selectable via the `gles`
+            // feature), so on GL the clock-side in-flight counter is the ONLY
+            // in-flight bound that exists; (b) this field only takes effect at
+            // `Surface::configure` — every reconfigure must resupply it. `resize`
+            // and `reconfigure_surface` below both mutate and re-`configure` THIS
+            // SAME `SurfaceConfiguration` value (so it never needs resupplying —
+            // it was never removed), and `recover` rebuilds the whole GPU stack
+            // through this exact function again rather than a second constructor,
+            // so the literal is written in exactly one place in the source, not
+            // scattered across call sites that could drift out of sync.
             desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &config);

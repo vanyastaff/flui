@@ -141,6 +141,12 @@ name = "offscreen_resource_cache"
 harness = false
 required-features = ["enable-wgpu-tests", "wgpu-backend"]
 
+[[bench]]
+name = "raster_backpressure"
+harness = false
+# The raster mailbox / accounting seam is backend-generic (a `NoOpBackend`
+# stands in below) — no GPU, no wgpu feature required.
+
 [lints]
 workspace = true
 

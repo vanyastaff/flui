@@ -184,6 +184,7 @@ declarations = [
     "pub mod commands;",
     "pub mod raster;",
     "pub mod raster_owner;",
+    "pub mod raster_options;",
     "pub mod wgpu;",
     "pub use commands::{dispatch_command, dispatch_commands};",
     "pub use error::{EngineError, EngineResult, Recoverability};",
@@ -192,6 +193,7 @@ declarations = [
     "pub use traits::{CommandRenderer, LayerStateStack};",
     "pub use raster::RasterBackend;",
     "pub use raster_owner::{ FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner, RasterSubmitError, SurfaceState, };",
+    "pub use raster_options::RasterOptions;",
     "pub use wgpu::DebugBackend;",
     "pub use wgpu::{Backend, FontLoader, LayerRender, WgpuPainter};",
 ]
@@ -2456,7 +2458,24 @@ owner = "the the raster mailbox contract mailbox protocol — implemented and th
 failure_semantics = "typed RasterSubmitError {MailboxClosed, ...}; acks carry frame identity; shutdown is a one-shot handshake"
 consumers = ["threaded protocol tests only"]
 owner_issue = 559
-notes = "Every RasterAck/PumpOutcome variant now carries address: flui_foundation::PresentationAddress (the full realm_id + presentation_id pair, replacing a bare presentation_id field), echoed from the submitted SceneSnapshot's own stamp (the owner mints epoch/surface-generation feedback, never a presentation identity). Two different realm incarnations can mint an identical PresentationId, so the owner is bound to its expected PresentationAddress at construction and RasterHandle::submit validates every frame against it, rejecting a mismatch as RasterSubmitError::AddressMismatch rather than accepting it. Per-variant #[non_exhaustive] added to both enums (enum-level non_exhaustive alone does not block exact-field destructuring); the two former tuple variants (Presented, DeviceLost) became named-field variants since non_exhaustive cannot apply to a tuple/unit variant."
+notes = "Every RasterAck/PumpOutcome variant now carries address: flui_foundation::PresentationAddress (the full realm_id + presentation_id pair, replacing a bare presentation_id field), echoed from the submitted SceneSnapshot's own stamp (the owner mints epoch/surface-generation feedback, never a presentation identity). Two different realm incarnations can mint an identical PresentationId, so the owner is bound to its expected PresentationAddress at construction and RasterHandle::submit validates every frame against it, rejecting a mismatch as RasterSubmitError::AddressMismatch rather than accepting it. Per-variant #[non_exhaustive] added to both enums (enum-level non_exhaustive alone does not block exact-field destructuring); the two former tuple variants (Presented, DeviceLost) became named-field variants since non_exhaustive cannot apply to a tuple/unit variant. #556 adds a reliable, cross-thread in-flight counter at this exact mailbox seam (RasterHandle::in_flight/set_wake_hook, RasterOwner::with_options) — see the RasterOptions surface entry below."
+
+[[surface]]
+path = "flui_engine::RasterOptions"
+crate = "flui-engine"
+kind = "type"
+declared_in = "crates/flui-engine/src/raster_options.rs"
+contains = "pub struct RasterOptions"
+classification = "experimental"
+thread_affinity = "plain Copy value type; Send + Sync"
+owner = "advanced pacing/capacity configuration carried at the raster boundary — a typed DTO only, read back out by a caller's own FrameClock (flui-scheduler); this crate never acts on it"
+failure_semantics = "infallible by construction (NonZeroU8/NonZeroU32 rule out the zero-threshold hazard); no Result-returning constructor needed"
+consumers = [
+    "RasterOwner::with_options (stores it, unread by this crate)",
+    "a future FrameClock wiring (#559) reads it back via RasterHandle::options",
+]
+owner_issue = 559
+notes = "Introduced in #556 alongside the reliable in-flight counter (RasterOwner surface entry above) — max_frames_in_flight is the CLOCK-side counting threshold only (flui_scheduler::FrameClock::set_max_in_flight), deliberately never threaded into wgpu::SurfaceConfiguration::desired_maximum_frame_latency (pinned at 1, see crate::wgpu::renderer's own doc); target_frame_rate converts via min_produce_interval() to the Duration FrameClock::set_min_produce_interval expects. flui-engine does not depend on flui-scheduler, so this type carries plain std::num/std::time values rather than referencing FrameClock directly. Production wiring (a live FrameClock actually reading these numbers back) is #559's job, same boundary as RasterOwner/RasterHandle above."
 
 [[surface]]
 path = "flui_layer::{SceneSnapshot, DamageRegion}"

@@ -1,0 +1,179 @@
+//! Profiling evidence for issue #556's raster-backpressure accounting seam:
+//! the hot `RasterHandle::submit` → `RasterOwner::pump` → retire path this
+//! issue added (`InFlightTicket` increment/decrement, the wake-hook lookup)
+//! must not allocate per frame.
+//!
+//! A dedicated integration-test binary (never the crate's `--lib` unit
+//! tests, and never the criterion bench) specifically so installing a
+//! counting `#[global_allocator]` here cannot affect any other test binary
+//! in this workspace — each `tests/*.rs` file compiles to its own process,
+//! and `#[global_allocator]` is process-wide.
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use flui_engine::{
+    CanvasLayer, DamageRegion, EngineError, Layer, RasterBackend, RasterOwner, Scene, SceneSnapshot,
+};
+use flui_foundation::{
+    FrameEpoch, PresentationAddress, PresentationId, RealmId, SurfaceGeneration,
+};
+use flui_types::Size;
+use flui_types::geometry::{Pixels, Rect};
+
+static ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
+static ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+struct CountingAllocator;
+
+// SAFETY: forwards every call unchanged to `System`, the platform default
+// allocator — the only added behavior is two `Relaxed` counter bumps before
+// the real `alloc` call. `System` itself upholds `GlobalAlloc`'s contract;
+// this wrapper adds no new invariant for the caller to uphold.
+#[allow(unsafe_code)]
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+        ALLOC_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+        // SAFETY: `layout` is the caller's own, forwarded unchanged.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+/// The minimum possible per-frame work — isolates the accounting/mailbox
+/// overhead this test measures from any real GPU cost.
+#[derive(Default)]
+struct NoOpBackend;
+
+impl RasterBackend for NoOpBackend {
+    fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+        Ok(true)
+    }
+
+    fn resize(&mut self, _width: u32, _height: u32) {}
+
+    fn is_device_lost(&self) -> bool {
+        false
+    }
+
+    fn mark_dirty(&mut self, _rect: Rect<Pixels>) {}
+
+    fn mark_full_repaint(&mut self) {}
+
+    fn has_damage(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> (u32, u32) {
+        (0, 0)
+    }
+
+    fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+        Ok(())
+    }
+}
+
+fn address() -> PresentationAddress {
+    PresentationAddress {
+        realm_id: RealmId::new(1),
+        presentation_id: PresentationId::new(1),
+    }
+}
+
+fn frame(epoch: FrameEpoch) -> SceneSnapshot {
+    SceneSnapshot::new(
+        address(),
+        epoch,
+        SurfaceGeneration::ZERO,
+        DamageRegion::Full,
+        Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
+    )
+}
+
+/// The measured claim: after warmup (the owner's own one-time
+/// `Arc<RasterMailbox>`/channel construction, and the first `tracing`
+/// callsite's one-time interest registration, are NOT part of the per-frame
+/// accounting path this issue added), every further submit→pump→retire
+/// cycle allocates exactly zero bytes.
+///
+/// `frame(epoch)` — building the `SceneSnapshot` itself — is deliberately
+/// measured OUTSIDE the checked region: constructing the caller's own scene
+/// is not this issue's accounting path, and asserting zero allocation for
+/// arbitrary scene construction would be a false claim about a mechanism
+/// this test does not touch.
+#[test]
+fn submit_pump_retire_cycle_allocates_nothing_on_the_accounting_path() {
+    let (mut owner, handle, _ack_rx, _shutdown_complete_rx) =
+        RasterOwner::new(NoOpBackend, address());
+
+    // Warmup: settles the owner's one-time construction cost and the first
+    // `tracing::instrument`d call's one-time callsite-interest caching,
+    // neither of which is part of the steady-state accounting path below.
+    handle
+        .submit(frame(FrameEpoch::ZERO.next()))
+        .expect("warmup submit");
+    let _ = owner.pump();
+
+    const CYCLES: usize = 10_000;
+    let mut epoch = FrameEpoch::ZERO.next();
+    let mut cycles_with_allocation = 0usize;
+    let mut worst_cycle_bytes = 0usize;
+    // Accumulated strictly from the per-cycle submit+pump deltas below —
+    // NOT from a whole-loop before/after snapshot, which would also count
+    // every `frame(epoch)` call's own (excluded, undisputed) allocation.
+    let mut accounting_path_alloc_calls = 0usize;
+    let mut accounting_path_alloc_bytes = 0usize;
+    let mut frame_construction_alloc_bytes = 0usize;
+
+    for _ in 0..CYCLES {
+        epoch = epoch.next();
+
+        let bytes_before_frame_construction = ALLOC_BYTES.load(Ordering::Relaxed);
+        let snapshot = frame(epoch); // outside the checked region -- see doc above
+        frame_construction_alloc_bytes +=
+            ALLOC_BYTES.load(Ordering::Relaxed) - bytes_before_frame_construction;
+
+        let count_before = ALLOC_COUNT.load(Ordering::Relaxed);
+        let bytes_before = ALLOC_BYTES.load(Ordering::Relaxed);
+        handle.submit(snapshot).expect("submit");
+        let _ = owner.pump();
+        let calls_this_cycle = ALLOC_COUNT.load(Ordering::Relaxed) - count_before;
+        let bytes_this_cycle = ALLOC_BYTES.load(Ordering::Relaxed) - bytes_before;
+        accounting_path_alloc_calls += calls_this_cycle;
+        accounting_path_alloc_bytes += bytes_this_cycle;
+        if calls_this_cycle != 0 {
+            cycles_with_allocation += 1;
+            worst_cycle_bytes = worst_cycle_bytes.max(bytes_this_cycle);
+        }
+    }
+
+    // Reported unconditionally (not just on failure) — the plan calls for
+    // numbers, not an assertion alone. The two totals are kept separate on
+    // purpose: `frame_construction_alloc_bytes` is `SceneSnapshot`/`Scene`/
+    // `Layer` construction cost this test does NOT claim anything about;
+    // `accounting_path_alloc_*` is the number the assertion below is about.
+    eprintln!(
+        "raster_backpressure_allocation: {CYCLES} submit+pump+retire cycles -- \
+         accounting path (submit+pump, the claim under test): {accounting_path_alloc_calls} \
+         allocating calls, {accounting_path_alloc_bytes} bytes total, \
+         {worst_cycle_bytes} bytes on the worst single cycle, {cycles_with_allocation} \
+         cycles allocated at least once; frame(epoch) construction (excluded from the \
+         claim, reported for context only): {frame_construction_alloc_bytes} bytes total"
+    );
+
+    assert_eq!(
+        cycles_with_allocation, 0,
+        "{cycles_with_allocation} of {CYCLES} submit+pump+retire cycles allocated \
+         at least once (worst cycle: {worst_cycle_bytes} bytes) — the accounting \
+         path this issue added (InFlightTicket, the wake-hook lookup) must be \
+         zero-allocation on every steady-state cycle"
+    );
+}
