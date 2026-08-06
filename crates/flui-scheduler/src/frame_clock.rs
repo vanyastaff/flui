@@ -1599,4 +1599,90 @@ mod tests {
              re-arm an already-pending request"
         );
     }
+
+    // ----------------------------------------------------------------
+    // `set_min_produce_interval` as a target-frame-rate throttle (the
+    // raster-backpressure slice of this file's own module-header issue): a
+    // caller-requested cadence lower than the feed's own rate is enforced
+    // entirely through `poll`'s existing capacity check and the caller's
+    // own next-wake scheduling — never a sleep or timer this clock owns.
+    // `RasterOptions::target_frame_rate` (`flui-engine`) feeds this knob via
+    // `RasterOptions::min_produce_interval`; this test proves the cadence
+    // the two crates cannot otherwise prove together, since flui-engine
+    // does not depend on flui-scheduler (see `RasterOptions`'s own doc).
+    // ----------------------------------------------------------------
+
+    /// A 144 Hz demand feed throttled to a 30 Hz target frame rate produces
+    /// at ~30 Hz, not 144 Hz — with NO sleep anywhere in this clock: the
+    /// whole 1-second virtual span below is driven by a `ManualClock`, and
+    /// the wall-clock guard asserts the real time this test itself took
+    /// stays far below the 1 virtual second it simulated, which could not
+    /// hold if `poll`/`set_min_produce_interval` blocked or slept
+    /// internally to enforce the cadence.
+    #[test]
+    fn target_frame_rate_thirty_throttles_a_one_hundred_forty_four_hertz_feed_with_no_sleep_in_the_clock()
+     {
+        let (clock, manual) = manual();
+        // The exact conversion `RasterOptions { target_frame_rate:
+        // Some(30), .. }.min_produce_interval()` performs (flui-engine
+        // does not depend on flui-scheduler, so this is the identical
+        // arithmetic inlined rather than a cross-crate call — see that
+        // method's own doc and its dedicated unit tests in flui-engine).
+        let target_frame_rate_hz = 30u32;
+        clock.set_min_produce_interval(Some(Duration::from_secs_f64(
+            1.0 / f64::from(target_frame_rate_hz),
+        )));
+
+        let step_144 = Duration::from_nanos(1_000_000_000 / 144);
+        let span = Duration::from_secs(1);
+
+        let wall_clock_start = std::time::Instant::now();
+
+        let mut elapsed = Duration::ZERO;
+        let mut ticks = 0u32;
+        let mut produces = 0u32;
+        while elapsed + step_144 <= span {
+            manual.advance(step_144);
+            elapsed += step_144;
+            ticks += 1;
+            clock.record_compositor_tick(manual.now());
+            clock.mark_demand(DemandKind::Dirty);
+            if clock.poll(manual.now()).is_produce() {
+                produces += 1;
+            }
+        }
+
+        let wall_clock_elapsed = wall_clock_start.elapsed();
+
+        assert_eq!(
+            ticks, 144,
+            "sanity: the scripted feed itself ran at 144 Hz for 1s"
+        );
+        // Hand-verifiable via the same throttle-boundary arithmetic
+        // `the_same_script_replayed_twice_matches_an_absolute_throttled_sequence`
+        // above already established: a produce needs
+        // `now.duration_since(last) >= interval`, so at a fixed 1/144s
+        // step and a 1/30s interval it takes `ceil((1/30) / (1/144)) =
+        // ceil(4.8) = 5` ticks to re-arm capacity after each produce (5 *
+        // 1/144s ≈ 34.72ms ≥ 33.33ms) — 144 ticks at 5 ticks/produce (the
+        // FIRST produce needs only 1 tick, since `last_produce_at` starts
+        // `None`) gives `1 + (144 - 1) / 5 = 29` (integer division)
+        // produces over the span. Pinned to the exact number, not just "far
+        // less than 144", so a mutant that shifts the throttle-boundary
+        // comparison by one step is caught.
+        assert_eq!(
+            produces, 29,
+            "a 30 Hz target frame rate against a 144 Hz feed must throttle to the \
+             hand-verified 29 produces over this exact 1-second, 144-tick script (see \
+             this test's own doc comment for the arithmetic) -- not 144"
+        );
+        assert!(
+            wall_clock_elapsed < Duration::from_millis(200),
+            "simulating 1 virtual second of a 144 Hz feed took {wall_clock_elapsed:?} of REAL \
+             time -- this clock has no sleep or timer of its own, so driving it through a \
+             ManualClock must complete near-instantly regardless of how much virtual time is \
+             simulated; a real sleep hiding in `poll`/`set_min_produce_interval` would blow \
+             this budget"
+        );
+    }
 }
