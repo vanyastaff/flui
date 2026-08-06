@@ -2010,7 +2010,8 @@ mod tests {
     }
 
     /// `set_wake_deadline_hook` must land in the same `PlatformHandlers` slot
-    /// `about_to_wait` reads via `invoke_wake_deadline` — the storage-level
+    /// `about_to_wait` clones the hook out of before dropping the state guard
+    /// (`invoke_wake_deadline` itself is now test-only) — the storage-level
     /// counterpart of `set_exit_policy_hook_installs_into_the_shared_handler_slot`
     /// above. Storage-only: driving a real `about_to_wait` through a live
     /// `ActiveEventLoop` is not exercised anywhere in this test module (same

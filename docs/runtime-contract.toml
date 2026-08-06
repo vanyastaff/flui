@@ -810,16 +810,19 @@ consulting the latch here would incorrectly stay silent in that sequence \
 and strand the presentation gated forever. An idle (never-dirtied) \
 presentation's unhide correctly does NOT wake (no demand to retain). \
 \
-**Honest scope, compositor-conditional (criterion 2 restated, not \
-overclaimed):** occlusion delivery is platform/backend-conditional \
-(`traits/window.rs:311-321` — Wayland's xdg-shell `suspended` state is not \
-universally reported); where a compositor never delivers it, this \
-presentation's clock is never hidden and behavior is unchanged from before \
-this slice. A live minimize/restore pass on a real Wayland/GNOME session is \
-infeasible to script in this environment (the same tooling gap ADR-0029 \
-recorded) — not claimed as automated proof. `flui-platform`'s own CI \
-coverage for this backend runs under `FLUI_HEADLESS=1`/`xvfb-run` (X11), \
-never a real Wayland compositor.\
+**Honest scope, backend-conditional (criterion 2 restated, not \
+overclaimed):** occlusion delivery comes from winit's \
+`WindowEvent::Occluded`, whose own documentation lists \
+`Android / Wayland / Windows / Orbital: Unsupported` \
+(`traits/window.rs:309-329`). The only emitters are X11 (on \
+`VisibilityFullyObscured`), macOS, iOS and Web — **Wayland delivers nothing \
+today**, so on a Wayland session this presentation's clock is never hidden \
+and behavior is unchanged from before this slice; on X11 it requires FULL \
+obscuration, which a compositing window manager does not produce. The \
+gating machinery is therefore exercised by injected signals here, not by a \
+live desktop: `flui-platform`'s own CI runs under \
+`FLUI_HEADLESS=1`/`xvfb-run` (X11), and a live minimize/restore pass is not \
+claimed as automated proof.\
 """
 state = "partial"
 domain = "realm"
@@ -1790,11 +1793,15 @@ responds_instantly`, `next_wake_is_the_min_deadline_across_every_installed_\
 realm`, and the two single-realm/single-arena variants below). What is NOT \
 automated-tested: the winit-level ACTUATOR — `WinitApp::new_events`'s \
 `StartCause::ResumeTimeReached` handling turning a `ControlFlow::WaitUntil` \
-expiry into a real `request_redraw()`/`RedrawRequested` — because a live \
-winit event loop cannot run inside `flui-platform`'s own test harness (this \
-repo's own testing notes state this precisely: winit requires the event \
-loop on the process's main thread, and every test in that crate already \
-routes around it). That actuator was verified with a STANDALONE, manual \
+expiry into a real `request_redraw()`/`RedrawRequested` — because this \
+slice DID NOT write a live-loop test for it, not because one is impossible: \
+`flui-platform`'s own `build_test_event_loop` builds a real `EventLoop` off \
+the main thread via `EventLoopBuilderExtX11::with_any_thread` (Linux and \
+Windows; `#[ignore]`d on macOS, which does require the main thread), and \
+four tests already drive `run_app` on it under `xvfb-run`. The real \
+constraints are one `EventLoop` per process — which nextest's \
+process-per-test satisfies — and macOS affinity. Closing this contract \
+means writing that test. The actuator was verified with a STANDALONE, manual \
 probe instead (a throwaway winit 0.30.13 binary outside this repo's \
 automated suite): un-actuated, ~657k-678k `about_to_wait` iterations per \
 500ms (an unbounded spin); actuated, 6 iterations per 500ms with the \
