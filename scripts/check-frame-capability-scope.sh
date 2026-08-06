@@ -6,9 +6,9 @@
 # A lifecycle-only capability lets code affect presentation state outside the
 # build/layout/paint transaction. Seven are guarded:
 #
-#   rebuild_handle()    ADR-0018 U1 — `RebuildHandle::schedule()` marks an element
+#   rebuild_handle()    ADR-0018 — `RebuildHandle::schedule()` marks an element
 #                       dirty for the next frame.
-#   post_frame_handle() ADR-0021 U2 — `PostFrameHandle::schedule()` queues work for
+#   post_frame_handle() ADR-0021 — `PostFrameHandle::schedule()` queues work for
 #                       the end of the current frame.
 #   local_post_frame_handle() ADR-0021/#556 — `LocalPostFrameHandle::schedule_local()`
 #                       is the same hazard as `post_frame_handle()` (queues work
