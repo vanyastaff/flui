@@ -167,6 +167,7 @@ declarations = [
     "pub use config::{ PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, TimingsCallback, set_time_dilation, time_dilation, };",
     "pub use frame_clock::{ClockSource, DemandKind, DemandMask, FrameClock, PollDecision, SkipReason};",
     "pub use frame_telemetry::{ FRAME_HISTORY_CAPACITY, FrameSnapshot, InputEpoch, InputEpochId, InputEpochs, MAX_COALESCED_INPUT_EPOCHS, PresentOutcome, };",
+    "pub use flui_foundation::PresentationId;",
     "pub use post_frame::{ LocalPostFrameHandle, LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle, };",
     "pub use web_time::Instant;",
     "pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};",

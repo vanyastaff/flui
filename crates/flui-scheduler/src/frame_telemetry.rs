@@ -26,18 +26,32 @@
 //! allocates — a `Vec` built on the *consumer's* call, never on the frame
 //! path.
 
+use flui_foundation::PresentationId;
 use web_time::{Duration, Instant};
 
 use crate::frame::FrameId;
 
 /// How many routed input events one produced frame can carry attribution
-/// for. Chosen generously relative to this workspace's own pointer-move
-/// coalescing (`GestureBinding::flush_pending_moves` already collapses
-/// high-frequency move events to one flush per frame before telemetry ever
-/// sees them) — a caller that coalesces more than this many *distinct*
-/// events into a single produce is a real, worth-knowing-about case, so
-/// [`InputEpochs::overflowed`] reports it rather than resizing to absorb it
-/// silently.
+/// for, before `InputEpochs::push` (crate-private) starts overwriting its own oldest
+/// entries.
+///
+/// This bounds the RAW dispatch stream, not a coalesced one:
+/// [`crate::frame_clock::FrameClock::stamp_input_epoch`] is called from
+/// `UiRealm::handle_input_addressed`, at the TOP of that method, before
+/// `GestureBinding::handle_pointer_event`/`flush_pending_moves` run —
+/// coalescing of high-frequency pointer moves happens downstream, once per
+/// frame, in `UiRealm::render_frame_entered`. So between two produces this
+/// buffer can genuinely see more than [`MAX_COALESCED_INPUT_EPOCHS`] *raw*
+/// events (a 1 kHz mouse against a 60 Hz produce cadence is on the order of
+/// 16 raw moves per frame — routine during any drag, not an edge case).
+/// `InputEpochs::push` handles that by overwriting the OLDEST retained
+/// epoch rather than rejecting the newest one: the arrival closest to the
+/// produce that will actually carry its effect is the one a jank consumer
+/// most needs attribution for (it is what the frame's layout/hit-test saw),
+/// while the earliest arrivals in a long coalescing window are the least
+/// representative of what the frame ended up doing.
+/// [`InputEpochs::overflowed`] still reports the condition rather than
+/// hiding it.
 pub const MAX_COALESCED_INPUT_EPOCHS: usize = 8;
 
 /// How many recent frames [`FrameClock::record_frame`](crate::frame_clock::FrameClock::record_frame)
@@ -52,8 +66,9 @@ pub const FRAME_HISTORY_CAPACITY: usize = 120;
 ///
 /// Scoped to the presentation whose clock minted it — two different
 /// presentations' `InputEpochId(0)` are not the same event. A consumer that
-/// needs process-wide uniqueness pairs this with the [`FrameSnapshot`] (and
-/// therefore the presentation) it was pulled alongside.
+/// needs process-wide uniqueness pairs this with the [`FrameSnapshot`] it
+/// was pulled alongside, whose own [`FrameSnapshot::presentation`] field
+/// names that presentation explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InputEpochId(u64);
 
@@ -74,7 +89,10 @@ impl core::fmt::Display for InputEpochId {
 /// One routed input event's identity and arrival instant, stamped at
 /// dispatch time and coalesced into whichever frame actually carries its
 /// effect.
+///
+/// `#[non_exhaustive]`: a future field (event kind, device id) is additive.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct InputEpoch {
     /// This event's identity, scoped to the presentation that stamped it.
     pub id: InputEpochId,
@@ -97,6 +115,12 @@ pub struct InputEpoch {
 pub struct InputEpochs {
     epochs: [Option<InputEpoch>; MAX_COALESCED_INPUT_EPOCHS],
     len: u8,
+    /// Ring write cursor: the slot the NEXT [`Self::push`] writes to. While
+    /// `len < MAX_COALESCED_INPUT_EPOCHS` this also marks one-past the last
+    /// occupied slot; once full, it marks the OLDEST occupied slot — the one
+    /// about to be overwritten — which is also where [`Self::iter`] starts
+    /// reading from.
+    next: u8,
     overflowed: bool,
 }
 
@@ -104,30 +128,41 @@ impl InputEpochs {
     const EMPTY: Self = Self {
         epochs: [None; MAX_COALESCED_INPUT_EPOCHS],
         len: 0,
+        next: 0,
         overflowed: false,
     };
 
-    /// Add `epoch`, oldest-arrival-first order preserved (callers push in
-    /// dispatch order). Beyond [`MAX_COALESCED_INPUT_EPOCHS`], the new epoch
-    /// is dropped and [`Self::overflowed`] latches `true` — the OLDER
-    /// (longer-waiting) epochs are kept, since they are the ones a jank
-    /// consumer most needs attribution for.
+    /// Add `epoch`. Beyond [`MAX_COALESCED_INPUT_EPOCHS`], this overwrites
+    /// the OLDEST retained epoch instead of rejecting the new one — see
+    /// [`MAX_COALESCED_INPUT_EPOCHS`]'s own doc for why keeping the newest
+    /// arrivals is the correct discard policy here, not just a convenient
+    /// one. [`Self::overflowed`] still latches `true` so a consumer can
+    /// tell this frame's coalescing window exceeded capacity at all.
     fn push(&mut self, epoch: InputEpoch) {
-        let index = self.len as usize;
-        if index < MAX_COALESCED_INPUT_EPOCHS {
-            self.epochs[index] = Some(epoch);
+        let index = self.next as usize;
+        if (self.len as usize) < MAX_COALESCED_INPUT_EPOCHS {
             self.len += 1;
         } else {
             self.overflowed = true;
         }
+        self.epochs[index] = Some(epoch);
+        self.next = ((index + 1) % MAX_COALESCED_INPUT_EPOCHS) as u8;
     }
 
-    /// Every coalesced epoch, in the order they were pushed (oldest arrival
-    /// first, under normal dispatch-order usage).
+    /// Every coalesced epoch, oldest arrival first. Once
+    /// [`MAX_COALESCED_INPUT_EPOCHS`] has been exceeded and the ring has
+    /// wrapped, "oldest" means the oldest SURVIVING epoch — see
+    /// `Self::push`'s discard policy.
+    #[must_use = "this returns the iterator rather than consuming it"]
     pub fn iter(&self) -> impl Iterator<Item = &InputEpoch> {
-        self.epochs[..self.len as usize]
-            .iter()
-            .filter_map(Option::as_ref)
+        let len = self.len as usize;
+        let start = if len < MAX_COALESCED_INPUT_EPOCHS {
+            0
+        } else {
+            self.next as usize
+        };
+        let epochs = &self.epochs;
+        (0..len).filter_map(move |i| epochs[(start + i) % MAX_COALESCED_INPUT_EPOCHS].as_ref())
     }
 
     /// How many epochs are coalesced here.
@@ -183,6 +218,15 @@ pub enum PresentOutcome {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct FrameSnapshot {
+    /// Which presentation produced this frame. A realm can host more than
+    /// one presentation, each with its own `FrameClock` and therefore its
+    /// own `frame_id` sequence — two different presentations' `frame_id`
+    /// values collide (both start counting from 1), so a consumer that
+    /// pulls snapshots across presentations (or exports them into one trace
+    /// file, as `flui-devtools`' `Timeline::record_frame_snapshots` does)
+    /// needs this to tell them apart. [`InputEpochId`]'s own doc makes the
+    /// same point about pairing an epoch id with its presentation.
+    pub presentation: PresentationId,
     /// This presentation's own produce-count-derived frame identity (see
     /// [`FrameClock::record_frame`](crate::frame_clock::FrameClock::record_frame)'s
     /// doc for why it is derived from `produced_count()` rather than a
@@ -216,6 +260,7 @@ impl FrameSnapshot {
     /// larger latency than one that arrived later, for the same submit —
     /// this is what lets a consumer attribute jank to a SPECIFIC input
     /// rather than only see a distribution.
+    #[must_use = "this returns the iterator rather than consuming it"]
     pub fn latencies(&self) -> impl Iterator<Item = (InputEpochId, Duration)> + '_ {
         self.input_epochs.iter().map(move |epoch| {
             (
@@ -325,6 +370,7 @@ mod tests {
 
     fn snapshot_at(index: usize, now: Instant) -> FrameSnapshot {
         FrameSnapshot {
+            presentation: PresentationId::new(1),
             frame_id: FrameId::zip(index),
             clock_timestamp: now,
             segment_start: now,
@@ -355,20 +401,24 @@ mod tests {
     }
 
     #[test]
-    fn input_epochs_beyond_capacity_sets_overflowed_and_keeps_the_older_ones() {
+    fn input_epochs_beyond_capacity_sets_overflowed_and_keeps_the_newest_ones() {
         let now = Instant::now();
         let mut epochs = InputEpochs::EMPTY;
-        for i in 0..(MAX_COALESCED_INPUT_EPOCHS as u64 + 3) {
+        let total = MAX_COALESCED_INPUT_EPOCHS as u64 + 3;
+        for i in 0..total {
             epochs.push(epoch(i, now + Duration::from_millis(i)));
         }
         assert!(epochs.overflowed());
         assert_eq!(epochs.len(), MAX_COALESCED_INPUT_EPOCHS);
-        // The kept epochs are the first MAX_COALESCED_INPUT_EPOCHS pushed
-        // (the oldest arrivals), not the most recent ones.
+        // The kept epochs are the LAST MAX_COALESCED_INPUT_EPOCHS pushed
+        // (the newest arrivals) — the ones closest to whatever produce
+        // ends up carrying them — not the oldest, longest-stale ones.
         let ids: Vec<u64> = epochs.iter().map(|e| e.id.get()).collect();
+        let expected_first_kept = total - MAX_COALESCED_INPUT_EPOCHS as u64;
         assert_eq!(
             ids,
-            (0..MAX_COALESCED_INPUT_EPOCHS as u64).collect::<Vec<_>>()
+            (expected_first_kept..total).collect::<Vec<_>>(),
+            "oldest-surviving-first order must still hold after wrapping"
         );
     }
 
@@ -440,6 +490,7 @@ mod tests {
         let submit_at = now + Duration::from_millis(20);
 
         let snapshot = FrameSnapshot {
+            presentation: PresentationId::new(1),
             frame_id: FrameId::zip(1),
             clock_timestamp: now,
             segment_start: now,

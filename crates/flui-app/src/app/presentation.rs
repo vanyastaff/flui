@@ -32,6 +32,7 @@ use flui_scheduler::{
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding};
+use web_time::Instant;
 
 use super::semantics_host::SemanticsHost;
 use crate::bindings::RenderingFlutterBinding;
@@ -237,6 +238,24 @@ pub(crate) struct PresentationState {
     /// submit — see `FrameClock`'s own module doc for the `.flutter/`
     /// citation that pins this.
     clock: FrameClock,
+    /// (segment start, segment end) for the most recently completed
+    /// build+layout+paint segment `UiRealm::draw_frame_entered`'s
+    /// per-presentation loop ran for THIS presentation — a side channel for
+    /// a caller whose segment-running step and submit-deciding step are two
+    /// separate calls (`UiRealm::draw_frame_entered` runs the segment;
+    /// `UiRealm::render_frame_entered`, its caller, decides whether/how to
+    /// submit and is where `FrameClock::record_frame` actually runs, for
+    /// whichever presentation's segment produced the outcome being
+    /// submitted — see that call site's own doc). Lives here, not on the
+    /// shared `FrameClock` (issue #556 review): a `pub` field on a type
+    /// every presentation shares would let one presentation's caller read
+    /// or clobber a SIBLING's in-flight span; keeping it private to this
+    /// presentation makes that structurally impossible. [`Self::
+    /// take_last_segment_span`] reads AND CLEARS it (never a plain `get`):
+    /// a pump where this presentation's segment did NOT run must see
+    /// `None` here, never a stale span latched by an earlier pump this
+    /// presentation was the one to produce.
+    last_segment_span: Cell<Option<(Instant, Instant)>>,
     /// Test-only oracle: how many times this presentation's own
     /// build+layout+paint segment actually ran (`UiRealm::
     /// draw_frame_for_presentation`), regardless of whether anything was
@@ -377,6 +396,7 @@ impl PresentationState {
             redraw_pending: Cell::new(false),
             vsync: RefCell::new(Vsync::new()),
             clock: FrameClock::new(),
+            last_segment_span: Cell::new(None),
             #[cfg(test)]
             flush_count: Cell::new(0),
         };
@@ -431,6 +451,7 @@ impl PresentationState {
             redraw_pending: Cell::new(false),
             vsync: RefCell::new(Vsync::new()),
             clock: FrameClock::new(),
+            last_segment_span: Cell::new(None),
             #[cfg(test)]
             flush_count: Cell::new(0),
         };
@@ -510,6 +531,28 @@ impl PresentationState {
     #[must_use]
     pub(crate) fn clock(&self) -> &FrameClock {
         &self.clock
+    }
+
+    /// Record this pump's just-completed segment span for THIS
+    /// presentation. Called exactly once per pump in which this
+    /// presentation's own segment ran, by `UiRealm::draw_frame_entered`'s
+    /// per-presentation loop, immediately after
+    /// `UiRealm::draw_frame_for_presentation` returns. See
+    /// [`Self::last_segment_span`]'s field doc for why this lives here and
+    /// not on the shared `FrameClock`.
+    pub(crate) fn set_last_segment_span(&self, start: Instant, end: Instant) {
+        self.last_segment_span.set(Some((start, end)));
+    }
+
+    /// Read AND CLEAR the span [`Self::set_last_segment_span`] most
+    /// recently recorded for this presentation. `take`, not `get`: called
+    /// by `UiRealm::render_frame_entered` at most once per pump, exactly
+    /// when it is about to decide whether to attach a `FrameSnapshot` to
+    /// THIS presentation's clock — a pump in which this presentation's own
+    /// segment did NOT run must see `None`, never a stale span this same
+    /// presentation latched on an earlier pump.
+    pub(crate) fn take_last_segment_span(&self) -> Option<(Instant, Instant)> {
+        self.last_segment_span.take()
     }
 
     /// The exact focus tree owned by this presentation.
@@ -974,6 +1017,39 @@ mod tests {
         presentation.close();
         presentation.close();
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
+    }
+
+    /// `take_last_segment_span` reads AND CLEARS — a second call with no
+    /// intervening `set_last_segment_span` must see `None`, never the same
+    /// value again. Pins the per-pump discipline directly on the type: this
+    /// is what makes "a segment ran THIS pump" (not "on some earlier pump")
+    /// an invariant this presentation's OWN state enforces, rather than
+    /// something only true by accident of how its one current caller
+    /// (`UiRealm::record_submit_telemetry`, always addressed to the correct
+    /// producer) happens to use it.
+    #[test]
+    fn take_last_segment_span_clears_on_read_a_second_take_sees_none() {
+        let presentation = presentation();
+        assert_eq!(
+            presentation.take_last_segment_span(),
+            None,
+            "a fresh presentation has no segment span recorded yet"
+        );
+
+        let start = Instant::now();
+        let end = start + std::time::Duration::from_millis(1);
+        presentation.set_last_segment_span(start, end);
+
+        assert_eq!(
+            presentation.take_last_segment_span(),
+            Some((start, end)),
+            "the first take must return exactly what was set"
+        );
+        assert_eq!(
+            presentation.take_last_segment_span(),
+            None,
+            "a second take with no intervening set must see None, not the stale value again"
+        );
     }
 
     /// `close` must detach through this presentation's OWN `WidgetsBinding`

@@ -106,7 +106,7 @@ use crate::frame::FrameId;
 use crate::frame_telemetry::{
     FrameHistory, FrameSnapshot, InputEpochId, PendingInputEpochs, PresentOutcome,
 };
-use flui_foundation::{ManualClock, MonotonicClock};
+use flui_foundation::{ManualClock, MonotonicClock, PresentationId};
 use web_time::{Duration, Instant};
 
 bitflags::bitflags! {
@@ -299,15 +299,6 @@ pub struct FrameClock {
     /// The fixed-capacity produced-frame ring. `RefCell` for the same
     /// reason as `pending_input_epochs` above.
     history: RefCell<FrameHistory>,
-    /// (segment start, segment end) for the most recently completed
-    /// build+layout+paint segment this clock gated — a side channel for a
-    /// caller whose segment-running step and submit step are two separate
-    /// calls (`UiRealm::draw_frame_entered` runs the segment;
-    /// `UiRealm::render_frame_entered`, ITS caller, decides whether/how to
-    /// submit and is where [`record_frame`](Self::record_frame) actually
-    /// runs) and therefore cannot pass segment timing between them as a
-    /// plain local variable.
-    last_segment_span: Cell<Option<(Instant, Instant)>>,
 }
 
 /// The default in-flight capacity before any raster-owner wiring configures
@@ -347,7 +338,6 @@ impl FrameClock {
             deferred_backpressure: Cell::new(0),
             pending_input_epochs: RefCell::new(PendingInputEpochs::default()),
             history: RefCell::new(FrameHistory::default()),
-            last_segment_span: Cell::new(None),
         }
     }
 
@@ -821,29 +811,20 @@ impl FrameClock {
         self.pending_input_epochs.borrow_mut().stamp(arrival)
     }
 
-    /// Record `(start, end)` as the most recently completed
-    /// build+layout+paint segment this clock gated — the side channel
-    /// [`last_segment_span`](Self::last_segment_span) reads back from a
-    /// separate, later call. Overwrites any previous value: only the
-    /// latest completed segment matters, since [`record_frame`](Self::record_frame)
-    /// consumes it (via the caller reading it back) at most once before the
-    /// next segment overwrites it again.
-    pub fn set_last_segment_span(&self, start: Instant, end: Instant) {
-        self.last_segment_span.set(Some((start, end)));
-    }
-
-    /// The `(start, end)` most recently recorded by
-    /// [`set_last_segment_span`](Self::set_last_segment_span), if any.
-    #[must_use]
-    pub fn last_segment_span(&self) -> Option<(Instant, Instant)> {
-        self.last_segment_span.get()
-    }
-
     /// Record that this clock's presentation produced and submitted a
     /// frame: drains every pending input epoch into the new
     /// [`FrameSnapshot`], stores it in the fixed-capacity history ring, and
     /// returns it (handy for a caller that wants to trace-emit the exact
     /// value just recorded without a redundant `frames_since` pull).
+    ///
+    /// `presentation` is stamped onto the returned [`FrameSnapshot`] as-is —
+    /// this clock does not know its own owning presentation's identity, so
+    /// the caller (the one presentation-scoped instance that actually
+    /// produced this frame) must supply it. Passing a DIFFERENT
+    /// presentation's id here is exactly the misattribution bug this
+    /// parameter exists to make impossible to reach silently: a caller
+    /// must name whose clock this is, not default to "whichever
+    /// presentation I happened to have a reference to."
     ///
     /// `frame_id` is deliberately derived from [`Self::produced_count`]
     /// (`FrameId::zip(produced_count())`, valid because `poll` has already
@@ -857,17 +838,36 @@ impl FrameClock {
     /// this — its pending input epochs stay buffered for whichever later
     /// pump does submit, so an event is never attributed to a frame that
     /// never reached the screen).
+    ///
+    /// # Panics
+    ///
+    /// Panics if no frame has ever been produced by THIS clock
+    /// (`produced_count() == 0`) — the precondition above already states in
+    /// prose ("call this ONLY when a real submit happened"): a real submit
+    /// only ever follows a `poll()` that returned `Produce`/
+    /// `ProduceWithheld`, which increments `produced_count` before the
+    /// caller can reach a submit point at all.
     pub fn record_frame(
         &self,
+        presentation: PresentationId,
         clock_timestamp: Instant,
         segment_start: Instant,
         segment_end: Instant,
         submit_at: Instant,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
+        let produced_count = self.produced_count();
+        let frame_id = (produced_count > 0)
+            .then(|| FrameId::zip(produced_count as usize))
+            .expect(
+                "BUG: record_frame called before this clock's poll() ever produced a frame -- \
+             only call this after a real submit, whose produce already incremented \
+             produced_count",
+            );
         let input_epochs = self.pending_input_epochs.borrow_mut().drain();
         let snapshot = FrameSnapshot {
-            frame_id: FrameId::zip(self.produced_count() as usize),
+            presentation,
+            frame_id,
             clock_timestamp,
             segment_start,
             segment_end,
@@ -1888,6 +1888,7 @@ mod tests {
         let submit_at = manual.now();
 
         let snapshot = clock.record_frame(
+            PresentationId::new(1),
             segment_start,
             segment_start,
             segment_end,
@@ -1934,7 +1935,14 @@ mod tests {
 
         manual.advance(Duration::from_millis(4));
         let submit_at = manual.now();
-        let snapshot = clock.record_frame(now, now, now, submit_at, PresentOutcome::Presented);
+        let snapshot = clock.record_frame(
+            PresentationId::new(1),
+            now,
+            now,
+            now,
+            submit_at,
+            PresentOutcome::Presented,
+        );
 
         let latencies: Vec<(InputEpochId, Duration)> = snapshot.latencies().collect();
         assert_eq!(latencies.len(), 1);
@@ -1953,13 +1961,27 @@ mod tests {
         clock.mark_demand(DemandKind::Dirty);
         let now = manual.now();
         assert_eq!(clock.poll(now), PollDecision::Produce);
-        let first = clock.record_frame(now, now, now, now, PresentOutcome::Presented);
+        let first = clock.record_frame(
+            PresentationId::new(1),
+            now,
+            now,
+            now,
+            now,
+            PresentOutcome::Presented,
+        );
 
         manual.advance(Duration::from_millis(16));
         clock.mark_demand(DemandKind::Dirty);
         let now2 = manual.now();
         assert_eq!(clock.poll(now2), PollDecision::Produce);
-        let second = clock.record_frame(now2, now2, now2, now2, PresentOutcome::Presented);
+        let second = clock.record_frame(
+            PresentationId::new(1),
+            now2,
+            now2,
+            now2,
+            now2,
+            PresentOutcome::Presented,
+        );
 
         assert_eq!(clock.frames_since(None).len(), 2);
         let recent = clock.frames_since(Some(first.frame_id));

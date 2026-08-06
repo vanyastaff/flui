@@ -111,7 +111,12 @@ fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
 }
 
 /// A single timeline event
+///
+/// `#[non_exhaustive]`: a future field is additive — this slice already
+/// added one (`args`), a semver break for any external constructor; marking
+/// it now stops the next addition from repeating that break.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TimelineEvent {
     /// Event name/description
     pub name: String,
@@ -347,6 +352,16 @@ impl Timeline {
     /// — issue #556's exportable, per-input-attributed frame telemetry.
     /// Reuses this module's own [`Self::export_chrome_trace`] serializer;
     /// no second trace format exists anywhere in this crate.
+    ///
+    /// The event name embeds [`FrameSnapshot::presentation`], not just
+    /// `frame_id`: a `frame_id` is scoped to the presentation whose clock
+    /// minted it (each starts counting from 1), so two presentations'
+    /// snapshots recorded into the SAME `Timeline` — a realm hosting more
+    /// than one presentation, e.g. via `open_secondary_window` — would
+    /// otherwise both name themselves "Frame 1", "Frame 2", … and collide
+    /// in one exported trace file. The `presentation` field is ALSO carried
+    /// in `args` (not just the name) so a consumer can filter/group by it
+    /// without parsing the display string back apart.
     pub fn record_frame_snapshots(&self, snapshots: &[FrameSnapshot]) {
         for snapshot in snapshots {
             let inputs: Vec<serde_json::Value> = snapshot
@@ -359,12 +374,13 @@ impl Timeline {
                 })
                 .collect();
             let args = json!({
+                "presentation": snapshot.presentation.to_string(),
                 "frame_id": snapshot.frame_id.to_string(),
                 "present_outcome": format!("{:?}", snapshot.present_outcome),
                 "inputs": inputs,
             });
             self.record_completed_event(
-                format!("Frame {}", snapshot.frame_id),
+                format!("Frame {} [{}]", snapshot.frame_id, snapshot.presentation),
                 EventCategory::Frame,
                 snapshot.segment_start,
                 snapshot.segment_span(),
@@ -726,7 +742,9 @@ mod tests {
     /// field that exists.
     #[test]
     fn frame_snapshot_export_carries_real_input_attribution_through_the_existing_serializer() {
-        use flui_scheduler::{ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome};
+        use flui_scheduler::{
+            ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome, PresentationId,
+        };
 
         let clock = FrameClock::with_source(ClockSource::Platform);
         let arrival = clock.now();
@@ -736,7 +754,14 @@ mod tests {
         let now = clock.now();
         assert_eq!(clock.poll(now), PollDecision::Produce);
         let submit_at = clock.now();
-        let _snapshot = clock.record_frame(now, now, now, submit_at, PresentOutcome::Presented);
+        let _snapshot = clock.record_frame(
+            PresentationId::new(1),
+            now,
+            now,
+            now,
+            submit_at,
+            PresentOutcome::Presented,
+        );
 
         let snapshots = clock.frames_since(None);
         assert_eq!(snapshots.len(), 1);
@@ -783,6 +808,19 @@ mod tests {
         );
         assert_eq!(begin["args"]["frame_id"], snapshots[0].frame_id.to_string());
         assert_eq!(begin["args"]["present_outcome"], "Presented");
+        assert_eq!(
+            begin["args"]["presentation"],
+            snapshots[0].presentation.to_string(),
+            "the exported args must name the producing presentation, not just the frame_id"
+        );
+        assert!(
+            begin["name"]
+                .as_str()
+                .expect("name must be a string")
+                .contains(&snapshots[0].presentation.to_string()),
+            "the event NAME must also embed the presentation, so two presentations' frame_id \
+             sequences (each starting from 1) cannot collide in one exported trace file"
+        );
     }
 
     /// Two inputs before one recorded frame: both survive the export, with
@@ -791,7 +829,9 @@ mod tests {
     /// JSON, not just at the `FrameSnapshot` level.
     #[test]
     fn frame_snapshot_export_preserves_coalescing_order_and_latency_ordering() {
-        use flui_scheduler::{ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome};
+        use flui_scheduler::{
+            ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome, PresentationId,
+        };
 
         let clock = FrameClock::with_source(ClockSource::Platform);
         let older = clock.stamp_input_epoch(clock.now());
@@ -802,7 +842,14 @@ mod tests {
         let now = clock.now();
         assert_eq!(clock.poll(now), PollDecision::Produce);
         let submit_at = clock.now();
-        let _ = clock.record_frame(now, now, now, submit_at, PresentOutcome::Presented);
+        let _ = clock.record_frame(
+            PresentationId::new(1),
+            now,
+            now,
+            now,
+            submit_at,
+            PresentOutcome::Presented,
+        );
 
         let timeline = Timeline::new();
         timeline.record_frame_snapshots(&clock.frames_since(None));
@@ -823,6 +870,57 @@ mod tests {
         assert!(
             latency_of(older) > latency_of(newer),
             "the older arrival must show the larger latency in the exported JSON"
+        );
+    }
+
+    /// Two DIFFERENT presentations, each producing their own "frame 1" (a
+    /// `FrameSnapshot::frame_id` is scoped to the clock that minted it, so
+    /// both start counting from 1) — exported into the SAME `Timeline`, as
+    /// `flui-app`'s own realm-wide devtools export would for a realm
+    /// hosting more than one presentation. The two events must be
+    /// distinguishable by NAME, not merely by an args field a consumer
+    /// would have to already know to inspect.
+    #[test]
+    fn two_presentations_own_colliding_frame_ids_export_as_distinguishable_events() {
+        use flui_scheduler::{
+            ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome, PresentationId,
+        };
+
+        let record_one = |presentation: PresentationId| -> FrameSnapshot {
+            let clock = FrameClock::with_source(ClockSource::Platform);
+            clock.mark_demand(DemandKind::Dirty);
+            let now = clock.now();
+            assert_eq!(clock.poll(now), PollDecision::Produce);
+            clock.record_frame(presentation, now, now, now, now, PresentOutcome::Presented)
+        };
+
+        let a = record_one(PresentationId::new(1));
+        let b = record_one(PresentationId::new(2));
+        assert_eq!(
+            a.frame_id, b.frame_id,
+            "sanity: two independent clocks' first frame_id really do collide"
+        );
+
+        let timeline = Timeline::new();
+        timeline.record_frame_snapshots(&[a, b]);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&timeline.export_chrome_trace()).expect("valid JSON");
+        let trace_events = parsed["traceEvents"].as_array().expect("array");
+        // One Begin + one End per recorded frame, two frames recorded.
+        assert_eq!(trace_events.len(), 4);
+
+        let begin_names: std::collections::HashSet<&str> = trace_events
+            .iter()
+            .filter(|event| event["ph"] == "B")
+            .map(|event| event["name"].as_str().expect("name is a string"))
+            .collect();
+        assert_eq!(
+            begin_names.len(),
+            2,
+            "two colliding frame_ids must still produce two DISTINCT event names once \
+             exported into the same trace, not one name overwriting the other conceptually \
+             (the trace format itself would keep both events either way, but a consumer \
+             reading names alone must be able to tell them apart): got {begin_names:?}"
         );
     }
 }

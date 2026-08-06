@@ -25,7 +25,9 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_scheduler::{ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome};
+use flui_scheduler::{
+    ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome, PresentationId,
+};
 
 static ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
 static ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -74,7 +76,14 @@ fn input_stamp_produce_record_cycle_allocates_nothing_on_the_frame_path() {
     clock.mark_demand(DemandKind::Dirty);
     let now = clock.now();
     assert_eq!(clock.poll(now), PollDecision::Produce, "warmup produce");
-    let _ = clock.record_frame(now, now, now, now, PresentOutcome::Presented);
+    let _ = clock.record_frame(
+        PresentationId::new(1),
+        now,
+        now,
+        now,
+        now,
+        PresentOutcome::Presented,
+    );
 
     const CYCLES: usize = 10_000;
     let mut cycles_with_allocation = 0usize;
@@ -92,7 +101,14 @@ fn input_stamp_produce_record_cycle_allocates_nothing_on_the_frame_path() {
         let now = clock.now();
         let decision = clock.poll(now);
         assert_eq!(decision, PollDecision::Produce, "every cycle must produce");
-        let _snapshot = clock.record_frame(now, now, now, now, PresentOutcome::Presented);
+        let _snapshot = clock.record_frame(
+            PresentationId::new(1),
+            now,
+            now,
+            now,
+            now,
+            PresentOutcome::Presented,
+        );
 
         let calls_this_cycle = ALLOC_COUNT.load(Ordering::Relaxed) - count_before;
         let bytes_this_cycle = ALLOC_BYTES.load(Ordering::Relaxed) - bytes_before;
@@ -130,7 +146,14 @@ fn frames_since_pull_side_does_allocate_unlike_the_frame_path() {
     clock.mark_demand(DemandKind::Dirty);
     let now = clock.now();
     assert_eq!(clock.poll(now), PollDecision::Produce);
-    let _ = clock.record_frame(now, now, now, now, PresentOutcome::Presented);
+    let _ = clock.record_frame(
+        PresentationId::new(1),
+        now,
+        now,
+        now,
+        now,
+        PresentOutcome::Presented,
+    );
 
     let bytes_before = ALLOC_BYTES.load(Ordering::Relaxed);
     let pulled = clock.frames_since(None);

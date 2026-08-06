@@ -159,6 +159,12 @@ pub use config::{
     PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, TimingsCallback,
     set_time_dilation, time_dilation,
 };
+/// [`FrameSnapshot::presentation`]'s type — re-exported so a consumer of
+/// this crate's frame telemetry (e.g. `flui-devtools`' `timeline` feature)
+/// can name it without an extra, redundant direct dependency on
+/// `flui-foundation` just to construct/match one of this crate's own public
+/// field types.
+pub use flui_foundation::PresentationId;
 pub use frame_clock::{ClockSource, DemandKind, DemandMask, FrameClock, PollDecision, SkipReason};
 pub use frame_telemetry::{
     FRAME_HISTORY_CAPACITY, FrameSnapshot, InputEpoch, InputEpochId, InputEpochs,
