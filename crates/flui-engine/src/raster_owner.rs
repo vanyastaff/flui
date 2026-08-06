@@ -141,25 +141,29 @@ struct InFlightAccounting {
     /// which is the only ordering guarantee anything here actually needs.
     count: AtomicU32,
     /// Invoked, unconditionally, every time a frame retires — see
-    /// [`InFlightTicket`]'s doc for the three sites. The raster owner has
-    /// no visibility into demand (the ownership rule: raster scheduling
-    /// never knows demand, ordering, or widget state — see this crate's
-    /// module docs), so it cannot decide whether waking is "worth it"; it
-    /// always is, and a spurious wake against an empty demand mask is a
-    /// cheap no-op poll on the consumer's side, never a correctness
+    /// [`InFlightTicket`]'s doc for the three sites, plus the panic-unwind
+    /// path through `RasterOwner::pump`'s own `WakeGuard` (a stalled,
+    /// purely wake-driven consumer has no other way to learn capacity
+    /// freed after a raster panic — see that type's doc). The raster owner
+    /// has no visibility into demand (the ownership rule: raster
+    /// scheduling never knows demand, ordering, or widget state — see this
+    /// crate's module docs), so it cannot decide whether waking is "worth
+    /// it"; it always is, and a spurious wake against an empty demand mask
+    /// is a cheap no-op poll on the consumer's side, never a correctness
     /// problem.
     ///
     /// **Hook contract:** never call back into the [`RasterHandle`]/
-    /// [`RasterOwner`] this hook came from synchronously. `notify_retired`
-    /// is called deliberately OUTSIDE any lock this module holds — see
-    /// each call site — so the hook itself does not need to worry about
-    /// `RasterMailbox::state`'s mutex specifically, but it still runs
-    /// synchronously on whichever thread retired the frame (sometimes
-    /// during a panicking unwind's caller-visible recovery, sometimes on
-    /// the raster/pump thread) and must not block. Treat it as a bare wake
-    /// signal — push to a channel, call `PlatformWindow::request_redraw` —
-    /// the same contract `flui_scheduler`'s `on_frame_scheduled` hook and
-    /// `flui-app`'s `FrameWakeHandle` already keep.
+    /// [`RasterOwner`] this hook came from synchronously. [`Self::notify_retired`]
+    /// clones the hook out of this field and drops the lock guard *before*
+    /// invoking it, so the hook never runs while this lock is held (nor
+    /// `RasterMailbox::state`'s — every call site releases that one
+    /// first too); it still runs synchronously on whichever thread retired
+    /// the frame (sometimes from inside a panicking unwind, via
+    /// `WakeGuard`; otherwise explicitly, on the raster/pump thread) and
+    /// must not block. Treat it as a bare wake signal — push to a channel,
+    /// call `PlatformWindow::request_redraw` — the same contract
+    /// `flui_scheduler`'s `on_frame_scheduled` hook and `flui-app`'s
+    /// `FrameWakeHandle` already keep.
     wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
@@ -171,10 +175,19 @@ impl InFlightAccounting {
         }
     }
 
-    /// Invokes the registered wake hook, if any. Callers must not hold any
-    /// of this module's own locks when calling this — see the field doc.
+    /// Invokes the registered wake hook, if any, cloning it out of
+    /// [`Self::wake`] and dropping that lock guard *before* calling it —
+    /// mirrors `flui_scheduler::scheduler::request_frame_impl`'s
+    /// `on_frame_scheduled` hook, the workspace's existing precedent for
+    /// this exact shape. Calling the hook while still holding `wake`'s own
+    /// lock is a real hang, not a theoretical one: a hook that
+    /// deregisters itself via `RasterHandle::set_wake_hook(None)` (the
+    /// ordinary fire-once pattern) would try to re-lock this same
+    /// non-reentrant `Mutex` from the same thread and block forever —
+    /// pinned by `self_deregistering_wake_hook_does_not_hang_the_retiring_thread`.
     fn notify_retired(&self) {
-        if let Some(hook) = self.wake.lock().as_ref() {
+        let hook = self.wake.lock().clone();
+        if let Some(hook) = hook {
             hook();
         }
     }
@@ -202,8 +215,12 @@ impl InFlightAccounting {
 /// anywhere, including while `RasterMailbox::state`'s lock is held (the
 /// supersede site keeps the decrement under that lock, matching the
 /// existing ack-ordering guarantee at that call site) or mid-panic-unwind.
-/// Each retire site calls [`InFlightAccounting::notify_retired`] explicitly,
-/// after the decrement, from a point with no lock held.
+/// Every ordinary (non-unwind) retire site calls
+/// [`InFlightAccounting::notify_retired`] explicitly, after the decrement,
+/// from a point with no lock held; the panic-unwind path is the one
+/// exception, where `WakeGuard` (declared below `RasterOwner::pump`) fires
+/// that same call from its own `Drop` instead, since the explicit call
+/// never runs on that path.
 struct InFlightTicket {
     accounting: Arc<InFlightAccounting>,
 }
@@ -220,6 +237,38 @@ impl InFlightTicket {
 impl Drop for InFlightTicket {
     fn drop(&mut self) {
         self.accounting.count.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Unwind-safety guard for [`RasterOwner::pump`]'s wake half: guarantees
+/// [`InFlightAccounting::notify_retired`] still fires even when
+/// [`RasterBackend::render_scene`] panics and unwinds before `pump`'s own
+/// ordinary post-retire `notify_retired()` call is ever reached — without
+/// it, a raster panic would still decrement the counter (via the
+/// [`InFlightTicket`] embedded in the unwinding `PendingFrame`'s own
+/// ordinary `Drop`) but never wake, permanently stalling a purely
+/// wake-driven consumer, the one kind this retire→wake edge exists to
+/// enable.
+///
+/// Armed when constructed, disarmed once `pump` has computed `outcome`
+/// successfully, so the ordinary explicit `notify_retired()` call
+/// immediately below stays the sole wake on the non-panic path — this
+/// guard only extends that guarantee to the unwind path, never duplicates
+/// it there.
+struct WakeGuard {
+    /// An owned `Arc` clone, not a borrow of `&self.mailbox.accounting`:
+    /// `RasterOwner::pump` calls `&mut self` methods (`handle_render_failure`)
+    /// while this guard is alive, which an `&InFlightAccounting` borrow of
+    /// `self` would conflict with. Cloning is a cheap atomic increment.
+    accounting: Arc<InFlightAccounting>,
+    armed: bool,
+}
+
+impl Drop for WakeGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.accounting.notify_retired();
+        }
     }
 }
 
@@ -529,6 +578,11 @@ impl RasterHandle {
             // accepted submit and its own accounting landing — a reader
             // on another thread sees either the pre-submit count or the
             // post-submit one, never a moment with neither ticket counted.
+            // This is a mint-before-replace *ordering* property, not a
+            // lock-derived one: `in_flight()` is a lock-free
+            // `Ordering::Acquire` load that never takes `state` at all, so
+            // holding this lock confers no atomicity on the net-zero pair
+            // below — the guarantee comes entirely from minting first.
             let ticket = InFlightTicket::new(&self.mailbox.accounting);
             let pending = PendingFrame {
                 snapshot: frame,
@@ -596,6 +650,20 @@ impl RasterHandle {
     /// already-pending frame before it signals completion on the dedicated
     /// one-shot channel [`RasterOwner::new`] returns.
     ///
+    /// This call itself only flips the flag and wakes the condvar — it does
+    /// NOT drain or retire a pending frame's ticket (this module has no
+    /// backend access from a cross-thread [`RasterHandle`] to do that
+    /// safely). Retiring still happens, either on the next
+    /// [`RasterOwner::pump`] (which finishes a pending frame through the
+    /// ordinary render path before it ever observes an empty, shutting-down
+    /// mailbox) or at [`RasterOwner`]'s own `Drop`.
+    /// [`RasterOwner::run_until_shutdown`]'s loop always delivers one of
+    /// those after this call wakes its condvar, so this is invisible under
+    /// that driver; a caller that manages the owner manually, calls this,
+    /// and then neither pumps again nor drops the owner leaves that ticket
+    /// held (`RasterHandle::in_flight()` stuck at 1, no wake) until it
+    /// eventually does one or the other.
+    ///
     /// Idempotent — calling it more than once has the same effect as
     /// calling it once.
     pub fn shutdown(&self) {
@@ -618,7 +686,9 @@ impl RasterHandle {
     /// The current reliable, cross-thread count of frames this owner has
     /// accepted but not yet retired. See the module docs for the accounting
     /// contract (three retire sites, RAII, panic-safe) and its atomics
-    /// orderings.
+    /// orderings. For today's synchronous owner this reads at most 2 —
+    /// see `RasterOptions::max_frames_in_flight`'s own doc for the full
+    /// honest statement of that structural ceiling and what would widen it.
     #[must_use]
     pub fn in_flight(&self) -> u32 {
         self.mailbox.accounting.count.load(Ordering::Acquire)
@@ -626,11 +696,15 @@ impl RasterHandle {
 
     /// Registers (or clears, via `None`) the hook invoked every time a
     /// frame retires. Never call back into this handle/its owner
-    /// synchronously from the hook — it can run from inside a retiring
-    /// `Drop`, sometimes while an internal lock is held or mid-panic-unwind
-    /// (see the module docs). It fires unconditionally on every retire
-    /// rather than only when demand is known nonzero — this module never
-    /// sees demand at all.
+    /// synchronously from the hook: it runs synchronously, with none of
+    /// this module's own locks held, either right after an ordinary
+    /// retire (from whichever thread performed it) or — for a frame whose
+    /// render panicked — from inside that panic's own unwind (see
+    /// `RasterOwner::pump`'s `WakeGuard`, which exists precisely so a
+    /// purely wake-driven consumer still learns capacity freed after a
+    /// raster panic, instead of stalling forever). It fires unconditionally
+    /// on every retire rather than only when demand is known nonzero —
+    /// this module never sees demand at all.
     ///
     /// Replaces any previously registered hook; there is exactly one
     /// registration slot per raster owner (shared by every clone of this
@@ -897,11 +971,25 @@ impl<B: RasterBackend> RasterOwner<B> {
         // unwind machinery drops it (and the `InFlightTicket` inside it)
         // like any other live local, decrementing the reliable in-flight
         // counter even on that path. The explicit `notify_retired()` call
-        // after `outcome` is computed is the wake half — deliberately not
-        // run from inside `InFlightTicket::drop` itself (see its doc), so
-        // it never fires while any lock in this module is held, and a
-        // panicking unwind still leaves the counter correct even though no
-        // wake fires for that one retire.
+        // after `outcome` is computed below is the ordinary wake half —
+        // deliberately not run from inside `InFlightTicket::drop` itself
+        // (see its doc), so it never fires while any lock in this module
+        // is held. `wake_guard` extends that same wake guarantee to the
+        // unwind path: without it, a panic here would still decrement (via
+        // `frame`'s own unwind-drop) but never wake — permanently stalling
+        // the one kind of consumer this retire→wake edge exists to enable,
+        // a purely wake-driven one with no other way to learn capacity
+        // freed. `frame` is re-bound (shadowed) below, after `wake_guard`'s
+        // own `let`, so Rust's reverse-declaration-order drop retires the
+        // ticket before `wake_guard`'s `Drop` can fire the wake on an
+        // unwind — "retire, then wake" holds on that path too, not only
+        // the ordinary one.
+        let mut wake_guard = WakeGuard {
+            accounting: Arc::clone(&self.mailbox.accounting),
+            armed: true,
+        };
+        let frame = frame;
+
         let outcome = if frame.snapshot.surface_generation == self.current_surface_generation {
             // `DamageRegion::Full` is the only variant that exists today
             // (flui-layer's own doc: fine-grained damage is an additive,
@@ -966,6 +1054,12 @@ impl<B: RasterBackend> RasterOwner<B> {
                 current,
             }
         };
+
+        // `outcome` computed without unwinding: disarm `wake_guard` so the
+        // explicit retire-then-wake sequence below is the sole wake on
+        // this path (its own eventual `Drop`, a no-op once disarmed, still
+        // runs at the end of this function — harmless).
+        wake_guard.armed = false;
 
         // Retire, then wake — in that order, and both after every lock
         // this function touched has already been released (the `state`
@@ -1105,7 +1199,9 @@ mod tests {
     use std::collections::VecDeque;
     use std::num::NonZeroU32;
     use std::sync::Barrier;
+    use std::sync::mpsc;
     use std::thread;
+    use std::time::Duration;
 
     use flui_foundation::{PresentationId, RealmId};
     use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene};
@@ -2022,8 +2118,12 @@ mod tests {
             1,
             "a superseding submit is net-zero on the counter: +1 for the new frame, \
              -1 for the one it replaced -- exactly one frame is genuinely outstanding \
-             either way, and this must happen under `mailbox.state`'s lock, same as \
-             the Superseded ack it accompanies"
+             either way. `submit` mints the new ticket before replacing (and \
+             dropping) the superseded one, so a reader can never observe a \
+             transient under-count between the two -- not because of any lock \
+             (`in_flight()` is a lock-free `Ordering::Acquire` load that never \
+             takes `mailbox.state`), but because of that mint-before-replace \
+             ordering alone"
         );
         assert_eq!(
             ack_rx.try_recv().unwrap(),
@@ -2133,6 +2233,69 @@ mod tests {
             }
         );
         assert_eq!(handle.in_flight(), 0);
+    }
+
+    /// Regression for the bug where a panicking `render_scene` retired the
+    /// ticket (via `frame`'s own ordinary unwind-drop) but never invoked
+    /// the wake hook, since `pump`'s explicit post-`outcome`
+    /// `notify_retired()` call never runs on that path -- the function
+    /// itself never gets there. A purely wake-driven consumer (the kind
+    /// the retire->wake edge exists to enable -- see the module docs) has
+    /// no other way to learn capacity freed, so this bug meant it stalled
+    /// permanently after any raster panic, with no external event ever
+    /// able to recover it. `WakeGuard` (declared next to `InFlightTicket`)
+    /// fixes it by firing the wake from its own `Drop` on the unwind path.
+    #[test]
+    fn panic_mid_render_still_wakes_a_wake_driven_consumer() {
+        let backend = FakeBackend {
+            panic_next_render: true,
+            ..FakeBackend::default()
+        };
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
+
+        let woken = Arc::new(AtomicBool::new(false));
+        {
+            let woken = Arc::clone(&woken);
+            handle.set_wake_hook(Some(Arc::new(move || woken.store(true, Ordering::SeqCst))));
+        }
+
+        let epoch1 = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame(epoch1, SurfaceGeneration::ZERO))
+            .expect("submit");
+        assert!(
+            !woken.load(Ordering::SeqCst),
+            "no wake before anything retires"
+        );
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.pump()));
+        assert!(
+            result.is_err(),
+            "the injected panic must actually propagate out of pump()"
+        );
+        assert!(
+            woken.load(Ordering::SeqCst),
+            "the wake hook must still fire when render_scene panics and unwinds -- \
+             a wake-driven consumer has no other way to learn capacity freed"
+        );
+        assert_eq!(owner.in_flight(), 0);
+
+        // With no further external event, the wake-driven consumer's
+        // ordinary reaction (submit again) must succeed and actually
+        // render -- proving capacity is genuinely usable again, not just
+        // the counter reading zero by coincidence.
+        let epoch2 = epoch1.next();
+        handle
+            .submit(test_frame(epoch2, SurfaceGeneration::ZERO))
+            .expect("submit after panic recovery");
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::Presented {
+                epoch: epoch2,
+                address: test_address(),
+            }
+        );
+        assert_eq!(owner.in_flight(), 0);
     }
 
     /// 17 retires with the (16-capacity) ack channel never drained: the
@@ -2307,6 +2470,59 @@ mod tests {
             0,
             "and capacity is genuinely free again"
         );
+    }
+
+    /// Regression for the bug where `InFlightAccounting::notify_retired`
+    /// invoked the hook WHILE STILL HOLDING `wake`'s own lock (`if let
+    /// Some(hook) = self.wake.lock().as_ref() { hook(); }` -- the temporary
+    /// guard from `.lock()` lives across the call since it is borrowed
+    /// from). A hook that deregisters itself via `set_wake_hook(None)` --
+    /// the ordinary fire-once pattern -- tries to re-lock that same
+    /// non-reentrant `parking_lot::Mutex` from the same thread and would
+    /// hang forever. `notify_retired` now clones the hook out and drops
+    /// the guard first (matching `flui_scheduler::scheduler::request_frame_impl`'s
+    /// existing precedent for this exact shape), so the hook is free to
+    /// call back into `set_wake_hook` without deadlocking. Runs the actual
+    /// retire (`pump`) on its own thread and bounds the wait with a
+    /// generous timeout rather than actually hanging the test process
+    /// forever if this regresses.
+    #[test]
+    fn self_deregistering_wake_hook_does_not_hang_the_retiring_thread() {
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+
+        let hook_ran = Arc::new(AtomicBool::new(false));
+        {
+            let handle_for_hook = handle.clone();
+            let hook_ran = Arc::clone(&hook_ran);
+            handle.set_wake_hook(Some(Arc::new(move || {
+                hook_ran.store(true, Ordering::SeqCst);
+                // The ordinary fire-once pattern: deregister from inside
+                // the hook itself. This re-locks `InFlightAccounting::wake`
+                // on the SAME thread that is currently invoking this hook
+                // -- exactly the scenario that hangs without the fix.
+                handle_for_hook.set_wake_hook(None);
+            })));
+        }
+
+        handle
+            .submit(test_frame(FrameEpoch::ZERO.next(), SurfaceGeneration::ZERO))
+            .expect("submit");
+
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = owner.pump();
+            // The receiving end may already be gone if the timeout below
+            // fired first; a failed send here is not this thread's problem
+            // to report.
+            let _ = done_tx.send(());
+        });
+
+        done_rx.recv_timeout(Duration::from_secs(10)).expect(
+            "pump() must not hang when its own wake hook deregisters itself -- \
+                 notify_retired must never call the hook while still holding \
+                 InFlightAccounting::wake's lock",
+        );
+        assert!(hook_ran.load(Ordering::SeqCst), "the hook must have run");
     }
 
     // -----------------------------------------------------------------------
