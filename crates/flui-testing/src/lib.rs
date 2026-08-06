@@ -226,7 +226,7 @@ impl HeadlessBinding {
         let clock = ManualClock::new();
         let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
         let scheduler = UpdateScheduler::new();
-        let local_post_frame = scheduler.local_post_frame_lane();
+        let local_post_frame = scheduler.new_local_post_frame_lane();
         let interaction_lane = InteractionLane::try_new()?;
         Ok(Self {
             clock,

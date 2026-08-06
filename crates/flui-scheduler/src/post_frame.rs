@@ -119,6 +119,11 @@ impl LocalPostFrameHandle {
     /// The callback may capture `Rc`/`RefCell` state. On error (the owning
     /// lane or its scheduler is gone) the callback is dropped without
     /// running — provably: nothing retains it once this call returns `Err`.
+    ///
+    /// Runs in the same total order as every [`PostFrameHandle::schedule`]
+    /// callback registered for this frame — by registration order, across
+    /// both handle types, not "all local callbacks, then all shared" or the
+    /// reverse.
     pub fn schedule_local(
         &self,
         callback: impl FnOnce(&FrameTiming) + 'static,
@@ -228,7 +233,7 @@ mod tests {
     #[test]
     fn mixed_shared_and_local_callbacks_keep_total_registration_order() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         let log = Arc::new(Mutex::new(Vec::new()));
 
         let shared = Arc::clone(&log);
@@ -260,7 +265,7 @@ mod tests {
     #[test]
     fn local_then_local_nested_registration_defers() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         let handle = lane.local_handle();
         let fired = Rc::new(Cell::new(0));
         let nested_handle = handle.clone();
@@ -283,7 +288,7 @@ mod tests {
     #[test]
     fn local_then_shared_nested_registration_defers() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let nested_scheduler = scheduler.clone();
         let nested = Arc::clone(&fired);
@@ -307,8 +312,8 @@ mod tests {
     #[test]
     fn concurrent_lanes_on_one_scheduler_never_cross_queues() {
         let scheduler = UpdateScheduler::new();
-        let lane_a = scheduler.local_post_frame_lane();
-        let lane_b = scheduler.local_post_frame_lane();
+        let lane_a = scheduler.new_local_post_frame_lane();
+        let lane_b = scheduler.new_local_post_frame_lane();
         let fired_a = Rc::new(Cell::new(0));
         let fired_b = Rc::new(Cell::new(0));
 
@@ -336,7 +341,7 @@ mod tests {
     fn other_scheduler_lane_is_untouched_by_a_different_scheduler_drive() {
         let scheduler_a = UpdateScheduler::new();
         let scheduler_b = UpdateScheduler::new();
-        let lane_b = scheduler_b.local_post_frame_lane();
+        let lane_b = scheduler_b.new_local_post_frame_lane();
         let fired = Rc::new(Cell::new(0));
 
         let probe = Rc::clone(&fired);
@@ -363,7 +368,7 @@ mod tests {
             }
         }
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         let handle = lane.local_handle();
         let dropped = Rc::new(Cell::new(false));
         let ran = Rc::new(Cell::new(false));
@@ -394,7 +399,7 @@ mod tests {
     #[test]
     fn dead_scheduler_is_also_a_typed_error() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         let handle = lane.local_handle();
         drop(scheduler);
         assert_eq!(
@@ -406,7 +411,7 @@ mod tests {
     #[test]
     fn post_frame_panic_restores_idle_and_later_scheduling_works() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         lane.local_handle()
             .schedule_local(|_| panic!("post-frame probe"))
             .expect("lane alive");
@@ -426,7 +431,7 @@ mod tests {
     #[test]
     fn aborted_pipeline_retains_local_callback_for_next_completed_frame() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.local_post_frame_lane();
+        let lane = scheduler.new_local_post_frame_lane();
         let fired = Rc::new(Cell::new(false));
         let callback = Rc::clone(&fired);
         lane.local_handle()
@@ -447,5 +452,51 @@ mod tests {
         assert!(!fired.get());
         scheduler.execute_frame_with_lane(&lane);
         assert!(fired.get());
+    }
+
+    /// `end_frame_with_lane` on a scheduler with no open frame must not
+    /// silently drop the lane's queued entries. The mutant this kills: taking
+    /// `lane.take_queue()` unconditionally, ahead of the `if let Some(timing)`
+    /// guard, instead of inside it — the taken entries would then never be
+    /// folded into `callbacks` (that only happens inside the same
+    /// `Some(timing)` arm) and would be dropped, un-run, when the call
+    /// returns.
+    ///
+    /// `#[cfg(not(debug_assertions))]`, deliberately: reaching this call with
+    /// no open frame ALSO means the current phase cannot legally transition
+    /// to `PostFrameCallbacks` (`current_frame` and the phase machine are
+    /// always advanced together — see `handle_begin_frame`/`handle_draw_frame`
+    /// — so the only way to decouple them is a misuse call, e.g. a second
+    /// `end_frame_with_lane` after the frame it was meant to close already
+    /// closed). `set_scheduler_phase`'s own `debug_assert!` catches that
+    /// misuse first in a debug/test build, panicking before this function
+    /// ever reaches `current_frame.lock().take()` — which is exactly why the
+    /// reviewer who asked for this test also called the bug "not reachable
+    /// today". It IS reachable the moment `debug_assertions` are off (a
+    /// release build, where that assert compiles out), which is what this
+    /// test pins; it cannot run under the debug-assertions-on profile this
+    /// workspace tests with, and is gated accordingly rather than pretending
+    /// otherwise.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn end_frame_with_lane_without_an_open_frame_does_not_drop_the_queued_entry() {
+        let scheduler = UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let fired = Rc::new(Cell::new(false));
+        let callback = Rc::clone(&fired);
+        lane.local_handle()
+            .schedule_local(move |_| callback.set(true))
+            .expect("lane alive");
+
+        // No frame is open: nothing runs, and nothing must be lost.
+        scheduler.end_frame_with_lane(&lane);
+        assert!(!fired.get(), "no open frame means nothing to close");
+
+        // The entry must still be queued for the next REAL frame close.
+        scheduler.execute_frame_with_lane(&lane);
+        assert!(
+            fired.get(),
+            "the queued entry must survive a no-open-frame end_frame_with_lane call"
+        );
     }
 }

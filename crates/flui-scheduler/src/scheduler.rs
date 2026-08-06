@@ -624,10 +624,19 @@ impl UpdateScheduler {
         callback(self.inner.callbacks.id_gen.next())
     }
 
-    /// Create an owner-affine local post-frame lane for a binding/runtime.
+    /// Create a FRESH owner-affine local post-frame lane for a binding/runtime.
+    ///
+    /// Named `new_*`, not `local_post_frame_lane`, so it cannot be confused
+    /// with `UiRealm::local_post_frame_lane()` — that one is an ACCESSOR
+    /// returning the realm's existing lane; this one is a CONSTRUCTOR that
+    /// mints a brand-new, empty one. Both are in scope at every drive site
+    /// (a `UiRealm` holds both a `scheduler: UpdateScheduler` and a
+    /// `local_post_frame: LocalPostFrameLane` field), so a same-named pair
+    /// would let `scheduler.local_post_frame_lane()` compile at a drive site
+    /// and silently drain a lane nothing ever schedules into, forever.
     #[doc(hidden)]
     #[must_use]
-    pub fn local_post_frame_lane(&self) -> crate::LocalPostFrameLane {
+    pub fn new_local_post_frame_lane(&self) -> crate::LocalPostFrameLane {
         crate::LocalPostFrameLane::new(self)
     }
 
@@ -867,7 +876,7 @@ impl UpdateScheduler {
     /// [`abort_frame`](Self::abort_frame).
     #[tracing::instrument(skip(self))]
     pub fn end_frame(&self) {
-        self.end_frame_impl(Vec::new());
+        self.end_frame_impl(None);
     }
 
     /// [`end_frame`](Self::end_frame), additionally draining `lane`'s owner-local
@@ -875,13 +884,14 @@ impl UpdateScheduler {
     /// `CallbackId` sequence, interleaving well-defined: both queues are
     /// combined into one snapshot and sorted by registration order before any
     /// callback runs, so it does not matter which queue a given callback landed
-    /// in, only when it was registered.
+    /// in, only when it was registered. A widget author reads this on
+    /// [`crate::LocalPostFrameHandle::schedule_local`], not here.
     #[tracing::instrument(skip(self, lane))]
     pub fn end_frame_with_lane(&self, lane: &crate::LocalPostFrameLane) {
-        self.end_frame_impl(lane.take_queue());
+        self.end_frame_impl(Some(lane));
     }
 
-    fn end_frame_impl(&self, local_entries: Vec<LocalPostFrameEntry>) {
+    fn end_frame_impl(&self, lane: Option<&crate::LocalPostFrameLane>) {
         // Phase 4: PostFrameCallbacks
         self.set_scheduler_phase(SchedulerPhase::PostFrameCallbacks);
 
@@ -907,11 +917,18 @@ impl UpdateScheduler {
             self.inner.binding.pending_timings.lock().push(timing);
 
             // Drain BEFORE invoking: a post-frame callback that registers another
-            // one must not have it run in this same frame. `local_entries` was
-            // already taken from the lane (if any) by the caller, before this
-            // impl acquired the shared-queue lock below — so a callback that
-            // re-registers locally during the loop below lands in the lane's
-            // now-empty queue, exactly like the shared queue's own drain.
+            // one must not have it run in this same frame. `lane.take_queue()`
+            // runs in here, inside the "a frame was actually open" branch, not
+            // unconditionally at the top of this function — taking the lane's
+            // queue on a no-open-frame call (no preceding `handle_begin_frame`/
+            // `handle_draw_frame`, or a second `end_frame_with_lane` call with
+            // nothing new to close) would silently drop every already-queued
+            // local entry: they'd be taken out of the lane here, never folded
+            // into `callbacks` below since that only happens inside this same
+            // `Some(timing)` arm, and then dropped un-run when this function
+            // returns. Keeping the take() and the invoke() in the same branch
+            // means a queue that isn't drained this call is simply left alone,
+            // still in the lane, for whenever a real frame next closes.
             let mut callbacks: Vec<LocalPostFrameEntry> = {
                 let _registration = self.inner.callbacks.post_frame_registration.lock();
                 let mut cbs = self.inner.callbacks.post_frame.lock();
@@ -922,7 +939,9 @@ impl UpdateScheduler {
                         callback: entry.callback as OwnerPostFrameCallback,
                     })
                     .collect();
-                snapshot.extend(local_entries);
+                if let Some(lane) = lane {
+                    snapshot.extend(lane.take_queue());
+                }
                 snapshot
             };
 
