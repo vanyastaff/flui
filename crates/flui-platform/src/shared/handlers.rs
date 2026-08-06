@@ -59,6 +59,15 @@ pub struct PlatformHandlers {
     /// pre-#555 unconditional "last window closed -> exit" default), so an
     /// embedder that never registers a hook sees no behavior change.
     pub exit_policy: Option<Box<dyn Fn() -> bool + Send>>,
+
+    /// Consulted once per idle event-loop iteration for the earliest
+    /// wall-clock instant the loop should wake at (issue #556's wall-clock
+    /// wake seam) — `None` (unset, or the hook itself answers `None`) keeps
+    /// the unconditional `ControlFlow::Wait` behavior exactly as before this
+    /// field existed. A backend that never calls
+    /// [`PlatformHandlers::invoke_wake_deadline`] is unaffected by this
+    /// field at all.
+    pub wake_deadline: Option<Box<dyn Fn() -> Option<web_time::Instant> + Send>>,
 }
 
 impl PlatformHandlers {
@@ -71,6 +80,7 @@ impl PlatformHandlers {
             open_urls: None,
             keyboard_layout_changed: None,
             exit_policy: None,
+            wake_deadline: None,
         }
     }
 
@@ -130,6 +140,13 @@ impl PlatformHandlers {
     pub fn invoke_exit_policy(&self) -> bool {
         self.exit_policy.as_ref().is_none_or(|hook| hook())
     }
+
+    /// Consult the wake-deadline hook (see [`Self::wake_deadline`]'s doc).
+    /// `None` when unset — the previously-unconditional-`Wait` default.
+    #[inline]
+    pub fn invoke_wake_deadline(&self) -> Option<web_time::Instant> {
+        self.wake_deadline.as_ref().and_then(|hook| hook())
+    }
 }
 
 impl Default for PlatformHandlers {
@@ -150,6 +167,7 @@ impl std::fmt::Debug for PlatformHandlers {
                 &self.keyboard_layout_changed.is_some(),
             )
             .field("exit_policy", &self.exit_policy.is_some())
+            .field("wake_deadline", &self.wake_deadline.is_some())
             .finish()
     }
 }

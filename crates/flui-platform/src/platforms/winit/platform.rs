@@ -1032,11 +1032,26 @@ impl ApplicationHandler for WinitApp {
         // one truncated one (documented winit approximation ceiling).
         self.freeze_completed_drops();
 
-        // Explicit `Wait`, not a no-op: see the module doc's "Vsync pacing"
-        // section. Re-asserted every iteration so an upstream winit default
-        // change can't silently turn the wake-driven frame loop into a
-        // busy poll.
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+        // Wall-clock wake: consult the registered
+        // wake-deadline hook (issue #556 — `flui-app` computes the earliest
+        // instant any hosted realm's pending gesture/timer deadline needs
+        // the loop to wake at, across every realm on this thread) fresh on
+        // EVERY iteration, not just once — a deadline that fires, a new one
+        // getting armed, or every deadline clearing must all be reflected
+        // immediately, not stale from whenever the hook was installed.
+        // `Some(deadline)` -> `ControlFlow::WaitUntil`; `None` (no hook
+        // installed, or the hook itself has nothing pending) falls back to
+        // the previously-unconditional `Wait` — re-asserted every iteration
+        // so an upstream winit default change can't silently turn the
+        // wake-driven frame loop into a busy poll.
+        let wake_deadline = self
+            .platform
+            .with_state(|state| state.handlers.invoke_wake_deadline());
+        let control_flow = match wake_deadline {
+            Some(deadline) => winit::event_loop::ControlFlow::WaitUntil(deadline),
+            None => winit::event_loop::ControlFlow::Wait,
+        };
+        event_loop.set_control_flow(control_flow);
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
@@ -1341,6 +1356,12 @@ impl Platform for WinitPlatform {
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
         self.with_state(|state| {
             state.handlers.exit_policy = Some(hook);
+        });
+    }
+
+    fn set_wake_deadline_hook(&self, hook: Box<dyn Fn() -> Option<web_time::Instant> + Send>) {
+        self.with_state(|state| {
+            state.handlers.wake_deadline = Some(hook);
         });
     }
 
@@ -1922,6 +1943,35 @@ mod tests {
         assert!(
             !vetoes_exit,
             "the installed hook's answer must be exactly what invoke_exit_policy returns"
+        );
+    }
+
+    /// `set_wake_deadline_hook` must land in the same `PlatformHandlers` slot
+    /// `about_to_wait` reads via `invoke_wake_deadline` — the storage-level
+    /// counterpart of `set_exit_policy_hook_installs_into_the_shared_handler_slot`
+    /// above. Storage-only: driving a real `about_to_wait` through a live
+    /// `ActiveEventLoop` is not exercised anywhere in this test module (same
+    /// stated gap as that test).
+    #[test]
+    fn set_wake_deadline_hook_installs_into_the_shared_handler_slot() {
+        let platform = WinitPlatform::new();
+        assert!(
+            platform.with_state(|state| state.handlers.wake_deadline.is_none()),
+            "no hook installed yet"
+        );
+        assert_eq!(
+            platform.with_state(|state| state.handlers.invoke_wake_deadline()),
+            None,
+            "unset hook must answer None, not panic or fabricate a deadline"
+        );
+
+        let deadline = web_time::Instant::now() + std::time::Duration::from_millis(250);
+        platform.set_wake_deadline_hook(Box::new(move || Some(deadline)));
+
+        assert_eq!(
+            platform.with_state(|state| state.handlers.invoke_wake_deadline()),
+            Some(deadline),
+            "the installed hook's answer must be exactly what invoke_wake_deadline returns"
         );
     }
 
