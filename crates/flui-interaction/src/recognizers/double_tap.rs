@@ -548,8 +548,19 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
 
     fn has_pending_deadline(&self) -> bool {
         // Armed exactly while `check_timeout` could still fire: the first tap
-        // completed and the inter-tap window is still open.
-        self.gesture_state.lock().phase == DoubleTapPhase::WaitingForSecond
+        // completed and the inter-tap window is still open. Must check BOTH
+        // conditions `next_deadline` checks, not just `phase` -- checking
+        // `phase` alone let this answer `true` in a state `next_deadline`
+        // would answer `None` for (`first_tap_time` absent), breaking the
+        // `GestureArenaMember` contract that the two must agree. Every
+        // production path that sets `WaitingForSecond` also sets
+        // `first_tap_time` in the same locked scope (`handle_up`), so this
+        // divergence has no reachable production trigger today -- the guard
+        // is here so a future edit to one can't silently desync it from the
+        // other, mirroring `LongPressGestureRecognizer`'s own dual-condition
+        // check on `phase`/`down_time`.
+        let state = self.gesture_state.lock();
+        state.phase == DoubleTapPhase::WaitingForSecond && state.first_tap_time.is_some()
     }
 
     fn next_deadline(&self) -> Option<Instant> {
@@ -875,6 +886,41 @@ mod tests {
         arena.poll_deadlines();
         assert_eq!(recognizer.next_deadline(), None);
         assert_eq!(arena.next_deadline(), None);
+    }
+
+    /// `GestureArenaMember`'s contract (`arena/mod.rs`) requires
+    /// `next_deadline` to be `Some` IFF `has_pending_deadline` is `true`. No
+    /// production path reaches `phase == WaitingForSecond` with
+    /// `first_tap_time == None` today -- `handle_up`'s `FirstDown` arm sets
+    /// both fields together under the same lock -- but `has_pending_
+    /// deadline` used to check only `phase`, so it would have silently
+    /// answered `true` here regardless. Constructs that state directly
+    /// (bypassing the public API, which cannot produce it) to pin the
+    /// contract at the unit level rather than relying on an unenforced
+    /// invariant staying true forever.
+    #[test]
+    fn has_pending_deadline_agrees_with_next_deadline_even_if_first_tap_time_is_absent() {
+        let arena = GestureArena::new();
+        let recognizer = DoubleTapGestureRecognizer::new(arena);
+
+        {
+            let mut state = recognizer.gesture_state.lock();
+            state.phase = DoubleTapPhase::WaitingForSecond;
+            state.first_tap_time = None;
+        }
+
+        assert_eq!(
+            recognizer.has_pending_deadline(),
+            recognizer.next_deadline().is_some(),
+            "has_pending_deadline() and next_deadline() must agree even when \
+             first_tap_time is absent while phase == WaitingForSecond"
+        );
+        assert!(
+            !recognizer.has_pending_deadline(),
+            "with no first_tap_time to compute a deadline from, nothing is \
+             actually armed -- has_pending_deadline must answer false, not \
+             just \"technically not diverging\""
+        );
     }
 
     #[test]
