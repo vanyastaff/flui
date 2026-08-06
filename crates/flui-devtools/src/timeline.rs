@@ -36,6 +36,7 @@
 
 use std::sync::Arc;
 
+use flui_scheduler::FrameSnapshot;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -90,6 +91,25 @@ fn current_thread_id() -> std::thread::ThreadId {
     std::thread::current().id()
 }
 
+/// The Chrome-trace "args" object for `event`'s Begin event:
+/// `{"category": ...}` plus every key of `event.args`, IF it is itself a
+/// JSON object (a frame-telemetry event's shape — see
+/// [`Timeline::record_frame_snapshots`]). An event recorded through
+/// [`Timeline::record_event`]/[`Timeline::record_instant`] carries
+/// `args: Value::Null`, which contributes nothing beyond `category` — the
+/// pre-existing behavior every caller of `export_chrome_trace` before this
+/// function existed already relied on.
+fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
+    let mut args = serde_json::Map::new();
+    args.insert("category".to_string(), json!(event.category.name()));
+    if let serde_json::Value::Object(extra) = &event.args {
+        for (key, value) in extra {
+            args.insert(key.clone(), value.clone());
+        }
+    }
+    serde_json::Value::Object(args)
+}
+
 /// A single timeline event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineEvent {
@@ -101,6 +121,13 @@ pub struct TimelineEvent {
     pub duration_micros: u128,
     /// Event category
     pub category: EventCategory,
+    /// Extra structured data carried alongside this event — e.g. a
+    /// frame-telemetry event's coalesced input ids and latencies (see
+    /// [`Timeline::record_frame_snapshots`]). `Value::Null` for an event
+    /// recorded through [`Timeline::record_event`]/[`Timeline::record_instant`],
+    /// which carry no extra args of their own.
+    #[serde(default)]
+    pub args: serde_json::Value,
     /// Thread ID (for multi-threaded applications)
     ///
     /// Not serialized; restored to the deserializing thread's ID on load.
@@ -173,10 +200,20 @@ impl TimelineInner {
             start_micros,
             duration_micros: 0, // Will be filled in when event ends
             category,
+            args: serde_json::Value::Null,
             thread_id: std::thread::current().id(),
         };
 
-        // Add event and return its index
+        self.push_event(event)
+    }
+
+    /// Push an already-fully-formed event (known start/duration/args up
+    /// front, unlike [`Self::start_event`]'s RAII start-then-later-end
+    /// shape) and apply the same capacity trim. Returns the pushed event's
+    /// index, for symmetry with `start_event` — no caller currently needs
+    /// it, since a fully-formed event is never later mutated via
+    /// [`Self::end_event`].
+    fn push_event(&mut self, event: TimelineEvent) -> usize {
         let index = self.events.len();
         self.events.push(event);
 
@@ -275,6 +312,67 @@ impl Timeline {
         inner.end_event(event_index, Duration::ZERO);
     }
 
+    /// Record an event whose timing is already fully known — unlike
+    /// [`Self::record_event`]'s RAII start-then-measure-on-drop shape,
+    /// `start`/`duration` are supplied up front (e.g. a frame's
+    /// already-computed segment span) and this call never reads the wall
+    /// clock itself. `start` is converted to this timeline's own
+    /// relative-microseconds basis the same way `record_event` does.
+    pub fn record_completed_event(
+        &self,
+        name: impl Into<String>,
+        category: EventCategory,
+        start: Instant,
+        duration: Duration,
+        args: serde_json::Value,
+    ) {
+        let mut inner = self.inner.lock();
+        let start_micros = start
+            .saturating_duration_since(inner.start_time)
+            .as_micros();
+        inner.push_event(TimelineEvent {
+            name: name.into(),
+            start_micros,
+            duration_micros: duration.as_micros(),
+            category,
+            args,
+            thread_id: std::thread::current().id(),
+        });
+    }
+
+    /// Record every produced-frame [`FrameSnapshot`] in `snapshots` (pulled
+    /// from a presentation's own `FrameClock::frames_since`) as one
+    /// Chrome-trace-compatible timeline event per frame, each carrying its
+    /// coalesced input ids and (present − arrival) latencies as trace args
+    /// — issue #556's exportable, per-input-attributed frame telemetry.
+    /// Reuses this module's own [`Self::export_chrome_trace`] serializer;
+    /// no second trace format exists anywhere in this crate.
+    pub fn record_frame_snapshots(&self, snapshots: &[FrameSnapshot]) {
+        for snapshot in snapshots {
+            let inputs: Vec<serde_json::Value> = snapshot
+                .latencies()
+                .map(|(id, latency)| {
+                    json!({
+                        "input_epoch_id": id.get(),
+                        "latency_us": latency.as_micros() as u64,
+                    })
+                })
+                .collect();
+            let args = json!({
+                "frame_id": snapshot.frame_id.to_string(),
+                "present_outcome": format!("{:?}", snapshot.present_outcome),
+                "inputs": inputs,
+            });
+            self.record_completed_event(
+                format!("Frame {}", snapshot.frame_id),
+                EventCategory::Frame,
+                snapshot.segment_start,
+                snapshot.segment_span(),
+                args,
+            );
+        }
+    }
+
     /// Get all recorded events
     pub fn get_events(&self) -> Vec<TimelineEvent> {
         self.inner.lock().get_events()
@@ -353,9 +451,7 @@ impl Timeline {
                         "ts": event.start_micros,
                         "pid": 1,
                         "tid": thread_id,
-                        "args": {
-                            "category": event.category.name(),
-                        }
+                        "args": begin_event_args(event),
                     }),
                     // End event
                     json!({
@@ -615,5 +711,118 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(timeline.event_count(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // Frame telemetry export (issue #556): reuse, not a second format.
+    // ------------------------------------------------------------------
+
+    /// A real `FrameClock`-produced [`FrameSnapshot`] (driven through
+    /// `flui_scheduler`'s own public API, not a hand-built stub — this
+    /// crate has no way to construct one otherwise, since `InputEpochs`'
+    /// fields are private) exports as valid Chrome trace JSON via THIS
+    /// module's existing `export_chrome_trace`, with the coalesced input's
+    /// id and latency actually present in the args — value, not merely a
+    /// field that exists.
+    #[test]
+    fn frame_snapshot_export_carries_real_input_attribution_through_the_existing_serializer() {
+        use flui_scheduler::{ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome};
+
+        let clock = FrameClock::with_source(ClockSource::Platform);
+        let arrival = clock.now();
+        let epoch_id = clock.stamp_input_epoch(arrival);
+
+        clock.mark_demand(DemandKind::Dirty);
+        let now = clock.now();
+        assert_eq!(clock.poll(now), PollDecision::Produce);
+        let submit_at = clock.now();
+        let _snapshot = clock.record_frame(now, now, now, submit_at, PresentOutcome::Presented);
+
+        let snapshots = clock.frames_since(None);
+        assert_eq!(snapshots.len(), 1);
+
+        let timeline = Timeline::new();
+        timeline.record_frame_snapshots(&snapshots);
+        assert_eq!(
+            timeline.event_count(),
+            1,
+            "one FrameSnapshot must become exactly one timeline event"
+        );
+
+        let json_text = timeline.export_chrome_trace();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json_text).expect("export_chrome_trace must produce valid JSON");
+        let trace_events = parsed["traceEvents"]
+            .as_array()
+            .expect("traceEvents must be an array");
+        assert_eq!(
+            trace_events.len(),
+            2,
+            "one Begin + one End event per recorded frame, the same shape every other \
+             Timeline event already uses"
+        );
+
+        let begin = &trace_events[0];
+        assert_eq!(begin["ph"], "B");
+        let inputs = begin["args"]["inputs"]
+            .as_array()
+            .expect("frame args must carry an inputs array");
+        assert_eq!(
+            inputs.len(),
+            1,
+            "the stamped epoch must survive into the export"
+        );
+        assert_eq!(
+            inputs[0]["input_epoch_id"].as_u64(),
+            Some(epoch_id.get()),
+            "the exported record must name the SPECIFIC input id, not just report a count"
+        );
+        assert!(
+            inputs[0]["latency_us"].as_u64().is_some(),
+            "a latency value must be present, not merely a None/absent field"
+        );
+        assert_eq!(begin["args"]["frame_id"], snapshots[0].frame_id.to_string());
+        assert_eq!(begin["args"]["present_outcome"], "Presented");
+    }
+
+    /// Two inputs before one recorded frame: both survive the export, with
+    /// the older arrival carrying the strictly larger latency — kills
+    /// "last-input-wins" attribution surviving all the way to the exported
+    /// JSON, not just at the `FrameSnapshot` level.
+    #[test]
+    fn frame_snapshot_export_preserves_coalescing_order_and_latency_ordering() {
+        use flui_scheduler::{ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome};
+
+        let clock = FrameClock::with_source(ClockSource::Platform);
+        let older = clock.stamp_input_epoch(clock.now());
+        thread::sleep(std::time::Duration::from_millis(5));
+        let newer = clock.stamp_input_epoch(clock.now());
+
+        clock.mark_demand(DemandKind::Dirty);
+        let now = clock.now();
+        assert_eq!(clock.poll(now), PollDecision::Produce);
+        let submit_at = clock.now();
+        let _ = clock.record_frame(now, now, now, submit_at, PresentOutcome::Presented);
+
+        let timeline = Timeline::new();
+        timeline.record_frame_snapshots(&clock.frames_since(None));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&timeline.export_chrome_trace()).expect("valid JSON");
+        let inputs = parsed["traceEvents"][0]["args"]["inputs"]
+            .as_array()
+            .expect("inputs array");
+        assert_eq!(inputs.len(), 2);
+
+        let latency_of = |id: flui_scheduler::InputEpochId| {
+            inputs
+                .iter()
+                .find(|entry| entry["input_epoch_id"].as_u64() == Some(id.get()))
+                .and_then(|entry| entry["latency_us"].as_u64())
+                .expect("id must be present with a latency")
+        };
+        assert!(
+            latency_of(older) > latency_of(newer),
+            "the older arrival must show the larger latency in the exported JSON"
+        );
     }
 }
