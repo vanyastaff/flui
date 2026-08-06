@@ -116,15 +116,33 @@ fn every_runner_frame_site_uses_the_shared_drive_frame_helper() {
     // draining the realm's owner-local post-frame lane in the same total
     // order as the shared queue (drain-by-parameter, not an ambient lookup)
     // — every production frame site names it, not the bare `drive_frame`,
-    // because every production site owns a `UiRealm` and its lane.
-    let sites = code_lines
+    // because every production site owns a `UiRealm` and its lane. Asserted
+    // as two counts, not one OR'd count: an OR'd `== 3` stays green if a
+    // production site regresses from `drive_frame_with_lane(` back to the
+    // bare `drive_frame(` spelling (silently losing the lane's drain), since
+    // the total site count would not change. `"drive_frame_with_lane(".
+    // contains("drive_frame(")` is false (the literal text between them is
+    // `_with_lane`, not `(`), so these two filters are already disjoint —
+    // no site is double-counted.
+    let with_lane_sites = code_lines
         .iter()
-        .filter(|l| l.contains("drive_frame(") || l.contains("drive_frame_with_lane("))
+        .filter(|l| l.contains("drive_frame_with_lane("))
+        .count();
+    let bare_sites = code_lines
+        .iter()
+        .filter(|l| l.contains("drive_frame("))
         .count();
     assert_eq!(
-        sites, 3,
-        "expected exactly three PRODUCTION frame sites (desktop, android, wasm); found {sites} \
-         — a unit test driving a throwaway `UpdateScheduler` directly is excluded from this count"
+        with_lane_sites, 3,
+        "expected exactly three PRODUCTION frame sites (desktop, android, wasm) naming \
+         drive_frame_with_lane(; found {with_lane_sites} — a unit test driving a throwaway \
+         `UpdateScheduler` directly is excluded from this count"
+    );
+    assert_eq!(
+        bare_sites, 0,
+        "found {bare_sites} production site(s) still calling the bare drive_frame( instead of \
+         drive_frame_with_lane( — that silently stops draining the realm's owner-local post-frame \
+         lane"
     );
 }
 
