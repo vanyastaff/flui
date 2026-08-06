@@ -155,6 +155,7 @@ declarations = [
     "pub mod config;",
     "pub mod frame;",
     "pub mod frame_clock;",
+    "pub mod frame_histogram;",
     "pub mod frame_telemetry;",
     "pub mod scheduler;",
     "pub mod task;",
@@ -166,6 +167,7 @@ declarations = [
     "pub use budget::{ AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget, };",
     "pub use config::{ PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, TimingsCallback, set_time_dilation, time_dilation, };",
     "pub use frame_clock::{ClockSource, DemandKind, DemandMask, FrameClock, PollDecision, SkipReason};",
+    "pub use frame_histogram::{ LatencyHistogram, frame_interval_histogram, input_to_present_histogram, produce_to_present_histogram, };",
     "pub use frame_telemetry::{ FRAME_HISTORY_CAPACITY, FrameSnapshot, InputEpoch, InputEpochId, InputEpochs, MAX_COALESCED_INPUT_EPOCHS, PresentOutcome, };",
     "pub use flui_foundation::PresentationId;",
     "pub use post_frame::{ LocalPostFrameHandle, LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle, };",
@@ -1777,6 +1779,35 @@ evidence = [
     { kind = "test", file = "crates/flui-scheduler/tests/frame_telemetry_allocation.rs", contains = "fn input_stamp_produce_record_cycle_allocates_nothing_on_the_frame_path" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record" },
     { kind = "test", file = "crates/flui-devtools/src/timeline.rs", contains = "fn frame_snapshot_export_carries_real_input_attribution_through_the_existing_serializer" },
+]
+
+[[contract]]
+key = "frame-latency-percentile-histograms"
+statement = """
+Fixed-bucket, allocation-free p50/p90/p99 histograms exist for the three \
+metrics named for this capability: frame-to-frame interval, produce-to-\
+present span, and input-to-present latency — built as pure functions over a \
+`frames_since`-pulled `&[FrameSnapshot]` slice \
+(`crates/flui-scheduler/src/frame_histogram.rs`), never a fourth persistent \
+ring on `FrameClock`. `LatencyHistogram::record` is an index-and-increment \
+into a fixed `[u32; N]` array (the type is `Copy`, so it cannot own a heap \
+allocation in safe Rust); percentiles are therefore bucket-boundary \
+approximations, not exact values — stated in the module's own doc, not \
+implied. Two things this contract does NOT claim: a structured `tracing` \
+emission point and an on-screen overlay line are not wired — computing the \
+metric and exposing it through those two channels are different scopes of \
+work, and only the former is done here, left as a named follow-up with no \
+single owner issue yet. This mechanism also has zero non-test callers at \
+this HEAD, the same honest gap `exportable-frame-telemetry-with-input-\
+attribution` already states for the snapshot ring it is built over.\
+"""
+state = "implemented"
+domain = "presentation"
+mechanical = true
+mechanism = "pinned known-distribution percentile tests (exact bucket values asserted, not just non-None); a Copy-type static assertion backing the allocation-free claim"
+evidence = [
+    { kind = "symbol", file = "crates/flui-scheduler/src/frame_histogram.rs", contains = "pub struct LatencyHistogram" },
+    { kind = "test", file = "crates/flui-scheduler/src/frame_histogram.rs", contains = "fn percentiles_land_on_the_expected_bucket_boundaries_for_a_known_distribution" },
 ]
 
 [[contract]]
