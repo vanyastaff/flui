@@ -160,7 +160,10 @@ struct InFlightAccounting {
     /// first too); it still runs synchronously on whichever thread retired
     /// the frame (sometimes from inside a panicking unwind, via
     /// `WakeGuard`; otherwise explicitly, on the raster/pump thread) and
-    /// must not block. Treat it as a bare wake signal — push to a channel,
+    /// must neither block NOR PANIC — a panic from the unwind-path
+    /// invocation is a panic during a `Drop` in flight, which aborts the
+    /// process and cannot be contained by the caller's `catch_unwind`.
+    /// Treat it as a bare wake signal — push to a channel,
     /// call `PlatformWindow::request_redraw` — the same contract
     /// `flui_scheduler`'s `on_frame_scheduled` hook and `flui-app`'s
     /// `FrameWakeHandle` already keep.
@@ -702,9 +705,12 @@ impl RasterHandle {
     /// render panicked — from inside that panic's own unwind (see
     /// `RasterOwner::pump`'s `WakeGuard`, which exists precisely so a
     /// purely wake-driven consumer still learns capacity freed after a
-    /// raster panic, instead of stalling forever). It fires unconditionally
-    /// on every retire rather than only when demand is known nonzero —
-    /// this module never sees demand at all.
+    /// raster panic, instead of stalling forever). Because of that unwind
+    /// path the hook must not panic: a panic raised there unwinds out of a
+    /// `Drop` that is already unwinding, which aborts the process — the
+    /// caller's `catch_unwind` cannot contain it. It must not block either.
+    /// It fires unconditionally on every retire rather than only when
+    /// demand is known nonzero — this module never sees demand at all.
     ///
     /// Replaces any previously registered hook; there is exactly one
     /// registration slot per raster owner (shared by every clone of this
@@ -2254,9 +2260,20 @@ mod tests {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
 
         let woken = Arc::new(AtomicBool::new(false));
+        // The hook reads capacity from inside its own invocation: on the
+        // unwind path the ticket's decrement must land BEFORE the wake, or a
+        // wake-driven consumer wakes, reads a still-full gate, and sleeps
+        // again — a lost wake that looks exactly like the stall this guard
+        // exists to prevent.
+        let capacity_at_wake = Arc::new(AtomicU32::new(u32::MAX));
         {
             let woken = Arc::clone(&woken);
-            handle.set_wake_hook(Some(Arc::new(move || woken.store(true, Ordering::SeqCst))));
+            let capacity_at_wake = Arc::clone(&capacity_at_wake);
+            let hook_handle = handle.clone();
+            handle.set_wake_hook(Some(Arc::new(move || {
+                capacity_at_wake.store(hook_handle.in_flight(), Ordering::SeqCst);
+                woken.store(true, Ordering::SeqCst);
+            })));
         }
 
         let epoch1 = FrameEpoch::ZERO.next();
@@ -2277,6 +2294,13 @@ mod tests {
             woken.load(Ordering::SeqCst),
             "the wake hook must still fire when render_scene panics and unwinds -- \
              a wake-driven consumer has no other way to learn capacity freed"
+        );
+        assert_eq!(
+            capacity_at_wake.load(Ordering::SeqCst),
+            0,
+            "the panicked frame's ticket must be released BEFORE the wake fires -- \
+             a consumer woken while capacity still reads full sees a closed gate \
+             and sleeps again, which is the stall this guard exists to prevent"
         );
         assert_eq!(owner.in_flight(), 0);
 

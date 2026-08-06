@@ -99,8 +99,14 @@ fn bench_frame(epoch: FrameEpoch) -> SceneSnapshot {
 /// Uncontended baseline: one thread doing submit→pump→retire in a tight
 /// loop, no wake hook registered. `iter_batched` separates the untimed
 /// per-batch setup (constructing the `SceneSnapshot` `submit` will consume)
-/// from the timed routine (`submit` + `pump` alone), so this measures the
-/// marginal plumbing cost, not frame construction.
+/// from the timed routine (`submit` + `pump` alone). That moves construction
+/// out of the measurement but does NOT yield a marginal plumbing cost: the
+/// timed region still drops the frame `pump` consumed, and there is no
+/// pre-accounting baseline to subtract, so the figure went UP versus the
+/// unbatched form (`iter_batched`'s per-iteration overhead exceeds the
+/// construction allocation it removed). Read it as a whole-cycle number —
+/// the closest delta this API shape allows — exactly as the module doc above
+/// says, not as the cost the accounting added.
 fn submit_pump_retire_cycle(c: &mut Criterion) {
     let (mut owner, handle, _ack_rx, _shutdown_complete_rx) =
         RasterOwner::new(NoOpBackend, bench_address());
