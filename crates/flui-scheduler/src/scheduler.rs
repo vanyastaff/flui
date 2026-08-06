@@ -616,6 +616,17 @@ impl UpdateScheduler {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
+    /// A stable, opaque identity for tracing/diagnostics only.
+    ///
+    /// Never used for equality — [`is_same_instance`](Self::is_same_instance)
+    /// owns that comparison. This exists so a scheduler-mismatch trace (e.g.
+    /// draining a [`crate::LocalPostFrameLane`] with the wrong
+    /// `UpdateScheduler`) can name both sides without printing the whole
+    /// internal state the `Debug` impl shows.
+    pub(crate) fn debug_ptr(&self) -> usize {
+        Arc::as_ptr(&self.inner) as usize
+    }
+
     pub(crate) fn with_post_frame_registration<R>(
         &self,
         callback: impl FnOnce(CallbackId) -> R,
@@ -917,7 +928,7 @@ impl UpdateScheduler {
             self.inner.binding.pending_timings.lock().push(timing);
 
             // Drain BEFORE invoking: a post-frame callback that registers another
-            // one must not have it run in this same frame. `lane.take_queue()`
+            // one must not have it run in this same frame. `lane.take_queue_for(self)`
             // runs in here, inside the "a frame was actually open" branch, not
             // unconditionally at the top of this function — taking the lane's
             // queue on a no-open-frame call (no preceding `handle_begin_frame`/
@@ -929,6 +940,20 @@ impl UpdateScheduler {
             // returns. Keeping the take() and the invoke() in the same branch
             // means a queue that isn't drained this call is simply left alone,
             // still in the lane, for whenever a real frame next closes.
+            //
+            // `take_queue_for` also verifies the lane actually belongs to
+            // `self` before draining it — restoring the identity check the
+            // retired thread-local ticket registry's `scheduler_identity`
+            // filter used to provide. A lane minted by a DIFFERENT scheduler
+            // (a binding wiring the wrong realm's lane, now that every
+            // `UiRealm` mints its own) must not be drained here: its
+            // callbacks would get this frame's `FrameTiming`, be removed
+            // before their own scheduler's frame ever runs, and its
+            // `CallbackId`s — meaningless in this scheduler's sequence —
+            // would corrupt the sort below. On a mismatch `take_queue_for`
+            // itself traces the error and returns `Err`; this treats that
+            // exactly like "no lane was passed" for this call, leaving the
+            // lane's queue untouched.
             let mut callbacks: Vec<LocalPostFrameEntry> = {
                 let _registration = self.inner.callbacks.post_frame_registration.lock();
                 let mut cbs = self.inner.callbacks.post_frame.lock();
@@ -939,8 +964,10 @@ impl UpdateScheduler {
                         callback: entry.callback as OwnerPostFrameCallback,
                     })
                     .collect();
-                if let Some(lane) = lane {
-                    snapshot.extend(lane.take_queue());
+                if let Some(lane) = lane
+                    && let Ok(local_entries) = lane.take_queue_for(self)
+                {
+                    snapshot.extend(local_entries);
                 }
                 snapshot
             };

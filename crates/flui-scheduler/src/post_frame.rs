@@ -71,13 +71,53 @@ impl LocalPostFrameLane {
         }
     }
 
-    /// Drain this lane's queue for the frame drive.
+    /// Drain this lane's queue, unconditionally. Private: every caller must
+    /// go through [`take_queue_for`](Self::take_queue_for), which verifies
+    /// the lane actually belongs to the scheduler asking to drain it before
+    /// ever reaching this.
+    fn take_queue(&self) -> Vec<LocalPostFrameEntry> {
+        self.inner.queue.take()
+    }
+
+    /// Drain this lane's queue for `scheduler`'s frame drive — but only if
+    /// `scheduler` is genuinely the one this lane was minted from.
     ///
     /// Called with the lane passed explicitly by [`UpdateScheduler::end_frame_with_lane`]
     /// (and the `execute_frame_with_lane`/`drive_frame_with_lane` convenience
-    /// wrappers) — drain-by-parameter, never an ambient lookup.
-    pub(crate) fn take_queue(&self) -> Vec<LocalPostFrameEntry> {
-        self.inner.queue.take()
+    /// wrappers) — drain-by-parameter, never an ambient lookup. The identity
+    /// check restores what the retired thread-local ticket registry's
+    /// `scheduler_identity` filter used to guarantee: a lane minted by
+    /// scheduler B, handed by mistake to scheduler A's drive, must not be
+    /// drained by A. Draining it anyway would hand B's callbacks A's
+    /// `FrameTiming`, remove them before B's own frame ever runs them, and
+    /// interleave B's `CallbackId`s — which mean nothing in A's registration
+    /// sequence — into A's sort, corrupting the one-total-order guarantee
+    /// this slice exists to provide. On mismatch (or a since-dropped owning
+    /// scheduler) this returns `Err` and leaves the lane's queue untouched,
+    /// still there for its own scheduler's next drive.
+    pub(crate) fn take_queue_for(
+        &self,
+        scheduler: &UpdateScheduler,
+    ) -> Result<Vec<LocalPostFrameEntry>, LocalPostFrameScheduleError> {
+        let Some(owner) = self.scheduler.upgrade() else {
+            tracing::error!(
+                driving_scheduler = scheduler.debug_ptr(),
+                "a LocalPostFrameLane's owning scheduler is already gone; refusing to \
+                 drain it from this (necessarily unrelated) frame drive"
+            );
+            return Err(LocalPostFrameScheduleError::LaneClosed);
+        };
+        if !owner.is_same_instance(scheduler) {
+            tracing::error!(
+                lane_owner_scheduler = owner.debug_ptr(),
+                driving_scheduler = scheduler.debug_ptr(),
+                "a LocalPostFrameLane was handed to a frame drive on a scheduler that does \
+                 not own it; refusing to drain it — its own scheduler's next drive still \
+                 delivers it"
+            );
+            return Err(LocalPostFrameScheduleError::WrongScheduler);
+        }
+        Ok(self.take_queue())
     }
 }
 
@@ -89,7 +129,8 @@ impl std::fmt::Debug for LocalPostFrameLane {
     }
 }
 
-/// Why an owner-local post-frame callback could not be registered.
+/// Why an owner-local post-frame callback could not be registered, or a
+/// lane's queue could not be drained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum LocalPostFrameScheduleError {
@@ -98,6 +139,17 @@ pub enum LocalPostFrameScheduleError {
     /// observe, and it is guaranteed never to run.
     #[error("the handle's owner-local lane is closed")]
     LaneClosed,
+    /// A [`LocalPostFrameLane`] was handed to a frame drive
+    /// (`end_frame_with_lane`/`execute_frame_with_lane`/`drive_frame_with_lane`)
+    /// on a different `UpdateScheduler` than the one it was minted from.
+    /// Draining it anyway would hand its callbacks a foreign frame's
+    /// `FrameTiming`, remove them before their own scheduler's frame ever
+    /// runs, and interleave `CallbackId`s from a different id sequence into
+    /// a sort where they carry no meaning — so the drive refuses to drain it
+    /// at all. The lane's queue is untouched: its own scheduler's next drive
+    /// still delivers it.
+    #[error("the lane belongs to a different UpdateScheduler than the one draining it")]
+    WrongScheduler,
 }
 
 /// Schedules owner-local work after a completed frame's layout and paint.
@@ -337,6 +389,11 @@ mod tests {
         assert_eq!(fired_b.get(), 1);
     }
 
+    /// The weak case: A is driven with NO lane parameter at all, so it never
+    /// even looks at B's lane. `draining_the_wrong_schedulers_lane_leaves_it_untouched`
+    /// below is the strong case this one does not cover — B's lane handed to
+    /// A's drive AS THE PARAMETER, which is the actual misuse
+    /// `take_queue_for`'s identity check exists to refuse.
     #[test]
     fn other_scheduler_lane_is_untouched_by_a_different_scheduler_drive() {
         let scheduler_a = UpdateScheduler::new();
@@ -357,6 +414,82 @@ mod tests {
 
         scheduler_b.execute_frame_with_lane(&lane_b);
         assert_eq!(fired.get(), 1);
+    }
+
+    /// The retired thread-local ticket registry filtered a lane's drain by
+    /// `scheduler_identity`; `take_queue_for` restores that check for the
+    /// direct-parameter shape the new design uses. With per-realm schedulers
+    /// now real (every `UiRealm` mints its own via `new_local_post_frame_lane`),
+    /// a binding wiring the wrong realm's lane into a drive call is a
+    /// reachable mistake, not a theoretical one — this is the exact
+    /// misuse `other_scheduler_lane_is_untouched_by_a_different_scheduler_drive`
+    /// above does not exercise (that one never hands B's lane to A's drive at
+    /// all).
+    ///
+    /// Mutant this kills: dropping the `is_same_instance` check from
+    /// `take_queue_for` (or calling the private `take_queue` directly, as the
+    /// pre-fix code did) — B's callback would run inside A's frame, with A's
+    /// `FrameTiming`, be removed from B's queue, and never fire again.
+    #[test]
+    fn draining_the_wrong_schedulers_lane_leaves_it_untouched() {
+        let scheduler_a = UpdateScheduler::new();
+        let scheduler_b = UpdateScheduler::new();
+        let lane_b = scheduler_b.new_local_post_frame_lane();
+        let fired_b = Rc::new(Cell::new(false));
+        let callback = Rc::clone(&fired_b);
+        lane_b
+            .local_handle()
+            .schedule_local(move |_| callback.set(true))
+            .expect("lane alive");
+
+        // A's own shared-queue callback, so the exploit can also prove the
+        // mismatch does not collaterally break A's real work.
+        let fired_a = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cb_a = Arc::clone(&fired_a);
+        scheduler_a.add_post_frame_callback(Box::new(move |_| {
+            cb_a.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        // The mistake: hand B's lane to A's drive.
+        scheduler_a.execute_frame_with_lane(&lane_b);
+        assert!(!fired_b.get(), "B's callback must NOT run inside A's frame");
+        assert!(
+            fired_a.load(std::sync::atomic::Ordering::SeqCst),
+            "A's own shared-queue callback must be unaffected by the mismatch"
+        );
+
+        // Not just "didn't run" — still there, unremoved: B's own next frame
+        // must still deliver it.
+        scheduler_b.execute_frame_with_lane(&lane_b);
+        assert!(
+            fired_b.get(),
+            "B's own frame must still run its own lane's callback \
+             (proves the entry was refused, not silently dropped)"
+        );
+    }
+
+    /// The mismatch is a typed, observable error — not merely an absence of
+    /// effect — and the correct scheduler is unaffected by a prior failed
+    /// attempt from the wrong one.
+    #[test]
+    fn take_queue_for_the_wrong_scheduler_is_a_typed_error() {
+        let scheduler_a = UpdateScheduler::new();
+        let scheduler_b = UpdateScheduler::new();
+        let lane_b = scheduler_b.new_local_post_frame_lane();
+
+        assert!(matches!(
+            lane_b.take_queue_for(&scheduler_a),
+            Err(LocalPostFrameScheduleError::WrongScheduler)
+        ));
+
+        lane_b
+            .local_handle()
+            .schedule_local(|_| {})
+            .expect("lane alive");
+        assert!(
+            lane_b.take_queue_for(&scheduler_b).is_ok(),
+            "the failed attempt from the wrong scheduler must not have corrupted the lane"
+        );
     }
 
     #[test]
