@@ -353,7 +353,7 @@ fn a_detached_controller_is_inert() {
     unmount_navigator(&mut harness, &navigator);
 
     // Layer 2: the capabilities are gone with the tree that named them.
-    assert!(navigator.post_frame_handle().is_none());
+    assert!(navigator.local_post_frame_handle().is_none());
     assert!(navigator.render_tree().is_none());
 
     // Layer 1: and the controller no longer holds the navigator at all.
@@ -498,7 +498,7 @@ fn every_eligible_top_change_gets_its_own_measurement() {
 /// live navigator, an attached controller. Only the capability is missing.
 ///
 /// Red-check: move `destination.set_offstage(…)` back above the
-/// `let Some(post_frame) = navigator.post_frame_handle()` guard in
+/// `let Some(post_frame) = navigator.local_post_frame_handle()` guard in
 /// `HeroController::maybe_start`.
 #[test]
 fn without_a_post_frame_capability_the_destination_is_left_onstage() {
@@ -516,7 +516,7 @@ fn without_a_post_frame_capability_the_destination_is_left_onstage() {
     // The controller attached, so it is not the `navigator == None` path being tested.
     assert!(controller.navigator().is_some());
     assert!(
-        navigator.post_frame_handle().is_none(),
+        navigator.local_post_frame_handle().is_none(),
         "this binding installed no post-frame capability"
     );
 

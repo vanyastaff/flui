@@ -412,7 +412,7 @@ impl HeroController {
         // the destination offstage forever: nothing else ever calls
         // `set_offstage(false)`, because the only caller is the measurement we just
         // failed to schedule. Acquire, then mutate.
-        let Some(post_frame) = navigator.post_frame_handle() else {
+        let Some(post_frame) = navigator.local_post_frame_handle() else {
             return;
         };
 
@@ -545,7 +545,7 @@ impl MeasurementPass<'_> {
         // end-of-frame, before any of them can finish. Same handle the pass itself was
         // scheduled through, so it targets the binding's scheduler.
         self.flights
-            .set_post_frame(self.navigator.post_frame_handle());
+            .set_post_frame(self.navigator.local_post_frame_handle());
 
         let started = self.collect_manifests();
         for (manifest, from_hero, to_hero) in &started {

@@ -400,7 +400,7 @@ impl Harness {
     /// `BuildOwner`, so a test can `schedule_local` a callback that captures
     /// the (`!Send`) [`PipelineCell`] — `add_post_frame_callback`'s `Send`
     /// bound cannot carry it.
-    pub(crate) fn post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
+    pub(crate) fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
         self.binding
             .build_owner_mut()
             .local_post_frame_handle()

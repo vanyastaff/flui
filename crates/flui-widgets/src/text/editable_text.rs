@@ -284,7 +284,7 @@ pub struct EditableTextState {
     /// `build`). `None` under a binding that installs no post-frame handle —
     /// the loop then simply never starts (warned, not panicked; see
     /// `init_state`'s IME focus listener).
-    post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
+    local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
     /// The current IME attach's cursor-area loop alive-flag, if a loop is
     /// currently running. `None` when no loop is running (never attached,
     /// or already blurred/disposed).
@@ -332,7 +332,7 @@ impl StatefulView for EditableText {
             ime_focus_transition: None,
             ime_handle: None,
             ime_token: Rc::new(RefCell::new(None)),
-            post_frame_handle: None,
+            local_post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
         }
     }
@@ -404,14 +404,14 @@ impl ViewState<EditableText> for EditableTextState {
         //    acquired here, in `init_state`, never in `build` (see
         //    `BuildContext::text_input_handle`'s doc) — and stored so the
         //    focus-listener closure below (which cannot borrow `&mut self`)
-        //    and `dispose` can both reach it. `post_frame_handle()` and
+        //    and `dispose` can both reach it. `local_post_frame_handle()` and
         //    `pipeline_owner()` are acquired alongside it for the same
         //    reason — the IME cursor-area loop (ADR-0032) they drive is
         //    started/stopped by that same closure.
         self.ime_handle = ctx.text_input_handle();
-        self.post_frame_handle = ctx.local_post_frame_handle();
+        self.local_post_frame_handle = ctx.local_post_frame_handle();
         let ime_handle_for_focus = self.ime_handle.clone();
-        let post_frame_handle_for_focus = self.post_frame_handle.clone();
+        let post_frame_handle_for_focus = self.local_post_frame_handle.clone();
         let pipeline_owner_for_focus = ctx.pipeline_owner();
         let inner_anchor_for_focus = self.inner_anchor.clone();
         let controller_for_ime = self.controller.clone();

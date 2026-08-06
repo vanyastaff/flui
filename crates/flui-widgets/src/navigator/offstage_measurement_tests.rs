@@ -112,7 +112,7 @@ fn a_route_forced_offstage_has_committed_geometry_in_the_same_frames_post_frame_
     // `PipelineCell` is `!Send`, so this callback must go through
     // `schedule_local` (same-thread, runtime-checked) rather than
     // `add_post_frame_callback` (`Send`-bound, for cross-thread wake).
-    let post_frame_handle = harness.post_frame_handle();
+    let post_frame_handle = harness.local_post_frame_handle();
     harness.enter_owner_scope(|| {
         post_frame_handle
             .schedule_local(move |_timing| {
@@ -173,7 +173,7 @@ fn the_offstage_routes_committed_geometry_is_real_not_zero() {
     let observed: Arc<Mutex<Option<Size>>> = Arc::new(Mutex::new(None));
     let observed_cb = Arc::clone(&observed);
     let owner_cb = owner.clone();
-    let post_frame_handle = harness.post_frame_handle();
+    let post_frame_handle = harness.local_post_frame_handle();
     harness.enter_owner_scope(|| {
         post_frame_handle
             .schedule_local(move |_| {

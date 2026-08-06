@@ -246,7 +246,7 @@ fn the_scheduled_callback_observes_this_frames_committed_layout() {
     // `PostFrameHandle::schedule` (its `Send` bound is for cross-thread
     // wake). `schedule_local` enforces same-thread execution at runtime
     // instead — same pattern as the `editable_text.rs` IME cursor loop.
-    let post_frame_handle = laid.post_frame_handle();
+    let post_frame_handle = laid.local_post_frame_handle();
     laid.enter_owner_scope(|| {
         post_frame_handle
             .schedule_local(move |_| {

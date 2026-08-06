@@ -1337,7 +1337,7 @@ impl NavigatorHandle {
     ///
     /// `None` before mount and after unmount, so a stale `HeroController` schedules
     /// nothing. Acquired in `init_state`; never in `build`/layout/paint (trigger #22).
-    pub(crate) fn post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
+    pub(crate) fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
         self.shared.post_frame.lock().clone()
     }
 

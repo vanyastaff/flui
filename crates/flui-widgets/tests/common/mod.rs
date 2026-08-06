@@ -253,7 +253,7 @@ impl LaidOut {
     /// `BuildOwner`, so a test can `schedule_local` a callback that captures
     /// the (`!Send`) [`PipelineCell`] — `PostFrameHandle::schedule`'s `Send`
     /// bound cannot carry it.
-    pub fn post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
+    pub fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
         self.binding
             .build_owner_mut()
             .local_post_frame_handle()
