@@ -1755,6 +1755,49 @@ evidence = [
 ]
 
 [[contract]]
+key = "exportable-frame-telemetry-with-input-attribution"
+statement = """
+Every presentation's `FrameClock` retains a fixed-capacity ring of produced-\
+frame records (segment timing, submit instant, present outcome) carrying \
+every routed input event coalesced into that frame, each with an id and \
+arrival instant. A consumer pulls owned snapshots and attributes a \
+produced frame's latency back to a SPECIFIC input, not merely a \
+distribution; the snapshot-pull API allocates only on the consumer's own \
+call, never on the frame-production path. Export reuses `flui-devtools`' \
+pre-existing Chrome/Perfetto trace serializer — no second trace format.\
+"""
+state = "implemented"
+domain = "presentation"
+mechanical = true
+mechanism = "counting-allocator integration test for the zero-allocation claim; pinned latency-value tests at the FrameClock, UiRealm production-sequence, and Timeline-export levels; an rg sweep for a second `traceEvents` emitter"
+evidence = [
+    { kind = "symbol", file = "crates/flui-scheduler/src/frame_telemetry.rs", contains = "pub struct FrameSnapshot" },
+    { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn two_inputs_before_one_produce_both_survive_with_distinct_latencies_older_larger" },
+    { kind = "test", file = "crates/flui-scheduler/tests/frame_telemetry_allocation.rs", contains = "fn input_stamp_produce_record_cycle_allocates_nothing_on_the_frame_path" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record" },
+    { kind = "test", file = "crates/flui-devtools/src/timeline.rs", contains = "fn frame_snapshot_export_carries_real_input_attribution_through_the_existing_serializer" },
+]
+
+[[contract]]
+key = "backpressure-deferral-is-not-a-dropped-frame"
+statement = """
+A `FrameClock` deferral (`Skip(Hidden)`/`Skip(Backpressure)`, demand \
+retained) is counted on the clock's own `produces_deferred` family, never \
+on a caller's separate "frames dropped" accounting (incremented only by a \
+genuine submit failure). The two counter families are structurally \
+distinct, not merely conventionally kept apart.\
+"""
+state = "implemented"
+domain = "presentation"
+mechanical = true
+mechanism = "pinned tests at the FrameClock unit level and the UiRealm production-sequence level, both mutant-confirmed"
+evidence = [
+    { kind = "symbol", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "pub fn produces_deferred(&self) -> u64" },
+    { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn backpressure_deferral_is_counted_separately_and_never_looks_like_a_dropped_frame" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn backpressure_episode_is_not_counted_as_a_dropped_frame_but_a_real_submit_error_is" },
+]
+
+[[contract]]
 key = "non-frame-app-config-effective-or-removed"
 statement = """
 Remaining public application configuration is effective and tested or removed. \
@@ -1842,10 +1885,16 @@ backgrounded via the pre-existing, coarser `AppLifecycleState::Hidden`/ \
 so `tick_deadlines` does not run in THAT case either; fixing it would mean \
 touching the pre-#556 `PumpAsync` arm, a different, larger, unscoped \
 change this issue does not attempt.\
+\
+**Handed off, not silently dropped, as issue #556 itself closes:** an \
+app-level wall-clock timeout that isn't a gesture-arena recognizer still \
+has no consumer wiring `GestureTimerService` into a real wake path — \
+tracked as its own follow-up under issue #619 rather than staying an \
+unowned residual of a now-closed issue.\
 """
 state = "planned"
 domain = "application"
-owner_issue = 556
+owner_issue = 619
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-interaction/src/arena/mod.rs", contains = "fn next_deadline(&self) -> Option<Instant>" },

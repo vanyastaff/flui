@@ -72,7 +72,12 @@ VALID_CLASSIFICATIONS = {"stable-candidate", "experimental", "transitional", "re
 # dumping ground for anything that lacks a home.
 VALID_DOMAINS = {"application", "realm", "presentation", "raster", "platform", "shared-engine", "workspace"}
 VALID_EVIDENCE_KINDS = {"symbol", "test", "compile-time", "source-gate"}
-OWNER_ISSUE_MIN, OWNER_ISSUE_MAX = 551, 565
+# 551-565 is the Runtime.1 epic this registry was created to track. #619 is
+# a genuinely separate, later-numbered follow-up issue (the app-level
+# wall-clock-timeout consumer residual `timer-service-for-frozen-tickers`
+# hands off to once issue #556 itself closes) -- widened rather than
+# creating a second owner-issue range mechanism for one entry.
+OWNER_ISSUE_MIN, OWNER_ISSUE_MAX = 551, 619
 
 # Runtime crates covered by the singleton and lock-surface nets.
 RUNTIME_CRATES = ["flui-app", "flui-scheduler", "flui-platform", "flui-engine"]
