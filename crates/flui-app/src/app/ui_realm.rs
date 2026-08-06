@@ -2247,7 +2247,7 @@ impl UiRealm {
         presented
     }
 
-    /// Finalize and record this pump's [`FrameSnapshot`] for `presentation`,
+    /// Finalize and record this pump's [`flui_scheduler::FrameSnapshot`] for `presentation`,
     /// IF a segment actually ran this pump (`FrameClock::last_segment_span`
     /// is `Some`) — a presentation whose segment was skipped entirely this
     /// pump (`draw_frame_entered`'s own gate) has nothing to record. Called
