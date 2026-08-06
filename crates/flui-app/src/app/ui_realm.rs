@@ -1044,6 +1044,15 @@ impl UiRealm {
         self.presentations.get(id).map(|p| p.clock().is_hidden())
     }
 
+    /// The primary presentation's own `FrameClock::produced_count` — for
+    /// tests in a sibling module (`runner.rs`) that need to observe the
+    /// clock's produce count without reaching into the private
+    /// `presentations` field directly.
+    #[cfg(test)]
+    pub(crate) fn primary_produced_count_for_test(&self) -> u64 {
+        self.presentations.primary().clock().produced_count()
+    }
+
     /// Whether `id` is this realm's currently ACTIVE presentation
     /// ([`FocusCoordinator`]). Production reader:
     /// `runner.rs`'s `PlatformToUi::WindowFocus` handling uses this to tell
@@ -7782,6 +7791,76 @@ mod tests {
             );
         }
 
+        /// The ungate->wake edge's OWN defining hazard, discriminated: the
+        /// unhide branch must wake on RETAINED DEMAND, not on
+        /// `try_arm_redraw_request`'s own latch state -- and the two only
+        /// disagree when the latch was armed BEFORE the hide (from an
+        /// earlier, unrelated produce) and never consumed since, because
+        /// nothing polled while hidden. Set up exactly that ordering: a
+        /// visible pump first arms the latch (a running controller's own
+        /// continuation-wake, `render_frame_entered`'s tail) and leaves
+        /// demand retained (the controller keeps running), THEN hide, THEN
+        /// unhide with no further pump in between. A version gated on
+        /// `try_arm_redraw_request()` instead of `demand_mask().is_empty()`
+        /// finds the latch ALREADY armed (from the visible pump) and
+        /// silently declines to wake -- stranding the presentation despite
+        /// genuinely retained demand.
+        #[test]
+        fn unhide_wakes_on_retained_demand_even_when_the_latch_was_armed_before_the_hide() {
+            use std::time::Duration;
+
+            use flui_animation::AnimationController;
+
+            let (wake, wake_count) = super::counting_wake();
+            let realm = super::new_runtime(wake).expect("runtime");
+            let presentation_id = realm.presentations.primary().id();
+            let mut backend = HiddenGateCountingBackend::new();
+
+            let controller = AnimationController::new(
+                Duration::from_secs(1),
+                &flui_scheduler::UpdateScheduler::new(),
+            );
+            realm.vsync().register(controller.clone());
+            controller.forward().expect("fresh controller forwards");
+
+            // One VISIBLE pump: the segment produces off the controller's
+            // own Animation demand, and render_frame_entered's tail --
+            // since the controller is still running -- marks a FRESH
+            // Animation demand for the next pump and arms
+            // try_arm_redraw_request's latch (the ONLY production call
+            // site of that method). After this call: demand mask is
+            // nonempty (Animation, retained), and the latch is armed
+            // (true) -- both facts this test's ordering depends on.
+            realm.set_now_secs_for_test(0.0);
+            let _ = realm.render_frame_entered(&mut backend);
+            assert_eq!(
+                realm.presentations.primary().clock().demand_mask(),
+                flui_scheduler::DemandMask::ANIMATION,
+                "precondition: the running controller must leave Animation demand retained"
+            );
+
+            // Hide with NO further pump -- the latch stays armed from the
+            // visible pump above; nothing consumes it while hidden.
+            realm.set_presentation_hidden(presentation_id, true);
+            wake_count.store(0, Ordering::Relaxed);
+
+            // Unhide: retained demand is still nonempty, so this must wake
+            // -- regardless of the latch's own (already-armed, therefore
+            // falsely "nothing to arm") state.
+            realm.set_presentation_hidden(presentation_id, false);
+
+            assert_eq!(
+                wake_count.load(Ordering::Relaxed),
+                1,
+                "unhiding with retained demand must wake even when \
+                 try_arm_redraw_request's latch was already armed before the hide -- a \
+                 latch-gated implementation would find it pre-armed and stay silent, \
+                 stranding the presentation"
+            );
+
+            controller.dispose();
+        }
+
         /// Gesture-arena deadlines are input-correctness, not frame
         /// production (plan-level rule): they remain a realm pre-segment
         /// step that runs on every logical pump regardless of this
@@ -7861,121 +7940,121 @@ mod tests {
             );
         }
 
-        /// The idle/instant-response headline, adaptive on-demand pacing:
-        /// over a real wall-clock window with a LIVE
-        /// realm (the async driver polled every pump, a gesture-arena
-        /// deadline armed but not yet due), an idle presentation produces
-        /// and submits exactly zero frames -- counted, not sampled -- and
-        /// the first dirty mark after that window produces within the very
-        /// next pump.
+        /// `UiRealm::next_wake`'s own min-over-presentations level,
+        /// discriminated -- production topology is exactly one realm
+        /// hosting N presentations, so this is the level a cross-realm-only
+        /// mutant test cannot see. Two presentations of ONE realm, a far
+        /// deadline on the primary and a near one on the secondary: the
+        /// aggregate must reflect the near one regardless of which
+        /// presentation is primary.
         #[test]
-        fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly() {
+        fn next_wake_is_the_min_deadline_across_two_presentations_of_one_realm() {
             use std::time::{Duration, Instant};
 
             use flui_interaction::{
                 GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
             };
 
-            let realm = mount_root_here();
-            let mut backend = HiddenGateCountingBackend::new();
-            let scheduler = realm.scheduler();
+            let mut realm = UiRealm::for_test();
+            let b_id = realm.install_second_presentation_for_test();
+            let a_id = realm.presentations.primary().id();
 
-            // Settle the attach's own first paint.
-            realm.set_now_secs_for_test(0.0);
-            let pump_once =
-                |realm: &UiRealm, backend: &mut HiddenGateCountingBackend, now_secs: f64| {
-                    realm.set_now_secs_for_test(now_secs);
-                    scheduler.drive_frame_with_lane(
-                        flui_scheduler::Instant::now(),
-                        flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-                        || {
-                            let _ = realm.render_frame_entered(backend);
-                        },
-                        realm.local_post_frame_lane(),
-                    );
-                };
-            pump_once(&realm, &mut backend, 0.0);
-            let produced_before = realm.presentations.primary().clock().produced_count();
-            let submits_before = backend.render_scene_calls;
-
-            // A live async task, polled every pump exactly like production
-            // (`UpdateScheduler::handle_begin_frame`'s mid-frame slot) --
-            // it never touches demand/dirty state.
-            let async_polls = Arc::new(AtomicUsize::new(0));
-            let async_polls_for_task = Arc::clone(&async_polls);
-            let _token = scheduler.spawn_local(Box::pin(async move {
-                async_polls_for_task.fetch_add(1, Ordering::Release);
-            }));
-
-            // A gesture-arena deadline armed but NOT yet due (timeout well
-            // past the idle window below) -- "timers armed" without ever
-            // firing during the measured window.
-            let arena = realm.presentations.primary().gestures().arena().clone();
-            let long_press_fired = Arc::new(AtomicBool::new(false));
-            let fired_for_callback = Arc::clone(&long_press_fired);
-            let recognizer = LongPressGestureRecognizer::with_settings(
-                arena,
+            let arena_a = realm
+                .presentations
+                .get(a_id)
+                .unwrap()
+                .gestures()
+                .arena()
+                .clone();
+            let recognizer_a = LongPressGestureRecognizer::with_settings(
+                arena_a,
                 GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_secs(5)),
             )
-            .with_on_long_press(move || fired_for_callback.store(true, Ordering::SeqCst));
-            let pointer = PointerId::new(2).expect("nonzero pointer id");
-            recognizer.add_pointer(pointer, flui_types::Offset::new(px(10.0), px(10.0)));
+            .with_on_long_press(|| {});
+            recognizer_a.add_pointer(
+                PointerId::new(2).expect("nonzero pointer id"),
+                flui_types::Offset::new(px(10.0), px(10.0)),
+            );
 
-            let window = Duration::from_millis(150);
-            let start = Instant::now();
-            let mut pump = 1u32;
-            while start.elapsed() < window {
-                pump_once(&realm, &mut backend, 0.016 * f64::from(pump));
-                pump += 1;
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            let before_b = Instant::now();
+            let arena_b = realm
+                .presentations
+                .get(b_id)
+                .unwrap()
+                .gestures()
+                .arena()
+                .clone();
+            let recognizer_b = LongPressGestureRecognizer::with_settings(
+                arena_b,
+                GestureSettings::touch_defaults()
+                    .with_long_press_timeout(Duration::from_millis(50)),
+            )
+            .with_on_long_press(|| {});
+            recognizer_b.add_pointer(
+                PointerId::new(3).expect("nonzero pointer id"),
+                flui_types::Offset::new(px(20.0), px(20.0)),
+            );
 
-            assert_eq!(
-                realm.presentations.primary().clock().produced_count(),
-                produced_before,
-                "an idle presentation over a real wall-clock window must produce exactly zero \
-                 additional frames"
-            );
-            assert_eq!(
-                backend.render_scene_calls, submits_before,
-                "and submit exactly zero additional frames to the raster backend"
-            );
-            // A `spawn_local` future completes on its first poll (a
-            // one-shot task, not a periodic one) -- proving the async
-            // driver's mid-frame poll step genuinely ran at least once
-            // during the idle window is the right bar here, not that this
-            // SAME task ran every pump (nothing re-arms it after it
-            // completes).
-            assert_eq!(
-                async_polls.load(Ordering::Acquire),
-                1,
-                "the async driver's mid-frame poll must have genuinely run the spawned task \
-                 during the idle window, not been skipped alongside the produce gate"
-            );
+            let next_wake = realm
+                .next_wake()
+                .expect("two armed deadlines pending -- next_wake must be Some");
+            let until_wake = next_wake.saturating_duration_since(before_b);
             assert!(
-                !long_press_fired.load(Ordering::SeqCst),
-                "the armed-but-not-due deadline must not have fired yet"
+                until_wake < Duration::from_secs(1),
+                "next_wake must reflect presentation B's near (50ms) deadline, not A's far \
+                 (5s) one, even though A is the primary -- got {until_wake:?} until wake"
+            );
+        }
+
+        /// `GestureArena::next_deadline`'s own min-over-members level,
+        /// discriminated -- production topology is any number of arena
+        /// members competing on one presentation's arena (e.g. a detector
+        /// combining long-press and double-tap on the same region), so
+        /// this is the level a single-presentation, single-recognizer test
+        /// cannot see. Two DIFFERENT recognizer kinds on the SAME arena, a
+        /// far long-press timeout and a near double-tap give-up: the
+        /// aggregate must reflect the near one.
+        #[test]
+        fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena() {
+            use std::time::{Duration, Instant};
+
+            use flui_interaction::{
+                DoubleTapGestureRecognizer, GestureRecognizer, GestureSettings,
+                LongPressGestureRecognizer, PointerId,
+            };
+
+            let realm = UiRealm::for_test();
+            let arena = realm.presentations.primary().gestures().arena().clone();
+
+            let long_press = LongPressGestureRecognizer::with_settings(
+                arena.clone(),
+                GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_secs(5)),
+            )
+            .with_on_long_press(|| {});
+            long_press.add_pointer(
+                PointerId::new(2).expect("nonzero pointer id"),
+                flui_types::Offset::new(px(10.0), px(10.0)),
             );
 
-            // Instant response: dirty the tree now, one more pump must
-            // produce -- within the very next pump, not "eventually".
-            realm.presentations.primary().pipeline().with_mut(|owner| {
-                if let Some(root_id) = owner.root_id() {
-                    owner.mark_needs_paint(root_id);
-                }
-            });
-            pump_once(&realm, &mut backend, 0.016 * f64::from(pump));
+            let before_double_tap = Instant::now();
+            let double_tap =
+                DoubleTapGestureRecognizer::new(arena.clone()).with_on_double_tap_cancel(|_| {});
+            let pointer = PointerId::new(3).expect("nonzero pointer id");
+            let position = flui_types::Offset::new(px(20.0), px(20.0));
+            double_tap.add_pointer(pointer, position);
+            double_tap.handle_event(&flui_interaction::events::make_up_event(
+                position,
+                flui_interaction::events::PointerType::Touch,
+            ));
 
-            assert_eq!(
-                realm.presentations.primary().clock().produced_count(),
-                produced_before + 1,
-                "the first dirty mark after the idle window must produce within the very next \
-                 pump"
-            );
-            assert_eq!(
-                backend.render_scene_calls,
-                submits_before + 1,
-                "and that pump must actually reach the raster backend"
+            let next_deadline = arena
+                .next_deadline()
+                .expect("two armed deadlines pending -- next_deadline must be Some");
+            let until_deadline = next_deadline.saturating_duration_since(before_double_tap);
+            assert!(
+                until_deadline < Duration::from_secs(1),
+                "GestureArena::next_deadline must reflect the double-tap's near give-up \
+                 window, not the long-press's far one -- got {until_deadline:?} until deadline"
             );
         }
     }

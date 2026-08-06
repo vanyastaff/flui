@@ -6583,6 +6583,240 @@ mod desktop_pacing_tests {
 
         controller.dispose();
     }
+
+    /// The idle/instant-response headline (adaptive on-demand pacing),
+    /// driven through the SAME real dirty-gate every other production wake
+    /// goes through -- `wake_action`, `keeps_frame_gate_open`, and
+    /// `no_present_fallback_pace` -- not a bare fixed-interval poll loop.
+    ///
+    /// This distinction is load-bearing, not stylistic: `has_pending_work`
+    /// includes `gestures().has_pending_deadlines()`, so a pending
+    /// gesture-arena deadline keeps `dirty == true` for the ENTIRE time it
+    /// is armed. An earlier version of this test called
+    /// `drive_frame_with_lane` on a fixed 5ms interval regardless of this
+    /// gate, which made "zero produces" true but hid a real cost: driven
+    /// through the real gate, ANY wake while the deadline is
+    /// armed-but-not-due reads `dirty == true` -> `WakeAction::Render` ->
+    /// a full (unpainting) pump -> `presented == false`, and with the gate
+    /// still open afterward, `no_present_fallback_pace` would sleep on the
+    /// calling thread. What keeps this genuinely idle is that NOTHING
+    /// wakes the loop until the deadline's own instant (`UiRealm::next_wake`,
+    /// standing in for the real winit `about_to_wait`/`new_events`
+    /// actuator this crate cannot drive with a live event loop under its
+    /// own test harness) -- so there is exactly ONE real callback over the
+    /// whole window, not many, and the fallback sleep never engages.
+    #[test]
+    fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use flui_engine::{EngineError, RasterBackend};
+        use flui_interaction::{
+            GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
+        };
+        use flui_layer::Scene;
+
+        struct CountingProbeBackend {
+            render_scene_calls: u32,
+        }
+
+        impl RasterBackend for CountingProbeBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                self.render_scene_calls += 1;
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        realm
+            .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+            .expect("attach succeeds");
+        let mut backend = CountingProbeBackend {
+            render_scene_calls: 0,
+        };
+
+        // Settle the attach's own first paint, through the real gate --
+        // so the "instant response" check at the end has real content to
+        // actually submit, not a vacuous zero-widget tree.
+        let now = Instant::now();
+        realm.record_compositor_tick(now);
+        let dirty = realm.needs_redraw() || realm.has_pending_work();
+        assert_eq!(
+            wake_action(
+                realm.scheduler().frames_enabled(),
+                dirty,
+                realm.scheduler().is_frame_scheduled()
+            ),
+            WakeAction::Render,
+            "precondition: the attach's own pending build must render"
+        );
+        realm.scheduler().drive_frame_with_lane(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {
+                let _ = realm.render_frame_entered(&mut backend);
+            },
+            realm.local_post_frame_lane(),
+        );
+
+        // A live async task, polled through the scheduler's real mid-frame
+        // slot whenever a pump actually runs -- it never touches
+        // demand/dirty state.
+        let async_polls = Arc::new(AtomicUsize::new(0));
+        let async_polls_for_task = Arc::clone(&async_polls);
+        let _token = realm.scheduler().spawn_local(Box::pin(async move {
+            async_polls_for_task.fetch_add(1, Ordering::Release);
+        }));
+
+        // A real, in-flight gesture-arena deadline, due 100ms from now.
+        let arena = realm.gestures().arena().clone();
+        let long_press_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fired_for_callback = Arc::clone(&long_press_fired);
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena,
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(100)),
+        )
+        .with_on_long_press(move || fired_for_callback.store(true, Ordering::SeqCst));
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        recognizer.add_pointer(
+            pointer,
+            flui_types::Offset::new(
+                flui_types::geometry::px(10.0),
+                flui_types::geometry::px(10.0),
+            ),
+        );
+
+        let produced_before = realm.primary_produced_count_for_test();
+        let submits_before = backend.render_scene_calls;
+
+        // Drive the loop waking ONLY at `next_wake`'s own computed instant
+        // -- no artificial fixed-interval polling.
+        let window_end = Instant::now() + Duration::from_millis(300);
+        let mut render_calls = 0u32;
+        let mut skip_calls = 0u32;
+        // `next_wake() == None` means production would genuinely fall back
+        // to `ControlFlow::Wait` here (nothing left to wait for) -- once the
+        // one callback below resolves the deadline, that is the expected,
+        // successful end of the simulated window, not a bug, so the loop
+        // condition itself ends it.
+        while let Some(next_wake) = realm.next_wake() {
+            if next_wake >= window_end {
+                break;
+            }
+            let wait = next_wake.saturating_duration_since(Instant::now());
+            if !wait.is_zero() {
+                std::thread::sleep(wait);
+            }
+            let now = Instant::now();
+            realm.record_compositor_tick(now);
+            let dirty = realm.needs_redraw() || realm.has_pending_work();
+            match wake_action(
+                realm.scheduler().frames_enabled(),
+                dirty,
+                realm.scheduler().is_frame_scheduled(),
+            ) {
+                WakeAction::Skip => {
+                    skip_calls += 1;
+                    continue;
+                }
+                WakeAction::PumpAsync => panic!(
+                    "frames must stay enabled for this probe -- a PumpAsync wake would mean \
+                     something else broke lifecycle state, not the property under test"
+                ),
+                WakeAction::Render => {}
+            }
+            // Wrapped in `drive_frame_with_lane`, exactly like
+            // `bootstrap_desktop`'s `on_request_frame` closure -- this is
+            // the ONLY call site that actually polls the async driver's
+            // mid-frame slot; `render_frame_entered` alone does not.
+            realm.scheduler().drive_frame_with_lane(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                || {
+                    let presented = realm.render_frame_entered(&mut backend);
+                    let keeps_gate_open = keeps_frame_gate_open(
+                        realm.needs_redraw(),
+                        realm.scheduler().is_frame_scheduled(),
+                        realm.has_pending_work(),
+                    );
+                    if let Some(pace) = no_present_fallback_pace(presented, keeps_gate_open) {
+                        std::thread::sleep(pace);
+                    }
+                },
+                realm.local_post_frame_lane(),
+            );
+            render_calls += 1;
+        }
+
+        assert_eq!(
+            realm.primary_produced_count_for_test(),
+            produced_before,
+            "an idle presentation, driven through the real wake_action gate, must produce \
+             exactly zero additional frames over the wall-clock window -- {render_calls} \
+             render callbacks, {skip_calls} skips"
+        );
+        assert_eq!(
+            backend.render_scene_calls, submits_before,
+            "and submit exactly zero additional frames to the raster backend"
+        );
+        assert_eq!(
+            render_calls, 1,
+            "exactly ONE real callback over the whole idle window -- the deadline's own wake, \
+             nothing polled it more often than that (render_calls={render_calls}, \
+             skip_calls={skip_calls})"
+        );
+        assert_eq!(
+            async_polls.load(Ordering::Acquire),
+            1,
+            "the async driver's mid-frame poll must have genuinely run the spawned task, at \
+             the one real callback that occurred"
+        );
+        assert!(
+            long_press_fired.load(Ordering::SeqCst),
+            "the deadline must have resolved by the end of the window"
+        );
+
+        // Instant response: dirty the tree now and drive exactly one more
+        // real callback through the same gate -- must produce.
+        realm.request_redraw();
+        let dirty = realm.needs_redraw() || realm.has_pending_work();
+        assert_eq!(
+            wake_action(
+                realm.scheduler().frames_enabled(),
+                dirty,
+                realm.scheduler().is_frame_scheduled()
+            ),
+            WakeAction::Render,
+            "precondition: the fresh redraw request must render"
+        );
+        let _ = realm.render_frame_entered(&mut backend);
+
+        assert_eq!(
+            realm.primary_produced_count_for_test(),
+            produced_before + 1,
+            "the first dirty mark after the idle window must produce within the very next \
+             real callback"
+        );
+        assert_eq!(
+            backend.render_scene_calls, 1,
+            "and that callback must actually reach the raster backend"
+        );
+    }
 }
 
 #[cfg(all(
@@ -7091,10 +7325,12 @@ where
 
         // Window focus/visibility -> the `(visible, focused)`
         // `AppLifecycleState` derivation. `on_visibility_status_change`
-        // rides winit's `Occluded` event; Wayland delivery is
-        // compositor-conditional (see that callback's doc) — where a
-        // compositor never sends it, the window is treated as always
-        // visible (the same as before this callback existed).
+        // rides winit's `Occluded` event, which winit 0.30 only emits on
+        // X11/macOS/iOS/Web (see that callback's own doc, verified against
+        // winit's source) — winit has NO Wayland emitter for this event at
+        // all, so on this workspace's own Wayland desktop reference the
+        // window is always treated as visible (the same as before this
+        // callback existed).
         window.on_active_status_change(Box::new(move |focused| {
             let _ = dispatch_platform_realm(
                 realm_dispatch,
