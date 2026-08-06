@@ -31,7 +31,7 @@
 #                       platform capability; acquiring it from `build`/
 #                       `layout`/`paint` would let presentation code enqueue
 #                       owner-lane platform work (e.g. `open_window`) mid-frame
-#                       transaction, ahead of trigger #22's other four via the
+#                       transaction, ahead of trigger #22's other six via the
 #                       same ambient-authority hazard.
 #   pipeline_owner()    PipelineCell port (docs/runtime-contract.toml's
 #                       `semantics-two-phase-borrow` contract and `PipelineCell`
@@ -48,15 +48,16 @@
 #                       `Focus::init_state` (`install_rect_provider`) and
 #                       `InteractiveViewerState::init_state`.
 #
-# The first five (including `local_post_frame_handle`) are exposed through
-# `BuildContext`; `owner_platform` is a free function in flui-app, not a
-# `BuildContext` method; `pipeline_owner` is the seventh `BuildContext` method
-# — the scanner is a textual token match, not a method-call parse, so all
-# three shapes are caught the same way. All seven must be acquired in
-# `ViewState::init_state` / `did_change_dependencies` (the six `BuildContext`
-# methods) or outside any guarded body entirely (`owner_platform`, which is
-# composition-root-only, `pub(crate)` to `flui-app`'s app module), stored, and
-# fired later from a callback. A stored
+# Seven tokens, six `BuildContext` methods: `rebuild_handle`,
+# `local_post_frame_handle`, `post_frame_handle`, `text_input_handle`,
+# `focus_manager`, and `pipeline_owner` are all `BuildContext` methods;
+# `owner_platform` is the odd one out — a free function in flui-app, not a
+# `BuildContext` method at all — and the scanner is a textual token match,
+# not a method-call parse, so both shapes are caught the same way. All seven
+# must be acquired in `ViewState::init_state` / `did_change_dependencies` (the
+# six `BuildContext` methods) or outside any guarded body entirely
+# (`owner_platform`, which is composition-root-only, `pub(crate)` to
+# `flui-app`'s app module), stored, and fired later from a callback. A stored
 # capability's OWN variable/field name must avoid the literal guarded token
 # too (e.g. `pipeline_cell`, not `pipeline_owner`) — this scanner does not
 # parse method calls, so a mere re-clone of an already-acquired value under

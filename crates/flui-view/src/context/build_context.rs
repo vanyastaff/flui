@@ -123,7 +123,11 @@ pub trait BuildContext {
     /// its lane directly rather than through the scheduler's cross-thread
     /// queue. This is what real widget code wants almost always: the tree is
     /// itself owner-affine, and `schedule_local`'s callback runs on the same
-    /// thread that acquired the handle.
+    /// thread that acquired the handle. Callbacks registered here and
+    /// callbacks registered on [`post_frame_handle`](Self::post_frame_handle)
+    /// (this frame's, on either handle, from anywhere) run in exactly one
+    /// order — the order they were registered in, not "shared queue first" or
+    /// "local queue first" — so interleaving the two is well-defined.
     ///
     /// `None` when no binding installed one. Acquire it in a lifecycle hook
     /// (`init_state` / `did_change_dependencies`), never in
