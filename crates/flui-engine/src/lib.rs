@@ -114,6 +114,10 @@ pub mod raster;
 /// Generic over [`RasterBackend`]; unconditional like `raster` itself.
 pub mod raster_owner;
 
+/// Advanced raster pacing/capacity configuration ([`RasterOptions`]).
+/// Unconditional, like `raster_owner` itself.
+pub mod raster_options;
+
 // ============================================================================
 // BACKENDS
 // ============================================================================
@@ -150,6 +154,8 @@ pub use raster_owner::{
     FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner, RasterSubmitError,
     SurfaceState,
 };
+// Advanced raster pacing/capacity configuration.
+pub use raster_options::RasterOptions;
 #[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;
 // wgpu backend exports
