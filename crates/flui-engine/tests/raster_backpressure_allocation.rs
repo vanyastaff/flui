@@ -26,10 +26,26 @@ static ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 struct CountingAllocator;
 
-// SAFETY: forwards every call unchanged to `System`, the platform default
-// allocator — the only added behavior is two `Relaxed` counter bumps before
-// the real `alloc` call. `System` itself upholds `GlobalAlloc`'s contract;
-// this wrapper adds no new invariant for the caller to uphold.
+// SAFETY: `alloc` and `dealloc` forward their arguments unchanged to `System`,
+// the platform default allocator, so a pointer is always freed by the
+// allocator that produced it. `realloc` and `alloc_zeroed` are deliberately
+// NOT overridden: `GlobalAlloc`'s defaults decompose them into `self.alloc` +
+// copy + `self.dealloc`, which lands in `System` too and, as a side effect,
+// counts an in-place `System::realloc` growth as an alloc — conservative for
+// this harness, never a miss. Overriding either one later MUST keep the
+// counter bumps, or every `Vec` growth becomes invisible and the
+// zero-allocation assertion silently turns into a false pass. (The workspace's
+// other counting allocator, in `flui-interaction`'s pointer-route test,
+// overrides all four and forwards each to `System` — do not reconcile the two
+// by copying its shape without carrying the counters across.)
+//
+// The `Relaxed` counters are sound because the measured region is
+// single-threaded: `submit` and `pump` both run on the test thread, so program
+// order plus per-location coherence make the post-loop load observe every
+// bump. Driving the threaded owner (`run_until_shutdown` on a spawned thread)
+// from this harness would break that precondition and require acquire/release.
+// `System` itself upholds `GlobalAlloc`'s contract; this wrapper adds no new
+// invariant for the caller to uphold.
 #[allow(unsafe_code)]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
