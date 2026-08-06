@@ -1815,16 +1815,33 @@ future work, not attempted here as a workaround). \
 \
 **Two named residual gaps, not silently closed:** (1) `GestureTimerService` \
 (`flui-interaction`'s standalone timer utility, distinct from the gesture \
-arena) still has ZERO production callers — `AppRuntime::next_wake` folds \
-in `GestureTimerService::next_deadline` for forward-composition, but it is \
-always `None` in this workspace's actual wiring today, so a hypothetical \
-app-level "timeout animation" that isn't a gesture-arena recognizer has no \
-wall-clock wake of its own yet. (2) A REALM fully backgrounded via the \
-pre-existing, coarser `AppLifecycleState::Hidden`/`Paused`/`Detached` \
-`frames_enabled` gate routes through `WakeAction::PumpAsync`, which never \
-calls `draw_frame_entered` at all — so `tick_deadlines` does not run in \
-THAT case either; fixing it would mean touching the pre-#556 `PumpAsync` \
-arm, a different, larger, unscoped change this issue does not attempt.\
+arena) still has ZERO production callers, and `AppRuntime::next_wake` \
+deliberately does NOT fold in `GestureTimerService::next_deadline` — an \
+earlier version composed it in anyway ("forward-composition at zero \
+cost"), but nothing on the wake path this aggregate feeds ever drains it \
+(`check_timers()` has no caller reachable from `draw_frame_entered`/ \
+`tick_deadlines`), so a timer scheduled through the public \
+`global_timer_service()` API would arm a `WaitUntil` that stays undrained \
+and therefore stays in the past once its instant elapses — the identical \
+unbounded-spin shape the winit actuator (above) closed, arriving from the \
+timer side. Caught in review, fixed by excluding the source from the \
+aggregate rather than inventing a drain call into a per-realm loop for a \
+service nothing schedules through; standalone-probe-measured: ~310K–390K \
+`about_to_wait` iterations per 500ms with the fold-in and the actuator \
+both present, vs. 6 excluded (same figure as the actuator fix's own \
+measurement) — pinned by \
+`next_wake_never_surfaces_the_global_timer_services_undrained_deadline` \
+(`crates/flui-app/src/app/runner.rs`), mutant-confirmed (restoring the \
+fold-in fails the test red). A hypothetical app-level "timeout animation" \
+that isn't a gesture-arena recognizer still has no wall-clock wake of its \
+own — composing this service back in is future work, gated on it gaining \
+a real drain call on this thread's own wake cycle first. (2) A REALM fully \
+backgrounded via the pre-existing, coarser `AppLifecycleState::Hidden`/ \
+`Paused`/`Detached` `frames_enabled` gate routes through \
+`WakeAction::PumpAsync`, which never calls `draw_frame_entered` at all — \
+so `tick_deadlines` does not run in THAT case either; fixing it would mean \
+touching the pre-#556 `PumpAsync` arm, a different, larger, unscoped \
+change this issue does not attempt.\
 """
 state = "planned"
 domain = "application"
@@ -1843,6 +1860,7 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn new_events" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn next_wake_never_surfaces_the_global_timer_services_undrained_deadline" },
 ]
 
 # Event-loop affinity capability
