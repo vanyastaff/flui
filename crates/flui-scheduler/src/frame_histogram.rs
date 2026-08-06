@@ -203,6 +203,18 @@ pub fn produce_to_present_histogram(snapshots: &[FrameSnapshot]) -> LatencyHisto
 /// coalesced input epoch's own `(submit_at - arrival)` value (see
 /// [`FrameSnapshot::latencies`]), across every snapshot in `snapshots`,
 /// folded into one histogram rather than kept per-frame.
+///
+/// **This tail is truncated whenever a snapshot's epoch ring overflowed,
+/// and it is truncated at the end that matters.** The ring evicts its
+/// OLDEST epochs, which are the ones with the largest `submit_at - arrival`
+/// — so under the overflow condition that is routine during a drag (a
+/// high-rate pointer stamps far more raw events per frame than the ring
+/// holds), the high percentiles of this histogram are biased LOW, dropping
+/// exactly the worst samples a p99 exists to surface. The condition is
+/// detectable per snapshot: check [`crate::InputEpochs::overflowed`] before
+/// treating this histogram's tail as complete. The frame-interval and
+/// produce-to-present histograms are unaffected — they take one value per
+/// frame and no ring bounds them.
 #[must_use]
 pub fn input_to_present_histogram(snapshots: &[FrameSnapshot]) -> LatencyHistogram {
     let mut histogram = LatencyHistogram::new();
