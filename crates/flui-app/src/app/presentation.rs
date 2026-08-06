@@ -621,12 +621,18 @@ impl PresentationState {
         self.frames_rendered.get()
     }
 
-    /// Frames dropped due to surface errors.
-    #[expect(
-        dead_code,
-        reason = "no production caller yet, and no test reads it back -- \
-                  forwarded only by UiRealm::frames_dropped (also uncalled); \
-                  record_frame_dropped is the production write side"
+    /// Frames dropped due to a real submit failure (surface/device error) —
+    /// never incremented by a `FrameClock` deferral (hidden/backpressure):
+    /// see `FrameClock::produces_deferred`'s own doc for why the two stay
+    /// structurally separate counter families.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production caller yet -- forwarded only by \
+                      UiRealm::frames_dropped, exercised by \
+                      frame_clock_segment_gate's frames-dropped-vs-deferred pin"
+        )
     )]
     pub(crate) fn frames_dropped(&self) -> u64 {
         self.frames_dropped.get()

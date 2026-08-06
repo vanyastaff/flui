@@ -299,6 +299,15 @@ pub struct FrameClock {
     /// The fixed-capacity produced-frame ring. `RefCell` for the same
     /// reason as `pending_input_epochs` above.
     history: RefCell<FrameHistory>,
+    /// (segment start, segment end) for the most recently completed
+    /// build+layout+paint segment this clock gated — a side channel for a
+    /// caller whose segment-running step and submit step are two separate
+    /// calls (`UiRealm::draw_frame_entered` runs the segment;
+    /// `UiRealm::render_frame_entered`, ITS caller, decides whether/how to
+    /// submit and is where [`record_frame`](Self::record_frame) actually
+    /// runs) and therefore cannot pass segment timing between them as a
+    /// plain local variable.
+    last_segment_span: Cell<Option<(Instant, Instant)>>,
 }
 
 /// The default in-flight capacity before any raster-owner wiring configures
@@ -338,6 +347,7 @@ impl FrameClock {
             deferred_backpressure: Cell::new(0),
             pending_input_epochs: RefCell::new(PendingInputEpochs::default()),
             history: RefCell::new(FrameHistory::default()),
+            last_segment_span: Cell::new(None),
         }
     }
 
@@ -809,6 +819,24 @@ impl FrameClock {
     /// drains it into whichever frame actually carries this event's effect.
     pub fn stamp_input_epoch(&self, arrival: Instant) -> InputEpochId {
         self.pending_input_epochs.borrow_mut().stamp(arrival)
+    }
+
+    /// Record `(start, end)` as the most recently completed
+    /// build+layout+paint segment this clock gated — the side channel
+    /// [`last_segment_span`](Self::last_segment_span) reads back from a
+    /// separate, later call. Overwrites any previous value: only the
+    /// latest completed segment matters, since [`record_frame`](Self::record_frame)
+    /// consumes it (via the caller reading it back) at most once before the
+    /// next segment overwrites it again.
+    pub fn set_last_segment_span(&self, start: Instant, end: Instant) {
+        self.last_segment_span.set(Some((start, end)));
+    }
+
+    /// The `(start, end)` most recently recorded by
+    /// [`set_last_segment_span`](Self::set_last_segment_span), if any.
+    #[must_use]
+    pub fn last_segment_span(&self) -> Option<(Instant, Instant)> {
+        self.last_segment_span.get()
     }
 
     /// Record that this clock's presentation produced and submitted a
