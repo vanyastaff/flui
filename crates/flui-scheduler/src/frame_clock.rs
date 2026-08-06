@@ -6,14 +6,43 @@
 //! [`UpdateScheduler`](crate::UpdateScheduler) owns *logical* time (phases,
 //! callback queues, the priority task queue) and makes no refresh-rate,
 //! display, or surface assumption. `FrameClock` owns *physical* time for
-//! **one presentation**: demand coalescing, first-frame deferral, visibility
-//! gating, a produce-capacity threshold, and frame timestamps. It answers
-//! exactly one question — "does this surface produce a frame now?" — and
-//! never touches a phase, a callback, or an element tree. Raster capacity
-//! (whether the GPU will accept another frame) is a third, still-separate
-//! owner; `FrameClock`'s in-flight/throttle knobs exist so that owner has
-//! somewhere to report backpressure, not so this clock reaches into a GPU
-//! queue itself.
+//! **one presentation**: demand coalescing, actuator-edge coalescing
+//! ([`try_arm_redraw_request`](FrameClock::try_arm_redraw_request)),
+//! compositor pacing feedback
+//! ([`record_compositor_tick`](FrameClock::record_compositor_tick)),
+//! first-frame deferral, visibility gating, a produce-capacity threshold,
+//! and frame timestamps. It answers exactly one question — "does this
+//! surface produce a frame now?" — and never touches a phase, a callback,
+//! or an element tree, and never reaches out to read an actual display or
+//! window: every physical-time fact it reasons about (a compositor tick,
+//! a produce capacity signal) is fed in by a caller that owns the real
+//! surface. Raster capacity (whether the GPU will accept another frame)
+//! is a third, still-separate owner; `FrameClock`'s in-flight/throttle
+//! knobs exist so that owner has somewhere to report backpressure, not so
+//! this clock reaches into a GPU queue itself.
+//!
+//! # The driver-loop hybrid (issue #556 PR-C2)
+//!
+//! Two distinct signals feed a produce decision, and this clock is where
+//! they both land: (1) a genuinely compositor-paced platform tick
+//! (Wayland's frame callbacks, delivered as `RedrawRequested` only in
+//! response to an earlier `request_redraw()` call, and only while the
+//! surface is visible) is recorded via
+//! [`record_compositor_tick`](FrameClock::record_compositor_tick); (2) a
+//! tree/animation demand mark (`Dirty`/`Animation`) still drives
+//! [`mark_demand`](FrameClock::mark_demand) exactly as before. Neither
+//! path is a second parallel produce mechanism — both simply mark this
+//! same [`DemandMask`], and the same [`poll`](FrameClock::poll) call
+//! decides. What is genuinely new is
+//! [`try_arm_redraw_request`](FrameClock::try_arm_redraw_request), the
+//! caller-side actuator: whichever platform mechanism ends up poking
+//! `request_redraw()` (a compositor-paced tick where the platform paces
+//! one, an immediate self-wake where it does not) consults this method
+//! first, so N demand marks that land before the next produce collapse
+//! into exactly one poke instead of a storm of redundant ones. See
+//! `flui-app`'s own driver wiring and `docs/adr/ADR-0044-driver-loop-hybrid.md`'s
+//! per-platform table for which concrete mechanism plays which role on
+//! each backend.
 //!
 //! # No public mode enum
 //!
@@ -213,6 +242,20 @@ pub struct FrameClock {
     min_produce_interval: Cell<Option<Duration>>,
     last_produce_at: Cell<Option<Instant>>,
     produced: Cell<u64>,
+    /// Set by [`try_arm_redraw_request`](Self::try_arm_redraw_request) the
+    /// first time it grants an actuation edge for the current demand mask;
+    /// cleared by [`poll`](Self::poll) on a granted produce. See that
+    /// method's doc for the full coalescing contract.
+    redraw_requested: Cell<bool>,
+    /// The instant [`record_compositor_tick`](Self::record_compositor_tick)
+    /// last recorded, if any — the pacing-feedback sample this clock's
+    /// owner (never this clock itself) feeds from an actual compositor-paced
+    /// signal.
+    last_compositor_tick: Cell<Option<Instant>>,
+    /// The interval between the two most recent
+    /// [`record_compositor_tick`](Self::record_compositor_tick) calls —
+    /// `None` until at least two ticks have been recorded.
+    last_compositor_tick_interval: Cell<Option<Duration>>,
 }
 
 /// The default in-flight capacity before any raster-owner wiring configures
@@ -245,6 +288,9 @@ impl FrameClock {
             min_produce_interval: Cell::new(None),
             last_produce_at: Cell::new(None),
             produced: Cell::new(0),
+            redraw_requested: Cell::new(false),
+            last_compositor_tick: Cell::new(None),
+            last_compositor_tick_interval: Cell::new(None),
         }
     }
 
@@ -311,6 +357,88 @@ impl FrameClock {
     #[must_use]
     pub fn demand_mask(&self) -> DemandMask {
         self.demand.get()
+    }
+
+    // ------------------------------------------------------------------
+    // Actuator edge — the platform-facing `request_redraw()` poke a caller
+    // makes in response to demand, coalesced against this clock's own
+    // mask so N marks between two produces collapse into exactly one
+    // poke (issue #556's driver-loop hybrid).
+    // ------------------------------------------------------------------
+
+    /// Test-and-set: returns `true` at most once per pending demand mask —
+    /// the edge a caller should react to by poking the platform's
+    /// `request_redraw()` — and `false` on every following call until the
+    /// next granted [`poll`](Self::poll) produce (which clears both the
+    /// mask and this latch) re-arms it. Also `false` while
+    /// [`is_hidden`](Self::is_hidden) or with an empty mask — there is
+    /// nothing to poke for.
+    ///
+    /// This is what turns N repeated demand marks (several ticks landing
+    /// before a produce clears the mask — under backpressure, inside a
+    /// [`set_min_produce_interval`](Self::set_min_produce_interval) window,
+    /// or just several dirty marks in a row) into exactly one
+    /// platform-facing request instead of a storm of redundant ones: a
+    /// caller marks demand via [`mark_demand`](Self::mark_demand) as
+    /// always, then separately consults this method whenever it is about
+    /// to decide whether to poke the platform.
+    ///
+    /// Mutates on a `true` return (arms the latch) — reading it twice in a
+    /// row without an intervening `poll` therefore returns `true` then
+    /// `false`, never `true` twice. A caller that marks demand and then
+    /// never reaches a `poll` call at all leaves this latch armed forever;
+    /// every production caller in this workspace polls every presentation
+    /// once per pump unconditionally, so that caller contract is already
+    /// satisfied structurally, not merely by convention.
+    pub fn try_arm_redraw_request(&self) -> bool {
+        if self.hidden.get() || self.demand.get().is_empty() || self.redraw_requested.get() {
+            return false;
+        }
+        self.redraw_requested.set(true);
+        true
+    }
+
+    // ------------------------------------------------------------------
+    // Compositor pacing feedback — a caller that owns an actual display
+    // surface feeds this clock the instants a compositor-paced signal (a
+    // Wayland frame callback delivering `RedrawRequested`, for instance)
+    // arrived. Bookkeeping only: this clock never reaches out to read a
+    // display's refresh rate itself, and recording a tick never marks
+    // demand on its own beyond what the caller separately marks — see
+    // [`record_compositor_tick`](Self::record_compositor_tick)'s own doc
+    // for the one exception (`DemandKind::Host`), which mirrors that
+    // variant's own doc.
+    // ------------------------------------------------------------------
+
+    /// Records that a compositor/platform-paced tick arrived at `now` —
+    /// the pacing-feedback half of issue #556's driver-loop hybrid.
+    /// Updates [`last_compositor_tick_interval`](Self::last_compositor_tick_interval)
+    /// from the previous recorded tick (if any), and marks
+    /// [`DemandKind::Host`] — "the host platform asked for a frame
+    /// directly" is exactly what a delivered compositor tick is, per that
+    /// variant's own doc. This is a safety net, not the primary demand
+    /// source for most produces: the compositor only ever delivers this
+    /// tick in response to an earlier `request_redraw()` call the caller
+    /// already made for its own reason (a genuine `Dirty`/`Animation`
+    /// demand), so marking `Host` here rarely changes the produce decision
+    /// — it only matters on the rare tick where that original demand
+    /// already cleared before this one arrived.
+    pub fn record_compositor_tick(&self, now: Instant) {
+        if let Some(last) = self.last_compositor_tick.get() {
+            self.last_compositor_tick_interval
+                .set(Some(now.duration_since(last)));
+        }
+        self.last_compositor_tick.set(Some(now));
+        self.mark_demand(DemandKind::Host);
+    }
+
+    /// The interval between the two most recent
+    /// [`record_compositor_tick`](Self::record_compositor_tick) calls —
+    /// `None` until at least two ticks have been recorded. Diagnostic/
+    /// telemetry data only; no produce decision reads this.
+    #[must_use]
+    pub fn last_compositor_tick_interval(&self) -> Option<Duration> {
+        self.last_compositor_tick_interval.get()
     }
 
     // ------------------------------------------------------------------
@@ -518,6 +646,7 @@ impl FrameClock {
         }
 
         self.demand.set(DemandMask::empty());
+        self.redraw_requested.set(false);
         self.last_produce_at.set(Some(now));
         self.produced.set(self.produced.get() + 1);
 
@@ -1079,5 +1208,227 @@ mod tests {
     fn is_deferred_is_false_by_default_with_no_deferral_ever_registered() {
         let (clock, _manual) = manual();
         assert!(!clock.is_deferred());
+    }
+
+    // ----------------------------------------------------------------
+    // `try_arm_redraw_request` — the driver-loop hybrid's actuator edge
+    // (issue #556 PR-C2). Anti-vacuous: an empty/hidden clock never arms,
+    // one arm per pending mask, re-armed only after a genuine produce.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn an_empty_mask_never_arms_a_redraw_request() {
+        let (clock, _manual) = manual();
+        assert!(!clock.try_arm_redraw_request());
+    }
+
+    #[test]
+    fn a_hidden_clock_never_arms_a_redraw_request_even_with_demand() {
+        let (clock, _manual) = manual();
+        clock.set_hidden(true);
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(
+            !clock.try_arm_redraw_request(),
+            "no reason to poke the platform for a surface that cannot produce"
+        );
+    }
+
+    #[test]
+    fn one_mark_arms_exactly_once_and_reads_false_after() {
+        let (clock, _manual) = manual();
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(clock.try_arm_redraw_request(), "the first call is the edge");
+        assert!(
+            !clock.try_arm_redraw_request(),
+            "the SAME pending mask must not arm a second poke"
+        );
+        assert!(
+            !clock.try_arm_redraw_request(),
+            "reading it again changes nothing further -- it is not a toggle"
+        );
+    }
+
+    /// The named exploit: N demand marks landing before a produce collapse
+    /// into exactly one armed edge; a produce re-arms it. Scripted via
+    /// backpressure so the mask genuinely survives several `poll` calls
+    /// without clearing -- the realistic shape a caller sees under GPU
+    /// backpressure or a throttle window, not just "call mark_demand
+    /// twice with no poll in between".
+    #[test]
+    fn n_demands_before_a_produce_collapse_into_exactly_one_armed_request_then_rearm() {
+        let (clock, manual) = manual();
+        clock.set_max_in_flight(1);
+        clock.record_submit(); // at capacity from the start -- every poll below skips
+
+        // N=5 marks, each followed by a poll that skips (Backpressure) and
+        // retains the mask -- only the FIRST arms.
+        let mut armed_count = 0;
+        for _ in 0..5 {
+            clock.mark_demand(DemandKind::Dirty);
+            if clock.try_arm_redraw_request() {
+                armed_count += 1;
+            }
+            assert_eq!(
+                clock.poll(manual.now()),
+                PollDecision::Skip(SkipReason::Backpressure),
+                "capacity never freed in this loop -- every poll must skip"
+            );
+        }
+        assert_eq!(
+            armed_count, 1,
+            "exactly one of the five marks may arm a redraw request"
+        );
+
+        // Free capacity: the next poll produces, clearing both the mask
+        // and the armed latch.
+        clock.record_retire();
+        assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+
+        // Re-armed: a fresh mark after the produce arms again.
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(
+            clock.try_arm_redraw_request(),
+            "a produce must re-arm the next genuinely new demand"
+        );
+    }
+
+    #[test]
+    fn skip_no_demand_never_arms_and_never_needed_to() {
+        let (clock, manual) = manual();
+        assert!(!clock.try_arm_redraw_request());
+        assert_eq!(
+            clock.poll(manual.now()),
+            PollDecision::Skip(SkipReason::NoDemand)
+        );
+        assert!(!clock.try_arm_redraw_request());
+    }
+
+    // ----------------------------------------------------------------
+    // `record_compositor_tick` — pacing feedback (issue #556 PR-C2).
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn record_compositor_tick_marks_host_demand_and_produces() {
+        let (clock, manual) = manual();
+        clock.record_compositor_tick(manual.now());
+        assert_eq!(
+            clock.poll(manual.now()),
+            PollDecision::Produce,
+            "a delivered compositor tick alone is sufficient Host demand"
+        );
+    }
+
+    #[test]
+    fn compositor_tick_interval_is_none_until_a_second_tick_then_tracks_the_gap() {
+        let (clock, manual) = manual();
+        assert_eq!(clock.last_compositor_tick_interval(), None);
+
+        clock.record_compositor_tick(manual.now());
+        assert_eq!(
+            clock.last_compositor_tick_interval(),
+            None,
+            "one tick alone has no interval to report yet"
+        );
+
+        manual.advance(Duration::from_millis(16));
+        clock.record_compositor_tick(manual.now());
+        assert_eq!(
+            clock.last_compositor_tick_interval(),
+            Some(Duration::from_millis(16))
+        );
+
+        manual.advance(Duration::from_millis(7));
+        clock.record_compositor_tick(manual.now());
+        assert_eq!(
+            clock.last_compositor_tick_interval(),
+            Some(Duration::from_millis(7)),
+            "the interval tracks only the two most recent ticks, not a running average"
+        );
+    }
+
+    /// Criterion 1 at the clock level: two independent clocks fed
+    /// compositor ticks at different scripted cadences (60 Hz vs 144 Hz)
+    /// over the identical wall-clock span produce proportionally --
+    /// exactly the multi-refresh-rate independence a single shared clock
+    /// could never reproduce (companion to `flui-testing`'s own
+    /// multi-presentation cadence test, at the bare-clock level with no
+    /// realm/vsync machinery at all).
+    #[test]
+    fn scripted_60hz_and_144hz_feeds_produce_independently_proportional_counts() {
+        let (clock_60, manual_60) = manual();
+        let (clock_144, manual_144) = manual();
+
+        let span = Duration::from_secs(1);
+        let step_60 = Duration::from_nanos(1_000_000_000 / 60);
+        let step_144 = Duration::from_nanos(1_000_000_000 / 144);
+
+        let mut elapsed = Duration::ZERO;
+        let mut ticks_60 = 0u32;
+        while elapsed + step_60 <= span {
+            manual_60.advance(step_60);
+            elapsed += step_60;
+            clock_60.record_compositor_tick(manual_60.now());
+            assert_eq!(clock_60.poll(manual_60.now()), PollDecision::Produce);
+            ticks_60 += 1;
+        }
+
+        let mut elapsed = Duration::ZERO;
+        let mut ticks_144 = 0u32;
+        while elapsed + step_144 <= span {
+            manual_144.advance(step_144);
+            elapsed += step_144;
+            clock_144.record_compositor_tick(manual_144.now());
+            assert_eq!(clock_144.poll(manual_144.now()), PollDecision::Produce);
+            ticks_144 += 1;
+        }
+
+        assert_eq!(ticks_60, 60);
+        assert_eq!(ticks_144, 144);
+        assert_eq!(clock_60.produced_count(), 60);
+        assert_eq!(clock_144.produced_count(), 144);
+        assert!(
+            clock_144.produced_count() > clock_60.produced_count() * 2,
+            "144 Hz must produce well over double the 60 Hz count across the identical span \
+             (got 60Hz={}, 144Hz={})",
+            clock_60.produced_count(),
+            clock_144.produced_count()
+        );
+    }
+
+    /// Compositor-freeze loyalty: a scripted feed that stops delivering
+    /// ticks must stop producing -- this clock has no background thread
+    /// and no timer of its own, so "pausing the feed" and "pausing
+    /// production" are the same fact, but this pins it so a future
+    /// regression (e.g. a stray internal re-arm) would be caught rather
+    /// than assumed.
+    #[test]
+    fn a_paused_compositor_feed_pauses_production_and_resuming_resumes_it() {
+        let (clock, manual) = manual();
+
+        for _ in 0..10 {
+            manual.advance(Duration::from_millis(16));
+            clock.record_compositor_tick(manual.now());
+            assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+        }
+        assert_eq!(clock.produced_count(), 10);
+
+        // The feed "freezes" -- nothing calls record_compositor_tick or
+        // poll for a long virtual stretch. Advancing the manual clock
+        // alone (no tick, no poll) must not move produced_count.
+        manual.advance(Duration::from_secs(5));
+        assert_eq!(
+            clock.produced_count(),
+            10,
+            "advancing wall-clock time alone, with no delivered tick and no poll, must not \
+             produce a frame"
+        );
+
+        // Resume: the feed starts delivering ticks again.
+        for _ in 0..3 {
+            manual.advance(Duration::from_millis(16));
+            clock.record_compositor_tick(manual.now());
+            assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+        }
+        assert_eq!(clock.produced_count(), 13);
     }
 }
