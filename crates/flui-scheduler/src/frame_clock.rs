@@ -338,6 +338,28 @@ impl FrameClock {
         self.first_frame_sent.set(false);
     }
 
+    /// Latch that the first frame has been sent — the caller's job, not
+    /// `poll`'s: `poll` grants `Produce` before the segment it gates has
+    /// actually run, so it cannot yet know whether that segment will
+    /// succeed. Call this AFTER a granted produce's segment completes
+    /// without error (mirroring `RenderingFlutterBinding::mark_first_frame_sent`'s
+    /// old `!errored` guard) — an errored first attempt must not latch, or a
+    /// later `defer` could never block it again. Idempotent.
+    pub fn mark_first_frame_sent(&self) {
+        self.first_frame_sent.set(true);
+    }
+
+    /// Whether a presentation should hand its produced frame to the engine
+    /// right now — `true` once the first frame has ever shipped, or while no
+    /// deferral is active. Exactly `!is_deferred()`; kept as its own named
+    /// query because it answers a different question a caller asks at a
+    /// different point (before deciding whether to submit, not before
+    /// deciding whether to produce).
+    #[must_use]
+    pub fn should_send_to_engine(&self) -> bool {
+        !self.is_deferred()
+    }
+
     // ------------------------------------------------------------------
     // Produce capacity (in-flight threshold + optional throttle) — the
     // knobs a raster owner's backpressure (§8, PR-E) reports through;
@@ -410,7 +432,10 @@ impl FrameClock {
     /// Checked in this order: hidden, then capacity (in-flight/throttle),
     /// then first-frame deferral, then the demand mask. A granted
     /// [`PollDecision::Produce`] clears the mask and records `now` as the
-    /// last produce instant; every `Skip` reason except
+    /// last produce instant — it does NOT latch
+    /// [`has_sent_first_frame`](Self::has_sent_first_frame); see
+    /// [`mark_first_frame_sent`](Self::mark_first_frame_sent)'s doc for why
+    /// that is the caller's job. Every `Skip` reason except
     /// [`SkipReason::NoDemand`] retains the mask untouched (there is
     /// nothing to retain for `NoDemand` — it IS the empty mask).
     ///
@@ -435,7 +460,6 @@ impl FrameClock {
 
         self.demand.set(DemandMask::empty());
         self.last_produce_at.set(Some(now));
-        self.first_frame_sent.set(true);
         self.produced.set(self.produced.get() + 1);
         PollDecision::Produce
     }
@@ -655,6 +679,11 @@ mod tests {
         let (clock, manual) = manual();
         clock.mark_demand(DemandKind::Dirty);
         assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+        // `poll` itself never latches -- that is the caller's job, done only
+        // once the segment it gated is known to have succeeded (see
+        // `mark_first_frame_sent`'s doc).
+        assert!(!clock.has_sent_first_frame());
+        clock.mark_first_frame_sent();
         assert!(clock.has_sent_first_frame());
 
         clock.defer();
@@ -818,5 +847,46 @@ mod tests {
         // Must not panic; must not affect anything observable.
         clock.advance(Duration::from_millis(16));
         assert!(matches!(clock.source(), ClockSource::Platform));
+    }
+
+    // ----------------------------------------------------------------
+    // `should_send_to_engine` / `mark_first_frame_sent` — the caller-driven
+    // latch a segment's own success (not `poll`'s produce grant) controls.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn an_unconfirmed_produce_does_not_latch_should_send_to_engine() {
+        let (clock, manual) = manual();
+        clock.mark_demand(DemandKind::Dirty);
+        assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+        // The caller's segment has not yet reported success -- a defer
+        // issued right now must still take effect, exactly as it would if
+        // this were genuinely the first attempt.
+        clock.defer();
+        assert!(
+            !clock.should_send_to_engine(),
+            "an unconfirmed produce must not have latched first_frame_sent"
+        );
+    }
+
+    #[test]
+    fn mark_first_frame_sent_makes_a_later_defer_inert() {
+        let (clock, manual) = manual();
+        clock.mark_demand(DemandKind::Dirty);
+        assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+        clock.mark_first_frame_sent();
+        assert!(clock.should_send_to_engine());
+
+        clock.defer();
+        assert!(
+            clock.should_send_to_engine(),
+            "a defer issued after the confirmed first frame must not re-close the gate"
+        );
+    }
+
+    #[test]
+    fn should_send_to_engine_is_true_by_default_with_no_deferral_ever_registered() {
+        let (clock, _manual) = manual();
+        assert!(clock.should_send_to_engine());
     }
 }

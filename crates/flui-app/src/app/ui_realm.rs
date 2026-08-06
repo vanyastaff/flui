@@ -43,12 +43,13 @@ use flui_platform::traits::{DragDropEvent, PlatformInput, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, SchedulerPhase, UpdateScheduler};
+use flui_scheduler::{
+    AppLifecycleState, DemandKind, LocalPostFrameLane, SchedulerPhase, UpdateScheduler,
+};
 use flui_semantics::SemanticsActionRequest;
 use flui_types::{HapticFeedback, Size, geometry::px};
 use flui_view::{GlobalKeyRegistryComposite, GlobalKeyScope, WidgetsBinding};
 use flui_widgets::{FocusRoot, GestureArenaScope, NavigatorCommand, VsyncScope};
-use parking_lot::Mutex;
 #[cfg(test)]
 use parking_lot::RwLock;
 
@@ -463,16 +464,6 @@ pub(crate) struct UiRealm {
     /// keyboard focus (ADR-0043 §4, issue #555's addressed-routing slice). See
     /// [`FocusCoordinator`]'s own doc.
     focus_coordinator: FocusCoordinator,
-    /// Controller registry for implicit animations (`VsyncScope`-driven).
-    /// Moved here from the retired `AppBinding` — an interim home: a later
-    /// scheduler-owning change re-homes controllers to `UpdateScheduler`,
-    /// but for now this is frame-relative, so per-realm instead of
-    /// process-wide.
-    /// `Mutex`, not `RwLock`: `set_vsync` replaces the whole handle through
-    /// `&self`, and the per-frame `tick_all`/`has_running` calls operate on
-    /// a cloned `Vsync` handle (sharing the inner `Arc<Mutex<VsyncInner>>`),
-    /// so this lock is only ever held for the length of a clone or a swap.
-    vsync_slot: Mutex<Vsync>,
     /// Wall-clock origin for the production `now_secs` computation, moved
     /// here from the retired `AppBinding`: frame times are realm-relative.
     /// `now_secs()` = `start.elapsed().as_secs_f64()`, stored once here so
@@ -772,7 +763,6 @@ impl UiRealm {
             global_key_scope,
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
-            vsync_slot: Mutex::new(Vsync::new()),
             start: web_time::Instant::now(),
             needs_redraw,
             wake: Arc::clone(&wake),
@@ -1287,27 +1277,37 @@ impl UiRealm {
         );
     }
 
-    /// A clone of the shared controller registry for implicit animations.
+    /// A clone of the PRIMARY presentation's own controller registry for
+    /// implicit animations.
     ///
     /// `Vsync` is `Arc`-backed; cloning is two atomic increments — cheap. App
     /// code constructs a `VsyncScope` from this clone so every
     /// implicitly-animated widget below registers its controller here. The
-    /// production frame driver ([`Self::draw_frame_entered`]) ticks all
-    /// registered running controllers once per frame (before the build
-    /// phase) and keeps the frame loop alive until the last one completes.
+    /// production frame driver ([`Self::draw_frame_entered`]) ticks EVERY
+    /// presentation's own registry once per frame (before that
+    /// presentation's build phase) and keeps the frame loop alive until the
+    /// last running controller, on any presentation, completes.
+    ///
+    /// Moved from this realm's own `vsync_slot` to per-presentation storage
+    /// (issue #556 §2: each surface paces its own animations independently)
+    /// — this forwarder to `self.presentations.primary()` keeps every
+    /// existing single-presentation caller and test unchanged; a genuine
+    /// multi-presentation caller reads
+    /// `self.presentations.get(id).vsync()` directly instead.
     pub(crate) fn vsync(&self) -> Vsync {
-        self.vsync_slot.lock().clone()
+        self.presentations.primary().vsync()
     }
 
-    /// Replace this realm's registry with a pre-existing shared `Vsync`.
+    /// Replace the PRIMARY presentation's registry with a pre-existing
+    /// shared `Vsync`.
     ///
-    /// Use when a `VsyncScope` was built before this realm's registry was
-    /// acquired (the scope needs the handle to pass to descendants, and this
-    /// realm must drive that same registry). Call before any controller is
-    /// registered so no registration is stranded on the discarded registry.
-    /// Never mount a second `VsyncScope` at the root with a *different*
-    /// registry — this realm ticks its own while descendants register into
-    /// the other, leaving them frozen.
+    /// Use when a `VsyncScope` was built before this presentation's registry
+    /// was acquired (the scope needs the handle to pass to descendants, and
+    /// this presentation must drive that same registry). Call before any
+    /// controller is registered so no registration is stranded on the
+    /// discarded registry. Never mount a second `VsyncScope` at the root
+    /// with a *different* registry — this presentation ticks its own while
+    /// descendants register into the other, leaving them frozen.
     #[expect(
         dead_code,
         reason = "no production caller yet, and no test exercises the \
@@ -1315,22 +1315,24 @@ impl UiRealm {
                   hatch that has no wiring point since UiRealm is pub(crate)-only"
     )]
     pub(crate) fn set_vsync(&self, vsync: Vsync) {
-        *self.vsync_slot.lock() = vsync;
+        self.presentations.primary().set_vsync(vsync);
     }
 
     /// Whether at least one registered implicit-animation controller is
-    /// currently running.
+    /// currently running, on ANY presentation this realm hosts.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "draw_frame_entered reads has_running() on its own local \
+            reason = "draw_frame_entered reads has_running() on each presentation's own \
                       Vsync clone directly, not through this wrapper; kept for \
                       tests and future external callers"
         )
     )]
     pub(crate) fn has_vsync_running(&self) -> bool {
-        self.vsync_slot.lock().has_running()
+        self.presentations
+            .iter()
+            .any(|presentation| presentation.vsync().has_running())
     }
 
     /// Current virtual seconds for the Vsync tick.
@@ -1454,11 +1456,15 @@ impl UiRealm {
 
     // ========================================================================
     // First-frame deferral and frame accounting (moved from the retired
-    // `AppBinding`, forwarding to the per-realm renderer / per-presentation
-    // counters respectively)
+    // `AppBinding`; issue #556 R2 re-homed the deferral gate itself from
+    // `RenderingFlutterBinding`'s own counter onto the primary presentation's
+    // `FrameClock` as `SkipReason::Deferred` — see `draw_frame_entered`'s
+    // segment loop, which is the actual production consumer now)
     // ========================================================================
 
-    /// See [`RenderingFlutterBinding::defer_first_frame`].
+    /// Defer this realm's primary presentation from producing until a
+    /// matching [`Self::allow_first_frame`]. See
+    /// [`FrameClock::defer`](flui_scheduler::FrameClock::defer).
     #[cfg_attr(
         not(test),
         expect(
@@ -1469,10 +1475,16 @@ impl UiRealm {
         )
     )]
     pub(crate) fn defer_first_frame(&self) {
-        self.presentations.primary().renderer().defer_first_frame();
+        self.presentations.primary().clock().defer();
     }
 
-    /// See [`RenderingFlutterBinding::allow_first_frame`].
+    /// Undo one [`Self::defer_first_frame`]. Because the clock retains its
+    /// demand mask across a `Skip(Deferred)`, lifting the gate with any
+    /// already-marked demand produces on the very next pump — no separate
+    /// re-dirty call needed (the retired `RenderingFlutterBinding`-based
+    /// design needed one; see `allow_first_frame`'s old doc in that struct
+    /// for the gap this closes). See
+    /// [`FrameClock::lift`](flui_scheduler::FrameClock::lift).
     #[cfg_attr(
         not(test),
         expect(
@@ -1481,16 +1493,28 @@ impl UiRealm {
         )
     )]
     pub(crate) fn allow_first_frame(&self) {
-        self.presentations.primary().renderer().allow_first_frame();
+        self.presentations.primary().clock().lift();
     }
 
-    /// See [`RenderingFlutterBinding::send_frames_to_engine`] (via the
-    /// `RendererBinding` trait).
+    /// Whether the primary presentation should hand a produced frame to the
+    /// engine right now. See
+    /// [`FrameClock::should_send_to_engine`](flui_scheduler::FrameClock::should_send_to_engine).
+    ///
+    /// `render_frame_entered` no longer consults this itself (issue #556
+    /// R2 — see that method's own doc): the segment gate already prevents a
+    /// deferred presentation from ever producing a `Painted` outcome, so
+    /// there is nothing left to double-gate at the submit site. Kept as a
+    /// direct query for tests exercising the deferral contract end to end.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production caller since render_frame_entered stopped \
+                      double-gating on this (issue #556 R2) -- see this method's own doc"
+        )
+    )]
     pub(crate) fn send_frames_to_engine(&self) -> bool {
-        self.presentations
-            .primary()
-            .renderer()
-            .send_frames_to_engine()
+        self.presentations.primary().clock().should_send_to_engine()
     }
 
     /// Total frames rendered successfully by this presentation.
@@ -1699,40 +1723,54 @@ impl UiRealm {
     /// introduced the per-presentation loop below; the frame-loop tests are
     /// the parity oracle.
     ///
-    /// **Per-presentation segment loop (ADR-0043 §3):** presentations are
-    /// processed once each, in mount order. Production topology is exactly
-    /// one presentation (`PresentationForest`'s ratchet), so this loop
-    /// degenerates to exactly today's single unconditional segment — see
-    /// [`Self::draw_frame_for_presentation`]'s doc for the proof that its
-    /// dirty gate cannot skip a segment the old, ungated code would have
-    /// run. Returns the LAST presentation's outcome (matches today's single-
-    /// presentation return value exactly; a genuine multi-presentation
-    /// caller reads each presentation's own render state directly rather
-    /// than this aggregate — addressed per-presentation return values are a
-    /// later slice's job).
+    /// **Per-presentation segment loop (ADR-0043 §3; issue #556 §1b/§9-C1):**
+    /// presentations are processed once each, in mount order. Each
+    /// presentation's own [`FrameClock`](flui_scheduler::FrameClock) —
+    /// replacing the old `take_redraw_pending() || has_pending_work()`
+    /// predicate read directly — decides whether its segment runs this pump.
+    /// The clock never inspects the tree itself (ownership rule: it never
+    /// knows phases, callbacks, or element trees), so the exact union the
+    /// old predicate read is marked as `Dirty` demand and the clock's
+    /// `poll` makes the call. Production topology is exactly one
+    /// presentation (`PresentationForest`'s ratchet) with a clock that is
+    /// never hidden, never backpressured, and only ever deferred by an
+    /// explicit `defer_first_frame` — so this reduces to exactly today's
+    /// single unconditional segment; see [`Self::draw_frame_for_presentation`]'s
+    /// doc for the proof that the gate cannot skip a segment the old,
+    /// ungated code would have run. Returns the LAST presentation's outcome
+    /// (matches today's single-presentation return value exactly; a genuine
+    /// multi-presentation caller reads each presentation's own render state
+    /// directly rather than this aggregate — addressed per-presentation
+    /// return values are a later slice's job).
     fn draw_frame_entered(&self, constraints: BoxConstraints) -> FramePaintOutcome {
-        // Vsync tick — MUST precede every presentation's build phase. See
-        // the retired `AppBinding::draw_frame_entered`'s doc for the full
-        // disjoint-controller-set argument this ordering depends on.
+        // Vsync tick + gesture-deadline tick — MUST precede every
+        // presentation's build phase. See the retired `AppBinding::
+        // draw_frame_entered`'s doc for the full disjoint-controller-set
+        // argument this ordering depends on. Each presentation ticks its OWN
+        // registry now (issue #556 §2: the registry moved off this realm's
+        // former `vsync_slot`, one per surface), off the SAME
+        // realm-relative `now` every presentation observes, so there is no
+        // clock drift between siblings sharing this one pump.
         let now = self.now_secs();
-        {
-            let vsync = self.vsync_slot.lock().clone();
+        for presentation in self.presentations.iter() {
+            let vsync = presentation.vsync();
             vsync.tick_all(now);
 
             // Frame continuation: if any controller is still running after
             // this tick, request the NEXT frame so the runner gate stays
-            // open for the full animation duration.
+            // open for the full animation duration. This deliberately does
+            // NOT mark demand on `presentation.clock()`: C1 keeps the pump
+            // wake-channel-driven (issue #556 §1c) and a controller with no
+            // tree-visible effect must not force THIS pump's segment to run
+            // by itself — only the render/dirty state a listener actually
+            // sets does that, via `has_pending_work` below. Marking Animation
+            // demand directly from this signal is C2's job (the compositor-
+            // paced `RedrawRequested` integration), once it cannot silently
+            // widen the segment gate past the predicate it replaces.
             if vsync.has_running() {
                 self.wake_frame();
             }
-        }
 
-        // Gesture-deadline tick + keep-alive — also MUST precede every
-        // presentation's build phase, for the identical ordering argument as
-        // the vsync tick. Each presentation owns its own gesture arena, so
-        // this runs once per presentation rather than once per realm; at
-        // N=1 this is exactly today's single `self.gestures()` call.
-        for presentation in self.presentations.iter() {
             presentation.gestures().tick_deadlines();
             if presentation.gestures().has_pending_deadlines() {
                 self.wake_frame();
@@ -1752,15 +1790,36 @@ impl UiRealm {
             // Segment start: clear this presentation's wake bit BEFORE
             // sampling dirty, so a mark arriving WHILE this segment runs
             // sets the bit again and lands next pump instead of being lost.
+            // The union is fed into the clock as `Dirty` demand rather than
+            // gating directly — the clock decides, the realm only reports.
             let woken = presentation.take_redraw_pending();
-            if !(woken || presentation.has_pending_work()) {
-                // Nothing to flush and nobody asked: skip this presentation's
-                // segment entirely. Bound: each presentation builds and
-                // flushes at most once per pump; this `continue` is what
-                // makes that true rather than merely documented.
+            if woken || presentation.has_pending_work() {
+                presentation.clock().mark_demand(DemandKind::Dirty);
+            }
+
+            if !presentation
+                .clock()
+                .poll(presentation.clock().now())
+                .is_produce()
+            {
+                // Nothing to flush and nobody asked, or a gate (hidden /
+                // backpressure / first-frame deferral) is closed: skip this
+                // presentation's segment entirely. Bound: each presentation
+                // builds and flushes at most once per pump; this `continue`
+                // is what makes that true rather than merely documented.
                 continue;
             }
-            last_outcome = Self::draw_frame_for_presentation(presentation, constraints);
+
+            let result = Self::draw_frame_for_presentation(presentation, constraints);
+            // Mirrors the old `RenderingFlutterBinding::mark_first_frame_sent`'s
+            // `!errored` guard: an errored attempt must not latch
+            // `should_send_to_engine` -- `poll` itself cannot know this
+            // before the segment runs, so confirming success is this call
+            // site's job.
+            if !matches!(result, FramePaintOutcome::Errored) {
+                presentation.clock().mark_first_frame_sent();
+            }
+            last_outcome = result;
         }
         last_outcome
     }
@@ -1869,9 +1928,13 @@ impl UiRealm {
     /// whose owner boundary could not finish (e.g. after a panic); flush
     /// coalesced pointer moves; draw the frame ([`Self::draw_frame_entered`]);
     /// re-hit-test stationary pointing devices against the freshly laid-out
-    /// tree; then, gated by [`Self::send_frames_to_engine`] (the first-frame
-    /// deferral counter), mark full-repaint damage and hand the scene to
-    /// `renderer.render_scene`. `SurfaceLost`/`DeviceLost`/`SurfaceValidation`
+    /// tree; then mark full-repaint damage and hand the scene to
+    /// `renderer.render_scene`. The first-frame deferral gate no longer
+    /// needs a second check here (issue #556 R2): `draw_frame_entered`'s
+    /// segment loop already consults the SAME `FrameClock` this method would
+    /// have re-checked, so a deferred presentation's segment never ran and
+    /// `outcome` is `Idle`, not `Painted` — there is nothing withheld to
+    /// gate a second time. `SurfaceLost`/`DeviceLost`/`SurfaceValidation`
     /// and any other render error all count as a dropped (not settled)
     /// frame, arming a retry via [`Self::wake_frame`] instead of
     /// [`Self::mark_rendered`]'s idle-clear.
@@ -1902,19 +1965,11 @@ impl UiRealm {
                 result
             });
 
-        let send_to_engine = self.send_frames_to_engine();
         let errored = matches!(outcome, FramePaintOutcome::Errored);
-        if send_to_engine && !errored {
-            self.presentations
-                .primary()
-                .renderer()
-                .mark_first_frame_sent();
-        }
 
         let mut presented = false;
         let mut retry_needed = errored;
-        if send_to_engine
-            && let FramePaintOutcome::Painted(ref scene) = outcome
+        if let FramePaintOutcome::Painted(ref scene) = outcome
             && scene.has_content()
         {
             renderer.mark_full_repaint();
@@ -4943,7 +4998,10 @@ mod tests {
         }
 
         #[test]
-        #[should_panic(expected = "allow_first_frame called without matching defer_first_frame")]
+        // The panic message changed with issue #556's migration from
+        // `RenderingFlutterBinding`'s own counter to `FrameClock::lift` --
+        // same caller-contract panic, new mechanism's own wording.
+        #[should_panic(expected = "FrameClock::lift called without a matching defer")]
         fn allow_first_frame_without_matching_defer_panics() {
             let realm = UiRealm::for_test();
             realm.allow_first_frame();

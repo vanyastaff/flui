@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
+use flui_animation::Vsync;
 use flui_foundation::PresentationId;
 use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
@@ -25,7 +26,9 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineOwner;
-use flui_scheduler::{AsyncDriver, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler};
+use flui_scheduler::{
+    AsyncDriver, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,
+};
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding};
@@ -215,6 +218,23 @@ pub(crate) struct PresentationState {
     /// (`Self::has_pending_work`) — see `UiRealm::draw_frame_entered`'s
     /// per-presentation loop.
     redraw_pending: Cell<bool>,
+    /// This presentation's own controller registry for implicit animations
+    /// (moved from the realm-level `UiRealm::vsync_slot`, issue #556 §2:
+    /// each surface paces its own animations independently). `RefCell`, not
+    /// a plain field — mirrors `UiRealm::vsync_slot`'s old `Mutex`: `Self::
+    /// set_vsync` replaces the whole handle through `&self`, and the
+    /// per-frame `tick_all`/`has_running` calls operate on a cloned `Vsync`
+    /// handle (sharing the inner `Arc<Mutex<VsyncInner>>`), so this cell is
+    /// only ever borrowed for the length of a clone or a swap.
+    vsync: RefCell<Vsync>,
+    /// This presentation's own physical-time produce-gate state machine
+    /// (issue #556 §1b) — the per-presentation half of the `UpdateScheduler`/
+    /// `FrameClock`/raster three-owner split. `UiRealm::draw_frame_entered`'s
+    /// per-presentation segment loop polls this instead of the old
+    /// `take_redraw_pending() || has_pending_work()` predicate directly;
+    /// first-frame deferral (`RenderingFlutterBinding::send_frames_to_engine`'s
+    /// old counter) folds into this same clock as `SkipReason::Deferred`.
+    clock: FrameClock,
     /// Test-only oracle: how many times this presentation's own
     /// build+layout+paint segment actually ran (`UiRealm::
     /// draw_frame_for_presentation`), regardless of whether anything was
@@ -353,6 +373,8 @@ impl PresentationState {
             frames_dropped: Cell::new(0),
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
+            vsync: RefCell::new(Vsync::new()),
+            clock: FrameClock::new(),
             #[cfg(test)]
             flush_count: Cell::new(0),
         };
@@ -405,6 +427,8 @@ impl PresentationState {
             frames_dropped: Cell::new(0),
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
+            vsync: RefCell::new(Vsync::new()),
+            clock: FrameClock::new(),
             #[cfg(test)]
             flush_count: Cell::new(0),
         };
@@ -453,6 +477,37 @@ impl PresentationState {
     #[must_use]
     pub(crate) fn gestures(&self) -> &GestureBinding {
         &self.gestures
+    }
+
+    /// A clone of this presentation's own implicit-animation controller
+    /// registry. `Vsync` is `Arc`-backed, so this is cheap and every clone
+    /// observes the same registry — the same handle shape
+    /// `UiRealm::vsync()` used to hand out from its own realm-level slot
+    /// (issue #556 §2: the registry moved here, one per presentation).
+    #[must_use]
+    pub(crate) fn vsync(&self) -> Vsync {
+        self.vsync.borrow().clone()
+    }
+
+    /// Replace this presentation's registry with a pre-existing shared
+    /// `Vsync` — see `UiRealm::set_vsync`'s doc for the one legitimate use
+    /// (a `VsyncScope` built before this presentation's own registry was
+    /// acquired).
+    #[expect(
+        dead_code,
+        reason = "no production caller yet -- forwards from UiRealm::set_vsync, \
+                  itself also uncalled in production (see that method's own doc)"
+    )]
+    pub(crate) fn set_vsync(&self, vsync: Vsync) {
+        *self.vsync.borrow_mut() = vsync;
+    }
+
+    /// This presentation's own physical-time produce-gate state machine
+    /// (issue #556 §1b). See [`FrameClock`]'s own doc for the produce
+    /// decision it makes.
+    #[must_use]
+    pub(crate) fn clock(&self) -> &FrameClock {
+        &self.clock
     }
 
     /// The exact focus tree owned by this presentation.
