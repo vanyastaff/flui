@@ -11,11 +11,15 @@ keywords = ["scheduler", "vsync", "animation", "frame", "ticker"]
 categories = ["gui", "game-development", "rendering"]
 
 [dependencies]
-# Flui foundation (for the generic Id<T: Marker> system: FrameId, TaskId, TickerId)
+# Flui foundation (for the generic Id<T: Marker> system: FrameId, TaskId, TickerId;
+# and MonotonicClock/ManualClock/SystemClock, which FrameClock's ClockSource reuses)
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 # Cross-platform time (web-time is the maintained replacement for instant)
 web-time = { workspace = true }
+
+# FrameClock's DemandMask bitset
+bitflags = { workspace = true }
 
 # Thread-safe synchronization
 parking_lot.workspace = true
