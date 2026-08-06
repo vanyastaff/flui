@@ -39,11 +39,18 @@ impl Default for DiagnosticsProfile {
 /// never wired to the real present path — issue #556 removed the unwired
 /// `vsync`/`target_fps` fields rather than leave a persistently misleading
 /// shape a caller could reasonably expect to govern pacing. Both are
-/// removed, not deprecated: the real, effective frame-pacing configuration
-/// is `flui_engine::RasterOptions` (`target_frame_rate`,
-/// `max_frames_in_flight`), read at the raster boundary a `FrameClock`
-/// consults. `docs/runtime-contract.toml`'s `frame-config-effective-or-removed`
-/// contract pins the absence of both fields on this type.
+/// removed, not deprecated, and the checker mechanically enforces that
+/// absence (`docs/runtime-contract.toml`'s `frame-config-effective-or-removed`
+/// contract, `forbidden_pattern` entries below). `flui_engine::RasterOptions`
+/// (`target_frame_rate`, `max_frames_in_flight`) is the SHAPE a future
+/// production frame-pacing surface would take, not one that governs
+/// anything today: `RasterOwner` reads its own `RasterOptions` field for
+/// nothing (`crates/flui-engine/src/raster_owner.rs`'s own doc: "this module
+/// never acts on it"), and `FrameClock::set_min_produce_interval`/
+/// `set_max_in_flight` have zero callers outside this workspace's own test
+/// code. There is no field here to remove-or-wire because there is no
+/// consumer downstream to wire it to yet — that consumer is #559's job, not
+/// a claim this removal gets to make in the meantime.
 ///
 /// # Example
 ///

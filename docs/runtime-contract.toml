@@ -1735,22 +1735,30 @@ evidence = [
 [[contract]]
 key = "frame-config-effective-or-removed"
 statement = """
-Public frame configuration is wired end to end or removed. `AppConfig` \
-carried `vsync` (unwired) and `target_fps` (advisory-only) — neither ever \
-governed the real presentation clock. Issue #556 removed both fields \
-outright rather than wire them to something they were never designed to \
-control: the effective, tested frame-pacing configuration is \
-`flui_engine::RasterOptions` (`target_frame_rate`, `max_frames_in_flight`), \
-consumed at the raster boundary a `FrameClock` reads. The superseded \
-`target-fps-advisory-documented` contract (which pinned the two fields' \
-advisory doc strings) is retired in the same commit that deletes the \
-fields it was pinning — its evidence would otherwise cite text this change \
-deletes.\
+Public frame configuration is wired end to end or removed — this contract \
+states the REMOVAL half. `AppConfig` carried `vsync` (unwired) and \
+`target_fps` (advisory-only) — neither ever governed the real presentation \
+clock. Issue #556 removed both fields outright rather than wire them to \
+something they were never designed to control, and the checker enforces \
+their absence mechanically (`forbidden_pattern` entries below). \
+`flui_engine::RasterOptions` (`target_frame_rate`, `max_frames_in_flight`) \
+is the SHAPE a future frame-pacing configuration surface would take, not a \
+consumed replacement today: `RasterOwner` stores its own `RasterOptions` \
+and never acts on it (that module's own doc says so directly), and \
+`FrameClock::set_min_produce_interval`/`set_max_in_flight` have zero \
+callers outside this workspace's own test code. Wiring `RasterOptions` to a \
+real consumer is the same #559 raster-adoption work the \
+`raster-owner-in-shipping-path` contract already tracks as `partial` — this \
+contract does not duplicate that claim or imply it is further along than \
+that one states. The superseded `target-fps-advisory-documented` contract \
+(which pinned the two fields' advisory doc strings) is retired in the same \
+commit that deletes the fields it was pinning — its evidence would \
+otherwise cite text this change deletes.\
 """
 state = "implemented"
 domain = "application"
 mechanical = true
-mechanism = "forbidden_pattern entries below assert both fields are absent from AppConfig; RasterOptions is the sole config surface for frame pacing"
+mechanism = "forbidden_pattern entries below assert both fields are absent from AppConfig -- the mechanically checked claim is the fields' absence, not that RasterOptions is consumed anywhere"
 evidence = [
     { kind = "symbol", file = "crates/flui-engine/src/raster_options.rs", contains = "pub struct RasterOptions" },
     { kind = "symbol", file = "crates/flui-app/src/app/config.rs", contains = "issue #556 removed the unwired" },
