@@ -213,6 +213,7 @@ declarations = [
     "pub mod clock;",
     "pub mod consts;",
     "pub mod epoch;",
+    "pub mod frame_stamp;",
     "pub mod id;",
     "pub mod key;",
     "pub mod wasm;",
@@ -230,6 +231,7 @@ declarations = [
     "pub use clock::{ManualClock, MonotonicClock, SystemClock};",
     "pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};",
     "pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};",
+    "pub use frame_stamp::{FrameStamp, FrameStampBuilder};",
     "pub use debug::{ DebugPaintConfig, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty, DiagnosticsPropertyKind, DiagnosticsTreeStyle, };",
     "pub use id::{ DataTransferId, ElementId, FrameCallbackId, FrameId, Id, Identifier, LayerId, ListenerId, Marker, ObserverId, PresentationAddress, PresentationId, RawId, RealmId, RenderId, SemanticsId, TaskId, TickerId, TreeId, ViewId, markers, };",
     "pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};",
@@ -255,7 +257,7 @@ declarations = [
     "pub use layer::{ AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LayerBounds, LayerLink, LeaderLayer, OffsetLayer, OpacityLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceStats, PictureLayer, PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer, SystemUiOverlayStyle, TextureLayer, TransformLayer, };",
     "pub use link_registry::{LeaderInfo, LinkRegistry, resolve_follower_offset};",
     "pub use scene::{CompositionCallback, Scene};",
-    "pub use scene_snapshot::{DamageRegion, SceneSnapshot};",
+    "pub use scene_snapshot::{DamageRegion, SceneSnapshot, SceneSnapshotBuilder};",
     "pub use tree::{LayerNode, LayerTree};",
     "pub mod prelude {",
     "pub const VERSION: &str = env!(\"CARGO_PKG_VERSION\");",
@@ -1420,6 +1422,66 @@ evidence = [
 ]
 
 [[contract]]
+key = "raster-wake-relay-precedes-thread-spawn"
+statement = """
+ADR-0045 decision 5's cross-thread wake relay -- the raster owner's wake \
+hook pushing onto a channel that the platform's own event-loop waker drains \
+on the OWNER thread, never a raster-thread call to \
+`PlatformWindow::request_redraw` -- must land before any raster thread is \
+spawned in production. Two independent reasons this is an ordering \
+constraint rather than a nice-to-have, either alone sufficient: a \
+raster-thread `request_redraw` call would falsify `MacOSWindow`'s own \
+`unsafe impl Send` SAFETY precondition (the NSWindow pointer is main-thread- \
+affine by AppKit convention) on the one backend CI compiles but never \
+executes, so nothing would go red; and the wake hook is `Send + Sync`-bound \
+while realm/presentation state is `!Send`, which blocks capturing UI state \
+into it at compile time but does nothing to stop a hook that skips the \
+relay and calls a platform API directly, compiling and being wrong. Today \
+no raster thread is spawned anywhere in production -- \
+`RasterOwner::run_until_shutdown` is exercised only by this module's own \
+threaded test harness -- so the ordering constraint is not yet live; it \
+becomes load-bearing the moment a production raster-thread spawn lands, \
+which is why it is recorded here ahead of that change rather than after.\
+"""
+state = "partial"
+domain = "raster"
+owner_issue = 559
+mechanical = false
+evidence = [
+    { kind = "symbol", file = "crates/flui-platform/src/platforms/macos/window.rs", contains = "unsafe impl Send for MacOSWindow {}" },
+    { kind = "symbol", file = "crates/flui-engine/src/raster_owner.rs", contains = "pub fn run_until_shutdown(mut self) {" },
+]
+
+[[contract]]
+key = "raster-pacing-baseline-precedes-async-surface-acquire"
+statement = """
+ADR-0045 decision 3 amends ADR-0029: the blocking `Fifo` present paces \
+production only while the raster owner runs inline on the produce thread. \
+The amendment -- and the whole record with it -- stays Proposed until a \
+re-measurement (median/p90/max over repeated windows, against the \
+display's own native period) exists for the threaded lane, and that \
+re-measurement is only evidence of a delta if it has a comparand: a \
+baseline captured with the SAME method, on the UNCHANGED, still-serial \
+lane. The ordering this entry records is that baseline capture, which must \
+happen before the slice that moves surface acquisition and present onto \
+the raster thread lands -- once that slice lands there is no still-serial \
+lane left to measure it on, and the delta this amendment's exit criterion \
+depends on becomes unmeasurable after the fact. `no_present_fallback_pace` \
+is today's serial-lane fallback pacer this baseline characterizes; the \
+re-predicated fallback ADR-0045 decision 3 describes (separating \
+`in_flight > 0` from `in_flight == 0` with a non-presenting last \
+completion, read from the coalesced `SurfaceState` slot rather than the \
+lossy ack lane) does not exist yet.\
+"""
+state = "partial"
+domain = "raster"
+owner_issue = 559
+mechanical = false
+evidence = [
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn no_present_fallback_pace(presented: bool, keeps_gate_open: bool) -> Option<std::time::Duration> {" },
+]
+
+[[contract]]
 key = "presentation-lifecycle-monotonic"
 statement = """
 Each presentation has the explicit Created → SurfaceAttached → Suspended → \
@@ -2576,10 +2638,10 @@ owner = "per-presentation per-frame raster package — non_exhaustive, explicitl
 failure_semantics = "identity fields let receivers reject stale frames"
 consumers = ["RasterOwner protocol", "threaded tests"]
 owner_issue = 552
-notes = "Now carries address: flui_foundation::PresentationAddress in place of the former bare realm_id/presentation_id fields (address, epoch is the full frame identity — FrameEpoch is only per-realm monotonic, so address disambiguates same-epoch frames from sibling presentations, and two different realm incarnations can mint an identical PresentationId so the full pair is required, not presentation_id alone). The prior note calling this addition additive under non_exhaustive was itself the overclaim corrected here: non_exhaustive makes matching additive, not construction through a positional new() — every field this type gains breaks the positional constructor, which is exactly what happened. Recorded pre-graduation gate: replace the growing positional new() with a builder or an identity-group value before this type leaves experimental."
+notes = "Carries stamp: flui_foundation::FrameStamp (address, epoch, surface_generation bundled — the full frame identity: FrameEpoch is only per-realm monotonic, so address disambiguates same-epoch frames from sibling presentations, and two different realm incarnations can mint an identical PresentationId so the full pair is required, not presentation_id alone). The pre-graduation gate this entry used to name — a growing positional new() breaking every external call site, since non_exhaustive makes matching additive but not construction — is discharged (#559): construction goes through SceneSnapshot::builder() (flui_layer::SceneSnapshotBuilder, a typestate builder mirroring flui_foundation::FrameStampBuilder), never a positional constructor, and the three former flat identity fields (address/epoch/surface_generation) are now the bundled FrameStamp identity-group value ADR-0045 names as the shape a future ResourceGeneration axis (decision 4) must land into additively. SceneSnapshot::new() is removed outright, not deprecated — every in-workspace call site (raster_owner.rs's own test helper, the raster_backpressure bench, and the raster_backpressure_allocation integration test) now goes through the builder."
 
 [[surface]]
-path = "flui_foundation::{RealmId, PresentationId, PresentationAddress, FrameEpoch, SurfaceGeneration, ResourceGeneration, GenerationGate}"
+path = "flui_foundation::{RealmId, PresentationId, PresentationAddress, FrameEpoch, SurfaceGeneration, ResourceGeneration, GenerationGate, FrameStamp, FrameStampBuilder}"
 crate = "flui-foundation"
 kind = "type"
 declared_in = "crates/flui-foundation/src/id.rs"
@@ -2590,7 +2652,7 @@ owner = "generational protocol identity vocabulary"
 failure_semantics = "generation mismatch compares unequal; GenerationGate rejects stale commits"
 consumers = ["UiRealm", "PresentationState", "SceneSnapshot", "RasterOwner"]
 owner_issue = 552
-notes = "PresentationAddress { realm_id, presentation_id } is a new additive public type: the full pair a `RasterOwner` binds to and validates every SceneSnapshot against (ADR-0037) — two different realm incarnations can mint an identical PresentationId, so the bare id alone never safely disambiguates them. Promoted here from flui-app's now-deleted private UiAddress once app/layer/engine all needed the same pair."
+notes = "PresentationAddress { realm_id, presentation_id } is a new additive public type: the full pair a `RasterOwner` binds to and validates every SceneSnapshot against (ADR-0037) — two different realm incarnations can mint an identical PresentationId, so the bare id alone never safely disambiguates them. Promoted here from flui-app's now-deleted private UiAddress once app/layer/engine all needed the same pair. FrameStamp { address, epoch, surface_generation } (crates/flui-foundation/src/frame_stamp.rs, #559) bundles this vocabulary's own address/epoch/surface_generation trio into the one identity-group value flui_layer::SceneSnapshot now carries as its `stamp` field, built only through the typestate FrameStampBuilder — shaped so ADR-0045 decision 4's later ResourceGeneration axis is one more builder slot, not a breaking field addition."
 
 [[surface]]
 path = "flui_testing::HeadlessBinding"

@@ -158,6 +158,10 @@ pub mod consts;
 // Monotonic generation/version counters for the window-runtime protocol:
 // FrameEpoch, SurfaceGeneration, ResourceGeneration.
 pub mod epoch;
+// The frame-identity group (address/epoch/surface_generation) bundled for
+// the raster boundary — see the module doc for why it exists as its own
+// builder-constructed type instead of positional constructor arguments.
+pub mod frame_stamp;
 pub mod id;
 pub mod key;
 pub mod wasm;
@@ -203,6 +207,8 @@ pub use clock::{ManualClock, MonotonicClock, SystemClock};
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
 // Window-runtime generation/version counters + commit-time freshness gate.
 pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};
+// The frame-identity group bundled for the raster boundary.
+pub use frame_stamp::{FrameStamp, FrameStampBuilder};
 // Diagnostics
 pub use debug::{
     DebugPaintConfig, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,

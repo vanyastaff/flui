@@ -16,7 +16,7 @@ use flui_engine::{
     CanvasLayer, DamageRegion, EngineError, Layer, RasterBackend, RasterOwner, Scene, SceneSnapshot,
 };
 use flui_foundation::{
-    FrameEpoch, PresentationAddress, PresentationId, RealmId, SurfaceGeneration,
+    FrameEpoch, FrameStamp, PresentationAddress, PresentationId, RealmId, SurfaceGeneration,
 };
 use flui_types::Size;
 use flui_types::geometry::{Pixels, Rect};
@@ -124,13 +124,20 @@ fn address() -> PresentationAddress {
 }
 
 fn frame(epoch: FrameEpoch) -> SceneSnapshot {
-    SceneSnapshot::new(
-        address(),
-        epoch,
-        SurfaceGeneration::ZERO,
-        DamageRegion::Full,
-        Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
-    )
+    let stamp = FrameStamp::builder()
+        .address(address())
+        .epoch(epoch)
+        .surface_generation(SurfaceGeneration::ZERO)
+        .build();
+    SceneSnapshot::builder()
+        .stamp(stamp)
+        .damage(DamageRegion::Full)
+        .scene(Scene::from_layer(
+            Size::ZERO,
+            Layer::from(CanvasLayer::new()),
+            0,
+        ))
+        .build()
 }
 
 /// The measured claim: after warmup (the owner's own one-time

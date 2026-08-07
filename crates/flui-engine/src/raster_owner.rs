@@ -568,17 +568,18 @@ impl RasterHandle {
     ///
     /// # Errors
     ///
-    /// [`RasterSubmitError::AddressMismatch`] if `frame.address` does not
-    /// match the address this owner was constructed with — checked first,
-    /// regardless of lifecycle state, since it is a protocol violation, not
-    /// a backpressure/lifecycle condition; [`RasterSubmitError::ShuttingDown`]
-    /// once [`Self::shutdown`] has been called; [`RasterSubmitError::OwnerGone`]
-    /// once the owning [`RasterOwner`] has dropped.
+    /// [`RasterSubmitError::AddressMismatch`] if `frame.stamp.address` does
+    /// not match the address this owner was constructed with — checked
+    /// first, regardless of lifecycle state, since it is a protocol
+    /// violation, not a backpressure/lifecycle condition;
+    /// [`RasterSubmitError::ShuttingDown`] once [`Self::shutdown`] has been
+    /// called; [`RasterSubmitError::OwnerGone`] once the owning
+    /// [`RasterOwner`] has dropped.
     pub fn submit(&self, frame: SceneSnapshot) -> Result<(), RasterSubmitError> {
-        if frame.address != self.mailbox.address {
+        if frame.stamp.address != self.mailbox.address {
             return Err(RasterSubmitError::AddressMismatch {
                 expected: self.mailbox.address,
-                got: frame.address,
+                got: frame.stamp.address,
             });
         }
         let mut superseded_a_frame = false;
@@ -608,7 +609,7 @@ impl RasterHandle {
             };
             if let Some(superseded) = state.pending_frame.replace(pending) {
                 tracing::trace!(
-                epoch = ?superseded.snapshot.epoch,
+                epoch = ?superseded.snapshot.stamp.epoch,
                 "raster mailbox: pending frame superseded by a newer submit"
                 );
                 // Sent while `state` is still held: the owner cannot
@@ -624,8 +625,8 @@ impl RasterHandle {
                 // `send_ack`'s `try_send` never blocks (the one ack that
                 // does block, `ShutdownComplete`, is never sent from here).
                 self.mailbox.send_ack(RasterAck::Dropped {
-                    epoch: superseded.snapshot.epoch,
-                    address: superseded.snapshot.address,
+                    epoch: superseded.snapshot.stamp.epoch,
+                    address: superseded.snapshot.stamp.address,
                     reason: FrameDropReason::Superseded,
                 });
                 // `superseded`'s ticket decrements the counter right here,
@@ -1039,7 +1040,8 @@ impl<B: RasterBackend> RasterOwner<B> {
         // that same wake guarantee to the unwind path for every fallible
         // call from there through `render_scene`.
 
-        let outcome = if frame.snapshot.surface_generation == self.current_surface_generation {
+        let outcome = if frame.snapshot.stamp.surface_generation == self.current_surface_generation
+        {
             // `DamageRegion::Full` is the only variant that exists today
             // (flui-layer's own doc: fine-grained damage is an additive,
             // `#[non_exhaustive]`-guarded follow-up, so
@@ -1065,40 +1067,40 @@ impl<B: RasterBackend> RasterOwner<B> {
                     // carrying no longer applies.
                     self.mailbox.set_device_lost(false);
                     self.mailbox.send_ack(RasterAck::Presented {
-                        epoch: frame.snapshot.epoch,
-                        address: frame.snapshot.address,
+                        epoch: frame.snapshot.stamp.epoch,
+                        address: frame.snapshot.stamp.address,
                     });
                     PumpOutcome::Presented {
-                        epoch: frame.snapshot.epoch,
-                        address: frame.snapshot.address,
+                        epoch: frame.snapshot.stamp.epoch,
+                        address: frame.snapshot.stamp.address,
                     }
                 }
                 Err(error) => self.handle_render_failure(
-                    frame.snapshot.epoch,
-                    frame.snapshot.address,
-                    frame.snapshot.surface_generation,
+                    frame.snapshot.stamp.epoch,
+                    frame.snapshot.stamp.address,
+                    frame.snapshot.stamp.surface_generation,
                     error,
                 ),
             }
         } else {
-            let stale = frame.snapshot.surface_generation;
+            let stale = frame.snapshot.stamp.surface_generation;
             let current = self.current_surface_generation;
             tracing::warn!(
-            epoch = ?frame.snapshot.epoch,
+            epoch = ?frame.snapshot.stamp.epoch,
             ?stale,
             ?current,
             "raster owner: frame stamped with a stale surface generation, \
             rejecting before render"
             );
             self.mailbox.send_ack(RasterAck::SurfaceOutdated {
-                epoch: frame.snapshot.epoch,
-                address: frame.snapshot.address,
+                epoch: frame.snapshot.stamp.epoch,
+                address: frame.snapshot.stamp.address,
                 stale,
                 current,
             });
             PumpOutcome::SurfaceOutdated {
-                epoch: frame.snapshot.epoch,
-                address: frame.snapshot.address,
+                epoch: frame.snapshot.stamp.epoch,
+                address: frame.snapshot.stamp.address,
                 stale,
                 current,
             }
@@ -1230,7 +1232,7 @@ impl<B: RasterBackend> Drop for RasterOwner<B> {
         let orphaned = self.mailbox.state.lock().pending_frame.take();
         if let Some(orphaned) = orphaned {
             tracing::debug!(
-                epoch = ?orphaned.snapshot.epoch,
+                epoch = ?orphaned.snapshot.stamp.epoch,
                 "raster owner dropped with a frame still pending; retiring it"
             );
             drop(orphaned);
@@ -1252,7 +1254,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use flui_foundation::{PresentationId, RealmId};
+    use flui_foundation::{FrameStamp, PresentationId, RealmId};
     use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene};
     use flui_types::Size;
     use flui_types::geometry::{Pixels, Rect};
@@ -1366,13 +1368,20 @@ mod tests {
         address: PresentationAddress,
         surface_generation: SurfaceGeneration,
     ) -> SceneSnapshot {
-        SceneSnapshot::new(
-            address,
-            epoch,
-            surface_generation,
-            DamageRegion::Full,
-            Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
-        )
+        let stamp = FrameStamp::builder()
+            .address(address)
+            .epoch(epoch)
+            .surface_generation(surface_generation)
+            .build();
+        SceneSnapshot::builder()
+            .stamp(stamp)
+            .damage(DamageRegion::Full)
+            .scene(Scene::from_layer(
+                Size::ZERO,
+                Layer::from(CanvasLayer::new()),
+                0,
+            ))
+            .build()
     }
 
     // -----------------------------------------------------------------------

@@ -547,8 +547,11 @@ impl std::fmt::Debug for UiRealm {
 /// up-to-date frame (see [`UiRealm::render_frame_entered`]'s retry gate).
 /// Moved here from the retired `AppBinding`.
 enum FramePaintOutcome {
-    /// A fresh layer tree was painted and turned into a `Scene`.
-    Painted(Arc<Scene>),
+    /// A fresh layer tree was painted and turned into a `Scene`. Owned, never
+    /// `Arc<Scene>`: `scene_snapshot.rs`'s own contract for this seam is
+    /// ownership transfer, not shared reference counting, and this outcome
+    /// has exactly one reader (`render_frame_entered`, immediately below).
+    Painted(Scene),
     /// Nothing was dirty this frame; no new content to composite.
     Idle,
     /// The build/layout/paint transaction failed (e.g. a render object
@@ -1864,7 +1867,7 @@ impl UiRealm {
     /// Draw a frame and return the produced `Scene`, if any. Test-only —
     /// production drives frames through [`Self::render_frame_entered`].
     #[cfg(test)]
-    pub(crate) fn draw_frame(&self, constraints: BoxConstraints) -> Option<Arc<Scene>> {
+    pub(crate) fn draw_frame(&self, constraints: BoxConstraints) -> Option<Scene> {
         match self.enter(|realm| realm.draw_frame_entered(constraints)).1 {
             FramePaintOutcome::Painted(scene) => Some(scene),
             FramePaintOutcome::Idle | FramePaintOutcome::Errored => None,
@@ -2112,12 +2115,16 @@ impl UiRealm {
                 link_registry.unwrap_or_default(),
                 frame_number,
             );
-            #[expect(
-                clippy::arc_with_non_send_sync,
-                reason = "Scene: Send but !Sync due to CompositionCallback (FnOnce + Send + 'static, no Sync). Sole reader is the owner thread; relaxing the callback bound is tracked under the engine composition redesign."
-            )]
-            let arc = Arc::new(scene);
-            FramePaintOutcome::Painted(arc)
+            // Owned transfer, never `Arc<Scene>` — `scene_snapshot.rs`'s own
+            // contract for this seam. `Scene` is `Send` but not `Sync`
+            // (`CompositionCallback` is `FnOnce + Send`, never `Sync`), which
+            // used to force an `Arc` just to satisfy `FramePaintOutcome`'s
+            // shape even though nothing ever shared it — the sole reader is
+            // `render_frame_entered`, immediately below, on the same owner
+            // thread. That also retires the
+            // `#[expect(clippy::arc_with_non_send_sync)]` this call used to
+            // need.
+            FramePaintOutcome::Painted(scene)
         } else if pipeline_errored {
             FramePaintOutcome::Errored
         } else {

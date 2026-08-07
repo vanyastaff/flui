@@ -41,7 +41,7 @@ use flui_engine::{
     CanvasLayer, DamageRegion, EngineError, Layer, RasterBackend, RasterOwner, Scene, SceneSnapshot,
 };
 use flui_foundation::{
-    FrameEpoch, PresentationAddress, PresentationId, RealmId, SurfaceGeneration,
+    FrameEpoch, FrameStamp, PresentationAddress, PresentationId, RealmId, SurfaceGeneration,
 };
 use flui_types::Size;
 use flui_types::geometry::{Pixels, Rect};
@@ -87,13 +87,20 @@ fn bench_address() -> PresentationAddress {
 }
 
 fn bench_frame(epoch: FrameEpoch) -> SceneSnapshot {
-    SceneSnapshot::new(
-        bench_address(),
-        epoch,
-        SurfaceGeneration::ZERO,
-        DamageRegion::Full,
-        Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
-    )
+    let stamp = FrameStamp::builder()
+        .address(bench_address())
+        .epoch(epoch)
+        .surface_generation(SurfaceGeneration::ZERO)
+        .build();
+    SceneSnapshot::builder()
+        .stamp(stamp)
+        .damage(DamageRegion::Full)
+        .scene(Scene::from_layer(
+            Size::ZERO,
+            Layer::from(CanvasLayer::new()),
+            0,
+        ))
+        .build()
 }
 
 /// Uncontended baseline: one thread doing submit→pump→retire in a tight
