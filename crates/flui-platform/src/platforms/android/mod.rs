@@ -55,6 +55,21 @@ use crate::{
     },
 };
 
+/// Whether the registered wake-deadline hook's answer means `run`'s loop
+/// should force a frame dispatch THIS iteration, even though nothing
+/// explicitly requested a redraw. Pulled out of `run`'s loop as its own
+/// pure, free function — unlike the rest of that loop, which needs a live
+/// `AndroidApp` (constructible only by the real Android runtime; no test
+/// double exists for it, so `run` itself cannot be exercised in a unit
+/// test on any host) — this one decision is entirely independent of that
+/// and is exactly the property this backend's new wake-deadline actuation
+/// rests on: `None` (no hook installed, or the hook itself has nothing
+/// pending) never forces a dispatch; `Some(deadline)` forces one once, and
+/// only once, `now` has reached it.
+fn is_deadline_due(deadline: Option<web_time::Instant>, now: web_time::Instant) -> bool {
+    deadline.is_some_and(|deadline| now >= deadline)
+}
+
 /// Android platform implementation using `android-activity`
 ///
 /// Wraps the `AndroidApp` provided by `android_main()` and implements the
@@ -217,12 +232,35 @@ impl Platform for AndroidPlatform {
                 break;
             }
 
-            // Check if we should render before polling
-            let should_render = platform
-                .window
-                .lock()
-                .as_ref()
-                .is_some_and(|w| w.take_redraw_request());
+            // Wall-clock wake (mirrors the winit backend's `about_to_wait`):
+            // consult the registered wake-deadline hook fresh on EVERY
+            // iteration -- a deadline that fires, a new one getting armed,
+            // or every deadline clearing must all be reflected immediately,
+            // not stale from whenever the hook was installed. Lock
+            // discipline (ADR-0038 §5, the same rule winit's own
+            // `about_to_wait` follows): the hook itself re-enters
+            // `flui-app` -- clone the `Arc` out, drop the lock, THEN call
+            // it, never while `platform.handlers` is still held.
+            let wake_deadline_hook = platform.handlers.lock().wake_deadline.clone();
+            let wake_deadline = wake_deadline_hook.and_then(|hook| hook());
+            let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
+
+            // Check if we should render before polling. `deadline_due`
+            // forces a dispatch even though nothing explicitly requested a
+            // redraw -- this is what lets a wake-deadline consumer (e.g.
+            // `flui-app`'s device-recovery retry backoff) actually get
+            // re-checked on this backend: unlike winit, Android has no
+            // `ControlFlow::WaitUntil` to fall back on, so the deadline is
+            // actuated by forcing this loop's own already-running ~16ms
+            // idle poll to dispatch a frame once due, rather than by a
+            // separate wait primitive. Granularity is therefore bounded by
+            // the idle timeout below (~16ms), not exact to the deadline.
+            let should_render = deadline_due
+                || platform
+                    .window
+                    .lock()
+                    .as_ref()
+                    .is_some_and(|w| w.take_redraw_request());
 
             let timeout = if should_render {
                 Duration::from_millis(0)
@@ -395,6 +433,20 @@ impl Platform for AndroidPlatform {
         self.handlers.lock().window_event = Some(callback);
     }
 
+    /// Unlike `winit`'s override (the trait's one other live implementor),
+    /// this backend has no `ControlFlow::WaitUntil` to hand the deadline
+    /// to — `run`'s own loop actuates it directly instead, by checking
+    /// `now >= deadline` once per iteration and forcing a dispatch when due
+    /// (see that loop's own comment). Storage is the identical
+    /// `PlatformHandlers::wake_deadline` slot winit uses, for the same
+    /// `Arc`-cloned-out-of-the-lock consultation discipline (ADR-0038 §5).
+    fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
+        self.handlers.lock().wake_deadline = Some(Arc::from(hook));
+    }
+
     fn app_path(&self) -> Result<PathBuf> {
         Ok(PathBuf::from("/data/local/tmp"))
     }
@@ -473,5 +525,37 @@ impl PlatformDisplay for AndroidDisplay {
 
     fn is_primary(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod wake_deadline_tests {
+    use std::time::Duration;
+
+    use super::is_deadline_due;
+
+    #[test]
+    fn no_hook_or_an_empty_hook_never_forces_a_dispatch() {
+        assert!(!is_deadline_due(None, web_time::Instant::now()));
+    }
+
+    #[test]
+    fn a_future_deadline_does_not_force_a_dispatch_yet() {
+        let now = web_time::Instant::now();
+        let deadline = now + Duration::from_millis(16);
+        assert!(!is_deadline_due(Some(deadline), now));
+    }
+
+    #[test]
+    fn a_due_or_past_deadline_forces_a_dispatch() {
+        let now = web_time::Instant::now();
+        let deadline = now
+            .checked_sub(Duration::from_millis(1))
+            .expect("now is far past the epoch");
+        assert!(is_deadline_due(Some(deadline), now));
+        assert!(
+            is_deadline_due(Some(now), now),
+            "exactly-now must count as due, not just strictly-past"
+        );
     }
 }

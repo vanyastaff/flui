@@ -1487,13 +1487,25 @@ impl UiRealm {
     /// independently of the clock's demand mechanism (confirmed by a
     /// probe, not assumed: `should_run_segment()` correctly read `true`
     /// with `request_redraw` alone, and the pipeline still produced
-    /// `Idle`). Marking the root render object dirty
-    /// (`PipelineOwner::mark_needs_layout`) is what gives the pipeline
-    /// actual work to redo — the same stand-in the `SurfaceLost` retry
-    /// test already uses by hand (`ui_realm.rs`'s
-    /// `surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`),
-    /// promoted here to a real, reusable production path instead of a
-    /// test-only workaround.
+    /// `Idle`). Marking the root render object dirty is what gives the
+    /// pipeline actual work to redo.
+    ///
+    /// [`PipelineOwner::mark_needs_paint`], deliberately NOT `mark_needs_
+    /// layout`: layout has not changed across a device loss — only the
+    /// PAINTED OUTPUT needs to be resubmitted, since the recovered
+    /// device's backing store (not the widget tree's geometry) is what was
+    /// invalidated. `mark_needs_paint` is sufficient because paint is
+    /// already a full-tree descent every frame in this codebase (see
+    /// `docs/` notes on that shape) — marking just the root non-Idle is
+    /// enough for the descent to cover everything beneath it; forcing a
+    /// full RELAYOUT of the whole tree for a purely renderer-side backing-
+    /// store loss would be strictly heavier than the fix needs. Verified,
+    /// not assumed: swapping this one call site is what the SurfaceLost
+    /// retry test's by-hand stand-in (`ui_realm.rs`'s
+    /// `surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`)
+    /// also uses `mark_needs_layout` for, but that stand-in predates this
+    /// method and was never revisited against the lighter mark — this is
+    /// the first real (non-test) caller, and it takes the lighter one.
     #[cfg_attr(
         target_arch = "wasm32",
         expect(
@@ -1504,12 +1516,20 @@ impl UiRealm {
                       -- see that call site's own comment"
         )
     )]
+    // TODO(#559): marks `self.presentations.primary()` unconditionally --
+    // a realm with a non-primary presentation hosting the device that just
+    // recovered would mark the WRONG presentation's tree. Latent today
+    // only because a secondary window carries no widget content yet
+    // (`open_secondary_window`'s own doc); #559's addressing slice is
+    // where this needs to become presentation-addressed, matching how
+    // `render_frame_with_device_recovery` itself is still single-renderer/
+    // single-presentation shaped.
     pub(crate) fn mark_primary_needs_full_repaint(&self) {
         self.request_redraw();
         let primary = self.presentations.primary();
         primary.renderer().root_pipeline_owner().with_mut(|owner| {
             if let Some(root_id) = owner.root_id() {
-                owner.mark_needs_layout(root_id);
+                owner.mark_needs_paint(root_id);
             }
         });
     }
