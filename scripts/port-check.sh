@@ -1194,7 +1194,7 @@ fi
 #   SingleChildLayoutDelegate, MultiChildLayoutDelegate, FlowDelegate,
 #   CustomPainter, ParentData, CustomClipper, RendererBinding, Debug
 #   #6-adjacent: LogicalIndexParentData — the pub(crate) ParentData sub-trait the
-#   re-entrant build contract (ADR-0003 U3c) uses to stamp the logical item index
+#   re-entrant build contract (ADR-0003) uses to stamp the logical item index
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
