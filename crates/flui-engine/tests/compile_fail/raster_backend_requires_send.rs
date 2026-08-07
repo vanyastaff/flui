@@ -3,10 +3,13 @@
 //! the `impl` site itself, not merely fail later at a
 //! `dyn RasterBackend + Send` use site.
 
-use std::marker::PhantomData;
-
+// A bare raw pointer rather than `PhantomData<*const ()>`: the note chain
+// then stays entirely inside this file. Routing !Send-ness through
+// `PhantomData` makes rustc quote `core/src/marker.rs`, whose source line is
+// only available when the `rust-src` component is installed — so the blessed
+// .stderr passed locally and failed in CI, where it is not.
 struct NotSend {
-    _marker: PhantomData<*const ()>,
+    _raw: *const (),
 }
 
 struct BadBackend {

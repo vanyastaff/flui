@@ -295,7 +295,8 @@ mod raw_handles_field_pin {
 /// Cross-platform GPU renderer
 ///
 /// `Send` by compiler derivation: every field is `Send`, including
-/// `raw_handles` via [`RawHandles`]'s `unsafe impl Send` above — the
+/// `raw_handles` via the private `RawHandles` newtype's `unsafe impl
+/// Send` above — the
 /// crate's only remaining manual `Send` assertion, narrowed to exactly the
 /// two fields it reasons about. Deliberately never `Sync`: the raster owner
 /// (`crate::raster_owner::RasterOwner`) has sole mutable access to the

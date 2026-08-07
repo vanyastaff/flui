@@ -1,24 +1,19 @@
 error[E0277]: `*const ()` cannot be sent between threads safely
-  --> tests/compile_fail/raster_backend_requires_send.rs:16:37
+  --> tests/compile_fail/raster_backend_requires_send.rs:19:37
    |
-16 | impl flui_engine::RasterBackend for BadBackend {
+19 | impl flui_engine::RasterBackend for BadBackend {
    |                                     ^^^^^^^^^^ `*const ()` cannot be sent between threads safely
    |
    = help: within `BadBackend`, the trait `Send` is not implemented for `*const ()`
-note: required because it appears within the type `PhantomData<*const ()>`
-  --> $RUST/core/src/marker.rs
-   |
-   | pub struct PhantomData<T: PointeeSized>;
-   |            ^^^^^^^^^^^
 note: required because it appears within the type `NotSend`
-  --> tests/compile_fail/raster_backend_requires_send.rs:8:8
+  --> tests/compile_fail/raster_backend_requires_send.rs:11:8
    |
- 8 | struct NotSend {
+11 | struct NotSend {
    |        ^^^^^^^
 note: required because it appears within the type `BadBackend`
-  --> tests/compile_fail/raster_backend_requires_send.rs:12:8
+  --> tests/compile_fail/raster_backend_requires_send.rs:15:8
    |
-12 | struct BadBackend {
+15 | struct BadBackend {
    |        ^^^^^^^^^^
 note: required by a bound in `RasterBackend`
   --> src/raster.rs
