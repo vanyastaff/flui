@@ -10,12 +10,13 @@
 # violation outside the whitelist; prints
 # the offending file:line and the trigger ID.
 # Triggers
-# #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
-# (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8). Trigger #14
-# added by the N-geom polish pass §U12 (unit-barrier escape-hatch guard).
-# Triggers #15/#16/#17/#18 added in core-0a adversarial-reaudit PR-4 §U5
-# (println!/eprintln!/dbg! ban, module-level allow(unsafe_code) ban,
-# reinvented debug_assert_* ban, key.rs new_unchecked ban). Trigger #19
+# #8/#10/#11/#12/#13 catch, respectively: stubbed-but-called functions,
+# parallel cross-crate type definitions, speculative scaffolding, lock
+# placement in public APIs, and constructor-time panics. Trigger #14 is a
+# flui-geometry unit-barrier escape-hatch guard. Triggers #15/#16/#17/#18
+# ban, respectively: println!/eprintln!/dbg!, module-level
+# allow(unsafe_code), reinvented debug_assert_* macros, and key.rs
+# new_unchecked. Trigger #19
 # added in engine overhaul T9f (C4: Matrix4 must not appear on the
 # record/pipeline side; convert at the Backend trait boundary). Trigger #20
 # added in advanced-blend PR-5 (gradient/image producers must not regress
@@ -46,7 +47,7 @@ budget=0
 # trigger-check run with marker summary tail; the other is a marker-only
 # scan that skips trigger checks). Extra args are a usage error so typos
 # like `port-check -v -b` or `port-check -vfoo` fail loud instead of
-# silently using only $1. Copilot review on PR #150.
+# silently using only $1.
 # Print usage to stdout (used by --help) or stderr (used by error paths).
 print_usage() {
   cat <<USAGE
@@ -148,8 +149,7 @@ if [[ "${budget}" -eq 1 ]]; then
   # summary tail uses. This was previously three inline `grep -E -c` pipes
   # that diverged from `count_markers` on tab-indented markers (the inline
   # form anchored on `\s+`, the helper passed the kind string directly to
-  # rg). Maintainability finding on PR #150 — single source of truth for
-  # the count semantics.
+  # rg). One helper is the single source of truth for the count semantics.
   total_todo=$(count_markers "TODO(port)" crates/)
   total_perf=$(count_markers "PERF(port)" crates/)
   total_note=$(count_markers "PORT NOTE"  crates/)
@@ -214,7 +214,7 @@ check "1" \
 # Trigger 2 -- Box<dyn RenderObject<...>> wrapped in an interior-mutability
 # primitive in render storage.
 #
-# Owned `Box<dyn RenderObject<_>>` as a plain field is the chosen post-U2
+# Owned `Box<dyn RenderObject<_>>` as a plain field is the chosen
 # baseline (preserves the open-set trait, delegates mutation discipline to
 # the borrow checker via &mut RenderTree). The hazard is *wrapping* the
 # trait object in RwLock/Mutex/RefCell/Cell/UnsafeCell on the storage type,
@@ -371,7 +371,7 @@ check "6" \
 # TexturePoolInner>>" for the deferral rationale.
 # -----------------------------------------------------------------------------
 #
-# Regex shape (anchored + grouped per Copilot review on PR #79):
+# Regex shape (anchored + grouped):
 #   ^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)
 # Anchors to struct-field syntax: leading whitespace + optional `pub` + ident
 # + `:`. Inner alternation `((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)`
@@ -395,7 +395,7 @@ check "7" \
   crates/flui-engine/src/wgpu
 
 # -----------------------------------------------------------------------------
-# FR-033 (Phase 3 §U29): downcast_ref::<…> in the View-type update dispatch
+# FR-033: downcast_ref::<…> in the View-type update dispatch
 # path. Scoped to `crates/flui-view/src/element/{generic.rs, dispatch.rs}` —
 # the body of `ElementCore::update_view` and its dispatch helper. The grep
 # matches **any** `downcast_ref::<` inside the scoped files, not just the
@@ -408,8 +408,8 @@ check "7" \
 # is reserved for sites that enter the scope but should be sanctioned
 # individually.
 #
-# This is a SPEC requirement (FR-033, SC-004) but NOT a numbered refusal
-# trigger — refusal trigger #9 (FR-036, plan §U30) is the broader
+# This is a SPEC requirement (FR-033) but NOT a numbered refusal
+# trigger — refusal trigger #9 (FR-036) is the broader
 # sanctioned-`dyn` enforcement; this grep targets a single defect class on
 # a tighter scope.
 # -----------------------------------------------------------------------------
@@ -432,16 +432,17 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# FR-033/widgets (ADR-0019 U4) — type-erased downcasts in the public widget
+# FR-033/widgets (ADR-0019) — type-erased downcasts in the public widget
 # catalog.
 #
 # `Navigator::pop(result)` must erase its result through `Box<dyn Any + Send>`,
 # because a heterogeneous route stack cannot carry each route's `Output` type
 # (ADR-0019 §4). The downcast back to `R::Output` in `RouteRecord::did_complete`
-# is signed off in ADR-0019's *Public API and sign-off (U4)*.
+# is signed off in ADR-0019's *Public API and sign-off* section.
 #
-# Before U4, `crates/flui-widgets` sat outside both FR-036 and FR-033, so that
-# boundary would have shipped with no gate at all. This grep closes it: any new
+# Before Navigator's public export (ADR-0019), `crates/flui-widgets` sat
+# outside both FR-036 and FR-033, so that boundary would have shipped with
+# no gate at all. This grep closes it: any new
 # `downcast`/`downcast_ref`/`downcast_mut` in the catalog must be justified with
 # a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker, i.e. a deliberate act.
 #
@@ -449,7 +450,7 @@ fi
 # `Localizations::maybe_of`/`build` (crates/flui-widgets/src/localization/
 # localizations.rs) downcast an `Arc<dyn Any + Send + Sync>` resource-map entry
 # back to the delegate-declared, caller-requested resource type — the same
-# heterogeneous-erasure shape as the ADR-0019 U4 boundary above (a
+# heterogeneous-erasure shape as the ADR-0019 boundary above (a
 # `Localizations` cannot be generic over every `LocalizationsDelegate::Resources`
 # type its delegate list carries and stay `dyn`-storable). Confined to that one
 # module, both call sites marked.
@@ -472,8 +473,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 8 (D-block PR-C-3 §U41, architecture-correction-plan SP-1) —
-# stubbed-but-called functions.
+# Trigger 8 — stubbed-but-called functions.
 #
 # Greps for `unimplemented!(` / `todo!(` in production code (non-test).
 # These are SP-1 violations: a `fn` body that panics on entry is a
@@ -515,7 +515,7 @@ trigger8_raw=$(rg --line-number --column \
   | grep -Ev '//\s*PORT-CHECK-OK-STUB:' \
   || true)
 
-# **PR #151 Codex review #3295220689:** post-filter out matches inside
+# Post-filter out matches inside
 # in-file `#[cfg(test)]` blocks (Rust convention: `#[cfg(test)] mod
 # tests { ... }` at end of source file). The path-glob exclusions
 # above only drop dedicated test files; in-file test modules slip
@@ -560,8 +560,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 10 (D-block PR-C-3 §U42, architecture-correction-plan SP-3) —
-# parallel cross-crate type definitions.
+# Trigger 10 — parallel cross-crate type definitions.
 #
 # Collects every `pub struct` / `pub enum` / `pub trait` identifier
 # across the `crates/flui-*/src/` tree and flags any identifier defined
@@ -633,7 +632,7 @@ trigger10_defs=$(
 )
 
 # Build a tab-separated index: crate \t kind \t name \t full-line.
-# **PR #151 Copilot review #3295220014:** Windows rg output uses `\`
+# Windows rg output uses `\`
 # in paths; the awk `split($1, parts, "/")` then yields `n < 2` and
 # silently drops every entry, suppressing all SP-3 duplicate detection.
 # Normalize backslash → forward slash before splitting.
@@ -710,8 +709,7 @@ check "Cross.H2/TargetPlatform" \
   crates
 
 # -----------------------------------------------------------------------------
-# Trigger 11 (D-block PR-C-3 §U43, architecture-correction-plan SP-4) —
-# speculative scaffolding: `pub mod` family with zero production
+# Trigger 11 — speculative scaffolding: `pub mod` family with zero production
 # consumers and not behind `cfg(feature = "unstable-*")`.
 #
 # Scans each crate's `lib.rs` for `pub mod <name>;` declarations.
@@ -731,8 +729,7 @@ check "Cross.H2/TargetPlatform" \
 # Limitations: this is a mechanical scan and trades precision for
 # implementability. It catches the common "lib.rs declares pub mod with
 # no use sites" shape; it does NOT catch sub-module speculation
-# (`mod foo { pub mod bar; }`). For deeper SP-4 audits, see the manual
-# verdicts in architecture-correction-plan §SP-4 (table at line 451).
+# (`mod foo { pub mod bar; }`).
 # -----------------------------------------------------------------------------
 trigger11_lib_files=$(rg --files --type rust --glob '**/lib.rs' --glob '!**/tests/**' --glob '!examples/**' crates/ 2>/dev/null || true)
 trigger11_violations=""
@@ -770,7 +767,7 @@ for libfile in ${trigger11_lib_files}; do
     fi
 
     # Skip if previous non-blank line is `#[cfg(feature = "unstable-...")]`.
-    # **PR #151 Copilot review #3295220020 + Codex #3295220690:** scan backward
+    # Scan backward
     # until a non-blank line is found (a blank separator between the attribute
     # and `pub mod` must not cause a false-positive).
     # Preloaded array eliminates per-line sed forks.
@@ -895,8 +892,7 @@ check "ADR-0037/focus-owner" \
   crates/flui-app
 
 # -----------------------------------------------------------------------------
-# Trigger 12 (D-block PR-C-3 §U44, architecture-correction-plan SP-6) —
-# lock placement in public API.
+# Trigger 12 — lock placement in public API.
 #
 # Lock types leak the framework's concurrency model across module
 # boundaries. A `pub fn -> RwLockReadGuard<...>` or `pub field:
@@ -967,8 +963,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 13 (D-block PR-C-3 §U45, architecture-correction-plan SP-8) —
-# constructor-time panics.
+# Trigger 13 — constructor-time panics.
 #
 # `unwrap()` / `expect()` / `panic!(...)` / `assert!(...)` inside a
 # public CONSTRUCTOR (`pub fn new` / `pub fn from_*` / `pub fn try_*`)
@@ -1017,10 +1012,10 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 14 (N-geom polish pass §U12) — unit-barrier escape hatches in
+# Trigger 14 — unit-barrier escape hatches in
 # flui-geometry.
 #
-# The `flui-geometry` polish pass (U1/U2/U4/U6) removed the implicit
+# A flui-geometry hardening pass removed the implicit
 # conversions and cross-type operators that let an untyped scalar leak across
 # the unit boundary. This trigger keeps them gone — the next contributor who
 # adds "just one quick conversion" re-opens the bug class the pass closed.
@@ -1087,7 +1082,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 9 (FR-036, Phase 3.1 §U30) — sanctioned `dyn`-boundary registry.
+# Trigger 9 (FR-036) — sanctioned `dyn`-boundary registry.
 #
 # Greps every `Box<dyn …>`, reference `dyn …` (in any of the four reference
 # forms — `&dyn`, `&mut dyn`, `&'a dyn`, `&'a mut dyn`), `Arc<dyn …>`,
@@ -1166,11 +1161,10 @@ fi
 #      REQUIRES type erasure here; the emitter crates cannot name the
 #      concrete devtools type below them in the DAG.
 #      (Fn/FnMut/FnOnce included via allowlist rather than per-site
-#      markers — see commit body of Phase 3.1 §U30 for the plan-time-
-#      vs-reality rationale; 96 owned-callback storage sites would have
-#      required per-site markers under the original plan §U30.4 sweep.)
+#      markers because 96 owned-callback storage sites would have
+#      required per-site markers otherwise.)
 #   #6 protocol-layout-erasure at the RenderObject<P>::perform_layout_raw
-#      trait seam (D-block PR-A1b U19 / companion memo D5):
+#      trait seam:
 #      BoxLayoutCtxErased, SliverLayoutCtxErased. The trait-object form
 #      lets the pipeline / RenderEntry hand a typed layout context to
 #      the erased perform_layout_raw method without per-protocol dispatch
@@ -1183,7 +1177,7 @@ fi
 #      perform_layout_raw API per-protocol.
 #   Pre-existing surfaces: ViewKey, BuildContext, Notification,
 #                          NotifiableElement, RenderObject, RenderObjectTrait
-#   ADR-0021 U4: `HeroTag(Arc<dyn ViewKey>)` in flui-widgets. A hero's tag is
+#   ADR-0021: `HeroTag(Arc<dyn ViewKey>)` in flui-widgets. A hero's tag is
 #   Flutter's `Object` tag (`heroes.dart:286-309`), compared with `==` and used as a
 #   map key. `ViewKey` is the framework's existing erased key trait and already
 #   provides `key_eq` / `key_hash`, so `HeroTag` derives its `Eq`/`Hash` from the
@@ -1200,7 +1194,7 @@ fi
 #   SingleChildLayoutDelegate, MultiChildLayoutDelegate, FlowDelegate,
 #   CustomPainter, ParentData, CustomClipper, RendererBinding, Debug
 #   #6-adjacent: LogicalIndexParentData — the pub(crate) ParentData sub-trait the
-#   re-entrant build contract (ADR-0003 U3c) uses to stamp the logical item index
+#   re-entrant build contract (ADR-0003) uses to stamp the logical item index
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
@@ -1226,10 +1220,11 @@ fr036_scope=(
   crates/flui-engine/src
   crates/flui-rendering/src
   crates/flui-interaction/src
-  # ADR-0019 U4: the public `Navigator` erases its route stack behind
+  # ADR-0019: the public `Navigator` erases its route stack behind
   # `Box<dyn ErasedRoute>` and its observers behind `Arc<dyn NavigatorObserver>`.
-  # Before U4 this crate was outside every dyn/downcast gate, so those boundaries
-  # would have shipped unguarded. Both are now registered in the allowlist above.
+  # Before Navigator's public export, this crate was outside every dyn/downcast
+  # gate, so those boundaries would have shipped unguarded. Both are now
+  # registered in the allowlist above.
   crates/flui-widgets/src
 )
 
@@ -1293,7 +1288,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 15 (core-0a adversarial-reaudit PR-4 §U5) — println!/eprintln!/dbg!
+# Trigger 15 — println!/eprintln!/dbg!
 # in foundation/tree/macros production source.
 #
 # Foundation, tree, and macros are the framework's low-level substrate;
@@ -1340,7 +1335,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 16 (core-0a adversarial-reaudit PR-4 §U5) — module-level
+# Trigger 16 — module-level
 # `#![allow(unsafe_code)]` in foundation/tree source.
 #
 # Edition-2024 idiom (F9): a module that genuinely needs `unsafe` must use
@@ -1371,7 +1366,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 17 (core-0a adversarial-reaudit PR-4 §U5) — reinvented
+# Trigger 17 — reinvented
 # `debug_assert_*` macros in foundation source.
 #
 # F29 deleted `debug_assert_valid!` / `debug_assert_range!` /
@@ -1400,10 +1395,10 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 18 (core-0a adversarial-reaudit PR-4 §U5) — `new_unchecked` in
+# Trigger 18 — `new_unchecked` in
 # key.rs.
 #
-# F2 replaced `NonZeroU64::new_unchecked` in `Key::new` with the
+# `Key::new` replaced `NonZeroU64::new_unchecked` with the
 # `fetch_update` sentinel pattern, eliminating the UB-on-counter-wrap
 # hazard. This trigger guards against reintroducing any `new_unchecked`
 # call into `crates/flui-foundation/src/key.rs` — the key counter must
@@ -1561,11 +1556,11 @@ check "21" \
   crates/flui-engine/src
 
 # -----------------------------------------------------------------------------
-# Trigger 22 (ADR-0018 U1) — `rebuild_handle()` never acquired in a frame phase.
+# Trigger 22 (ADR-0018) — `rebuild_handle()` never acquired in a frame phase.
 #
 # A lifecycle-only capability lets code affect presentation state outside one:
-# `rebuild_handle()` (ADR-0018 U1) dirties an element for the next frame;
-# `post_frame_handle()` (ADR-0021 U2) queues work for the end of the current one.
+# `rebuild_handle()` (ADR-0018) dirties an element for the next frame;
+# `post_frame_handle()` (ADR-0021) queues work for the end of the current one.
 # `text_input_handle()` (ADR-0030) reaches the presentation's IME owner; and
 # `focus_manager()` (ADR-0037) reaches its imperative focus owner.
 #
@@ -1586,7 +1581,7 @@ check "21" \
 frame_capability_hits=$("${repo_root}/scripts/check-frame-capability-scope.sh" crates 2>/dev/null || true)
 if [[ -n "${frame_capability_hits}" ]]; then
   echo "VIOLATION 22: a lifecycle-only presentation capability"
-  echo "             was acquired inside a build/layout/paint body (ADR-0018 U1, ADR-0021 U2)"
+  echo "             was acquired inside a build/layout/paint body (ADR-0018, ADR-0021)"
   echo "see ${trigger_doc} (trigger 22)"
   echo "${frame_capability_hits}"
   echo ""
