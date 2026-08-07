@@ -79,6 +79,10 @@ tracing = { workspace = true }
 # Raster mailbox + dedicated ack channel — bounded, typed
 # backpressure, same precedent as PipelineOwnerHandle's dirty channel.
 crossbeam-channel = { workspace = true }
+# Compile-time Send/Sync pins (ADR-0045 decision 1's `Renderer: Send`
+# derivation and `!Sync` posture) — same convention as flui-app/flui-view/
+# flui-rendering etc.
+static_assertions = { workspace = true }
 
 # Image loading (optional)
 image = { workspace = true, optional = true }
@@ -128,6 +132,12 @@ criterion = { workspace = true }
 # `images` feature; test diagnostics must not depend on a lib feature combo,
 # so tests get their own unconditional edge to the same workspace pin.
 image = { workspace = true }
+# Compile-fail fixtures pinning ADR-0045 decision 1: an unwrapped raw
+# platform handle breaks `Renderer`'s derived `Send`, and a `!Send` backend
+# cannot implement `RasterBackend` now that `Send` is a supertrait. Same
+# crate/version flui-types already uses for its unit-mixing compile-fail
+# suite (`crates/flui-types/tests/unit_mixing_compile_fail.rs`).
+trybuild = "1.0"
 
 [[bench]]
 name = "render_throughput"
