@@ -73,7 +73,6 @@ use crate::{
 ///     }));
 /// }
 /// ```
-#[derive(Debug)]
 pub struct AndroidPlatform {
     app: AndroidApp,
     handlers: Arc<Mutex<PlatformHandlers>>,
@@ -82,6 +81,18 @@ pub struct AndroidPlatform {
     background_executor: Arc<SimpleExecutor>,
     clipboard: Arc<MockClipboard>,
     capabilities: MobileCapabilities,
+}
+
+// Opaque on purpose, matching `HeadlessPlatform` and `WinitPlatform`. A
+// derived `Debug` here traverses `Arc<MockClipboard>`'s
+// `Mutex<Option<String>>` and prints the user's entire clipboard contents
+// into whatever sink formatted the platform — a log line, a panic message,
+// a bug report. None of the remaining fields are useful to a reader either:
+// handles, an executor, and a capability set.
+impl std::fmt::Debug for AndroidPlatform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidPlatform").finish_non_exhaustive()
+    }
 }
 
 impl AndroidPlatform {
@@ -402,9 +413,20 @@ impl PlatformExecutor for SimpleExecutor {
 }
 
 /// Mock clipboard for Android MVP
-#[derive(Debug)]
 struct MockClipboard {
     content: Mutex<Option<String>>,
+}
+
+// Redacted at the source, not just at `AndroidPlatform`'s boundary, so a
+// future holder of this type cannot reintroduce the leak by deriving its
+// own `Debug`. Whether the clipboard is set is safe to show; what it holds
+// is the user's data.
+impl std::fmt::Debug for MockClipboard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MockClipboard")
+            .field("has_content", &self.content.lock().is_some())
+            .finish()
+    }
 }
 
 impl MockClipboard {

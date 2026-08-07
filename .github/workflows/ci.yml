@@ -805,11 +805,11 @@ jobs:
   # whoever happened to develop on that OS: the Windows backend had a hard
   # `missing_docs` error (`pub mod win32`) and both backends had missing
   # Debug impls that the Linux and wasm gates structurally could not see.
-  # Android joined this matrix later (issue #556's device-recovery wake
-  # fix), for the identical reason: it had never been built, type-checked,
-  # or linted anywhere in CI, so `set_wake_deadline_hook`'s Android override
-  # and everything else in that module could have stopped compiling with no
-  # gate to notice.
+  # Android joined this matrix later, for the identical reason: it had never
+  # been built, type-checked, or linted anywhere in CI, so that whole module
+  # could have stopped compiling with no gate to notice. On arrival it had 24
+  # violations under `-D warnings`, one of them a derived `Debug` that printed
+  # the user's clipboard.
   #
   # clippy, not plain check, on purpose: `cfg(windows)`/`cfg(macos)`/
   # `cfg(target_os = "android")` code is invisible to every other lint gate,
