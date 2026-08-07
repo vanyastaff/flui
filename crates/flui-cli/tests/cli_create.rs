@@ -50,7 +50,17 @@ fn assert_generated_project_compiles(template: &str) {
         std::fs::remove_dir_all(&project).expect("clear the previous generated project");
     }
 
+    // `flui create` runs its own `cargo check` on the scaffold (step 4 of
+    // `commands/create.rs::execute`) before this test gets to build anything,
+    // and that invocation carries neither a lockfile nor `--offline`. Left
+    // alone it would resolve and download the whole graph from the registry —
+    // the very thing the seeding below exists to prevent — so the network is
+    // closed for the CLI process too. Its internal check merely warns on
+    // failure (`run_cargo_check` returns `Ok(false)`, the scaffold itself
+    // having succeeded), so this cannot turn the assertion below red; it just
+    // stops the test reaching the network at all.
     flui()
+        .env("CARGO_NET_OFFLINE", "true")
         .args([
             "create",
             &name,
@@ -65,9 +75,37 @@ fn assert_generated_project_compiles(template: &str) {
         .assert()
         .success();
 
+    // Seed the generated project with this workspace's own resolved versions
+    // before checking it, and forbid the network.
+    //
+    // Without this the generated project — which declares its own empty
+    // `[workspace]` to detach from ours — resolves its whole transitive graph
+    // fresh from the registry on every run. That makes this test, and
+    // therefore the merge gate, non-hermetic: any crate anywhere in that graph
+    // can turn CI red with nothing in this repository having changed. It has:
+    // an upstream `zune-jpeg` release stopped compiling under the pinned
+    // toolchain and took `main` down with it. Every other cargo invocation in
+    // `ci.yml` runs `--locked` for exactly this reason; this one escaped the
+    // discipline by construction, because it builds a *different* project.
+    //
+    // Copying the lock is sound here precisely because `--local` points the
+    // generated project's `flui-*` dependencies at this tree, so its
+    // third-party graph is a subset of ours. `cargo` still adds the new root
+    // package to the copied lock; `--offline` is what guarantees nothing else
+    // is re-resolved, and fails loudly rather than silently upgrading if a
+    // crate is somehow absent from the cache.
+    //
+    // What this deliberately gives up: this test no longer notices that the
+    // template compiles against the *current* published world. That check
+    // belongs in `weekly.yml`, which already builds against a fresh
+    // `cargo update` as early warning rather than as a merge gate.
+    std::fs::copy(root.join("Cargo.lock"), project.join("Cargo.lock"))
+        .expect("seed the generated project with the workspace's resolved versions");
+
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = std::process::Command::new(cargo)
         .arg("check")
+        .arg("--offline")
         .arg("--target-dir")
         .arg(target.join("cli-template-check"))
         .current_dir(&project)
