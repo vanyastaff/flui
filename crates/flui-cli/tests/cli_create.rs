@@ -50,7 +50,17 @@ fn assert_generated_project_compiles(template: &str) {
         std::fs::remove_dir_all(&project).expect("clear the previous generated project");
     }
 
+    // `flui create` runs its own `cargo check` on the scaffold (step 4 of
+    // `commands/create.rs::execute`) before this test gets to build anything,
+    // and that invocation carries neither a lockfile nor `--offline`. Left
+    // alone it would resolve and download the whole graph from the registry —
+    // the very thing the seeding below exists to prevent — so the network is
+    // closed for the CLI process too. Its internal check merely warns on
+    // failure (`run_cargo_check` returns `Ok(false)`, the scaffold itself
+    // having succeeded), so this cannot turn the assertion below red; it just
+    // stops the test reaching the network at all.
     flui()
+        .env("CARGO_NET_OFFLINE", "true")
         .args([
             "create",
             &name,

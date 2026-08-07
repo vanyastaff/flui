@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/sync-references.sh)",
+      "Bash(node *)",
+      "Bash(./scripts/validate-distribution.sh)",
+      "Bash(bun *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  },
+  "$version": 4
+}
