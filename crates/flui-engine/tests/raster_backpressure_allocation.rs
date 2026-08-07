@@ -16,7 +16,7 @@ use flui_engine::{
     CanvasLayer, DamageRegion, EngineError, Layer, RasterBackend, RasterOwner, Scene, SceneSnapshot,
 };
 use flui_foundation::{
-    FrameEpoch, PresentationAddress, PresentationId, RealmId, SurfaceGeneration,
+    FrameEpoch, FrameStamp, PresentationAddress, PresentationId, RealmId, SurfaceGeneration,
 };
 use flui_types::Size;
 use flui_types::geometry::{Pixels, Rect};
@@ -124,10 +124,9 @@ fn address() -> PresentationAddress {
 }
 
 fn frame(epoch: FrameEpoch) -> SceneSnapshot {
+    let stamp = FrameStamp::new(address(), epoch, SurfaceGeneration::ZERO);
     SceneSnapshot::new(
-        address(),
-        epoch,
-        SurfaceGeneration::ZERO,
+        stamp,
         DamageRegion::Full,
         Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
     )
