@@ -321,6 +321,9 @@ impl RealmRegistry {
     /// unnecessary and wrong (it has nothing to mutate, and checking a realm
     /// out here would make it briefly invisible to a real dispatch racing
     /// against this read).
+    // Its only production caller is the desktop wake-deadline hook, which
+    // wasm does not build.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(super) fn get(&self, id: &RealmId) -> Option<&RealmSlot> {
         self.slots
             .iter()

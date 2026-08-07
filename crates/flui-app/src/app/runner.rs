@@ -290,7 +290,11 @@ fn merge_wake_deadlines(
 /// the root unconditionally (`UiRealm::redirty_root_for_frames_reenable`),
 /// which wakes the loop through the ordinary `needs_redraw` channel and
 /// lets a real `WakeAction::Render` resume the retry then.
-#[cfg(not(target_os = "ios"))]
+// Desktop-only, like its sole caller `bootstrap_desktop`: wasm has no
+// `ControlFlow`/`WaitUntil` to feed and iOS has no bootstrap here, so
+// compiling it on either target is dead code the `-D warnings` wasm gate
+// rejects.
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 fn desktop_secondary_wake_deadline(
     next_attempt_at: Option<web_time::Instant>,
     frames_enabled: bool,
@@ -6360,6 +6364,10 @@ fn wake_action(frames_enabled: bool, dirty: bool, frame_scheduled: bool) -> Wake
 /// wired into the wake-deadline hook but invisible to this gate reaches
 /// `WakeAction::Skip` and returns before `render_frame_with_device_recovery`
 /// is ever called, no matter how faithfully the platform actuates the wake.
+// Absent on wasm: its two production callers are the desktop and Android
+// frame closures, neither of which exists there, and the web runner has
+// no `DeviceRecoveryBackoff` deadline term to fold in.
+#[cfg(not(target_arch = "wasm32"))]
 fn frame_is_dirty(
     inbox_redraw: bool,
     needs_redraw: bool,
