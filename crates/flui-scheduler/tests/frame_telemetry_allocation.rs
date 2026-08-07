@@ -32,14 +32,33 @@
 //! either runner, not just the one this workspace standardizes on.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use flui_scheduler::{
     ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome, PresentationId,
 };
 
-static ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
-static ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
+// Per-thread, not process-global: a `GlobalAlloc` sees every thread's
+// allocations, so process-wide counters charge any other thread's work to the
+// measured window. libtest runs a test on a spawned thread while its own
+// harness thread lives on, which made the measurement load-sensitive and
+// intermittently wrong. `Cell<usize>` in a const-initialised thread-local has
+// no drop glue and no lazy init, so reading it cannot itself allocate or run
+// during TLS teardown.
+thread_local! {
+    static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
+    static ALLOC_BYTES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Add to a counter without allocating or panicking during TLS teardown.
+fn bump(counter: &'static std::thread::LocalKey<Cell<usize>>, by: usize) {
+    let _ = counter.try_with(|c| c.set(c.get().wrapping_add(by)));
+}
+
+/// Read a counter; `0` if this thread's TLS is already gone.
+fn read(counter: &'static std::thread::LocalKey<Cell<usize>>) -> usize {
+    counter.try_with(Cell::get).unwrap_or(0)
+}
 
 struct CountingAllocator;
 
@@ -56,8 +75,8 @@ struct CountingAllocator;
 #[allow(unsafe_code)]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
-        ALLOC_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+        bump(&ALLOC_COUNT, 1);
+        bump(&ALLOC_BYTES, layout.size());
         // SAFETY: `layout` is the caller's own, forwarded unchanged.
         unsafe { System.alloc(layout) }
     }
@@ -112,8 +131,8 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     let mut frame_path_alloc_bytes = 0usize;
 
     for _ in 0..CYCLES {
-        let count_before = ALLOC_COUNT.load(Ordering::Relaxed);
-        let bytes_before = ALLOC_BYTES.load(Ordering::Relaxed);
+        let count_before = read(&ALLOC_COUNT);
+        let bytes_before = read(&ALLOC_BYTES);
 
         let arrival = clock.now();
         let _epoch_id = clock.stamp_input_epoch(arrival);
@@ -130,8 +149,8 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
             PresentOutcome::Presented,
         );
 
-        let calls_this_cycle = ALLOC_COUNT.load(Ordering::Relaxed) - count_before;
-        let bytes_this_cycle = ALLOC_BYTES.load(Ordering::Relaxed) - bytes_before;
+        let calls_this_cycle = read(&ALLOC_COUNT) - count_before;
+        let bytes_this_cycle = read(&ALLOC_BYTES) - bytes_before;
         frame_path_alloc_calls += calls_this_cycle;
         frame_path_alloc_bytes += bytes_this_cycle;
         if calls_this_cycle != 0 {
@@ -157,9 +176,9 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     // Negative control: same clock, right after the measured loop above --
     // if this did NOT allocate, the zero-allocation claim just pinned would
     // be proving nothing (a no-op counting allocator would pass it too).
-    let bytes_before_pull = ALLOC_BYTES.load(Ordering::Relaxed);
+    let bytes_before_pull = read(&ALLOC_BYTES);
     let pulled = clock.frames_since(None);
-    let bytes_after_pull = ALLOC_BYTES.load(Ordering::Relaxed);
+    let bytes_after_pull = read(&ALLOC_BYTES);
 
     assert!(!pulled.is_empty());
     assert!(

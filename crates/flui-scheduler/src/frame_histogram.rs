@@ -184,8 +184,9 @@ pub fn frame_interval_histogram(snapshots: &[FrameSnapshot]) -> LatencyHistogram
 
 /// Build a [`LatencyHistogram`] of produce-to-present spans —
 /// [`FrameSnapshot::submit_at`] minus [`FrameSnapshot::clock_timestamp`],
-/// i.e. from the instant `poll` decided to produce to the instant the
-/// resulting scene was handed to the raster backend — from a
+/// i.e. from the instant `poll` decided to produce to the instant the raster
+/// backend returned from consuming the scene (present-inclusive on the
+/// production backend — see [`FrameSnapshot::submit_at`]) — from a
 /// `frames_since`-pulled slice.
 #[must_use]
 pub fn produce_to_present_histogram(snapshots: &[FrameSnapshot]) -> LatencyHistogram {

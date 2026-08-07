@@ -1059,7 +1059,8 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // Hidden — retains the mask, outranks everything else.
+    // Hidden — retains the mask. Ranks below NoDemand (an empty mask is
+    // reported as NoDemand even while hidden) and above Backpressure.
     // ----------------------------------------------------------------
 
     #[test]
