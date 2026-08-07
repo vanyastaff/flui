@@ -91,6 +91,16 @@ fn current_thread_id() -> std::thread::ThreadId {
     std::thread::current().id()
 }
 
+/// `duration.as_micros()` (`u128`) as a `u64`, saturating rather than
+/// wrapping if it ever exceeds `u64::MAX` microseconds (~584,942 years —
+/// never realistic for a real frame latency, but a silent wraparound would
+/// be a far worse failure mode than an implausible ceiling: it could make
+/// an enormous, clearly-bogus latency look like a small, plausible one in
+/// an exported trace).
+fn saturating_micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
 /// The Chrome-trace "args" object for `event`'s Begin event:
 /// `{"category": ...}` plus every key of `event.args`, IF it is itself a
 /// JSON object (a frame-telemetry event's shape — see
@@ -99,14 +109,23 @@ fn current_thread_id() -> std::thread::ThreadId {
 /// `args: Value::Null`, which contributes nothing beyond `category` — the
 /// pre-existing behavior every caller of `export_chrome_trace` before this
 /// function existed already relied on.
+///
+/// `extra`'s keys are copied in FIRST, `category` LAST: `category` is this
+/// module's own reserved key (`export_chrome_trace`'s Begin event always
+/// carries it, and nothing downstream expects it to mean anything other
+/// than `event.category.name()`), so it must win if a caller-supplied
+/// `args` object also happens to use that key — inserting it last makes
+/// that an overwrite rather than a coin flip on `serde_json::Map`'s
+/// (insertion-order-preserving, but "last write wins" on a duplicate key)
+/// semantics.
 fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
     let mut args = serde_json::Map::new();
-    args.insert("category".to_string(), json!(event.category.name()));
     if let serde_json::Value::Object(extra) = &event.args {
         for (key, value) in extra {
             args.insert(key.clone(), value.clone());
         }
     }
+    args.insert("category".to_string(), json!(event.category.name()));
     serde_json::Value::Object(args)
 }
 
@@ -157,6 +176,22 @@ impl TimelineEvent {
     }
 }
 
+/// A stable identity for one recorded-but-not-yet-closed event, minted by
+/// [`TimelineInner::push_event`].
+///
+/// Deliberately NOT a `Vec` index: `push_event` applies capacity trimming
+/// (dropping the oldest entries once `max_events` is exceeded), which
+/// shifts every surviving event's POSITION in `events`. A plain index
+/// handed out before a later `push_event` call triggers that trim would
+/// silently identify a different (or no) event by the time
+/// [`TimelineInner::end_event`] used it — closing the wrong event, or
+/// closing none at all with no signal that anything went wrong. A handle
+/// is immune: it names an event by MINT ORDER, not by current position,
+/// and `end_event` translates it back to a position (or recognizes it was
+/// already trimmed out) using [`TimelineInner::base_event_id`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EventHandle(u64);
+
 /// RAII guard for recording an event
 ///
 /// Automatically records the event duration when dropped.
@@ -164,7 +199,7 @@ impl TimelineEvent {
 #[derive(Debug)]
 pub struct EventGuard {
     timeline: Arc<Mutex<TimelineInner>>,
-    event_index: usize,
+    event_handle: EventHandle,
     start: Instant,
 }
 
@@ -172,7 +207,7 @@ impl Drop for EventGuard {
     fn drop(&mut self) {
         let duration = self.start.elapsed();
         let mut inner = self.timeline.lock();
-        inner.end_event(self.event_index, duration);
+        inner.end_event(self.event_handle, duration);
     }
 }
 
@@ -185,6 +220,15 @@ struct TimelineInner {
     events: Vec<TimelineEvent>,
     /// Maximum number of events to keep
     max_events: usize,
+    /// The [`EventHandle`] the NEXT `push_event` call mints.
+    next_event_id: u64,
+    /// The [`EventHandle`] of `events[0]`, if `events` is non-empty.
+    /// `events` is FIFO by push order and trimming only ever removes from
+    /// the front, so `events[i]`'s handle is always `base_event_id + i` —
+    /// no per-event id needs to be stored inline on [`TimelineEvent`]
+    /// itself (which stays a plain, serializable value with no notion of
+    /// this internal bookkeeping).
+    base_event_id: u64,
 }
 
 impl TimelineInner {
@@ -193,10 +237,12 @@ impl TimelineInner {
             start_time: Instant::now(),
             events: Vec::new(),
             max_events,
+            next_event_id: 0,
+            base_event_id: 0,
         }
     }
 
-    fn start_event(&mut self, name: String, category: EventCategory) -> usize {
+    fn start_event(&mut self, name: String, category: EventCategory) -> EventHandle {
         let now = Instant::now();
         let start_micros = (now - self.start_time).as_micros();
 
@@ -214,25 +260,43 @@ impl TimelineInner {
 
     /// Push an already-fully-formed event (known start/duration/args up
     /// front, unlike [`Self::start_event`]'s RAII start-then-later-end
-    /// shape) and apply the same capacity trim. Returns the pushed event's
-    /// index, for symmetry with `start_event` — no caller currently needs
-    /// it, since a fully-formed event is never later mutated via
-    /// [`Self::end_event`].
-    fn push_event(&mut self, event: TimelineEvent) -> usize {
-        let index = self.events.len();
+    /// shape) and apply the same capacity trim. Returns a stable
+    /// [`EventHandle`] — see that type's own doc for why a `Vec` index
+    /// would not survive a LATER call to this same method trimming the
+    /// event out from under an earlier caller still holding one (an
+    /// [`EventGuard`] that outlives the trim). No current caller of THIS
+    /// particular return value needs it (a fully-formed event pushed here
+    /// is never later mutated via [`Self::end_event`]) — kept for
+    /// signature symmetry with `start_event`, whose callers do.
+    fn push_event(&mut self, event: TimelineEvent) -> EventHandle {
+        let handle = EventHandle(self.next_event_id);
+        self.next_event_id += 1;
         self.events.push(event);
 
-        // Trim old events if we exceed max
+        // Trim old events if we exceed max, advancing `base_event_id` by
+        // exactly how many were dropped so every SURVIVING event's handle
+        // still resolves to its correct (new) position.
         if self.events.len() > self.max_events {
-            self.events.drain(0..self.events.len() - self.max_events);
-            // Adjust index after draining
-            self.events.len() - 1
-        } else {
-            index
+            let removed = self.events.len() - self.max_events;
+            self.events.drain(0..removed);
+            self.base_event_id += removed as u64;
         }
+        handle
     }
 
-    fn end_event(&mut self, index: usize, duration: Duration) {
+    /// Resolve `handle` back to a live position in `events`, or `None` if
+    /// it was already trimmed out by a later `push_event` call.
+    fn index_of(&self, handle: EventHandle) -> Option<usize> {
+        handle.0.checked_sub(self.base_event_id).map(|i| i as usize)
+    }
+
+    fn end_event(&mut self, handle: EventHandle, duration: Duration) {
+        let Some(index) = self.index_of(handle) else {
+            // Trimmed out before this event could be closed -- nothing
+            // left to update, and nothing to close a wrong event with
+            // either, which is the whole point of a stable handle.
+            return;
+        };
         if let Some(event) = self.events.get_mut(index) {
             event.duration_micros = duration.as_micros();
         }
@@ -297,12 +361,12 @@ impl Timeline {
     /// ```
     pub fn record_event(&self, name: impl Into<String>, category: EventCategory) -> EventGuard {
         let mut inner = self.inner.lock();
-        let event_index = inner.start_event(name.into(), category);
+        let event_handle = inner.start_event(name.into(), category);
         let start = Instant::now();
 
         EventGuard {
             timeline: self.inner.clone(),
-            event_index,
+            event_handle,
             start,
         }
     }
@@ -313,8 +377,8 @@ impl Timeline {
     /// duration.
     pub fn record_instant(&self, name: impl Into<String>, category: EventCategory) {
         let mut inner = self.inner.lock();
-        let event_index = inner.start_event(name.into(), category);
-        inner.end_event(event_index, Duration::ZERO);
+        let event_handle = inner.start_event(name.into(), category);
+        inner.end_event(event_handle, Duration::ZERO);
     }
 
     /// Record an event whose timing is already fully known — unlike
@@ -369,7 +433,7 @@ impl Timeline {
                 .map(|(id, latency)| {
                     json!({
                         "input_epoch_id": id.get(),
-                        "latency_us": latency.as_micros() as u64,
+                        "latency_us": saturating_micros(latency),
                     })
                 })
                 .collect();
@@ -663,6 +727,109 @@ mod tests {
         assert_eq!(events.len(), 5);
         assert_eq!(events[0].name, "Event 5");
         assert_eq!(events[4].name, "Event 9");
+    }
+
+    /// An `EventGuard` that outlives capacity trimming must not close the
+    /// WRONG event once its own event has been trimmed out of the ring —
+    /// the bug a plain `Vec` index (reused after trimming shifted every
+    /// surviving event's position) would produce. Started event A occupies
+    /// position 0; two more completed events (B, C) push capacity past 2,
+    /// trimming A out and leaving B at position 0 — the exact position a
+    /// stale index for A would misidentify as still being A. Dropping A's
+    /// guard AFTER that trim must be a no-op, not an overwrite of B's own
+    /// (pinned, deliberately implausible-to-collide-by-accident) duration.
+    #[test]
+    fn a_guard_outliving_capacity_trimming_does_not_close_the_wrong_event() {
+        let timeline = Timeline::with_capacity(2);
+
+        let guard_a = timeline.record_event("A", EventCategory::Custom);
+
+        timeline.record_completed_event(
+            "B",
+            EventCategory::Custom,
+            Instant::now(),
+            Duration::from_micros(123_456),
+            serde_json::Value::Null,
+        );
+        // Capacity (2) exceeded by this push: A is trimmed out, leaving
+        // [B, C] -- B now sits at position 0, A's own former position.
+        timeline.record_completed_event(
+            "C",
+            EventCategory::Custom,
+            Instant::now(),
+            Duration::from_micros(654_321),
+            serde_json::Value::Null,
+        );
+
+        // A deliberately real, controlled delay: if the bug reappears (a
+        // stale index closing whatever now sits at position 0), B's
+        // duration would become approximately THIS sleep, unmistakably
+        // different from the 123,456us pinned above.
+        thread::sleep(Duration::from_millis(5));
+        drop(guard_a);
+
+        let events = timeline.get_events();
+        assert_eq!(events.len(), 2, "the ring stays at its bounded capacity");
+        assert_eq!(events[0].name, "B");
+        assert_eq!(
+            events[0].duration_micros, 123_456,
+            "A's guard closing after being trimmed out must not overwrite B's own duration -- \
+             a stale positional index would have closed whatever now occupies A's old slot"
+        );
+        assert_eq!(events[1].name, "C");
+        assert_eq!(
+            events[1].duration_micros, 654_321,
+            "C must also be untouched"
+        );
+    }
+
+    /// A caller-supplied `args` object that happens to use the reserved
+    /// `category` key must not overwrite the exporter's own — the exported
+    /// Begin event's `category` field must always equal
+    /// `event.category.name()`, never a caller-controlled string.
+    #[test]
+    fn caller_supplied_category_key_never_overwrites_the_reserved_one() {
+        let timeline = Timeline::new();
+        timeline.record_completed_event(
+            "Colliding Event",
+            EventCategory::Layout,
+            Instant::now(),
+            Duration::ZERO,
+            json!({ "category": "attacker-controlled", "custom_field": "kept" }),
+        );
+
+        let json_text = timeline.export_chrome_trace();
+        let parsed: serde_json::Value = serde_json::from_str(&json_text).expect("valid JSON");
+        let begin = parsed["traceEvents"][0].clone();
+        assert_eq!(begin["ph"], "B");
+        assert_eq!(
+            begin["args"]["category"], "Layout",
+            "the reserved `category` key must always name the event's REAL category, never a \
+             caller-supplied `args` value that happens to collide with it"
+        );
+        assert_eq!(
+            begin["args"]["custom_field"], "kept",
+            "a non-colliding caller key must still survive"
+        );
+    }
+
+    /// `Duration::as_micros` is `u128`; converting it to `u64` for
+    /// `latency_us` must not silently wrap for a value that overflows
+    /// `u64` — `saturating_micros` must report the (implausible) ceiling
+    /// instead.
+    #[test]
+    fn saturating_micros_saturates_rather_than_wraps_an_overlong_duration() {
+        assert_eq!(
+            saturating_micros(Duration::from_micros(42)),
+            42,
+            "an ordinary duration must pass through exactly"
+        );
+        assert_eq!(
+            saturating_micros(Duration::MAX),
+            u64::MAX,
+            "a duration whose microsecond count overflows u64 must saturate to u64::MAX, \
+             never wrap into a small, misleadingly plausible value"
+        );
     }
 
     #[test]
