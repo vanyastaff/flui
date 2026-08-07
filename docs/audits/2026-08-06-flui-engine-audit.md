@@ -11,7 +11,7 @@
 
 **Объект:** ветка `main` (HEAD `df5e74fd`), крейт `flui-engine` ~67k строк (из них ~20k —
 GPU-readback-тесты), wgpu 29, Rust 1.97. Все пути ниже — `crates/flui-engine/`, если не указано
-иначе; строки проверены по текущему состоянию файлов.
+иначе; строки проверены по состоянию файлов на этом коммите и с тех пор могли сдвинуться.
 
 **Формат уверенности:** все пункты — доказанные (есть `file:line` evidence), кроме явно
 помеченных как «не проверено».
@@ -53,7 +53,7 @@ resource/recovery-контурах long-running приложения.
 ## 2. Что действительно сильно
 
 - **Record/replay IR** (`src/wgpu/command_ir.rs`): чистота машинно-проверена через `Clone`,
-  A/B replay клонов в `deterministic_replay_tests.rs` даёт байтовую идентичность (T11 C5-гейт).
+  A/B replay клонов в `deterministic_replay_tests.rs` даёт байтовую идентичность.
 - **GPU-сьют ~440 тестов merge-blocking в CI** на windows-latest/WARP (`ci.yml:385-437`,
   `--test-threads 1`, PNG-дампы при падении); CPU-ораклы и дискриминаторы
   (`blur_filter_tests`, `morphology_filter_tests`, `mode_filter_tests` против `Color::blend`,
@@ -153,7 +153,7 @@ Headless-девайс создаётся с `DeviceDescriptor::default()` без
 
 #### 3.2.2. Текст всегда поверх всего и выпадает при повторных flush'ах
 
-Текст вне Command IR (T11 не решён, `ARCHITECTURE.md:276`), пишется финальной глобальной фазой
+Текст вне Command IR — шов «текст vs IR» не решён (в исходниках помечен `T11`; `ARCHITECTURE.md:276`), пишется финальной глобальной фазой
 (`replay/mod.rs:251-252, 569-570`). Следствия:
 
 - Z-перемежение текста с геометрией невозможно;
@@ -199,8 +199,12 @@ UV-rebase (`blur/mod.rs:118-135` ≈ `morphology/mod.rs:96-112`) и `test_device
 комментариях `shader_compiler.rs:29-35`. `offscreen/` — параллельная вселенная со своим
 `TexturePool` и `ShaderCache` (`offscreen/mod.rs:163-164`) и 6 пустыми `#[ignore]`-заглушками
 в тестах (`offscreen/mod.rs:475-540`). Backdrop-сигма схлопывает анизотропию:
-`f32::midpoint(sigma_x, sigma_y)` (`renderer.rs:1711`) — расхождение с Flutter
-`ImageFilter.blur` на анизотропных значениях.
+`f32::midpoint(sigma_x, sigma_y)` (`renderer.rs:1711`). Расхождение с Flutter
+`ImageFilter.blur` на анизотропных значениях — **проверено частично**: усреднение на стороне
+FLUI прочитано в исходнике, двухосность API Flutter подтверждена по сигнатуре
+(`sigmaX`/`sigmaY` во всех вызовах `packages/flutter/lib`), но сама растеризация живёт в
+движке (C++), которого нет в локальном срезе клона `.flutter/` — независимость осей при
+отрисовке не проверялась.
 
 `wgsl_bindgen`-генерация биндингов покрывает 6 из ~17 WGSL-файлов (`build.rs:12-20`);
 остальные (blit, downsample/upsample, shadow, masks, gradients, shape) — на ручных layout'ах.

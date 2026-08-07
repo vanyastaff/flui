@@ -17,7 +17,7 @@ changelog'и upstream'ов, релизные заметки wgpu 29/30, квар
 
 ### Что в wgpu 30 важно именно для UI-движка
 
-1. **Color-space API для поверхностей — прямое закрытие боли B5 аудита (HDR-эвристика).**
+1. **Color-space API для поверхностей — закрывает необходимость угадывать HDR-режим поверхности эвристикой.**
    - `SurfaceConfiguration` получил **обязательное** поле `color_space: SurfaceColorSpace`;
      `SurfaceColorSpace::Auto` сохраняет историческое поведение (extended linear scRGB для
      `Rgba16Float` где поддержано, иначе sRGB; никогда wide-gamut/HDR без запроса).
@@ -188,7 +188,7 @@ GPUI за период в блоге Zed не найдено (проверено
    наблюдатель в golden-контуре. Это же лечит DoD-боль «golden-инструмент лжёт»
    (§3.2.1 аудита) независимым источником пикселей.
 4. **tiny-skia — самый дешёвый CPU-оракл** для CI без WARP на shape/gradient-подмножестве.
-5. **Текстовый стек — стратегическая развилка T11**: glyphon+cosmic-text (текущий, живой)
+5. **Текстовый стек — развилка по шву «текст vs Command IR»** (в исходниках помечена `T11`, расшифрована в `crates/flui-engine/ARCHITECTURE.md:276`): glyphon+cosmic-text (текущий, живой)
    против Parley+Fontique+Skrifa (+Glifo) (растущий центр экосистемы, Bevy уже мигрировал).
    Решение влияет на IR-швов текста (текст вне Command IR, §3.2.2 аудита) и на future
    Vello-бэкенд (Vello рендерит глифы через Parley/Skrifa-стек).
