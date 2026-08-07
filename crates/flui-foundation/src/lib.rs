@@ -208,7 +208,7 @@ pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB
 // Window-runtime generation/version counters + commit-time freshness gate.
 pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};
 // The frame-identity group bundled for the raster boundary.
-pub use frame_stamp::{FrameStamp, FrameStampBuilder};
+pub use frame_stamp::FrameStamp;
 // Diagnostics
 pub use debug::{
     DebugPaintConfig, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,

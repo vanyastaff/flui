@@ -2,26 +2,34 @@
 //! boundary: which presentation produced a frame, at what per-realm epoch,
 //! against which raster surface configuration.
 //!
-//! # Why a bundled type instead of positional constructor arguments
+//! # Why a bundled type
 //!
-//! `flui_layer::SceneSnapshot` used to accept these three values as three
-//! positional [`SceneSnapshot::new`](../../flui_layer/struct.SceneSnapshot.html)
-//! arguments. `#[non_exhaustive]` on that struct made *matching* on it
-//! additive, but not *construction*: every field the type gained broke every
-//! external call site, because a positional constructor has no room to grow.
-//! Bundling the identity fields into one value here — constructed only
-//! through [`FrameStamp::builder`] — is what makes the *next* identity axis
-//! additive instead of breaking.
+//! `flui_layer::SceneSnapshot` used to hold these three values as three flat
+//! fields, each threaded separately through its own positional constructor
+//! argument. Bundling them into one value here is a real simplification for
+//! `SceneSnapshot`: its own identity collapses from three fields to one
+//! (`stamp: FrameStamp`).
 //!
-//! # The next axis, named so this type is shaped for it now
+//! # What bundling does *not* buy: construction is not additive
 //!
-//! ADR-0045 decision 4 adds a second identity axis once GPU-services
-//! generation gating lands: `ResourceGeneration`, checked alongside
-//! [`SurfaceGeneration`] before a frame renders. Adding that field here
-//! widens [`FrameStampBuilder`] with one more typestate slot and one more
-//! setter; it touches no existing call site, because every existing call
-//! site already goes through the builder rather than a positional
-//! constructor.
+//! An earlier revision of this type used a typestate builder on the claim
+//! that it would make a *future* field addition to `FrameStamp` non-
+//! breaking. That claim was tested — by literally adding a field — and was
+//! false: no value-type construction shape in Rust, positional constructor
+//! or typestate builder alike, makes adding a *required* field additive.
+//! Additivity is available only for *optional* fields, and ADR-0045
+//! decision 4's later `ResourceGeneration` axis cannot be optional (the
+//! decision requires both generations to be checked before a frame
+//! renders). Adding that field will change [`FrameStamp::new`]'s signature
+//! and break every call site that calls it — three today, each one named
+//! directly by the compiler as a type or arity mismatch: the
+//! `raster_owner.rs` test helper, the `raster_backpressure` bench, and the
+//! `raster_backpressure_allocation` integration test (all in `flui-engine`).
+//! That is a real, compiler-guided, small-blast-radius breaking change —
+//! narrowed from five positional arguments (`SceneSnapshot`'s own former
+//! shape) to three, not eliminated — and no amount of builder ceremony
+//! changes that, so this type uses the plain constructor the honest version
+//! of that claim implies.
 
 use crate::epoch::{FrameEpoch, SurfaceGeneration};
 use crate::id::PresentationAddress;
@@ -42,12 +50,18 @@ use crate::id::PresentationAddress;
 /// presentation's own raster seam (ADR-0037 §8), never by the realm or by
 /// frame counting.
 ///
-/// # Construction
+/// # `#[non_exhaustive]`, and what it does and does not do here
 ///
-/// Build through [`FrameStamp::builder`]. `#[non_exhaustive]` blocks
-/// struct-literal construction from outside this crate deliberately, so a
-/// future field here is additive rather than breaking every caller — see the
-/// module doc for the specific axis this is already shaped for.
+/// This struct is deliberately `#[non_exhaustive]`. That constrains
+/// *matching* from outside this crate — an external struct-literal pattern
+/// without `..` fails to compile — never construction; see
+/// [`FrameStamp::new`]'s own doc for why no annotation makes a future
+/// required field additive to construction. The benefit is real but
+/// narrow: this workspace has no consumer of `FrameStamp` outside this
+/// crate that destructures it today, so the guard is not yet load-bearing,
+/// but it costs nothing (no destructuring pattern exists anywhere in this
+/// workspace for it to complicate) and it is scoped honestly to the one
+/// thing `#[non_exhaustive]` actually buys.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameStamp {
@@ -61,12 +75,12 @@ pub struct FrameStamp {
 }
 
 impl FrameStamp {
-    /// Starts building a [`FrameStamp`]. Every field is required; the
-    /// returned builder only exposes [`FrameStampBuilder::build`] once
-    /// [`FrameStampBuilder::address`], [`FrameStampBuilder::epoch`], and
-    /// [`FrameStampBuilder::surface_generation`] have all been called —
-    /// enforced at compile time via the builder's typestate, not by a
-    /// runtime check or a panicking default.
+    /// Packages the three identity/versioning fields the raster boundary
+    /// needs to accept, reject, or reconcile a frame.
+    ///
+    /// All three fields are distinct newtypes (never the same underlying
+    /// type as one another), so transposing two arguments is a compile-time
+    /// type error, not a silent bug — see the second example below.
     ///
     /// # Examples
     ///
@@ -76,105 +90,46 @@ impl FrameStamp {
     ///     SurfaceGeneration,
     /// };
     ///
-    /// let stamp = FrameStamp::builder()
-    ///     .address(PresentationAddress {
+    /// let stamp = FrameStamp::new(
+    ///     PresentationAddress {
     ///         realm_id: RealmId::new(1),
     ///         presentation_id: PresentationId::new(1),
-    ///     })
-    ///     .epoch(FrameEpoch::ZERO)
-    ///     .surface_generation(SurfaceGeneration::ZERO)
-    ///     .build();
+    ///     },
+    ///     FrameEpoch::ZERO,
+    ///     SurfaceGeneration::ZERO,
+    /// );
     ///
     /// assert_eq!(stamp.epoch, FrameEpoch::ZERO);
     /// ```
+    ///
+    /// Swapping `epoch` and `surface_generation` — the two fields whose
+    /// underlying representation looks alike (both wrap a `u64` counter) —
+    /// does not compile:
+    ///
+    /// ```compile_fail
+    /// use flui_foundation::{
+    ///     FrameEpoch, FrameStamp, PresentationAddress, PresentationId, RealmId,
+    ///     SurfaceGeneration,
+    /// };
+    ///
+    /// let address = PresentationAddress {
+    ///     realm_id: RealmId::new(1),
+    ///     presentation_id: PresentationId::new(1),
+    /// };
+    /// // ERROR[E0308]: expected `FrameEpoch`, found `SurfaceGeneration` —
+    /// // the two arguments are transposed, and each is a distinct newtype.
+    /// let _ = FrameStamp::new(address, SurfaceGeneration::ZERO, FrameEpoch::ZERO);
+    /// ```
     #[must_use]
-    pub fn builder() -> FrameStampBuilder {
-        FrameStampBuilder::new()
-    }
-}
-
-/// Builder for [`FrameStamp`].
-///
-/// A typestate builder: each of the three setters is offered only while its
-/// own slot is still the unit type `()` (unfilled), and [`Self::build`] is
-/// offered only once every slot holds its real value. Calling the setters in
-/// any order reaches the same buildable state — each setter constrains only
-/// its own slot. Forgetting a field is a compile error, not a runtime panic:
-/// there is no sensible default for a frame's own identity to fall back on.
-#[derive(Debug, Clone, Copy)]
-pub struct FrameStampBuilder<Address = (), Epoch = (), SurfaceGen = ()> {
-    address: Address,
-    epoch: Epoch,
-    surface_generation: SurfaceGen,
-}
-
-impl FrameStampBuilder {
-    fn new() -> Self {
-        Self {
-            address: (),
-            epoch: (),
-            surface_generation: (),
-        }
-    }
-}
-
-impl Default for FrameStampBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<Epoch, SurfaceGen> FrameStampBuilder<(), Epoch, SurfaceGen> {
-    /// Sets the frame's realm+presentation address.
-    #[must_use]
-    pub fn address(
-        self,
+    pub fn new(
         address: PresentationAddress,
-    ) -> FrameStampBuilder<PresentationAddress, Epoch, SurfaceGen> {
-        FrameStampBuilder {
-            address,
-            epoch: self.epoch,
-            surface_generation: self.surface_generation,
-        }
-    }
-}
-
-impl<Address, SurfaceGen> FrameStampBuilder<Address, (), SurfaceGen> {
-    /// Sets the frame's per-realm epoch.
-    #[must_use]
-    pub fn epoch(self, epoch: FrameEpoch) -> FrameStampBuilder<Address, FrameEpoch, SurfaceGen> {
-        FrameStampBuilder {
-            address: self.address,
-            epoch,
-            surface_generation: self.surface_generation,
-        }
-    }
-}
-
-impl<Address, Epoch> FrameStampBuilder<Address, Epoch, ()> {
-    /// Sets the raster surface generation this frame was produced against.
-    #[must_use]
-    pub fn surface_generation(
-        self,
+        epoch: FrameEpoch,
         surface_generation: SurfaceGeneration,
-    ) -> FrameStampBuilder<Address, Epoch, SurfaceGeneration> {
-        FrameStampBuilder {
-            address: self.address,
-            epoch: self.epoch,
+    ) -> Self {
+        Self {
+            address,
+            epoch,
             surface_generation,
-        }
-    }
-}
-
-impl FrameStampBuilder<PresentationAddress, FrameEpoch, SurfaceGeneration> {
-    /// Builds the [`FrameStamp`]. Only reachable once every field has been
-    /// set — see the type's own doc.
-    #[must_use]
-    pub fn build(self) -> FrameStamp {
-        FrameStamp {
-            address: self.address,
-            epoch: self.epoch,
-            surface_generation: self.surface_generation,
         }
     }
 }
@@ -192,32 +147,16 @@ mod tests {
     }
 
     #[test]
-    fn builder_round_trips_every_field() {
-        let stamp = FrameStamp::builder()
-            .address(test_address())
-            .epoch(FrameEpoch::ZERO.next())
-            .surface_generation(SurfaceGeneration::ZERO.next())
-            .build();
+    fn new_packages_all_fields() {
+        let address = test_address();
+        let epoch = FrameEpoch::ZERO.next();
+        let surface_generation = SurfaceGeneration::ZERO.next();
 
-        assert_eq!(stamp.address, test_address());
-        assert_eq!(stamp.epoch, FrameEpoch::ZERO.next());
-        assert_eq!(stamp.surface_generation, SurfaceGeneration::ZERO.next());
-    }
+        let stamp = FrameStamp::new(address, epoch, surface_generation);
 
-    #[test]
-    fn setters_are_order_independent() {
-        let built_address_first = FrameStamp::builder()
-            .address(test_address())
-            .epoch(FrameEpoch::ZERO)
-            .surface_generation(SurfaceGeneration::ZERO)
-            .build();
-        let built_surface_generation_first = FrameStamp::builder()
-            .surface_generation(SurfaceGeneration::ZERO)
-            .epoch(FrameEpoch::ZERO)
-            .address(test_address())
-            .build();
-
-        assert_eq!(built_address_first, built_surface_generation_first);
+        assert_eq!(stamp.address, address);
+        assert_eq!(stamp.epoch, epoch);
+        assert_eq!(stamp.surface_generation, surface_generation);
     }
 
     #[test]

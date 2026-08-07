@@ -547,10 +547,19 @@ impl std::fmt::Debug for UiRealm {
 /// up-to-date frame (see [`UiRealm::render_frame_entered`]'s retry gate).
 /// Moved here from the retired `AppBinding`.
 enum FramePaintOutcome {
-    /// A fresh layer tree was painted and turned into a `Scene`. Owned, never
-    /// `Arc<Scene>`: `scene_snapshot.rs`'s own contract for this seam is
-    /// ownership transfer, not shared reference counting, and this outcome
-    /// has exactly one reader (`render_frame_entered`, immediately below).
+    /// A fresh layer tree was painted and turned into a `Scene`. Holds
+    /// `Scene` by value, not `Arc<Scene>`: the sole reader
+    /// (`render_frame_entered`, immediately below) borrows it and both are
+    /// dropped in the same call stack — nothing shares this value or
+    /// crosses a thread with it, so an `Arc` bought nothing here. `Scene`
+    /// is not `Sync` (`CompositionCallback` is `FnOnce + Send`, never
+    /// `Sync`), which is why wrapping it in `Arc` used to need a
+    /// `#[expect(clippy::arc_with_non_send_sync)]` at the construction
+    /// site below — removed along with the `Arc`. (`SceneSnapshot`'s own
+    /// "never `Arc<Scene>`" contract in `scene_snapshot.rs` is a related
+    /// but separate rule for the raster-mailbox seam; `SceneSnapshot` is
+    /// not on this call path at all — production has no consumer of it
+    /// yet.)
     Painted(Scene),
     /// Nothing was dirty this frame; no new content to composite.
     Idle,
@@ -2115,15 +2124,8 @@ impl UiRealm {
                 link_registry.unwrap_or_default(),
                 frame_number,
             );
-            // Owned transfer, never `Arc<Scene>` — `scene_snapshot.rs`'s own
-            // contract for this seam. `Scene` is `Send` but not `Sync`
-            // (`CompositionCallback` is `FnOnce + Send`, never `Sync`), which
-            // used to force an `Arc` just to satisfy `FramePaintOutcome`'s
-            // shape even though nothing ever shared it — the sole reader is
-            // `render_frame_entered`, immediately below, on the same owner
-            // thread. That also retires the
-            // `#[expect(clippy::arc_with_non_send_sync)]` this call used to
-            // need.
+            // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
+            // own doc for why.
             FramePaintOutcome::Painted(scene)
         } else if pipeline_errored {
             FramePaintOutcome::Errored

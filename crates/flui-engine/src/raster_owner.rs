@@ -1368,20 +1368,12 @@ mod tests {
         address: PresentationAddress,
         surface_generation: SurfaceGeneration,
     ) -> SceneSnapshot {
-        let stamp = FrameStamp::builder()
-            .address(address)
-            .epoch(epoch)
-            .surface_generation(surface_generation)
-            .build();
-        SceneSnapshot::builder()
-            .stamp(stamp)
-            .damage(DamageRegion::Full)
-            .scene(Scene::from_layer(
-                Size::ZERO,
-                Layer::from(CanvasLayer::new()),
-                0,
-            ))
-            .build()
+        let stamp = FrameStamp::new(address, epoch, surface_generation);
+        SceneSnapshot::new(
+            stamp,
+            DamageRegion::Full,
+            Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
+        )
     }
 
     // -----------------------------------------------------------------------

@@ -231,7 +231,7 @@ declarations = [
     "pub use clock::{ManualClock, MonotonicClock, SystemClock};",
     "pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};",
     "pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};",
-    "pub use frame_stamp::{FrameStamp, FrameStampBuilder};",
+    "pub use frame_stamp::FrameStamp;",
     "pub use debug::{ DebugPaintConfig, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty, DiagnosticsPropertyKind, DiagnosticsTreeStyle, };",
     "pub use id::{ DataTransferId, ElementId, FrameCallbackId, FrameId, Id, Identifier, LayerId, ListenerId, Marker, ObserverId, PresentationAddress, PresentationId, RawId, RealmId, RenderId, SemanticsId, TaskId, TickerId, TreeId, ViewId, markers, };",
     "pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};",
@@ -257,7 +257,7 @@ declarations = [
     "pub use layer::{ AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LayerBounds, LayerLink, LeaderLayer, OffsetLayer, OpacityLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceStats, PictureLayer, PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer, SystemUiOverlayStyle, TextureLayer, TransformLayer, };",
     "pub use link_registry::{LeaderInfo, LinkRegistry, resolve_follower_offset};",
     "pub use scene::{CompositionCallback, Scene};",
-    "pub use scene_snapshot::{DamageRegion, SceneSnapshot, SceneSnapshotBuilder};",
+    "pub use scene_snapshot::{DamageRegion, SceneSnapshot};",
     "pub use tree::{LayerNode, LayerTree};",
     "pub mod prelude {",
     "pub const VERSION: &str = env!(\"CARGO_PKG_VERSION\");",
@@ -2638,10 +2638,10 @@ owner = "per-presentation per-frame raster package — non_exhaustive, explicitl
 failure_semantics = "identity fields let receivers reject stale frames"
 consumers = ["RasterOwner protocol", "threaded tests"]
 owner_issue = 552
-notes = "Carries stamp: flui_foundation::FrameStamp (address, epoch, surface_generation bundled — the full frame identity: FrameEpoch is only per-realm monotonic, so address disambiguates same-epoch frames from sibling presentations, and two different realm incarnations can mint an identical PresentationId so the full pair is required, not presentation_id alone). The pre-graduation gate this entry used to name — a growing positional new() breaking every external call site, since non_exhaustive makes matching additive but not construction — is discharged (#559): construction goes through SceneSnapshot::builder() (flui_layer::SceneSnapshotBuilder, a typestate builder mirroring flui_foundation::FrameStampBuilder), never a positional constructor, and the three former flat identity fields (address/epoch/surface_generation) are now the bundled FrameStamp identity-group value ADR-0045 names as the shape a future ResourceGeneration axis (decision 4) must land into additively. SceneSnapshot::new() is removed outright, not deprecated — every in-workspace call site (raster_owner.rs's own test helper, the raster_backpressure bench, and the raster_backpressure_allocation integration test) now goes through the builder."
+notes = "Carries stamp: flui_foundation::FrameStamp in place of the former bare address/epoch/surface_generation fields (the full frame identity — FrameEpoch is only per-realm monotonic, so address disambiguates same-epoch frames from sibling presentations, and two different realm incarnations can mint an identical PresentationId so the full pair is required, not presentation_id alone; see the flui_foundation surface entry for FrameStamp's own note). A prior revision of this note called this addition additive under non_exhaustive; that was itself an overclaim, corrected in the note that preceded this one: non_exhaustive makes matching additive, not construction through a positional new(), and every field the type gained broke the positional constructor, exactly as happened. A SECOND revision of this note (#559) then claimed a typestate builder made the type's identity-group bundling additive to FUTURE field growth; that claim was tested — a resource_generation field was actually added to FrameStamp — and was false too: no value-type construction shape in Rust, positional or typestate, makes a REQUIRED field additive, only an optional one, and ADR-0045 decision 4's ResourceGeneration axis cannot be optional. This note repeats the correction deliberately rather than silently dropping it a second time: erasing a self-correcting sentence while reintroducing the error it corrected is exactly the failure that sentence exists to prevent. What changed for real: the pre-graduation gate is NARROWED, not discharged. SceneSnapshot::new() is a plain constructor again — SceneSnapshot::new(stamp, damage, scene), three arguments instead of the original five, because the three former flat identity fields now collapse into one FrameStamp value. A future FrameStamp field still breaks every FrameStamp::new call site — three today, each named directly by the compiler as a type or arity mismatch (raster_owner.rs's own test helper, the raster_backpressure bench, and the raster_backpressure_allocation integration test) — rather than an unbounded set of external SceneSnapshot::new callers. Smaller and compiler-guided, not additive."
 
 [[surface]]
-path = "flui_foundation::{RealmId, PresentationId, PresentationAddress, FrameEpoch, SurfaceGeneration, ResourceGeneration, GenerationGate, FrameStamp, FrameStampBuilder}"
+path = "flui_foundation::{RealmId, PresentationId, PresentationAddress, FrameEpoch, SurfaceGeneration, ResourceGeneration, GenerationGate}"
 crate = "flui-foundation"
 kind = "type"
 declared_in = "crates/flui-foundation/src/id.rs"
@@ -2652,7 +2652,26 @@ owner = "generational protocol identity vocabulary"
 failure_semantics = "generation mismatch compares unequal; GenerationGate rejects stale commits"
 consumers = ["UiRealm", "PresentationState", "SceneSnapshot", "RasterOwner"]
 owner_issue = 552
-notes = "PresentationAddress { realm_id, presentation_id } is a new additive public type: the full pair a `RasterOwner` binds to and validates every SceneSnapshot against (ADR-0037) — two different realm incarnations can mint an identical PresentationId, so the bare id alone never safely disambiguates them. Promoted here from flui-app's now-deleted private UiAddress once app/layer/engine all needed the same pair. FrameStamp { address, epoch, surface_generation } (crates/flui-foundation/src/frame_stamp.rs, #559) bundles this vocabulary's own address/epoch/surface_generation trio into the one identity-group value flui_layer::SceneSnapshot now carries as its `stamp` field, built only through the typestate FrameStampBuilder — shaped so ADR-0045 decision 4's later ResourceGeneration axis is one more builder slot, not a breaking field addition."
+notes = "PresentationAddress { realm_id, presentation_id } is a new additive public type: the full pair a `RasterOwner` binds to and validates every SceneSnapshot against (ADR-0037) — two different realm incarnations can mint an identical PresentationId, so the bare id alone never safely disambiguates them. Promoted here from flui-app's now-deleted private UiAddress once app/layer/engine all needed the same pair. declared_in pins one representative symbol (PresentationId, in id.rs) for a family whose members actually span two files — FrameEpoch/SurfaceGeneration/ResourceGeneration/GenerationGate are declared in epoch.rs, not id.rs; pre-existing imprecision in this entry, not introduced or corrected by #559."
+
+[[surface]]
+path = "flui_foundation::FrameStamp"
+crate = "flui-foundation"
+kind = "type"
+declared_in = "crates/flui-foundation/src/frame_stamp.rs"
+contains = "pub struct FrameStamp"
+classification = "experimental"
+thread_affinity = "plain Copy value type; Send + Sync"
+owner = "frame-identity group (address/epoch/surface_generation) for the raster boundary — bundles three fields flui_layer::SceneSnapshot used to carry flat into its own stamp field"
+failure_semantics = "infallible by construction; a stale frame is rejected by comparing stamps, not by this type"
+consumers = [
+    "flui_layer::SceneSnapshot",
+    "RasterOwner protocol",
+    "threaded tests",
+    "the raster_backpressure bench",
+]
+owner_issue = 559
+notes = "Constructed by FrameStamp::new(address, epoch, surface_generation), a plain positional constructor — not a builder. An earlier revision of this entry (and of FrameStamp's own module doc) claimed a typestate builder made a future required field (ADR-0045 decision 4's ResourceGeneration axis) additive to construction; that claim was tested by actually adding the field and was false — no value-type construction shape in Rust makes a required field additive, only an optional one. #[non_exhaustive] is kept for what it genuinely buys (matching additivity from outside this crate), never claimed for construction. Today's three FrameStamp::new call sites (raster_owner.rs's test helper, the raster_backpressure bench, the raster_backpressure_allocation integration test, all in flui-engine) are exactly what a future required field breaks — named directly by the compiler, small and knowable, not eliminated."
 
 [[surface]]
 path = "flui_testing::HeadlessBinding"

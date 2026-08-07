@@ -124,20 +124,12 @@ fn address() -> PresentationAddress {
 }
 
 fn frame(epoch: FrameEpoch) -> SceneSnapshot {
-    let stamp = FrameStamp::builder()
-        .address(address())
-        .epoch(epoch)
-        .surface_generation(SurfaceGeneration::ZERO)
-        .build();
-    SceneSnapshot::builder()
-        .stamp(stamp)
-        .damage(DamageRegion::Full)
-        .scene(Scene::from_layer(
-            Size::ZERO,
-            Layer::from(CanvasLayer::new()),
-            0,
-        ))
-        .build()
+    let stamp = FrameStamp::new(address(), epoch, SurfaceGeneration::ZERO);
+    SceneSnapshot::new(
+        stamp,
+        DamageRegion::Full,
+        Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
+    )
 }
 
 /// The measured claim: after warmup (the owner's own one-time

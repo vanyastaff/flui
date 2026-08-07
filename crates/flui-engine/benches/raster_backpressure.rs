@@ -87,20 +87,12 @@ fn bench_address() -> PresentationAddress {
 }
 
 fn bench_frame(epoch: FrameEpoch) -> SceneSnapshot {
-    let stamp = FrameStamp::builder()
-        .address(bench_address())
-        .epoch(epoch)
-        .surface_generation(SurfaceGeneration::ZERO)
-        .build();
-    SceneSnapshot::builder()
-        .stamp(stamp)
-        .damage(DamageRegion::Full)
-        .scene(Scene::from_layer(
-            Size::ZERO,
-            Layer::from(CanvasLayer::new()),
-            0,
-        ))
-        .build()
+    let stamp = FrameStamp::new(bench_address(), epoch, SurfaceGeneration::ZERO);
+    SceneSnapshot::new(
+        stamp,
+        DamageRegion::Full,
+        Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
+    )
 }
 
 /// Uncontended baseline: one thread doing submit→pump→retire in a tight

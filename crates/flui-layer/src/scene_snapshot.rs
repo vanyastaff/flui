@@ -39,16 +39,29 @@ pub enum DamageRegion {
 /// [`FrameStamp`]'s own doc for why those three values are bundled into one
 /// type rather than three struct fields here.
 ///
-/// # Construction is additive, not positional
+/// # Construction is narrowed, not additive
 ///
 /// Fields are `pub` for direct read/match access; `#[non_exhaustive]` makes
-/// *matching* on this struct additive when a field is added later.
-/// Construction goes through [`SceneSnapshot::builder`], never a positional
-/// constructor — the pre-graduation gate this type used to carry (a growing
-/// positional `new()` breaking every external call site) is discharged by
-/// the builder: a future field addition here widens [`SceneSnapshotBuilder`]
-/// with one more typestate slot and setter, and touches no existing call
-/// site.
+/// *matching* on this struct additive when a field is added later — it does
+/// **not** make *construction* additive, and neither does bundling three of
+/// this type's former fields into [`FrameStamp`].
+///
+/// This type used to carry a documented pre-graduation gate: a growing
+/// positional `new()` with five arguments (`address`, `epoch`,
+/// `surface_generation`, `damage`, `scene`) would break every call site on
+/// its next field. That gate is **narrowed, not discharged**. The prior
+/// revision of this doc claimed bundling the identity fields into
+/// `FrameStamp` plus a typestate builder made the *next* field addition
+/// additive; that claim was tested (a `resource_generation` field was
+/// actually added to `FrameStamp`) and found false — see
+/// [`FrameStamp`]'s own doc for why no construction shape makes a required
+/// field additive, and why the correction there matters enough to repeat
+/// here rather than silently drop. What genuinely improved: a positional
+/// constructor argument list of five collapses to three
+/// (`SceneSnapshot::new(stamp, damage, scene)`), and a future field on
+/// `FrameStamp` breaks three call sites in `flui-engine` today, each named
+/// directly by the compiler, rather than an unbounded set of external
+/// callers. Smaller and compiler-guided, not additive.
 #[non_exhaustive]
 #[derive(Debug)]
 pub struct SceneSnapshot {
@@ -63,124 +76,15 @@ pub struct SceneSnapshot {
 }
 
 impl SceneSnapshot {
-    /// Starts building a [`SceneSnapshot`]. Every field is required; the
-    /// returned builder only exposes [`SceneSnapshotBuilder::build`] once
-    /// [`SceneSnapshotBuilder::stamp`], [`SceneSnapshotBuilder::damage`], and
-    /// [`SceneSnapshotBuilder::scene`] have all been called — enforced at
-    /// compile time via the builder's typestate, not by a runtime check.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_foundation::{
-    ///     FrameEpoch, FrameStamp, PresentationAddress, PresentationId, RealmId,
-    ///     SurfaceGeneration,
-    /// };
-    /// use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene, SceneSnapshot};
-    /// use flui_types::Size;
-    ///
-    /// let stamp = FrameStamp::builder()
-    ///     .address(PresentationAddress {
-    ///         realm_id: RealmId::new(1),
-    ///         presentation_id: PresentationId::new(1),
-    ///     })
-    ///     .epoch(FrameEpoch::ZERO)
-    ///     .surface_generation(SurfaceGeneration::ZERO)
-    ///     .build();
-    /// let scene = Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0);
-    ///
-    /// let snapshot = SceneSnapshot::builder()
-    ///     .stamp(stamp)
-    ///     .damage(DamageRegion::Full)
-    ///     .scene(scene)
-    ///     .build();
-    ///
-    /// assert_eq!(snapshot.stamp, stamp);
-    /// ```
+    /// Packages a composited [`Scene`] with the identity/versioning
+    /// [`FrameStamp`] and damage region the raster boundary needs to
+    /// accept, reject, or reconcile it.
     #[must_use]
-    pub fn builder() -> SceneSnapshotBuilder {
-        SceneSnapshotBuilder::new()
-    }
-}
-
-/// Builder for [`SceneSnapshot`].
-///
-/// A typestate builder, the same shape as [`FrameStampBuilder`](flui_foundation::FrameStampBuilder):
-/// each setter is offered only while its own slot is still the unit type
-/// `()` (unfilled), and [`Self::build`] is offered only once every slot
-/// holds its real value. Calling the setters in any order reaches the same
-/// buildable state.
-#[derive(Debug)]
-pub struct SceneSnapshotBuilder<Stamp = (), Damage = (), SceneValue = ()> {
-    stamp: Stamp,
-    damage: Damage,
-    scene: SceneValue,
-}
-
-impl SceneSnapshotBuilder {
-    fn new() -> Self {
+    pub fn new(stamp: FrameStamp, damage: DamageRegion, scene: Scene) -> Self {
         Self {
-            stamp: (),
-            damage: (),
-            scene: (),
-        }
-    }
-}
-
-impl Default for SceneSnapshotBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<Damage, SceneValue> SceneSnapshotBuilder<(), Damage, SceneValue> {
-    /// Sets this frame's identity group.
-    #[must_use]
-    pub fn stamp(self, stamp: FrameStamp) -> SceneSnapshotBuilder<FrameStamp, Damage, SceneValue> {
-        SceneSnapshotBuilder {
             stamp,
-            damage: self.damage,
-            scene: self.scene,
-        }
-    }
-}
-
-impl<Stamp, SceneValue> SceneSnapshotBuilder<Stamp, (), SceneValue> {
-    /// Sets which regions changed since the previous frame.
-    #[must_use]
-    pub fn damage(
-        self,
-        damage: DamageRegion,
-    ) -> SceneSnapshotBuilder<Stamp, DamageRegion, SceneValue> {
-        SceneSnapshotBuilder {
-            stamp: self.stamp,
             damage,
-            scene: self.scene,
-        }
-    }
-}
-
-impl<Stamp, Damage> SceneSnapshotBuilder<Stamp, Damage, ()> {
-    /// Sets the composited layer tree, ready to render.
-    #[must_use]
-    pub fn scene(self, scene: Scene) -> SceneSnapshotBuilder<Stamp, Damage, Scene> {
-        SceneSnapshotBuilder {
-            stamp: self.stamp,
-            damage: self.damage,
             scene,
-        }
-    }
-}
-
-impl SceneSnapshotBuilder<FrameStamp, DamageRegion, Scene> {
-    /// Builds the [`SceneSnapshot`]. Only reachable once every field has
-    /// been set — see the type's own doc.
-    #[must_use]
-    pub fn build(self) -> SceneSnapshot {
-        SceneSnapshot {
-            stamp: self.stamp,
-            damage: self.damage,
-            scene: self.scene,
         }
     }
 }
@@ -202,45 +106,24 @@ mod tests {
     assert_impl_all!(SceneSnapshot: Send);
 
     fn test_stamp() -> FrameStamp {
-        FrameStamp::builder()
-            .address(flui_foundation::PresentationAddress {
+        FrameStamp::new(
+            flui_foundation::PresentationAddress {
                 realm_id: flui_foundation::RealmId::new(1),
                 presentation_id: flui_foundation::PresentationId::new(1),
-            })
-            .epoch(flui_foundation::FrameEpoch::ZERO.next())
-            .surface_generation(flui_foundation::SurfaceGeneration::ZERO)
-            .build()
+            },
+            flui_foundation::FrameEpoch::ZERO.next(),
+            flui_foundation::SurfaceGeneration::ZERO,
+        )
     }
 
     #[test]
-    fn builder_packages_all_fields() {
+    fn new_packages_all_fields() {
         let stamp = test_stamp();
         let scene = Scene::from_layer(Size::ZERO, crate::Layer::from(CanvasLayer::new()), 0);
 
-        let frame = SceneSnapshot::builder()
-            .stamp(stamp)
-            .damage(DamageRegion::Full)
-            .scene(scene)
-            .build();
+        let frame = SceneSnapshot::new(stamp, DamageRegion::Full, scene);
 
         assert_eq!(frame.stamp, stamp);
         assert_eq!(frame.damage, DamageRegion::Full);
-    }
-
-    #[test]
-    fn builder_setters_are_order_independent() {
-        let stamp = test_stamp();
-        let scene_stamp_damage = SceneSnapshotBuilder::new()
-            .scene(Scene::from_layer(
-                Size::ZERO,
-                crate::Layer::from(CanvasLayer::new()),
-                0,
-            ))
-            .stamp(stamp)
-            .damage(DamageRegion::Full)
-            .build();
-
-        assert_eq!(scene_stamp_damage.stamp, stamp);
-        assert_eq!(scene_stamp_damage.damage, DamageRegion::Full);
     }
 }

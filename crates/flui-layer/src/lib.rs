@@ -163,7 +163,7 @@ pub use layer::{
 // ============================================================================
 pub use link_registry::{LeaderInfo, LinkRegistry, resolve_follower_offset};
 pub use scene::{CompositionCallback, Scene};
-pub use scene_snapshot::{DamageRegion, SceneSnapshot, SceneSnapshotBuilder};
+pub use scene_snapshot::{DamageRegion, SceneSnapshot};
 // ============================================================================
 // RE-EXPORTS - Tree
 // ============================================================================
@@ -206,7 +206,7 @@ pub mod prelude {
     // Compositor
     pub use crate::{LinkRegistry, Scene, SceneBuilder, SceneCompositor, resolve_follower_offset};
     // Raster boundary
-    pub use crate::{DamageRegion, SceneSnapshot, SceneSnapshotBuilder};
+    pub use crate::{DamageRegion, SceneSnapshot};
     // Transform layers
     pub use crate::{OffsetLayer, TransformLayer};
     // Platform types
