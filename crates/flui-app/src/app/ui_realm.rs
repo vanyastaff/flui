@@ -1467,6 +1467,53 @@ impl UiRealm {
         presentation.mark_redraw_pending();
     }
 
+    /// Force the primary presentation to repaint on its next pump segment
+    /// even though nothing in the widget tree itself changed — for a
+    /// renderer-side reason the build/layout/paint pipeline has no way to
+    /// observe on its own. The one production caller today: a GPU device
+    /// recovery (`runner.rs`'s `render_frame_with_device_recovery`), where
+    /// the recovered device's backing store was invalidated by the loss —
+    /// `Renderer::recover` already primes a full repaint
+    /// (`damage_tracker.mark_full_repaint`) for whatever scene reaches it
+    /// next, but nothing reaches it at all unless something forces one.
+    ///
+    /// [`Self::request_redraw`] ALONE is necessary but not sufficient for
+    /// that: it opens `draw_frame_entered`'s per-presentation segment gate
+    /// (`PresentationState::mark_redraw_pending`, read by
+    /// `take_redraw_pending`), which is REQUIRED for the segment to run at
+    /// all — but an otherwise-unchanged tree, even with that gate open,
+    /// still produces `FramePaintOutcome::Idle` and never reaches
+    /// `render_scene`, because `PipelineOwner` tracks its own dirty state
+    /// independently of the clock's demand mechanism (confirmed by a
+    /// probe, not assumed: `should_run_segment()` correctly read `true`
+    /// with `request_redraw` alone, and the pipeline still produced
+    /// `Idle`). Marking the root render object dirty
+    /// (`PipelineOwner::mark_needs_layout`) is what gives the pipeline
+    /// actual work to redo — the same stand-in the `SurfaceLost` retry
+    /// test already uses by hand (`ui_realm.rs`'s
+    /// `surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`),
+    /// promoted here to a real, reusable production path instead of a
+    /// test-only workaround.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the only production caller is the desktop/Android device-recovery \
+                      path (runner.rs's render_frame_with_device_recovery); web's own \
+                      recovery stays un-unified and pokes `wake_handle()` directly instead \
+                      -- see that call site's own comment"
+        )
+    )]
+    pub(crate) fn mark_primary_needs_full_repaint(&self) {
+        self.request_redraw();
+        let primary = self.presentations.primary();
+        primary.renderer().root_pipeline_owner().with_mut(|owner| {
+            if let Some(root_id) = owner.root_id() {
+                owner.mark_needs_layout(root_id);
+            }
+        });
+    }
+
     /// Whether a redraw is needed.
     pub(crate) fn needs_redraw(&self) -> bool {
         self.needs_redraw.load(Ordering::Relaxed)
@@ -7439,6 +7486,34 @@ mod tests {
             }
         }
 
+        /// A raster backend that always reports `SurfaceValidation` — this
+        /// module's own minimal double for
+        /// `surface_validation_retry_preserves_the_original_input_epoch_for_the_presented_frame`
+        /// below, the `SurfaceValidation` counterpart of
+        /// [`AlwaysDeviceLostBackend`].
+        struct AlwaysSurfaceValidationBackend;
+
+        impl RasterBackend for AlwaysSurfaceValidationBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                Err(EngineError::SurfaceValidation)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
         /// END-STATE INVARIANT: at N=1 -- a clock that is
         /// never hidden and never backpressured -- the segment gate's
         /// decision (`clock.poll().should_run_segment()`, fed `Dirty`
@@ -8980,6 +9055,80 @@ mod tests {
             // Retry: standing in for the renderer owner's recovery + wake,
             // same as the `SurfaceLost` pin above -- mark the root dirty
             // directly rather than actually rebuilding a device.
+            let primary = realm.presentations.primary();
+            primary.renderer().root_pipeline_owner().with_mut(|owner| {
+                if let Some(root_id) = owner.root_id() {
+                    owner.mark_needs_layout(root_id);
+                }
+            });
+            primary.mark_redraw_pending();
+            let mut succeeding_backend = AlwaysPresentBackend;
+            let presented = realm.render_frame_entered(&mut succeeding_backend);
+            assert!(presented, "the retry must actually reach present()");
+
+            let after_retry = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(
+                after_retry.len(),
+                2,
+                "the retry adds a second snapshot alongside the failed attempt's"
+            );
+            let retry_snapshot = &after_retry[1];
+            assert_eq!(
+                retry_snapshot.present_outcome,
+                flui_scheduler::PresentOutcome::Presented
+            );
+            assert_eq!(
+                retry_snapshot.latencies().count(),
+                1,
+                "the presented retry frame must carry the ORIGINAL input epoch -- retaining \
+                 it across the failed attempt must not have lost it"
+            );
+        }
+
+        /// The `SurfaceValidation` counterpart to both pins above. Named
+        /// finding: flipping `EpochDisposition::Retain` back to `Drain` on
+        /// the `SurfaceValidation` arm specifically was NOT caught by
+        /// anything in the suite before this test existed — 281/281 stayed
+        /// green under that flip, because `surface_validation_keeps_needs_
+        /// redraw_armed_for_a_retry` only pins the `needs_redraw` half of
+        /// the fix, never epoch attribution. Same input -> failure -> retry
+        /// -> attribution sequence as the two pins above, substituting
+        /// `SurfaceValidation` for `DeviceLost`/`SurfaceLost`.
+        #[test]
+        fn surface_validation_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
+            use flui_interaction::events::{PointerType, make_down_event};
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = mount_root_here();
+            let primary_id = realm.presentations.primary().id();
+
+            let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+            realm.enter(|realm| {
+                realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
+            });
+
+            // First attempt: the surface fails validation. A retry is
+            // armed, and the failed attempt's own snapshot must still see
+            // the epoch that was pending (diagnostic value), but must NOT
+            // consume it.
+            let mut failing_backend = AlwaysSurfaceValidationBackend;
+            let presented = realm.render_frame_entered(&mut failing_backend);
+            assert!(!presented, "SurfaceValidation never reaches present()");
+            let after_failure = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(
+                after_failure.len(),
+                1,
+                "the failed attempt is still recorded, for diagnostics"
+            );
+            assert_eq!(
+                after_failure[0].latencies().count(),
+                1,
+                "the failed attempt's own snapshot still reports the pending epoch"
+            );
+
+            // Retry: standing in for the external reconfigure a later
+            // wake performs, same as the pins above -- mark the root dirty
+            // directly rather than actually reconfiguring a surface.
             let primary = realm.presentations.primary();
             primary.renderer().root_pipeline_owner().with_mut(|owner| {
                 if let Some(root_id) = owner.root_id() {
