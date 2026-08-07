@@ -355,6 +355,18 @@ impl PendingInputEpochs {
     pub(crate) fn drain(&mut self) -> InputEpochs {
         core::mem::replace(&mut self.pending, InputEpochs::EMPTY)
     }
+
+    /// Read every pending epoch WITHOUT draining the buffer — for a submit
+    /// attempt that failed on a path its own caller has already armed a
+    /// retry for (e.g. `EngineError::SurfaceLost`). Draining here would
+    /// leave the eventual retry's own real [`Self::drain`] with nothing to
+    /// attribute to the inputs that arrived before the failed attempt, so
+    /// the frame that eventually reaches the screen would carry no
+    /// attribution for them at all. `InputEpochs` is `Copy`, so this is a
+    /// plain read, not a second live handle into the buffer.
+    pub(crate) fn peek(&self) -> InputEpochs {
+        self.pending
+    }
 }
 
 #[cfg(test)]
@@ -476,6 +488,36 @@ mod tests {
         assert!(
             pending.drain().is_empty(),
             "a second drain finds nothing left"
+        );
+    }
+
+    /// `peek` must report the same epochs `drain` would, but leave them
+    /// pending for a later real `drain` — the property a failed submit
+    /// that will be retried depends on to not lose input attribution.
+    #[test]
+    fn peek_reports_pending_epochs_without_draining_them() {
+        let mut pending = PendingInputEpochs::default();
+        let now = Instant::now();
+        let a = pending.stamp(now);
+        let b = pending.stamp(now + Duration::from_millis(5));
+
+        let peeked = pending.peek();
+        assert_eq!(peeked.len(), 2, "peek must see every pending epoch");
+        let ids: Vec<u64> = peeked.iter().map(|e| e.id.get()).collect();
+        assert_eq!(ids, vec![a.get(), b.get()]);
+
+        // Unlike `drain`, a second `peek` sees the SAME epochs again.
+        assert_eq!(
+            pending.peek().len(),
+            2,
+            "peek must not have consumed anything"
+        );
+
+        let drained = pending.drain();
+        assert_eq!(
+            drained.len(),
+            2,
+            "the epochs peek reported must still be there for a real drain"
         );
     }
 
