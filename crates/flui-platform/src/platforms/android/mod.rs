@@ -55,6 +55,64 @@ use crate::{
     },
 };
 
+/// Whether the registered wake-deadline hook's answer means `run`'s loop
+/// should WANT to force a frame dispatch this iteration, even though
+/// nothing explicitly requested a redraw. Pulled out of `run`'s loop as its
+/// own pure, free function — unlike the rest of that loop, which needs a
+/// live `AndroidApp` (constructible only by the real Android runtime; no
+/// test double exists for it, so `run` itself cannot be exercised in a unit
+/// test on any host) — this one decision is entirely independent of that:
+/// `None` (no hook installed, or the hook itself has nothing pending) is
+/// never due; `Some(deadline)` is due once `now` has reached it.
+///
+/// This function is STATELESS and NOT self-limiting: called again with the
+/// same `deadline` and a `now` that has not gone backwards, it answers
+/// `true` again, and keeps answering `true` on every subsequent call until
+/// either `deadline` itself advances/clears or `now` regresses (it never
+/// does). It does not know, and cannot know, whether some earlier call's
+/// `true` already caused a dispatch — it has no memory of ever being
+/// called before. Something else has to be the actuator that stops asking:
+/// either the deadline source's own consumer advances `deadline` in
+/// response to acting on it (the desktop/Android device-recovery backoff
+/// does this — see `DeviceRecoveryBackoff`'s two paired obligations), or
+/// the CALLER stops treating "due" as "act now" once acting is impossible
+/// (`run`'s loop does this by gating this answer's effect on `should_render`
+/// on `resumed` — see that call site's own comment for the busy-spin this
+/// prevents while backgrounded). Read this function's own `true` as "the
+/// deadline has passed", never as "and therefore something happened".
+fn is_deadline_due(deadline: Option<web_time::Instant>, now: web_time::Instant) -> bool {
+    deadline.is_some_and(|deadline| now >= deadline)
+}
+
+/// Whether `run`'s loop should force a zero-timeout `poll_events` call (and,
+/// once actually dispatched a few lines later, a frame) THIS iteration.
+///
+/// `redraw_requested` passes through unconditionally: it comes from
+/// [`AndroidWindow::take_redraw_request`](super::window::AndroidWindow::take_redraw_request), which
+/// consumes on read (an atomic swap to `false`), so it is already
+/// self-limiting the way [`is_deadline_due`] is NOT — one call answering
+/// `true` clears it for every subsequent call until something re-arms it.
+///
+/// `deadline_due` is gated on `resumed` because it carries no such
+/// self-limiting property, and round 6 found what happens when it is
+/// counted in unconditionally: with the app paused and a deadline armed —
+/// which device loss and `MainEvent::Pause` are frequently the same
+/// real-world event for — `is_deadline_due` answers `true` on every
+/// iteration (see its own doc: it is stateless), forcing a 0ms
+/// `poll_events` timeout every iteration, while the actual dispatch this
+/// would be for stays gated on `resumed` too (`run`'s loop, a few lines
+/// below this decision) and so never runs — nothing ever consumes the
+/// deadline, and the loop spins at 100% CPU on a backgrounded phone for as
+/// long as it stays paused. Gating here means a due-but-unconsumable
+/// deadline instead falls through to the ordinary ~16ms idle timeout; it is
+/// not lost, only deferred — the moment a real `MainEvent::Resume` arrives,
+/// the wake-deadline hook is re-consulted on the very next iteration (that
+/// read is unconditional and never cached) and a still-due deadline is
+/// caught then.
+fn should_force_render_poll(resumed: bool, deadline_due: bool, redraw_requested: bool) -> bool {
+    (resumed && deadline_due) || redraw_requested
+}
+
 /// Android platform implementation using `android-activity`
 ///
 /// Wraps the `AndroidApp` provided by `android_main()` and implements the
@@ -217,12 +275,29 @@ impl Platform for AndroidPlatform {
                 break;
             }
 
-            // Check if we should render before polling
-            let should_render = platform
+            // Wall-clock wake (mirrors the winit backend's `about_to_wait`):
+            // consult the registered wake-deadline hook fresh on EVERY
+            // iteration -- a deadline that fires, a new one getting armed,
+            // or every deadline clearing must all be reflected immediately,
+            // not stale from whenever the hook was installed. Lock
+            // discipline (ADR-0038 §5, the same rule winit's own
+            // `about_to_wait` follows): the hook itself re-enters
+            // `flui-app` -- clone the `Arc` out, drop the lock, THEN call
+            // it, never while `platform.handlers` is still held.
+            let wake_deadline_hook = platform.handlers.lock().wake_deadline.clone();
+            let wake_deadline = wake_deadline_hook.and_then(|hook| hook());
+            let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
+
+            // Check if we should render before polling — see
+            // `should_force_render_poll`'s own doc for why `deadline_due`'s
+            // contribution is gated on `resumed` and `redraw_requested`'s is
+            // not.
+            let redraw_requested = platform
                 .window
                 .lock()
                 .as_ref()
                 .is_some_and(|w| w.take_redraw_request());
+            let should_render = should_force_render_poll(resumed, deadline_due, redraw_requested);
 
             let timeout = if should_render {
                 Duration::from_millis(0)
@@ -395,6 +470,20 @@ impl Platform for AndroidPlatform {
         self.handlers.lock().window_event = Some(callback);
     }
 
+    /// Unlike `winit`'s override (the trait's one other live implementor),
+    /// this backend has no `ControlFlow::WaitUntil` to hand the deadline
+    /// to — `run`'s own loop actuates it directly instead, by checking
+    /// `now >= deadline` once per iteration and forcing a dispatch when due
+    /// (see that loop's own comment). Storage is the identical
+    /// `PlatformHandlers::wake_deadline` slot winit uses, for the same
+    /// `Arc`-cloned-out-of-the-lock consultation discipline (ADR-0038 §5).
+    fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
+        self.handlers.lock().wake_deadline = Some(Arc::from(hook));
+    }
+
     fn app_path(&self) -> Result<PathBuf> {
         Ok(PathBuf::from("/data/local/tmp"))
     }
@@ -473,5 +562,91 @@ impl PlatformDisplay for AndroidDisplay {
 
     fn is_primary(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod wake_deadline_tests {
+    use std::time::Duration;
+
+    use super::{is_deadline_due, should_force_render_poll};
+
+    #[test]
+    fn no_hook_or_an_empty_hook_is_never_due() {
+        assert!(!is_deadline_due(None, web_time::Instant::now()));
+    }
+
+    #[test]
+    fn a_future_deadline_is_not_due_yet() {
+        let now = web_time::Instant::now();
+        let deadline = now + Duration::from_millis(16);
+        assert!(!is_deadline_due(Some(deadline), now));
+    }
+
+    #[test]
+    fn a_due_or_past_deadline_is_due() {
+        let now = web_time::Instant::now();
+        let deadline = now
+            .checked_sub(Duration::from_millis(1))
+            .expect("now is far past the epoch");
+        assert!(is_deadline_due(Some(deadline), now));
+        assert!(
+            is_deadline_due(Some(now), now),
+            "exactly-now must count as due, not just strictly-past"
+        );
+    }
+
+    /// The property this function's own doc leads with: it is stateless, so
+    /// a due deadline stays due across repeated calls with the same
+    /// arguments — it does not remember having already answered `true`. Any
+    /// self-limiting behavior (stopping the loop from re-asking, or
+    /// stopping "due" from re-forcing an action once nothing can act on it)
+    /// has to live in a caller, never here.
+    #[test]
+    fn a_due_deadline_stays_due_across_repeated_calls_with_unchanged_arguments() {
+        let now = web_time::Instant::now();
+        let deadline = now
+            .checked_sub(Duration::from_secs(1))
+            .expect("now is far past the epoch");
+        for _ in 0..5 {
+            assert!(
+                is_deadline_due(Some(deadline), now),
+                "is_deadline_due must not self-extinguish -- it has no state to extinguish"
+            );
+        }
+    }
+
+    /// Round 6's finding, pinned directly: a due deadline must NOT force a
+    /// render poll while paused, because nothing downstream would consume
+    /// it (the actual dispatch is gated on `resumed` too) — reported
+    /// unconditionally, this is a 100% CPU spin on a backgrounded phone for
+    /// as long as it stays paused, since `is_deadline_due` has no memory of
+    /// already having said "yes" once (see its own doc).
+    #[test]
+    fn a_due_deadline_does_not_force_a_render_poll_while_paused() {
+        assert!(
+            !should_force_render_poll(false, true, false),
+            "paused + due + no explicit redraw request must fall through to the ordinary idle \
+             timeout, not force a 0ms poll nobody can act on"
+        );
+    }
+
+    #[test]
+    fn a_due_deadline_forces_a_render_poll_while_resumed() {
+        assert!(should_force_render_poll(true, true, false));
+    }
+
+    #[test]
+    fn an_explicit_redraw_request_forces_a_render_poll_regardless_of_resumed_or_deadline_state() {
+        // `redraw_requested` is already self-limiting (consume-on-read), so
+        // unlike `deadline_due` it is never gated on `resumed` here.
+        assert!(should_force_render_poll(false, false, true));
+        assert!(should_force_render_poll(true, false, true));
+    }
+
+    #[test]
+    fn nothing_pending_never_forces_a_render_poll() {
+        assert!(!should_force_render_poll(false, false, false));
+        assert!(!should_force_render_poll(true, false, false));
     }
 }

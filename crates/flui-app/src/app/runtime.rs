@@ -310,16 +310,20 @@ impl RealmRegistry {
         self.slots.is_empty()
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "shared-reference lookup; every production call site so far checks a slot \
-                      out via get_mut (the checkout-based dispatch/visit pattern) -- exercised \
-                      by this crate's own tests, which only need to read a slot back, never \
-                      mutate it"
-        )
-    )]
+    /// A read-only checkout: unlike [`Self::get_mut`] (the checkout-based
+    /// dispatch/visit pattern every OTHER call site uses), this never removes
+    /// `realm` from its slot — so it is exactly what a peek that must not
+    /// disturb an in-flight checkout needs. First production caller: the
+    /// desktop wake-deadline hook's `frames_enabled` lookup
+    /// (`runner.rs`'s `bootstrap_desktop`, step 3d) reads a realm's
+    /// scheduler state from a callback the platform invokes independently of
+    /// any dispatch, where a `get_mut`-style checkout would be both
+    /// unnecessary and wrong (it has nothing to mutate, and checking a realm
+    /// out here would make it briefly invisible to a real dispatch racing
+    /// against this read).
+    // Its only production caller is the desktop wake-deadline hook, which
+    // wasm does not build.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(super) fn get(&self, id: &RealmId) -> Option<&RealmSlot> {
         self.slots
             .iter()

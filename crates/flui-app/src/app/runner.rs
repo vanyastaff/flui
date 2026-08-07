@@ -206,7 +206,21 @@ fn install_exit_policy_hook(policy: ExitPolicy) {
 /// full contract. Call once, alongside [`install_exit_policy_hook`], from
 /// every backend that wants this: today, that is `run_desktop` only —
 /// Android/web bootstraps never call this (their platforms don't override
-/// that trait method either, so it would be inert there anyway).
+/// that trait method either, so it would be inert there anyway; see
+/// `DeviceRecoveryBackoff`'s own doc for what that means for a device-
+/// recovery deadline specifically on Android).
+///
+/// `secondary_deadline` merges an additional wake-deadline SOURCE into this
+/// hook's answer (the earliest of the two wins) without this function
+/// needing to know what produces it — `bootstrap_desktop` passes a closure
+/// over its own `DeviceRecoveryBackoff`, so a device stuck retrying under
+/// backoff still gets `ControlFlow::WaitUntil`'s efficient wait instead of
+/// this hook silently only ever answering the realm's own deadline. Kept
+/// generic (not `DeviceRecoveryBackoff`-typed) so this function's own `cfg`
+/// gate can stay as broad as it already is (`not(ios)`, wider than that
+/// type's `not(ios), not(wasm32)`) without needing a matching narrow gate
+/// here too — only the (already desktop-only) call site's closure captures
+/// the concrete backoff type.
 ///
 /// The hook itself re-enters `APP_RUNTIME` only when the PLATFORM calls it
 /// later (`about_to_wait`) — never synchronously from this function, which
@@ -224,12 +238,164 @@ fn install_exit_policy_hook(policy: ExitPolicy) {
                   never call this"
     )
 )]
-fn install_wake_deadline_hook() {
+fn install_wake_deadline_hook(
+    secondary_deadline: impl Fn() -> Option<web_time::Instant> + Send + Sync + 'static,
+) {
     with_owner_platform(|owner| {
-        owner.shared().set_wake_deadline_hook(Box::new(|| {
-            APP_RUNTIME.with(|slot| slot.borrow().next_wake())
+        owner.shared().set_wake_deadline_hook(Box::new(move || {
+            let realm_deadline = APP_RUNTIME.with(|slot| slot.borrow().next_wake());
+            merge_wake_deadlines(realm_deadline, secondary_deadline())
         }));
     });
+}
+
+/// The earlier of two optional wake deadlines, treating `None` as "no
+/// opinion" rather than as a value that could win a `min` against a real
+/// deadline — the same fold `AppRuntime::next_wake` (`runtime.rs`) itself
+/// uses across realms, pulled out here as its own named, unit-tested
+/// function because it is exactly what [`install_wake_deadline_hook`]'s
+/// entire non-blocking desktop design now rests on: this whole module's
+/// device-recovery deadline reaches the platform's `ControlFlow::WaitUntil`
+/// only through this fold correctly picking the earlier of the realm's own
+/// deadline and the secondary (device-recovery) one, and correctly leaving
+/// the realm's deadline untouched when the secondary source has nothing
+/// pending.
+#[cfg(not(target_os = "ios"))]
+fn merge_wake_deadlines(
+    a: Option<web_time::Instant>,
+    b: Option<web_time::Instant>,
+) -> Option<web_time::Instant> {
+    [a, b].into_iter().flatten().min()
+}
+
+/// Whether an armed device-recovery deadline should actually be reported to
+/// [`install_wake_deadline_hook`]'s secondary-source closure this call —
+/// pulled out as its own pure function for the same reason `frame_is_dirty`
+/// was: the real closure captures `APP_RUNTIME` state no unit test can drive
+/// directly, so the decision this function makes is tested here in
+/// isolation instead, and the closure calls this rather than reimplementing
+/// it (round 6's own lesson about what happens to a predicate reimplemented
+/// in two places).
+///
+/// `frames_enabled == false` suppresses the deadline unconditionally,
+/// regardless of how soon it is due: while frames are disabled
+/// (`AppLifecycleState::Hidden`/`Paused`/`Detached`), the frame closure's
+/// `WakeAction::PumpAsync` arm returns before `render_frame_with_device_
+/// recovery` ever runs, so nothing on that path would consume a reported
+/// deadline — reporting it anyway hands `about_to_wait` the SAME past
+/// instant on every idle iteration once it comes due, which is
+/// `WinitApp::new_events`'s own named `WaitUntil(past)` busy-spin, forced by
+/// this hook instead of a stale realm deadline. The deadline is not lost by
+/// staying unreported while disabled: frames re-enabling already redirties
+/// the root unconditionally (`UiRealm::redirty_root_for_frames_reenable`),
+/// which wakes the loop through the ordinary `needs_redraw` channel and
+/// lets a real `WakeAction::Render` resume the retry then.
+// Desktop-only, like its sole caller `bootstrap_desktop`: wasm has no
+// `ControlFlow`/`WaitUntil` to feed and iOS has no bootstrap here, so
+// compiling it on either target is dead code the `-D warnings` wasm gate
+// rejects.
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn desktop_secondary_wake_deadline(
+    next_attempt_at: Option<web_time::Instant>,
+    frames_enabled: bool,
+) -> Option<web_time::Instant> {
+    if frames_enabled {
+        next_attempt_at
+    } else {
+        None
+    }
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+mod desktop_secondary_wake_deadline_tests {
+    use web_time::Instant;
+
+    use super::desktop_secondary_wake_deadline;
+
+    #[test]
+    fn an_armed_deadline_is_reported_while_frames_are_enabled() {
+        let deadline = Instant::now();
+        assert_eq!(
+            desktop_secondary_wake_deadline(Some(deadline), true),
+            Some(deadline)
+        );
+    }
+
+    #[test]
+    fn an_armed_deadline_is_suppressed_while_frames_are_disabled() {
+        let deadline = Instant::now();
+        assert_eq!(
+            desktop_secondary_wake_deadline(Some(deadline), false),
+            None,
+            "a deadline nothing can act on must not be reported -- reporting it would hand \
+             `about_to_wait` the same past instant forever (the PumpAsync arm never consumes \
+             it), the exact WaitUntil(past) busy-spin `WinitApp::new_events` names, one layer \
+             up from where round 4 fixed the equivalent hole on the Render path"
+        );
+    }
+
+    #[test]
+    fn no_armed_deadline_stays_none_either_way() {
+        assert_eq!(desktop_secondary_wake_deadline(None, true), None);
+        assert_eq!(desktop_secondary_wake_deadline(None, false), None);
+    }
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+mod merge_wake_deadlines_tests {
+    use std::time::Duration;
+
+    use web_time::Instant;
+
+    use super::merge_wake_deadlines;
+
+    #[test]
+    fn picks_the_earlier_of_two_present_deadlines_either_order() {
+        let now = Instant::now();
+        let earlier = now + Duration::from_millis(16);
+        let later = now + Duration::from_secs(1);
+
+        assert_eq!(
+            merge_wake_deadlines(Some(earlier), Some(later)),
+            Some(earlier),
+            "realm-earlier, secondary-later"
+        );
+        assert_eq!(
+            merge_wake_deadlines(Some(later), Some(earlier)),
+            Some(earlier),
+            "realm-later, secondary-earlier -- order must not matter"
+        );
+    }
+
+    #[test]
+    fn a_missing_secondary_leaves_the_realm_deadline_untouched() {
+        let deadline = Instant::now() + Duration::from_millis(16);
+        assert_eq!(
+            merge_wake_deadlines(Some(deadline), None),
+            Some(deadline),
+            "no device-recovery deadline pending must not suppress a real realm deadline"
+        );
+    }
+
+    #[test]
+    fn a_missing_realm_deadline_leaves_the_secondary_deadline_untouched() {
+        let deadline = Instant::now() + Duration::from_millis(16);
+        assert_eq!(
+            merge_wake_deadlines(None, Some(deadline)),
+            Some(deadline),
+            "no realm deadline pending must not suppress a real device-recovery deadline"
+        );
+    }
+
+    #[test]
+    fn both_absent_is_absent() {
+        assert_eq!(
+            merge_wake_deadlines(None, None),
+            None,
+            "neither source has an opinion -- the platform must fall back to its \
+             unconditional Wait, not a spurious WaitUntil(anything)"
+        );
+    }
 }
 
 /// Borrow-style access to the loop-scoped owner-platform capability.
@@ -6178,6 +6344,39 @@ fn wake_action(frames_enabled: bool, dirty: bool, frame_scheduled: bool) -> Wake
     }
 }
 
+/// The frame closure's `dirty` gate, shared verbatim by both backends' own
+/// closures AND their tests — pulled out for the identical reason
+/// `wake_action`/`keeps_frame_gate_open`/`no_present_fallback_pace`/
+/// `merge_wake_deadlines` already are one level up: a test that reimplements
+/// a one-line predicate in its own body instead of calling the production
+/// code silently stops pinning it. That happened here once already — both
+/// `the_real_closure_gate_...` tests below used to compute this boolean
+/// inline, so reverting the REAL `next_attempt_at().is_some()` term in
+/// either closure below left the tests green (they were asserting against
+/// their own copy of the old logic, not the production line) even though
+/// the fix it was meant to pin was gone.
+///
+/// Four sources, all required: `inbox_redraw` (a command drained this frame
+/// boundary asked for a redraw), `needs_redraw`/`has_pending_work` (the
+/// realm's own pre-existing dirty state), and `next_attempt_at.is_some()` —
+/// an armed device-recovery retry deadline. Dropping that last term is
+/// exactly the bug `DeviceRecoveryBackoff`'s own doc describes: a deadline
+/// wired into the wake-deadline hook but invisible to this gate reaches
+/// `WakeAction::Skip` and returns before `render_frame_with_device_recovery`
+/// is ever called, no matter how faithfully the platform actuates the wake.
+// Absent on wasm: its two production callers are the desktop and Android
+// frame closures, neither of which exists there, and the web runner has
+// no `DeviceRecoveryBackoff` deadline term to fold in.
+#[cfg(not(target_arch = "wasm32"))]
+fn frame_is_dirty(
+    inbox_redraw: bool,
+    needs_redraw: bool,
+    has_pending_work: bool,
+    next_attempt_at: Option<web_time::Instant>,
+) -> bool {
+    inbox_redraw || needs_redraw || has_pending_work || next_attempt_at.is_some()
+}
+
 /// Whether another frame will be requested regardless of this one's
 /// outcome: `needs_redraw`, a scheduled ticker, or dirty
 /// pipeline/build work left over from the frame that just ran.
@@ -6883,6 +7082,1427 @@ mod desktop_pacing_tests {
     }
 }
 
+// ============================================================================
+// GPU device-loss recovery (App.1 device-recovery wake)
+// ============================================================================
+//
+// The sync device-rebuild seam plus the shared retry/backoff logic the
+// desktop and Android frame drivers both use around
+// `UiRealm::render_frame_entered`. Web's own recovery (`bootstrap_web`)
+// stays un-unified: its `recover()` is driven through
+// `wasm_bindgen_futures::spawn_local`, not a synchronous call this trait
+// could wrap — see that call site's own comment for why.
+
+/// The sync device-rebuild seam the frame driver needs from its renderer.
+///
+/// [`flui_engine::RasterBackend`] deliberately excludes recovery — it is
+/// async and window-handle-specific (see `flui-engine/src/raster.rs`'s
+/// trait doc) — so the runners narrow the concrete renderer to this seam
+/// instead of widening the public trait. The production impl wraps
+/// `Renderer::recover` in `pollster::block_on`; test fakes script the
+/// outcome. `is_device_lost` is NOT duplicated here — it already lives on
+/// `RasterBackend`, and every consumer bounds on both traits.
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+trait DeviceRecovery {
+    /// Attempt to rebuild the lost device synchronously on the runner
+    /// thread.
+    fn try_recover_device(&mut self) -> Result<(), flui_engine::EngineError>;
+}
+
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+impl DeviceRecovery for flui_engine::wgpu::Renderer {
+    fn try_recover_device(&mut self) -> Result<(), flui_engine::EngineError> {
+        // `pollster` is already a dep and safe to use here — the
+        // desktop/Android runners own synchronous platform callbacks, not
+        // an async executor.
+        pollster::block_on(self.recover())
+    }
+}
+
+/// Exponential backoff for the [`DeviceRecovery::try_recover_device`] retry
+/// loop: paces how often an ATTEMPT is made while the device stays lost,
+/// growing from one frame interval up to a capped ceiling and resetting on
+/// the first successful recovery.
+///
+/// Deliberately never gives up permanently (no attempt-count ceiling):
+/// device loss is expected to clear eventually on every platform this runs
+/// on — a driver TDR reset, an app coming back from the background, an
+/// eGPU replug — so a hard cap would turn a recoverable condition into a
+/// dead app. An UNBOUNDED, un-backed-off retry loop is equally wrong (a
+/// full `recover()` rebuilds the instance/adapter/device/surface/painter/
+/// offscreen target — not cheap to repeat every wake), so this paces the
+/// ATTEMPT itself, not just the log line.
+///
+/// This is a DEADLINE, not a sleep: [`Self::next_attempt_at`] reports the
+/// earliest instant an attempt is allowed, and the caller's only obligation
+/// is to skip attempting before it — never to block the calling thread
+/// waiting for it. A `thread::sleep` sized to this backoff's own interval
+/// (climbing to a full second at the cap) was tried and rejected: on the
+/// platform event-loop thread that call runs on, it blocks input dispatch
+/// for its duration on every backend, and on Android specifically it also
+/// blocks `MainEvent` lifecycle delivery (`AndroidPlatform::run`'s poll
+/// loop calls `process_input_events`/`dispatch_request_frame` inline, on
+/// the SAME thread) — repeated one-second stalls there are ANR territory.
+/// Both desktop and Android wire [`DeviceRecoveryBackoff::next_attempt_at`]
+/// into a wall-clock wake-deadline hook (`install_wake_deadline_hook` for
+/// desktop; `Platform::set_wake_deadline_hook` on `AndroidPlatform` directly
+/// for Android, added alongside this backoff since the trait's default
+/// implementation is a no-op there) so the platform's own idle wait — or,
+/// on Android, its own already-running ~16ms idle poll — carries the
+/// deadline instead of this crate sleeping on it. See each hook's own doc
+/// for exactly what it can express and at what granularity. **A deadline
+/// wired into either hook is necessary but not sufficient on its own**: it
+/// must also appear in the owning frame closure's `dirty` predicate (`wake_
+/// action`'s input) or the wake it actuates reaches `WakeAction::Skip` and
+/// returns before this backoff is ever consulted again — both closures'
+/// `dirty` computations OR in `next_attempt_at().is_some()` for exactly
+/// this reason.
+///
+/// `Send + Sync`: captured behind an `Arc` by the platform's
+/// `on_request_frame` callback, which every backend's `Window::
+/// on_request_frame` requires to be `Send` (`flui-platform/src/traits/
+/// window.rs`). State lives behind one `parking_lot::Mutex` rather than
+/// several independent atomics — this is read/written at most once per
+/// frame wake, and a single lock rules out the counters and the deadline
+/// ever being updated out of step with each other.
+///
+/// This mutex has TWO callers, not one: the frame closure itself
+/// (`attempt_device_recovery`/[`Self::record_failure`]/[`Self::record_success`])
+/// and the wake-deadline hook closure ([`Self::next_attempt_at`], called
+/// from desktop's `about_to_wait` or Android's own poll loop). Both run on
+/// this platform's single event-loop thread, never concurrently with each
+/// other — that same-thread invariant is what makes holding this
+/// `parking_lot::Mutex` (non-reentrant: a same-thread re-lock while already
+/// held deadlocks, it does not block-and-wait) safe with no actual
+/// contention today. It is still deliberately never held across a
+/// `tracing` call (whose subscriber may perform I/O) — see
+/// [`Self::record_failure`]'s own comment for where the guard is dropped
+/// before logging, defensively, not because a reentrant call from within a
+/// subscriber has been observed.
+///
+/// [`web_time::Instant`], not `std::time::Instant`: a deliberate match to
+/// every other clock on this frame-driver path (`web_time::Instant::now()`
+/// at the top of both closures, `AppRuntime::next_wake`'s own return type)
+/// rather than an accident of this type compiling only because the two
+/// happen to be the same type off-`wasm32` (this backoff's own `cfg` gate
+/// already excludes `wasm32`, so the distinction is moot today, but the
+/// convention is the same one this whole module already follows).
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+struct DeviceRecoveryBackoff {
+    state: parking_lot::Mutex<DeviceRecoveryBackoffState>,
+}
+
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+struct DeviceRecoveryBackoffState {
+    /// Consecutive failures since the last success (or since construction).
+    consecutive_failures: u32,
+    /// Whether the "backoff reached its cap" error has already been logged
+    /// once this losing streak — re-armed on the next success.
+    cap_logged: bool,
+    /// The earliest instant the next attempt is allowed. `None` before the
+    /// first failure of a streak (attempt immediately) or right after a
+    /// success.
+    next_attempt_at: Option<web_time::Instant>,
+}
+
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+impl DeviceRecoveryBackoff {
+    /// The base interval: the same cadence [`NO_PRESENT_FALLBACK_PACE`]
+    /// already paces a no-present frame at, reused rather than inventing a
+    /// second pacing constant for the same "roughly one frame interval"
+    /// shape.
+    const BASE: std::time::Duration = NO_PRESENT_FALLBACK_PACE;
+    /// The ceiling: "on the order of a second", per this module's device-
+    /// recovery retry policy.
+    const CAP: std::time::Duration = std::time::Duration::from_secs(1);
+    /// `BASE << SHIFT_CAP >= CAP` already holds well before this shift is
+    /// reached, so capping the shift itself (rather than only the final
+    /// `.min(CAP)`) avoids ever computing `1u32 << n` for an
+    /// unboundedly long losing streak.
+    const SHIFT_CAP: u32 = 6;
+
+    fn new() -> Self {
+        Self {
+            state: parking_lot::Mutex::new(DeviceRecoveryBackoffState {
+                consecutive_failures: 0,
+                cap_logged: false,
+                next_attempt_at: None,
+            }),
+        }
+    }
+
+    /// The earliest instant the next attempt is allowed, if a failure has
+    /// armed one. `None` when ready right now (never failed, or the last
+    /// outcome was a success).
+    fn next_attempt_at(&self) -> Option<web_time::Instant> {
+        self.state.lock().next_attempt_at
+    }
+
+    /// Record a failed recovery attempt at `now`, arm the next deadline,
+    /// and return it.
+    ///
+    /// Logs the first failure of a losing streak at `error`, every
+    /// subsequent one at `debug`, and re-emits `error` exactly once more
+    /// when the backoff reaches [`Self::CAP`] — a permanently dead GPU
+    /// says so once more at that point, not on every attempt after it.
+    fn record_failure(
+        &self,
+        error: &flui_engine::EngineError,
+        now: web_time::Instant,
+    ) -> web_time::Instant {
+        /// Which line to log, decided while the state lock is held (it
+        /// reads/mutates `cap_logged`); the actual `tracing` call happens
+        /// AFTER the guard drops — see this method's own call site below.
+        enum LogKind {
+            FirstFailure,
+            ReachedCap,
+            Retrying,
+        }
+
+        let (deadline, interval, log_kind) = {
+            let mut state = self.state.lock();
+            let shift = state.consecutive_failures.min(Self::SHIFT_CAP);
+            let interval = (Self::BASE * (1u32 << shift)).min(Self::CAP);
+            let at_cap = interval >= Self::CAP;
+            let is_first = state.consecutive_failures == 0;
+            state.consecutive_failures += 1;
+            let deadline = now + interval;
+            state.next_attempt_at = Some(deadline);
+
+            let log_kind = if is_first {
+                LogKind::FirstFailure
+            } else if at_cap && !state.cap_logged {
+                state.cap_logged = true;
+                LogKind::ReachedCap
+            } else {
+                LogKind::Retrying
+            };
+            (deadline, interval, log_kind)
+            // `state` (the `MutexGuard`) drops here, before any `tracing`
+            // call: this mutex's other caller is the wake-deadline hook
+            // closure (see this type's own doc for why holding it across a
+            // subscriber's possible I/O is undesirable even though no
+            // reentrant call is reachable today).
+        };
+
+        match log_kind {
+            LogKind::FirstFailure => {
+                tracing::error!(error = ?error, "GPU device recovery failed; retrying with backoff");
+            }
+            LogKind::ReachedCap => {
+                tracing::error!(
+                    error = ?error,
+                    backoff = ?interval,
+                    "GPU device recovery still failing at the backoff cap; retries continue \
+                     silently from here"
+                );
+            }
+            LogKind::Retrying => {
+                tracing::debug!(
+                    error = ?error,
+                    backoff = ?interval,
+                    "GPU device recovery failed; retrying"
+                );
+            }
+        }
+        deadline
+    }
+
+    /// Reset the backoff after a successful recovery.
+    fn record_success(&self) {
+        let mut state = self.state.lock();
+        state.consecutive_failures = 0;
+        state.cap_logged = false;
+        state.next_attempt_at = None;
+    }
+}
+
+/// Outcome of one call to [`attempt_device_recovery`].
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+enum RecoveryAttempt {
+    /// The backoff's armed deadline had not yet elapsed — no attempt was
+    /// made. Carries that SAME deadline (not a freshly computed one).
+    Deferred(web_time::Instant),
+    /// A fresh attempt was made and failed. Carries the NEW deadline the
+    /// failure just armed.
+    Failed(web_time::Instant),
+    /// A fresh attempt was made and succeeded.
+    Recovered,
+}
+
+/// Attempt one synchronous device rebuild — but only if `backoff`'s deadline
+/// has elapsed; otherwise returns immediately without touching the renderer
+/// or the backoff's counters. See [`DeviceRecoveryBackoff`]'s own doc for
+/// why this is a deadline CHECK, never a sleep: skipping is the only
+/// non-blocking way to pace an attempt that can cost a full GPU stack
+/// rebuild.
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn attempt_device_recovery<R: DeviceRecovery>(
+    renderer: &mut R,
+    backoff: &DeviceRecoveryBackoff,
+    now: web_time::Instant,
+) -> RecoveryAttempt {
+    if let Some(deadline) = backoff.next_attempt_at()
+        && now < deadline
+    {
+        return RecoveryAttempt::Deferred(deadline);
+    }
+    match renderer.try_recover_device() {
+        Ok(()) => {
+            tracing::warn!("GPU device lost — recovered successfully");
+            backoff.record_success();
+            RecoveryAttempt::Recovered
+        }
+        Err(e) => {
+            let deadline = backoff.record_failure(&e, now);
+            RecoveryAttempt::Failed(deadline)
+        }
+    }
+}
+
+/// Outcome of driving one frame through [`render_frame_with_device_recovery`].
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+struct FrameRecoveryOutcome {
+    /// Whether the frame reached `present()` — same meaning as
+    /// [`super::ui_realm::UiRealm::render_frame_entered`]'s own return.
+    presented: bool,
+    /// Set exactly when a NEW recovery attempt failed this call — never on
+    /// a merely-deferred attempt (the backoff deadline had not elapsed) and
+    /// never on success. Only this arms the retry wake; see this function's
+    /// own doc for why raising it here, not inside the attempt helper
+    /// itself, is what makes the wake survive.
+    ///
+    /// Read only by this module's own tests today: production callers
+    /// (`bootstrap_desktop`/`bootstrap_android`) consult the persistent
+    /// `DeviceRecoveryBackoff` directly (via its own `next_attempt_at`) for
+    /// the wake-deadline hook rather than this per-call snapshot, so this
+    /// field carries no separate production obligation of its own — kept
+    /// on the struct anyway because it is what makes the wake-on-failure-
+    /// only contract independently checkable per call.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by this module's own tests only -- see field doc"
+        )
+    )]
+    just_failed: bool,
+    /// The earliest instant the next recovery attempt is allowed, if the
+    /// device is still (or newly) lost. `None` once healthy.
+    ///
+    /// Read only by this module's own tests today, for the same reason as
+    /// [`Self::just_failed`] — production callers consult
+    /// `DeviceRecoveryBackoff::next_attempt_at` directly instead.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by this module's own tests only -- see field doc"
+        )
+    )]
+    next_attempt_at: Option<web_time::Instant>,
+}
+
+/// Drive one frame through `realm` against `renderer`, rebuilding a lost
+/// device around it.
+///
+/// A device already lost at frame start gets a backoff-gated recovery
+/// attempt here, BEFORE [`super::ui_realm::UiRealm::render_frame_entered`]
+/// — but `render_frame_entered` runs regardless of whether that attempt
+/// happened or what it returned. Skipping it on a still-lost device was the
+/// original bug this function fixes: `render_frame_entered` is the only
+/// caller of `drain_deferred_arena_resolutions`, `flush_pending_moves`,
+/// `draw_frame_entered`, and `mouse_tracker().update_all_devices()`, all of
+/// which must keep advancing while the device is down (gesture-arena
+/// deadlines, coalesced pointer moves, and every Vsync ticker included) —
+/// and `Renderer::acquire_surface_texture` already bails out on the same
+/// `device_lost` flag before touching the GPU, so running it costs nothing
+/// extra on a still-dead device.
+///
+/// A device lost or re-lost MID-frame (the wgpu device-lost callback firing
+/// while `render_scene` ran) gets its own attempt AFTER. The post-frame
+/// check is gated on `next_attempt_at.is_none()`, not on "was the device
+/// lost before this call": a pre-frame attempt that SUCCEEDS leaves
+/// `next_attempt_at` at `None`, so if the SAME call's `render_frame_entered`
+/// then loses the device again, the post-frame check still fires — a
+/// `was_lost_pre_frame`-style gate would silently miss exactly that
+/// recovered-then-re-lost-mid-frame case, since it only ever asks about the
+/// PRE-frame state. Either check finding a non-`None` `next_attempt_at`
+/// means a decision (failed or deferred) was already recorded THIS call, so
+/// the other one skips — attempting twice in one wake would silently double
+/// the effective retry rate the backoff exists to bound.
+///
+/// A SUCCESSFUL PRE-frame attempt calls [`super::ui_realm::UiRealm::
+/// mark_primary_needs_full_repaint`] — never [`super::ui_realm::UiRealm::
+/// wake_frame`], and never bare [`super::ui_realm::UiRealm::request_redraw`]
+/// either. Neither of those alone is enough: `wake_frame` does not open
+/// `render_frame_entered`'s OWN per-presentation dirty gate
+/// (`presentation.take_redraw_pending()`, `ui_realm.rs`'s
+/// `draw_frame_entered`) at all, and `request_redraw` alone opens that gate
+/// but still leaves `PipelineOwner`'s OWN independent dirty tracking
+/// untouched — confirmed by a probe, not assumed: with `request_redraw`
+/// alone, `draw_frame_entered`'s segment gate correctly read `Produce`, and
+/// the pipeline STILL emitted `Idle` because nothing told it there was work
+/// to redo. `mark_primary_needs_full_repaint` does both: it is what a
+/// recovered device — whose own backing store was invalidated by the loss;
+/// `Renderer::recover` already primes a full repaint via `mark_full_repaint`
+/// for whatever scene reaches it next — needs to actually get a fresh scene
+/// submitted, rather than staying visually blank until something unrelated
+/// happens to dirty the tree. No platform poke alongside it (unlike a
+/// failure): this call's OWN `render_frame_entered` below runs
+/// synchronously right after, in the very same wake, so there is nothing
+/// external left to wake. The POST-frame (mid-frame-loss) success arm calls
+/// neither: that frame already had its own chance to present before the
+/// loss was even noticed, so there is no known-blank backing store to force
+/// a fresh submit for.
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn render_frame_with_device_recovery<R>(
+    realm: &super::ui_realm::UiRealm,
+    renderer: &mut R,
+    backoff: &DeviceRecoveryBackoff,
+    now: web_time::Instant,
+) -> FrameRecoveryOutcome
+where
+    R: flui_engine::RasterBackend + DeviceRecovery,
+{
+    let mut just_failed = false;
+    let mut next_attempt_at = None;
+
+    if renderer.is_device_lost() {
+        match attempt_device_recovery(renderer, backoff, now) {
+            // Pre-frame only: nothing has presented since the device died,
+            // so the recovered backing store needs a genuinely fresh
+            // submit — see `UiRealm::mark_primary_needs_full_repaint`'s
+            // own doc for why `request_redraw` alone does not get one.
+            RecoveryAttempt::Recovered => realm.mark_primary_needs_full_repaint(),
+            RecoveryAttempt::Failed(deadline) => {
+                just_failed = true;
+                next_attempt_at = Some(deadline);
+            }
+            RecoveryAttempt::Deferred(deadline) => next_attempt_at = Some(deadline),
+        }
+    }
+
+    let presented = realm.render_frame_entered(renderer);
+
+    if next_attempt_at.is_none() && renderer.is_device_lost() {
+        match attempt_device_recovery(renderer, backoff, now) {
+            // Post-frame (mid-frame loss) success arms NOTHING, unlike the
+            // pre-frame case above: the frame that just ran already had
+            // its own chance to present before the loss was noticed, so
+            // there is no known-blank backing store to force a fresh
+            // submit for here — forcing one anyway would just be a
+            // spurious extra repaint with no correctness reason behind it.
+            RecoveryAttempt::Recovered => {}
+            RecoveryAttempt::Failed(deadline) => {
+                just_failed = true;
+                next_attempt_at = Some(deadline);
+            }
+            RecoveryAttempt::Deferred(deadline) => next_attempt_at = Some(deadline),
+        }
+    }
+
+    if just_failed {
+        // Raised AFTER `render_frame_entered`, never before: that method's
+        // own tail (`if retry_needed { wake_frame() } else {
+        // mark_rendered() }`) runs unconditionally on EVERY call, and
+        // `mark_rendered()` silently clobbers an earlier `wake_frame()`
+        // whenever this frame's tree had nothing new to paint
+        // (`draw_frame_entered` returns `Idle`, so `retry_needed` stays
+        // `false` at the `ui_realm` layer). That is exactly what happens
+        // on every wake AFTER the first against a permanently dead device,
+        // once the initial mount's content is already consumed — a
+        // pre-frame `wake_frame()` call here self-extinguishes one hop
+        // later and the device stays dead for the life of the process.
+        // Raising it here, after `render_frame_entered` has already run
+        // its own tail, is the only place a failed recovery's wake
+        // survives it.
+        realm.wake_frame();
+    }
+
+    FrameRecoveryOutcome {
+        presented,
+        just_failed,
+        next_attempt_at,
+    }
+}
+
+/// The device-loss recovery contract of
+/// [`render_frame_with_device_recovery`] against scripted backends and the
+/// [`DeviceRecoveryBackoff`] pacing it: a pre-frame loss recovers BEFORE the
+/// frame build and ALWAYS runs it regardless of outcome, a mid-frame loss
+/// recovers after, only a NEW failure arms the retry wake (never a success,
+/// never a merely-deferred attempt), a successful recovery marks the
+/// presentation dirty so it actually paints again, and a persistently
+/// failing device is retried on a bounded, non-blocking, growing deadline —
+/// never abandoned, never slept on.
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod device_recovery_tests {
+    use std::time::Duration;
+
+    use flui_engine::{EngineError, RasterBackend};
+    use web_time::Instant;
+
+    use super::{
+        DeviceRecovery, DeviceRecoveryBackoff, frame_is_dirty, render_frame_with_device_recovery,
+    };
+
+    #[derive(Clone)]
+    struct LeafView;
+
+    impl flui_view::RenderView for LeafView {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+        ) -> flui_objects::RenderSizedBox {
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+            render_object: &mut flui_objects::RenderSizedBox,
+        ) {
+            *render_object = flui_objects::RenderSizedBox::shrink();
+        }
+    }
+
+    impl flui_view::View for LeafView {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::render_variable(self)
+        }
+    }
+
+    fn mount_root() -> super::super::ui_realm::UiRealm {
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        realm
+            .enter(|realm| realm.attach_root_widget(&LeafView))
+            .expect("attach succeeds");
+        realm
+    }
+
+    struct ScriptedDeviceBackend {
+        /// Current device-lost flag (what `RasterBackend::is_device_lost` reports).
+        lost: bool,
+        /// `render_scene` outcome once the scene reaches it (`take`n —
+        /// `EngineError` is not `Clone`).
+        scene_outcome: Option<Result<bool, EngineError>>,
+        /// `try_recover_device` outcome (`take`n, same reason).
+        recover_outcome: Option<Result<(), EngineError>>,
+        /// Whether a successful recovery clears the lost flag (a failing
+        /// driver reset leaves it set).
+        recover_clears_lost: bool,
+        /// Flip the lost flag from INSIDE `render_scene` — the wgpu
+        /// device-lost callback firing mid-frame.
+        lose_on_render: bool,
+        render_calls: u32,
+        recover_attempts: u32,
+    }
+
+    impl ScriptedDeviceBackend {
+        fn healthy() -> Self {
+            Self {
+                lost: false,
+                scene_outcome: Some(Ok(true)),
+                recover_outcome: Some(Ok(())),
+                recover_clears_lost: true,
+                lose_on_render: false,
+                render_calls: 0,
+                recover_attempts: 0,
+            }
+        }
+    }
+
+    impl RasterBackend for ScriptedDeviceBackend {
+        fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<bool, EngineError> {
+            self.render_calls += 1;
+            if self.lose_on_render {
+                self.lost = true;
+            }
+            self.scene_outcome
+                .take()
+                .expect("render_scene called more than once in a single-frame test")
+        }
+        fn resize(&mut self, _width: u32, _height: u32) {}
+        fn is_device_lost(&self) -> bool {
+            self.lost
+        }
+        fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+        fn mark_full_repaint(&mut self) {}
+        fn has_damage(&self) -> bool {
+            true
+        }
+        fn size(&self) -> (u32, u32) {
+            (800, 600)
+        }
+        fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    impl DeviceRecovery for ScriptedDeviceBackend {
+        fn try_recover_device(&mut self) -> Result<(), EngineError> {
+            self.recover_attempts += 1;
+            let outcome = self
+                .recover_outcome
+                .take()
+                .expect("try_recover_device called more than once in a single-frame test");
+            if outcome.is_ok() && self.recover_clears_lost {
+                self.lost = false;
+            }
+            outcome
+        }
+    }
+
+    #[test]
+    fn a_healthy_device_renders_without_any_recovery() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend::healthy();
+        realm.mark_rendered();
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+
+        assert!(outcome.presented, "Ok(true) reaches present()");
+        assert_eq!(backend.render_calls, 1, "the scene reached render_scene");
+        assert_eq!(
+            backend.recover_attempts, 0,
+            "no recovery on a healthy device"
+        );
+        assert!(
+            !outcome.just_failed,
+            "no recovery attempt failed, so nothing arms the retry wake"
+        );
+        assert!(
+            outcome.next_attempt_at.is_none(),
+            "a healthy device has no pending recovery deadline"
+        );
+        assert!(
+            !realm.needs_redraw(),
+            "a successful frame clears the redraw flag"
+        );
+    }
+
+    #[test]
+    fn a_pre_frame_loss_with_a_successful_recovery_renders_the_same_frame_and_arms_nothing() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend {
+            lost: true,
+            ..ScriptedDeviceBackend::healthy()
+        };
+        realm.mark_rendered();
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+
+        assert_eq!(
+            backend.recover_attempts, 1,
+            "the pre-frame loss is recovered"
+        );
+        assert!(
+            !backend.lost,
+            "the scripted successful recovery cleared the lost flag"
+        );
+        assert_eq!(
+            backend.render_calls, 1,
+            "after a successful recovery the SAME frame renders — no extra wake needed"
+        );
+        assert!(outcome.presented, "the recovered frame reaches present()");
+        assert!(
+            !outcome.just_failed,
+            "a SUCCESSFUL recovery must not report a failure — there is nothing to retry"
+        );
+        assert!(
+            outcome.next_attempt_at.is_none(),
+            "a successful recovery leaves no pending deadline"
+        );
+        // The original bug this pins: an earlier version of this test
+        // never asserted `needs_redraw()`, which is exactly where a
+        // spurious wake on the success arm hid — a successful pre-frame
+        // recovery is immediately followed by rendering this very frame,
+        // and that render's own `mark_rendered()` would silently clobber
+        // an extra `wake_frame()` two statements later, leaving only a
+        // wasted platform `request_redraw` with no test ever catching it.
+        assert!(
+            !realm.needs_redraw(),
+            "a successful pre-frame recovery followed by a presented frame must leave no \
+             spurious wake armed"
+        );
+    }
+
+    #[test]
+    fn a_successful_recovery_forces_the_recovered_devices_next_frame_to_actually_paint() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend::healthy();
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        // Consume the mount's own pending paint FIRST, so the presentation's
+        // wake-only redraw bit (`PresentationState::mark_redraw_pending`,
+        // read by `draw_frame_entered`'s `take_redraw_pending`) is
+        // definitely false going into the recovery below — otherwise this
+        // test could pass by riding the mount's own leftover demand
+        // instead of proving what the recovery success arm itself does.
+        let warm_up = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        assert!(
+            warm_up.presented,
+            "precondition: the mount's own first frame presented"
+        );
+        assert_eq!(backend.render_calls, 1);
+
+        // Now the device dies and recovers, with NOTHING else marking the
+        // tree dirty in between (no input, no animation, no resize).
+        backend.lost = true;
+        backend.scene_outcome = Some(Ok(true));
+        backend.recover_outcome = Some(Ok(()));
+
+        let recovery = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+
+        // The fix this test pins: `wake_frame()` alone (the realm-level
+        // flag plus a platform poke) does NOT set `PresentationState::
+        // redraw_pending` — only `UiRealm::request_redraw` does, and that
+        // bit is what `draw_frame_entered`'s segment gate actually reads.
+        // Without marking it on a SUCCESSFUL recovery, this second call
+        // would find nothing dirty, `draw_frame_entered` would return
+        // `Idle`, and `render_scene` would never be reached — the
+        // recovered device would stay visually blank (its own backing
+        // store was invalidated by the loss; `Renderer::recover` primes a
+        // full repaint for whatever gets submitted next, but nothing
+        // submits at all without this).
+        assert_eq!(
+            backend.render_calls, 2,
+            "a successful recovery must force the recovered device's next frame to reach \
+             render_scene, not silently stay Idle"
+        );
+        assert!(
+            recovery.presented,
+            "the forced repaint must reach present()"
+        );
+    }
+
+    #[test]
+    fn a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend {
+            lost: true,
+            // The real `Renderer::acquire_surface_texture` bails on the
+            // `device_lost` flag before touching the GPU — scripted here
+            // as `render_scene` itself reporting `DeviceLost`, since the
+            // device is still down when this frame's build reaches it.
+            scene_outcome: Some(Err(EngineError::DeviceLost)),
+            recover_outcome: Some(Err(EngineError::DeviceLost)),
+            recover_clears_lost: false,
+            ..ScriptedDeviceBackend::healthy()
+        };
+        realm.mark_rendered();
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+
+        assert!(!outcome.presented, "a still-lost device presents nothing");
+        assert_eq!(backend.recover_attempts, 1, "the recovery was attempted");
+        // The fix this test exists to pin: the earlier version of this
+        // function returned `false` here WITHOUT calling
+        // `render_frame_entered` at all on a still-lost device, so
+        // `render_calls` would read 0. `render_frame_entered` must ALWAYS
+        // run — see this module's own doc for why (gesture-arena
+        // deadlines, coalesced pointer moves, and every Vsync ticker all
+        // depend on it).
+        assert_eq!(
+            backend.render_calls, 1,
+            "render_frame_entered must run even when the pre-frame recovery attempt \
+             failed — a dead device must not stop the non-GPU half of the frame"
+        );
+        assert!(outcome.just_failed, "a fresh attempt genuinely failed");
+        assert_eq!(
+            outcome.next_attempt_at,
+            Some(now + DeviceRecoveryBackoff::BASE),
+            "the first failed attempt backs off by exactly the base interval"
+        );
+        assert!(
+            realm.needs_redraw(),
+            "the failed recovery must arm the retry wake: on a quiescent loop — no \
+             input, no animations — nothing else would ever schedule the next \
+             recovery attempt"
+        );
+    }
+
+    #[test]
+    fn a_deferred_attempt_before_the_deadline_does_not_touch_the_renderer() {
+        let realm = mount_root();
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        let mut backend = ScriptedDeviceBackend {
+            lost: true,
+            scene_outcome: Some(Err(EngineError::DeviceLost)),
+            recover_outcome: Some(Err(EngineError::DeviceLost)),
+            recover_clears_lost: false,
+            ..ScriptedDeviceBackend::healthy()
+        };
+        let first = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        assert!(
+            first.just_failed,
+            "precondition: the first attempt genuinely failed"
+        );
+        assert_eq!(backend.recover_attempts, 1);
+
+        // Refilled so a genuine second attempt, if this test's premise is
+        // wrong, fails loudly on its own assertions below rather than
+        // panicking on a `.take()` of `None`.
+        backend.scene_outcome = Some(Err(EngineError::DeviceLost));
+        backend.recover_outcome = Some(Err(EngineError::DeviceLost));
+
+        // Same instant, well before the backoff's own deadline (BASE, 16ms).
+        let second = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+
+        assert_eq!(
+            backend.recover_attempts, 1,
+            "a wake before the backoff's deadline must not touch the renderer at all — the \
+             whole point of a deadline CHECK over a sleep is that a still-too-early wake \
+             costs nothing"
+        );
+        assert!(
+            !second.just_failed,
+            "a deferred (not attempted) call must not report a fresh failure"
+        );
+        assert_eq!(
+            second.next_attempt_at, first.next_attempt_at,
+            "a deferred call must report the SAME deadline the earlier failure armed, not \
+             a freshly computed one"
+        );
+    }
+
+    /// A backend that recovers successfully on EVERY `try_recover_device`
+    /// call (no `.take()`-once panic guard — this test's whole point is
+    /// calling it twice) and dies again during `render_scene` exactly
+    /// once, right after the first recovery cleared `lost`.
+    struct AlwaysRecoversButDiesOnFirstRenderBackend {
+        lost: bool,
+        died_on_render: bool,
+        render_calls: u32,
+        recover_attempts: u32,
+    }
+
+    impl AlwaysRecoversButDiesOnFirstRenderBackend {
+        fn new() -> Self {
+            Self {
+                lost: true,
+                died_on_render: false,
+                render_calls: 0,
+                recover_attempts: 0,
+            }
+        }
+    }
+
+    impl RasterBackend for AlwaysRecoversButDiesOnFirstRenderBackend {
+        fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<bool, EngineError> {
+            self.render_calls += 1;
+            if !self.died_on_render {
+                self.died_on_render = true;
+                // Dies again mid-frame, right after the pre-frame recovery
+                // (below) just cleared `lost`.
+                self.lost = true;
+            }
+            Ok(true)
+        }
+        fn resize(&mut self, _width: u32, _height: u32) {}
+        fn is_device_lost(&self) -> bool {
+            self.lost
+        }
+        fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+        fn mark_full_repaint(&mut self) {}
+        fn has_damage(&self) -> bool {
+            true
+        }
+        fn size(&self) -> (u32, u32) {
+            (800, 600)
+        }
+        fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    impl DeviceRecovery for AlwaysRecoversButDiesOnFirstRenderBackend {
+        fn try_recover_device(&mut self) -> Result<(), EngineError> {
+            self.recover_attempts += 1;
+            self.lost = false;
+            Ok(())
+        }
+    }
+
+    /// Pins the review's finding #2: gating the post-frame recovery check
+    /// on "was the device lost BEFORE this call" (`!was_lost_pre_frame`, the
+    /// earlier shape) silently misses a device that recovers successfully
+    /// pre-frame and then dies AGAIN during the very `render_frame_entered`
+    /// call that follows — `was_lost_pre_frame` reads `true` going in, so
+    /// that gate would skip the post-frame check entirely, and the fresh
+    /// mid-frame loss would never be attempted or armed at all. Gating on
+    /// `next_attempt_at.is_none()` instead correctly re-checks, because a
+    /// SUCCESSFUL pre-frame attempt leaves no deadline armed.
+    #[test]
+    fn a_pre_frame_recovery_success_does_not_block_a_fresh_mid_frame_loss() {
+        let realm = mount_root();
+        let mut backend = AlwaysRecoversButDiesOnFirstRenderBackend::new();
+        realm.mark_rendered();
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+
+        assert_eq!(
+            backend.recover_attempts, 2,
+            "the device recovered pre-frame, died again mid-frame, and must be attempted \
+             a SECOND time in the same call"
+        );
+        assert_eq!(
+            backend.render_calls, 1,
+            "the frame still rendered exactly once"
+        );
+        assert!(
+            !backend.lost,
+            "the second, post-frame recovery attempt succeeded"
+        );
+        assert!(
+            outcome.presented,
+            "the frame rendered before the second loss reaches present()"
+        );
+        assert!(
+            !outcome.just_failed,
+            "the second attempt succeeded too, so nothing failed this call"
+        );
+    }
+
+    #[test]
+    fn a_mid_frame_loss_with_a_failing_recovery_backs_off() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend {
+            lose_on_render: true,
+            recover_outcome: Some(Err(EngineError::DeviceLost)),
+            recover_clears_lost: false,
+            ..ScriptedDeviceBackend::healthy()
+        };
+        realm.mark_rendered();
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+
+        assert_eq!(
+            backend.render_calls, 1,
+            "the frame rendered before the loss landed"
+        );
+        assert!(
+            outcome.presented,
+            "the frame that rendered still reaches present()"
+        );
+        assert_eq!(
+            backend.recover_attempts, 1,
+            "the mid-frame loss is recovered after the render"
+        );
+        assert!(
+            outcome.just_failed,
+            "a fresh post-render attempt genuinely failed"
+        );
+        assert_eq!(
+            outcome.next_attempt_at,
+            Some(now + DeviceRecoveryBackoff::BASE),
+            "the failed post-render recovery backs off by the base interval, same as a \
+             pre-frame failure"
+        );
+        assert!(
+            realm.needs_redraw(),
+            "the post-render recovery wake must survive render_frame_entered's own \
+             mark_rendered(), so the recovered renderer renders again on a quiescent \
+             loop"
+        );
+    }
+
+    /// The mid-frame counterpart to
+    /// `a_pre_frame_loss_with_a_successful_recovery_renders_the_same_frame_and_arms_nothing`:
+    /// a device that dies DURING `render_scene` but recovers immediately
+    /// afterward must arm nothing either — the frame that just rendered
+    /// already presented (or not) on its own merits, and there is no
+    /// retry to arm for a device that is healthy again.
+    #[test]
+    fn a_mid_frame_loss_with_a_successful_recovery_arms_nothing() {
+        let realm = mount_root();
+        let mut backend = ScriptedDeviceBackend {
+            lose_on_render: true,
+            ..ScriptedDeviceBackend::healthy()
+        };
+        realm.mark_rendered();
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+
+        assert_eq!(
+            backend.render_calls, 1,
+            "the frame rendered before the loss landed"
+        );
+        assert!(
+            outcome.presented,
+            "the frame that rendered still reaches present()"
+        );
+        assert_eq!(
+            backend.recover_attempts, 1,
+            "the mid-frame loss is recovered after the render"
+        );
+        assert!(
+            !backend.lost,
+            "the scripted successful recovery cleared the lost flag"
+        );
+        assert!(
+            !outcome.just_failed,
+            "a SUCCESSFUL post-render recovery must not report a failure"
+        );
+        assert!(
+            outcome.next_attempt_at.is_none(),
+            "a successful post-render recovery leaves no pending deadline"
+        );
+        assert!(
+            !realm.needs_redraw(),
+            "a presented frame followed by a successful recovery must leave no spurious \
+             wake armed"
+        );
+    }
+
+    /// The 🔴 fix, pinned directly against the observable the deleted
+    /// pre-frame `return false` used to kill: a gesture-arena long-press
+    /// deadline. `render_frame_entered`'s very first two calls
+    /// (`drain_deferred_arena_resolutions`, `flush_pending_moves`) — and
+    /// `draw_frame_entered`'s own Vsync tick right after — must all still
+    /// run while the device stays lost and every recovery attempt fails,
+    /// because they are the ONLY thing that ever resolves a timed-out
+    /// gesture, flushes a coalesced pointer move, or ticks an animation.
+    /// Before the fix, a still-lost device after a failed pre-frame
+    /// recovery attempt returned `false` immediately, and this deadline
+    /// would never resolve at all.
+    #[test]
+    fn a_pre_frame_device_loss_still_resolves_a_pending_gesture_arena_deadline() {
+        use flui_interaction::{
+            GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
+        };
+
+        let realm = mount_root();
+        realm.mark_rendered();
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        let arena = realm.gestures().arena().clone();
+        let long_press_fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fired_for_callback = std::sync::Arc::clone(&long_press_fired);
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena,
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(1)),
+        )
+        .with_on_long_press(move || {
+            fired_for_callback.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let pointer = PointerId::new(3).expect("nonzero pointer id");
+        recognizer.add_pointer(
+            pointer,
+            flui_types::Offset::new(
+                flui_types::geometry::px(10.0),
+                flui_types::geometry::px(10.0),
+            ),
+        );
+        assert!(
+            realm.gestures().has_pending_deadlines(),
+            "precondition: the long-press deadline is actually armed"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+
+        // A permanently lost device whose recovery never succeeds — the
+        // worst case for the deleted early return, and the one production
+        // scenario (driver still mid-reset) this fix must keep advancing
+        // through.
+        let mut backend = ScriptedDeviceBackend {
+            lost: true,
+            scene_outcome: Some(Err(EngineError::DeviceLost)),
+            recover_outcome: Some(Err(EngineError::DeviceLost)),
+            recover_clears_lost: false,
+            ..ScriptedDeviceBackend::healthy()
+        };
+
+        let _ = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+
+        assert!(
+            long_press_fired.load(std::sync::atomic::Ordering::SeqCst),
+            "a pre-frame device loss with a failing recovery must still resolve a due \
+             gesture-arena deadline — render_frame_entered's non-GPU work must never be \
+             skipped just because the device stayed lost"
+        );
+    }
+
+    /// Direct reproduction of the review's self-extinguishing-retry finding:
+    /// with `wake_frame()` raised INSIDE the recovery attempt (BEFORE
+    /// `render_frame_entered` runs, the shape this test would fail
+    /// against), `render_frame_entered`'s own tail (`mark_rendered()`,
+    /// since a quiescent tree with nothing new to paint produces `Idle`,
+    /// not `Errored`) silently clobbers it one hop later. A two-frame drive
+    /// does not catch this: the FIRST frame still has the mount's own
+    /// pending paint, reaches `render_scene`, and `ui_realm`'s OWN
+    /// `DeviceLost` arm independently arms `needs_redraw` too (`retry_needed
+    /// = true` there, from this same issue's `ui_realm.rs` fix) — the bug
+    /// only shows up once that leftover demand is exhausted, on the frame
+    /// AFTER, which is exactly why this drives (and checks) three.
+    #[test]
+    fn needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device()
+    {
+        let realm = mount_root();
+        let backoff = DeviceRecoveryBackoff::new();
+        let mut now = Instant::now();
+
+        for frame in 1..=3u32 {
+            let mut backend = ScriptedDeviceBackend {
+                lost: true,
+                scene_outcome: Some(Err(EngineError::DeviceLost)),
+                recover_outcome: Some(Err(EngineError::DeviceLost)),
+                recover_clears_lost: false,
+                ..ScriptedDeviceBackend::healthy()
+            };
+            let _ = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+            assert!(
+                realm.needs_redraw(),
+                "needs_redraw must still be armed after frame {frame} against a \
+                 permanently dead device — a device that never recovers must never let \
+                 this flag settle back to false, or nothing will ever wake the loop to \
+                 retry again"
+            );
+            // Space frames out past the backoff's own growing deadline so
+            // each one is a genuine NEW attempt, not one silently deferred
+            // by the backoff (which would make this loop pass trivially,
+            // for the wrong reason — a deferred attempt reports no fresh
+            // failure at all).
+            now += Duration::from_secs(2);
+        }
+    }
+
+    /// The test every prior round's test suite was missing: the three
+    /// tests above (and every other test in this module) call
+    /// `render_frame_with_device_recovery` DIRECTLY, so none of them can
+    /// see what happens at the layer in FRONT of it — the desktop closure's
+    /// own `dirty` predicate and `wake_action` match, the exact place a
+    /// wake-deadline source that never reaches `dirty` returns before this
+    /// function is ever called at all. This test drives that outer gate,
+    /// verbatim (not a simplification), across enough simulated wakes to
+    /// include BOTH failure-mode shapes a real run produces: the immediate
+    /// platform poke `wake_frame()` queues on every failure (arrives before
+    /// ANY real time passes — reproduced here as `now` staying put, not
+    /// advancing), and the deadline-actuated wake the wake-deadline hook
+    /// produces once `DeviceRecoveryBackoff`'s own armed instant is
+    /// actually due (reproduced as `now` jumping straight to
+    /// `next_attempt_at()`). Against the code before this fix (`dirty`
+    /// missing the `next_attempt_at().is_some()` term), the SECOND
+    /// simulated wake — the immediate poke, arriving before the deadline —
+    /// finds nothing else dirty, is silently deferred, and
+    /// `render_frame_entered`'s own tail clears `needs_redraw`; the THIRD
+    /// wake (the deadline itself, correctly actuated) then reads
+    /// `dirty == false` and returns before `render_frame_with_device_
+    /// recovery` is even called — a permanently dead device is attempted
+    /// exactly once, ever, and the closure never runs again.
+    #[test]
+    fn the_real_closure_gate_keeps_retrying_across_the_immediate_poke_and_the_deadline_wake() {
+        let realm = mount_root();
+        let backoff = DeviceRecoveryBackoff::new();
+        let mut now = Instant::now();
+
+        fn permanently_dead_backend() -> ScriptedDeviceBackend {
+            ScriptedDeviceBackend {
+                lost: true,
+                scene_outcome: Some(Err(EngineError::DeviceLost)),
+                recover_outcome: Some(Err(EngineError::DeviceLost)),
+                recover_clears_lost: false,
+                ..ScriptedDeviceBackend::healthy()
+            }
+        }
+
+        // Wake 1: the FIRST detection of the loss. What legitimately
+        // triggers it (a mid-frame loss via `ui_realm`'s own `retry_needed`
+        // arm, or the realm's very first pending paint) is out of scope
+        // for this probe, which exists to check everything AFTER it —
+        // called directly, bypassing the closure's own gate, the same way
+        // every wake in production reaches this function only once
+        // `wake_action` has already decided `Render`.
+        let mut backend = permanently_dead_backend();
+        let seed = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        assert!(
+            seed.just_failed,
+            "precondition: wake 1 is a genuine failure"
+        );
+        let mut total_attempts = 1u32;
+        let mut poke_pending = true;
+        // Measured, not argued: the busy-spin the winit backend's own
+        // `about_to_wait` module doc names (`platforms/winit/platform.rs`'s
+        // `WaitUntil(past)` failure mode) is exactly a hook that keeps
+        // answering the SAME stale deadline forever. Collecting every
+        // deadline the backoff arms across real attempts and asserting
+        // strict growth is the direct check that this hook is never one of
+        // those stale sources: each real attempt computes a FRESH deadline
+        // from the `now` it actually ran at, never reusing an old one.
+        let mut armed_deadlines = vec![seed.next_attempt_at.expect("wake 1 armed a deadline")];
+
+        for wake in 2..=12u32 {
+            // The PRODUCTION `frame_is_dirty` call, not a local
+            // reimplementation — `inbox_redraw` is always `false` in this
+            // scenario (orthogonal to the property under test), the other
+            // three arguments read live off `realm`/`backoff`. Round 6's own
+            // finding: this test used to recompute the boolean inline, which
+            // meant reverting the real closure's `next_attempt_at().is_some()`
+            // term left this assertion green — it was checking its own copy
+            // of the old logic, not the line the fix actually changed.
+            let dirty = frame_is_dirty(
+                false, // inbox_redraw: never true in this scenario
+                realm.needs_redraw(),
+                realm.has_pending_work(),
+                backoff.next_attempt_at(),
+            );
+            assert!(
+                dirty,
+                "wake {wake}: the real closure gate went Skip and returned before even \
+                 checking device recovery -- the retry chain died here (total_attempts so \
+                 far: {total_attempts})"
+            );
+
+            // The wake that gets here is either the immediate platform
+            // poke `wake_frame()` queued on the previous wake's failure
+            // (arrives before any real time passes), or -- once that
+            // poke's own attempt was deferred (too early) -- the
+            // deadline-actuated wake the wake-deadline hook produces
+            // exactly at the armed instant.
+            now = if poke_pending {
+                now
+            } else {
+                backoff.next_attempt_at().unwrap_or_else(|| {
+                    panic!(
+                        "wake {wake}: dirty was true with no pending poke, so the only \
+                         remaining dirty source must be an armed deadline -- but none is \
+                         armed"
+                    )
+                })
+            };
+
+            let mut backend = permanently_dead_backend();
+            let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+            if backend.recover_attempts == 1 {
+                total_attempts += 1;
+                armed_deadlines.push(
+                    outcome
+                        .next_attempt_at
+                        .expect("a real failed attempt always arms a fresh deadline"),
+                );
+            }
+            poke_pending = outcome.just_failed;
+        }
+
+        assert!(
+            total_attempts >= 4,
+            "a persistently failing device must be retried repeatedly across the \
+             simulated idle window (immediate poke, deferred, deadline wake, repeat), not \
+             collapse to a single attempt -- total_attempts={total_attempts}"
+        );
+        assert!(
+            armed_deadlines.windows(2).all(|pair| pair[1] > pair[0]),
+            "every real attempt must arm a STRICTLY LATER deadline than the one before it \
+             -- a non-growing or repeated deadline is exactly the `WaitUntil(past)` shape \
+             the winit backend's own `about_to_wait` module doc names as a busy-spin \
+             (deadline never refreshed -> `about_to_wait` -> `WaitUntil(past)` -> \
+             `new_events` -> `request_redraw` -> repeat at 100% CPU): {armed_deadlines:?}"
+        );
+    }
+
+    /// The Android counterpart of
+    /// `the_real_closure_gate_keeps_retrying_across_the_immediate_poke_and_the_deadline_wake`
+    /// above, driving the same `frame_is_dirty` call `bootstrap_android`'s
+    /// closure makes (`has_pending` is just that closure's own local name
+    /// for `realm.has_pending_work()`).
+    ///
+    /// **What this pins, precisely — and what it does not.** This test
+    /// exercises only the `flui-app`-side gate: `frame_is_dirty` and
+    /// `DeviceRecoveryBackoff` are plain functions/types this crate owns and
+    /// can call directly. It does NOT drive `flui-platform`'s
+    /// `AndroidPlatform::run` loop — `is_deadline_due`, the `resumed` state
+    /// machine, `should_render`, or the 0ms/16ms `timeout` switch — because
+    /// that loop needs a live `AndroidApp`, which has no test double on any
+    /// host (see `is_deadline_due`'s own module for the parts of that state
+    /// machine that ARE unit-tested there, in isolation, without `run`
+    /// itself). The one adjustment made here to acknowledge that gap: `now`
+    /// lands `NO_PRESENT_FALLBACK_PACE` (16ms) past each armed deadline
+    /// rather than exactly on it, approximating that `is_deadline_due` is
+    /// polled once per ~16ms idle tick rather than actuated exactly at the
+    /// instant like desktop's `ControlFlow::WaitUntil`. Do not read this
+    /// test's `total_attempts` as a measurement of the native loop's actual
+    /// retry cadence — it measures the shared `flui-app` gate/backoff
+    /// invariant under a coarser deadline-catch approximation, nothing more.
+    #[test]
+    fn the_real_closure_gate_keeps_retrying_on_android_across_the_immediate_poke_and_the_16ms_poll()
+    {
+        let realm = mount_root();
+        let backoff = DeviceRecoveryBackoff::new();
+        let mut now = Instant::now();
+
+        fn permanently_dead_backend() -> ScriptedDeviceBackend {
+            ScriptedDeviceBackend {
+                lost: true,
+                scene_outcome: Some(Err(EngineError::DeviceLost)),
+                recover_outcome: Some(Err(EngineError::DeviceLost)),
+                recover_clears_lost: false,
+                ..ScriptedDeviceBackend::healthy()
+            }
+        }
+
+        let mut backend = permanently_dead_backend();
+        let seed = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        assert!(
+            seed.just_failed,
+            "precondition: wake 1 is a genuine failure"
+        );
+        let mut total_attempts = 1u32;
+        let mut poke_pending = true;
+
+        for wake in 2..=12u32 {
+            let has_pending = realm.has_pending_work();
+            // The PRODUCTION `frame_is_dirty` call — see this test's own doc
+            // for why reimplementing it inline here would silently stop
+            // pinning the fix.
+            let dirty = frame_is_dirty(
+                false, // inbox_redraw: never true in this scenario
+                realm.needs_redraw(),
+                has_pending,
+                backoff.next_attempt_at(),
+            );
+            assert!(
+                dirty,
+                "wake {wake}: Android's closure gate went Skip and returned before even \
+                 checking device recovery -- the retry chain died here (total_attempts so \
+                 far: {total_attempts})"
+            );
+
+            now = if poke_pending {
+                now
+            } else {
+                // Android's own `is_deadline_due` granularity: caught on
+                // the next ~16ms poll, not exactly at the deadline.
+                backoff.next_attempt_at().unwrap_or_else(|| {
+                    panic!("wake {wake}: dirty was true with no pending poke and no armed deadline")
+                }) + super::NO_PRESENT_FALLBACK_PACE
+            };
+
+            let mut backend = permanently_dead_backend();
+            let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+            if backend.recover_attempts == 1 {
+                total_attempts += 1;
+            }
+            poke_pending = outcome.just_failed;
+        }
+
+        assert!(
+            total_attempts >= 4,
+            "a persistently failing device must be retried repeatedly on Android too, not \
+             collapse to a single attempt -- total_attempts={total_attempts}"
+        );
+    }
+
+    /// A persistently failing recovery must be attempted a BOUNDED number
+    /// of times over a fixed window, not once per delivered platform frame
+    /// — the same property issue #556's `no_present_fallback_bounds_
+    /// repeating_no_present_wakes` measures for the no-present pace,
+    /// applied here to [`DeviceRecoveryBackoff`] directly. Driven entirely
+    /// in VIRTUAL time (`now` advanced by hand to each returned deadline,
+    /// never `std::thread::sleep`): the backoff's own API takes `now`
+    /// explicitly for exactly this reason, so a much longer window is
+    /// provable in microseconds of real wall-clock time instead of costing
+    /// the window for real — this test used to be the slowest in the
+    /// suite at ~1s; it no longer sleeps at all.
+    #[test]
+    fn device_recovery_backoff_bounds_a_persistently_failing_retry_loop() {
+        let backoff = DeviceRecoveryBackoff::new();
+        let mut now = Instant::now();
+        let window = Duration::from_mins(10);
+        let window_end = now + window;
+        let mut attempts = 0u32;
+
+        while now < window_end {
+            attempts += 1;
+            now = backoff.record_failure(&EngineError::DeviceLost, now);
+        }
+
+        let unbacked_off_attempts =
+            u32::try_from(window.as_millis() / DeviceRecoveryBackoff::BASE.as_millis())
+                .unwrap_or(u32::MAX);
+        assert!(
+            attempts < 700,
+            "the backoff failed to bound the retry loop: {attempts} attempts over a \
+             simulated {window:?} (an un-backed-off fixed cadence would rack up roughly \
+             {unbacked_off_attempts} in the same window — once capped at one second per \
+             attempt, {window:?} allows at most about 600)",
+        );
+        assert!(
+            attempts >= 2,
+            "sanity: the loop must actually retry more than once, not just give up after \
+             the first failure (attempts={attempts})"
+        );
+    }
+
+    #[test]
+    fn device_recovery_backoff_resets_to_the_base_interval_after_a_success() {
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+
+        let first = backoff.record_failure(&EngineError::DeviceLost, now);
+        let second = backoff.record_failure(&EngineError::DeviceLost, now);
+        assert_eq!(first - now, DeviceRecoveryBackoff::BASE);
+        assert!(
+            second - now > first - now,
+            "the backoff must grow across consecutive failures with no success in between"
+        );
+
+        backoff.record_success();
+        let after_reset = backoff.record_failure(&EngineError::DeviceLost, now);
+        assert_eq!(
+            after_reset - now,
+            DeviceRecoveryBackoff::BASE,
+            "a success must reset the backoff to its base interval, not continue growing \
+             from where it left off"
+        );
+    }
+
+    #[test]
+    fn device_recovery_backoff_caps_at_the_ceiling_and_never_gives_up() {
+        let backoff = DeviceRecoveryBackoff::new();
+        let now = Instant::now();
+        let mut last = now;
+
+        // Comfortably past the point the shift itself saturates.
+        for _ in 0..20u32 {
+            last = backoff.record_failure(&EngineError::DeviceLost, now);
+        }
+
+        assert_eq!(
+            last - now,
+            DeviceRecoveryBackoff::CAP,
+            "the interval must stop growing at the cap instead of overflowing or \
+             continuing to double"
+        );
+        // "Never gives up" is an absence: there is no attempt-count field
+        // anywhere on this type that could refuse a 21st call — the type
+        // itself has no such state to check, which is the point.
+    }
+}
+
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -6989,13 +8609,14 @@ where
         // the backend would otherwise take unconditionally.
         install_exit_policy_hook(config.exit_policy);
 
-        // 0c. Wire the wall-clock-wake hook: the winit
-        // backend's `about_to_wait` consults this every idle iteration
-        // instead of blocking forever, so a pending gesture-arena deadline
-        // (a long-press hold, a double-tap give-up) still wakes the loop
-        // at the right instant even while nothing else is dirty and no
-        // animation is running.
-        install_wake_deadline_hook();
+        // 0c. This window's device-recovery backoff, constructed here (not
+        // down at step 6 alongside the renderer it paces) so the
+        // wake-deadline hook below can be wired to it from the start — one
+        // instance for the whole closure's life, `Arc`'d because a fresh
+        // clone is threaded into each `RealmTask::Frame` the frame closure
+        // builds while the underlying counters/deadline must persist. See
+        // `DeviceRecoveryBackoff`'s own doc.
+        let device_recovery_backoff = Arc::new(DeviceRecoveryBackoff::new());
 
         // 1. Open window now that the event loop is running. Window creation is
         // an environment failure (display server hiccup, resource exhaustion),
@@ -7115,6 +8736,42 @@ where
         *rebuild_registration_slot.borrow_mut() =
             Some(worker_reload.register_rebuild_hook(hot_reload_sender));
 
+        // 3d. Wire the wall-clock-wake hook, now that `realm_dispatch`
+        // exists — the winit backend's `about_to_wait` consults this every
+        // idle iteration instead of blocking forever, so a pending gesture-
+        // arena deadline (a long-press hold, a double-tap give-up) or an
+        // armed device-recovery retry still wakes the loop at the right
+        // instant even while nothing else is dirty and no animation is
+        // running. Moved here from directly after step 0c (this window's
+        // `device_recovery_backoff` construction) specifically so this
+        // closure can capture `realm_dispatch.address.realm_id` and look up
+        // THIS realm's `frames_enabled` state each time it runs — see the
+        // closure body's own comment for why that lookup, not just
+        // `next_attempt_at()`, is required.
+        install_wake_deadline_hook({
+            let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
+            let realm_id = realm_dispatch.address.realm_id;
+            move || {
+                // The frames-enabled gate itself is `desktop_secondary_
+                // wake_deadline` — a pure, unit-tested function (see its own
+                // doc for why an unconditional report here would reproduce
+                // `WinitApp::new_events`'s named busy-spin one layer up).
+                // Only the `frames_enabled` LOOKUP is inline here, since it
+                // needs live `APP_RUNTIME` state no pure function can carry.
+                let frames_enabled = APP_RUNTIME.with(|slot| {
+                    slot.borrow()
+                        .realms
+                        .get(&realm_id)
+                        .and_then(|realm_slot| realm_slot.realm.as_ref())
+                        .is_some_and(|realm| realm.scheduler().frames_enabled())
+                });
+                desktop_secondary_wake_deadline(
+                    device_recovery_backoff.next_attempt_at(),
+                    frames_enabled,
+                )
+            }
+        });
+
         // 4. Wrap renderer for callback sharing
         let renderer = Arc::new(Mutex::new(renderer));
 
@@ -7147,161 +8804,186 @@ where
         // 6. Register frame callback -> scheduler + UiRealm::render_frame_entered()
         let renderer_frame = Arc::clone(&renderer);
         let worker_reload_frame = worker_reload.clone();
+        // Reuses the SAME backoff constructed at step 0c (already wired
+        // into the wake-deadline hook above) — not a fresh one.
         window.on_request_frame(Box::new(move || {
-        let renderer_frame = Arc::clone(&renderer_frame);
-        let worker_reload_frame = worker_reload_frame.clone();
-        let _ = dispatch_platform_realm(realm_dispatch, RealmTask::Frame(Box::new(move |realm| {
-            worker_reload_frame.poll_and_apply(realm);
+            let renderer_frame = Arc::clone(&renderer_frame);
+            let worker_reload_frame = worker_reload_frame.clone();
+            let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Frame(Box::new(move |realm| {
+                    worker_reload_frame.poll_and_apply(realm);
 
-            let scheduler = realm.scheduler();
+                    let scheduler = realm.scheduler();
 
-        // Every fire of this callback is a genuine platform-delivered
-        // frame-request signal on this backend (`WinitWindowEvent::
-        // RedrawRequested` -> `dispatch_request_frame` -> here; see
-        // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
-        // pace this via the compositor vs. deliver it immediately).
-        // Recorded unconditionally, before the dirty/wake_action gate below
-        // decides whether anything actually runs this pump: pacing
-        // feedback is about observing the PLATFORM's own delivery timing,
-        // independent of whether this particular delivery ends up idle.
-        // `now` is read ONCE here and reused ~60 lines below at this
-        // closure's `drive_frame_with_lane(now, ...)` call, past the
-        // `wake_action` match below (that later call site's own comment
-        // points back to this one) — this pump's pacing-feedback sample
-        // and its own frame-drive instant must agree, the same
-        // single-`now`-per-pump discipline every other call site in this
-        // closure already follows.
-            let now = web_time::Instant::now();
-            realm.record_compositor_tick(now);
+                    // Every fire of this callback is a genuine platform-delivered
+                    // frame-request signal on this backend (`WinitWindowEvent::
+                    // RedrawRequested` -> `dispatch_request_frame` -> here; see
+                    // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
+                    // pace this via the compositor vs. deliver it immediately).
+                    // Recorded unconditionally, before the dirty/wake_action gate below
+                    // decides whether anything actually runs this pump: pacing
+                    // feedback is about observing the PLATFORM's own delivery timing,
+                    // independent of whether this particular delivery ends up idle.
+                    // `now` is read ONCE here and reused ~60 lines below at this
+                    // closure's `drive_frame_with_lane(now, ...)` call, past the
+                    // `wake_action` match below (that later call site's own comment
+                    // points back to this one) — this pump's pacing-feedback sample
+                    // and its own frame-drive instant must agree, the same
+                    // single-`now`-per-pump discipline every other call site in this
+                    // closure already follows.
+                    let now = web_time::Instant::now();
+                    realm.record_compositor_tick(now);
 
-        // Owner-inbox drain: commands and worker results
-        // commit HERE, at the frame boundary while the scheduler phase is
-        // Idle — never inside the frame transaction below. Runs before the
-        // dirty gate so a command-driven redraw request is observed by the
-        // very frame its wake produced.
-        //
-        // The runtime is TAKEN out of the slot for the drain (and restored
-        // after) so drained user closures never run under the RefCell
-        // borrow: a command that re-enters this frame callback through a
-        // nested platform pump then finds an empty slot and skips the
-        // drain, instead of panicking the borrow.
-            let inbox_redraw = drain_owner_inbox(realm);
-
-            let dirty =
-                inbox_redraw || realm.needs_redraw() || realm.has_pending_work();
-            match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled()) {
-                WakeAction::Skip => return,
-                WakeAction::PumpAsync => {
-                    // Frames disabled (Hidden/Paused/Detached): the mid-frame
-                    // `drive_async_tasks` poll inside `handle_begin_frame`
-                    // never runs because no frame runs at all — this
-                    // explicit call is the ONLY thing keeping a spawned
-                    // future progressing while backgrounded. No begin/draw
-                    // frame, no tickers, no pipeline, no present.
+                    // Owner-inbox drain: commands and worker results
+                    // commit HERE, at the frame boundary while the scheduler phase is
+                    // Idle — never inside the frame transaction below. Runs before the
+                    // dirty gate so a command-driven redraw request is observed by the
+                    // very frame its wake produced.
                     //
-                    // `finish_async_pump` MUST run first, not after: nothing
-                    // else ever clears the scheduler's `frame_scheduled`
-                    // latch on this path (only `handle_begin_frame` does,
-                    // and it never runs here), so without this call a LATER,
-                    // independent wake (a network response's `Waker::wake`,
-                    // arriving after this pump cycle returns) would find the
-                    // latch already set, never re-fire `on_frame_scheduled`,
-                    // and never wake this loop again — see
-                    // `UpdateScheduler::finish_async_pump`'s doc for the full
-                    // starvation hazard and why the ordering matters.
-                    scheduler.finish_async_pump();
-                    scheduler.drive_async_tasks();
-                    // Reuse the existing no-present throttle: a backgrounded
-                    // wake with dirty/pending work re-requesting another
-                    // wake every loop tick has the identical busy-spin risk
-                    // an un-presented frame with an open gate has, and
-                    // nothing else paces it while frames are disabled.
+                    // The runtime is TAKEN out of the slot for the drain (and restored
+                    // after) so drained user closures never run under the RefCell
+                    // borrow: a command that re-enters this frame callback through a
+                    // nested platform pump then finds an empty slot and skips the
+                    // drain, instead of panicking the borrow.
+                    let inbox_redraw = drain_owner_inbox(realm);
+
+                    // `device_recovery_backoff.next_attempt_at().is_some()` is a
+                    // REQUIRED fourth dirty source, not an optional extra: a
+                    // deadline wired into the wake-deadline hook (installed
+                    // below, after this realm exists) but absent from THIS
+                    // predicate reaches `WakeAction::Skip` and returns before
+                    // `render_frame_with_device_recovery` is ever called, no
+                    // matter how faithfully the platform actuates the wake —
+                    // see `DeviceRecoveryBackoff`'s own doc for the two paired
+                    // obligations a wake-deadline source carries and the
+                    // dropped-attempt trace that motivated this line. Calls
+                    // the shared `frame_is_dirty` (not a local reimplementation)
+                    // for the same reason `wake_action` itself is a named
+                    // function here and not inlined: this closure's own
+                    // `dirty` computation and the tests that pin it must run
+                    // the identical code, or a regression in one is invisible
+                    // to the other.
+                    let dirty = frame_is_dirty(
+                        inbox_redraw,
+                        realm.needs_redraw(),
+                        realm.has_pending_work(),
+                        device_recovery_backoff.next_attempt_at(),
+                    );
+                    match wake_action(
+                        scheduler.frames_enabled(),
+                        dirty,
+                        scheduler.is_frame_scheduled(),
+                    ) {
+                        WakeAction::Skip => return,
+                        WakeAction::PumpAsync => {
+                            // Frames disabled (Hidden/Paused/Detached): the mid-frame
+                            // `drive_async_tasks` poll inside `handle_begin_frame`
+                            // never runs because no frame runs at all — this
+                            // explicit call is the ONLY thing keeping a spawned
+                            // future progressing while backgrounded. No begin/draw
+                            // frame, no tickers, no pipeline, no present.
+                            //
+                            // `finish_async_pump` MUST run first, not after: nothing
+                            // else ever clears the scheduler's `frame_scheduled`
+                            // latch on this path (only `handle_begin_frame` does,
+                            // and it never runs here), so without this call a LATER,
+                            // independent wake (a network response's `Waker::wake`,
+                            // arriving after this pump cycle returns) would find the
+                            // latch already set, never re-fire `on_frame_scheduled`,
+                            // and never wake this loop again — see
+                            // `UpdateScheduler::finish_async_pump`'s doc for the full
+                            // starvation hazard and why the ordering matters.
+                            scheduler.finish_async_pump();
+                            scheduler.drive_async_tasks();
+                            // Reuse the existing no-present throttle: a backgrounded
+                            // wake with dirty/pending work re-requesting another
+                            // wake every loop tick has the identical busy-spin risk
+                            // an un-presented frame with an open gate has, and
+                            // nothing else paces it while frames are disabled.
+                            let keeps_gate_open = keeps_frame_gate_open(
+                                realm.needs_redraw(),
+                                scheduler.is_frame_scheduled(),
+                                realm.has_pending_work(),
+                            );
+                            if let Some(pace) = no_present_fallback_pace(false, keeps_gate_open) {
+                                std::thread::sleep(pace);
+                            }
+                            return;
+                        }
+                        WakeAction::Render => {}
+                    }
+
+                    // The `now` used below is the SAME instant bound near the top of
+                    // this closure and already recorded into `record_compositor_tick`
+                    // there (see the comment at that earlier `let now` binding) --
+                    // reused here, not re-read fresh.
+                    // UpdateScheduler callbacks (animations). NOTE: the global `UpdateScheduler` is driven
+                    // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
+                    // (`UiRealm::draw_frame`) ticks off the realm's own `start` origin —
+                    // two separate clocks ON PURPOSE: the controller sets are disjoint (implicit
+                    // animations register with `Vsync`; plain controllers carry a private
+                    // `UpdateScheduler` ticker, never the global one), so the origins never need to
+                    // agree and no controller is advanced twice.
+                    // The ONE shared frame ordering — begin (transient +
+                    // microtasks + the single async-driver poll) -> persistent callbacks ->
+                    // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
+                    // drives the same helper on its binding-local scheduler.
+                    let outcome = scheduler.drive_frame_with_lane(
+                        now,
+                        flui_scheduler::IdleDeadline::far_future(now),
+                        || {
+                            // Render frame via the realm, rebuilding a lost GPU device
+                            // around it: BEFORE the frame build when the loss predates
+                            // the frame (a dead device never pays extra for it — the
+                            // frame builds anyway, see this function's own doc for why),
+                            // and AFTER when the wgpu device-lost callback fired
+                            // mid-frame — see `render_frame_with_device_recovery`.
+                            let mut r = renderer_frame.lock();
+                            render_frame_with_device_recovery(
+                                realm,
+                                &mut *r,
+                                &device_recovery_backoff,
+                                now,
+                            )
+                        },
+                        realm.local_post_frame_lane(),
+                    );
+
+                    // No-present fallback throttle. Fifo present (the default, see
+                    // `select_present_mode`) blocks every PRESENTED frame at display
+                    // cadence — that IS the steady-state pacing, which is why the fixed
+                    // frame-budget sleep this replaced is gone. A frame that never
+                    // reaches `present()` (no damage, occluded surface, surface lost)
+                    // gets none of that blocking, so if nothing else is going to wake
+                    // this loop, an unpaced wake is harmless: the loop falls back to
+                    // `ControlFlow::Wait` and blocks on the next real event. The
+                    // busy-spin this guards against (observed: ~30 000 fps) only
+                    // happens when a ticker/animation keeps re-requesting a frame every
+                    // wake with nothing pacing it — `no_present_fallback_pace` fires
+                    // only in exactly that combination. A still-lost device armed for
+                    // a LATER retry does NOT feed this pace: `DeviceRecoveryBackoff`
+                    // paces the ATTEMPT itself (a deadline check, never a sleep — see
+                    // its own doc), and its deadline reaches the platform's own idle
+                    // wait through the wake-deadline hook wired above, not through
+                    // this fallback.
                     let keeps_gate_open = keeps_frame_gate_open(
                         realm.needs_redraw(),
                         scheduler.is_frame_scheduled(),
                         realm.has_pending_work(),
                     );
-                    if let Some(pace) = no_present_fallback_pace(false, keeps_gate_open) {
+                    if let Some(pace) = no_present_fallback_pace(outcome.presented, keeps_gate_open)
+                    {
+                        // This runs on the platform event-loop thread, so the sleep
+                        // blocks input dispatch for its duration — acceptable here
+                        // because this path only fires for an occluded/undamaged
+                        // window with a ticker still running, not an interactive one.
                         std::thread::sleep(pace);
                     }
-                    return;
-                }
-                WakeAction::Render => {}
-            }
-
-        // The `now` used below is the SAME instant bound near the top of
-        // this closure and already recorded into `record_compositor_tick`
-        // there (see the comment at that earlier `let now` binding) --
-        // reused here, not re-read fresh.
-        // UpdateScheduler callbacks (animations). NOTE: the global `UpdateScheduler` is driven
-        // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
-        // (`UiRealm::draw_frame`) ticks off the realm's own `start` origin —
-        // two separate clocks ON PURPOSE: the controller sets are disjoint (implicit
-        // animations register with `Vsync`; plain controllers carry a private
-        // `UpdateScheduler` ticker, never the global one), so the origins never need to
-        // agree and no controller is advanced twice.
-        // The ONE shared frame ordering — begin (transient +
-        // microtasks + the single async-driver poll) -> persistent callbacks ->
-        // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
-        // drives the same helper on its binding-local scheduler.
-            let presented = scheduler.drive_frame_with_lane(now, flui_scheduler::IdleDeadline::far_future(now), || {
-            // Render frame via the realm
-            let mut r = renderer_frame.lock();
-                let did_present = realm.render_frame_entered(&mut *r);
-
-            // GPU device-loss recovery: if the device was lost during this frame
-            // (detected by the wgpu callback that fired between render_frame calls),
-            // attempt a synchronous rebuild on the runner thread. `pollster` is
-            // already a dep and safe to use here — the desktop runner owns this
-            // synchronous callback, not an async executor.
-            if r.is_device_lost() {
-                match pollster::block_on(r.recover()) {
-                    Ok(()) => {
-                        tracing::warn!("GPU device lost — recovered successfully");
-                        // `wake_frame` (not `request_redraw`) so an idle winit loop
-                        // actually queues a `RedrawRequested`: device loss is
-                        // detected on a quiescent loop, where only flipping the
-                        // `needs_redraw` flag would leave the recovered renderer
-                        // idle until the next external input/resize.
-                        realm.wake_frame();
-                    }
-                    Err(e) => {
-                        // Driver may still be resetting. Log and let the next frame
-                        // retry; the device-lost flag remains set so recover() will
-                        // be tried again.
-                        tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
-                    }
-                }
-            }
-                did_present
-            }, realm.local_post_frame_lane());
-
-        // No-present fallback throttle. Fifo present (the default, see
-        // `select_present_mode`) blocks every PRESENTED frame at display
-        // cadence — that IS the steady-state pacing, which is why the fixed
-        // frame-budget sleep this replaced is gone. A frame that never
-        // reaches `present()` (no damage, occluded surface, surface lost)
-        // gets none of that blocking, so if nothing else is going to wake
-        // this loop, an unpaced wake is harmless: the loop falls back to
-        // `ControlFlow::Wait` and blocks on the next real event. The
-        // busy-spin this guards against (observed: ~30 000 fps) only
-        // happens when a ticker/animation keeps re-requesting a frame every
-        // wake with nothing pacing it — `no_present_fallback_pace` fires
-        // only in exactly that combination.
-            let keeps_gate_open = keeps_frame_gate_open(
-                realm.needs_redraw(),
-                scheduler.is_frame_scheduled(),
-                realm.has_pending_work(),
+                })),
             );
-            if let Some(pace) = no_present_fallback_pace(presented, keeps_gate_open) {
-                // This runs on the platform event-loop thread, so the sleep
-                // blocks input dispatch for its duration — acceptable here
-                // because this path only fires for an occluded/undamaged
-                // window with a ticker still running, not an interactive one.
-                std::thread::sleep(pace);
-            }
-        })));
-    }));
+        }));
 
         // 7. Register resize callback -> typed Resized event; the applier
         // installed above (not this closure) actually touches the renderer.
@@ -8106,6 +9788,29 @@ where
         let clipboard = owner_platform_installed(|owner| owner.shared().clipboard());
         APP_RUNTIME.with(|slot| slot.borrow().set_platform_clipboard(clipboard));
 
+        // 0b. This window's device-recovery backoff, constructed here (not
+        // down at step 6 alongside the renderer it paces) so the
+        // wake-deadline hook below can be wired to it from the start — see
+        // `bootstrap_desktop`'s matching comment.
+        let device_recovery_backoff = Arc::new(DeviceRecoveryBackoff::new());
+
+        // 0c. Wire the wall-clock-wake hook. Unlike `install_wake_deadline_
+        // hook` (desktop's `bootstrap_desktop`), this does NOT also fold in
+        // `AppRuntime::next_wake()` (realm-level deadlines: gesture-arena
+        // timers, animation continuations) — this backend's `Platform::
+        // set_wake_deadline_hook` override is new in this same change
+        // (`flui-platform`'s `platforms/android/mod.rs`), added
+        // specifically to carry the device-recovery deadline; folding in
+        // realm-level deadlines too would change this backend's existing,
+        // untested-here wake behavior for gesture/animation timers, which
+        // is out of this fix's scope.
+        owner_platform_installed(|owner| {
+            let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
+            owner.shared().set_wake_deadline_hook(Box::new(move || {
+                device_recovery_backoff.next_attempt_at()
+            }));
+        });
+
         // 1. Open window (wraps the existing ANativeWindow). `Ready` is
         // guaranteed inside `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
@@ -8198,9 +9903,12 @@ where
         // 6. Register frame callback -- with hot-reload plugin override
         let renderer_frame = Arc::clone(&renderer);
         let hot_reload_frame = hot_reload.clone();
+        // Reuses the SAME backoff constructed at step 0b (already wired
+        // into the wake-deadline hook above) — not a fresh one.
         window.on_request_frame(Box::new(move || {
             let renderer_frame = Arc::clone(&renderer_frame);
             let hot_reload_frame = hot_reload_frame.clone();
+            let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let _ = dispatch_platform_realm(
                 realm_dispatch,
                 RealmTask::Frame(Box::new(move |realm| {
@@ -8226,10 +9934,28 @@ where
                     drop(r);
 
                     let has_pending = realm.has_pending_work();
-                    let dirty = inbox_redraw || realm.needs_redraw() || has_pending;
+                    // See the desktop closure's matching comment: a wake-
+                    // deadline source (here, `set_wake_deadline_hook` forces
+                    // a dispatch once due — `flui-platform`'s
+                    // `platforms/android/mod.rs`'s own `run` loop) that is
+                    // absent from `dirty` reaches `WakeAction::Skip` and
+                    // returns before this closure ever calls `render_frame_
+                    // with_device_recovery`, no matter how faithfully the
+                    // platform actuates the wake. Calls the shared
+                    // `frame_is_dirty` — see that function's own doc for why
+                    // this must not be reimplemented locally.
+                    let dirty = frame_is_dirty(
+                        inbox_redraw,
+                        realm.needs_redraw(),
+                        has_pending,
+                        device_recovery_backoff.next_attempt_at(),
+                    );
                     let scheduler = realm.scheduler();
-                    match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
-                    {
+                    match wake_action(
+                        scheduler.frames_enabled(),
+                        dirty,
+                        scheduler.is_frame_scheduled(),
+                    ) {
                         WakeAction::Skip => return,
                         WakeAction::PumpAsync => {
                             // Frames disabled: pump only the async driver — no
@@ -8258,22 +9984,52 @@ where
                     // UpdateScheduler callbacks and rendering share ONE `UiRealm::enter`
                     // dynamic extent; callbacks may legally resolve realm-local
                     // capabilities throughout the complete frame transaction.
-                    scheduler.drive_frame_with_lane(now, flui_scheduler::IdleDeadline::far_future(now), || {
-                        let mut r = renderer_frame.lock();
-                        realm.render_frame_entered(&mut *r);
-
-                        if r.is_device_lost() {
-                            match pollster::block_on(r.recover()) {
-                                Ok(()) => {
-                                    tracing::warn!("GPU device lost — recovered successfully");
-                                    realm.wake_frame();
-                                }
-                                Err(e) => {
-                                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
-                                }
-                            }
-                        }
-                    }, realm.local_post_frame_lane());
+                    //
+                    // No sleep here, unlike an earlier version of this
+                    // closure: `DeviceRecoveryBackoff` paces the recovery
+                    // ATTEMPT itself via a non-blocking deadline check (see
+                    // its own doc), never by blocking this thread.
+                    // `AndroidPlatform::run`'s poll loop calls
+                    // `process_input_events`/`dispatch_request_frame`
+                    // inline on this SAME thread, so a sleep here — even
+                    // one bounded to the backoff's own growing interval —
+                    // would stall input and `MainEvent` lifecycle delivery
+                    // (Pause/Destroy/Resize) for its duration, which is ANR
+                    // territory at the backoff's one-second cap. Unlike
+                    // desktop, Android has no non-blocking wait-until
+                    // primitive to carry the backoff's deadline instead
+                    // (`Platform::set_wake_deadline_hook`'s own doc names
+                    // Android explicitly as not overriding it) — so while a
+                    // FAILED recovery attempt still wakes this loop once
+                    // (`render_frame_with_device_recovery`'s own
+                    // `wake_frame()` call, on failure only), a merely
+                    // DEFERRED attempt (backoff not yet elapsed) wakes
+                    // nothing here, and this platform's retry cadence
+                    // degrades to "the next externally-caused wake"
+                    // (input, resize, a lifecycle event) rather than a
+                    // strict wall-clock cadence — strictly better than the
+                    // original bug (no retry, ever, ANDROID included) and
+                    // never worse than every other quiescent-wake path
+                    // this codebase already has on this backend (gesture-
+                    // arena deadlines, animation ticks: none of them have a
+                    // platform timer here either).
+                    scheduler.drive_frame_with_lane(
+                        now,
+                        flui_scheduler::IdleDeadline::far_future(now),
+                        || {
+                            // Device-loss recovery around the frame, same
+                            // shape as the desktop path — see
+                            // `render_frame_with_device_recovery`.
+                            let mut r = renderer_frame.lock();
+                            let _ = render_frame_with_device_recovery(
+                                realm,
+                                &mut *r,
+                                &device_recovery_backoff,
+                                now,
+                            );
+                        },
+                        realm.local_post_frame_lane(),
+                    );
                 })),
             );
         }));
@@ -8639,7 +10395,41 @@ where
                                         wake();
                                     }
                                     Err(e) => {
-                                        tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                                        // Driver may still be resetting. Arm
+                                        // the retry wake in the failure arm
+                                        // too — RAF alone re-pumps an ACTIVE
+                                        // tab, but a backgrounded tab's RAF
+                                        // is suspended, and without this wake
+                                        // the recovery is never retried once
+                                        // the tab comes back to the front.
+                                        //
+                                        // No `DeviceRecoveryBackoff` here —
+                                        // web stays un-unified with the
+                                        // desktop/Android `DeviceRecovery`
+                                        // seam (its `recover()` is async,
+                                        // driven through `spawn_local`, not
+                                        // a synchronous call that trait
+                                        // could wrap) — and needs no backoff
+                                        // of its own either: the renderer
+                                        // slot stays `None` for the
+                                        // duration of this `.await`, so the
+                                        // outer closure's own `let Some(r)
+                                        // = slot.as_mut() else { return; }`
+                                        // above already refuses to spawn a
+                                        // second recovery while one is in
+                                        // flight, and once it returns the
+                                        // browser's own `requestAnimationFrame`
+                                        // cadence bounds how often a new one
+                                        // can start (~16ms, the same order
+                                        // as desktop/Android's base backoff
+                                        // interval) — see the `PumpAsync`
+                                        // arm's own comment above for why
+                                        // RAF is a sufficient pacer here.
+                                        tracing::error!(
+                                            error = ?e,
+                                            "GPU device recovery failed; retry armed for the next wake"
+                                        );
+                                        wake();
                                     }
                                 }
                             });
