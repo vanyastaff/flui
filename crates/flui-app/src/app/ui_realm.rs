@@ -574,8 +574,15 @@ enum FramePaintOutcome {
 /// records, or merely reads them without consuming them.
 ///
 /// `Retain` exists for exactly one shape: a submit failure whose own caller
-/// has already armed a retry (`EngineError::SurfaceLost` in
-/// [`UiRealm::render_frame_entered`]) — draining there would leave the
+/// has already armed a retry. **Three** arms in
+/// [`UiRealm::render_frame_entered`] are that shape — `SurfaceLost`,
+/// `DeviceLost` and `SurfaceValidation`. The latter two joined when device
+/// loss gained a retry at all; before that they drained, and this sentence
+/// named only `SurfaceLost`. Each is pinned by its own
+/// `*_retry_preserves_the_original_input_epoch_for_the_presented_frame`
+/// test, so flipping any of the three back to `Drain` turns one red — the
+/// invariant used to be documentation alone. Draining on such an arm
+/// leaves the
 /// eventual retry's own real submit with nothing pending to attribute to
 /// the frame that actually reaches the screen, so the inputs that arrived
 /// before the failure would never be attributed to any frame at all. Every
