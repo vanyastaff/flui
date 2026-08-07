@@ -1551,6 +1551,7 @@ version = "0.2.0"
 dependencies = [
  "flui-foundation",
  "flui-hot-reload",
+ "flui-scheduler",
  "parking_lot",
  "serde",
  "serde_json",

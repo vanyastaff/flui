@@ -72,7 +72,19 @@ VALID_CLASSIFICATIONS = {"stable-candidate", "experimental", "transitional", "re
 # dumping ground for anything that lacks a home.
 VALID_DOMAINS = {"application", "realm", "presentation", "raster", "platform", "shared-engine", "workspace"}
 VALID_EVIDENCE_KINDS = {"symbol", "test", "compile-time", "source-gate"}
+# 551-565 is the Runtime.1 epic this registry was created to track. Widening
+# this range to admit one later-numbered issue would silently admit every
+# number in between too -- a one-element allowlist below names the specific
+# exception instead.
 OWNER_ISSUE_MIN, OWNER_ISSUE_MAX = 551, 565
+
+# Owner issues outside the Runtime.1 epic range above, admitted individually
+# rather than by widening that range (which would silently admit every
+# number in between too). #619 is a genuinely separate, later-numbered
+# follow-up issue the app-level wall-clock-timeout consumer residual
+# `timer-service-for-frozen-tickers` hands off to once issue #556 itself
+# closes.
+OWNER_ISSUE_ALLOWLIST: set[int] = {619}
 
 # Runtime crates covered by the singleton and lock-surface nets.
 RUNTIME_CRATES = ["flui-app", "flui-scheduler", "flui-platform", "flui-engine"]
@@ -109,10 +121,12 @@ def check_owner_issue(entry: dict, label: str, required: bool) -> None:
     issue = entry.get("owner_issue")
     if issue is None:
         if required:
-            fail(f"{label} has no owning issue; partial/planned/transitional work needs exactly one owner in #{OWNER_ISSUE_MIN}-#{OWNER_ISSUE_MAX}")
+            fail(f"{label} has no owning issue; partial/planned/transitional work needs exactly one owner in #{OWNER_ISSUE_MIN}-#{OWNER_ISSUE_MAX} or {sorted(OWNER_ISSUE_ALLOWLIST)}")
         return
-    if isinstance(issue, bool) or not isinstance(issue, int) or not (OWNER_ISSUE_MIN <= issue <= OWNER_ISSUE_MAX):
-        fail(f"{label} declares owner_issue {issue!r}; expected an integer in {OWNER_ISSUE_MIN}-{OWNER_ISSUE_MAX}")
+    in_range = isinstance(issue, int) and not isinstance(issue, bool) and (OWNER_ISSUE_MIN <= issue <= OWNER_ISSUE_MAX)
+    in_allowlist = isinstance(issue, int) and not isinstance(issue, bool) and issue in OWNER_ISSUE_ALLOWLIST
+    if not (in_range or in_allowlist):
+        fail(f"{label} declares owner_issue {issue!r}; expected an integer in {OWNER_ISSUE_MIN}-{OWNER_ISSUE_MAX} or {sorted(OWNER_ISSUE_ALLOWLIST)}")
 
 
 def check_citation(file_value: object, contains_value: object, label: str, *, forbid_docs: bool = False) -> None:
@@ -344,11 +358,18 @@ elif "experimental" not in direct_rs.read_text().lower():
 
 # ---------------------------------------------------------------------------
 # Known advisory / unwired configuration must never look stable.
+#
+# `vsync`/`target_fps` used to live here as required advisory fields (they
+# governed nothing real, so they were registered instead of left silently
+# misleading). Issue #556 §5 removed both fields outright — the
+# must-*exist* mechanism below has no more work to do for them, and the
+# `forbidden_pattern` table further down (a must-NOT-exist mode this
+# checker already had for retired identifiers, e.g. `HasInstance`,
+# `REALM_CLAIMED`) enforces their absence instead: re-adding
+# `pub vsync: bool` or `pub target_fps: u32` to `AppConfig` fails
+# conformance without a second checker mode being built for it.
 # ---------------------------------------------------------------------------
 VALID_CONFIG_STATUSES = {"unwired", "advisory", "partially-wired"}
-# vsync does not control the present mode; target_fps is advisory. These two
-# must be registered and must not be classified as working stable config.
-REQUIRED_ADVISORY_FIELDS = {"vsync", "target_fps"}
 
 config_fields: dict[str, dict] = {}
 for index, entry in enumerate(table_array("config_field")):
@@ -373,13 +394,6 @@ for index, entry in enumerate(table_array("config_field")):
         fail(f"{label} is {status!r} yet classified `stable-candidate` — configuration that does not govern behavior is never stable")
     check_citation(entry.get("file"), entry.get("contains"), f"{label} field pin")
     check_owner_issue(entry, label, required=True)
-
-for required in sorted(REQUIRED_ADVISORY_FIELDS):
-    if required not in config_fields:
-        fail(
-            f"{registry_rel} must register config_field `{required}` — it is a known advisory/unwired "
-            "field and removing its entry requires actually wiring or deleting the field first"
-        )
 
 # ---------------------------------------------------------------------------
 # Ambient singleton net: every impl_binding_singleton!/manual instance() in

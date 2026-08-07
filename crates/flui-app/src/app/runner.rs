@@ -69,14 +69,18 @@ where
     // rather than a panic.
     let _installation = super::logging::init_managed_logging(&config);
 
-    // `target_fps` is logged as advisory, not enforced: the desktop runner's
-    // steady-state pacing comes from the GPU-side blocking Fifo present
-    // (`flui-engine::wgpu::Renderer::render_scene`), not from this value —
-    // see `AppConfig::target_fps`'s doc for the full consumer audit.
+    // No frame-pacing field is logged here: `AppConfig` carries none — the
+    // advisory-only `vsync`/`target_fps` fields it used to have were removed
+    // rather than kept misleading. The desktop runner's steady-state pacing
+    // comes entirely from the GPU-side blocking Fifo present
+    // (`flui-engine::wgpu::Renderer::render_scene`) today. `flui_engine::
+    // RasterOptions` exists as the shape a future frame-pacing surface would
+    // take, but nothing reads it at the raster boundary yet (`RasterOwner`
+    // stores its `RasterOptions` and never acts on it) — that wiring is
+    // #559's job, not a claim this comment gets to make in the meantime.
     tracing::info!(
         title = %config.title,
         size = ?config.size,
-        target_fps_advisory = config.target_fps,
         "Starting FLUI application"
     );
 

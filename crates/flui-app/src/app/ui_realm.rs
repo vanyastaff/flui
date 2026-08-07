@@ -44,7 +44,8 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_scheduler::{
-    AppLifecycleState, DemandKind, LocalPostFrameLane, SchedulerPhase, UpdateScheduler,
+    AppLifecycleState, DemandKind, Instant, LocalPostFrameLane, PresentOutcome, SchedulerPhase,
+    UpdateScheduler,
 };
 use flui_semantics::SemanticsActionRequest;
 use flui_types::{HapticFeedback, Size, geometry::px};
@@ -554,6 +555,27 @@ enum FramePaintOutcome {
     /// panicked and was caught by `catch_unwind`); the frame was dropped and
     /// must be retried.
     Errored,
+}
+
+/// Whether [`UiRealm::record_submit_telemetry`] drains a presentation's
+/// pending input epochs into the [`flui_scheduler::FrameSnapshot`] it
+/// records, or merely reads them without consuming them.
+///
+/// `Retain` exists for exactly one shape: a submit failure whose own caller
+/// has already armed a retry (`EngineError::SurfaceLost` in
+/// [`UiRealm::render_frame_entered`]) — draining there would leave the
+/// eventual retry's own real submit with nothing pending to attribute to
+/// the frame that actually reaches the screen, so the inputs that arrived
+/// before the failure would never be attributed to any frame at all. Every
+/// other outcome (a real present, or a submit failure with no armed retry)
+/// uses `Drain`, the same as before this type existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EpochDisposition {
+    /// Drain pending epochs into the recorded snapshot (the common case).
+    Drain,
+    /// Read pending epochs into the recorded snapshot without consuming
+    /// them, for a failed submit a retry will resubmit shortly.
+    Retain,
 }
 
 /// Moved here from the retired `AppBinding`, unchanged.
@@ -1605,11 +1627,17 @@ impl UiRealm {
         self.presentations.primary().frames_rendered()
     }
 
-    /// Frames dropped due to surface errors on this presentation.
-    #[expect(
-        dead_code,
-        reason = "no production caller yet, and no test reads it back -- \
-                  forwards PresentationState::frames_dropped, also uncalled"
+    /// Frames dropped due to surface errors on this presentation. See
+    /// `PresentationState::frames_dropped`'s own doc for how this stays
+    /// structurally distinct from `FrameClock::produces_deferred` (a
+    /// backpressure/hidden deferral is never counted here).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production caller yet -- exercised by \
+                      frame_clock_segment_gate's frames-dropped-vs-deferred pin"
+        )
     )]
     pub(crate) fn frames_dropped(&self) -> u64 {
         self.presentations.primary().frames_dropped()
@@ -1746,6 +1774,44 @@ impl UiRealm {
         Ok(())
     }
 
+    /// [`Self::attach_root_widget_entered`], but targets an arbitrary
+    /// RESIDENT presentation instead of always `primary()` — for tests that
+    /// need a SECOND presentation to carry real, paintable content.
+    /// `draw_frame_for_presentation` resolves to `FramePaintOutcome::Idle`
+    /// for a presentation with nothing attached (no layer tree to paint),
+    /// so a multi-presentation test proving telemetry attribution follows
+    /// the presentation that actually produced (not `primary()`
+    /// unconditionally) needs the non-primary presentation to genuinely
+    /// paint, not merely flip a dirty bit.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` does not name a presentation this realm currently
+    /// hosts.
+    #[cfg(test)]
+    pub(crate) fn attach_root_widget_to_for_test<V>(
+        &self,
+        id: PresentationId,
+        view: &V,
+    ) -> Result<(), flui_view::AttachError>
+    where
+        V: flui_view::View + Clone + 'static,
+    {
+        self.enter(|realm| {
+            let presentation = realm.presentations.get(id).expect(
+                "BUG: attach_root_widget_to_for_test given a presentation id this realm does \
+                 not host",
+            );
+            let focused = FocusRoot::new(view.clone());
+            let animated = VsyncScope::new(presentation.vsync(), focused);
+            let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated);
+            presentation.widgets().attach_root_widget(&wrapped)?;
+            realm.request_redraw_for(presentation);
+            tracing::debug!(?id, "Root widget attached (non-primary, test-only)");
+            Ok(())
+        })
+    }
+
     /// Attach a root widget sizing the root view to an explicit logical
     /// `width` × `height` — the platform window's surface size.
     ///
@@ -1799,7 +1865,7 @@ impl UiRealm {
     /// production drives frames through [`Self::render_frame_entered`].
     #[cfg(test)]
     pub(crate) fn draw_frame(&self, constraints: BoxConstraints) -> Option<Arc<Scene>> {
-        match self.enter(|realm| realm.draw_frame_entered(constraints)) {
+        match self.enter(|realm| realm.draw_frame_entered(constraints)).1 {
             FramePaintOutcome::Painted(scene) => Some(scene),
             FramePaintOutcome::Idle | FramePaintOutcome::Errored => None,
         }
@@ -1834,12 +1900,19 @@ impl UiRealm {
     /// exactly today's single unconditional segment; see
     /// [`Self::draw_frame_for_presentation`]'s doc for the proof that the
     /// gate cannot skip a segment the old, ungated code would have run.
-    /// Returns the LAST presentation's outcome (matches today's single-
-    /// presentation return value exactly; a genuine multi-presentation
-    /// caller reads each presentation's own render state directly rather
-    /// than this aggregate — addressed per-presentation return values are a
-    /// later slice's job).
-    fn draw_frame_entered(&self, constraints: BoxConstraints) -> FramePaintOutcome {
+    /// Returns the LAST presentation whose segment actually ran this pump,
+    /// paired with its outcome (matches today's single-presentation return
+    /// value exactly when only one presentation is mounted; with more than
+    /// one, `render_frame_entered`, this method's own caller, submits and
+    /// records telemetry against the RETURNED id, never an assumed
+    /// `primary()` — see that method's own doc for the misattribution bug
+    /// this addressing closes). A caller reading a SPECIFIC non-last
+    /// presentation's own render state still does so directly rather than
+    /// through this aggregate.
+    fn draw_frame_entered(
+        &self,
+        constraints: BoxConstraints,
+    ) -> (PresentationId, FramePaintOutcome) {
         // Vsync tick + gesture-deadline tick — MUST precede every
         // presentation's build phase. See the retired `AppBinding::
         // draw_frame_entered`'s doc for the full disjoint-controller-set
@@ -1903,6 +1976,7 @@ impl UiRealm {
         // scheduler itself.
 
         let mut last_outcome = FramePaintOutcome::Idle;
+        let mut producer = self.presentations.primary().id();
         for presentation in self.presentations.iter() {
             // Segment start: clear this presentation's wake bit BEFORE
             // sampling dirty, so a mark arriving WHILE this segment runs
@@ -1914,7 +1988,8 @@ impl UiRealm {
                 presentation.clock().mark_demand(DemandKind::Dirty);
             }
 
-            let decision = presentation.clock().poll(presentation.clock().now());
+            let segment_start = presentation.clock().now();
+            let decision = presentation.clock().poll(segment_start);
             if !decision.should_run_segment() {
                 // Nothing to flush and nobody asked, or a gate (hidden /
                 // backpressure) is closed: skip this presentation's segment
@@ -1931,6 +2006,17 @@ impl UiRealm {
             }
 
             let result = Self::draw_frame_for_presentation(presentation, constraints);
+            // Telemetry: remember this segment's span so `render_frame_entered`
+            // (this method's own caller, which decides whether/how to submit)
+            // can attach it to a `FrameSnapshot` at its own submit point --
+            // see `PresentationState::last_segment_span`'s own doc for why
+            // this is a side channel rather than a local variable, and why
+            // it lives on the presentation rather than the shared
+            // `FrameClock`. `take_last_segment_span` (never a plain `get`)
+            // is what makes this per-pump: a presentation whose segment does
+            // NOT run some later pump sees `None` here, not this pump's
+            // stale value.
+            presentation.set_last_segment_span(segment_start, presentation.clock().now());
             // Latch "first frame confirmed sent" only for an unconditional
             // `Produce` that didn't error -- mirrors the old
             // `RenderingFlutterBinding::mark_first_frame_sent`'s `!errored`
@@ -1944,8 +2030,9 @@ impl UiRealm {
                 presentation.clock().mark_first_frame_sent();
             }
             last_outcome = result;
+            producer = presentation.id();
         }
-        last_outcome
+        (producer, last_outcome)
     }
 
     /// One presentation's build+layout+paint segment — moves VERBATIM from
@@ -2080,7 +2167,21 @@ impl UiRealm {
             .with(PipelineOwner::device_pixel_ratio);
         let constraints =
             BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
-        let outcome = self.draw_frame_entered(constraints);
+        let (producer_id, outcome) = self.draw_frame_entered(constraints);
+        // The presentation whose segment actually produced `outcome` above —
+        // NEVER assumed to be `primary()`. On a pump where the primary
+        // skips (nothing dirty) and a secondary presentation produces (both
+        // reachable in production: `install_presentation_alongside` <-
+        // `open_secondary_window`), `primary()` and the real producer
+        // differ, and every decision below (the deferred-submit gate, the
+        // submit timestamp, frame accounting, telemetry) must be read from
+        // and recorded against the ACTUAL producer's own clock, not a
+        // sibling's — see `Self::record_submit_telemetry`'s own doc for the
+        // misattribution this addressing closes.
+        let producer = self
+            .presentations
+            .get(producer_id)
+            .unwrap_or_else(|| self.presentations.primary());
 
         self.gestures()
             .mouse_tracker()
@@ -2094,11 +2195,11 @@ impl UiRealm {
             });
 
         let errored = matches!(outcome, FramePaintOutcome::Errored);
-        // The submit gate: withheld while the primary presentation's first
-        // frame is deferred -- see this method's own doc for why this is a
-        // SEPARATE check from `draw_frame_entered`'s segment gate, not a
-        // redundant re-check of the same decision.
-        let should_send = !self.presentations.primary().clock().is_deferred();
+        // The submit gate: withheld while the PRODUCER's own first frame is
+        // deferred -- see this method's own doc for why this is a SEPARATE
+        // check from `draw_frame_entered`'s segment gate, not a redundant
+        // re-check of the same decision.
+        let should_send = !producer.clock().is_deferred();
 
         let mut presented = false;
         let mut retry_needed = errored;
@@ -2107,14 +2208,43 @@ impl UiRealm {
             && scene.has_content()
         {
             renderer.mark_full_repaint();
-            match renderer.render_scene(scene) {
+            let render_result = renderer.render_scene(scene);
+            // Telemetry: sampled AFTER `render_scene` returns, never before
+            // it -- on the production wgpu backend, a `Ok(true)` result
+            // means `render_scene` itself called `output.present()`, which
+            // under the default `Fifo` presentation mode BLOCKS until the
+            // next vsync before returning. Sampling before the call (as an
+            // earlier version of this method did) understates every
+            // "input-to-present"/"produce-to-present" latency by up to a
+            // full frame interval -- it would measure submit, not present,
+            // while `flui_scheduler::frame_histogram`'s
+            // `input_to_present_histogram`/`produce_to_present_histogram`
+            // names (and `FrameSnapshot::submit_at`'s own doc) already
+            // claim the present-inclusive meaning. Sampling once, here,
+            // after the call returns -- for EVERY outcome, not just
+            // `Ok(true)` -- keeps that claim true uniformly: a failure
+            // arm's `submit_at` is likewise "whenever `render_scene`
+            // finished attempting this submit", including whatever work
+            // (partial blocking, driver validation) it did before failing.
+            // Never recorded for `Ok(false)` (no damage/occluded, nothing
+            // actually reached the backend): that branch's pending input
+            // epochs stay buffered on the clock for whichever later pump
+            // does submit, per `FrameClock::record_frame`'s own doc.
+            let submit_at = producer.clock().now();
+            match render_result {
                 Ok(did_present) => {
                     presented = did_present;
                     if did_present {
-                        self.presentations.primary().record_frame_rendered();
+                        producer.record_frame_rendered();
+                        Self::record_submit_telemetry(
+                            producer,
+                            submit_at,
+                            PresentOutcome::Presented,
+                            EpochDisposition::Drain,
+                        );
                         tracing::trace!(
                             frame = scene.frame_number(),
-                            total = self.presentations.primary().frames_rendered(),
+                            total = producer.frames_rendered(),
                             "Frame rendered successfully"
                         );
                     } else {
@@ -2125,24 +2255,53 @@ impl UiRealm {
                     }
                 }
                 Err(EngineError::SurfaceLost) => {
-                    self.presentations.primary().record_frame_dropped();
+                    producer.record_frame_dropped();
+                    // `Retain`, not `Drain`: this arm arms a retry
+                    // (`retry_needed = true` below) via `wake_frame()`, and
+                    // the eventual real submit that retry produces must
+                    // still find the epochs that arrived before this
+                    // failure -- see `record_submit_telemetry`'s own doc.
+                    Self::record_submit_telemetry(
+                        producer,
+                        submit_at,
+                        PresentOutcome::Errored,
+                        EpochDisposition::Retain,
+                    );
                     retry_needed = true;
                     tracing::debug!("Surface lost; frame dropped — retry armed via wake_frame()");
                 }
                 Err(EngineError::DeviceLost) => {
-                    self.presentations.primary().record_frame_dropped();
+                    producer.record_frame_dropped();
+                    Self::record_submit_telemetry(
+                        producer,
+                        submit_at,
+                        PresentOutcome::Errored,
+                        EpochDisposition::Drain,
+                    );
                     tracing::warn!(
                         "GPU device lost — recovery will be attempted by the platform runner"
                     );
                 }
                 Err(EngineError::SurfaceValidation) => {
-                    self.presentations.primary().record_frame_dropped();
+                    producer.record_frame_dropped();
+                    Self::record_submit_telemetry(
+                        producer,
+                        submit_at,
+                        PresentOutcome::Errored,
+                        EpochDisposition::Drain,
+                    );
                     tracing::error!(
                         "Surface validation error — surface misconfig; external reconfigure required"
                     );
                 }
                 Err(e) => {
-                    self.presentations.primary().record_frame_dropped();
+                    producer.record_frame_dropped();
+                    Self::record_submit_telemetry(
+                        producer,
+                        submit_at,
+                        PresentOutcome::Errored,
+                        EpochDisposition::Drain,
+                    );
                     tracing::error!(error = ?e, "Render error (non-recoverable this frame)");
                 }
             }
@@ -2197,6 +2356,77 @@ impl UiRealm {
         }
 
         presented
+    }
+
+    /// Finalize and record this pump's [`flui_scheduler::FrameSnapshot`] for
+    /// `presentation`, IF a segment actually ran THIS PUMP for
+    /// `presentation` specifically (`PresentationState::
+    /// take_last_segment_span` returns `Some`) — a presentation whose
+    /// segment was skipped entirely this pump (`draw_frame_entered`'s own
+    /// gate) has nothing to record.
+    ///
+    /// `presentation` must be the exact presentation whose segment produced
+    /// the outcome being submitted this call — [`Self::render_frame_entered`]
+    /// resolves this from `draw_frame_entered`'s own returned producer id,
+    /// never `self.presentations.primary()` unconditionally. The bug this
+    /// guards against: with more than one presentation mounted, a pump where
+    /// the primary's segment is skipped (nothing dirty) while a secondary's
+    /// produces used to still record against `primary()`; because the old
+    /// per-clock segment-span latch was never cleared once set, a primary
+    /// that HAD produced on some EARLIER pump still read `Some` here (stale,
+    /// from that earlier pump, not this one), so the guard below wrongly
+    /// passed — recording a `FrameSnapshot` with the primary's stale span, a
+    /// duplicate `frame_id` (the primary's own `produced_count` unchanged
+    /// since it didn't poll-produce this pump), and the primary's own
+    /// pending input epochs drained into a frame it never produced. Reading
+    /// and clearing PER-PRESENTATION via `take_last_segment_span` (rather
+    /// than a shared, never-cleared `get`) and resolving the correct
+    /// producer together close this: a presentation not addressed here never
+    /// has its span read, and the addressed one's stale cross-pump reads are
+    /// impossible because the span is cleared the moment it is used.
+    ///
+    /// Called only from the branches of [`Self::render_frame_entered`] that
+    /// reached a real submit attempt (never for `Ok(false)`/no-damage, whose
+    /// pending input epochs must stay buffered for a later, real submit).
+    ///
+    /// `epochs` decides whether this presentation's pending input epochs are
+    /// drained into the recorded snapshot ([`EpochDisposition::Drain`], the
+    /// common case) or merely read from without consuming them
+    /// ([`EpochDisposition::Retain`]) — see that type's own doc for why a
+    /// submit failure that arms a retry must use `Retain`: draining on the
+    /// failed attempt would leave the eventual retry's own real submit with
+    /// nothing pending to attribute to the frame that actually reaches the
+    /// screen.
+    fn record_submit_telemetry(
+        presentation: &PresentationState,
+        submit_at: Instant,
+        present_outcome: PresentOutcome,
+        epochs: EpochDisposition,
+    ) {
+        if let Some((segment_start, segment_end)) = presentation.take_last_segment_span() {
+            match epochs {
+                EpochDisposition::Drain => {
+                    presentation.clock().record_frame(
+                        presentation.id(),
+                        segment_start,
+                        segment_start,
+                        segment_end,
+                        submit_at,
+                        present_outcome,
+                    );
+                }
+                EpochDisposition::Retain => {
+                    presentation.clock().record_frame_retaining_epochs(
+                        presentation.id(),
+                        segment_start,
+                        segment_start,
+                        segment_end,
+                        submit_at,
+                        present_outcome,
+                    );
+                }
+            }
+        }
     }
 
     // ========================================================================
@@ -2282,12 +2512,28 @@ impl UiRealm {
             );
             return;
         }
+        // Telemetry: stamp this event's arrival on the RESOLVED target's own
+        // clock (never a wall-clock read) before dispatch, so a consumer can
+        // later attribute a produced frame's latency back to this specific
+        // input — see `FrameClock::stamp_input_epoch`'s own doc. Stamped
+        // INSIDE each arm below, only for a kind this method actually
+        // routes (every arm that stamps also calls `request_redraw_for`,
+        // its own contribution to demand) — never for `DragDrop`, whose own
+        // arm traces the event as dropped without routing it anywhere or
+        // requesting a frame. Stamping an event this method is about to
+        // drop would leave a phantom epoch sitting in the ring until
+        // eviction, attributed to whichever unrelated frame happens to
+        // produce next.
         match input {
             PlatformInput::Ime(ime_event) => {
+                let clock = presentation.clock();
+                clock.stamp_input_epoch(clock.now());
                 presentation.text_input().dispatch(&ime_event);
                 self.request_redraw_for(presentation);
             }
             PlatformInput::Pointer(pointer_event) => {
+                let clock = presentation.clock();
+                clock.stamp_input_epoch(clock.now());
                 let routing_panic = catch_unwind(AssertUnwindSafe(|| {
                     presentation
                         .gestures()
@@ -2322,12 +2568,17 @@ impl UiRealm {
                 }
             }
             PlatformInput::Keyboard(keyboard_event) => {
+                let clock = presentation.clock();
+                clock.stamp_input_epoch(clock.now());
                 presentation
                     .focus_manager()
                     .dispatch_key_event(&keyboard_event);
                 self.request_redraw_for(presentation);
             }
             PlatformInput::DragDrop(drag_drop_event) => {
+                // Not stamped (see this method's own doc): this event is
+                // never routed and never requests a frame, so there is no
+                // future produce to attribute it to.
                 tracing::debug!(
                     drag_drop_kind = drag_drop_kind(&drag_drop_event),
                     "drag-and-drop input received; realm routing not implemented yet, dropping"
@@ -7039,6 +7290,32 @@ mod tests {
             }
         }
 
+        /// A raster backend that always reports `SurfaceLost` — this
+        /// module's own minimal double for the "a real submit genuinely
+        /// failed" half of the frames-dropped-vs-deferred pin below.
+        struct AlwaysErrorsBackend;
+
+        impl RasterBackend for AlwaysErrorsBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                Err(EngineError::SurfaceLost)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
         /// END-STATE INVARIANT: at N=1 -- a clock that is
         /// never hidden and never backpressured -- the segment gate's
         /// decision (`clock.poll().should_run_segment()`, fed `Dirty`
@@ -7428,7 +7705,8 @@ mod tests {
 
             for pump in 0..50 {
                 realm.set_now_secs_for_test(f64::from(pump) * 0.016);
-                let outcome = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+                let (_, outcome) =
+                    realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
                 assert!(
                     matches!(outcome, FramePaintOutcome::Idle),
                     "pump {pump}: an idle presentation must never produce anything but Idle"
@@ -7470,7 +7748,8 @@ mod tests {
                 realm.set_now_secs_for_test(f64::from(pump) * 0.016);
                 now += std::time::Duration::from_millis(16);
                 realm.record_compositor_tick(now);
-                let outcome = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+                let (_, outcome) =
+                    realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
                 assert!(
                     matches!(outcome, FramePaintOutcome::Idle),
                     "pump {pump}: recording a compositor tick every single pump, exactly as \
@@ -7521,7 +7800,7 @@ mod tests {
                     owner.mark_needs_paint(root_id);
                 }
             });
-            let outcome = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            let (_, outcome) = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
 
             assert!(
                 matches!(outcome, FramePaintOutcome::Painted(_)),
@@ -8055,6 +8334,532 @@ mod tests {
                 until_deadline < Duration::from_secs(1),
                 "GestureArena::next_deadline must reflect the double-tap's near give-up \
                  window, not the long-press's far one -- got {until_deadline:?} until deadline"
+            );
+        }
+
+        // ------------------------------------------------------------------
+        // Frame telemetry: input->present attribution, driven through the
+        // REAL production sequence (`handle_input_addressed` ->
+        // `render_frame_entered`), never `FrameClock`'s own methods called
+        // directly — the lesson this codebase has already paid for once in
+        // this same area (see `render_frame_entered`'s own doc on why a
+        // production-sequence probe caught what calling `draw_frame_entered`
+        // directly could not).
+        // ------------------------------------------------------------------
+
+        /// A dispatched pointer event's arrival survives into the exported
+        /// `FrameSnapshot` with a bounded, real, non-zero latency — value,
+        /// not merely presence. Kills "epoch field exists but is zero/None"
+        /// and "latency is a distribution with no attribution".
+        #[test]
+        fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record() {
+            use std::thread;
+            use std::time::Duration;
+
+            use flui_interaction::events::{PointerType, make_down_event};
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = mount_root_here();
+            let primary_id = realm.presentations.primary().id();
+            assert_eq!(
+                realm
+                    .presentations
+                    .primary()
+                    .clock()
+                    .frames_since(None)
+                    .len(),
+                0,
+                "precondition: nothing recorded before this test's own dispatch+produce"
+            );
+
+            let down = make_down_event(Offset::new(Pixels(4.0), Pixels(6.0)), PointerType::Mouse);
+            let before_dispatch = std::time::Instant::now();
+            realm.enter(|realm| {
+                realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
+            });
+
+            // A measurable, non-flaky real gap between dispatch and produce.
+            thread::sleep(Duration::from_millis(5));
+
+            let mut backend = AlwaysPresentBackend;
+            let presented = realm.render_frame_entered(&mut backend);
+            assert!(
+                presented,
+                "precondition: the frame actually reached present()"
+            );
+            let wall_clock_elapsed = before_dispatch.elapsed();
+
+            let snapshots = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(snapshots.len(), 1, "exactly one frame must be recorded");
+            let latencies: Vec<_> = snapshots[0].latencies().collect();
+            assert_eq!(
+                latencies.len(),
+                1,
+                "the dispatched input's epoch must survive into the exported record"
+            );
+            let (_, latency) = latencies[0];
+            assert!(
+                latency >= Duration::from_millis(5),
+                "attributed latency must be at least the real sleep between dispatch and \
+                 present -- got {latency:?}"
+            );
+            assert!(
+                latency <= wall_clock_elapsed + Duration::from_millis(200),
+                "attributed latency ({latency:?}) must not exceed the real wall-clock time \
+                 actually elapsed since dispatch ({wall_clock_elapsed:?}) by more than \
+                 measurement slop -- a stray wall-clock read from an unrelated instant would \
+                 blow this bound"
+            );
+        }
+
+        /// Two inputs dispatched before one produce: coalescing honesty --
+        /// both survive with distinct latencies, the older one larger.
+        /// Companion to the single-input test above, at the SAME
+        /// production-sequence level (through `handle_input_addressed`, not
+        /// `FrameClock::stamp_input_epoch` called directly).
+        #[test]
+        fn two_dispatched_inputs_before_one_produce_both_attributed_older_larger() {
+            use std::thread;
+            use std::time::Duration;
+
+            use flui_interaction::events::{PointerType, make_down_event};
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = mount_root_here();
+            let primary_id = realm.presentations.primary().id();
+
+            let first = make_down_event(Offset::new(Pixels(1.0), Pixels(1.0)), PointerType::Mouse);
+            realm.enter(|realm| {
+                realm.handle_input_addressed(primary_id, PlatformInput::Pointer(first));
+            });
+            thread::sleep(Duration::from_millis(8));
+
+            let second = make_down_event(Offset::new(Pixels(2.0), Pixels(2.0)), PointerType::Mouse);
+            realm.enter(|realm| {
+                realm.handle_input_addressed(primary_id, PlatformInput::Pointer(second));
+            });
+
+            let mut backend = AlwaysPresentBackend;
+            assert!(realm.render_frame_entered(&mut backend));
+
+            let snapshots = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(snapshots.len(), 1);
+            let mut latencies: Vec<_> = snapshots[0].latencies().collect();
+            assert_eq!(
+                latencies.len(),
+                2,
+                "both dispatched inputs must survive into the same produced frame's record \
+                 -- coalescing must not be last-input-wins"
+            );
+            // Order as pushed: first dispatched (older) is index 0.
+            latencies.sort_by_key(|(id, _)| id.get());
+            let (_, older_latency) = latencies[0];
+            let (_, newer_latency) = latencies[1];
+            assert!(
+                older_latency > newer_latency,
+                "the earlier-dispatched input must show the larger latency: \
+                 older={older_latency:?} newer={newer_latency:?}"
+            );
+        }
+
+        /// `Skip(Backpressure)` vs `frames_dropped`, pinned at the REAL
+        /// production path: a clock-level backpressure episode (simulated
+        /// here since no production caller saturates `FrameClock`'s
+        /// in-flight counter yet -- see `FrameClock::record_submit`'s own
+        /// doc) must leave `UiRealm::frames_dropped` untouched, while a
+        /// GENUINE submit failure through `render_frame_entered` (a real
+        /// `SurfaceLost`) must increment it. Two different mechanisms,
+        /// asserted against the same realm, so a mutant that folds either
+        /// counter into the other is caught either way.
+        #[test]
+        fn backpressure_episode_is_not_counted_as_a_dropped_frame_but_a_real_submit_error_is() {
+            let realm = mount_root_here();
+            let presentation = realm.presentations.primary();
+
+            // Saturate capacity so the very next poll defers rather than
+            // produces -- `has_capacity` requires `in_flight < max`.
+            presentation.clock().set_max_in_flight(1);
+            presentation.clock().record_submit();
+            presentation.mark_redraw_pending();
+
+            let _ = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+
+            assert_eq!(
+                presentation.clock().backpressure_deferrals(),
+                1,
+                "the saturated clock must defer this pump's demand"
+            );
+            assert_eq!(
+                realm.frames_dropped(),
+                0,
+                "a backpressure deferral must never be counted as a dropped frame"
+            );
+
+            // Free capacity so the retained demand can actually flow
+            // through a real submit attempt next.
+            presentation.clock().record_retire();
+            presentation.mark_redraw_pending();
+
+            let mut backend = AlwaysErrorsBackend;
+            let presented = realm.render_frame_entered(&mut backend);
+
+            assert!(!presented, "SurfaceLost never reaches present()");
+            assert_eq!(
+                realm.frames_dropped(),
+                1,
+                "a genuine submit failure must increment frames_dropped exactly once"
+            );
+            assert_eq!(
+                presentation.clock().backpressure_deferrals(),
+                1,
+                "the real submit failure must not also inflate the deferral counter -- \
+                 the two stay structurally separate"
+            );
+        }
+
+        /// Multi-presentation attribution, red-exploit for the bug where
+        /// `record_submit_telemetry` hardcoded `primary()`: on a pump where
+        /// the PRIMARY's segment is skipped (nothing dirty) and a SECONDARY's
+        /// segment produces, the recorded `FrameSnapshot` must land on the
+        /// SECONDARY's own clock, carrying THIS pump's own fresh segment
+        /// span — never the primary's, and never a stale span the primary
+        /// itself latched on an earlier pump. Reproduces the production
+        /// topology `runner.rs`'s `install_presentation_alongside` (behind
+        /// `open_secondary_window`) creates: more than one presentation
+        /// resident in one realm.
+        ///
+        /// Before the fix, this failed two ways at once: A gained a SECOND,
+        /// wrongly-attributed snapshot (guarded only by A's own
+        /// `last_segment_span().is_some()`, which stayed `Some` forever
+        /// once pump 1 set it — proving "a segment ran on SOME pump", not
+        /// "this pump"), with a `frame_id` colliding with pump 1's own
+        /// (A's `produced_count` never advanced this pump), while B — the
+        /// presentation that actually produced — recorded nothing at all.
+        #[test]
+        fn a_pump_where_the_primary_skips_and_a_secondary_produces_attributes_telemetry_to_the_secondary_not_the_stale_primary()
+         {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+
+            // Pump 1: only A has content. A produces and submits,
+            // establishing a REAL segment span and one recorded
+            // `FrameSnapshot` on A's own clock — the exact state a latched-
+            // forever span could later be misread as "still valid" once it
+            // goes stale.
+            realm
+                .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
+                .expect("A attaches");
+            let mut backend = AlwaysPresentBackend;
+            assert!(
+                realm.render_frame_entered(&mut backend),
+                "pump 1: A alone must produce and present"
+            );
+            let a_snapshots_after_pump_1 = realm
+                .presentations
+                .get(a_id)
+                .expect("A installed")
+                .clock()
+                .frames_since(None);
+            assert_eq!(
+                a_snapshots_after_pump_1.len(),
+                1,
+                "sanity: A's own first pump must record exactly one snapshot"
+            );
+
+            // Pump 2: A is now settled (its segment will be SKIPPED this
+            // pump — nothing dirty), B gets real content attached and
+            // produces instead.
+            realm
+                .attach_root_widget_to_for_test(b_id, &flui_widgets::SizedBox::new(20.0, 20.0))
+                .expect("B attaches");
+            assert!(
+                realm.render_frame_entered(&mut backend),
+                "pump 2: B alone must produce and present"
+            );
+
+            let a = realm.presentations.get(a_id).expect("A installed");
+            let b = realm.presentations.get(b_id).expect("B installed");
+
+            let a_snapshots_after_pump_2 = a.clock().frames_since(None);
+            assert_eq!(
+                a_snapshots_after_pump_2.len(),
+                1,
+                "A must NOT gain a second, wrongly-attributed snapshot from B's own pump"
+            );
+            assert_eq!(
+                a_snapshots_after_pump_2[0].frame_id, a_snapshots_after_pump_1[0].frame_id,
+                "A's own recorded snapshot must be byte-for-byte untouched by B's pump"
+            );
+
+            let b_snapshots = b.clock().frames_since(None);
+            assert_eq!(
+                b_snapshots.len(),
+                1,
+                "B's own pump must record exactly one snapshot, on B's own clock"
+            );
+            assert_eq!(
+                b_snapshots[0].presentation, b_id,
+                "the recorded snapshot must name B, not A, as its producer"
+            );
+        }
+
+        /// More than `MAX_COALESCED_INPUT_EPOCHS` raw pointer events
+        /// dispatched before a single produce — routine for any drag
+        /// against a high-frequency device, not an edge case (the
+        /// `stamp_input_epoch` call in `handle_input_addressed` fires
+        /// before `GestureBinding::flush_pending_moves` coalesces anything,
+        /// so telemetry sees the RAW dispatch stream). The exported record
+        /// must retain the NEWEST arrivals, not misattribute the oldest,
+        /// longest-stale ones as if they were still representative of what
+        /// this frame carried.
+        #[test]
+        fn more_than_max_coalesced_inputs_before_one_produce_keeps_the_newest_arrivals() {
+            use std::thread;
+            use std::time::Duration;
+
+            use flui_interaction::events::{PointerType, make_move_event};
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = mount_root_here();
+            let primary_id = realm.presentations.primary().id();
+
+            let dispatched = flui_scheduler::MAX_COALESCED_INPUT_EPOCHS + 4;
+            for i in 0..dispatched {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "test-only pixel offsets, i stays far below f32's exact-integer range"
+                )]
+                let position = Offset::new(Pixels(i as f32), Pixels(i as f32));
+                let event = make_move_event(position, PointerType::Mouse);
+                realm.enter(|realm| {
+                    realm.handle_input_addressed(primary_id, PlatformInput::Pointer(event));
+                });
+                thread::sleep(Duration::from_micros(200));
+            }
+
+            let mut backend = AlwaysPresentBackend;
+            assert!(realm.render_frame_entered(&mut backend));
+
+            let snapshots = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(snapshots.len(), 1);
+            let mut latencies: Vec<_> = snapshots[0].latencies().collect();
+            assert_eq!(
+                latencies.len(),
+                flui_scheduler::MAX_COALESCED_INPUT_EPOCHS,
+                "the ring must retain exactly its bounded capacity, never silently grow"
+            );
+            latencies.sort_by_key(|(id, _)| id.get());
+            let expected_first_kept =
+                (dispatched - flui_scheduler::MAX_COALESCED_INPUT_EPOCHS) as u64;
+            let ids: Vec<u64> = latencies.iter().map(|(id, _)| id.get()).collect();
+            assert_eq!(
+                ids,
+                (expected_first_kept..dispatched as u64).collect::<Vec<_>>(),
+                "must keep the newest-dispatched inputs, not the oldest -- the discard \
+                 policy this test pins"
+            );
+        }
+
+        /// A raster backend whose `render_scene` sleeps a known interval
+        /// before returning `Ok(true)` — standing in for the production
+        /// wgpu backend's `output.present()` under the default `Fifo`
+        /// presentation mode, which blocks until the next vsync before
+        /// `render_scene` returns. Proves `submit_at` is sampled AFTER
+        /// `render_scene` returns, not before it.
+        struct SleepingPresentBackend {
+            sleep: std::time::Duration,
+        }
+
+        impl RasterBackend for SleepingPresentBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                std::thread::sleep(self.sleep);
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        /// Finding: `submit_at` used to be sampled BEFORE `render_scene`
+        /// was called, so any time the call spent blocked inside a
+        /// synchronous `present()` (the production `Fifo` case) was
+        /// invisible to the recorded latency — the shipped
+        /// `input_to_present_histogram`/`produce_to_present_histogram`
+        /// names would then be lying about what they measure (submit, not
+        /// present). This backend simulates that blocking present with a
+        /// real sleep; a `submit_at` sampled before the call would report a
+        /// latency that does NOT include it.
+        #[test]
+        fn submit_latency_includes_time_spent_inside_render_scene_not_just_before_it() {
+            use flui_interaction::events::{PointerType, make_down_event};
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = mount_root_here();
+            let primary_id = realm.presentations.primary().id();
+
+            let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+            realm.enter(|realm| {
+                realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
+            });
+
+            let sleep = std::time::Duration::from_millis(30);
+            let mut backend = SleepingPresentBackend { sleep };
+            assert!(
+                realm.render_frame_entered(&mut backend),
+                "precondition: the frame actually reached present()"
+            );
+
+            let snapshots = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(snapshots.len(), 1);
+            let (_, latency) = snapshots[0]
+                .latencies()
+                .next()
+                .expect("the dispatched input's epoch must be attributed to this frame");
+            assert!(
+                latency >= sleep,
+                "recorded input->present latency ({latency:?}) must include the time \
+                 render_scene spent blocked inside its own present() call (simulated here as \
+                 a {sleep:?} sleep) -- a submit_at sampled BEFORE render_scene would \
+                 understate this by up to the sleep duration"
+            );
+        }
+
+        /// Finding: on `SurfaceLost`, `record_submit_telemetry` used to
+        /// unconditionally DRAIN this presentation's pending input epochs
+        /// into the failed attempt's own `Errored` snapshot — but
+        /// `render_frame_entered` arms a retry for exactly this outcome
+        /// (`retry_needed = true` -> `wake_frame()`), so the frame that
+        /// eventually reaches the screen would find the epoch buffer
+        /// already empty and carry no attribution at all. Drives the exact
+        /// sequence the finding names: input -> `SurfaceLost` -> retry ->
+        /// the presented frame still carries the original epoch.
+        #[test]
+        fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
+            use flui_interaction::events::{PointerType, make_down_event};
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = mount_root_here();
+            let primary_id = realm.presentations.primary().id();
+
+            let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+            realm.enter(|realm| {
+                realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
+            });
+
+            // First attempt: the surface is lost. A retry is armed, and the
+            // failed attempt's own snapshot must still see the epoch that
+            // was pending (diagnostic value), but must NOT consume it.
+            let mut failing_backend = AlwaysErrorsBackend;
+            let presented = realm.render_frame_entered(&mut failing_backend);
+            assert!(!presented, "SurfaceLost never reaches present()");
+            let after_failure = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(
+                after_failure.len(),
+                1,
+                "the failed attempt is still recorded, for diagnostics"
+            );
+            assert_eq!(
+                after_failure[0].latencies().count(),
+                1,
+                "the failed attempt's own snapshot still reports the pending epoch"
+            );
+
+            // Retry: `wake_frame()` only pokes the platform loop to pump
+            // again -- it does not by itself mark the render pipeline
+            // dirty (paint already succeeded before the failed submit;
+            // only `present()` failed), so a genuinely content-bearing
+            // retry pump needs its own fresh dirty state, same as the real
+            // driver loop would eventually have from whatever caused this
+            // presentation to need a NEW frame. Mark the root dirty
+            // directly, standing in for that external cause.
+            let primary = realm.presentations.primary();
+            primary.renderer().root_pipeline_owner().with_mut(|owner| {
+                if let Some(root_id) = owner.root_id() {
+                    owner.mark_needs_layout(root_id);
+                }
+            });
+            primary.mark_redraw_pending();
+            let mut succeeding_backend = AlwaysPresentBackend;
+            let presented = realm.render_frame_entered(&mut succeeding_backend);
+            assert!(presented, "the retry must actually reach present()");
+
+            let after_retry = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(
+                after_retry.len(),
+                2,
+                "the retry adds a second snapshot alongside the failed attempt's"
+            );
+            let retry_snapshot = &after_retry[1];
+            assert_eq!(
+                retry_snapshot.present_outcome,
+                flui_scheduler::PresentOutcome::Presented
+            );
+            assert_eq!(
+                retry_snapshot.latencies().count(),
+                1,
+                "the presented retry frame must carry the ORIGINAL input epoch -- retaining \
+                 it across the failed attempt must not have lost it"
+            );
+        }
+
+        /// Finding: `DragDrop` is stamped unconditionally before the match
+        /// on input kind, even though its own arm traces the event as
+        /// dropped without routing it anywhere or requesting a frame -- a
+        /// phantom epoch that would sit in the ring until eviction,
+        /// attributed to whatever unrelated frame happens to produce next.
+        /// Dispatches a dropped `DragDrop` event followed by a real,
+        /// routed `Pointer` event and confirms only the pointer's epoch
+        /// survives to the produced frame.
+        #[test]
+        fn drag_drop_input_is_not_stamped_since_it_is_dropped_not_routed() {
+            use flui_interaction::events::{PointerType, make_down_event};
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = mount_root_here();
+            let primary_id = realm.presentations.primary().id();
+
+            let drag_drop = PlatformInput::DragDrop(DragDropEvent::Exited {
+                id: flui_foundation::DataTransferId::new(1),
+            });
+            realm.enter(|realm| {
+                realm.handle_input_addressed(primary_id, drag_drop);
+            });
+
+            let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+            realm.enter(|realm| {
+                realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
+            });
+
+            let mut backend = AlwaysPresentBackend;
+            assert!(realm.render_frame_entered(&mut backend));
+
+            let snapshots = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(snapshots.len(), 1);
+            let latencies: Vec<_> = snapshots[0].latencies().collect();
+            assert_eq!(
+                latencies.len(),
+                1,
+                "only the routed pointer event's epoch must survive -- the dropped drag-drop \
+                 event must never have been stamped at all"
+            );
+            assert_eq!(
+                latencies[0].0.get(),
+                0,
+                "the pointer event must have minted the FIRST epoch id on this clock -- if \
+                 drag-drop had wrongly been stamped first, the pointer's own id would be 1"
             );
         }
     }

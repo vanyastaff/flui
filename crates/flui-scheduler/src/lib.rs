@@ -140,6 +140,8 @@ pub mod budget;
 pub mod config;
 pub mod frame;
 pub mod frame_clock;
+pub mod frame_histogram;
+pub mod frame_telemetry;
 pub mod scheduler;
 pub mod task;
 pub mod ticker;
@@ -158,7 +160,21 @@ pub use config::{
     PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, TimingsCallback,
     set_time_dilation, time_dilation,
 };
+/// [`FrameSnapshot::presentation`]'s type — re-exported so a consumer of
+/// this crate's frame telemetry (e.g. `flui-devtools`' `timeline` feature)
+/// can name it without an extra, redundant direct dependency on
+/// `flui-foundation` just to construct/match one of this crate's own public
+/// field types.
+pub use flui_foundation::PresentationId;
 pub use frame_clock::{ClockSource, DemandKind, DemandMask, FrameClock, PollDecision, SkipReason};
+pub use frame_histogram::{
+    LatencyHistogram, frame_interval_histogram, input_to_present_histogram,
+    produce_to_present_histogram,
+};
+pub use frame_telemetry::{
+    FRAME_HISTORY_CAPACITY, FrameSnapshot, InputEpoch, InputEpochId, InputEpochs,
+    MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
+};
 pub use post_frame::{
     LocalPostFrameHandle, LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle,
 };

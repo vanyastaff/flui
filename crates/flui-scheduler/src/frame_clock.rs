@@ -74,10 +74,39 @@
 //! `poll` reading a clock source itself) is what makes the same decision
 //! function replayable against a scripted timeline with byte-identical
 //! output on every run.
+//!
+//! # Telemetry: what a produce actually did
+//!
+//! [`stamp_input_epoch`](FrameClock::stamp_input_epoch)/
+//! [`record_frame`](FrameClock::record_frame)/
+//! [`frames_since`](FrameClock::frames_since) extend this clock's existing
+//! "frame timestamps" responsibility (see the ownership table above) with a
+//! fixed-capacity history of what each produce did and which routed inputs
+//! it carried — see `crate::frame_telemetry`'s own module doc for the full
+//! shape and the zero-allocation argument.
+//!
+//! # Deferral accounting: a Skip is never a drop
+//!
+//! [`hidden_deferrals`](FrameClock::hidden_deferrals)/
+//! [`backpressure_deferrals`](FrameClock::backpressure_deferrals) count
+//! [`poll`](FrameClock::poll) calls that retained demand rather than
+//! granting it — `Hidden`/`Backpressure`, never `NoDemand` (there is no
+//! demand to defer there). This is deliberately a SEPARATE counter family
+//! from a caller's own "frames dropped" accounting (e.g.
+//! `PresentationState::frames_dropped` in `flui-app`, incremented only on a
+//! real submit failure): a presentation that is merely gated, or waiting on
+//! GPU capacity, has not failed to produce a frame — it has deferred one,
+//! and the demand is still retained for the next successful poll. Conflating
+//! the two would make a healthy, momentarily-gated presentation look like it
+//! is failing.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
-use flui_foundation::{ManualClock, MonotonicClock};
+use crate::frame::FrameId;
+use crate::frame_telemetry::{
+    FrameHistory, FrameSnapshot, InputEpochId, InputEpochs, PendingInputEpochs, PresentOutcome,
+};
+use flui_foundation::{ManualClock, MonotonicClock, PresentationId};
 use web_time::{Duration, Instant};
 
 bitflags::bitflags! {
@@ -254,6 +283,22 @@ pub struct FrameClock {
     /// [`record_compositor_tick`](Self::record_compositor_tick) calls —
     /// `None` until at least two ticks have been recorded.
     last_compositor_tick_interval: Cell<Option<Duration>>,
+    /// How many [`poll`](Self::poll) calls returned `Skip(Hidden)` — a
+    /// deferral, never a drop. See the module doc's "Deferral accounting"
+    /// section.
+    deferred_hidden: Cell<u64>,
+    /// How many [`poll`](Self::poll) calls returned `Skip(Backpressure)` —
+    /// a deferral, never a drop. See the module doc's "Deferral accounting"
+    /// section.
+    deferred_backpressure: Cell<u64>,
+    /// Input epochs stamped since the last [`record_frame`](Self::record_frame)
+    /// drained them. `RefCell`, not `Cell`: the buffer is a small inline
+    /// array (`InputEpochs`), too large to move in and out of a `Cell` on
+    /// every push the way this struct's other fields do.
+    pending_input_epochs: RefCell<PendingInputEpochs>,
+    /// The fixed-capacity produced-frame ring. `RefCell` for the same
+    /// reason as `pending_input_epochs` above.
+    history: RefCell<FrameHistory>,
 }
 
 /// The default in-flight capacity before any raster-owner wiring configures
@@ -261,6 +306,18 @@ pub struct FrameClock {
 /// `FrameClock` constructed with no explicit call to
 /// [`FrameClock::set_max_in_flight`] already agrees with it.
 const DEFAULT_MAX_IN_FLIGHT: u8 = 2;
+
+/// The four [`FrameSnapshot`] timing fields [`FrameClock::record_frame`]/
+/// [`FrameClock::record_frame_retaining_epochs`] pass through unchanged to
+/// their shared private core — bundled purely to keep that core's own
+/// arity under clippy's `too_many_arguments` bound; not part of either
+/// public method's own signature.
+struct FrameTiming {
+    clock_timestamp: Instant,
+    segment_start: Instant,
+    segment_end: Instant,
+    submit_at: Instant,
+}
 
 impl FrameClock {
     /// A fresh clock reading the real platform clock, with an empty demand
@@ -289,6 +346,10 @@ impl FrameClock {
             redraw_requested: Cell::new(false),
             last_compositor_tick: Cell::new(None),
             last_compositor_tick_interval: Cell::new(None),
+            deferred_hidden: Cell::new(0),
+            deferred_backpressure: Cell::new(0),
+            pending_input_epochs: RefCell::new(PendingInputEpochs::default()),
+            history: RefCell::new(FrameHistory::default()),
         }
     }
 
@@ -671,24 +732,29 @@ impl FrameClock {
 
     /// The produce/skip decision for physical instant `now`.
     ///
-    /// Checked in this order: hidden, then the demand mask, then capacity
-    /// (in-flight/throttle). An empty mask is ALWAYS `Skip(NoDemand)`,
-    /// regardless of whether a throttle or in-flight limit happens to be
-    /// configured — capacity is a reason to defer demand that exists, not a
-    /// reason to invent a demand that doesn't; checking it before the mask
-    /// would misreport an idle clock (no demand at all) as backpressured
-    /// whenever a caller had ALSO configured a throttle, which is wrong on
-    /// its own terms and would undermine the demand-driven-idle invariant
-    /// this clock exists to prove (idle must read `Skip(NoDemand)` on every
-    /// pump, never `Skip(Backpressure)`, however capacity happens to be
-    /// configured). A nonzero mask always runs the segment (clearing the
-    /// mask and recording `now` as the last produce instant) — first-frame
-    /// deferral does NOT change whether the segment runs; it only changes
-    /// which of [`PollDecision::Produce`]/[`PollDecision::ProduceWithheld`]
-    /// comes back, so the caller knows whether it may submit the result.
-    /// Every `Skip` reason retains the mask untouched, except
-    /// [`SkipReason::NoDemand`] — there is nothing to retain there, it IS
-    /// the empty mask.
+    /// Checked in this order: the demand mask FIRST, then hidden, then
+    /// capacity (in-flight/throttle). An empty mask is ALWAYS
+    /// `Skip(NoDemand)`, regardless of whether hidden/a throttle/an
+    /// in-flight limit happens to be configured — hidden and capacity are
+    /// reasons to defer demand that exists, not reasons to invent a demand
+    /// that doesn't; checking either before the mask would misreport an
+    /// idle clock (no demand at all) as deferred whenever a caller had ALSO
+    /// hidden the presentation or configured a throttle, which is wrong on
+    /// its own terms and would undermine both the demand-driven-idle
+    /// invariant this clock exists to prove (idle must read
+    /// `Skip(NoDemand)` on every pump, never `Skip(Hidden)`/
+    /// `Skip(Backpressure)`, however hidden/capacity happen to be
+    /// configured) AND the deferral-accounting invariant the module doc's
+    /// "Deferral accounting" section states: `hidden_deferrals`/
+    /// `backpressure_deferrals` count demand that was RETAINED, never an
+    /// idle poll that had nothing to retain. A nonzero mask always runs the
+    /// segment (clearing the mask and recording `now` as the last produce
+    /// instant) — first-frame deferral does NOT change whether the segment
+    /// runs; it only changes which of [`PollDecision::Produce`]/
+    /// [`PollDecision::ProduceWithheld`] comes back, so the caller knows
+    /// whether it may submit the result. Every `Skip` reason retains the
+    /// mask untouched, except [`SkipReason::NoDemand`] — there is nothing
+    /// to retain there, it IS the empty mask.
     ///
     /// `now` is the caller's own responsibility to obtain from
     /// [`Self::now`] (or a shared instant several clocks/tickers observe
@@ -696,13 +762,16 @@ impl FrameClock {
     /// which is what makes a [`ClockSource::Manual`] clock's decisions
     /// exactly replayable.
     pub fn poll(&self, now: Instant) -> PollDecision {
-        if self.hidden.get() {
-            return PollDecision::Skip(SkipReason::Hidden);
-        }
         if self.demand.get().is_empty() {
             return PollDecision::Skip(SkipReason::NoDemand);
         }
+        if self.hidden.get() {
+            self.deferred_hidden.set(self.deferred_hidden.get() + 1);
+            return PollDecision::Skip(SkipReason::Hidden);
+        }
         if !self.has_capacity(now) {
+            self.deferred_backpressure
+                .set(self.deferred_backpressure.get() + 1);
             return PollDecision::Skip(SkipReason::Backpressure);
         }
 
@@ -716,6 +785,206 @@ impl FrameClock {
         } else {
             PollDecision::Produce
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Deferral accounting — see the module doc's "Deferral accounting"
+    // section for why this is a separate counter family from a caller's
+    // own "frames dropped" accounting.
+    // ------------------------------------------------------------------
+
+    /// How many `poll` calls returned `Skip(Hidden)` — demand deferred,
+    /// never dropped.
+    #[must_use]
+    pub fn hidden_deferrals(&self) -> u64 {
+        self.deferred_hidden.get()
+    }
+
+    /// How many `poll` calls returned `Skip(Backpressure)` — demand
+    /// deferred, never dropped.
+    #[must_use]
+    pub fn backpressure_deferrals(&self) -> u64 {
+        self.deferred_backpressure.get()
+    }
+
+    /// The sum of every deferral reason (never `Skip(NoDemand)`, which is
+    /// not a deferral — there was no demand to defer).
+    #[must_use]
+    pub fn produces_deferred(&self) -> u64 {
+        self.deferred_hidden.get() + self.deferred_backpressure.get()
+    }
+
+    // ------------------------------------------------------------------
+    // Telemetry — see `crate::frame_telemetry`'s module doc for the shape
+    // and the zero-allocation argument.
+    // ------------------------------------------------------------------
+
+    /// Stamp a routed input event as having arrived at `arrival` (read from
+    /// [`Self::now`], never the wall clock directly, so a
+    /// [`ClockSource::Manual`] test gets a deterministic latency
+    /// computation). Buffered until the next [`record_frame`](Self::record_frame)
+    /// drains it into whichever frame actually carries this event's effect.
+    pub fn stamp_input_epoch(&self, arrival: Instant) -> InputEpochId {
+        self.pending_input_epochs.borrow_mut().stamp(arrival)
+    }
+
+    /// Record that this clock's presentation produced and submitted a
+    /// frame: drains every pending input epoch into the new
+    /// [`FrameSnapshot`], stores it in the fixed-capacity history ring, and
+    /// returns it (handy for a caller that wants to trace-emit the exact
+    /// value just recorded without a redundant `frames_since` pull).
+    ///
+    /// `presentation` is stamped onto the returned [`FrameSnapshot`] as-is —
+    /// this clock does not know its own owning presentation's identity, so
+    /// the caller (the one presentation-scoped instance that actually
+    /// produced this frame) must supply it. Passing a DIFFERENT
+    /// presentation's id here is exactly the misattribution bug this
+    /// parameter exists to make impossible to reach silently: a caller
+    /// must name whose clock this is, not default to "whichever
+    /// presentation I happened to have a reference to."
+    ///
+    /// `frame_id` is deliberately derived from [`Self::produced_count`]
+    /// (`FrameId::zip(produced_count())`, valid because `poll` has already
+    /// incremented it by the time a caller reaches its own submit point) —
+    /// not a second, independent counter minted here, which would drift
+    /// from `produced_count` the first time the two disagreed about what
+    /// counts as a produce.
+    ///
+    /// Call this ONLY when a real submit happened (a segment that ran but
+    /// was withheld/deferred/produced no damage this pump must NOT call
+    /// this — its pending input epochs stay buffered for whichever later
+    /// pump does submit, so an event is never attributed to a frame that
+    /// never reached the screen).
+    ///
+    /// # Panics
+    ///
+    /// Panics if no frame has ever been produced by THIS clock
+    /// (`produced_count() == 0`) — the precondition above already states in
+    /// prose ("call this ONLY when a real submit happened"): a real submit
+    /// only ever follows a `poll()` that returned `Produce`/
+    /// `ProduceWithheld`, which increments `produced_count` before the
+    /// caller can reach a submit point at all.
+    pub fn record_frame(
+        &self,
+        presentation: PresentationId,
+        clock_timestamp: Instant,
+        segment_start: Instant,
+        segment_end: Instant,
+        submit_at: Instant,
+        present_outcome: PresentOutcome,
+    ) -> FrameSnapshot {
+        let input_epochs = self.pending_input_epochs.borrow_mut().drain();
+        self.record_frame_with_epochs(
+            presentation,
+            FrameTiming {
+                clock_timestamp,
+                segment_start,
+                segment_end,
+                submit_at,
+            },
+            present_outcome,
+            input_epochs,
+        )
+    }
+
+    /// Like [`Self::record_frame`], but for a submit attempt that FAILED on
+    /// a path its own caller has already armed a retry for (e.g.
+    /// `EngineError::SurfaceLost`) — reads the currently pending input
+    /// epochs into the recorded `FrameSnapshot` WITHOUT draining them, so
+    /// the eventual retry's own real [`Self::record_frame`] still finds
+    /// them and can attribute them to the frame that actually reaches the
+    /// screen. Without this, [`Self::record_frame`]'s drain on the failed
+    /// attempt would leave the retry with nothing pending, and the inputs
+    /// that arrived before the failure would never be attributed to any
+    /// frame at all.
+    ///
+    /// The failed attempt's own recorded snapshot still reports every epoch
+    /// pending at this instant (useful for diagnosing what a surface-lost
+    /// episode affected); it is the SAME epochs the retry's snapshot will
+    /// also report once it actually submits — deliberately, since both
+    /// snapshots describe real attempts to deliver those inputs' effects,
+    /// only one of which reached the screen.
+    ///
+    /// Same panic precondition as [`Self::record_frame`].
+    pub fn record_frame_retaining_epochs(
+        &self,
+        presentation: PresentationId,
+        clock_timestamp: Instant,
+        segment_start: Instant,
+        segment_end: Instant,
+        submit_at: Instant,
+        present_outcome: PresentOutcome,
+    ) -> FrameSnapshot {
+        let input_epochs = self.pending_input_epochs.borrow().peek();
+        self.record_frame_with_epochs(
+            presentation,
+            FrameTiming {
+                clock_timestamp,
+                segment_start,
+                segment_end,
+                submit_at,
+            },
+            present_outcome,
+            input_epochs,
+        )
+    }
+
+    /// Shared core of [`Self::record_frame`]/[`Self::record_frame_retaining_epochs`]:
+    /// mint this produce's `frame_id`, build the [`FrameSnapshot`], and
+    /// store it in the history ring. The only difference between the two
+    /// public callers is whether `input_epochs` came from a drain or a
+    /// peek — a decision made by the caller, not this shared core. `timing`
+    /// bundles the four `Instant` fields both callers pass through
+    /// unchanged, keeping this function's own arity within clippy's
+    /// `too_many_arguments` bound without changing either public caller's
+    /// own (pre-existing, six-`Instant`-plus-enum) signature.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no frame has ever been produced by THIS clock
+    /// (`produced_count() == 0`) — see the public callers' own docs for why
+    /// that precondition always holds by the time either is reached.
+    fn record_frame_with_epochs(
+        &self,
+        presentation: PresentationId,
+        timing: FrameTiming,
+        present_outcome: PresentOutcome,
+        input_epochs: InputEpochs,
+    ) -> FrameSnapshot {
+        let produced_count = self.produced_count();
+        let frame_id = (produced_count > 0)
+            .then(|| FrameId::zip(produced_count as usize))
+            .expect(
+                "BUG: record_frame(_retaining_epochs) called before this clock's poll() ever \
+             produced a frame -- only call this after a real submit attempt, whose produce \
+             already incremented produced_count",
+            );
+        let snapshot = FrameSnapshot {
+            presentation,
+            frame_id,
+            clock_timestamp: timing.clock_timestamp,
+            segment_start: timing.segment_start,
+            segment_end: timing.segment_end,
+            submit_at: timing.submit_at,
+            present_outcome,
+            input_epochs,
+        };
+        self.history.borrow_mut().record(&snapshot);
+        snapshot
+    }
+
+    /// Every retained [`FrameSnapshot`] with `frame_id` strictly greater
+    /// than `since` (or every retained snapshot, if `since` is `None`),
+    /// oldest first, as owned values. `Option<FrameId>` rather than a bare
+    /// `FrameId` sentinel: this workspace's IDs are 1-based `NonZeroUsize`
+    /// under the hood (see `AGENTS.md`'s ID offset pattern), so there is no
+    /// representable "before the first frame" `FrameId` to pass instead.
+    ///
+    /// Allocates a `Vec` — this is the pull side an app/devtools consumer
+    /// calls, never the frame-production path itself (see the module doc).
+    #[must_use]
+    pub fn frames_since(&self, since: Option<FrameId>) -> Vec<FrameSnapshot> {
+        self.history.borrow().since(since)
     }
 }
 
@@ -790,7 +1059,8 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // Hidden — retains the mask, outranks everything else.
+    // Hidden — retains the mask. Ranks below NoDemand (an empty mask is
+    // reported as NoDemand even while hidden) and above Backpressure.
     // ----------------------------------------------------------------
 
     #[test]
@@ -1684,5 +1954,291 @@ mod tests {
              simulated; a real sleep hiding in `poll`/`set_min_produce_interval` would blow \
              this budget"
         );
+    }
+
+    // ----------------------------------------------------------------
+    // Telemetry: input->present attribution, coalescing, and deferral
+    // accounting (vs. a caller's own "frames dropped" counter).
+    // ----------------------------------------------------------------
+
+    /// Two inputs stamped before one produce -> both survive into the
+    /// recorded frame, with the OLDER arrival carrying the LARGER latency
+    /// -- kills "last-input-wins" attribution and "epoch field exists but
+    /// is zero/None".
+    #[test]
+    fn two_inputs_before_one_produce_both_survive_with_distinct_latencies_older_larger() {
+        let (clock, manual) = manual();
+
+        let older = clock.stamp_input_epoch(manual.now());
+        manual.advance(Duration::from_millis(10));
+        let newer = clock.stamp_input_epoch(manual.now());
+
+        manual.advance(Duration::from_millis(5));
+        clock.mark_demand(DemandKind::Dirty);
+        let segment_start = manual.now();
+        assert_eq!(clock.poll(segment_start), PollDecision::Produce);
+        manual.advance(Duration::from_millis(2));
+        let segment_end = manual.now();
+        manual.advance(Duration::from_millis(3));
+        let submit_at = manual.now();
+
+        let snapshot = clock.record_frame(
+            PresentationId::new(1),
+            segment_start,
+            segment_start,
+            segment_end,
+            submit_at,
+            PresentOutcome::Presented,
+        );
+
+        let latencies: std::collections::HashMap<InputEpochId, Duration> =
+            snapshot.latencies().collect();
+        assert_eq!(
+            latencies.len(),
+            2,
+            "both inputs must survive into the record"
+        );
+        let older_latency = latencies[&older];
+        let newer_latency = latencies[&newer];
+        assert!(
+            older_latency > newer_latency,
+            "the older arrival must show the larger latency: older={older_latency:?} \
+             newer={newer_latency:?}"
+        );
+        // Exact values, not just an ordering -- kills a mutant that always
+        // reports the same (wrong) latency for every epoch. `older` arrived
+        // at t=0, `newer` at t=10ms, submit at t=20ms (10 + 5 + 2 + 3).
+        assert_eq!(older_latency, Duration::from_millis(20));
+        assert_eq!(newer_latency, Duration::from_millis(10));
+    }
+
+    /// `record_frame_retaining_epochs` must leave every pending epoch in
+    /// place for a SUBSEQUENT real `record_frame` — the property a failed
+    /// submit that its caller has already armed a retry for depends on: the
+    /// epoch that arrived before the failure must still reach the frame
+    /// that eventually presents it, not vanish into the failed attempt's
+    /// own snapshot alone.
+    #[test]
+    fn record_frame_retaining_epochs_leaves_pending_epochs_for_the_next_real_record_frame() {
+        let (clock, manual) = manual();
+
+        let arrival = manual.now();
+        let epoch_id = clock.stamp_input_epoch(arrival);
+
+        clock.mark_demand(DemandKind::Dirty);
+        let attempt_1 = manual.now();
+        assert_eq!(clock.poll(attempt_1), PollDecision::Produce);
+        let failed_snapshot = clock.record_frame_retaining_epochs(
+            PresentationId::new(1),
+            attempt_1,
+            attempt_1,
+            attempt_1,
+            attempt_1,
+            PresentOutcome::Errored,
+        );
+        assert_eq!(
+            failed_snapshot.latencies().count(),
+            1,
+            "the failed attempt's own snapshot still reports what was pending"
+        );
+
+        // Retry: a later real produce must still find the SAME epoch
+        // pending, not an empty buffer.
+        manual.advance(Duration::from_millis(5));
+        clock.mark_demand(DemandKind::Dirty);
+        let attempt_2 = manual.now();
+        assert_eq!(clock.poll(attempt_2), PollDecision::Produce);
+        let presented_snapshot = clock.record_frame(
+            PresentationId::new(1),
+            attempt_2,
+            attempt_2,
+            attempt_2,
+            attempt_2,
+            PresentOutcome::Presented,
+        );
+
+        let latencies: Vec<_> = presented_snapshot.latencies().collect();
+        assert_eq!(
+            latencies.len(),
+            1,
+            "the retry's own presented frame must carry the ORIGINAL epoch -- retaining it \
+             across the failed attempt must not have lost it"
+        );
+        assert_eq!(latencies[0].0, epoch_id);
+
+        // And it really is drained now: a third produce finds nothing left.
+        clock.mark_demand(DemandKind::Dirty);
+        let attempt_3 = manual.now();
+        assert_eq!(clock.poll(attempt_3), PollDecision::Produce);
+        let third_snapshot = clock.record_frame(
+            PresentationId::new(1),
+            attempt_3,
+            attempt_3,
+            attempt_3,
+            attempt_3,
+            PresentOutcome::Presented,
+        );
+        assert_eq!(
+            third_snapshot.latencies().count(),
+            0,
+            "the epoch must not be attributed a SECOND time to a later, unrelated frame"
+        );
+    }
+
+    /// A synthetic input at a known scripted time, one produced frame -> the
+    /// exported record's latency equals (submit - arrival) exactly, within
+    /// zero tolerance under a `ManualClock` (no wall-clock jitter to admit
+    /// any tolerance at all).
+    #[test]
+    fn end_to_end_attribution_latency_equals_submit_minus_arrival_exactly() {
+        let (clock, manual) = manual();
+
+        let arrival = manual.now();
+        let epoch_id = clock.stamp_input_epoch(arrival);
+
+        manual.advance(Duration::from_millis(7));
+        clock.mark_demand(DemandKind::Dirty);
+        let now = manual.now();
+        assert_eq!(clock.poll(now), PollDecision::Produce);
+
+        manual.advance(Duration::from_millis(4));
+        let submit_at = manual.now();
+        let snapshot = clock.record_frame(
+            PresentationId::new(1),
+            now,
+            now,
+            now,
+            submit_at,
+            PresentOutcome::Presented,
+        );
+
+        let latencies: Vec<(InputEpochId, Duration)> = snapshot.latencies().collect();
+        assert_eq!(latencies.len(), 1);
+        assert_eq!(latencies[0].0, epoch_id);
+        assert_eq!(latencies[0].1, Duration::from_millis(11));
+    }
+
+    /// `frames_since` returns the recorded snapshot, and a second `None`
+    /// pull after a fresh `record_frame` with no new input excludes the
+    /// already-seen one when queried with `since` -- proves the pull API
+    /// is a real filter, not a constant "return everything" stub.
+    #[test]
+    fn frames_since_filters_by_frame_id() {
+        let (clock, manual) = manual();
+
+        clock.mark_demand(DemandKind::Dirty);
+        let now = manual.now();
+        assert_eq!(clock.poll(now), PollDecision::Produce);
+        let first = clock.record_frame(
+            PresentationId::new(1),
+            now,
+            now,
+            now,
+            now,
+            PresentOutcome::Presented,
+        );
+
+        manual.advance(Duration::from_millis(16));
+        clock.mark_demand(DemandKind::Dirty);
+        let now2 = manual.now();
+        assert_eq!(clock.poll(now2), PollDecision::Produce);
+        let second = clock.record_frame(
+            PresentationId::new(1),
+            now2,
+            now2,
+            now2,
+            now2,
+            PresentOutcome::Presented,
+        );
+
+        assert_eq!(clock.frames_since(None).len(), 2);
+        let recent = clock.frames_since(Some(first.frame_id));
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].frame_id, second.frame_id);
+    }
+
+    /// A backpressure episode retains demand (never dropped) and is counted
+    /// on the clock's own deferral stat -- NOT on a caller's separate
+    /// "frames dropped" counter, which this clock does not own and never
+    /// touches. Pins `Skip(Backpressure)` vs "dropped" semantics at the
+    /// level this clock actually controls.
+    #[test]
+    fn backpressure_deferral_is_counted_separately_and_never_looks_like_a_dropped_frame() {
+        let (clock, manual) = manual();
+        clock.set_max_in_flight(1);
+        clock.record_submit(); // saturate capacity
+
+        clock.mark_demand(DemandKind::Dirty);
+        assert_eq!(
+            clock.poll(manual.now()),
+            PollDecision::Skip(SkipReason::Backpressure)
+        );
+        assert_eq!(clock.backpressure_deferrals(), 1);
+        assert_eq!(clock.hidden_deferrals(), 0);
+        assert_eq!(clock.produces_deferred(), 1);
+        assert!(
+            !clock.demand_mask().is_empty(),
+            "backpressure must retain demand, never silently drop it"
+        );
+
+        // Capacity frees; the SAME retained demand now produces -- proving
+        // this was a deferral (demand survived), not a drop (which would
+        // have nothing left to produce from).
+        clock.record_retire();
+        assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
+    }
+
+    /// `Skip(NoDemand)` is not a deferral -- an idle clock's poll must
+    /// leave every deferral counter at zero. Kills a mutant that counts
+    /// every Skip reason as a deferral.
+    #[test]
+    fn no_demand_skip_is_not_counted_as_a_deferral() {
+        let (clock, manual) = manual();
+        assert_eq!(
+            clock.poll(manual.now()),
+            PollDecision::Skip(SkipReason::NoDemand)
+        );
+        assert_eq!(clock.produces_deferred(), 0);
+        assert_eq!(clock.hidden_deferrals(), 0);
+        assert_eq!(clock.backpressure_deferrals(), 0);
+    }
+
+    /// `Skip(Hidden)` is counted on `hidden_deferrals` specifically, not
+    /// folded into `backpressure_deferrals`.
+    #[test]
+    fn hidden_deferral_is_counted_on_its_own_reason() {
+        let (clock, manual) = manual();
+        clock.set_hidden(true);
+        clock.mark_demand(DemandKind::Dirty);
+        assert_eq!(
+            clock.poll(manual.now()),
+            PollDecision::Skip(SkipReason::Hidden)
+        );
+        assert_eq!(clock.hidden_deferrals(), 1);
+        assert_eq!(clock.backpressure_deferrals(), 0);
+    }
+
+    /// A hidden clock with NO demand marked must read `Skip(NoDemand)`, not
+    /// `Skip(Hidden)` — hidden alone, with nothing to retain, is not a
+    /// deferral. Kills the ordering bug where `poll` checked `hidden`
+    /// before the demand mask: `hidden_deferrals` would then increment on
+    /// every idle pump of a hidden (but otherwise settled) presentation,
+    /// contradicting this module's own "Deferral accounting" doc (a
+    /// deferral tracks RETAINED demand, and an empty mask retains nothing).
+    #[test]
+    fn hidden_and_idle_is_no_demand_not_a_hidden_deferral() {
+        let (clock, manual) = manual();
+        clock.set_hidden(true);
+        assert_eq!(
+            clock.poll(manual.now()),
+            PollDecision::Skip(SkipReason::NoDemand),
+            "hidden with nothing dirty must report NoDemand, never Hidden"
+        );
+        assert_eq!(
+            clock.hidden_deferrals(),
+            0,
+            "an idle poll must never be counted as a hidden deferral, even while hidden"
+        );
+        assert_eq!(clock.produces_deferred(), 0);
     }
 }

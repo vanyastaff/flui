@@ -33,6 +33,25 @@ impl Default for DiagnosticsProfile {
 ///
 /// Use this to customize the app window and behavior.
 ///
+/// # Frame pacing has no field here
+///
+/// `vsync`/`target_fps` fields previously lived here, advisory-only and
+/// never wired to the real present path — issue #556 removed the unwired
+/// `vsync`/`target_fps` fields rather than leave a persistently misleading
+/// shape a caller could reasonably expect to govern pacing. Both are
+/// removed, not deprecated, and the checker mechanically enforces that
+/// absence (`docs/runtime-contract.toml`'s `frame-config-effective-or-removed`
+/// contract, `forbidden_pattern` entries below). `flui_engine::RasterOptions`
+/// (`target_frame_rate`, `max_frames_in_flight`) is the SHAPE a future
+/// production frame-pacing surface would take, not one that governs
+/// anything today: `RasterOwner` reads its own `RasterOptions` field for
+/// nothing (`crates/flui-engine/src/raster_owner.rs`'s own doc: "this module
+/// never acts on it"), and `FrameClock::set_min_produce_interval`/
+/// `set_max_in_flight` have zero callers outside this workspace's own test
+/// code. There is no field here to remove-or-wire because there is no
+/// consumer downstream to wire it to yet — that consumer is #559's job, not
+/// a claim this removal gets to make in the meantime.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -80,36 +99,6 @@ pub struct AppConfig {
     /// (or a post-creation `toggle_fullscreen` call keyed off this field)
     /// grows the plumbing end to end.
     pub fullscreen: bool,
-
-    /// Whether to enable vsync.
-    ///
-    /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
-    /// drops this field. `UiRealm::vsync()`/`VsyncScope` is an unrelated
-    /// animation-ticker registry, not the GPU present mode — do not confuse
-    /// the two. The intended consumer is `flui-engine`'s
-    /// `select_present_mode`, which today always chooses `Fifo` regardless of
-    /// this value.
-    pub vsync: bool,
-
-    /// Advisory target frame rate (FPS) — **not enforced pacing**.
-    ///
-    /// The desktop runner's steady-state pacing comes from the GPU-side
-    /// blocking Fifo present (`flui-engine::wgpu::Renderer::render_scene`
-    /// blocks in `present()` until the next vsync for every frame that
-    /// actually presents), not from this value. Consumer audit (App.1
-    /// vsync pacing):
-    /// - `run_app_with_config_impl` logs it (`target_fps_advisory`) at
-    ///   startup; informational only.
-    /// - `flui-platform`'s `PlatformCapabilities::default_target_fps` is a
-    ///   platform-reported hint (e.g. `120` for a ProMotion display) that
-    ///   nothing currently reads into this field — `AppConfig::default`
-    ///   hardcodes `60` regardless of platform.
-    ///
-    /// The one place a target-fps-shaped value governs anything real is
-    /// the no-present fallback throttle in `runner.rs`'s `run_desktop`
-    /// (a fixed ~1/60s constant, not derived from this field) — see the
-    /// frame-pacing ADR.
-    pub target_fps: u32,
 
     /// Whether to show the performance overlay — FPS and average frame time,
     /// drawn over the app's own content.
@@ -170,8 +159,6 @@ impl Default for AppConfig {
             resizable: true,
             decorations: true,
             fullscreen: false,
-            vsync: true,
-            target_fps: 60,
             show_performance_overlay: false,
             debug_paint: false,
             #[cfg(feature = "hot-reload")]
@@ -242,19 +229,6 @@ impl AppConfig {
         self
     }
 
-    /// Set whether to enable vsync.
-    pub fn with_vsync(mut self, vsync: bool) -> Self {
-        self.vsync = vsync;
-        self
-    }
-
-    /// Set the advisory target frame rate. See [`AppConfig::target_fps`] —
-    /// this does not change how the frame loop is paced.
-    pub fn with_target_fps(mut self, fps: u32) -> Self {
-        self.target_fps = fps;
-        self
-    }
-
     /// Enable performance overlay.
     pub fn with_performance_overlay(mut self, show: bool) -> Self {
         self.show_performance_overlay = show;
@@ -306,7 +280,6 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(config.title, "FLUI App");
         assert_eq!(config.application_identity.display_name(), "FLUI App");
-        assert_eq!(config.target_fps, 60);
         assert!(config.resizable);
         #[cfg(feature = "hot-reload")]
         assert!(config.worker_plugin_path.is_none());
