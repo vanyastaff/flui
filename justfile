@@ -100,30 +100,34 @@ wasm-link-check:
       target/wasm32-unknown-unknown/debug/flui_web_demo.wasm \
       target/wasm32-unknown-unknown/debug/flui_painting_demo.wasm
 
-# `cargo check` does not link, so the per-OS backends in flui-platform can be
+# `cargo clippy` does not link, so the per-OS backends in flui-platform can be
 # type-checked from any host. Without this they are only ever compiled by
 # whoever happens to develop on that OS — which is how the Windows backend
-# came to have a hard `missing_docs` error and both backends accumulated
-# missing Debug impls that no gate could see.
+# came to have a hard `missing_docs` error, both desktop backends accumulated
+# missing Debug impls, and Android accumulated ~24 more of its own (found the
+# day it joined this matrix) that no gate could see.
 #
 # The triples are the ones actually shipped: MSVC (what `gpu-test` runs on
-# windows-latest), not the GNU ABI, and aarch64 for macOS. `--all-targets` so
-# per-OS test targets are compiled too — omitting it is what made live code
-# look dead on wasm32.
+# windows-latest), not the GNU ABI, aarch64 for macOS, and aarch64 for
+# Android. `--all-targets` so per-OS test targets are compiled too — omitting
+# it is what made live code look dead on wasm32.
 #
-# LINT, NO LINK: clippy (not plain check) because cfg(windows)/cfg(macos)
-# code is invisible to every other lint gate — check-only let ~80 deny-level
-# violations accumulate unseen. It still does not link and runs no tests. The
-# `test` job's dedicated flui-platform step only runs the Linux-buildable
-# backends (headless + winit-on-X11); the Windows/macOS backends this lints
-# are never linked or executed by anything else. Green here means "compiles
-# clean under the workspace lints", nothing more.
-# Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
+# LINT, NO LINK: clippy (not plain check) because cfg(windows)/cfg(macos)/
+# cfg(target_os = "android") code is invisible to every other lint gate —
+# check-only let ~80 deny-level violations accumulate unseen on Windows/macOS
+# and a further ~24 on Android. It still does not link and runs no tests —
+# Android's own build needs the NDK's cross-linker, which `cargo clippy`
+# never reaches. The `test` job's dedicated flui-platform step only runs the
+# Linux-buildable backends (headless + winit-on-X11); the Windows, macOS, and
+# Android backends this lints are never linked or executed by anything else.
+# Green here means "compiles clean under the workspace lints", nothing more.
+# Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android
 [group("build")]
-[doc("Clippy flui-platform's Windows and macOS backends from this host (mirrors the CI cross-typecheck job)")]
+[doc("Clippy flui-platform's Windows, macOS, and Android backends from this host (mirrors the CI cross-typecheck job)")]
 cross-typecheck:
     cargo clippy -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
     cargo clippy -p flui-platform --locked --all-targets --target aarch64-apple-darwin -- -D warnings
+    cargo clippy -p flui-platform --locked --all-targets --target aarch64-linux-android -- -D warnings
 
 # =============================================================================
 # Testing
@@ -511,7 +515,7 @@ watch-test crate="":
 # their own recipes — run them deliberately before pushing risky changes:
 #   just feature-matrix   (per-feature clippy, minutes)
 #   just wasm-check       (wasm32 target check)
-#   just cross-typecheck  (windows + macos backends, type-check only)
+#   just cross-typecheck  (windows + macos + android backends, type-check only)
 #   just deny             (advisories / bans / licenses / sources)
 #   just miri             (nightly UB check, narrow scope — see its comment)
 [group("ci")]
