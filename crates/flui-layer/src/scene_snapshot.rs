@@ -59,7 +59,8 @@ pub enum DamageRegion {
 /// here rather than silently drop. What genuinely improved: a positional
 /// constructor argument list of five collapses to three
 /// (`SceneSnapshot::new(stamp, damage, scene)`), and a future field on
-/// `FrameStamp` breaks three call sites in `flui-engine` today, each named
+/// `FrameStamp` breaks six call sites today — across `flui-foundation`,
+/// this crate (the stamp helper below) and `flui-engine` — each named
 /// directly by the compiler, rather than an unbounded set of external
 /// callers. Smaller and compiler-guided, not additive.
 #[non_exhaustive]

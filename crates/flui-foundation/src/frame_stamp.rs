@@ -21,10 +21,17 @@
 //! decision 4's later `ResourceGeneration` axis cannot be optional (the
 //! decision requires both generations to be checked before a frame
 //! renders). Adding that field will change [`FrameStamp::new`]'s signature
-//! and break every call site that calls it — three today, each one named
-//! directly by the compiler as a type or arity mismatch: the
-//! `raster_owner.rs` test helper, the `raster_backpressure` bench, and the
-//! `raster_backpressure_allocation` integration test (all in `flui-engine`).
+//! and break every call site that calls it — **six today, across three
+//! crates**, each named directly by the compiler as an arity mismatch: this
+//! module's own unit test and its positive doctest (`flui-foundation`);
+//! `scene_snapshot.rs`'s stamp helper (`flui-layer`); and the
+//! `raster_owner.rs` test helper, the `raster_backpressure` bench and the
+//! `raster_backpressure_allocation` integration test (`flui-engine`). The
+//! `compile_fail` doctest below is a seventh site and needs different
+//! handling — see its own note. An earlier revision of this paragraph said
+//! "three, all in `flui-engine`"; the compiler names six, and a paragraph
+//! whose whole purpose is to be the trustworthy version of a claim that was
+//! previously untrustworthy has to survive being checked.
 //! That is a real, compiler-guided, small-blast-radius breaking change —
 //! narrowed from five positional arguments (`SceneSnapshot`'s own former
 //! shape) to three, not eliminated — and no amount of builder ceremony
@@ -105,6 +112,14 @@ impl FrameStamp {
     /// Swapping `epoch` and `surface_generation` — the two fields whose
     /// underlying representation looks alike (both wrap a `u64` counter) —
     /// does not compile:
+    ///
+    /// **This block goes vacuous the moment a fourth field lands.** It would
+    /// then fail on arity rather than on the type transposition its comment
+    /// names, and keep reporting success while testing nothing. Whoever adds
+    /// ADR-0045 decision 4's `resource_generation` axis must update this
+    /// block along with the six ordinary call sites, and re-confirm the
+    /// failure is still `E0308` — a `compile_fail` that fails for the wrong
+    /// reason is the trap this workspace has already shipped once.
     ///
     /// ```compile_fail
     /// use flui_foundation::{
