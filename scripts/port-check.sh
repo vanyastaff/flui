@@ -149,8 +149,7 @@ if [[ "${budget}" -eq 1 ]]; then
   # summary tail uses. This was previously three inline `grep -E -c` pipes
   # that diverged from `count_markers` on tab-indented markers (the inline
   # form anchored on `\s+`, the helper passed the kind string directly to
-  # rg). Maintainability finding on PR #150 — single source of truth for
-  # the count semantics.
+  # rg). One helper is the single source of truth for the count semantics.
   total_todo=$(count_markers "TODO(port)" crates/)
   total_perf=$(count_markers "PERF(port)" crates/)
   total_note=$(count_markers "PORT NOTE"  crates/)
