@@ -2281,26 +2281,66 @@ impl UiRealm {
                 }
                 Err(EngineError::DeviceLost) => {
                     producer.record_frame_dropped();
+                    // `Retain`, not `Drain`: this arm now arms a retry
+                    // (`retry_needed = true` below), and the eventual real
+                    // submit that retry produces must still find the epochs
+                    // that arrived before this failure — see
+                    // `record_submit_telemetry`'s own doc.
                     Self::record_submit_telemetry(
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
-                        EpochDisposition::Drain,
+                        EpochDisposition::Retain,
                     );
+                    // Division of labor with the platform runner's own
+                    // recovery wake (`render_frame_with_device_recovery` in
+                    // `runner.rs`): this arm only ever runs once
+                    // `render_scene` was actually called, i.e. there was
+                    // dirty content to submit — it owns the retry for a
+                    // loss OBSERVED MID-FRAME, for every `RasterBackend`
+                    // consumer (headless included), not just the desktop/
+                    // Android runners. A loss discovered on a quiescent
+                    // loop, before anything is dirty enough to reach
+                    // `render_scene` at all, never reaches this arm
+                    // (`draw_frame_entered` produces `Idle`, nothing to
+                    // submit) — that gap is what the runner's own wake on a
+                    // FAILED pre-frame recovery attempt covers instead. The
+                    // two are non-overlapping, not redundant.
+                    retry_needed = true;
                     tracing::warn!(
-                        "GPU device lost — recovery will be attempted by the platform runner"
+                        "GPU device lost; frame dropped — retry armed, recovery is \
+                         attempted by the renderer owner"
                     );
                 }
                 Err(EngineError::SurfaceValidation) => {
                     producer.record_frame_dropped();
+                    // `Retain`, not `Drain`: this arm now arms a retry, and
+                    // the eventual real submit that retry produces must
+                    // still find the epochs that arrived before this
+                    // failure — see `record_submit_telemetry`'s own doc.
                     Self::record_submit_telemetry(
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
-                        EpochDisposition::Drain,
+                        EpochDisposition::Retain,
                     );
+                    // Retry armed for the same reason as `DeviceLost`
+                    // above. NOTE: as of this change the wgpu backend does
+                    // NOT yet reconfigure the surface before the retry's
+                    // own acquire attempt — `Renderer::acquire_surface_
+                    // texture`'s `Validation` arm gaining its own
+                    // reconfigure-and-retry-once (with its own test) ships
+                    // separately. Until it lands, an armed retry here
+                    // re-attempts the identical acquire and may keep
+                    // failing; arming it anyway is still strictly better
+                    // than the alternative (a permanently dropped frame
+                    // with nothing ever retrying it), and gives a
+                    // transient validation error the chance to clear on a
+                    // later wake.
+                    retry_needed = true;
                     tracing::error!(
-                        "Surface validation error — surface misconfig; external reconfigure required"
+                        "Surface validation error — surface misconfig; retry armed for \
+                         the next wake"
                     );
                 }
                 Err(e) => {
@@ -5381,6 +5421,51 @@ mod tests {
         }
 
         #[test]
+        fn device_lost_keeps_needs_redraw_armed_for_a_retry() {
+            let realm = mount_root();
+            let mut backend = ScriptedRasterBackend::new(Err(EngineError::DeviceLost));
+
+            realm.mark_rendered();
+            let presented = realm.render_frame_entered(&mut backend);
+
+            assert!(!presented, "a DeviceLost frame never reaches present()");
+            assert_eq!(
+                backend.render_scene_calls, 1,
+                "precondition: the mounted scene actually reached render_scene"
+            );
+            assert!(
+                realm.needs_redraw(),
+                "a dropped DeviceLost frame must re-arm needs_redraw: rebuilding the \
+                 device is the renderer owner's job, but on a quiescent loop nothing \
+                 else would ever wake the owner to retry the recovery"
+            );
+        }
+
+        #[test]
+        fn surface_validation_keeps_needs_redraw_armed_for_a_retry() {
+            let realm = mount_root();
+            let mut backend = ScriptedRasterBackend::new(Err(EngineError::SurfaceValidation));
+
+            realm.mark_rendered();
+            let presented = realm.render_frame_entered(&mut backend);
+
+            assert!(
+                !presented,
+                "a SurfaceValidation frame never reaches present()"
+            );
+            assert_eq!(
+                backend.render_scene_calls, 1,
+                "precondition: the mounted scene actually reached render_scene"
+            );
+            assert!(
+                realm.needs_redraw(),
+                "a dropped SurfaceValidation frame must re-arm needs_redraw so a later \
+                 wake gets another acquire attempt instead of parking the misconfigured \
+                 surface forever"
+            );
+        }
+
+        #[test]
         fn a_successful_frame_still_clears_needs_redraw() {
             let realm = mount_root();
             let mut backend = ScriptedRasterBackend::new(Ok(true));
@@ -7325,6 +7410,35 @@ mod tests {
             }
         }
 
+        /// A raster backend that always reports `DeviceLost` — this
+        /// module's own minimal double for
+        /// `device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`
+        /// below, kept separate from [`AlwaysErrorsBackend`] (which is
+        /// dedicated to the `SurfaceLost` pin) so each test's backend name
+        /// says exactly which failure it scripts.
+        struct AlwaysDeviceLostBackend;
+
+        impl RasterBackend for AlwaysDeviceLostBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                Err(EngineError::DeviceLost)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
         /// END-STATE INVARIANT: at N=1 -- a clock that is
         /// never hidden and never backpressured -- the segment gate's
         /// decision (`clock.poll().should_run_segment()`, fed `Dirty`
@@ -8794,6 +8908,78 @@ mod tests {
             // driver loop would eventually have from whatever caused this
             // presentation to need a NEW frame. Mark the root dirty
             // directly, standing in for that external cause.
+            let primary = realm.presentations.primary();
+            primary.renderer().root_pipeline_owner().with_mut(|owner| {
+                if let Some(root_id) = owner.root_id() {
+                    owner.mark_needs_layout(root_id);
+                }
+            });
+            primary.mark_redraw_pending();
+            let mut succeeding_backend = AlwaysPresentBackend;
+            let presented = realm.render_frame_entered(&mut succeeding_backend);
+            assert!(presented, "the retry must actually reach present()");
+
+            let after_retry = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(
+                after_retry.len(),
+                2,
+                "the retry adds a second snapshot alongside the failed attempt's"
+            );
+            let retry_snapshot = &after_retry[1];
+            assert_eq!(
+                retry_snapshot.present_outcome,
+                flui_scheduler::PresentOutcome::Presented
+            );
+            assert_eq!(
+                retry_snapshot.latencies().count(),
+                1,
+                "the presented retry frame must carry the ORIGINAL input epoch -- retaining \
+                 it across the failed attempt must not have lost it"
+            );
+        }
+
+        /// The `DeviceLost` counterpart to
+        /// `surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`
+        /// above: before this change, `DeviceLost` used `EpochDisposition::Drain`
+        /// unconditionally AND never armed a retry, so this pin would have been
+        /// meaningless either way — a mistaken `Drain` on this arm is caught
+        /// here, not just by inspection. Drives the same
+        /// input -> failure -> retry -> attribution sequence, substituting
+        /// `DeviceLost` for `SurfaceLost`.
+        #[test]
+        fn device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
+            use flui_interaction::events::{PointerType, make_down_event};
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = mount_root_here();
+            let primary_id = realm.presentations.primary().id();
+
+            let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+            realm.enter(|realm| {
+                realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
+            });
+
+            // First attempt: the device is lost. A retry is armed, and the
+            // failed attempt's own snapshot must still see the epoch that
+            // was pending (diagnostic value), but must NOT consume it.
+            let mut failing_backend = AlwaysDeviceLostBackend;
+            let presented = realm.render_frame_entered(&mut failing_backend);
+            assert!(!presented, "DeviceLost never reaches present()");
+            let after_failure = realm.presentations.primary().clock().frames_since(None);
+            assert_eq!(
+                after_failure.len(),
+                1,
+                "the failed attempt is still recorded, for diagnostics"
+            );
+            assert_eq!(
+                after_failure[0].latencies().count(),
+                1,
+                "the failed attempt's own snapshot still reports the pending epoch"
+            );
+
+            // Retry: standing in for the renderer owner's recovery + wake,
+            // same as the `SurfaceLost` pin above -- mark the root dirty
+            // directly rather than actually rebuilding a device.
             let primary = realm.presentations.primary();
             primary.renderer().root_pipeline_owner().with_mut(|owner| {
                 if let Some(root_id) = owner.root_id() {
