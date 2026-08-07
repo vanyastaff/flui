@@ -6,8 +6,7 @@
 # sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
 # guard, Cross.H2 canonical-type-home guards, the Cross.H3
 # live-BuildContext guard, the Cross.H7 speculative scheduler surface guard,
-# the ADR-0027/ADR-0037 ownership-surface guards, and the ADR-0045
-# renderer-Send-narrowing guard. Exits non-zero on the first
+# and the ADR-0027/ADR-0037 ownership-surface guards. Exits non-zero on the first
 # violation outside the whitelist; prints
 # the offending file:line and the trigger ID.
 # Triggers
@@ -892,23 +891,14 @@ check "ADR-0037/focus-owner" \
   crates/flui-material \
   crates/flui-app
 
-# ADR-0045 decision 1 guard — `Renderer: Send` must stay a compiler
-# derivation, not a blanket hand-written assertion.
-#
-# The old `unsafe impl Send for Renderer {}` asserted `Send` for every
-# present *and future* field while its SAFETY comment reasoned about only
-# two (`raw_window_handle`, `raw_display_handle`). It was narrowed to a
-# private `RawHandles` newtype carrying just those two fields, so
-# `Renderer` now derives `Send` automatically and a future `!Send` field
-# left outside `RawHandles` fails `cargo check` on its own. Re-adding
-# `unsafe impl Send for Renderer` directly re-widens the assertion back to
-# every field, silently, exactly as before — this guard catches it at the
-# source instead of relying on someone noticing in review.
-check "ADR-0045/renderer-send-narrow" \
-  "blanket unsafe impl Send for Renderer reintroduced (narrow to RawHandles instead)" \
-  'unsafe\s+impl\s+Send\s+for\s+Renderer\b' \
-  --type rust \
-  crates/flui-engine/src/wgpu/renderer.rs
+# ADR-0045 decision 1's `Renderer: Send` re-widening guard lives in
+# `docs/runtime-contract.toml` as a `forbidden_pattern` entry, right next
+# to the pre-existing sibling `unsafe impl Sync for Renderer` entry —
+# checked by `just runtime-conformance-check`, not here. That scan is
+# workspace-wide by default (this trigger's file-scoped `check()` would
+# have missed a reintroduction landing in a different file of the crate),
+# so the two Renderer concurrency guards live at one audit point instead
+# of being split across two different mechanisms.
 
 # -----------------------------------------------------------------------------
 # Trigger 12 — lock placement in public API.
@@ -1620,7 +1610,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 22 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner + ADR-0045/renderer-send-narrow grep clean"
+echo "port-check: all 22 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

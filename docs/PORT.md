@@ -272,28 +272,14 @@ Flutter-port trigger.
 
 **Back-reference:** [ADR-0037](adr/ADR-0037-presentation-ownership-domains.md).
 
-### ADR-0045 decision 1 guard. `Renderer: Send` stays a compiler derivation
-
-The old `unsafe impl Send for Renderer {}` in `crates/flui-engine/src/wgpu/renderer.rs`
-was blanket — it asserted `Send` for every present and future field while its
-SAFETY comment reasoned about exactly two (`raw_window_handle`,
-`raw_display_handle`). It was narrowed to a private `RawHandles` newtype
-carrying just those two fields, so `Renderer` now derives `Send` from its
-field types instead, and a future `!Send` field left outside `RawHandles`
-fails `cargo check` on its own rather than silently riding a re-widened
-blanket assertion.
-
-**Forbidden:** `unsafe impl Send for Renderer` reintroduced directly on the
-struct. `unsafe impl Send for RawHandles` (the narrowed, sanctioned form) does
-not match.
-
-**Scope:** `crates/flui-engine/src/wgpu/renderer.rs`.
-
-**Enforcement:** `scripts/port-check.sh`, reported as
-`ADR-0045/renderer-send-narrow`. This is an extra architecture guard, not a
-new Flutter-port trigger.
-
-**Back-reference:** [ADR-0045](adr/ADR-0045-raster-lane.md) decision 1.
+Note: ADR-0045 decision 1's `Renderer: Send` re-widening guard is **not**
+here — it lives in `docs/runtime-contract.toml` as a `forbidden_pattern`
+entry next to the pre-existing sibling `unsafe impl Sync for Renderer`
+entry, checked by `just runtime-conformance-check`. That scanner is
+workspace-wide by default, closing a same-crate-but-different-file
+reintroduction that a `port-check.sh` `check()` scoped to one file would
+have missed; keeping both `Renderer` concurrency guards on one audit point
+was chosen deliberately over splitting them across two mechanisms.
 
 ### 12. Lock placement in public API
 

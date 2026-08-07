@@ -6,7 +6,7 @@
 //! `Renderer`'s fields are private, so this cannot literally add a field to
 //! `Renderer` from an external fixture; it pins the general mechanism that
 //! makes an un-wrapped `!Send` field a compile error instead of silently
-//! riding a re-widened blanket `unsafe impl Send for Renderer`. See
+//! riding a re-widened blanket `Send` impl on `Renderer` itself. See
 //! `Renderer: Send` itself pinned unconditionally (not just here) via
 //! `static_assertions::assert_impl_all!` in `src/wgpu/renderer.rs`.
 

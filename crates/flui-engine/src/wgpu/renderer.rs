@@ -182,8 +182,8 @@ struct WindowedGpuStack {
 /// manual `unsafe impl Send` reasons about exactly these two fields — see
 /// its SAFETY comment below — rather than asserting `Send` for every field
 /// `Renderer` has today *and every field it gains later* (ADR-0045
-/// decision 1: the old `unsafe impl Send for Renderer` was blanket while
-/// its SAFETY comment reasoned about only these two handles).
+/// decision 1: the old blanket `Send` impl on `Renderer` itself reasoned
+/// about only these two handles).
 struct RawHandles {
     /// `None` for offscreen renderers.
     window: Option<raw_window_handle::RawWindowHandle>,
@@ -191,22 +191,106 @@ struct RawHandles {
     display: Option<raw_window_handle::RawDisplayHandle>,
 }
 
-// SAFETY: The handles are:
-//   1. Extracted once at construction from the live window (or `None` for
-//      offscreen renderers).
-//   2. Read only inside `Renderer::recover(&mut self)`, which requires
-//      exclusive access — no two threads can call `recover` concurrently on
-//      the same `Renderer`.
-//   3. Never sent to another thread while they are being dereferenced; the
-//      dereferencing happens only inside the `unsafe` block in
-//      `Renderer::build_windowed_gpu_stack`, which runs in the same logical
-//      context as the caller holding `&mut self`.
-// This is the same Send posture that wgpu itself uses for its internal raw-handle
-// wrappers: the window pointer is accessed exclusively and never aliased across
-// threads. The owning window (flui-app's `App`) is alive for the lifetime of the
-// `Renderer`, satisfying the validity requirement.
+// SAFETY: `RawHandles` is Plain-Old-Data -- two `Copy` enums, no pointee is
+// touched by relocating the value itself, so *moving* it to another thread
+// cannot race or corrupt memory on its own. That is the whole of what
+// `Send` promises; it says nothing about which thread may legally *use*
+// the pointee, and this crate's one consumer of these fields
+// (`Renderer::recover`, via `build_windowed_gpu_stack` and its
+// `create_surface_unsafe` call) does dereference them, exclusively under
+// `&mut self` (no two threads can call `recover` concurrently on the same
+// `Renderer`). Per platform, checked against the crates actually in this
+// workspace's dependency graph rather than assumed:
+//
+// - **Win32** (`Win32WindowHandle` / `WindowsDisplayHandle`): the HWND is
+//   an opaque value (`NonZeroIsize`), not a pointer into thread-owned
+//   memory; raw-window-handle 0.6.2 itself asserts
+//   `Win32WindowHandle: Send + Sync` (src/lib.rs:482). Creating a DXGI
+//   swap chain against an HWND from a thread other than the one that
+//   created the window is a documented, widely used pattern -- the
+//   message-loop is the HWND's only thread-affine property, and nothing
+//   here posts messages. `WindowsDisplayHandle` is a zero-field marker
+//   (raw-window-handle src/windows.rs) -- nothing to invalidate.
+// - **AppKit** (`AppKitWindowHandle` / `AppKitDisplayHandle`): **not safe
+//   to dereference off the main thread today.** raw-window-handle 0.6.2
+//   documents this directly -- "NSView can only be accessed from the main
+//   thread of the application. This struct is `!Send` and `!Sync` to help
+//   with ensuring that" (src/appkit.rs:48-49) -- and wgpu-hal 29.0.4's
+//   Metal backend enforces it in code: `Instance::create_surface`
+//   (src/metal/mod.rs:161) calls `raw_window_metal::Layer::from_ns_view`,
+//   which panics via `MainThreadMarker::new().expect(..)` off the main
+//   thread (raw-window-metal 1.1.0 src/lib.rs:402-403).
+//   `AppKitDisplayHandle` is itself a zero-field marker, so the display
+//   half is inert; the window half is the hazard. **This means
+//   `Renderer::recover()` -- which ADR-0045 decision 1 designates
+//   raster-affine -- cannot run on a non-main raster thread on AppKit
+//   without hitting this panic.** That is a gap between this narrowing and
+//   decision 1's stated plan, not something this argument papers over: it
+//   is a known, reported, open finding against the ADR, not resolved by
+//   this impl. `Send` itself stays sound (relocating the bytes alone does
+//   nothing), but a raster-thread `recover()` call is not safe to reach on
+//   this platform yet.
+// - **X11 via winit's fallback backend** (`XlibWindowHandle` /
+//   `XlibDisplayHandle`): safe. `XlibWindowHandle` (the window XID) is
+//   already `Send + Sync` per raw-window-handle's own assertions
+//   (src/lib.rs:477). The `Display*` in `XlibDisplayHandle` is the
+//   pointer winit's `XConnection::new` opens; winit 0.30.13 calls
+//   `(xlib.XInitThreads)()` unconditionally before `XOpenDisplay`
+//   (src/platform_impl/linux/x11/xdisplay.rs:76) and itself asserts
+//   `unsafe impl Send for XConnection {}` / `Sync` on that identical
+//   pointer (same file, :62-63) -- winit's own authors made and shipped
+//   this exact judgment call already. The connection is opened once and
+//   shared for the life of the event loop, which outlives every window
+//   built from it, so the pointer stays valid for as long as any
+//   `Renderer` built against it.
+// - **Wayland** (winit fallback): not verified to the same standard as the
+//   two cases above. `wl_display` is documented by libwayland as
+//   supporting multi-threaded access via its own read-lock protocol, and
+//   this crate's only use of the pointer is a one-shot surface-
+//   registration call, not raw event dispatch -- no blocker found, but
+//   this is a lower-confidence claim than the X11 and Win32 cases and
+//   should be reverified before anything here is load-bearing for
+//   Wayland specifically.
+//
+// Pointee *validity* (as opposed to thread-affinity) is argued separately
+// from the above: the window handle's validity is tied to the window's
+// own lifetime (flui-app's `App` owns it for the `Renderer`'s whole life);
+// the display handle's validity is tied to the platform connection, which
+// outlives every window built from it (argued per-platform above; Win32
+// and AppKit carry no display-handle data to invalidate in the first
+// place).
 #[allow(unsafe_code)]
 unsafe impl Send for RawHandles {}
+
+#[cfg(test)]
+mod raw_handles_field_pin {
+    use super::RawHandles;
+
+    /// Pins `RawHandles`' field set at exactly the two fields the SAFETY
+    /// argument above covers.
+    ///
+    /// The struct literal below has no `..Default::default()`, and the
+    /// destructure has no `..` -- both are exhaustive, so a field smuggled
+    /// onto `RawHandles` (e.g. `smuggled: Option<std::rc::Rc<u8>>`, read
+    /// from `Renderer::recover`) fails to compile here: E0063 on the
+    /// literal, E0027 on the destructure. This is the check
+    /// `static_assertions::assert_impl_all!(Renderer: Send)` cannot do —
+    /// that assertion only proves `Send` still holds, and it would still
+    /// (correctly, per this same `unsafe impl`) hold for the smuggled
+    /// field too, exactly as the old blanket impl let it silently hold for
+    /// any field. This test is the one that actually goes red.
+    #[test]
+    fn raw_handles_has_exactly_the_two_fields_the_safety_argument_covers() {
+        let handles = RawHandles {
+            window: None,
+            display: None,
+        };
+        let RawHandles {
+            window: _window,
+            display: _display,
+        } = handles;
+    }
+}
 
 /// Cross-platform GPU renderer
 ///
@@ -224,7 +308,7 @@ unsafe impl Send for RawHandles {}
 /// `assert_impl_all!`/`assert_not_impl_any!` pair after this struct pins
 /// the `Send`/`!Sync` split itself: a future field that is `!Send` and left
 /// outside `RawHandles` now fails `cargo check` instead of silently riding
-/// a re-widened blanket `unsafe impl Send for Renderer`.
+/// a re-widened blanket `Send` impl on `Renderer` itself.
 ///
 /// ```compile_fail
 /// fn assert_sync<T: Sync>() {}
@@ -293,14 +377,15 @@ pub struct Renderer {
 
 // `Renderer: Send` is now a compiler derivation: every field is `Send`,
 // including `raw_handles` via `RawHandles`' own `unsafe impl Send` above.
-// There is deliberately no `unsafe impl Send for Renderer` here any more —
-// ADR-0045 decision 1 narrowed the crate's one manual `Send` assertion to
-// exactly the two raw-handle fields it is actually about, so a future
-// field that is `!Send` and left outside `RawHandles` fails `cargo check`
-// instead of silently riding a blanket impl. Pinned below; the sibling
-// `!Sync` guarantee is unchanged and stays separately forbidden-pattern-
-// checked in `docs/runtime-contract.toml` (the renderer single-owner
-// contract entry).
+// There is deliberately no manual `Send` impl on `Renderer` itself any
+// more — ADR-0045 decision 1 narrowed the crate's one manual `Send`
+// assertion to exactly the two raw-handle fields it is actually about, so
+// a future field that is `!Send` and left outside `RawHandles` fails
+// `cargo check` on its own instead of silently riding a blanket impl.
+// Pinned below; `docs/runtime-contract.toml` carries the matching
+// forbidden-pattern guards (both this bound's re-widening and its `!Sync`
+// sibling) so a hand-reintroduced blanket impl fails `just
+// runtime-conformance-check` too, workspace-wide.
 static_assertions::assert_impl_all!(Renderer: Send);
 static_assertions::assert_not_impl_any!(Renderer: Sync);
 
