@@ -48,8 +48,10 @@ use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     shared::PlatformHandlers,
     traits::{
+        Clipboard, DisplayId, MobileCapabilities, OwnerPlatform, Platform, PlatformCapabilities,
+        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
+        WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
-        *,
     },
 };
 
@@ -81,6 +83,18 @@ pub struct AndroidPlatform {
     capabilities: MobileCapabilities,
 }
 
+// Opaque on purpose, matching `HeadlessPlatform` and `WinitPlatform`. A
+// derived `Debug` here traverses `Arc<MockClipboard>`'s
+// `Mutex<Option<String>>` and prints the user's entire clipboard contents
+// into whatever sink formatted the platform — a log line, a panic message,
+// a bug report. None of the remaining fields are useful to a reader either:
+// handles, an executor, and a capability set.
+impl std::fmt::Debug for AndroidPlatform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidPlatform").finish_non_exhaustive()
+    }
+}
+
 impl AndroidPlatform {
     /// Create a new Android platform from the `AndroidApp` provided by
     /// `android_main()`
@@ -107,16 +121,13 @@ impl AndroidPlatform {
     /// dispatches them through the window's callbacks as `PlatformInput`.
     fn process_input_events(&self) {
         let window_guard = self.window.lock();
-        let window = match window_guard.as_ref() {
-            Some(w) => w,
-            None => {
-                // No window yet — still drain events to prevent ANR
-                drop(window_guard);
-                if let Ok(mut iter) = self.app.input_events_iter() {
-                    while iter.next(|_event| InputStatus::Unhandled) {}
-                }
-                return;
+        let Some(window) = window_guard.as_ref() else {
+            // No window yet — still drain events to prevent ANR
+            drop(window_guard);
+            if let Ok(mut iter) = self.app.input_events_iter() {
+                while iter.next(|_event| InputStatus::Unhandled) {}
             }
+            return;
         };
 
         let scale_factor = window.scale_factor();
@@ -222,8 +233,8 @@ impl Platform for AndroidPlatform {
             let mut should_call_ready = false;
 
             platform.app.poll_events(Some(timeout), |event| {
-                match event {
-                    PollEvent::Main(main_event) => match main_event {
+                if let PollEvent::Main(main_event) = event {
+                    match main_event {
                         MainEvent::Resume { .. } => {
                             tracing::info!("Android: Resumed — native window available");
                             resumed = true;
@@ -285,8 +296,7 @@ impl Platform for AndroidPlatform {
                             tracing::warn!("Android: Low memory warning");
                         }
                         _ => {}
-                    },
-                    _ => {}
+                    }
                 }
             });
 
@@ -298,23 +308,17 @@ impl Platform for AndroidPlatform {
             // migration). No owner lane on this backend: every
             // `OwnerPlatform::open_window` call creates directly and is
             // always `Ready`.
-            if should_call_ready {
-                if let Some(ready) = on_ready.take() {
-                    let owner_platform = Arc::clone(&platform) as Arc<dyn Platform>;
-                    let hooks: Arc<dyn OwnerHooks> =
-                        Arc::new(DirectOwnerHooks::new(Arc::clone(&owner_platform)));
-                    if let Err(error) = ready(OwnerPlatform::new(owner_platform, hooks)) {
-                        tracing::error!(
-                            %error,
-                            "on_ready bootstrap failed; stopping the event loop"
-                        );
-                        bootstrap_error = Some(error);
-                        platform.running.store(false, Ordering::Relaxed);
-                        // Skip input/frame dispatch below for this
-                        // iteration -- the top-of-loop check exits on the
-                        // next pass.
-                        continue;
-                    }
+            if should_call_ready && let Some(ready) = on_ready.take() {
+                let owner_platform = Arc::clone(&platform) as Arc<dyn Platform>;
+                let hooks: Arc<dyn OwnerHooks> =
+                    Arc::new(DirectOwnerHooks::new(Arc::clone(&owner_platform)));
+                if let Err(error) = ready(OwnerPlatform::new(owner_platform, hooks)) {
+                    tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
+                    bootstrap_error = Some(error);
+                    platform.running.store(false, Ordering::Relaxed);
+                    // Skip input/frame dispatch below for this iteration --
+                    // the top-of-loop check exits on the next pass.
+                    continue;
                 }
             }
 
@@ -324,10 +328,11 @@ impl Platform for AndroidPlatform {
             }
 
             // Dispatch frame rendering if resumed and redraw was requested
-            if resumed && should_render {
-                if let Some(ref w) = *platform.window.lock() {
-                    w.callbacks().dispatch_request_frame();
-                }
+            if resumed
+                && should_render
+                && let Some(ref w) = *platform.window.lock()
+            {
+                w.callbacks().dispatch_request_frame();
             }
         }
 
@@ -398,6 +403,7 @@ impl Platform for AndroidPlatform {
 // ==================== Mock implementations (MVP) ====================
 
 /// Simple executor that runs tasks on the current thread
+#[derive(Debug)]
 struct SimpleExecutor;
 
 impl PlatformExecutor for SimpleExecutor {
@@ -409,6 +415,18 @@ impl PlatformExecutor for SimpleExecutor {
 /// Mock clipboard for Android MVP
 struct MockClipboard {
     content: Mutex<Option<String>>,
+}
+
+// Redacted at the source, not just at `AndroidPlatform`'s boundary, so a
+// future holder of this type cannot reintroduce the leak by deriving its
+// own `Debug`. Whether the clipboard is set is safe to show; what it holds
+// is the user's data.
+impl std::fmt::Debug for MockClipboard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MockClipboard")
+            .field("has_content", &self.content.lock().is_some())
+            .finish()
+    }
 }
 
 impl MockClipboard {

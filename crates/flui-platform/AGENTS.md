@@ -34,11 +34,14 @@ Platform abstraction layer. Provides a unified `Platform` trait with concrete im
   box with a real desktop session instead fails on the `open_window`
   ordering panics — neither failure mode means the crate is broken, both are
   fixed by running it the way CI does.
-- **Windows and macOS backends still have zero executing tests anywhere** —
-  `STATUS_HEAP_CORRUPTION` (ROADMAP-TRACKER item H9) is a Windows-only crash
-  that can't reproduce on the Linux CI runners above; `cross-typecheck` lints
-  those backends (clippy, no link, no run) as the only coverage they get
-  until someone debugs H9 on an actual Windows box.
+- **Windows, macOS, and Android backends still have zero executing tests
+  anywhere** — `STATUS_HEAP_CORRUPTION` (ROADMAP-TRACKER item H9) is a
+  Windows-only crash that can't reproduce on the Linux CI runners above;
+  Android's own build needs the NDK's cross-linker, unavailable on those
+  runners. `cross-typecheck` lints all three backends (clippy, no link, no
+  run) as the only coverage they get — Windows until someone debugs H9 on an
+  actual Windows box, Android/macOS until real hardware or an emulator joins
+  CI.
 - The `winit/` module (including its owner-lane tests) only compiles under the
   `winit-backend` feature, not `desktop` (default) — a bare
   `cargo nextest run -p flui-platform` silently skips all of it; use

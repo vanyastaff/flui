@@ -217,6 +217,24 @@ pub struct PageAlignedVec<T> {
     byte_capacity: usize,
 }
 
+// Manual, not `#[derive(Debug)]`: a derive would add a `T: Debug` bound to
+// every caller of this type, even though nothing here actually needs to
+// print an element (the intended element types -- vertex data pushed
+// straight into a Vulkan buffer, per this type's own doc example -- have no
+// reason to implement `Debug` at all). Shows the container's own bookkeeping
+// instead of its contents, the same shape `Vec`'s own `Debug` would need if
+// it could not rely on `T: Debug`.
+impl<T> fmt::Debug for PageAlignedVec<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PageAlignedVec")
+            .field("ptr", &self.ptr)
+            .field("len", &self.len)
+            .field("capacity", &self.capacity)
+            .field("byte_capacity", &self.byte_capacity)
+            .finish()
+    }
+}
+
 impl<T> PageAlignedVec<T> {
     /// Create a new page-aligned vector with the given capacity.
     ///
@@ -280,7 +298,7 @@ impl<T> PageAlignedVec<T> {
             // valid, non-zero-size layout.
             let layout = Layout::from_size_align(byte_capacity, align)
                 .expect("Invalid layout for page-aligned allocation");
-            let raw = unsafe { alloc(layout) as *mut T };
+            let raw = unsafe { alloc(layout).cast::<T>() };
             NonNull::new(raw).expect("Allocation failed")
         };
 
@@ -400,9 +418,17 @@ impl<T> PageAlignedVec<T> {
 
     /// Clear all elements without deallocating.
     pub fn clear(&mut self) {
-        // SAFETY: Dropping initialized elements
+        // SAFETY: `self.ptr` is valid for `self.len` initialized `T`s (the
+        // struct's own invariant), and `drop_in_place` only needs a raw
+        // pointer, not a live `&mut [T]` reference to memory about to be
+        // dropped — built via `slice_from_raw_parts_mut` (a raw-pointer
+        // constructor) rather than `slice::from_raw_parts_mut` (which
+        // materializes a reference first) for exactly that reason.
         unsafe {
-            std::ptr::drop_in_place(std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len));
+            std::ptr::drop_in_place(std::ptr::slice_from_raw_parts_mut(
+                self.ptr.as_ptr(),
+                self.len,
+            ));
         }
         self.len = 0;
     }
@@ -417,7 +443,7 @@ impl<T> PageAlignedVec<T> {
     /// This is useful for debugging and testing.
     pub fn is_page_aligned(&self) -> bool {
         let page_size = get_page_size();
-        (self.ptr.as_ptr() as usize) % page_size == 0
+        (self.ptr.as_ptr() as usize).is_multiple_of(page_size)
     }
 }
 
@@ -455,7 +481,7 @@ impl<T> Drop for PageAlignedVec<T> {
         );
 
         unsafe {
-            dealloc(self.ptr.as_ptr() as *mut u8, layout);
+            dealloc(self.ptr.as_ptr().cast::<u8>(), layout);
         }
     }
 }
@@ -635,7 +661,7 @@ mod tests {
             (page_size, page_size),
             (page_size + 1, page_size * 2),
             (page_size * 2, page_size * 2),
-            (12345, ((12345 + page_size - 1) / page_size) * page_size),
+            (12345, 12345_usize.div_ceil(page_size) * page_size),
         ];
 
         for (input, expected) in test_cases {
@@ -689,6 +715,11 @@ mod tests {
     fn test_page_aligned_vec_large_type() {
         #[derive(Clone, Copy)]
         struct LargeType {
+            #[expect(
+                dead_code,
+                reason = "exists only to make this struct large (256+ bytes) for the \
+                          page-rounding math below -- never constructed or read"
+            )]
             data: [u8; 256],
         }
 

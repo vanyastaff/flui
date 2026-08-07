@@ -20,7 +20,8 @@ use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 use ui_events::{
     keyboard::KeyboardEvent,
     pointer::{
-        ContactGeometry, PointerButtonEvent, PointerId, PointerInfo, PointerState, PointerUpdate,
+        ContactGeometry, PointerButtonEvent, PointerId, PointerInfo, PointerOrientation,
+        PointerState, PointerUpdate,
     },
 };
 
@@ -140,10 +141,9 @@ pub fn convert_motion_event(
 pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Option<PlatformInput> {
     let action = event.action();
     let state = match action {
-        KeyAction::Down => KeyState::Down,
         KeyAction::Up => KeyState::Up,
         // Multiple = auto-repeat; treat as Down
-        KeyAction::Multiple => KeyState::Down,
+        KeyAction::Down | KeyAction::Multiple => KeyState::Down,
         _ => return None,
     };
 
@@ -154,13 +154,13 @@ pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Optio
     let location = ui_events::keyboard::android::keycode_to_location(keycode_i32);
 
     // Derive the Key from the named key mapping
-    let key = if named_key != NamedKey::Unidentified {
-        Key::Named(named_key)
-    } else {
+    let key = if named_key == NamedKey::Unidentified {
         // Try to map character keys (A-Z, 0-9, symbols)
-        keycode_to_character(keycode_i32)
-            .map(|ch| Key::Character(ch.to_string().into()))
-            .unwrap_or(Key::Named(NamedKey::Unidentified))
+        keycode_to_character(keycode_i32).map_or(Key::Named(NamedKey::Unidentified), |ch| {
+            Key::Character(ch.to_string())
+        })
+    } else {
+        Key::Named(named_key)
     };
 
     let modifiers = convert_meta_state(event.meta_state());
@@ -229,7 +229,7 @@ fn make_pointer_state(
         modifiers,
         count: 1,
         contact_geometry: contact,
-        orientation: Default::default(),
+        orientation: PointerOrientation::default(),
         pressure,
         tangential_pressure: 0.0,
         scale_factor,
@@ -257,8 +257,8 @@ fn convert_meta_state(meta: android_activity::input::MetaState) -> Modifiers {
     const META_ALT: u32 = 0x02;
     const META_CTRL: u32 = 0x1000;
     const META_META: u32 = 0x10000;
-    const META_CAPS_LOCK: u32 = 0x100000;
-    const META_NUM_LOCK: u32 = 0x200000;
+    const META_CAPS_LOCK: u32 = 0x0010_0000;
+    const META_NUM_LOCK: u32 = 0x0020_0000;
 
     if bits & META_SHIFT != 0 {
         mods |= Modifiers::SHIFT;
@@ -285,7 +285,16 @@ fn convert_meta_state(meta: android_activity::input::MetaState) -> Modifiers {
 /// Map Android keycode to a character, for keys that produce printable
 /// characters.
 fn keycode_to_character(keycode: i32) -> Option<char> {
-    use ui_events::keyboard::android::*;
+    use ui_events::keyboard::android::{
+        KEYCODE_0, KEYCODE_1, KEYCODE_2, KEYCODE_3, KEYCODE_4, KEYCODE_5, KEYCODE_6, KEYCODE_7,
+        KEYCODE_8, KEYCODE_9, KEYCODE_A, KEYCODE_APOSTROPHE, KEYCODE_AT, KEYCODE_B,
+        KEYCODE_BACKSLASH, KEYCODE_C, KEYCODE_COMMA, KEYCODE_D, KEYCODE_E, KEYCODE_EQUALS,
+        KEYCODE_F, KEYCODE_G, KEYCODE_GRAVE, KEYCODE_H, KEYCODE_I, KEYCODE_J, KEYCODE_K, KEYCODE_L,
+        KEYCODE_LEFT_BRACKET, KEYCODE_M, KEYCODE_MINUS, KEYCODE_N, KEYCODE_O, KEYCODE_P,
+        KEYCODE_PERIOD, KEYCODE_PLUS, KEYCODE_POUND, KEYCODE_Q, KEYCODE_R, KEYCODE_RIGHT_BRACKET,
+        KEYCODE_S, KEYCODE_SEMICOLON, KEYCODE_SLASH, KEYCODE_SPACE, KEYCODE_STAR, KEYCODE_T,
+        KEYCODE_U, KEYCODE_V, KEYCODE_W, KEYCODE_X, KEYCODE_Y, KEYCODE_Z,
+    };
 
     match keycode {
         KEYCODE_A => Some('a'),

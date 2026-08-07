@@ -8,7 +8,7 @@ name: CI
 #                    supported `flui` facade feature combination compiled in isolation
 #   wasm-check     — cargo check for the wasm-capable crates + real cdylib link of the two web
 #                    demos + import-surface check against scripts/wasm-import-allowlist.txt
-#   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos backends
+#   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos + android backends
 #   test           — build + nextest (lib + integration), ubuntu, plus a
 #                    dedicated flui-platform (Linux-runnable subset) step
 #   gpu-test       — full enable-wgpu-tests readback suite on windows/WARP (merge-blocking)
@@ -174,9 +174,9 @@ jobs:
   # test — workspace build + nextest. Matrix: Linux only today (see the
   # Windows note on `os:` below for why it was dropped; macOS was never
   # added here). All 28 crates are active — nothing is workspace-disabled.
-  # `cross-typecheck` is the only job touching the AppKit/Win32 backends,
-  # and it only type-checks them (no link, no tests) — see AGENTS.md's CI
-  # Pipeline notes for what that gate does and does not prove.
+  # `cross-typecheck` is the only job touching the AppKit/Win32/Android
+  # backends, and it only type-checks them (no link, no tests) — see
+  # AGENTS.md's CI Pipeline notes for what that gate does and does not prove.
   # ─────────────────────────────────────────────────────────────────────────
   test:
     name: test (${{ matrix.os }})
@@ -800,26 +800,35 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # cross-typecheck — flui-platform's per-OS backends, LINTED from Linux.
-  # `cargo clippy` does not link, so the Win32 and AppKit backends compile
-  # from any host. Before this job they were only ever built by whoever
-  # happened to develop on that OS: the Windows backend had a hard
+  # `cargo clippy` does not link, so the Win32, AppKit, and Android backends
+  # compile from any host. Before this job they were only ever built by
+  # whoever happened to develop on that OS: the Windows backend had a hard
   # `missing_docs` error (`pub mod win32`) and both backends had missing
   # Debug impls that the Linux and wasm gates structurally could not see.
+  # Android joined this matrix later, for the identical reason: it had never
+  # been built, type-checked, or linted anywhere in CI, so that whole module
+  # could have stopped compiling with no gate to notice. On arrival it had 24
+  # violations under `-D warnings`, one of them a derived `Debug` that printed
+  # the user's clipboard.
   #
-  # clippy, not plain check, on purpose: `cfg(windows)`/`cfg(macos)` code is
-  # invisible to every other lint gate, and running only `cargo check` here
-  # let ~80 deny-level lint violations accumulate unseen (found the day this
-  # switched). It still does NOT link and runs NO tests. The `test` job's
-  # dedicated flui-platform step only runs the Linux-buildable backends
-  # (headless + winit-on-X11); the Windows and macOS backends this job
-  # lints are never linked or executed by anything, so this remains the
-  # only gate touching that source at all. Green here
-  # means "compiles clean under the workspace lints", nothing more.
-  # Triples are the shipped ones — MSVC (what `gpu-test` uses) and aarch64
-  # macOS — with `--all-targets` so per-OS test targets compile too.
+  # clippy, not plain check, on purpose: `cfg(windows)`/`cfg(macos)`/
+  # `cfg(target_os = "android")` code is invisible to every other lint gate,
+  # and running only `cargo check` here let ~80 deny-level lint violations
+  # accumulate unseen on Windows/macOS (found the day this switched) and a
+  # further ~24 on Android (found when it joined this matrix). It still does
+  # NOT link and runs NO tests — Android's own build needs the NDK's
+  # cross-linker, which this runner does not have; `cargo clippy` never
+  # reaches that step. The `test` job's dedicated flui-platform step only
+  # runs the Linux-buildable backends (headless + winit-on-X11); the
+  # Windows, macOS, and Android backends this job lints are never linked or
+  # executed by anything, so this remains the only gate touching that
+  # source at all. Green here means "compiles clean under the workspace
+  # lints", nothing more. Triples are the shipped desktop ones — MSVC (what
+  # `gpu-test` uses) and aarch64 macOS — plus aarch64 Android, with
+  # `--all-targets` so per-OS test targets compile too.
   # ─────────────────────────────────────────────────────────────────────────
   cross-typecheck:
-    name: cross-typecheck (windows + macos backends)
+    name: cross-typecheck (windows + macos + android backends)
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -828,10 +837,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable + windows/macos targets
+      - name: Install Rust stable + windows/macos/android targets
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          targets: x86_64-pc-windows-msvc,aarch64-apple-darwin
+          targets: x86_64-pc-windows-msvc,aarch64-apple-darwin,aarch64-linux-android
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -844,13 +853,16 @@ jobs:
       # version — so the target has to be added again against the pin. Without
       # this the build fails with E0463 "can't find crate for `core`".
       - name: Add cross targets to the pinned toolchain
-        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
+        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android
 
       - name: cargo clippy (windows backend)
         run: cargo clippy -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
 
       - name: cargo clippy (macos backend)
         run: cargo clippy -p flui-platform --locked --all-targets --target aarch64-apple-darwin -- -D warnings
+
+      - name: cargo clippy (android backend)
+        run: cargo clippy -p flui-platform --locked --all-targets --target aarch64-linux-android -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern). Branch protection
