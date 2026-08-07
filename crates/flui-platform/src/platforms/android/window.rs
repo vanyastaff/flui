@@ -13,7 +13,10 @@ use android_activity::AndroidApp;
 use cursor_icon::CursorIcon;
 use flui_types::geometry::{DevicePixels, Pixels, Point, Size, device_px, px};
 
-use crate::{shared::WindowCallbacks, traits::*};
+use crate::{
+    shared::WindowCallbacks,
+    traits::{CursorError, DispatchEventResult, PlatformInput, PlatformWindow, WindowId},
+};
 
 /// Android window wrapping the native ANativeWindow via `AndroidApp`
 ///
@@ -24,7 +27,7 @@ use crate::{shared::WindowCallbacks, traits::*};
 ///
 /// `AndroidApp` implements `HasWindowHandle` and `HasDisplayHandle`, so this
 /// window can be used directly with wgpu for Vulkan surface creation.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AndroidWindow {
     app: AndroidApp,
     callbacks: Arc<WindowCallbacks>,
