@@ -12,15 +12,24 @@
 //! equivalent claim for the raster in-flight accounting path this issue
 //! also added.
 //!
-//! **Run this file under `cargo nextest run`, not bare `cargo test`.** The
-//! two `#[test]`s below share this process's global allocator counters;
-//! bare `cargo test`'s default in-process thread pool can run them
-//! concurrently, and the second test's own (real, expected) `frames_since`
-//! allocation can land inside the first test's measured window on another
-//! thread, reporting a false positive. `cargo nextest run` gives every test
-//! its own process (this workspace's standard runner — see `AGENTS.md`'s
-//! Testing Quirks), which removes the interference structurally rather
-//! than by adding a lock.
+//! # One test, not two, and why
+//!
+//! This file's global allocator counters are process-wide, and this file
+//! has exactly ONE `#[test]` below for exactly that reason: an EARLIER
+//! version of this file split the positive claim (the frame path allocates
+//! nothing) and its negative control (`frames_since` DOES allocate, so the
+//! positive claim is not simply vacuous) into two separate tests. Under
+//! `cargo nextest run` (this workspace's standard runner, one process per
+//! test) that was fine; under bare `cargo test` (in-process thread pool by
+//! default) the two tests could run concurrently on separate threads, and
+//! the negative control's own real allocation could land inside the
+//! positive test's measured window, intermittently reporting a false
+//! allocation. A test binary that is only correct under ONE runner is a
+//! trap for anyone who reaches for `cargo test` locally instead of
+//! `nextest` — folding both claims into one test removes the possibility
+//! of cross-test interference structurally (nothing else in this binary
+//! can run concurrently with itself), so the binary is correct under
+//! either runner, not just the one this workspace standardizes on.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -62,12 +71,23 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-/// The measured claim: after warmup, every further
-/// stamp-input -> poll(Produce) -> record_frame cycle allocates exactly
-/// zero bytes — even though telemetry (input-epoch stamping and the
-/// fixed-capacity history ring) runs on every one of them.
+/// Both halves of this harness's claim, pinned in ONE test so they can
+/// never interleave across threads regardless of runner (see this file's
+/// own module doc's "One test, not two, and why"):
+///
+/// 1. **The measured claim:** after warmup, every further
+///    stamp-input -> poll(Produce) -> record_frame cycle allocates exactly
+///    zero bytes — even though telemetry (input-epoch stamping and the
+///    fixed-capacity history ring) runs on every one of them.
+/// 2. **The negative control the claim above depends on:** `frames_since`
+///    (the consumer PULL side, never claimed to be zero-allocation — see
+///    `crate::frame_telemetry`'s own module doc) DOES allocate. Without
+///    this, a broken counting allocator (or a no-op-by-accident harness)
+///    would make claim 1 vacuous. Run AFTER claim 1's own loop, on the
+///    SAME clock, so nothing about it can retroactively taint the
+///    already-completed measurement above.
 #[test]
-fn input_stamp_produce_record_cycle_allocates_nothing_on_the_frame_path() {
+fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     let clock = FrameClock::with_source(ClockSource::Platform);
 
     // Warmup: settles this process's first-allocation costs (e.g. any
@@ -133,35 +153,17 @@ fn input_stamp_produce_record_cycle_allocates_nothing_on_the_frame_path() {
          once (worst cycle: {worst_cycle_bytes} bytes) — the frame-telemetry path this issue \
          added (InputEpochs, FrameHistory) must be zero-allocation on every steady-state cycle"
     );
-}
 
-/// The negative control this harness's own zero-allocation claim depends
-/// on: `frames_since` (the consumer PULL side, never claimed to be
-/// zero-allocation — see `crate::frame_telemetry`'s own module doc) DOES
-/// allocate. Without this, a broken counting allocator (or a
-/// no-op-by-accident harness) would make the positive claim above vacuous.
-#[test]
-fn frames_since_pull_side_does_allocate_unlike_the_frame_path() {
-    let clock = FrameClock::with_source(ClockSource::Platform);
-    clock.mark_demand(DemandKind::Dirty);
-    let now = clock.now();
-    assert_eq!(clock.poll(now), PollDecision::Produce);
-    let _ = clock.record_frame(
-        PresentationId::new(1),
-        now,
-        now,
-        now,
-        now,
-        PresentOutcome::Presented,
-    );
-
-    let bytes_before = ALLOC_BYTES.load(Ordering::Relaxed);
+    // Negative control: same clock, right after the measured loop above --
+    // if this did NOT allocate, the zero-allocation claim just pinned would
+    // be proving nothing (a no-op counting allocator would pass it too).
+    let bytes_before_pull = ALLOC_BYTES.load(Ordering::Relaxed);
     let pulled = clock.frames_since(None);
-    let bytes_after = ALLOC_BYTES.load(Ordering::Relaxed);
+    let bytes_after_pull = ALLOC_BYTES.load(Ordering::Relaxed);
 
     assert!(!pulled.is_empty());
     assert!(
-        bytes_after > bytes_before,
+        bytes_after_pull > bytes_before_pull,
         "frames_since must allocate its returned Vec — if it didn't, the frame-path \
          zero-allocation claim above would be proving nothing"
     );

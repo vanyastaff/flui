@@ -1784,7 +1784,7 @@ mechanism = "counting-allocator integration test for the zero-allocation claim; 
 evidence = [
     { kind = "symbol", file = "crates/flui-scheduler/src/frame_telemetry.rs", contains = "pub struct FrameSnapshot" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn two_inputs_before_one_produce_both_survive_with_distinct_latencies_older_larger" },
-    { kind = "test", file = "crates/flui-scheduler/tests/frame_telemetry_allocation.rs", contains = "fn input_stamp_produce_record_cycle_allocates_nothing_on_the_frame_path" },
+    { kind = "test", file = "crates/flui-scheduler/tests/frame_telemetry_allocation.rs", contains = "fn frame_path_allocates_nothing_while_frames_since_pull_side_does" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record" },
     { kind = "test", file = "crates/flui-devtools/src/timeline.rs", contains = "fn frame_snapshot_export_carries_real_input_attribution_through_the_existing_serializer" },
 ]
