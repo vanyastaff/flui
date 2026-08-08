@@ -103,7 +103,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 ### 7. `Arc<Mutex<*Renderer | *Pool | wgpu::*>>` field in `flui-engine` wgpu module 🔮
 
-**Forward-looking** — added in Mythos Step 9 of the `flui-engine` chain. Catches regressions of the `Arc<parking_lot::Mutex<OffscreenRenderer>>` and `Arc<Mutex<TexturePoolInner>>` shapes documented as Outstanding refactors in [`crates/flui-engine/ARCHITECTURE.md`](../crates/flui-engine/ARCHITECTURE.md). Today's known sites are excluded via file-glob (`!**/texture_pool.rs`, `!**/renderer.rs`, `!**/backend.rs`) so the trigger reports clean post-chain; when the corresponding Outstanding refactor lands, the file-glob exclusions go away.
+A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mutator into a single-mutator design. One file is excluded by glob — `!**/texture_pool.rs`, where `Arc<Mutex<TexturePoolInner>>` is still the real shape — and that exclusion must go in the same change as the lock. The exclusions for `renderer.rs` and `backend.rs` have been retired: `Renderer` now owns its `OffscreenRenderer` outright and `Backend<'frame>` borrows one, so both files are watched again.
 
 **Why:** the wgpu single-mutator runtime invariant means `Arc<Mutex<T>>` on engine subsystems hides a single-thread access pattern behind shared-mutability ceremony. The lock is uncontended in production but the shape mismatches the type-level invariant; a future regression would re-introduce the same maintenance burden.
 
