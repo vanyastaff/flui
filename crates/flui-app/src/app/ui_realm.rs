@@ -1477,12 +1477,22 @@ impl UiRealm {
     /// Force the primary presentation to repaint on its next pump segment
     /// even though nothing in the widget tree itself changed — for a
     /// renderer-side reason the build/layout/paint pipeline has no way to
-    /// observe on its own. The one production caller today: a GPU device
-    /// recovery (`runner.rs`'s `render_frame_with_device_recovery`), where
-    /// the recovered device's backing store was invalidated by the loss —
-    /// `Renderer::recover` already primes a full repaint
-    /// (`damage_tracker.mark_full_repaint`) for whatever scene reaches it
-    /// next, but nothing reaches it at all unless something forces one.
+    /// observe on its own. Two production callers today, both a GPU/surface
+    /// recovery forcing a resubmit of content the pipeline itself has no
+    /// reason to consider dirty:
+    ///
+    /// - A pre-frame GPU device recovery (`runner.rs`'s
+    ///   `render_frame_with_device_recovery`), where the recovered device's
+    ///   backing store was invalidated by the loss — `Renderer::recover`
+    ///   already primes a full repaint (`damage_tracker.mark_full_repaint`)
+    ///   for whatever scene reaches it next, but nothing reaches it at all
+    ///   unless something forces one.
+    /// - [`Self::render_frame_entered`]'s own `retry_needed` arm (issue
+    ///   #637), for a submit that failed with `SurfaceLost`, `DeviceLost`,
+    ///   or `SurfaceValidation` mid-frame: the frame that just failed had
+    ///   already consumed the pipeline's dirty state producing the scene it
+    ///   tried to send, so the eventual retry needs its own fresh reason to
+    ///   redo the work, same as the pre-frame case above.
     ///
     /// [`Self::request_redraw`] ALONE is necessary but not sufficient for
     /// that: it opens `draw_frame_entered`'s per-presentation segment gate
@@ -1513,16 +1523,14 @@ impl UiRealm {
     /// also uses `mark_needs_layout` for, but that stand-in predates this
     /// method and was never revisited against the lighter mark — this is
     /// the first real (non-test) caller, and it takes the lighter one.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "the only production caller is the desktop/Android device-recovery \
-                      path (runner.rs's render_frame_with_device_recovery); web's own \
-                      recovery stays un-unified and pokes `wake_handle()` directly instead \
-                      -- see that call site's own comment"
-        )
-    )]
+    // No longer wasm-dead-code (this method used to carry a
+    // `#[cfg_attr(target_arch = "wasm32", expect(dead_code, ...))]` here):
+    // unlike the pre-frame device-recovery path above, which stays
+    // desktop/Android-only (web's own recovery is un-unified and pokes
+    // `wake_handle()` directly instead), `Self::render_frame_entered` runs
+    // on every target, `wasm32` included (`runner.rs`'s `bootstrap_web`
+    // calls it directly), so its own `retry_needed` arm reaches this method
+    // there too.
     // TODO(#559): marks `self.presentations.primary()` unconditionally --
     // a realm with a non-primary presentation hosting the device that just
     // recovered would mark the WRONG presentation's tree. Latent today
@@ -2431,6 +2439,32 @@ impl UiRealm {
         }
 
         if retry_needed {
+            // Issue #637: `wake_frame()` alone re-opens `draw_frame_entered`'s
+            // per-presentation segment gate but never touches `PipelineOwner`'s
+            // own independent dirty tracking — the frame that just failed to
+            // submit had already consumed whatever was dirty producing the
+            // scene it tried to send, so an otherwise-unchanged tree finds
+            // nothing dirty on the retry pump, produces `Idle`, and
+            // `mark_rendered()` clears the flag having never reached
+            // `render_scene`: one no-op frame, then the retry silently parks.
+            // `mark_primary_needs_full_repaint()` is the same fix #630 already
+            // established for the pre-frame device-recovery-success arm
+            // (`runner.rs`'s `render_frame_with_device_recovery`) — reused
+            // here rather than duplicated, since both are "a retry needs the
+            // pipeline to actually have work to redo, not just a wake"; see
+            // that method's own doc for why `mark_needs_paint` (not `mark_
+            // needs_layout`) is the right weight. Scoped to `self.presentations
+            // .primary()`, matching every other decision in this method — see
+            // this method's own doc's `producer`/`self.presentations.primary()`
+            // distinction for why that is deliberate here, not overlooked.
+            //
+            // Still followed by `wake_frame()`: unlike the pre-frame success
+            // arm (which runs synchronously right before this same call's own
+            // `render_frame_entered`, so nothing external needs poking),
+            // SurfaceLost/DeviceLost/SurfaceValidation all fail INSIDE this
+            // call — the retry can only happen on a LATER wake, so the
+            // platform still needs the poke `wake_frame()` provides.
+            self.mark_primary_needs_full_repaint();
             self.wake_frame();
         } else {
             self.mark_rendered();
@@ -9002,14 +9036,18 @@ mod tests {
                 "the failed attempt's own snapshot still reports the pending epoch"
             );
 
-            // Retry: `wake_frame()` only pokes the platform loop to pump
-            // again -- it does not by itself mark the render pipeline
-            // dirty (paint already succeeded before the failed submit;
-            // only `present()` failed), so a genuinely content-bearing
-            // retry pump needs its own fresh dirty state, same as the real
-            // driver loop would eventually have from whatever caused this
-            // presentation to need a NEW frame. Mark the root dirty
-            // directly, standing in for that external cause.
+            // Retry: as of #637's fix, `render_frame_entered`'s own
+            // `retry_needed` arm already marks the root needs-paint (see
+            // `mark_primary_needs_full_repaint`), so this hand mark is no
+            // longer load-bearing for getting `render_scene` reached again
+            // -- `a_mid_frame_submit_failure_retry_actually_reaches_
+            // render_scene_again_on_a_static_tree` covers THAT invariant
+            // without any hand-dirtying at all. This mark stays here to
+            // isolate a DIFFERENT invariant this test is actually about
+            // (epoch attribution across the retry), standing in for the
+            // genuinely new external cause (input, animation, resize) a
+            // real driver loop would eventually supply on top of the
+            // fix's own repaint.
             let primary = realm.presentations.primary();
             primary.renderer().root_pipeline_owner().with_mut(|owner| {
                 if let Some(root_id) = owner.root_id() {
@@ -9079,9 +9117,13 @@ mod tests {
                 "the failed attempt's own snapshot still reports the pending epoch"
             );
 
-            // Retry: standing in for the renderer owner's recovery + wake,
-            // same as the `SurfaceLost` pin above -- mark the root dirty
-            // directly rather than actually rebuilding a device.
+            // Retry: as of #637's fix this hand mark is no longer required
+            // to reach `render_scene` again (`render_frame_entered`'s own
+            // `retry_needed` arm now does that -- see the `SurfaceLost` pin
+            // above's comment for the non-vacuous test that covers it). Kept
+            // here standing in for the renderer owner's recovery + wake, to
+            // isolate this test's own epoch-attribution invariant rather
+            // than actually rebuilding a device.
             let primary = realm.presentations.primary();
             primary.renderer().root_pipeline_owner().with_mut(|owner| {
                 if let Some(root_id) = owner.root_id() {
@@ -9153,9 +9195,13 @@ mod tests {
                 "the failed attempt's own snapshot still reports the pending epoch"
             );
 
-            // Retry: standing in for the external reconfigure a later
-            // wake performs, same as the pins above -- mark the root dirty
-            // directly rather than actually reconfiguring a surface.
+            // Retry: as of #637's fix this hand mark is no longer required
+            // to reach `render_scene` again (`render_frame_entered`'s own
+            // `retry_needed` arm now does that -- see the `SurfaceLost` pin
+            // above's comment for the non-vacuous test that covers it). Kept
+            // here standing in for the external reconfigure a later wake
+            // performs, to isolate this test's own epoch-attribution
+            // invariant rather than actually reconfiguring a surface.
             let primary = realm.presentations.primary();
             primary.renderer().root_pipeline_owner().with_mut(|owner| {
                 if let Some(root_id) = owner.root_id() {
@@ -9183,6 +9229,112 @@ mod tests {
                 1,
                 "the presented retry frame must carry the ORIGINAL input epoch -- retaining \
                  it across the failed attempt must not have lost it"
+            );
+        }
+
+        /// A raster backend that fails its first `render_scene` call with a
+        /// scripted [`EngineError`] and presents on every call after — the
+        /// double [`a_mid_frame_submit_failure_retry_actually_reaches_render_scene_again_on_a_static_tree`]
+        /// needs to observe whether a retry actually reaches `render_scene`
+        /// a second time, not just whether bookkeeping (`needs_redraw()`,
+        /// epoch attribution) looks right around it. Every `Always*Backend`
+        /// above scripts a single outcome forever, which cannot express "the
+        /// transient failure clears" — the shape a real retry produces.
+        struct FailOnceThenPresentsBackend {
+            error: Option<EngineError>,
+            render_scene_calls: u32,
+        }
+
+        impl FailOnceThenPresentsBackend {
+            fn new(error: EngineError) -> Self {
+                Self {
+                    error: Some(error),
+                    render_scene_calls: 0,
+                }
+            }
+        }
+
+        impl RasterBackend for FailOnceThenPresentsBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                self.render_scene_calls += 1;
+                match self.error.take() {
+                    Some(e) => Err(e),
+                    None => Ok(true),
+                }
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        /// Issue #637's own oracle requirement: the epoch-preservation pins
+        /// above (`surface_lost_retry_preserves_...` and its two siblings)
+        /// dirty the tree BY HAND after the scripted failure
+        /// (`owner.mark_needs_layout` + `primary.mark_redraw_pending()`),
+        /// standing in for whatever external cause would normally re-dirty
+        /// it. That stand-in is exactly why they kept passing while the
+        /// PRODUCTION retry path was silently a no-op: `wake_frame()` alone
+        /// re-opens `draw_frame_entered`'s per-presentation segment gate,
+        /// but never touches `PipelineOwner`'s own independent dirty
+        /// tracking, so an otherwise-unchanged (static) tree produces
+        /// `FramePaintOutcome::Idle` on the retry pump and `render_scene` is
+        /// never reached again.
+        ///
+        /// This test dirties nothing itself, ever — not before the failure,
+        /// not between the failure and the retry. Sequence: mount (the
+        /// mount's own attach genuinely leaves build/layout dirty — nothing
+        /// hand-poked), pump ONCE against a backend scripted to fail that
+        /// very first submit (so the pipeline's build/layout/paint work is
+        /// genuinely consumed producing real content, even though the
+        /// submit of that content then fails), then pump again with no
+        /// intervening dirtying of any kind. The static tree between the
+        /// failure and the retry is the whole point: on `main`, nothing
+        /// re-arms the pipeline's own dirty tracking after a submit
+        /// failure, so this second pump finds nothing dirty and never
+        /// reaches `render_scene` again. The assertion is a `render_scene`
+        /// call counter, not `is_ok()` or `needs_redraw()` — either of
+        /// which a no-op retry (gate reopened, pipeline never touched)
+        /// would also satisfy.
+        #[test]
+        fn a_mid_frame_submit_failure_retry_actually_reaches_render_scene_again_on_a_static_tree() {
+            let realm = mount_root_here();
+
+            // Pump 1: the mount's own dirty state is genuinely consumed --
+            // build, layout, and paint all run, producing real content --
+            // but the submit of that content fails.
+            let mut backend = FailOnceThenPresentsBackend::new(EngineError::SurfaceLost);
+            let presented = realm.render_frame_entered(&mut backend);
+            assert!(!presented, "SurfaceLost never reaches present()");
+            assert_eq!(
+                backend.render_scene_calls, 1,
+                "precondition: the failing pump actually reached render_scene once"
+            );
+            assert!(realm.needs_redraw(), "the failure must arm a retry");
+
+            // Pump 2, the retry -- driven by the same wake this test never
+            // hand-dirties around. The tree is unchanged (static) since the
+            // failure: whatever reaches render_scene again must come from
+            // the failure arm's own fix, not from anything this test did.
+            let presented = realm.render_frame_entered(&mut backend);
+            assert!(presented, "the retry must actually reach present()");
+            assert_eq!(
+                backend.render_scene_calls, 2,
+                "the retry must reach render_scene a SECOND time -- wake_frame() alone \
+                 re-opens the segment gate but leaves PipelineOwner's own dirty tracking \
+                 untouched, so an unmodified static tree produces Idle and render_scene is \
+                 never called again"
             );
         }
 
