@@ -30,10 +30,12 @@ use crate::error::EngineError;
 /// The trait is dyn-compatible (no generic parameters, no `async` methods).
 /// `Send` is a supertrait (ADR-0045 decision 1): the raster owner moves the
 /// backend onto its own thread once at lane construction, so every backend
-/// implementation must cross that boundary. Naming the object-safe form
-/// explicitly as `dyn RasterBackend + Send` stays required at any future
-/// dyn use site — Rust does not infer a supertrait auto-trait bound onto a
-/// bare trait object.
+/// implementation must cross that boundary. Note that this does **not** make
+/// `dyn RasterBackend` itself `Send`: Rust never infers an auto-trait bound
+/// onto a trait object from a supertrait, so a use site that needs the
+/// object to cross a thread must spell out `dyn RasterBackend + Send`. A use
+/// site that does not — a `Box<dyn RasterBackend>` staying on one thread —
+/// needs nothing extra.
 pub trait RasterBackend: Send {
     /// Render a [`Scene`] to the surface.
     ///
