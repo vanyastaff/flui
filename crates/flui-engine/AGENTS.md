@@ -21,10 +21,10 @@ GPU rendering engine via wgpu. Converts Layer trees into GPU draw calls.
 - **`enable-wgpu-tests` feature** — gates GPU-dependent integration tests (not run in CI).
 - **`#![allow(missing_debug_implementations)]`** — wgpu handles (Device, Queue, Texture, Buffer) don't impl Debug.
 - **Outstanding refactors** (tracked in ARCHITECTURE.md):
-  - `Arc<Mutex<OffscreenRenderer>>` → direct ownership + `Backend<'a>`
   - `Arc<Mutex<TexturePoolInner>>` → direct ownership
   - Per-frame `Arc::clone` in renderer.rs → borrowed references
-  - These are whitelisted in port-check.sh triggers #5 and #7 — remove whitelist entries when refactors land.
+  - `render_scene`'s painter take/reassign pattern (the `Arc<Mutex<OffscreenRenderer>>` half of this list **landed**: `Renderer` owns its `OffscreenRenderer`, `Backend<'frame>` borrows one)
+  - The remaining two are whitelisted in port-check.sh triggers #5 and #7 — **remove the whitelist entry in the same change as the refactor**. Trigger 7's exclusions for `renderer.rs`/`backend.rs` were not removed when that refactor landed, and both files went unwatched until #635 caught it.
 - **No `async fn` in render hot paths** — enforced by port-check trigger #3. `new`/`new_offscreen` are async (setup-phase, acceptable).
 
 ## Architecture doc
