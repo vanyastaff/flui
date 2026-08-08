@@ -9559,6 +9559,20 @@ mod tests {
                  presented retry on its OWN clock -- a call counter alone cannot tell \
                  this apart from A's stale content being spuriously re-marked instead"
             );
+            // The submit-count assertions above are one-sided: `frames_since`
+            // counts SUBMITS, and only the per-pump `producer` submits, so an
+            // extra segment run on a NON-producing presentation is invisible
+            // to them. Marking A *in addition to* B — rather than instead of
+            // it — passes both of the above while A really does run a
+            // spurious full build/layout/paint. Its flush count is what sees
+            // that: 1 when only B is marked, 2 when A is marked too.
+            assert_eq!(
+                realm.presentations.primary().flush_count(),
+                1,
+                "A must not run a second segment at all -- the assertions above \
+                 cannot see this, because a non-producing presentation submits \
+                 nothing for `frames_since` to count"
+            );
         }
 
         /// Finding: `DragDrop` is stamped unconditionally before the match
