@@ -131,8 +131,8 @@ serde = ["flui-types/serde"]
 # `first_picture_bounds`, diagnostics dump) are reused rather than duplicated.
 testing = ["flui-layer/testing"]
 
-# Cycle 4 R-16: gate the delegate trait modules behind an off-by-default
-# feature until their companion render object lands (ADR-0007). Each
+# Gate the delegate trait modules behind an off-by-default feature until
+# their companion render object lands (ADR-0007). Each
 # gated trait has zero production impls; gating removes the surface from
 # default builds without deleting it. `sliver_grid_delegate.rs`,
 # `custom_painter.rs`, and `flow_delegate.rs` were promoted to the default

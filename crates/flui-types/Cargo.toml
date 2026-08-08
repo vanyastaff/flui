@@ -51,7 +51,7 @@ default = []
 # Forwards to flui-geometry/serde so flui_types::geometry::* (re-exported
 # from flui-geometry) gets Serialize/Deserialize impls. Without the forward,
 # enabling flui-types/serde would silently leave geometry types non-serde-able
-# post-split — a compat regression (Codex P1, PR #138).
+# post-split — a compat regression.
 serde = ["dep:serde", "flui-geometry/serde"]
 
 # === Performance ===

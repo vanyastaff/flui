@@ -183,7 +183,7 @@ Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>
 
 This section documents the decomposition of `WgpuPainter` performed in the engine-overhaul series (PRs #231–#232, T9–T10 sub-PRs). The governing decision is recorded in [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](../../docs/adr/ADR-0006-c-ir-record-replay-seam.md).
 
-### Two-level IR contract (T11)
+### Two-level IR contract
 
 The engine uses two distinct IRs in a strict producer/consumer chain.  Understanding their boundary is load-bearing for any change that touches recording, replay, or testing.
 
@@ -212,7 +212,7 @@ plain CPU value — no `wgpu::Buffer`, `wgpu::Texture`, or `wgpu::TextureView`.
 **Purity contract.**  `DrawSegment: Clone` is a compile-time machine-checked
 guarantee of Level-2 purity: `Clone` is only derivable when every field is
 `Clone`, and `wgpu::Buffer` / `wgpu::Texture` / `wgpu::TextureView` /
-`wgpu::BindGroup` are **not** `Clone`.  The T11 deterministic-replay test
+`wgpu::BindGroup` are **not** `Clone`.  The deterministic-replay test
 (`src/wgpu/deterministic_replay_tests.rs`) uses this property: it records a scene
 once, clones the resulting `DrawSegment`s, replays two independent clones to two
 independent render targets (encoder A → target A, encoder B → target B), and
@@ -273,7 +273,7 @@ Record methods (per-primitive draw calls) are owned by `DrawBatcher` in `batches
 
 `GpuReplay` (`replay/`) owns the replay/submit path: it holds the viewport_buffer, viewport_bind_group, two unit_quad buffers, the default_sampler, and the texture_batch scratch. The dispatch core (`new` / `update_viewport` / `submit` / `reintegrate_offscreen_content`) lives in `replay/mod.rs`; the segment-flush machinery in `replay/flush.rs` — `flush_segment` (the canonical five-phase entry point) drives `flush_all_instanced_batches`, `flush_gradient_batches`, `flush_tessellated_geometry`, `flush_segment_cached_images`, and `flush_segment_external_images`, plus the four `flush_texture_batch*` blend variants. `GpuReplay::submit` is the top-level dispatch loop that consumes `&DrawSegment` / `&[DrawItem]` and drives GPU encoding, including `flush_opacity_layer` recursion (defined in `opacity_layer.rs`) and `reintegrate_offscreen_content`.
 
-`text` / `rich_text` remain on `WgpuPainter` pending T11 (the text-vs-IR seam decision).
+`text` / `rich_text` remain on `WgpuPainter` pending the text-vs-Command-IR seam decision.
 
 ### Borrow-seam contract
 

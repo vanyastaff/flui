@@ -1,6 +1,6 @@
 //! `RenderSliverListLazy` — lazily-virtualized list of Box children.
 //!
-//! Implements the U3b lazy `SliverList` consumer: drives
+//! Implements the lazy `SliverList` consumer: drives
 //! [`Virtualizer`] for `O(log n)` range queries, builds only the
 //! visible-plus-cache band via the re-entrant build contract
 //! (ADR-0003 Decision 2, [`SliverLayoutContext::build_and_layout_box_child`]),
@@ -333,8 +333,9 @@ impl RenderSliver for RenderSliverListLazy {
             // pass. This is safe — not a collision — because Insert applies
             // serially, and `apply_deferred_mutation` clamps each new child's
             // position to `min(index, parent.child_count())`, so children land
-            // in consecutive slots in request order (D3 keeps Remove before
-            // Insert, so evicted slots are compacted before insertion).
+            // in consecutive slots in request order (the deferred-mutation
+            // queue applies Remove before Insert, so evicted slots are
+            // compacted before insertion).
             &mut |logical_i| child_source(logical_i),
             // Absent strategy: build the child via the re-entrant build contract.
             // `dense_count` is the correct deferred-insert position (see comment

@@ -22,7 +22,7 @@ parking_lot = { workspace = true }
 # and this clock is the default the gesture arena runs on (see clock.rs).
 web-time = { workspace = true }
 # `SmallVec` for stack-allocated listener-callback snapshots in
-# `ChangeNotifier::notify_listeners` (audit I-4). Inline capacity 4
+# `ChangeNotifier::notify_listeners`. Inline capacity 4
 # covers the common case of one or two listeners per notifier;
 # overflow spills to heap.
 smallvec = { workspace = true }

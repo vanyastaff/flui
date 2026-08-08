@@ -92,7 +92,7 @@ mod tests {
     /// item) is `Clone` + handle-free. Its fields are `DrawSegment` (witnessed
     /// above), `BlendMode` (`Copy`), and `Rect<Pixels>` (`Copy`). A future field
     /// holding a live GPU handle (`Texture`/`TextureView`/`BindGroup`/`Sampler`)
-    /// would make this `const` fail to compile — guarding T11 IR-purity for the
+    /// would make this `const` fail to compile — guarding IR-purity for the
     /// new variant.
     const _ADVANCED_SHAPE_OP_IS_CLONE: fn(
         crate::wgpu::command_ir::AdvancedShapeOp,

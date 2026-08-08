@@ -986,14 +986,14 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     /// deferred-mutation queue once the walk releases its borrows. Empty unless a
     /// lazy sliver requests a not-yet-built child.
     pending_builds: &'ctx parking_lot::Mutex<Vec<PendingBuild>>,
-    /// Symmetric remove sink for the re-entrant build contract (U3c D2): `(parent,
+    /// Symmetric remove sink for the re-entrant build contract: `(parent,
     /// child)` pairs of children the consumer wants evicted from the tree.
     /// The `parent` here is always `self.node_id` (the sliver itself), not the
     /// walk root — the pipeline must call `defer_remove(parent, child)` so that
     /// `mark_needs_layout` targets the sliver and it reflows after its child list
     /// changes.  Drained after the walk releases its borrows, before
-    /// pending_builds are applied (Remove → Insert ordering, D3). Same
-    /// `Mutex`-for-Send discipline as `pending_builds`.
+    /// pending_builds are applied — Remove before Insert. Same `Mutex`-for-Send
+    /// discipline as `pending_builds`.
     pending_removes: &'ctx parking_lot::Mutex<Vec<(RenderId, RenderId)>>,
     /// Sink for child-build requests from request-strategy slivers — the
     /// producer half of the request-strategy seam: `(sliver_id,
@@ -1031,7 +1031,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
     /// Creates the walk-side context over pre-built child slots. `node_id` is the
     /// sliver being laid out, `pending_builds` is the walk-owned sink for
     /// on-demand child builds (see [`PendingBuild`]), and `pending_removes` is the
-    /// symmetric sink for deferred child removals (U3c D2).
+    /// symmetric sink for deferred child removals.
     ///
     /// `pub(crate)`: the only constructor caller is the pipeline's sliver layout
     /// walk; the `PendingBuild` sink type it takes is crate-internal.
@@ -1114,9 +1114,8 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
             Some(object) => {
                 // Pre-build the parent-data box so `apply_deferred_mutation`
                 // can install it on the fresh `RenderNode` even though the node
-                // starts with `parent_data = None`.  This is D1 of the lazy-
-                // sliver re-entrant build contract: the logical index must be
-                // readable by `perform_layout` on the very next pass.
+                // starts with `parent_data = None`, and the logical index must
+                // be readable by `perform_layout` on the very next pass.
                 let initial_parent_data: Option<Box<dyn ParentData>> = Some(Box::new(
                     SliverMultiBoxAdaptorParentData::new(logical_index),
                 ));

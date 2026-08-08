@@ -417,7 +417,7 @@ impl WgpuPainter {
     /// draw scene that produces only `Segment` items, so all items in the drain are
     /// returned.
     ///
-    /// This accessor exists solely to feed the T11 C5-gate tests.  It is gated to
+    /// This accessor exists solely to feed the C5-gate tests.  It is gated to
     /// `#[cfg(all(test, feature = "enable-wgpu-tests"))]` and must never be called
     /// from production code.
     #[cfg(all(test, feature = "enable-wgpu-tests"))]
@@ -428,7 +428,7 @@ impl WgpuPainter {
             .filter_map(|item| match item {
                 DrawItem::Segment(seg) => Some(seg),
                 // SsaaPath carries the path's tessellated DrawSegment internally;
-                // surface it so the T11 deterministic-replay drain covers path
+                // surface it so the deterministic-replay drain covers path
                 // geometry too (rather than silently omitting it if a future test
                 // scene adds a SrcOver arbitrary-path fill).
                 DrawItem::SsaaPath(op) => Some(op.segment),
@@ -466,7 +466,7 @@ impl WgpuPainter {
     /// Replay a caller-supplied list of `DrawItem`s onto `view` using `encoder`.
     ///
     /// This is a thin wrapper around `GpuReplay::submit` that exposes the replay
-    /// path to the T11 deterministic-replay test.  Two independent calls with
+    /// path to the deterministic-replay test.  Two independent calls with
     /// two independent encoders + views and the **same logical IR** (same content,
     /// different clones) must produce byte-identical pixel outputs — that is the
     /// C5 gate assertion.
