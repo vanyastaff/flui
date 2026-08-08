@@ -1474,63 +1474,97 @@ impl UiRealm {
         presentation.mark_redraw_pending();
     }
 
-    /// Force the primary presentation to repaint on its next pump segment
-    /// even though nothing in the widget tree itself changed — for a
+    /// [`Self::request_redraw_for`]'s pipeline-dirtying counterpart,
+    /// addressed to exactly `presentation` rather than always the primary.
+    /// Forces `presentation` to repaint on its next pump segment even
+    /// though nothing in its widget tree itself changed — for a
     /// renderer-side reason the build/layout/paint pipeline has no way to
-    /// observe on its own. Two production callers today, both a GPU/surface
-    /// recovery forcing a resubmit of content the pipeline itself has no
-    /// reason to consider dirty:
+    /// observe on its own. Two production callers today, each resolving
+    /// `presentation` from what only THAT caller knows:
     ///
-    /// - A pre-frame GPU device recovery (`runner.rs`'s
+    /// - [`Self::mark_primary_needs_full_repaint`] (below), for the
+    ///   pre-frame GPU device-recovery path (`runner.rs`'s
     ///   `render_frame_with_device_recovery`), where the recovered device's
     ///   backing store was invalidated by the loss — `Renderer::recover`
     ///   already primes a full repaint (`damage_tracker.mark_full_repaint`)
     ///   for whatever scene reaches it next, but nothing reaches it at all
-    ///   unless something forces one.
+    ///   unless something forces one. That caller is still single-renderer/
+    ///   single-presentation shaped (see its own TODO(#559)), so `primary()`
+    ///   is the only presentation it has to address.
     /// - [`Self::render_frame_entered`]'s own `retry_needed` arm (issue
     ///   #637), for a submit that failed with `SurfaceLost`, `DeviceLost`,
     ///   or `SurfaceValidation` mid-frame: the frame that just failed had
     ///   already consumed the pipeline's dirty state producing the scene it
     ///   tried to send, so the eventual retry needs its own fresh reason to
-    ///   redo the work, same as the pre-frame case above.
+    ///   redo the work, same as the pre-frame case above — addressed to
+    ///   that call's own `producer`, NEVER `primary()` unconditionally
+    ///   (that method's own doc, at the `producer` binding, explains why
+    ///   the two can differ).
     ///
-    /// [`Self::request_redraw`] ALONE is necessary but not sufficient for
-    /// that: it opens `draw_frame_entered`'s per-presentation segment gate
-    /// (`PresentationState::mark_redraw_pending`, read by
+    /// [`Self::request_redraw_for`] ALONE is necessary but not sufficient
+    /// for either: it opens `draw_frame_entered`'s per-presentation segment
+    /// gate (`PresentationState::mark_redraw_pending`, read by
     /// `take_redraw_pending`), which is REQUIRED for the segment to run at
     /// all — but an otherwise-unchanged tree, even with that gate open,
     /// still produces `FramePaintOutcome::Idle` and never reaches
     /// `render_scene`, because `PipelineOwner` tracks its own dirty state
     /// independently of the clock's demand mechanism (confirmed by a
     /// probe, not assumed: `should_run_segment()` correctly read `true`
-    /// with `request_redraw` alone, and the pipeline still produced
+    /// with `request_redraw_for` alone, and the pipeline still produced
     /// `Idle`). Marking the root render object dirty is what gives the
     /// pipeline actual work to redo.
     ///
     /// [`PipelineOwner::mark_needs_paint`], deliberately NOT `mark_needs_
-    /// layout`: layout has not changed across a device loss — only the
-    /// PAINTED OUTPUT needs to be resubmitted, since the recovered
-    /// device's backing store (not the widget tree's geometry) is what was
-    /// invalidated. `mark_needs_paint` is sufficient because paint is
-    /// already a full-tree descent every frame in this codebase (see
-    /// `docs/` notes on that shape) — marking just the root non-Idle is
-    /// enough for the descent to cover everything beneath it; forcing a
-    /// full RELAYOUT of the whole tree for a purely renderer-side backing-
-    /// store loss would be strictly heavier than the fix needs. Verified,
-    /// not assumed: swapping this one call site is what the SurfaceLost
-    /// retry test's by-hand stand-in (`ui_realm.rs`'s
+    /// layout`: layout has not changed across either caller's failure —
+    /// a device loss invalidates only the renderer's backing store, and a
+    /// submit failure (`SurfaceLost`/`DeviceLost`/`SurfaceValidation`) is
+    /// likewise a renderer/surface-side rejection of an already-correct
+    /// scene, never a report that the widget tree's geometry is wrong — so
+    /// only the PAINTED OUTPUT needs to be resubmitted in either case.
+    /// `mark_needs_paint` is sufficient because paint is already a
+    /// full-tree descent every frame in this codebase (see `docs/` notes on
+    /// that shape) — marking just the root non-Idle is enough for the
+    /// descent to cover everything beneath it; forcing a full RELAYOUT of
+    /// the whole tree for a purely renderer-side rejection would be
+    /// strictly heavier than either fix needs. Verified, not assumed:
+    /// swapping this one call site is what the SurfaceLost retry test's
+    /// by-hand stand-in (`ui_realm.rs`'s
     /// `surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`)
     /// also uses `mark_needs_layout` for, but that stand-in predates this
-    /// method and was never revisited against the lighter mark — this is
-    /// the first real (non-test) caller, and it takes the lighter one.
-    // No longer wasm-dead-code (this method used to carry a
-    // `#[cfg_attr(target_arch = "wasm32", expect(dead_code, ...))]` here):
-    // unlike the pre-frame device-recovery path above, which stays
-    // desktop/Android-only (web's own recovery is un-unified and pokes
-    // `wake_handle()` directly instead), `Self::render_frame_entered` runs
-    // on every target, `wasm32` included (`runner.rs`'s `bootstrap_web`
-    // calls it directly), so its own `retry_needed` arm reaches this method
-    // there too.
+    /// method and was never revisited against the lighter mark — the
+    /// device-recovery caller was the first real (non-test) one, and it
+    /// takes the lighter one.
+    ///
+    /// Deliberately NOT extended to [`Self::render_frame_entered`]'s
+    /// `FramePaintOutcome::Errored` outcome (a build/layout/paint failure
+    /// inside the pipeline itself, distinct from the three submit failures
+    /// above) — see that method's own comment at its `retry_needs_repaint`
+    /// binding for why the reasoning above does not transfer to that case.
+    ///
+    /// No longer wasm-dead-code (this method used to carry a
+    /// `#[cfg_attr(target_arch = "wasm32", expect(dead_code, ...))]` when it
+    /// had only the pre-frame device-recovery caller): `render_frame_entered`
+    /// runs on every target, `wasm32` included (`runner.rs`'s
+    /// `bootstrap_web` calls it directly), so its own `retry_needed` arm
+    /// reaches this method there too.
+    fn mark_needs_full_repaint_for(&self, presentation: &PresentationState) {
+        self.request_redraw_for(presentation);
+        presentation
+            .renderer()
+            .root_pipeline_owner()
+            .with_mut(|owner| {
+                if let Some(root_id) = owner.root_id() {
+                    owner.mark_needs_paint(root_id);
+                }
+            });
+    }
+
+    /// [`Self::mark_needs_full_repaint_for`], addressed to
+    /// `self.presentations.primary()` — the shape its one caller
+    /// (`runner.rs`'s `render_frame_with_device_recovery`) needs: that
+    /// function runs BEFORE `render_frame_entered`, driven purely by
+    /// `renderer.is_device_lost()`, with no per-pump `producer` of its own
+    /// to resolve which presentation actually owns the lost device.
     // TODO(#559): marks `self.presentations.primary()` unconditionally --
     // a realm with a non-primary presentation hosting the device that just
     // recovered would mark the WRONG presentation's tree. Latent today
@@ -1539,14 +1573,24 @@ impl UiRealm {
     // where this needs to become presentation-addressed, matching how
     // `render_frame_with_device_recovery` itself is still single-renderer/
     // single-presentation shaped.
+    //
+    // wasm-dead-code (unlike `mark_needs_full_repaint_for` above, which
+    // `render_frame_entered`'s own `retry_needed` arm also calls on every
+    // target): this wrapper's only caller, `render_frame_with_device_
+    // recovery`, is itself `#[cfg(all(not(target_os = "ios"),
+    // not(target_arch = "wasm32")))]` (desktop/Android only -- web's own
+    // recovery stays un-unified and pokes `wake_handle()` directly
+    // instead), so on `wasm32` this wrapper genuinely has no caller at all.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the only caller, render_frame_with_device_recovery, is itself \
+                      desktop/Android-only -- see this method's own comment"
+        )
+    )]
     pub(crate) fn mark_primary_needs_full_repaint(&self) {
-        self.request_redraw();
-        let primary = self.presentations.primary();
-        primary.renderer().root_pipeline_owner().with_mut(|owner| {
-            if let Some(root_id) = owner.root_id() {
-                owner.mark_needs_paint(root_id);
-            }
-        });
+        self.mark_needs_full_repaint_for(self.presentations.primary());
     }
 
     /// Whether a redraw is needed.
@@ -2241,9 +2285,13 @@ impl UiRealm {
     /// sent to the engine"), so a deferred presentation's segment can very
     /// much have produced a real `Painted` outcome here, and this check is
     /// what keeps it off the engine. `SurfaceLost`/`DeviceLost`/
-    /// `SurfaceValidation` and any other render error all count as a
-    /// dropped (not settled) frame, arming a retry via
-    /// [`Self::wake_frame`] instead of [`Self::mark_rendered`]'s idle-clear.
+    /// `SurfaceValidation`, a pipeline `Errored` outcome, and any other
+    /// render error all count as a dropped (not settled) frame, arming a
+    /// retry via [`Self::wake_frame`] instead of [`Self::mark_rendered`]'s
+    /// idle-clear — but only the three named submit failures additionally
+    /// re-dirty the pipeline via [`Self::mark_needs_full_repaint_for`]; see
+    /// the `retry_needs_repaint` binding below for why a pipeline `Errored`
+    /// outcome does not get the same treatment.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
         self.gestures().drain_deferred_arena_resolutions();
@@ -2294,6 +2342,22 @@ impl UiRealm {
 
         let mut presented = false;
         let mut retry_needed = errored;
+        // Tracks a NARROWER condition than `retry_needed`: whether the
+        // eventual retry also needs [`Self::mark_needs_full_repaint_for`]
+        // to have something to redo. Only the three submit-failure arms
+        // below (`SurfaceLost`/`DeviceLost`/`SurfaceValidation`) set this —
+        // deliberately NOT `errored` (a `FramePaintOutcome::Errored`
+        // outcome, i.e. `run_frame_with_layout_builders` itself returned
+        // `Err`): on that path `render_scene` is never called at all, so
+        // the repaint-mark's own justification ("the frame had already
+        // consumed the pipeline's dirty state producing the scene it tried
+        // to submit") is simply false there — nothing was produced to
+        // submit. Marking `mark_needs_paint` also could not even address a
+        // BUILD/LAYOUT failure (paint alone does not redo either), so it
+        // would add a repaint with no plausible fix-the-retry effect while
+        // still paying its cost every wake. That arm keeps its PRE-#637
+        // behavior unchanged: `wake_frame()` only, same as `main`.
+        let mut retry_needs_repaint = false;
         if should_send
             && let FramePaintOutcome::Painted(ref scene) = outcome
             && scene.has_content()
@@ -2359,6 +2423,12 @@ impl UiRealm {
                         EpochDisposition::Retain,
                     );
                     retry_needed = true;
+                    // See `retry_needs_repaint`'s own binding above for why
+                    // this arm (a genuine submit failure, not a pipeline
+                    // error) is one of the three that also re-dirties
+                    // `producer`'s pipeline via
+                    // `mark_needs_full_repaint_for` below.
+                    retry_needs_repaint = true;
                     tracing::debug!("Surface lost; frame dropped — retry armed via wake_frame()");
                 }
                 Err(EngineError::DeviceLost) => {
@@ -2389,6 +2459,8 @@ impl UiRealm {
                     // FAILED pre-frame recovery attempt covers instead. The
                     // two are non-overlapping, not redundant.
                     retry_needed = true;
+                    // See `retry_needs_repaint`'s own binding above.
+                    retry_needs_repaint = true;
                     tracing::warn!(
                         "GPU device lost; frame dropped — retry armed, recovery is \
                          attempted by the renderer owner"
@@ -2419,7 +2491,27 @@ impl UiRealm {
                     // with nothing ever retrying it), and gives a
                     // transient validation error the chance to clear on a
                     // later wake.
+                    //
+                    // Updated by issue #637: this NOTE was written when the
+                    // armed retry silently parked after one no-op frame (see
+                    // that issue) — "may keep failing" understated the old
+                    // behavior, since a parked retry could not keep doing
+                    // anything past its first no-op. Now that the retry
+                    // actually re-submits (`retry_needs_repaint` below), a
+                    // PERMANENTLY misconfigured surface genuinely repeats
+                    // this failure indefinitely, at `NO_PRESENT_FALLBACK_
+                    // PACE`'s ~62 Hz throttle (`runner.rs`) rather than a
+                    // busy spin — a real, continuous full-tree paint cost
+                    // that did not exist before this fix. Whether that
+                    // steady state should sit behind its own backoff (like
+                    // `DeviceRecoveryBackoff` already gates the pre-frame
+                    // device-recovery path) is a real question this change
+                    // does not answer — a working retry that costs CPU
+                    // indefinitely on a permanently broken surface is still
+                    // strictly better than one that silently gives up, but
+                    // is not obviously the final shape either.
                     retry_needed = true;
+                    retry_needs_repaint = true;
                     tracing::error!(
                         "Surface validation error — surface misconfig; retry armed for \
                          the next wake"
@@ -2447,24 +2539,48 @@ impl UiRealm {
             // nothing dirty on the retry pump, produces `Idle`, and
             // `mark_rendered()` clears the flag having never reached
             // `render_scene`: one no-op frame, then the retry silently parks.
-            // `mark_primary_needs_full_repaint()` is the same fix #630 already
-            // established for the pre-frame device-recovery-success arm
-            // (`runner.rs`'s `render_frame_with_device_recovery`) — reused
-            // here rather than duplicated, since both are "a retry needs the
-            // pipeline to actually have work to redo, not just a wake"; see
-            // that method's own doc for why `mark_needs_paint` (not `mark_
-            // needs_layout`) is the right weight. Scoped to `self.presentations
-            // .primary()`, matching every other decision in this method — see
-            // this method's own doc's `producer`/`self.presentations.primary()`
-            // distinction for why that is deliberate here, not overlooked.
             //
-            // Still followed by `wake_frame()`: unlike the pre-frame success
-            // arm (which runs synchronously right before this same call's own
+            // `retry_needs_repaint` (set only by the three submit-failure
+            // arms above, never by a pipeline `Errored` outcome — see that
+            // binding's own comment) gates
+            // [`Self::mark_needs_full_repaint_for`], the same fix #630
+            // already established for the pre-frame device-recovery-success
+            // arm (`runner.rs`'s `render_frame_with_device_recovery`) —
+            // shared rather than duplicated via that one function, since
+            // both are "a retry needs the pipeline to actually have work to
+            // redo, not just a wake"; see that function's own doc for why
+            // `mark_needs_paint` (not `mark_needs_layout`) is the right
+            // weight. Addressed to `producer` — the presentation whose
+            // segment actually produced the scene that just failed to
+            // submit, resolved above and NEVER assumed to be `primary()`
+            // (this method's own doc, at the `producer` binding, explains
+            // why the two can differ) — not `self.presentations.primary()`:
+            // an earlier version of this fix wrongly hard-coded `primary()`
+            // here, which left the fix inert on any pump where a secondary
+            // presentation was the actual producer.
+            //
+            // Steady-state cost of a PERMANENTLY failing submit: unlike the
+            // pre-frame device-recovery path, this arm is not gated by
+            // `DeviceRecoveryBackoff` — a surface that keeps failing every
+            // submit now retries every wake, throttled only by
+            // `runner.rs`'s `NO_PRESENT_FALLBACK_PACE` (~62 Hz), running a
+            // full-tree paint each time, indefinitely. Before this fix that
+            // same surface went quiet after one no-op frame. A working
+            // retry that costs CPU forever on a permanently broken surface
+            // is still strictly better than one that silently gives up, but
+            // whether this steady state deserves its own backoff is a
+            // separate question this change does not answer.
+            if retry_needs_repaint {
+                self.mark_needs_full_repaint_for(producer);
+            }
+            // Still called unconditionally for every `retry_needed` cause,
+            // pipeline `Errored` included: unlike the pre-frame success arm
+            // (which runs synchronously right before this same call's own
             // `render_frame_entered`, so nothing external needs poking),
-            // SurfaceLost/DeviceLost/SurfaceValidation all fail INSIDE this
-            // call — the retry can only happen on a LATER wake, so the
-            // platform still needs the poke `wake_frame()` provides.
-            self.mark_primary_needs_full_repaint();
+            // every cause here fails INSIDE this call — the retry can only
+            // happen on a LATER wake, so the platform still needs the poke
+            // `wake_frame()` provides regardless of whether a repaint was
+            // also marked above.
             self.wake_frame();
         } else {
             self.mark_rendered();
@@ -9335,6 +9451,113 @@ mod tests {
                  re-opens the segment gate but leaves PipelineOwner's own dirty tracking \
                  untouched, so an unmodified static tree produces Idle and render_scene is \
                  never called again"
+            );
+        }
+
+        /// Regression for a review finding on this fix's own first draft: an
+        /// earlier version called `self.mark_primary_needs_full_repaint()`
+        /// unconditionally from `render_frame_entered`'s `retry_needed` arm
+        /// — but this method's own doc, at the `producer` binding, already
+        /// says `producer` (the presentation whose segment actually
+        /// produced the failed submit) is NEVER assumed to be `primary()`,
+        /// and every OTHER decision in the method reads `producer`
+        /// specifically. With more than one presentation resident (the
+        /// production topology `install_presentation_alongside`, behind
+        /// `open_secondary_window`, creates), a primary-only mark repaints
+        /// the WRONG tree whenever a non-primary presentation is the real
+        /// producer — the actually-failing presentation's own pipeline is
+        /// never re-dirtied, so ITS retry still parks, while the untouched
+        /// primary spuriously repaints instead.
+        ///
+        /// Drives exactly that: A (primary) produces and settles, then B
+        /// (a second, resident presentation) gets real content and becomes
+        /// the producer whose submit fails. The oracle checks BOTH
+        /// presentations' own clocks, not just a call counter — a call
+        /// counter alone cannot distinguish "B's retry succeeded" from "A's
+        /// stale content got spuriously re-marked, re-submitted, and
+        /// coincidentally reached render_scene too", which is exactly what
+        /// the primary-only draft of this fix would produce here: A's own
+        /// segment would wrongly reopen (marked dirty by mistake) and
+        /// produce a second, spurious snapshot while B — the one presentation
+        /// that actually needed the retry — never got remarked and stayed at
+        /// one snapshot (its own failed attempt, forever unretried).
+        #[test]
+        fn a_mid_frame_submit_failure_retry_repaints_the_actual_producer_not_the_primary() {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+
+            // Pump 1: only A (primary) has content. A produces, presents,
+            // and settles -- from here on A has nothing left to redo.
+            realm
+                .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
+                .expect("A attaches");
+            let mut warm_up = AlwaysPresentBackend;
+            assert!(
+                realm.render_frame_entered(&mut warm_up),
+                "pump 1: A alone must produce and present"
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(a_id)
+                    .expect("A installed")
+                    .clock()
+                    .frames_since(None)
+                    .len(),
+                1,
+                "precondition: A recorded exactly its own pump-1 snapshot"
+            );
+
+            // B gets real content; A stays static/settled from here on.
+            realm
+                .attach_root_widget_to_for_test(b_id, &flui_widgets::SizedBox::new(20.0, 20.0))
+                .expect("B attaches");
+
+            // Pump 2: B is the producer (A's segment skips -- nothing dirty
+            // there), and B's submit fails.
+            let mut backend = FailOnceThenPresentsBackend::new(EngineError::SurfaceLost);
+            let presented = realm.render_frame_entered(&mut backend);
+            assert!(!presented, "SurfaceLost never reaches present()");
+            assert_eq!(
+                backend.render_scene_calls, 1,
+                "precondition: B's segment actually reached render_scene once"
+            );
+            assert!(realm.needs_redraw(), "the failure must arm a retry");
+
+            // Pump 3, the retry -- no hand-dirtying of either presentation.
+            let presented = realm.render_frame_entered(&mut backend);
+            assert!(presented, "the retry must actually reach present()");
+            assert_eq!(
+                backend.render_scene_calls, 2,
+                "the retry must reach render_scene a second time"
+            );
+
+            let a_snapshots = realm
+                .presentations
+                .get(a_id)
+                .expect("A installed")
+                .clock()
+                .frames_since(None)
+                .len();
+            let b_snapshots = realm
+                .presentations
+                .get(b_id)
+                .expect("B installed")
+                .clock()
+                .frames_since(None)
+                .len();
+            assert_eq!(
+                a_snapshots, 1,
+                "A (the primary) must stay untouched by a retry that belongs to B -- \
+                 marking A's pipeline dirty instead of the real producer's is exactly \
+                 the bug this test guards against"
+            );
+            assert_eq!(
+                b_snapshots, 2,
+                "B (the actual producer) must record both the failed attempt and the \
+                 presented retry on its OWN clock -- a call counter alone cannot tell \
+                 this apart from A's stale content being spuriously re-marked instead"
             );
         }
 
