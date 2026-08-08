@@ -332,43 +332,30 @@ check "6" \
 # -----------------------------------------------------------------------------
 # Trigger 7 -- Arc<Mutex<*>> or Arc<RwLock<*>> on a *Renderer / *Pool / wgpu::*
 # field inside crates/flui-engine/src/wgpu/.
-# Forward-looking. Added in Mythos Step 9 of the flui-engine chain. Catches
-# regressions of the Arc<parking_lot::Mutex<OffscreenRenderer>> and
-# Arc<Mutex<TexturePoolInner>> shapes documented as Outstanding refactors in
-# crates/flui-engine/ARCHITECTURE.md.
 #
-# Today's known sites at crate root, intentionally surfaced as Friction log
-# entries in ARCHITECTURE.md, do match this trigger and will be expected to
-# be reported once the corresponding Outstanding refactor lands. Until then,
-# the trigger is INFORMATIONAL on Friction-log-tracked sites; the regex is
-# narrow enough that any NEW Arc<Mutex<>>/Arc<RwLock<>> on a *Renderer /
-# *Pool / wgpu::* field is a regression that should be addressed.
+# The lock-or-interior-mutability problem: a renderer, a pool or a raw wgpu
+# handle behind a shared lock invites a second mutator into a single-mutator
+# design. The regex is narrow enough that any new one is a regression.
 #
-# Scope excludes test files (`!**/test*.rs`, `!**/tests/**`) so test fixtures
-# are not flagged.
+# ONE file is excluded, and the exclusion carries an obligation.
 #
-# *** FILE-GLOB EXCLUSIONS BELOW ARE TRACKED-OUTSTANDING-REFACTOR WHITELISTS ***
+#   texture_pool.rs -- `Arc<Mutex<TexturePoolInner>>` at two sites, still the
+#   real shape. **When that lock is removed, this `--glob` MUST go in the same
+#   change**, or the file silently stops being watched precisely when it
+#   becomes watchable.
 #
-# Three files contain the EXACT patterns this trigger is designed to catch:
-#   - `texture_pool.rs:71,224`  -- `Arc<Mutex<TexturePoolInner>>` (R10; tracked
-#                                  as Outstanding refactor #2 in
-#                                  `crates/flui-engine/ARCHITECTURE.md`).
-#   - `renderer.rs:147`         -- `Arc<parking_lot::Mutex<OffscreenRenderer>>`
-#                                  (R9; tracked as Outstanding refactor #1).
-#   - `backend.rs:26,45,57`     -- same `Arc<Mutex<OffscreenRenderer>>` shape,
-#                                  symmetric with renderer.rs (R9).
+# Two other exclusions used to sit here, for `renderer.rs` and `backend.rs`,
+# both waiting on the same refactor. That refactor landed -- `Renderer` now
+# owns its `OffscreenRenderer` outright and `Backend` borrows one for a frame
+# -- and nobody removed the globs, so both files went unwatched for however
+# long. A stale exclusion is worse than none: it reads as "known to violate"
+# while the file is clean, and it permits the next real violation in exactly
+# the place the rule most wants to look. Both are now gone, verified by
+# running the trigger against both files with the globs removed (zero hits).
 #
-# The Mythos chain (PR feat/flui-engine-mythos-redesign) DEFERRED these three
-# refactors to follow-up work per ARCHITECTURE.md `## Outstanding refactors`.
-# To avoid port-check fire-on-known-violation, the three files are whitelisted
-# below. **When the corresponding Outstanding refactor lands (i.e., the
-# Arc<Mutex<>> shape is removed from a file), the matching `--glob !**/<file>`
-# exclusion below MUST be removed in the same PR** so this trigger then catches
-# regressions against the post-refactor shape.
-#
-# Cross-reference: see `crates/flui-engine/ARCHITECTURE.md` ## Friction log
-# entry "Arc<parking_lot::Mutex<OffscreenRenderer>>" and "Arc<Mutex<
-# TexturePoolInner>>" for the deferral rationale.
+# Test files (`!**/test*.rs`, `!**/tests/**`) stay excluded so fixtures are
+# not flagged.
+
 # -----------------------------------------------------------------------------
 #
 # Regex shape (anchored + grouped):
@@ -390,8 +377,6 @@ check "7" \
   --glob '!**/test*.rs' \
   --glob '!**/tests/**' \
   --glob '!**/texture_pool.rs' \
-  --glob '!**/renderer.rs' \
-  --glob '!**/backend.rs' \
   crates/flui-engine/src/wgpu
 
 # -----------------------------------------------------------------------------

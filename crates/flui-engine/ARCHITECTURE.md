@@ -327,8 +327,8 @@ The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) was extr
 | `Renderer::device` / `Renderer::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | wgpu's own API uses `Arc` for these handles (cheap ref-count, not lock-protected). Shared by `WgpuPainter` and `OffscreenRenderer` via setup-phase `Arc::clone` (acceptable; not per-frame). |
 | `Renderer::surface` | `Option<wgpu::Surface<'static>>` | Owned, single-mutator | wgpu 29.x's `Surface<'_>: Send + Sync` (verified via `assert_impl_all!` in `wgpu/src/api/surface.rs`). Single-mutator enforced by code convention (only `Renderer::render_scene` calls `surface.get_current_texture`), not by trait bound. |
 | `Renderer::painter` | `Option<WgpuPainter>` | Owned, single-mutator | The take/return dance during `render_scene` is the per-frame ownership transfer. |
-| `Renderer::offscreen` | `Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` | **Mythos friction** | The lock is uncontended in production (single-mutator). Removal requires a `Backend<'a>` lifetime refactor; see [Outstanding refactors](#outstanding-refactors). |
-| `Backend::offscreen` | `Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` | **Mythos friction** | Same; symmetric with the above. |
+| `Renderer::offscreen` | `Option<super::offscreen::OffscreenRenderer>` | resolved | Owned outright. The `Backend<'a>` lifetime refactor that this waited on has landed, so the lock is gone; port-check trigger 7 now watches this file. |
+| `Backend::offscreen` | `Option<&'frame mut super::offscreen::OffscreenRenderer>` | resolved | Borrowed for the frame, symmetric with the above. |
 | `Backend::offscreen_painter` | `Option<WgpuPainter>` | Owned, single-mutator | Cross-frame painter cache; resized on demand. No lock. |
 | `WgpuPainter::device` / `WgpuPainter::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | Same as `Renderer::device`. |
 | `WgpuPainter::transform_stack` / `clip_stack` / `opacity_stack` | `Vec<T>` | Owned, single-mutator | Per-frame save/restore stacks. No lock. |
