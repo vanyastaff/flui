@@ -1,6 +1,6 @@
 //! Shared virtualizer band-walk for lazily-virtualized sliver layout.
 //!
-//! Extracted from `RenderSliverListLazy::perform_layout` (U3b) so both the
+//! Extracted from `RenderSliverListLazy::perform_layout` so both the
 //! build strategy ([`super::sliver_list_lazy::RenderSliverListLazy`]) and the
 //! request strategy ([`super::sliver_list::RenderSliverList`]) drive
 //! the same geometry engine without duplicating per-frame virtualizer
@@ -186,8 +186,8 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 
 /// Drives the full virtualized-band layout pass for one sliver scroll frame.
 ///
-/// This is the shared algorithm for `RenderSliverListLazy` (build strategy,
-/// U3b) and `RenderSliverList` (request strategy).  Both share the
+/// This is the shared algorithm for `RenderSliverListLazy` (build strategy)
+/// and `RenderSliverList` (request strategy).  Both share the
 /// virtualizer geometry bookkeeping; the absent-in-band action is the only
 /// point of divergence and is delegated to the caller.
 ///
@@ -345,8 +345,8 @@ where
 
     // ── 5. Dispose off-band children ──────────────────────────────────────
     // For `RenderOwned` slivers, `dispose_box_child` enqueues the render-node
-    // removal (U3c — the queued removal must be ordered before the
-    // corresponding insert in `layout_dirty_root`).
+    // removal — the queued removal must be ordered before the corresponding
+    // insert in `layout_dirty_root`.
     // For `ElementOwned` slivers, we skip this entirely: the element tree drives
     // eviction via `SparseChildren::retain_band` using the `cache_first`/
     // `cache_last` band returned below, preventing the ABA double-remove that

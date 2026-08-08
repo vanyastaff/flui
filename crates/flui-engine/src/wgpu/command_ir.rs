@@ -283,7 +283,7 @@ pub(crate) enum ImageFilterPass {
 
 /// A bounds-GROWING image-filter operation, isolated at record time.
 ///
-/// `Clone` + GPU-resource-free (T11 purity witness): `input` is a `DrawSegment`
+/// `Clone` + GPU-resource-free (the IR-purity witness): `input` is a `DrawSegment`
 /// (already witnessed `Clone`), `passes` are POD, bounds are `Copy`. The repo
 /// represents an owned GPU texture as `PooledTexture`, which is `!Clone` (it
 /// reclaims its pool slot on `Drop`); adding such a field would break the
@@ -464,7 +464,7 @@ pub(crate) struct SavedLayer {
 /// `Clone` is derived because all fields are plain CPU data (no GPU handles).
 /// This is the compile-time purity witness: `DrawSegment` can be cloned without
 /// touching any `wgpu::Device`, `wgpu::Queue`, `wgpu::Encoder`, or `wgpu::TextureView`.
-/// The deterministic-replay test (T11) snapshots a `DrawSegment` before replay to assert
+/// The deterministic-replay test snapshots a `DrawSegment` before replay to assert
 /// the IR is unchanged by `GpuReplay::submit`.
 #[derive(Debug, Clone)]
 pub(crate) struct DrawSegment {
@@ -628,7 +628,7 @@ impl Default for DrawSegment {
 /// offscreen at replay time so `flush_advanced_layer` can read the backdrop and
 /// compute the correct non-separable blend.
 ///
-/// ## T11 purity contract
+/// ## IR-purity contract
 ///
 /// `DrawSegment` derives `Clone` as the compile-time IR-purity witness.
 /// `AdvancedShapeOp` also derives `Clone` for the same reason — it must be
@@ -690,7 +690,7 @@ pub(crate) struct AdvancedShapeOp {
 ///   outside the geometry boundary.  See the coverage-destructive exception list
 ///   in `batches/shapes.rs` and `batches/paths.rs`.
 ///
-/// ## T11 purity contract
+/// ## IR-purity contract
 ///
 /// `SsaaPathOp` derives `Clone` — it is handle-free (no `wgpu::*` fields),
 /// matching the [`AdvancedShapeOp`] invariant.  `BlendMode` is `Copy`.
@@ -809,7 +809,7 @@ pub(crate) struct PendingOpacityLayer {
 //      the new variants under `cfg(test)` so `dead_code` stays satisfied there
 //      (the `#[cfg_attr(not(test), allow(dead_code))]` on the variants covers only
 //      the non-test build, where no production producer exists until Slice 1); and
-//   2. assert the new IR is `Clone` + handle-free (T11 purity), so any future field
+//   2. assert the new IR is `Clone` + handle-free (the IR-purity witness), so any future field
 //      holding a live GPU handle fails to compile — guarding IR purity in CI.
 #[cfg(test)]
 mod task0_ir_witnesses {
@@ -937,7 +937,7 @@ mod task0_ir_witnesses {
         assert_ne!(GammaDirection::SrgbToLinear, GammaDirection::LinearToSrgb);
     }
 
-    /// `FilterOp` carrying a `Morph` pass is still `Clone` (T11 purity witness).
+    /// `FilterOp` carrying a `Morph` pass is still `Clone` (the IR-purity witness).
     #[test]
     fn filter_op_with_morph_pass_is_pure_cpu_data() {
         let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(64.0), px(64.0));
@@ -981,7 +981,7 @@ mod task0_ir_witnesses {
         assert!(matches!(pass, ImageFilterPass::Blur { .. }));
     }
 
-    /// `FilterOp` carrying a `Blur` pass is still `Clone` (T11 purity witness).
+    /// `FilterOp` carrying a `Blur` pass is still `Clone` (the IR-purity witness).
     #[test]
     fn filter_op_with_blur_pass_is_pure_cpu_data() {
         let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(64.0), px(64.0));

@@ -821,9 +821,9 @@ mod unit_tests {
         }
     }
 
-    // ── SsaaPathOp is Clone (T11 purity witness) ─────────────────────────────
+    // ── SsaaPathOp is Clone (the IR-purity witness) ──────────────────────────
 
-    /// `SsaaPathOp` must implement `Clone` (T11 IR-purity contract).
+    /// `SsaaPathOp` must implement `Clone` (the IR-purity contract).
     ///
     /// Derivability of `Clone` proves no GPU handle is embedded in the record IR.
     #[test]

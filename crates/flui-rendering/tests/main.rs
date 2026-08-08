@@ -42,6 +42,8 @@ mod layout_offset_commit;
 mod layout_poison;
 #[path = "layout_raw_bridge.rs"]
 mod layout_raw_bridge;
+#[path = "lazy_sliver_list_child_build_contract.rs"]
+mod lazy_sliver_list_child_build_contract;
 #[path = "paint_dirty_flag_discipline.rs"]
 mod paint_dirty_flag_discipline;
 #[path = "paint_fragment_snapshot.rs"]
@@ -78,5 +80,3 @@ mod sliver_to_box_adapter;
 mod transform_to;
 #[path = "u21b_cyclic_intrinsic_query.rs"]
 mod u21b_cyclic_intrinsic_query;
-#[path = "u3c_lazy_sliver_contract.rs"]
-mod u3c_lazy_sliver_contract;
