@@ -172,17 +172,144 @@ struct WindowedGpuStack {
     gpu_profiler: Option<super::profiler::GpuFrameProfiler>,
 }
 
+/// The renderer's two raw platform handles, wrapped so `Renderer: Send`
+/// follows by compiler derivation instead of a blanket, hand-written
+/// assertion covering every field.
+///
+/// `RawWindowHandle`/`RawDisplayHandle` contain `NonNull<c_void>` on some
+/// platforms (e.g. `UiKitWindowHandle`) and are therefore `!Send` by
+/// default. Confining them behind this newtype means the crate's one
+/// manual `unsafe impl Send` reasons about exactly these two fields — see
+/// its SAFETY comment below — rather than asserting `Send` for every field
+/// `Renderer` has today *and every field it gains later* (ADR-0045
+/// decision 1: the old blanket `Send` impl on `Renderer` itself reasoned
+/// about only these two handles).
+struct RawHandles {
+    /// `None` for offscreen renderers.
+    window: Option<raw_window_handle::RawWindowHandle>,
+    /// `None` for offscreen renderers, alongside `window`.
+    display: Option<raw_window_handle::RawDisplayHandle>,
+}
+
+// SAFETY: `RawHandles` is Plain-Old-Data -- two `Copy` enums, no pointee is
+// touched by relocating the value itself, so *moving* it to another thread
+// cannot race or corrupt memory on its own. That is the whole of what
+// `Send` promises; it says nothing about which thread may legally *use*
+// the pointee, and this crate's one consumer of these fields
+// (`Renderer::recover`, via `build_windowed_gpu_stack` and its
+// `create_surface_unsafe` call) does dereference them, exclusively under
+// `&mut self` (no two threads can call `recover` concurrently on the same
+// `Renderer`). Per platform, checked against the crates actually in this
+// workspace's dependency graph rather than assumed:
+//
+// - **Win32** (`Win32WindowHandle` / `WindowsDisplayHandle`): the HWND is
+//   an opaque value (`NonZeroIsize`), not a pointer into thread-owned
+//   memory; raw-window-handle 0.6.2 itself asserts
+//   `Win32WindowHandle: Send + Sync` (src/lib.rs:482). Creating a DXGI
+//   swap chain against an HWND from a thread other than the one that
+//   created the window is a documented, widely used pattern -- the
+//   message-loop is the HWND's only thread-affine property, and nothing
+//   here posts messages. `WindowsDisplayHandle` is a zero-field marker
+//   (raw-window-handle src/windows.rs) -- nothing to invalidate.
+// - **AppKit** (`AppKitWindowHandle` / `AppKitDisplayHandle`): **not safe
+//   to dereference off the main thread today.** raw-window-handle 0.6.2
+//   documents this directly -- "NSView can only be accessed from the main
+//   thread of the application. This struct is `!Send` and `!Sync` to help
+//   with ensuring that" (src/appkit.rs:48-49) -- and wgpu-hal 29.0.4's
+//   Metal backend enforces it in code: `Instance::create_surface`
+//   (src/metal/mod.rs:161) calls `raw_window_metal::Layer::from_ns_view`,
+//   which panics via `MainThreadMarker::new().expect(..)` off the main
+//   thread (raw-window-metal 1.1.0 src/lib.rs:402-403).
+//   `AppKitDisplayHandle` is itself a zero-field marker, so the display
+//   half is inert; the window half is the hazard. **This means
+//   `Renderer::recover()` -- which ADR-0045 decision 1 designates
+//   raster-affine -- cannot run on a non-main raster thread on AppKit
+//   without hitting this panic.** That is a gap between this narrowing and
+//   decision 1's stated plan, not something this argument papers over: it
+//   is a known, reported, open finding against the ADR, not resolved by
+//   this impl. `Send` itself stays sound (relocating the bytes alone does
+//   nothing), but a raster-thread `recover()` call is not safe to reach on
+//   this platform yet.
+// - **X11 via winit's fallback backend** (`XlibWindowHandle` /
+//   `XlibDisplayHandle`): safe. `XlibWindowHandle` (the window XID) is
+//   already `Send + Sync` per raw-window-handle's own assertions
+//   (src/lib.rs:477). The `Display*` in `XlibDisplayHandle` is the
+//   pointer winit's `XConnection::new` opens; winit 0.30.13 calls
+//   `(xlib.XInitThreads)()` unconditionally before `XOpenDisplay`
+//   (src/platform_impl/linux/x11/xdisplay.rs:76) and itself asserts
+//   `unsafe impl Send for XConnection {}` / `Sync` on that identical
+//   pointer (same file, :62-63) -- winit's own authors made and shipped
+//   this exact judgment call already. The connection is opened once and
+//   shared for the life of the event loop, which outlives every window
+//   built from it, so the pointer stays valid for as long as any
+//   `Renderer` built against it.
+// - **Wayland** (winit fallback): not verified to the same standard as the
+//   two cases above. `wl_display` is documented by libwayland as
+//   supporting multi-threaded access via its own read-lock protocol, and
+//   this crate's only use of the pointer is a one-shot surface-
+//   registration call, not raw event dispatch -- no blocker found, but
+//   this is a lower-confidence claim than the X11 and Win32 cases and
+//   should be reverified before anything here is load-bearing for
+//   Wayland specifically.
+//
+// Pointee *validity* (as opposed to thread-affinity) is argued separately
+// from the above: the window handle's validity is tied to the window's
+// own lifetime (flui-app's `App` owns it for the `Renderer`'s whole life);
+// the display handle's validity is tied to the platform connection, which
+// outlives every window built from it (argued per-platform above; Win32
+// and AppKit carry no display-handle data to invalidate in the first
+// place).
+#[allow(unsafe_code)]
+unsafe impl Send for RawHandles {}
+
+#[cfg(test)]
+mod raw_handles_field_pin {
+    use super::RawHandles;
+
+    /// Pins `RawHandles`' field set at exactly the two fields the SAFETY
+    /// argument above covers.
+    ///
+    /// The struct literal below has no `..Default::default()`, and the
+    /// destructure has no `..` -- both are exhaustive, so a field smuggled
+    /// onto `RawHandles` (e.g. `smuggled: Option<std::rc::Rc<u8>>`, read
+    /// from `Renderer::recover`) fails to compile here: E0063 on the
+    /// literal, E0027 on the destructure. This is the check
+    /// `static_assertions::assert_impl_all!(Renderer: Send)` cannot do —
+    /// that assertion only proves `Send` still holds, and it would still
+    /// (correctly, per this same `unsafe impl`) hold for the smuggled
+    /// field too, exactly as the old blanket impl let it silently hold for
+    /// any field. This test is the one that actually goes red.
+    #[test]
+    fn raw_handles_has_exactly_the_two_fields_the_safety_argument_covers() {
+        let handles = RawHandles {
+            window: None,
+            display: None,
+        };
+        let RawHandles {
+            window: _window,
+            display: _display,
+        } = handles;
+    }
+}
+
 /// Cross-platform GPU renderer
 ///
-/// `Send` (see the `unsafe impl Send` below, justified there) but
-/// deliberately never `Sync`: the raster owner
+/// `Send` by compiler derivation: every field is `Send`, including
+/// `raw_handles` via the private `RawHandles` newtype's `unsafe impl
+/// Send` above — the
+/// crate's only remaining manual `Send` assertion, narrowed to exactly the
+/// two fields it reasons about. Deliberately never `Sync`: the raster owner
 /// (`crate::raster_owner::RasterOwner`) has sole mutable access to the
 /// `Renderer`/`Surface`/`Device`/`Queue` it wraps, and a shared `&Renderer`
 /// across threads would defeat that single-mutator contract. No field
 /// grants `Sync` today, so this already holds without a marker type; the
 /// doctest below pins the contract so a future field addition that
 /// accidentally makes every field `Sync` fails loudly at compile time
-/// instead of silently reopening `Arc<Renderer>` shared-mutation:
+/// instead of silently reopening `Arc<Renderer>` shared-mutation. The
+/// `assert_impl_all!`/`assert_not_impl_any!` pair after this struct pins
+/// the `Send`/`!Sync` split itself: a future field that is `!Send` and left
+/// outside `RawHandles` now fails `cargo check` instead of silently riding
+/// a re-widened blanket `Send` impl on `Renderer` itself.
 ///
 /// ```compile_fail
 /// fn assert_sync<T: Sync>() {}
@@ -211,16 +338,11 @@ pub struct Renderer {
     device_lost: Arc<std::sync::atomic::AtomicBool>,
     /// Tracks dirty regions for incremental rendering (skip frames with no damage)
     damage_tracker: flui_layer::damage::DamageTracker,
-    /// Raw window handle stored for self-contained device recovery.
-    ///
-    /// SAFETY: The stored handles are reused by `recover()` to rebuild the wgpu
-    /// surface after a GPU device loss. They remain valid for the same reason the
-    /// existing `wgpu::Surface<'static>` is sound — the window (owned by
-    /// flui-app's `App`) outlives the `Renderer`. `None` for offscreen renderers.
-    raw_window_handle: Option<raw_window_handle::RawWindowHandle>,
-    /// Raw display handle stored alongside `raw_window_handle` for recovery.
-    /// `None` for offscreen renderers.
-    raw_display_handle: Option<raw_window_handle::RawDisplayHandle>,
+    /// Raw platform handles, wrapped in [`RawHandles`] so `Renderer: Send`
+    /// is a compiler derivation rather than a hand-written assertion.
+    /// Reused by `recover()` to rebuild the wgpu surface after a GPU device
+    /// loss; the validity argument lives on `RawHandles`' SAFETY comment.
+    raw_handles: RawHandles,
     /// GPU timestamp profiler. `None` when the `gpu-profiler` feature is off
     /// or the adapter does not expose `wgpu::Features::TIMESTAMP_QUERY`.
     #[cfg(feature = "gpu-profiler")]
@@ -254,24 +376,19 @@ pub struct Renderer {
     force_full_repaint_next_frame: bool,
 }
 
-// SAFETY: `Renderer` stores `Option<RawWindowHandle>` and
-// `Option<RawDisplayHandle>`, which contain `NonNull<c_void>` on some
-// platforms (e.g. `UiKitWindowHandle`) and are therefore `!Send` by default.
-// The handles are:
-//   1. Extracted once at construction from the live window (or `None` for
-//      offscreen renderers).
-//   2. Read only inside `recover(&mut self)`, which requires exclusive access —
-//      no two threads can call `recover` concurrently on the same `Renderer`.
-//   3. Never sent to another thread while they are being dereferenced; the
-//      dereferencing happens only inside the `unsafe` block in
-//      `build_windowed_gpu_stack`, which runs in the same logical context as the
-//      caller holding `&mut self`.
-// This is the same Send posture that wgpu itself uses for its internal raw-handle
-// wrappers: the window pointer is accessed exclusively and never aliased across
-// threads. The owning window (flui-app's `App`) is alive for the lifetime of the
-// `Renderer`, satisfying the validity requirement.
-#[allow(unsafe_code)]
-unsafe impl Send for Renderer {}
+// `Renderer: Send` is now a compiler derivation: every field is `Send`,
+// including `raw_handles` via `RawHandles`' own `unsafe impl Send` above.
+// There is deliberately no manual `Send` impl on `Renderer` itself any
+// more — ADR-0045 decision 1 narrowed the crate's one manual `Send`
+// assertion to exactly the two raw-handle fields it is actually about, so
+// a future field that is `!Send` and left outside `RawHandles` fails
+// `cargo check` on its own instead of silently riding a blanket impl.
+// Pinned below; `docs/runtime-contract.toml` carries the matching
+// forbidden-pattern guards (both this bound's re-widening and its `!Sync`
+// sibling) so a hand-reintroduced blanket impl fails `just
+// runtime-conformance-check` too, workspace-wide.
+static_assertions::assert_impl_all!(Renderer: Send);
+static_assertions::assert_not_impl_any!(Renderer: Sync);
 
 impl Renderer {
     /// Create a new renderer with automatic backend selection
@@ -332,8 +449,10 @@ impl Renderer {
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
-            raw_window_handle: Some(raw_window_handle),
-            raw_display_handle,
+            raw_handles: RawHandles {
+                window: Some(raw_window_handle),
+                display: raw_display_handle,
+            },
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: stack.gpu_profiler,
             #[cfg(test)]
@@ -605,8 +724,10 @@ impl Renderer {
             supports_copy_src: false,
             device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
-            raw_window_handle: None,
-            raw_display_handle: None,
+            raw_handles: RawHandles {
+                window: None,
+                display: None,
+            },
             // Offscreen renderers have no surface present, so profiling results
             // cannot be harvested with process_finished_frame. Disabled here.
             #[cfg(feature = "gpu-profiler")]
@@ -664,14 +785,14 @@ impl Renderer {
 
     /// Rebuild the GPU device and surface after a device-lost event.
     ///
-    /// On the **windowed** path (`raw_window_handle` is `Some`) this rebuilds
+    /// On the **windowed** path (`raw_handles.window` is `Some`) this rebuilds
     /// the entire GPU stack (instance → adapter → device → surface → painter →
     /// offscreen) and swaps the new pieces into `self`. The recovered surface
     /// is configured at the **current** surface size captured from `self.config`
     /// (falling back to 800×600), so the window keeps its correct dimensions
     /// without a separate resize call.
     ///
-    /// On the **offscreen** path (`raw_window_handle` is `None`) only the
+    /// On the **offscreen** path (`raw_handles.window` is `None`) only the
     /// device/queue are replaced; surface, painter, and offscreen are left as
     /// `None`.
     ///
@@ -688,7 +809,7 @@ impl Renderer {
     /// alive).
     #[tracing::instrument(level = "warn", skip(self))]
     pub async fn recover(&mut self) -> EngineResult<()> {
-        if let Some(raw_window) = self.raw_window_handle {
+        if let Some(raw_window) = self.raw_handles.window {
             // Capture current dimensions before rebuild so the recovered
             // surface matches the live window size instead of defaulting to
             // 800×600.
@@ -698,7 +819,7 @@ impl Renderer {
                 .map_or((800u32, 600u32), |c| (c.width, c.height));
 
             let stack =
-                Self::build_windowed_gpu_stack(raw_window, self.raw_display_handle, width, height)
+                Self::build_windowed_gpu_stack(raw_window, self.raw_handles.display, width, height)
                     .await?;
 
             self.instance = stack.instance;

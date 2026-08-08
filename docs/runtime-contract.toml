@@ -3041,6 +3041,39 @@ why = "the renderer single-owner contract: Renderer is Send + !Sync — a single
 allow_files = []
 
 [[forbidden_pattern]]
+pattern = "unsafe impl Send for Renderer"
+why = """
+ADR-0045 decision 1: the old blanket `Send` impl on `Renderer` asserted the \
+bound for every present and future field while its SAFETY comment reasoned \
+about exactly two (the raw window/display handles). It was narrowed to a \
+private `RawHandles` newtype carrying just those two fields, so `Renderer` \
+now derives the bound from its field types instead of asserting it \
+directly. Reintroducing a manual impl on `Renderer` itself re-widens the \
+assertion back to every field, silently, exactly as before. This scan is \
+workspace-wide (no `scope`), unlike a port-check.sh `check()`, which closes \
+a same-crate-different-file reintroduction a file-scoped grep would miss. \
+Not closed by this entry: an arbitrary `type` alias to `Renderer` under a \
+different name (e.g. `type X = Renderer; unsafe impl Send for X {}`) — no \
+name-based textual scan, substring or regex, can close that, since the \
+alias name carries no trace of "Renderer" for any pattern to match against. \
+The two sibling entries directly below catch the two path-prefixed \
+spellings named during review (`self::` and the fully-qualified \
+`crate::wgpu::` form); this is a best-effort enumeration against the \
+realistic reintroduction shapes, not a claim of completeness.\
+"""
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "unsafe impl Send for self::Renderer"
+why = "path-prefixed spelling of the entry above (ADR-0045 decision 1) — same rationale, same forbidden shape."
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "unsafe impl Send for crate::wgpu::Renderer"
+why = "fully-qualified spelling of the entry above (ADR-0045 decision 1) — same rationale, same forbidden shape."
+allow_files = []
+
+[[forbidden_pattern]]
 pattern = "debug_assert_owner"
 scope = "crates/flui-platform/src/platforms/macos/clipboard.rs"
 why = "the clipboard ownership contract: clipboard operations are documented off-main-safe; an affinity assert would panic legitimate existing cross-thread callers"

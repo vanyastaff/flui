@@ -891,6 +891,15 @@ check "ADR-0037/focus-owner" \
   crates/flui-material \
   crates/flui-app
 
+# ADR-0045 decision 1's `Renderer: Send` re-widening guard lives in
+# `docs/runtime-contract.toml` as a `forbidden_pattern` entry, right next
+# to the pre-existing sibling `unsafe impl Sync for Renderer` entry —
+# checked by `just runtime-conformance-check`, not here. That scan is
+# workspace-wide by default (this trigger's file-scoped `check()` would
+# have missed a reintroduction landing in a different file of the crate),
+# so the two Renderer concurrency guards live at one audit point instead
+# of being split across two different mechanisms.
+
 # -----------------------------------------------------------------------------
 # Trigger 12 — lock placement in public API.
 #

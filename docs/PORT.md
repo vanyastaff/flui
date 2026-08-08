@@ -272,6 +272,15 @@ Flutter-port trigger.
 
 **Back-reference:** [ADR-0037](adr/ADR-0037-presentation-ownership-domains.md).
 
+Note: ADR-0045 decision 1's `Renderer: Send` re-widening guard is **not**
+here — it lives in `docs/runtime-contract.toml` as a `forbidden_pattern`
+entry next to the pre-existing sibling `unsafe impl Sync for Renderer`
+entry, checked by `just runtime-conformance-check`. That scanner is
+workspace-wide by default, closing a same-crate-but-different-file
+reintroduction that a `port-check.sh` `check()` scoped to one file would
+have missed; keeping both `Renderer` concurrency guards on one audit point
+was chosen deliberately over splitting them across two mechanisms.
+
 ### 12. Lock placement in public API
 
 **SP-6 — `RwLock` / `Mutex` / `Arc<RwLock<...>>` in a `pub fn` return type OR a `pub` field of a trait/struct.** Lock types leak the framework's concurrency model across module boundaries; every caller has to reason about lock ordering / poisoning / re-entrancy. SP-6's verdict is that locks should live behind private fields; public APIs should expose immutable snapshots or scoped callbacks.

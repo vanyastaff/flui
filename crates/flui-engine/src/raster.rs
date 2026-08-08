@@ -28,7 +28,15 @@ use crate::error::EngineError;
 /// Lyon and wgpu are internal details of the wgpu implementation.
 ///
 /// The trait is dyn-compatible (no generic parameters, no `async` methods).
-pub trait RasterBackend {
+/// `Send` is a supertrait (ADR-0045 decision 1): the raster owner moves the
+/// backend onto its own thread once at lane construction, so every backend
+/// implementation must cross that boundary. Note that this does **not** make
+/// `dyn RasterBackend` itself `Send`: Rust never infers an auto-trait bound
+/// onto a trait object from a supertrait, so a use site that needs the
+/// object to cross a thread must spell out `dyn RasterBackend + Send`. A use
+/// site that does not — a `Box<dyn RasterBackend>` staying on one thread —
+/// needs nothing extra.
+pub trait RasterBackend: Send {
     /// Render a [`Scene`] to the surface.
     ///
     /// Traverses the scene's `LayerTree` and dispatches each layer's
@@ -107,5 +115,79 @@ impl RasterBackend for crate::wgpu::Renderer {
 
     fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
         self.reconfigure_surface()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal backend used only to exercise `RasterBackend` as a trait
+    /// object — not a behavioral fake for the wgpu backend. Every method
+    /// but `mark_full_repaint`/`has_damage` is a no-op / fixed return.
+    #[derive(Default)]
+    struct NoOpBackend {
+        damage: bool,
+    }
+
+    impl RasterBackend for NoOpBackend {
+        fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+            Ok(false)
+        }
+
+        fn resize(&mut self, _width: u32, _height: u32) {}
+
+        fn is_device_lost(&self) -> bool {
+            false
+        }
+
+        fn mark_dirty(&mut self, _rect: Rect<Pixels>) {
+            self.damage = true;
+        }
+
+        fn mark_full_repaint(&mut self) {
+            self.damage = true;
+        }
+
+        fn has_damage(&self) -> bool {
+            self.damage
+        }
+
+        fn size(&self) -> (u32, u32) {
+            (0, 0)
+        }
+
+        fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    /// Moves a `Box<dyn RasterBackend + Send>` to a real OS thread and
+    /// calls through the trait object there.
+    ///
+    /// ADR-0045 decision 1 requires `RasterBackend: Send` and
+    /// `dyn RasterBackend + Send` to stay nameable and dyn-safe — the exact
+    /// shape the raster lane needs once it threads a boxed backend across
+    /// the owner boundary. Naming `+ Send` on the trait-object type is not
+    /// implied by the `Send` supertrait alone (Rust does not infer a
+    /// supertrait auto-trait bound onto a bare `dyn Trait`), so this pins
+    /// both properties together rather than either one in isolation. A
+    /// regression in either — the trait losing dyn-safety, or a backend
+    /// silently losing `Send` — fails this test, not just a hypothetical.
+    #[test]
+    fn raster_backend_is_dyn_safe_and_moves_across_threads() {
+        let backend: Box<dyn RasterBackend + Send> = Box::new(NoOpBackend::default()); // PORT-CHECK-OK-DYN: proves ADR-0045 decision 1's object-safety requirement (dyn RasterBackend + Send stays nameable/dyn-safe); test-only, no production dyn RasterBackend site exists today.
+        let handle = std::thread::spawn(move || {
+            let mut backend = backend;
+            assert!(!backend.has_damage(), "fresh backend starts with no damage");
+            backend.mark_full_repaint();
+            assert!(
+                backend.has_damage(),
+                "mark_full_repaint must be observable through the trait object \
+                 after crossing the thread boundary"
+            );
+            backend.size()
+        });
+        assert_eq!(handle.join().expect("owner thread must not panic"), (0, 0));
     }
 }
