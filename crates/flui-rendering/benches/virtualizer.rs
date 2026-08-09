@@ -22,7 +22,7 @@
 //!   *beats* the tree until ~5k items, which would understate the tree's win and
 //!   measure the wrong alternative (a flat array is not the rejected Fenwick).
 //!
-//! ## Lazy sliver consumer (U3c)
+//! ## Lazy sliver consumer
 //!
 //! The `lazy_sliver` group measures the two hot paths of
 //! [`RenderSliverListLazy`] at N = 1k / 10k / 100k items:
@@ -308,7 +308,7 @@ fn bench_structural_growth(c: &mut Criterion) {
 }
 
 // ============================================================================
-// Lazy sliver consumer (U3c)
+// Lazy sliver consumer
 // ============================================================================
 //
 // Two benches at N = 1k / 10k / 100k:

@@ -82,8 +82,8 @@ pub enum DeferredMutation {
         /// stamping" (legacy / non-lazy inserts).
         logical_index: Option<usize>,
         /// Pre-built parent-data to install on the fresh child node immediately
-        /// after insertion.  Used by the lazy-sliver re-entrant build contract
-        /// (U3c D1): `ErasedSliverLayoutCtx::build_and_layout_box_child` seeds
+        /// after insertion.  Used by the lazy-sliver re-entrant build contract:
+        /// `ErasedSliverLayoutCtx::build_and_layout_box_child` seeds
         /// a `SliverMultiBoxAdaptorParentData { index: logical_index }` here so
         /// `apply_deferred_mutation` can set it even though the freshly-inserted
         /// `RenderNode` starts with `parent_data = None`.

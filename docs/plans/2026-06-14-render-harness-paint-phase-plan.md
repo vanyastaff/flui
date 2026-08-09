@@ -558,14 +558,14 @@ git commit -m "test(rendering): compile-checked phase-tagged run handles (run_to
 
 - [ ] **Step 1: Write the failing test**
 
-Add a tiny render object whose `paint` panics, mount it, and assert `try_run_frame` returns `Err(Poisoned)`. (Define the panicking object inline in the test file, mirroring the `FixedBox` pattern in `tests/u3c_lazy_sliver_contract.rs`.)
+Add a tiny render object whose `paint` panics, mount it, and assert `try_run_frame` returns `Err(Poisoned)`. (Define the panicking object inline in the test file, mirroring the `FixedBox` pattern in `tests/lazy_sliver_list_child_build_contract.rs`.)
 
 ```rust
 #[test]
 fn try_run_frame_captures_poisoned_paint() {
     // A leaf RenderBox whose paint panics -> pipeline catch_unwind -> RenderError::Poisoned.
     // (impl RenderBox for PanicPaintBox with perform_layout returning a fixed Size and
-    //  paint() { panic!("boom") }; see u3c_lazy_sliver_contract.rs for the impl scaffold.)
+    //  paint() { panic!("boom") }; see lazy_sliver_list_child_build_contract.rs for the impl scaffold.)
     let err = RenderTester::mount(box_node(PanicPaintBox))
         .with_size(Size::new(px(10.0), px(10.0)))
         .try_run_frame()
@@ -673,13 +673,13 @@ fn snapshot_opacity_layer() {
 #[test]
 fn snapshot_lazy_sliver_list_paints_only_visible_band() {
     // Mount RenderSliverListLazy under the SliverHost scaffold from
-    // tests/u3c_lazy_sliver_contract.rs; pump to settle; snapshot.
+    // tests/lazy_sliver_list_child_build_contract.rs; pump to settle; snapshot.
     // The snapshot must show pictures for ONLY the visible+cache children —
     // the virtualization win asserted at the paint-structure layer.
 }
 ```
 
-> Use the exact `RenderDecoratedBox`/`BoxDecoration`/`RenderOpacity` constructors (grep `crates/flui-rendering/src/objects/`). For the lazy-sliver snapshot, reuse the `SliverHost` + `FixedBox` + `build_and_pump` scaffold already in `tests/u3c_lazy_sliver_contract.rs` (copy the minimal harness or factor it into `testing::sliver`).
+> Use the exact `RenderDecoratedBox`/`BoxDecoration`/`RenderOpacity` constructors (grep `crates/flui-rendering/src/objects/`). For the lazy-sliver snapshot, reuse the `SliverHost` + `FixedBox` + `build_and_pump` scaffold already in `tests/lazy_sliver_list_child_build_contract.rs` (copy the minimal harness or factor it into `testing::sliver`).
 
 - [ ] **Step 2: Generate + review the snapshots**
 

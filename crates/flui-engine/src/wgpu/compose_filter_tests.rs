@@ -460,9 +460,9 @@ mod gpu_tests {
         );
     }
 
-    // ── C2: Flatten-nesting — CPU structural ─────────────────────────────────
+    // ── Flatten-nesting — CPU structural ──────────────────────────────────────
 
-    /// C2: `filter_ops_for_test` returns the correctly flattened pass sequence for
+    /// `filter_ops_for_test` returns the correctly flattened pass sequence for
     /// two nested `Compose` AST shapes.
     ///
     /// Exercises `flatten_compose` in `backend.rs` via the painter IR record path
@@ -518,14 +518,14 @@ mod gpu_tests {
             assert_eq!(
                 recorded_ops.len(),
                 1,
-                "C2 case-1: expected exactly 1 FilterOp, got {n}",
+                "case 1: expected exactly 1 FilterOp, got {n}",
                 n = recorded_ops.len()
             );
             let passes = &recorded_ops[0].passes;
             assert_eq!(
                 passes.as_slice(),
                 &[blur_pass.clone(), dilate_pass.clone()],
-                "C2 case-1: Compose([Compose([Blur]), Dilate]) should flatten to [Blur, Dilate]"
+                "case 1: Compose([Compose([Blur]), Dilate]) should flatten to [Blur, Dilate]"
             );
         }
 
@@ -546,14 +546,14 @@ mod gpu_tests {
             assert_eq!(
                 recorded_ops.len(),
                 1,
-                "C2 case-2: expected exactly 1 FilterOp, got {n}",
+                "case 2: expected exactly 1 FilterOp, got {n}",
                 n = recorded_ops.len()
             );
             let passes = &recorded_ops[0].passes;
             assert_eq!(
                 passes.as_slice(),
                 &[blur_pass, dilate_pass, matrix_pass],
-                "C2 case-2: Compose([Blur, Compose([Dilate, Matrix])]) should flatten to \
+                "case 2: Compose([Blur, Compose([Dilate, Matrix])]) should flatten to \
                  [Blur, Dilate, Matrix]"
             );
         }
@@ -663,9 +663,9 @@ mod gpu_tests {
         }
     }
 
-    // ── C4: Cumulative bounds — CPU structural ────────────────────────────────
+    // ── Cumulative bounds — CPU structural ────────────────────────────────────
 
-    /// C4: `cumulative_growth` accumulates Blur kernel radii and treats ColorMatrix
+    /// `cumulative_growth` accumulates Blur kernel radii and treats ColorMatrix
     /// as bounds-PRESERVING (zero growth).
     ///
     /// a) `[Blur(σ=4), ColorMatrix, Blur(σ=4)]` → growth = 2 × kernel_radius(4).
@@ -691,7 +691,7 @@ mod gpu_tests {
             super::super::painter::cumulative_growth(passes_two_blurs_one_matrix);
         assert!(
             (growth_two_blurs - expected_growth_px).abs() < 0.5,
-            "C4a: cumulative_growth([Blur(σ={SIGMA}), Matrix, Blur(σ={SIGMA})]) = {growth_two_blurs}, \
+            "case a: cumulative_growth([Blur(σ={SIGMA}), Matrix, Blur(σ={SIGMA})]) = {growth_two_blurs}, \
              expected {expected_growth_px} (= 2 × kernel_radius({SIGMA}) = 2 × {})",
             kernel_radius(SIGMA),
         );
@@ -704,14 +704,14 @@ mod gpu_tests {
         let growth_two_matrices = super::super::painter::cumulative_growth(passes_two_matrices);
         assert!(
             growth_two_matrices == 0.0,
-            "C4b: cumulative_growth([ColorMatrix, ColorMatrix]) = {growth_two_matrices}, \
+            "case b: cumulative_growth([ColorMatrix, ColorMatrix]) = {growth_two_matrices}, \
              expected 0.0 (ColorMatrix is bounds-PRESERVING)"
         );
     }
 
-    // ── C5: Empty/degenerate — CPU structural ────────────────────────────────
+    // ── Empty/degenerate — CPU structural ─────────────────────────────────────
 
-    /// C5: Degenerate Compose cases:
+    /// Degenerate Compose cases:
     ///
     /// a) `Compose([])` opens a plain group layer → no `DrawItem::Filter` in the IR.
     ///
@@ -740,7 +740,7 @@ mod gpu_tests {
             let recorded_ops = painter.filter_ops_for_test();
             assert!(
                 recorded_ops.is_empty(),
-                "C5a: Compose([]) should emit no FilterOp (falls through to plain group layer); \
+                "case a: Compose([]) should emit no FilterOp (falls through to plain group layer); \
                  got {n} FilterOp(s)",
                 n = recorded_ops.len()
             );
@@ -763,19 +763,19 @@ mod gpu_tests {
             assert_eq!(
                 recorded_ops.len(),
                 1,
-                "C5b: Compose([Matrix]) should emit exactly 1 FilterOp; got {n}",
+                "case b: Compose([Matrix]) should emit exactly 1 FilterOp; got {n}",
                 n = recorded_ops.len()
             );
             let filter_op = &recorded_ops[0];
             assert_eq!(
                 filter_op.passes.as_slice(),
                 &[ImageFilterPass::ColorMatrix(matrix_values)],
-                "C5b: single-pass Compose should produce one ColorMatrix pass"
+                "case b: single-pass Compose should produce one ColorMatrix pass"
             );
             // ColorMatrix grows bounds by 0 px (bounds-PRESERVING).
             assert_eq!(
                 filter_op.grown_bounds, filter_op.content_bounds,
-                "C5b: ColorMatrix is bounds-PRESERVING; grown_bounds should equal content_bounds"
+                "case b: ColorMatrix is bounds-PRESERVING; grown_bounds should equal content_bounds"
             );
         }
     }

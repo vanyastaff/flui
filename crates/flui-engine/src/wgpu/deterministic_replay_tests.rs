@@ -1,7 +1,6 @@
-//! T11 C5-gate: deterministic-replay acceptance tests.
+//! Deterministic-replay acceptance tests.
 //!
-//! This module implements the three-part C5 acceptance criterion from
-//! `.rust-studio/specs/flui-engine-overhaul/tasks.md` task 11:
+//! This module proves three properties of the record/replay boundary:
 //!
 //! 1. **A/B deterministic-replay test** — record one scene's Command-IR, then replay it
 //!    to two *independent* offscreen render targets (encoder A → target A, encoder B → target
@@ -92,7 +91,7 @@ mod tests {
     /// item) is `Clone` + handle-free. Its fields are `DrawSegment` (witnessed
     /// above), `BlendMode` (`Copy`), and `Rect<Pixels>` (`Copy`). A future field
     /// holding a live GPU handle (`Texture`/`TextureView`/`BindGroup`/`Sampler`)
-    /// would make this `const` fail to compile — guarding T11 IR-purity for the
+    /// would make this `const` fail to compile — guarding IR-purity for the
     /// new variant.
     const _ADVANCED_SHAPE_OP_IS_CLONE: fn(
         crate::wgpu::command_ir::AdvancedShapeOp,
@@ -149,7 +148,7 @@ mod tests {
         }))
         .expect("a GPU adapter must be available for deterministic-replay tests");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("T11 Deterministic Replay Test Device"),
+            label: Some("deterministic-replay test device"),
             ..Default::default()
         }))
         .expect("a GPU device must be available for deterministic-replay tests");
@@ -159,7 +158,7 @@ mod tests {
     /// Create a fresh render target (RENDER_ATTACHMENT | COPY_SRC) and its view.
     fn make_render_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("T11 render target"),
+            label: Some("deterministic-replay render target"),
             size: wgpu::Extent3d {
                 width: SCENE_SIZE,
                 height: SCENE_SIZE,
@@ -182,7 +181,7 @@ mod tests {
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("T11 clear pass"),
+                label: Some("deterministic-replay clear pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
                     resolve_target: None,
@@ -214,7 +213,7 @@ mod tests {
         let padded_stride = unpadded.div_ceil(align) * align;
 
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("T11 readback staging buffer"),
+            label: Some("deterministic-replay readback staging buffer"),
             size: u64::from(padded_stride) * u64::from(SCENE_SIZE),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -309,10 +308,10 @@ mod tests {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Test 1: deterministic A/B dual-target replay (core C5 gate)
+    // Test 1: deterministic A/B dual-target replay
     // ──────────────────────────────────────────────────────────────────────────
 
-    /// C5 gate: replay the same recorded Command-IR to two independent offscreen
+    /// Replay the same recorded Command-IR to two independent offscreen
     /// render targets (encoder A → target A, encoder B → target B) and assert that
     /// both full-frame pixel readbacks are byte-identical.
     ///
@@ -408,7 +407,7 @@ mod tests {
             (SCENE_SIZE, SCENE_SIZE),
         );
         let mut encoder_a = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("T11-A"),
+            label: Some("deterministic-replay encoder A"),
         });
         painter_a
             .replay_items_for_test(items_for_replay_a, &view_a, &mut encoder_a)
@@ -423,7 +422,7 @@ mod tests {
             (SCENE_SIZE, SCENE_SIZE),
         );
         let mut encoder_b = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("T11-B"),
+            label: Some("deterministic-replay encoder B"),
         });
         painter_b
             .replay_items_for_test(items_for_replay_b, &view_b, &mut encoder_b)
@@ -449,8 +448,8 @@ mod tests {
 
         assert!(
             first_mismatch.is_none(),
-            "pixel readbacks from replay A and replay B must be byte-identical \
-             (C5 deterministic-replay gate). First divergence at byte index {} \
+            "pixel readbacks from replay A and replay B must be byte-identical. \
+             First divergence at byte index {} \
              (pixel {}, channel {}): A={:#04x} B={:#04x}",
             first_mismatch.unwrap().0,
             first_mismatch.unwrap().0 / 4,
@@ -550,7 +549,7 @@ mod tests {
         vec![DrawItem::Segment(seg)]
     }
 
-    /// C5 extension: deterministic A/B replay of a `DrawItem::Filter(Identity)`
+    /// Deterministic A/B replay of a `DrawItem::Filter(Identity)`
     /// scene, proving:
     /// 1. `FilterOp` is `Clone` + handle-free (the `op.clone()` below won't
     ///    compile without the Task 0 seam — the "red→green" structural gate).
@@ -606,7 +605,7 @@ mod tests {
             (SCENE_SIZE, SCENE_SIZE),
         );
         let mut encoder_a = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("T11-Filter-A"),
+            label: Some("deterministic-replay filter encoder A"),
         });
         painter_a
             .replay_items_for_test(items_a, &view_a, &mut encoder_a)
@@ -621,7 +620,7 @@ mod tests {
             (SCENE_SIZE, SCENE_SIZE),
         );
         let mut encoder_b = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("T11-Filter-B"),
+            label: Some("deterministic-replay filter encoder B"),
         });
         painter_b
             .replay_items_for_test(items_b, &view_b, &mut encoder_b)
@@ -637,7 +636,7 @@ mod tests {
             (SCENE_SIZE, SCENE_SIZE),
         );
         let mut encoder_c = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("T11-Filter-C-baseline"),
+            label: Some("deterministic-replay filter baseline encoder"),
         });
         painter_c
             .replay_items_for_test(baseline_items, &view_c, &mut encoder_c)
@@ -777,7 +776,7 @@ mod tests {
             (SCENE_SIZE, SCENE_SIZE),
         );
         let mut encoder_d = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("T11-Filter-D-empty-passes"),
+            label: Some("deterministic-replay filter empty-passes encoder"),
         });
         painter_d
             .replay_items_for_test(

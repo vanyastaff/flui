@@ -1,23 +1,28 @@
-//! U3c acceptance tests — re-entrant child-build contract: logical-index
-//! stamping (D1) and bounded child count / deferred dispose (D2).
+//! Acceptance and regression tests for the lazy `SliverList`'s re-entrant
+//! child-build contract: children are built out-of-band during layout, each
+//! freshly attached child must be stamped with its true logical index, and
+//! each child that scrolls out of the cache band must be disposed instead of
+//! accumulating without bound.
 //!
-//! ## 9a — Convergence
+//! ## Convergence
 //! N=1000 items, viewport shows ~K. Drive enough frames to settle. Assert:
 //!   - every attached child's `parent_data.index` equals its true logical index
-//!     (NOT 0) — proves D1 defect is fixed.
+//!     (NOT 0) — proves the logical-index stamp is applied on insert.
 //!   - the visible band's logical indices match the expected visible window.
 //!
-//! ## 9b — Bounded child count
+//! ## Bounded child count
 //! Scroll the viewport across many items over many frames. Assert the attached
-//! child count stays bounded (≈ band size, ≪ N) — proves D2 dispose path works.
+//! child count stays bounded (≈ band size, ≪ N) — proves the deferred-dispose
+//! path evicts off-band children instead of letting the list grow unbounded.
 //!
-//! ## Step-3 regression — logical index stamped on Insert
+//! ## Logical index stamped on Insert
 //! A `RenderSliverListLazy` with a single virtual item forces a deferred Insert
 //! with `logical_index = 0`. After settlement, assert the child's
-//! `SliverMultiBoxAdaptorParentData.index == 0` (not the pre-fix value of
-//! "whatever was in memory"). For a non-trivial index, 9a covers many offsets.
+//! `SliverMultiBoxAdaptorParentData.index == 0` (not whatever was already in
+//! memory before the stamp was written). For a non-trivial index, the
+//! convergence test above covers many offsets.
 //!
-//! ## Step-7 regression — Remove → Insert ordering
+//! ## Remove → Insert ordering
 //! A mixed Remove+Insert batch targeting the same parent applies Remove first.
 
 use std::sync::{
@@ -195,22 +200,23 @@ fn collect_child_indices(
 }
 
 // ============================================================================
-// Step-3 regression: logical index stamped on Insert (non-zero index)
+// Logical index stamped on Insert (non-zero index)
 // ============================================================================
 
-/// Regression guard for Defect 1 (D1): `apply_deferred_mutation` must stamp the
-/// correct logical index onto a freshly-inserted child.
+/// Regression guard: `apply_deferred_mutation` must stamp the correct logical
+/// index onto a freshly-inserted child.
 ///
 /// N=5 items at 50 px each, scroll_offset=100 px → the visible band starts at
 /// logical item 2 (not item 0). After settlement every attached child's index
 /// must equal its true logical index (≥ 2).
 ///
-/// **Why this test catches D1 where the old N=1/scroll=0 test did not:**
-/// The pre-fix `index` field defaulted to `0` — so a child built at slot 0 with
-/// logical index 0 passed trivially. Only a non-zero logical index (scroll_offset
+/// **Why a non-zero scroll offset is required to catch a missing stamp:**
+/// The unstamped `index` field defaults to `0` — so a child built at slot 0 with
+/// logical index 0 would pass trivially. Only a non-zero logical index (scroll_offset
 /// \> 0) makes the stamp observable: if `apply_deferred_mutation` is a no-op, the
 /// built child has `index = 0` instead of `index = 2`, which the assertion below
-/// catches. 9a covers many offsets; this test fixes the discriminating edge at index=2.
+/// catches. The convergence test covers many offsets; this test fixes the
+/// discriminating edge at index=2.
 #[test]
 fn step3_logical_index_stamped_on_deferred_insert() {
     let item_height = 50.0_f32;
@@ -221,7 +227,7 @@ fn step3_logical_index_stamped_on_deferred_insert() {
     let pairs = collect_child_indices(&owner, sliver_id);
     assert!(
         !pairs.is_empty(),
-        "D1: at least one child must be built after 8 frames with N=5 items",
+        "at least one child must be built after 8 frames with N=5 items",
     );
 
     // Pre-fix: index == 0 for every child (never stamped).
@@ -233,10 +239,10 @@ fn step3_logical_index_stamped_on_deferred_insert() {
     let has_item_zero = pairs.iter().any(|(idx, _)| *idx == 0);
     assert!(
         !has_item_zero,
-        "D1 regression: a child has logical index 0 even though scroll_offset={scroll_offset} \
-         places item 0 (offset 0..50 px) above the entire cache band. \
-         Pre-fix: apply_deferred_mutation never stamped logical_index → fresh \
-         children defaulted to index=0 regardless of their true logical position.",
+        "a child has logical index 0 even though scroll_offset={scroll_offset} \
+         places item 0 (offset 0..50 px) above the entire cache band: \
+         apply_deferred_mutation must stamp logical_index on every freshly \
+         inserted child instead of leaving the index=0 default.",
     );
 
     // Every index must be distinct.
@@ -254,10 +260,10 @@ fn step3_logical_index_stamped_on_deferred_insert() {
 }
 
 // ============================================================================
-// Step-7 regression: Remove → Insert ordering
+// Remove → Insert ordering
 // ============================================================================
 
-/// Verifies D3: when a batch contains both a Remove and an Insert targeting
+/// Verifies that when a batch contains both a Remove and an Insert targeting
 /// the same parent, the Remove is applied first, so the final child set
 /// contains exactly the pre-existing child B plus newly inserted C (not also
 /// the removed child A).
@@ -292,8 +298,8 @@ fn step7_deferred_remove_before_insert_ordering() {
     owner.run_layout().expect("frame 0: initial layout");
 
     // Enqueue Remove(A) and Insert(C) in the same pass.
-    // D3 guarantees Remove is drained before Insert: A is gone when C is
-    // inserted, so the final child list is [B, C].
+    // The deferred-mutation queue guarantees Remove is drained before Insert:
+    // A is gone when C is inserted, so the final child list is [B, C].
     owner.defer_remove(root_id, child_a_id);
     owner.defer_insert_box(
         root_id,
@@ -318,7 +324,7 @@ fn step7_deferred_remove_before_insert_ordering() {
     );
     assert!(
         !children_after.contains(&child_a_id),
-        "removed child A must not appear after Remove+Insert batch (D3 ordering violated)",
+        "removed child A must not appear after Remove+Insert batch (Remove-before-Insert ordering violated)",
     );
 }
 
@@ -326,12 +332,12 @@ fn step7_deferred_remove_before_insert_ordering() {
 // 9a — Convergence: logical indices reconcile correctly
 // ============================================================================
 
-/// U3c 9a acceptance test: N=1000 items, viewport showing ~K. Drive enough
+/// Convergence acceptance test: N=1000 items, viewport showing ~K. Drive enough
 /// frames to settle. Assert every attached child's `parent_data.index` equals
 /// its true logical index (NOT 0).
 ///
-/// This test MUST fail before D1 (logical_index was 0 for all children when
-/// scroll_offset > 0) and pass after.
+/// This test fails if logical_index is 0 for all children when
+/// scroll_offset > 0, i.e. if the insert-time stamp is missing.
 #[test]
 fn u3c_9a_convergence_logical_indices_reconcile() {
     let n_items = 1_000;
@@ -366,10 +372,9 @@ fn u3c_9a_convergence_logical_indices_reconcile() {
     let all_zero = pairs.iter().all(|(idx, _)| *idx == 0);
     assert!(
         !all_zero,
-        "U3c D1 regression: ALL attached children have logical index 0. \
-         With scroll_offset={scroll_offset} the visible band starts at item 10, \
-         not item 0. Pre-fix: apply_deferred_mutation never wrote logical_index \
-         into parent-data → every fresh child defaulted to index 0.",
+        "ALL attached children have logical index 0. With scroll_offset={scroll_offset} \
+         the visible band starts at item 10, not item 0: apply_deferred_mutation \
+         must write logical_index into parent-data for every freshly built child.",
     );
 
     // All logical indices must be distinct (no two children claim the same item).
@@ -412,11 +417,12 @@ fn u3c_9a_convergence_logical_indices_reconcile() {
 // 9b — Bounded child count (dispose works)
 // ============================================================================
 
-/// U3c 9b acceptance test: scroll the viewport across many items over many
-/// frames; assert the attached child count stays bounded (≈ band size, ≪ N).
+/// Bounded-child-count acceptance test: scroll the viewport across many items
+/// over many frames; assert the attached child count stays bounded (≈ band
+/// size, ≪ N).
 ///
-/// This test MUST show unbounded growth before D2 (dispose never fired) and
-/// bounded growth after.
+/// This test fails with unbounded growth if dispose never fires, and passes
+/// with bounded growth once off-band children are evicted.
 #[test]
 fn u3c_9b_bounded_child_count_after_scroll() {
     let n_items = 1_000usize;
@@ -499,10 +505,9 @@ fn u3c_9b_bounded_child_count_after_scroll() {
     let upper_bound = expected_band_size * 3;
     assert!(
         peak <= upper_bound,
-        "U3c D2 regression: peak attached child count {peak} exceeded \
-         {upper_bound} (= 3 × expected band size {expected_band_size}). \
-         Pre-fix: dispose_box_child was never called → unbounded growth to N={n_items}. \
-         Post-fix: off-band children are evicted each pass via deferred Remove.",
+        "peak attached child count {peak} exceeded {upper_bound} \
+         (= 3 × expected band size {expected_band_size}): off-band children must be \
+         evicted each pass via deferred Remove instead of accumulating toward N={n_items}.",
     );
 
     // Secondary: count is significantly less than N.
@@ -529,7 +534,8 @@ fn u3c_9b_bounded_child_count_after_scroll() {
 /// an index-arithmetic overflow, or a cache-eviction bug that only manifests
 /// once thousands of children have cycled through). This test drives the
 /// scroll position through the FULL range and asserts both:
-///   - the attached child count stays bounded throughout (D2, generalized),
+///   - the attached child count stays bounded throughout the full range (not
+///     just the partial window the bounded-child-count test above covers),
 ///   - the visible band's logical indices genuinely progress from the head
 ///     to the tail of the list (not stuck near 0), reaching within the last
 ///     visible band of item N-1.
@@ -613,14 +619,15 @@ fn u3c_9c_full_range_scroll_reaches_tail_with_bounded_children() {
          final min logical index={last_min_idx} (max_scroll={max_scroll}px)",
     );
 
-    // Bounded child count across the ENTIRE range (D2, generalized beyond 9b's
-    // partial-range coverage).
+    // Bounded child count across the ENTIRE range, generalizing the
+    // bounded-child-count test above's partial-range coverage.
     let upper_bound = expected_band_size * 3;
     assert!(
         peak <= upper_bound,
-        "U3c D2 regression (full range): peak attached child count {peak} exceeded \
-         {upper_bound} (= 3 × expected band size {expected_band_size}) while scrolling \
-         the ENTIRE 1000-item range, not just a partial window.",
+        "peak attached child count {peak} exceeded {upper_bound} \
+         (= 3 × expected band size {expected_band_size}) while scrolling \
+         the ENTIRE 1000-item range, not just a partial window: off-band \
+         children must stay evicted across the full scroll extent.",
     );
     let n_limit = n_items / 5;
     assert!(
@@ -667,7 +674,7 @@ fn u3c_9c_full_range_scroll_reaches_tail_with_bounded_children() {
 ///
 /// **What this test DOES verify:**
 /// - Dispose runs at all in a `root ≠ sliver` topology (smoke test for the
-///   full D2 path with a non-trivial tree shape).
+///   full off-band-eviction path with a non-trivial tree shape).
 /// - The child count stays bounded under repeated scrolling (guards against
 ///   regressions where dispose stops firing entirely, as opposed to firing
 ///   with the wrong parent id).
@@ -749,11 +756,11 @@ fn p1_dispose_targets_sliver_not_walk_root() {
     // means the sliver relayouts regardless of where dispose's mark_needs_layout
     // goes, so the assertion does not distinguish wrong vs correct parent_id.
     // What it does verify: dispose actually fires at all in this topology
-    // (guards against regressions where the entire D2 path is skipped).
+    // (guards against regressions where off-band eviction is skipped entirely).
     let upper_bound = expected_band_size * 3;
     assert!(
         peak <= upper_bound,
-        "D2 smoke: peak child count {peak} under sliver_id={sliver_id:?} \
+        "peak child count {peak} under sliver_id={sliver_id:?} \
          exceeded {upper_bound} (3 × expected band {expected_band_size}). \
          walk_root={root_id:?} ≠ sliver={sliver_id:?}. \
          Dispose is not evicting off-band children in this topology.",
@@ -763,7 +770,7 @@ fn p1_dispose_targets_sliver_not_walk_root() {
     let final_count = owner.render_tree().children(sliver_id).len();
     assert!(
         final_count < n_items / 5,
-        "D2 smoke: final child count {final_count} is too close to N={n_items}. \
+        "final child count {final_count} is too close to N={n_items}. \
          Dispose did not shrink the child list under the lazy sliver.",
     );
 }
