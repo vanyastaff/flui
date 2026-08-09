@@ -80,7 +80,7 @@ jobs:
           components: rustfmt
 
       - name: Install CI tools (typos, taplo, ripgrep, zizmor)
-        uses: taiki-e/install-action@3d7d7cd5ac7f994c1892ae0c06165095b9139094 # v2.85.1
+        uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately. `ripgrep` is required by
@@ -235,7 +235,7 @@ jobs:
           cache-bin: ${{ matrix.os != 'macos-latest' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
         with:
           tool: cargo-nextest@0.9
 
@@ -350,7 +350,7 @@ jobs:
       # local repro (same pattern as egui/xilem snapshot artifacts).
       - name: Upload insta snapshot candidates on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: insta-snap-new
           path: "**/*.snap.new"
@@ -416,7 +416,7 @@ jobs:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
         with:
           tool: cargo-nextest@0.9
 
@@ -438,7 +438,7 @@ jobs:
       # $FLUI_READBACK_DUMP_DIR — upload it for post-mortem inspection.
       - name: Upload readback PNG dumps on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: readback-dumps
           path: readback-dumps/**/*.png
@@ -528,7 +528,7 @@ jobs:
           persist-credentials: false
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
         with:
           tool: cargo-deny@0.19
 
@@ -688,7 +688,7 @@ jobs:
       # `just` carries the facade combination list, so CI and `just
       # feature-matrix` cannot drift into testing different sets.
       - name: Install cargo-hack + just
-        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
         with:
           tool: cargo-hack@0.6,just@1
 
@@ -785,7 +785,7 @@ jobs:
         run: cargo build --locked --target wasm32-unknown-unknown -p flui-web-demo -p flui-painting-demo
 
       - name: Install wasm-tools
-        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
         with:
           tool: wasm-tools@1
 
