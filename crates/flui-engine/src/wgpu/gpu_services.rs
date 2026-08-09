@@ -77,9 +77,15 @@ use crate::error::{EngineError, EngineResult};
 /// the shared foundation crate specifically because a second crate needed
 /// to compare against it (`SurfaceGeneration` is minted by `flui-engine`'s
 /// raster owner but carried by `flui-layer`'s `SceneSnapshot`/`FrameStamp`);
-/// `GpuResourceGeneration` has no such cross-crate consumer today — it
-/// never leaves `flui-engine` in this slice — so promoting it would be
-/// speculative. Separately, the macro's `next()` is an owner bumping an
+/// `GpuResourceGeneration` has no such consumer *in this slice* — but one is
+/// already scheduled rather than merely possible: ADR-0045 decision 4
+/// compares this axis at the same frame gate as `SurfaceGeneration`, and the
+/// only values that cross that boundary are `flui-layer`'s `SceneSnapshot`
+/// and `flui-foundation`'s `FrameStamp`, neither of which can name a
+/// `flui-engine` type. So treat the promotion as **expected and deferred**,
+/// not as unmotivated; the surface is registered `experimental` precisely so
+/// that later export move is sanctioned rather than a surprise. What holds
+/// on its own is the second ground: the macro's `next()` is an owner bumping an
 /// existing value in place; this type is minted fresh from a process-wide
 /// counter with no persistent owner yet (that arrives with a later slice's
 /// `AppRuntime` wiring), a different-enough mint model that forcing it
