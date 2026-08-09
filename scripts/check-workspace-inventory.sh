@@ -781,10 +781,10 @@ for forbidden in (app_src / "theme", app_src / "theme.rs"):
 # the review that mandated the rename, and rewriting it would erase the
 # rationale.
 stale_package_name = "flui-" + "binding"
-snapshot_dirs = {
-    root / "docs" / "research",
-    root / "docs" / "plans",
-    root / "docs" / "audits",
+snapshot_rel = {
+    ("docs", "research"),
+    ("docs", "plans"),
+    ("docs", "audits"),
 }
 scanned_extensions = {".rs", ".toml", ".md", ".sh", ".yml", ".yaml", ".just", ""}
 for path in sorted(root.rglob("*")):
@@ -793,7 +793,17 @@ for path in sorted(root.rglob("*")):
     parts = path.relative_to(root).parts
     if parts[0] in {"target", ".git"} or "target" in parts:
         continue
-    if any(snapshot in path.parents for snapshot in snapshot_dirs):
+    # Nested checkouts (git worktrees under `.claude/worktrees/`, used by agent
+    # tooling) carry a full copy of the tree, including its own docs/. Scanning
+    # them reports another branch's snapshots as this branch's violations --
+    # which broke this gate locally while CI, which has no worktrees, stayed
+    # green.
+    if ".claude" in parts:
+        continue
+    # Match the snapshot directories by their RELATIVE position, not as
+    # absolute paths under this root: an absolute comparison silently stops
+    # excluding them inside any nested copy.
+    if any(parts[:2] == snapshot for snapshot in snapshot_rel):
         continue
     if path.suffix not in scanned_extensions:
         continue

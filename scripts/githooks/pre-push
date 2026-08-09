@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Runs the non-test half of `just ci` before every push.
+#
+# Why a hook and not a line in a guide: every gate this repository lost time to
+# recently was a gate that EXISTED and was CORRECT, and simply was not run --
+# broken intra-doc links, a clippy pass missing `--locked`, a second clippy
+# invocation nobody knew about. Prose telling people to run `just ci` had been
+# in AGENTS.md the whole time.
+#
+# The test suite is deliberately NOT here. Every one of those misses was caught
+# by a cheap gate; tests take minutes and a hook people disable is worth less
+# than a hook they keep. Tests still run in CI.
+#
+# Escape hatch: `git push --no-verify`. If you use it, CI is your gate.
+set -euo pipefail
+
+if ! command -v just >/dev/null 2>&1; then
+    printf 'pre-push: `just` not found -- skipping the local gate.\n' >&2
+    printf '          Install it (https://just.systems) or push with --no-verify.\n' >&2
+    exit 0
+fi
+
+printf 'pre-push: running `just gate` (fmt, lints, docs, contract checks)...\n' >&2
+if ! just gate; then
+    printf '\npre-push: the local gate failed. Fix it, or push with --no-verify if\n' >&2
+    printf '          you have a reason and CI will catch it.\n' >&2
+    exit 1
+fi
