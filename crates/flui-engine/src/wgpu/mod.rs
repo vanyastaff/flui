@@ -153,6 +153,13 @@ mod pipeline;
 // The `pipelines.rs` introduced by T3 is distinct: it defines `PipelineSet`,
 // which *composes* the live `PipelineCache` from `pipeline.rs` (singular) and
 // adds the nine named pipelines previously scattered as painter fields.
+/// Shared per-owner-thread GPU services (ADR-0045 decision 2):
+/// `GpuServices` and its immutable `GpuResourceGeneration` stamp. Reuses
+/// `renderer`'s `select_backend`/`required_features`/`required_limits`/
+/// `install_device_diagnostics` (widened to `pub(super)`) so adapter
+/// selection and diagnostics installation are written in exactly one place
+/// each, not re-derived per construction site.
+mod gpu_services;
 /// Opacity/layer save-state machine: `opacity_stack`, `current_opacity`, and
 /// `layer_stack` extracted from `WgpuPainter`.  Owns the book-keeping half of
 /// `save_layer`/`restore_layer`; GPU emission lives in `GpuReplay`.
@@ -346,6 +353,9 @@ pub use painter::WgpuPainter;
 
 // Renderer (the one and only externally-consumed wgpu/* type)
 pub use renderer::Renderer;
+// Shared per-owner-thread GPU services (ADR-0045 decision 2; external via
+// lib.rs re-export at crate root as `flui_engine::GpuServices`).
+pub use gpu_services::{GpuResourceGeneration, GpuServices};
 // Font loading utilities (external via lib.rs re-export at crate root)
 pub use font_loader::FontLoader;
 // GPU frame profile — feature-independent type, always available so callers

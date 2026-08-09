@@ -1,0 +1,16 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/compile_fail/gpu_resource_generation_private_field.rs:16:13
+   |
+16 |     let _ = flui_engine::GpuResourceGeneration(5);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/wgpu/gpu_services.rs
+   |
+   | pub struct GpuResourceGeneration(u64);
+   |                                  ^^^ private field
+help: you might have meant to use the `mint` associated function
+   |
+16 -     let _ = flui_engine::GpuResourceGeneration(5);
+16 +     let _ = flui_engine::GpuResourceGeneration::mint();
+   |

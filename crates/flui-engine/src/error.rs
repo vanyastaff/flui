@@ -177,6 +177,28 @@ pub enum EngineError {
     /// An operation was attempted before the renderer was fully initialized.
     #[error("Renderer not initialized")]
     NotInitialized,
+
+    /// `recover()` was called on a [`Renderer`](crate::wgpu::Renderer) built
+    /// via `Renderer::from_offscreen_services` (ADR-0045 decision 2).
+    ///
+    /// Such a renderer does not own the device/adapter/instance it renders
+    /// with — every renderer built from the same `GpuServices` shares them.
+    /// Letting `recover()` rebuild a private stack here would install a
+    /// second `set_device_lost_callback` that only this renderer observes,
+    /// breaking the "exactly one callback, one shared flag" invariant every
+    /// sibling renderer depends on. Recovery for a shared-services renderer
+    /// is the owner thread's job — mint a new `GpuServices` and re-point
+    /// every renderer at it — not something this method can do alone.
+    /// Retrying this call never succeeds, so it is not
+    /// [`Recoverability::Recoverable`]; recreating just THIS renderer does
+    /// not fix it either (a fresh `GpuServices` is what's needed), so it is
+    /// not [`Recoverability::Fatal`] in the usual "recreate the renderer"
+    /// sense — classified [`Recoverability::Unrecoverable`].
+    #[error(
+        "recover() is not valid on a renderer sharing GpuServices; recovery is \
+         the owner thread's job (rebuild GpuServices and re-point every renderer at it)"
+    )]
+    SharedServicesNotRecoverable,
 }
 
 // ============================================================================
@@ -228,7 +250,8 @@ impl EngineError {
             Self::SurfaceValidation
             | Self::ResourceIo { .. }
             | Self::TextPrepare(_)
-            | Self::TextRender(_) => Recoverability::Unrecoverable,
+            | Self::TextRender(_)
+            | Self::SharedServicesNotRecoverable => Recoverability::Unrecoverable,
         }
     }
 }
@@ -398,6 +421,10 @@ mod tests {
         );
         assert_eq!(
             EngineError::text_render(std::io::Error::other("render boom")).recoverability(),
+            Recoverability::Unrecoverable
+        );
+        assert_eq!(
+            EngineError::SharedServicesNotRecoverable.recoverability(),
             Recoverability::Unrecoverable
         );
     }
