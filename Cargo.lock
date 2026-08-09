@@ -1493,7 +1493,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "cliclack",
- "console 0.15.11",
+ "console 0.16.3",
  "dirs",
  "flui-build",
  "flui-devtools",
