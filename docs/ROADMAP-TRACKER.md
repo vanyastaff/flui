@@ -326,7 +326,7 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > are already satisfied — **(1) per-RO tests**: the catalog guard
 > `flui-objects --test render_object_harness` passes **250/250** (every exported
 > `RenderBox`/`RenderSliver` appears in `RENDER_OBJECT_TYPES` with matching `harness_*`
-> tests); **(2) 1000-item sliver scroll**: `flui-rendering --test lazy_sliver_list_child_build_contract`
+> tests); **(2) 1000-item sliver scroll**: `flui-rendering --test rendering_it -- lazy_sliver_list_child_build_contract`
 > passes **9/9**, including `u3c_9c_full_range_scroll_reaches_tail_with_bounded_children`
 > (drives a 1000-item lazy list across its *entire* 49,700px range, asserting bounded
 > child count throughout **and** that the visible band reaches the tail). **(3) coverage** is now measured (2026-07-02,

@@ -216,8 +216,8 @@ guarantee of Level-2 purity: `Clone` is only derivable when every field is
 (`src/wgpu/deterministic_replay_tests.rs`) uses this property: it records a scene
 once, clones the resulting `DrawSegment`s, replays two independent clones to two
 independent render targets (encoder A → target A, encoder B → target B), and
-asserts byte-identical pixel output.  This is the non-tautological C5-gate
-assertion — it would fail under any determinism break in the replay path.
+asserts byte-identical pixel output.  This is a non-tautological assertion —
+it would fail under any determinism break in the replay path.
 
 **Exception.**  `DrawItem::OffscreenTexture` and `DrawItem::OpacityLayer` hold
 live `PooledTexture` (wrapping `wgpu::Texture`) and are therefore NOT `Clone`.
