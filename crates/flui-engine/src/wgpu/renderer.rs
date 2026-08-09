@@ -172,6 +172,22 @@ struct WindowedGpuStack {
     gpu_profiler: Option<super::profiler::GpuFrameProfiler>,
 }
 
+/// Who constructed this renderer's `Instance`/`Adapter`/`Device`/`Queue`
+/// stack — decides whether [`Renderer::recover`] may run.
+///
+/// A renderer built via [`Renderer::from_offscreen_services`] shares its
+/// stack with every other renderer built from the same `GpuServices`
+/// (ADR-0045 decision 2); it must not rebuild a private one in `recover()`,
+/// which would install a second `set_device_lost_callback` that only it
+/// observes. See [`EngineError::SharedServicesNotRecoverable`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GpuStackOrigin {
+    /// Built its own stack (`new`, `new_offscreen`); owns its own recovery.
+    Owned,
+    /// Shares a `GpuServices` value; recovery is the owner thread's job.
+    SharedServices,
+}
+
 /// The renderer's two raw platform handles, wrapped so `Renderer: Send`
 /// follows by compiler derivation instead of a blanket, hand-written
 /// assertion covering every field.
@@ -343,6 +359,9 @@ pub struct Renderer {
     /// Reused by `recover()` to rebuild the wgpu surface after a GPU device
     /// loss; the validity argument lives on `RawHandles`' SAFETY comment.
     raw_handles: RawHandles,
+    /// Who owns this renderer's GPU stack; gates `recover()`. See
+    /// [`GpuStackOrigin`].
+    gpu_stack_origin: GpuStackOrigin,
     /// GPU timestamp profiler. `None` when the `gpu-profiler` feature is off
     /// or the adapter does not expose `wgpu::Features::TIMESTAMP_QUERY`.
     #[cfg(feature = "gpu-profiler")]
@@ -416,11 +435,14 @@ impl Renderer {
     /// This builds a whole private `Instance → Adapter → Device → Queue`
     /// stack per call, which is exactly the per-`Renderer` device
     /// duplication [`super::gpu_services::GpuServices`] exists to remove.
-    /// `#[doc(hidden)]` as of this slice: kept working (its five call sites
-    /// — four in `flui-app`, one in the Android demo example — still build
-    /// their own private stack, unmigrated) but no longer advertised as the
-    /// entry point for new integrations. Deleted in a later slice once those
-    /// five consumers move to a `GpuServices`-backed constructor.
+    /// `#[doc(hidden)]` as of this slice: kept working (its eight call sites
+    /// — three in `flui-app`'s `runner.rs`, one in `flui-app`'s `direct.rs`,
+    /// the Android demo example, and three in the root package's own
+    /// examples: `scene_render.rs`, `filter_demo.rs`, `color_filter_demo.rs`
+    /// — still build their own private stack, unmigrated) but no longer
+    /// advertised as the entry point for new integrations. Deleted in a
+    /// later slice once those eight consumers move to a
+    /// `GpuServices`-backed constructor.
     #[doc(hidden)]
     pub async fn new<W>(window: &W) -> EngineResult<Self>
     where
@@ -465,6 +487,7 @@ impl Renderer {
                 window: Some(raw_window_handle),
                 display: raw_display_handle,
             },
+            gpu_stack_origin: GpuStackOrigin::Owned,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: stack.gpu_profiler,
             #[cfg(test)]
@@ -740,6 +763,7 @@ impl Renderer {
                 window: None,
                 display: None,
             },
+            gpu_stack_origin: GpuStackOrigin::Owned,
             // Offscreen renderers have no surface present, so profiling results
             // cannot be harvested with process_finished_frame. Disabled here.
             #[cfg(feature = "gpu-profiler")]
@@ -751,7 +775,7 @@ impl Renderer {
     }
 
     /// Build an offscreen renderer that shares GPU services with every other
-    /// renderer built from the same [`GpuServices`] value on this owner
+    /// renderer built from the same `GpuServices` value on this owner
     /// thread (ADR-0045 decision 2).
     ///
     /// Unlike [`Renderer::new_offscreen`], this performs no
@@ -772,6 +796,10 @@ impl Renderer {
     ///
     /// Synchronous, unlike `new_offscreen`: `services` has already resolved
     /// everything an `.await` would otherwise be needed for.
+    ///
+    /// `recover()` on the returned renderer always fails with
+    /// [`EngineError::SharedServicesNotRecoverable`] — see `GpuStackOrigin`
+    /// (private to this module).
     #[must_use]
     pub fn from_offscreen_services(services: &super::gpu_services::GpuServices) -> Self {
         Self {
@@ -791,6 +819,7 @@ impl Renderer {
                 window: None,
                 display: None,
             },
+            gpu_stack_origin: GpuStackOrigin::SharedServices,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: None,
             #[cfg(test)]
@@ -863,6 +892,12 @@ impl Renderer {
     ///
     /// # Errors
     ///
+    /// Returns [`EngineError::SharedServicesNotRecoverable`] immediately,
+    /// before touching any GPU state, if this renderer was built via
+    /// [`Renderer::from_offscreen_services`] — see `GpuStackOrigin` for
+    /// why rebuilding a private stack here would be unsound for a shared
+    /// one.
+    ///
     /// Returns [`EngineError::AdapterRequest`] or [`EngineError::DeviceCreation`]
     /// when the driver is still resetting or the adapter is no longer available.
     /// Returns [`EngineError::SurfaceCreation`] if the surface cannot be
@@ -870,6 +905,10 @@ impl Renderer {
     /// alive).
     #[tracing::instrument(level = "warn", skip(self))]
     pub async fn recover(&mut self) -> EngineResult<()> {
+        if self.gpu_stack_origin == GpuStackOrigin::SharedServices {
+            return Err(EngineError::SharedServicesNotRecoverable);
+        }
+
         if let Some(raw_window) = self.raw_handles.window {
             // Capture current dimensions before rebuild so the recovered
             // surface matches the live window size instead of defaulting to
@@ -2291,6 +2330,50 @@ mod tests {
             assert!(
                 services.is_device_lost(),
                 "GpuServices itself must observe the flip too"
+            );
+        });
+    }
+
+    /// Pins the fix for the hole review found: nothing previously stopped
+    /// `recover()` from running on a renderer built via
+    /// `from_offscreen_services`, which would silently rebuild a private
+    /// device, install a SECOND `set_device_lost_callback`, and overwrite
+    /// `self.device_lost` with a fresh, unshared `Arc` — breaking both the
+    /// single-callback invariant and the flag-sharing the two tests above
+    /// pin. `recover()` must reject this before touching any GPU state, and
+    /// every sibling renderer sharing the same `GpuServices` must be
+    /// unaffected by the attempt.
+    #[test]
+    fn recover_on_a_shared_services_renderer_is_rejected() {
+        pollster::block_on(async {
+            let Ok(services) = crate::GpuServices::resolve_offscreen().await else {
+                return;
+            };
+
+            let mut renderer_a = Renderer::from_offscreen_services(&services);
+            let renderer_b = Renderer::from_offscreen_services(&services);
+            let device_before = Arc::clone(&renderer_a.device);
+
+            let result = renderer_a.recover().await;
+            assert!(
+                matches!(result, Err(EngineError::SharedServicesNotRecoverable)),
+                "recover() on a shared-services renderer must return \
+                 SharedServicesNotRecoverable, got {result:?}"
+            );
+
+            assert!(
+                Arc::ptr_eq(&renderer_a.device, &device_before),
+                "a rejected recover() must not touch the device at all"
+            );
+            assert!(
+                Arc::ptr_eq(&renderer_a.device, &renderer_b.device),
+                "renderer_b must still share renderer_a's device after the \
+                 rejected recover() call"
+            );
+            assert!(
+                Arc::ptr_eq(&renderer_a.device_lost, &renderer_b.device_lost),
+                "renderer_b must still share renderer_a's device_lost flag \
+                 after the rejected recover() call"
             );
         });
     }
