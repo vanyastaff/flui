@@ -112,7 +112,7 @@ This record does not paper over that. The scope **is** per owner thread, and it 
 
 **And recovery must reach every lane, not just the one that observed the loss.** The device is shared per owner thread, so its loss is a property of the *thread*, not of one surface. A second lane's `Renderer` still holds an `Arc<Device>` from the pre-recovery services and would render into a dead device forever — the third of the three hazards named at the top of this decision. `ResourceGeneration` gating rejects that lane's *frames*, which prevents corruption but does not by itself re-point the lane at the new device; without the step below, gating alone would leave the second lane permanently starved rather than recovered.
 
-> **Recovery is a whole-owner-thread event.** `AppRuntime::recreate_gpu(observed)` mints **one** new `GpuServices` on the owner thread, then sends **every** lane on that thread a `ReplaceServices { services, generation }` command on the same ordered, coalesced command path as resize and attach/detach — not a broadcast on the lossy ack lane.
+> **Recovery is a whole-owner-thread event.** `AppRuntime::recreate_gpu(observed)` mints **one** new `GpuServices` on the owner thread, then sends **every** lane on that thread a `ReplaceServices` command on the same ordered, coalesced command path as resize and attach/detach — not a broadcast on the lossy ack lane. Its full shape, including the replacement surface the owner thread builds because the lane may not, is given below.
 
 Each lane applies it at its next command drain, which happens at the top of `pump` **before** the generation compare, so no frame is ever rendered against a replaced device:
 
