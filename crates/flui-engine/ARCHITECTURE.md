@@ -175,7 +175,7 @@ The `GpuCapabilities` struct in `wgpu/renderer.rs` is the canonical capability s
 | U10 + U11 (dead_code audit + `text_renderer.rs` deletion) | ~-330 | 0 | 0 |
 | **Total** | **~-5,984** | **0** | **0** |
 
-Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>` + `Arc<Mutex<TexturePoolInner>>` removal (verdict's U6 + U8) were **deferred** to follow-up; see [Outstanding refactors](#outstanding-refactors).
+Per-frame `Arc::clone` removal and `Arc<Mutex<TexturePoolInner>>` removal were **deferred** to follow-up; see [Outstanding refactors](#outstanding-refactors). The `Arc<Mutex<OffscreenRenderer>>` half of that deferral has since landed -- see the resolved Friction log entry.
 
 ---
 
@@ -327,8 +327,8 @@ The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) was extr
 | `Renderer::device` / `Renderer::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | wgpu's own API uses `Arc` for these handles (cheap ref-count, not lock-protected). Shared by `WgpuPainter` and `OffscreenRenderer` via setup-phase `Arc::clone` (acceptable; not per-frame). |
 | `Renderer::surface` | `Option<wgpu::Surface<'static>>` | Owned, single-mutator | wgpu 29.x's `Surface<'_>: Send + Sync` (verified via `assert_impl_all!` in `wgpu/src/api/surface.rs`). Single-mutator enforced by code convention (only `Renderer::render_scene` calls `surface.get_current_texture`), not by trait bound. |
 | `Renderer::painter` | `Option<WgpuPainter>` | Owned, single-mutator | The take/return dance during `render_scene` is the per-frame ownership transfer. |
-| `Renderer::offscreen` | `Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` | **Mythos friction** | The lock is uncontended in production (single-mutator). Removal requires a `Backend<'a>` lifetime refactor; see [Outstanding refactors](#outstanding-refactors). |
-| `Backend::offscreen` | `Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` | **Mythos friction** | Same; symmetric with the above. |
+| `Renderer::offscreen` | `Option<super::offscreen::OffscreenRenderer>` | resolved | Owned outright. The `Backend<'a>` lifetime refactor that this waited on has landed, so the lock is gone; port-check trigger 7 now watches this file. |
+| `Backend::offscreen` | `Option<&'frame mut super::offscreen::OffscreenRenderer>` | resolved | Borrowed for the frame, symmetric with the above. |
 | `Backend::offscreen_painter` | `Option<WgpuPainter>` | Owned, single-mutator | Cross-frame painter cache; resized on demand. No lock. |
 | `WgpuPainter::device` / `WgpuPainter::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | Same as `Renderer::device`. |
 | `WgpuPainter::transform_stack` / `clip_stack` / `opacity_stack` | `Vec<T>` | Owned, single-mutator | Per-frame save/restore stacks. No lock. |
@@ -366,13 +366,18 @@ There is **no `unsafe impl Sync`** anywhere in the crate. Two further unsafe sur
 
 Known sites that do not yet match the methodology but are not violations of the current refusal triggers. Each entry names the site and the next planned step.
 
-### `Arc<parking_lot::Mutex<OffscreenRenderer>>` shared between `Renderer` and `Backend`
+### `Arc<parking_lot::Mutex<OffscreenRenderer>>` shared between `Renderer` and `Backend` -- RESOLVED
 
-**Sites:** [`src/wgpu/renderer.rs:147`](src/wgpu/renderer.rs) (`Renderer::offscreen` field), [`src/wgpu/renderer.rs:670`](src/wgpu/renderer.rs) (`Arc::clone(offscreen)` at `Backend::with_offscreen` construction), [`src/wgpu/renderer.rs:898, 925`](src/wgpu/renderer.rs) (`offscreen_arc.lock()` calls in `handle_backdrop_filter`), [`src/wgpu/backend.rs:26`](src/wgpu/backend.rs) (field), [`src/wgpu/backend.rs:45, 57`](src/wgpu/backend.rs) (signatures), [`src/wgpu/backend.rs:399`](src/wgpu/backend.rs) (`self.offscreen.clone()` Arc-clone bind), [`src/wgpu/backend.rs:407, 464`](src/wgpu/backend.rs) (`offscreen_arc.lock()` calls in `render_shader_mask`).
+The lock is gone. `Renderer` owns its `OffscreenRenderer` outright and `Backend<'frame>`
+borrows one for the frame, so there is no shared mutable handle and no `.lock()` on this
+path at all. Kept as a heading rather than deleted because port-check trigger 7 exists to
+catch a regression of exactly this shape, and now watches both files -- its exclusions for
+them were retired at the same time.
 
-**Violation:** none of the seven refusal triggers; the Mythos verdict §9 lists this as the canonical "Arc<Mutex<>> over single-mutator data" smell, but the lock is uncontended in production (single-mutator). The shape is a known maintenance burden, not a soundness or contention issue today.
-
-**Next planned step:** see [Outstanding refactors](#outstanding-refactors) -- the refactor requires introducing a frame lifetime `Backend<'a>` and restructuring `Renderer::render_scene`'s painter take/return pattern.
+One piece of the surrounding restructure the Outstanding-refactor entry also described did
+not land with it: `Renderer::render_scene` still uses the `self.painter.take()` /
+reassign pattern (`renderer.rs:1526`). That was an enabler for removing the lock, not the
+goal, and it is now independent of it.
 
 ### `Arc<Mutex<TexturePoolInner>>` back-reference on `PooledTexture`
 
@@ -430,22 +435,26 @@ Same shape as `painter.rs`. Mixes mask, blur, and morphological filter pipelines
 
 Concrete cleanups visible from `flui-engine` outward, sized for an `/aif-implement` dispatch. Each entry names a file and what would need to change. Each has a named concrete blocker per the no-quick-wins memo.
 
-### `Arc<parking_lot::Mutex<OffscreenRenderer>>` -> direct ownership + `Backend<'a>` frame lifetime
+### `Renderer::render_scene`'s painter take/reassign pattern
 
-**Files:** [`src/wgpu/renderer.rs`](src/wgpu/renderer.rs), [`src/wgpu/backend.rs`](src/wgpu/backend.rs).
+**Files:** [`src/wgpu/renderer.rs`](src/wgpu/renderer.rs).
 
-**Goal:** replace `Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` on `Renderer` and `Backend` with `Option<OffscreenRenderer>` (direct ownership on `Renderer`) + `Option<&'a mut OffscreenRenderer>` (borrowed on `Backend<'a>` for the frame lifetime).
+**What already landed.** This entry used to describe removing
+`Arc<parking_lot::Mutex<OffscreenRenderer>>` from `Renderer` and `Backend`. That is done:
+`Renderer` owns its `OffscreenRenderer`, `Backend<'frame>` borrows one, `handle_backdrop_filter`
+takes `&mut Backend<'_>`, and no `.lock()` remains on the path. Port-check trigger 7 now watches
+both files; its exclusions for them were retired when this was confirmed.
 
-**Shape:**
-1. `Renderer::offscreen: Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` -> `offscreen: Option<OffscreenRenderer>`.
-2. `pub struct Backend` -> `pub struct Backend<'a>` with `painter: &'a mut WgpuPainter`, `offscreen: Option<&'a mut OffscreenRenderer>`.
-3. `Renderer::render_scene` restructured to drop the `self.painter.take()` / `self.painter = Some(painter)` pattern (no longer needed; Backend borrows).
-4. `Backend::render_shader_mask` uses `&mut self.offscreen.as_mut()` instead of `offscreen_arc.lock()`.
-5. `Renderer::handle_backdrop_filter` takes `backend: &mut Backend<'_>` and accesses offscreen via the backend's lifetime.
+**What remains.** `render_scene` still takes the painter out of `self` and puts it back
+(`renderer.rs:1526`). That was an enabler for the lifetime work above, not its goal, and with the
+lock gone it stands alone: a smaller, self-contained cleanup with no lock-contention argument
+behind it any more.
 
-**Concrete blocker:** the refactor requires breaking the painter take/return pattern in `render_scene` (substantial lifetime gymnastics with the `Backend<'a>` lifetime, since `Backend::render_shader_mask` and `Renderer::handle_backdrop_filter` both need disjoint `&mut painter` + `&mut offscreen` from the same `Backend<'a>`). The borrow-checker resolution is non-trivial (likely needs a `Backend::split_mut(&mut self) -> (&mut WgpuPainter, Option<&mut OffscreenRenderer>)` accessor). Estimated 200-400 LOC of churn for marginal-runtime-benefit (the lock is uncontended in production); review-clarity favours landing this as a separate housekeeping PR with focused review.
+**Concrete blocker:** none identified beyond ordinary borrow-checker work, now that
+`Backend<'frame>` exists. The original blocker -- needing disjoint `&mut painter` and
+`&mut offscreen` out of one `Backend<'a>` -- was what the lifetime refactor solved.
 
-**Dependencies:** none external; pure Rust refactor.
+**Dependencies:** none.
 
 ### `Arc<Mutex<TexturePoolInner>>` -> direct ownership + explicit `pool.release(texture)`
 
