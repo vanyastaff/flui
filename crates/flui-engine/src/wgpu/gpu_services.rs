@@ -305,10 +305,27 @@ mod tests {
         pollster::block_on(GpuServices::resolve_offscreen()).ok()
     }
 
-    /// Pins "`GpuResourceGeneration` is minted only by `GpuServices`
-    /// construction": two independently constructed `GpuServices` values
-    /// never share a generation, and the second construction mints strictly
-    /// after the first.
+    /// Pins that two independently constructed `GpuServices` values never
+    /// share a generation, and that the second construction mints strictly
+    /// after the first — `GpuServices::resolve_offscreen` calls
+    /// `GpuResourceGeneration::mint()` exactly once per construction, and
+    /// this proves that call draws from the type's one process-wide
+    /// monotonic counter rather than, say, a value derived from the
+    /// adapter/device it resolved.
+    ///
+    /// # This is not "minted only by `GpuServices` construction" — that claim went stale
+    ///
+    /// An earlier revision of this doc claimed exactly that. It was true
+    /// when `GpuResourceGeneration::mint` was private to `flui-engine`
+    /// (the only call site was `resolve_offscreen`, right above). ADR-0045
+    /// decision 4 moved the type's definition to
+    /// `flui_foundation::epoch` and made `mint()` a genuinely public
+    /// associated function there — `flui-engine`'s own `raster_owner.rs`
+    /// test suite now calls it directly to fabricate test values, which a
+    /// crate-private constructor could never allow. What THIS test still
+    /// pins is narrower and still true: `GpuServices::resolve_offscreen`'s
+    /// own two calls to `mint()` produce two distinct, ordered values —
+    /// nothing broader about who else may call `mint()`.
     ///
     /// What this does NOT pin: "never crosses an owner thread" itself —
     /// there is no consumer in this slice that sends a

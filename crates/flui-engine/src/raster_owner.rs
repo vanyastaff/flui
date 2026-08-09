@@ -324,12 +324,23 @@ struct MailboxState {
     /// The one un-started frame waiting for [`RasterOwner::pump`]. A newer
     /// [`RasterHandle::submit`] replaces (never queues behind) this.
     pending_frame: Option<PendingFrame>,
-    /// The most recent coalesced resize request, applied before the next
-    /// frame render — carrying the [`SurfaceGeneration`] already minted for
-    /// it by [`RasterHandle::resize`] (ADR-0045 decision 4: the mint is
-    /// generation-forward, at request time, never deferred to apply time —
-    /// see that method's own doc).
-    pending_resize: Option<(u32, u32, SurfaceGeneration)>,
+    /// The most recent coalesced resize request (dimensions only), applied
+    /// before the next frame render.
+    ///
+    /// Deliberately does NOT carry the [`SurfaceGeneration`]
+    /// [`RasterHandle::resize`] minted when this was requested — a value
+    /// captured at request time can go stale before [`RasterOwner::pump`]
+    /// actually applies it: the render-failure (surface-lost) mint site can
+    /// advance [`Self::current_surface_generation`] *while this command
+    /// still sits here, unapplied*, and adopting the captured value at apply
+    /// time would then walk the owner's `current_surface_generation`
+    /// **backwards** — the exact false-accept this counter exists to
+    /// prevent, reached through generation *regression* rather than mint
+    /// *duplication*. `pump` instead re-reads
+    /// [`Self::current_surface_generation`] fresh, in the same lock
+    /// acquisition that drains this field, and adopts THAT — see
+    /// [`RasterOwner::pump`]'s own doc at the resize-apply site.
+    pending_resize: Option<(u32, u32)>,
     /// The most recent coalesced `GpuServices` generation this lane has been
     /// told to bind to, applied at the top of the next [`RasterOwner::pump`]
     /// before the frame-freshness compare — the same "applies at its next
@@ -342,8 +353,13 @@ struct MailboxState {
     /// owner-thread mint site) and
     /// [`RasterMailbox::mint_surface_generation`] (the render-failure /
     /// surface-lost mint site, called from [`RasterOwner::pump`]). Neither
-    /// site keeps a private counter of its own; see the module docs for the
-    /// false-accept defect two independent counters used to produce.
+    /// site keeps a private counter of its own; see ADR-0045 decision 4's
+    /// own worked example for the false-accept defect two independent
+    /// counters would produce, and
+    /// `single_counter_rejects_a_frame_stamped_before_a_post_loss_resize`'s
+    /// own doc (in this module's test suite) for the regression this single
+    /// counter is *not* enough to prevent on its own — see
+    /// [`Self::pending_resize`]'s doc for the other half of that fix.
     current_surface_generation: SurfaceGeneration,
     /// Set by [`RasterHandle::shutdown`]; refuses further submits and tells
     /// the next pump with an empty mailbox to signal shutdown-complete
@@ -759,23 +775,64 @@ impl RasterHandle {
     /// so would need to inspect pending state this call has no need to
     /// touch otherwise, for a u64 increment that is not worth avoiding.
     ///
+    /// # The returned generation is not carried into the pending command
+    ///
+    /// The minted value is returned to THIS caller so it can stamp its own
+    /// next `SceneSnapshot` immediately — but it is deliberately NOT stored
+    /// alongside the coalesced `(width, height)` for [`RasterOwner::pump`]
+    /// to adopt later. A value captured here can go stale before `pump`
+    /// actually applies it: the render-failure (surface-lost) mint site can
+    /// advance the SAME counter *while this command still sits unapplied*,
+    /// and adopting a captured-at-request-time value at apply time would
+    /// walk `current_surface_generation` **backwards** — a false accept
+    /// reached through regression rather than duplication. `pump` instead
+    /// re-reads the counter fresh, in the same lock acquisition that drains
+    /// the pending command — see `MailboxState::pending_resize`'s doc and
+    /// `single_counter_rejects_a_frame_stamped_before_a_post_loss_resize`'s
+    /// sibling regression test for the exact interleaving this closes.
+    ///
+    /// One consequence: [`SurfaceState::required_generation`] is NOT updated
+    /// by this call either, for the same reason — it reflects "the
+    /// generation the owner has actually reconfigured against", which this
+    /// call has only requested, not yet performed. A caller that wants to
+    /// observe today's true applied generation polls
+    /// [`Self::surface_state`]; a caller that wants to stamp its own very
+    /// next frame uses this method's return value directly. That value is
+    /// accepted once `pump` drains and applies this request PROVIDED
+    /// nothing else has minted a newer generation in the meantime (a
+    /// concurrent resize, or a render failure elsewhere) — exactly the
+    /// ordinary staleness a frame stamped with any generation is always
+    /// subject to, never a false accept or a false reject caused by this
+    /// method's own bookkeeping.
+    ///
     /// Infallible and best-effort: a resize against a shut-down or dropped
     /// owner still mints and returns a generation (nothing downstream will
-    /// ever apply it, but the counter and the reliable
-    /// [`SurfaceState::required_generation`] slot stay consistent regardless
-    /// of lifecycle state) — there is nothing unsafe about minting one extra
+    /// ever apply it) — there is nothing unsafe about minting one extra
     /// generation nobody consumes.
+    ///
+    /// # Thread safety of concurrent callers
+    ///
+    /// `RasterHandle` is `Clone + Send + Sync`, so nothing stops two threads
+    /// from calling this concurrently. That is sound: the mint and the
+    /// `pending_resize` write happen under the SAME `state` lock acquisition
+    /// (a single critical section, not two), so two racing calls simply
+    /// serialize — each gets its own distinct, correctly-ordered minted
+    /// value back, and `pending_resize` ends up holding whichever call's
+    /// `(width, height)` acquired the lock last, same as any other
+    /// coalescing write. An earlier revision of this method also wrote
+    /// [`SurfaceState::required_generation`] here, in a SEPARATE lock
+    /// acquisition after this one released — two racing callers could then
+    /// leave that slot holding a superseded generation, since nothing
+    /// tied the two locks together. Removing that eager write (see this
+    /// doc's own "not carried into the pending command" section above)
+    /// deleted the second critical section entirely, and with it that
+    /// hazard — this method now touches exactly one lock, once.
     pub fn resize(&self, width: u32, height: u32) -> SurfaceGeneration {
-        let generation = {
-            let mut state = self.mailbox.state.lock();
-            state.current_surface_generation = state.current_surface_generation.next();
-            let generation = state.current_surface_generation;
-            state.pending_resize = Some((width, height, generation));
-            generation
-        };
-        // Reliable, not just the (possibly-full) ack lane — same
-        // requirement as every other surface-(re)configure event.
-        self.mailbox.set_required_generation(generation);
+        let mut state = self.mailbox.state.lock();
+        state.current_surface_generation = state.current_surface_generation.next();
+        let generation = state.current_surface_generation;
+        state.pending_resize = Some((width, height));
+        drop(state);
         self.mailbox.condvar.notify_one();
         generation
     }
@@ -1117,16 +1174,30 @@ impl<B: RasterBackend> RasterOwner<B> {
     /// and no work happens off this call.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn pump(&mut self) -> PumpOutcome {
-        let (resize, pending_gpu_resource_generation, frame, shutting_down) = {
+        let (
+            resize,
+            pending_gpu_resource_generation,
+            frame,
+            shutting_down,
+            mailbox_surface_generation,
+        ) = {
             let mut state = self.mailbox.state.lock();
             let resize = state.pending_resize.take();
             let pending_gpu_resource_generation = state.pending_gpu_resource_generation.take();
             let frame = state.pending_frame.take();
+            // Read in the SAME lock acquisition that drains `pending_resize`
+            // — see that field's own doc and `RasterHandle::resize`'s doc
+            // for why a resize command may not carry its own
+            // captured-at-request-time generation: this is the fresh
+            // re-read that replaces it. Captured unconditionally (not only
+            // when `resize.is_some()`) so its cost is one field copy on
+            // every pump, not a second lock acquisition on the resize path.
             (
                 resize,
                 pending_gpu_resource_generation,
                 frame,
                 state.shutting_down,
+                state.current_surface_generation,
             )
         };
 
@@ -1163,19 +1234,32 @@ impl<B: RasterBackend> RasterOwner<B> {
         };
         let frame = frame;
 
-        if let Some((width, height, generation)) = resize {
+        if let Some((width, height)) = resize {
             self.backend.resize(width, height);
-            // ADR-0045 decision 4: `generation` was already minted by
-            // `RasterHandle::resize`, through the mailbox's ONE shared
-            // counter — this call ADOPTS that carried value as "the
-            // generation of the currently applied configuration"; it never
-            // independently increments anything, so this owner and the
-            // mailbox's counter can never disagree.
+            // ADR-0045 decision 4, corrected: adopt `mailbox_surface_generation`
+            // — the counter's value as read FRESH in this call's own initial
+            // lock acquisition — never a value captured back when this
+            // resize was first REQUESTED. The two can differ: the
+            // render-failure (surface-lost) mint site can advance the same
+            // counter while this command sat here unapplied, and adopting a
+            // stale captured value here would walk `current_surface_generation`
+            // BACKWARDS, re-opening the exact false accept this counter
+            // exists to prevent — reached through regression instead of
+            // duplication. Because `mailbox_surface_generation` was read
+            // in the SAME lock acquisition that drained this command, it is
+            // never older than what any earlier mint (from either site)
+            // already established; it is the mailbox's one counter's true
+            // current value, full stop, never independently derived here.
+            let generation = mailbox_surface_generation;
             self.current_surface_generation = generation;
             self.attached = true;
             // Reliable, not just the (possibly-full) ack lane: a resize is
             // exactly the kind of surface-(re)configure event a consumer
-            // must never miss.
+            // must never miss. Written here — once the backend has actually
+            // been reconfigured — rather than eagerly inside
+            // `RasterHandle::resize`: see that method's own doc for why
+            // "requested" and "applied" are different moments this field
+            // must not conflate.
             self.mailbox.set_required_generation(generation);
             self.mailbox.set_attached(true);
             tracing::debug!(
@@ -1403,8 +1487,10 @@ impl<B: RasterBackend> RasterOwner<B> {
                 // resize mints from (ADR-0045 decision 4) rather than
                 // bumping a private copy — the fix that makes a resize
                 // issued right after this never re-mint a value this call
-                // already consumed (see the module docs' false-accept
-                // scenario). Every frame the consumer has already stamped
+                // already consumed (see ADR-0045 decision 4's own worked
+                // false-accept example, and this module's
+                // `single_counter_rejects_a_frame_stamped_before_a_post_loss_resize`
+                // test). Every frame the consumer has already stamped
                 // against the old generation (including any submitted
                 // before it observes this ack) is rejected by the
                 // proactive check in `pump` until the consumer catches up.
@@ -1518,6 +1604,59 @@ mod tests {
         /// (a pump that extracts both a pending resize and a pending
         /// frame runs `resize` first).
         panic_next_resize: bool,
+        /// When set, the NEXT `render_scene` call parks here before
+        /// consulting `planned_results`, then clears itself. Lets a test
+        /// pause a real `pump()` call ON A REAL THREAD mid-render while a
+        /// concurrent `RasterHandle::resize` races it — reproducing
+        /// ADR-0045 decision 4's exact regression interleaving (a resize
+        /// requested, but not yet applied, while a DIFFERENT already-
+        /// in-flight frame's render fails) without a synchronous
+        /// single-threaded shortcut that could not actually separate "the
+        /// resize was requested" from "pump already extracted its pending
+        /// state for this call" in time.
+        render_gate: Option<Arc<RenderGate>>,
+    }
+
+    /// Two-phase rendezvous for [`FakeBackend::render_scene`]'s optional
+    /// pause: `entered` lets the racing thread know rendering has actually
+    /// started (so it does not race the mailbox lock before `pump` has
+    /// drained its pending state for this call); `release` lets the test
+    /// resume it once the race it set up is in place.
+    #[derive(Default)]
+    struct RenderGate {
+        entered: Mutex<bool>,
+        entered_cvar: Condvar,
+        release: Mutex<bool>,
+        release_cvar: Condvar,
+    }
+
+    impl RenderGate {
+        /// Blocks the calling thread until [`Self::open`] is called on
+        /// another thread, first signaling [`Self::wait_until_entered`]'s
+        /// waiter that this call has begun.
+        fn enter_and_wait_for_release(&self) {
+            *self.entered.lock() = true;
+            self.entered_cvar.notify_one();
+            let mut release = self.release.lock();
+            while !*release {
+                self.release_cvar.wait(&mut release);
+            }
+        }
+
+        /// Blocks until a concurrent [`Self::enter_and_wait_for_release`]
+        /// call has actually begun.
+        fn wait_until_entered(&self) {
+            let mut entered = self.entered.lock();
+            while !*entered {
+                self.entered_cvar.wait(&mut entered);
+            }
+        }
+
+        /// Releases a thread parked in [`Self::enter_and_wait_for_release`].
+        fn open(&self) {
+            *self.release.lock() = true;
+            self.release_cvar.notify_one();
+        }
     }
 
     impl FakeBackend {
@@ -1536,6 +1675,9 @@ mod tests {
                 !std::mem::take(&mut self.panic_next_render),
                 "FakeBackend: injected render panic (test)"
             );
+            if let Some(gate) = self.render_gate.take() {
+                gate.enter_and_wait_for_release();
+            }
             self.planned_results.pop_front().unwrap_or(Ok(true))
         }
 
@@ -2368,15 +2510,21 @@ mod tests {
         // reconfigure the reliable slot observes, which the assertion right
         // after the loop checks.
         let primed = handle.resize(1, 1);
+        // `RasterHandle::resize` deliberately does NOT write the reliable
+        // slot: it only requests a reconfigure, and the slot's own contract
+        // is "the generation the owner has actually reconfigured against"
+        // (see that method's own doc for why a captured-at-request-time
+        // value would be unsafe to publish here). Nothing has applied this
+        // resize yet, so the slot is still at its construction default.
         assert_eq!(
             handle.surface_state(),
             SurfaceState {
-                required_generation: primed,
+                required_generation: SurfaceGeneration::ZERO,
                 device_lost: false,
                 attached: false,
             },
-            "resize updates the reliable slot's generation immediately at \
-             request time, but `attached` only flips once pump APPLIES it"
+            "the reliable slot must not move until pump actually applies \
+             the reconfigure — resize only requests one"
         );
 
         // Saturate the lossy ack channel with unrelated Presented acks,
@@ -3301,63 +3449,293 @@ mod tests {
         );
     }
 
+    /// **The exact interleaving a review reproduced live against an
+    /// earlier version of this fix, on real threads**: a resize is
+    /// REQUESTED — and mints — while a DIFFERENT, already-in-flight frame
+    /// is mid-render on the pump thread. That frame's render then fails
+    /// with `SurfaceLost`, minting further. The resize's pending command
+    /// sits UNAPPLIED across that intervening mint. When `pump` finally
+    /// applies it, it must adopt the CURRENT (post-loss) generation —
+    /// never the generation that was current back when the resize was
+    /// merely requested.
+    ///
+    /// The single-counter property alone (proven by the sibling
+    /// `single_counter_rejects_a_frame_stamped_before_a_post_loss_resize`
+    /// test above) does not by itself prevent this: it stops the two mint
+    /// sites from ever producing the SAME value, but a resize command that
+    /// CARRIES the generation it minted at request time can still walk
+    /// `current_surface_generation` BACKWARDS once a later, unrelated mint
+    /// advances past it before the command is applied — a false accept
+    /// reached through regression rather than duplication. See
+    /// [`MailboxState::pending_resize`]'s own doc and
+    /// [`RasterHandle::resize`]'s own doc for the fix: `pump` re-reads the
+    /// mailbox's counter fresh, in the lock acquisition that drains the
+    /// command, never a value captured at request time.
+    ///
+    /// This needs real threads, not the synchronous single-call shortcut
+    /// the other tests in this file use: the bug requires a resize to be
+    /// requested strictly AFTER `pump` has already drained ITS pending
+    /// state for a call in progress, which a single-threaded test cannot
+    /// order without genuine concurrency. [`RenderGate`] pauses
+    /// `render_scene` so the racing `resize` call is guaranteed to land
+    /// after `pump`'s drain and before this call's render-failure mint.
+    ///
+    /// Mutant this kills (substitution-class — a revert to the shape this
+    /// fixed, not a line removed or inverted): change
+    /// [`MailboxState::pending_resize`] back to carrying its own captured
+    /// `SurfaceGeneration`, and have `pump`'s resize-apply branch adopt
+    /// THAT carried value instead of re-reading the mailbox's counter
+    /// fresh at apply time.
+    #[test]
+    fn a_resize_pending_across_an_intervening_surface_loss_never_regresses_the_applied_generation()
+    {
+        let gate = Arc::new(RenderGate::default());
+        let backend = FakeBackend {
+            planned_results: VecDeque::from([Err(EngineError::SurfaceLost)]),
+            render_gate: Some(Arc::clone(&gate)),
+            ..FakeBackend::default()
+        };
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
+
+        // Prime a baseline generation and apply it.
+        let g0 = handle.resize(1, 1);
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::Idle,
+            "priming resize alone has no pending frame"
+        );
+
+        // Queue the "mid-render" frame the scenario names — it will fail
+        // with SurfaceLost once released below.
+        let epoch0 = FrameEpoch::ZERO.next();
+        handle.submit(test_frame(epoch0, g0)).expect("submit");
+
+        // Drive this pump() call on its own thread; it parks inside
+        // render_scene, having already drained THIS call's (empty)
+        // pending_resize, until the gate opens.
+        let (outcome_after_loss, g1) = thread::scope(|scope| {
+            let pump_thread = scope.spawn(|| owner.pump());
+
+            // Wait until the pump thread has actually entered
+            // render_scene -- i.e. it has drained pending_resize (None,
+            // nothing requested yet) and pending_frame (this frame) for
+            // THIS call -- before racing a resize against it. Racing
+            // earlier could let the resize's command land in the SAME
+            // pump call instead of sitting pending across it, which would
+            // not reproduce the bug.
+            gate.wait_until_entered();
+
+            // The concurrent resize: mints from the mailbox's counter,
+            // which is still at g0 (nothing else has minted yet).
+            let g1 = handle.resize(2, 2);
+            assert_eq!(g1, g0.next());
+
+            // Release the pump thread: render_scene returns
+            // Err(SurfaceLost), minting one past g1 via the
+            // render-failure path.
+            gate.open();
+            let outcome = pump_thread.join().expect("pump thread must not panic");
+            (outcome, g1)
+        });
+
+        let after_loss = match outcome_after_loss {
+            PumpOutcome::SurfaceOutdated { stale, current, .. } => {
+                assert_eq!(
+                    stale, g0,
+                    "the mid-render frame was stamped with the pre-race baseline"
+                );
+                current
+            }
+            other => panic!(
+                "expected the surface-lost mint to reject via SurfaceOutdated, got {other:?}"
+            ),
+        };
+        assert_eq!(
+            after_loss,
+            g1.next(),
+            "the render-failure mint must continue from the concurrent \
+             resize's own mint, not from a stale snapshot"
+        );
+
+        // The resize from before the loss is STILL pending, unapplied --
+        // the next pump must adopt the CURRENT (post-loss) generation when
+        // it finally applies it, never the stale g1 the resize minted
+        // before the loss raced ahead of it.
+        let epoch1 = epoch0.next();
+        handle
+            .submit(test_frame(epoch1, after_loss))
+            .expect("submit");
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::Presented {
+                epoch: epoch1,
+                address: test_address(),
+            },
+            "a resize requested before an intervening surface-loss mint \
+             must adopt the CURRENT (post-loss) generation when finally \
+             applied, never the stale value captured at request time"
+        );
+        owner.with_backend(|backend| {
+            assert_eq!(
+                backend.resize_calls,
+                vec![(1, 1), (2, 2)],
+                "the pending resize must still apply its real dimensions \
+                 once drained, after the earlier priming resize"
+            );
+        });
+    }
+
     /// The symmetric failure ADR-0045 decision 4 also rules out: repeated
     /// surface losses interleaved with resizes must never let the mailbox's
     /// counter and a consumer's own tracking permanently diverge — a frame
-    /// honestly re-stamped with the latest value the reliable
-    /// `SurfaceState` slot reports must always eventually be accepted,
-    /// never rejected forever.
+    /// honestly re-stamped with the latest known-good generation must
+    /// always eventually be accepted, never rejected forever.
     ///
-    /// Mutant this kills: same class as the false-accept test above — an
-    /// independent counter on either mint site (resize or surface-lost)
-    /// lets the two drift apart after enough mints that a consumer polling
-    /// `RasterHandle::surface_state()` can never re-derive a value the
-    /// owner's `pump` will actually accept, starving every subsequent frame
-    /// permanently.
+    /// # This test has a documented history of not catching what it claimed — read before trusting it further
+    ///
+    /// **Revision 1** asserted only that `handle.surface_state().required_generation`
+    /// echoed back whatever value each mint site had just produced — a
+    /// tautology under EITHER a single shared counter or two
+    /// independently-drifting ones, since whatever a mint site writes, the
+    /// same call also reads back.
+    ///
+    /// **Revision 2** replaced that with purely behavioral accept/reject
+    /// checks (a frame stamped with a generation one site just produced is
+    /// actually `Presented`, or actually rejected with the reported
+    /// `current`), one resize then one loss per round. Real coverage — an
+    /// independent counter on the RESIZE side still fails the very first
+    /// resize-accept-check, verified live — but an independent counter on
+    /// the RENDER-FAILURE side survived it outright: with exactly one
+    /// resize and one loss per round, a private loss-side counter starting
+    /// from the same baseline advances at the same PACE as the real,
+    /// shared field (both move by exactly one per round), so
+    /// `next_generation > generation` stayed true by coincidence and every
+    /// other check round-tripped through values this module's own API had
+    /// already re-derived, never against an independent ledger.
+    ///
+    /// **This revision (3)** fixes both gaps at once. First, a direct
+    /// structural check — [`assert_owner_synced_with_mailbox`] reaches into
+    /// this module's own private fields (legitimate white-box access — this
+    /// test lives inside `raster_owner`, not outside it) and asserts
+    /// `RasterOwner::current_surface_generation` equals the mailbox's own
+    /// `MailboxState::current_surface_generation` after every pump — "one
+    /// counter, no drift" as a checked invariant instead of inferred from
+    /// behavior. Second, the round shape is deliberately UNBALANCED (one
+    /// resize against TWO losses in a row, no resize between them):
+    /// balanced 1:1 counts are exactly what let a private loss counter
+    /// coincide with the real field in revision 2; two consecutive losses
+    /// with no intervening resize force the loss-side count strictly ahead
+    /// of the resize-side count, so a private loss counter can no longer
+    /// coincidentally track the real field's value.
+    ///
+    /// Mutant this kills (substitution-class — replacing the real mint call
+    /// with an independent counter, not removing or inverting a line — see
+    /// `single_counter_rejects_a_frame_stamped_before_a_post_loss_resize`'s
+    /// own doc for the same class): route EITHER `RasterHandle::resize`'s
+    /// mint or `RasterMailbox::mint_surface_generation`'s mint through a
+    /// private counter instead of `state.current_surface_generation`.
+    /// Verified live against the exact version below, both ways: with
+    /// `resize` minting privately, the round-0 resize-accept-check fails
+    /// first (`SurfaceOutdated` where `Presented` was required, on the very
+    /// first frame). With `mint_surface_generation` minting privately, the
+    /// sync-invariant check fails first at "round 0 after loss 1" — the
+    /// SECOND of the two consecutive losses, exactly where the loss-side
+    /// count (2) first outruns the resize-side count (1) — reporting
+    /// `owner`'s adopted generation as `SurfaceGeneration(2)` against the
+    /// mailbox's true `SurfaceGeneration(1)`.
     #[test]
     fn repeated_losses_and_resizes_never_permanently_starve_a_correctly_stamped_frame() {
-        let backend = FakeBackend::with_planned([
-            Err(EngineError::SurfaceLost),
-            Err(EngineError::SurfaceValidation),
-            Err(EngineError::SurfaceLost),
-            Ok(true),
-        ]);
+        /// Reaches into `RasterOwner`'s and `RasterMailbox`'s private
+        /// fields (both accessible here — this module's own test
+        /// submodule) to check the actual invariant ADR-0045 decision 4
+        /// makes: the owner's adopted generation is never anything other
+        /// than the mailbox's own single counter's current value.
+        fn assert_owner_synced_with_mailbox(owner: &RasterOwner<FakeBackend>, context: &str) {
+            let mailbox_value = owner.mailbox.state.lock().current_surface_generation;
+            assert_eq!(
+                owner.current_surface_generation, mailbox_value,
+                "{context}: RasterOwner::current_surface_generation must always \
+                 equal the mailbox's own single counter -- any divergence here \
+                 IS the two-counters defect, independent of whether a \
+                 subsequent frame's accept/reject behavior happens to still \
+                 look right"
+            );
+        }
+
+        // Deliberately asymmetric: ONE resize per round against TWO losses
+        // per round, back to back with no resize between them. Equal
+        // counts on both sides (one resize per one loss) let two
+        // INDEPENDENT counters that both start from the same baseline and
+        // advance once per round track each other by pure coincidence —
+        // caught live, see this test's own doc. Unbalancing the ratio
+        // forces the two sequences apart the moment an independent loss
+        // counter has been invoked more times than the shared field has
+        // actually been bumped by a resize.
+        let mut planned = VecDeque::new();
+        for _ in 0..3u32 {
+            // Resize half: proves this round's resize-minted generation is
+            // genuinely accepted, not merely self-consistent.
+            planned.push_back(Ok(true));
+            // Loss half, twice in a row: the second of the pair is where an
+            // independent loss-side counter is forced to disagree with the
+            // mailbox's real field (see this test's own doc).
+            planned.push_back(Err(EngineError::SurfaceLost));
+            planned.push_back(Err(EngineError::SurfaceValidation));
+        }
+        let backend = FakeBackend::with_planned(planned);
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
 
         let mut generation = handle.resize(1, 1);
         let mut epoch = FrameEpoch::ZERO;
 
-        // Three rounds, alternating which side mints: a submit that fails
-        // inside render_scene (the surface-lost side), then a resize (the
-        // owner/handle side) — driving the shared counter forward through
-        // both mint sites repeatedly.
         for round in 0u32..3 {
+            // Resize half.
             epoch = epoch.next();
             handle
                 .submit(test_frame(epoch, generation))
-                .unwrap_or_else(|e| panic!("round {round} submit failed: {e:?}"));
-            let outcome = owner.pump();
-            let PumpOutcome::SurfaceOutdated { current, .. } = outcome else {
-                panic!(
-                    "round {round}: expected the injected failure to reject \
-                     via SurfaceOutdated, got {outcome:?}"
+                .unwrap_or_else(|e| panic!("round {round} resize-accept submit failed: {e:?}"));
+            assert_eq!(
+                owner.pump(),
+                PumpOutcome::Presented {
+                    epoch,
+                    address: test_address(),
+                },
+                "round {round}: a frame stamped with resize's own returned \
+                 generation must actually be accepted by the pump that \
+                 applies it"
+            );
+            assert_owner_synced_with_mailbox(&owner, &format!("round {round} after resize-apply"));
+
+            // Loss half, twice in a row with no resize between them.
+            for loss in 0u32..2 {
+                epoch = epoch.next();
+                handle
+                    .submit(test_frame(epoch, generation))
+                    .unwrap_or_else(|e| panic!("round {round} loss {loss} submit failed: {e:?}"));
+                let outcome = owner.pump();
+                let PumpOutcome::SurfaceOutdated { current, .. } = outcome else {
+                    panic!(
+                        "round {round} loss {loss}: expected the injected \
+                         failure to reject via SurfaceOutdated, got {outcome:?}"
+                    );
+                };
+                assert_owner_synced_with_mailbox(
+                    &owner,
+                    &format!("round {round} after loss {loss}"),
                 );
-            };
-            // The reliable slot must track every mint from either site — a
-            // consumer has no other way to learn the current generation.
-            assert_eq!(
-                handle.surface_state().required_generation,
-                current,
-                "round {round}: the reliable slot must reflect the \
-                 render-failure mint"
+                generation = current;
+            }
+
+            // The next resize must mint STRICTLY past what the second loss
+            // just reported.
+            let next_generation = handle.resize(round + 10, 10);
+            assert!(
+                next_generation > generation,
+                "round {round}: a resize issued after a loss must mint \
+                 strictly past the loss's own reported generation \
+                 ({generation:?}), got {next_generation:?}"
             );
-            generation = handle.resize(round + 10, 10);
-            assert_eq!(
-                handle.surface_state().required_generation,
-                generation,
-                "round {round}: the reliable slot must reflect the resize \
-                 mint too"
-            );
+            generation = next_generation;
         }
 
         // A frame honestly re-stamped with the latest generation must
@@ -3377,6 +3755,7 @@ mod tests {
              never be permanently starved, no matter how many prior mints \
              came from either site"
         );
+        assert_owner_synced_with_mailbox(&owner, "final");
     }
 
     /// ADR-0045 decision 4's second freshness axis: a frame whose surface
@@ -3460,18 +3839,44 @@ mod tests {
     /// permanently stuck — only a wall-clock bound distinguishes "correct"
     /// from "correct but frozen".
     ///
+    /// # The gate opens on a timer, not after the burst — and here is why that matters
+    ///
+    /// An earlier revision held the pump thread's gate closed until AFTER
+    /// the resize burst finished, then released it. That shape has a real
+    /// flaw: this workspace has no `nextest.toml`, hence no
+    /// `terminate-after`, so if `resize` really did rendezvous with the
+    /// pump thread, the FIRST call in the burst would block forever
+    /// waiting for a pump that is itself parked behind a gate this test
+    /// only opens once the (never-finishing) burst returns — a genuine
+    /// deadlock, not a slow assertion. This revision opens the gate from an
+    /// independent timer thread that answers to nothing the burst does,
+    /// which is what actually turns "a rendezvousing resize" into "the
+    /// elapsed-time assertion below fails" rather than "this test process
+    /// hangs": even a fully rendezvousing `resize` gets unblocked once the
+    /// timer fires, so the burst always eventually completes and its
+    /// elapsed time is always eventually measured — just far past the
+    /// bound, for a blocking implementation.
+    ///
     /// Mutant this kills: make `RasterHandle::resize` rendezvous with the
     /// pump side (e.g. block on an ack channel until `pump` has applied the
     /// resize) instead of only taking the mailbox's own short-lived lock —
-    /// the burst below would then block for the duration the pump thread is
-    /// deliberately kept busy, failing the elapsed-time assertion.
+    /// the burst below would then block until the independent timer thread
+    /// releases the pump side ~300ms later, failing the elapsed-time
+    /// assertion (not merely running slowly and not hanging the test
+    /// process either way). Not verified live against an actual
+    /// rendezvousing `resize` implementation — writing one is a
+    /// significantly larger change than a single-call mutation, unlike
+    /// this suite's other mutants — so this is a structural argument for
+    /// the bound, not an empirically-confirmed kill.
     #[test]
     fn n_coalesced_resizes_never_block_the_caller_even_while_the_pump_thread_is_busy() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
 
         // Simulates the raster/pump side being busy elsewhere (e.g. parked
-        // in surface acquisition) for a real, measurable interval before it
-        // ever calls `pump()`.
+        // in surface acquisition) until an INDEPENDENT timer releases it —
+        // never conditioned on the resize burst below finishing. See this
+        // test's own doc for why that independence is what keeps this test
+        // from being able to hang the process outright.
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let pump_gate = Arc::clone(&gate);
         let pump_thread = thread::spawn(move || {
@@ -3483,6 +3888,13 @@ mod tests {
                 }
             }
             owner.pump()
+        });
+        let timer_gate = Arc::clone(&gate);
+        let timer_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            let (lock, cvar) = &*timer_gate;
+            *lock.lock() = true;
+            cvar.notify_one();
         });
 
         let start = Instant::now();
@@ -3496,26 +3908,24 @@ mod tests {
             burst_elapsed < Duration::from_millis(200),
             "{RESIZE_BURST} coalesced resizes must return promptly even \
              while the pump thread is still busy elsewhere — a \
-             rendezvousing resize would stall here for as long as the pump \
-             thread stays busy (took {burst_elapsed:?})"
+             rendezvousing resize would stall here until the independent \
+             timer thread releases the pump side ~300ms later (took \
+             {burst_elapsed:?})"
         );
 
-        // Submit a frame stamped with the last minted generation BEFORE
-        // releasing the pump thread, proving submit is equally non-blocking.
+        // Submit a frame stamped with the last minted generation. Under a
+        // correct, non-blocking `resize` this lands well before the timer
+        // fires; the pump thread is still parked at this point.
         let epoch = FrameEpoch::ZERO.next();
         handle
             .submit(test_frame(epoch, last_generation))
             .expect("submit");
 
-        // Keep the pump thread busy for a real, measurable interval before
-        // releasing it, so the elapsed-time assertion above is checking
-        // something a blocking implementation could actually fail.
-        thread::sleep(Duration::from_millis(300));
-        {
-            let (lock, cvar) = &*gate;
-            *lock.lock() = true;
-            cvar.notify_one();
-        }
+        // The timer thread releases the pump thread on its own schedule —
+        // nothing here conditions that release on the burst or the submit
+        // above, which is the property that keeps this test bounded no
+        // matter what `resize` does internally.
+        timer_thread.join().expect("timer thread must not panic");
 
         let outcome = pump_thread.join().expect("pump thread must not panic");
         assert_eq!(
@@ -3526,6 +3936,77 @@ mod tests {
             },
             "once released, the pump thread must apply the coalesced \
              burst's final resize and publish the frame stamped against it"
+        );
+    }
+
+    /// The interleaved liveness oracle the single-shot test above cannot
+    /// see: it stages the whole resize burst, THEN stamps, THEN submits, so
+    /// it never has a resize land BETWEEN a stamp and a submit — exactly
+    /// the interleaving decision 4's no-handshake design has to stay live
+    /// under, since a real drag delivers resize events at a rate that will
+    /// eventually race an in-flight frame request on genuinely
+    /// unsynchronized threads. This test drives that race directly: one
+    /// thread repeatedly resizes, stamps the value it just got back, and
+    /// submits, immediately, in a loop with no coordination; a second
+    /// thread pumps continuously. Heavy superseding is expected and
+    /// correct — latest-frame-wins is the mailbox's whole point, so most
+    /// rounds are expected to lose the race to a later one — the property
+    /// under test is that the pipeline never stalls entirely under it: at
+    /// least one frame, across many racing rounds, actually reaches
+    /// `Presented`.
+    ///
+    /// Mutant this kills: a `resize` that blocks waiting for `pump` (the
+    /// rejected handshake design) would deadlock the stamping thread on its
+    /// very first iteration; `stamper.is_finished()` would never become
+    /// true and the bounded pump-loop guard below would trip, failing
+    /// loudly with a diagnosed "looks stalled" panic rather than hanging —
+    /// this test's own pump loop is capped, unlike a single fixed-duration
+    /// gate, precisely because it drives an unbounded number of pumps
+    /// against a thread it does not otherwise control. Not verified live
+    /// against an actual rendezvousing `resize`, same honest caveat as the
+    /// single-shot test above — constructing one is a materially larger
+    /// change than this suite's single-call mutants.
+    #[test]
+    fn resize_stamp_submit_pump_interleaved_across_two_threads_never_stalls_entirely() {
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+
+        const ROUNDS: u32 = 200;
+        let stamp_handle = handle.clone();
+        let stamper = thread::spawn(move || {
+            let mut epoch = FrameEpoch::ZERO;
+            for i in 0..ROUNDS {
+                let generation = stamp_handle.resize(100 + i, 100 + i);
+                epoch = epoch.next();
+                // Best-effort: a submit racing this test's own teardown
+                // is not the concern here, only whether the pipeline as a
+                // whole makes progress under the race.
+                let _ = stamp_handle.submit(test_frame(epoch, generation));
+            }
+        });
+
+        let mut presented = 0u32;
+        let mut pumps = 0u32;
+        const MAX_PUMPS: u32 = 1_000_000;
+        while !stamper.is_finished() || handle.in_flight() > 0 {
+            if matches!(owner.pump(), PumpOutcome::Presented { .. }) {
+                presented += 1;
+            }
+            pumps += 1;
+            assert!(
+                pumps < MAX_PUMPS,
+                "pump loop did not converge after {MAX_PUMPS} iterations -- \
+                 the pipeline looks stalled rather than merely racing"
+            );
+        }
+        stamper.join().expect("stamping thread must not panic");
+
+        assert!(
+            presented > 0,
+            "across {ROUNDS} racing resize/stamp/submit/pump rounds on two \
+             unsynchronized threads, at least one frame must reach \
+             Presented -- zero would mean the pipeline stalled entirely \
+             under the exact race ADR-0045 decision 4's no-handshake \
+             design is supposed to stay live under"
         );
     }
 }

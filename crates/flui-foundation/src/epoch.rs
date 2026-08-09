@@ -148,9 +148,12 @@ impl GpuResourceGeneration {
     /// Mints the next generation from a process-wide monotonic counter.
     ///
     /// Public because minting now crosses the `flui-foundation`/`flui-engine`
-    /// boundary (only `GpuServices::resolve_offscreen` calls this in
-    /// production) — the tuple field stays private, so this remains the only
-    /// way to construct a non-`ZERO` value from outside this module.
+    /// boundary: `GpuServices::resolve_offscreen` is the only production
+    /// call site, but this function is not otherwise restricted to it —
+    /// `flui-engine`'s own test suites call it directly to fabricate test
+    /// values, which is exactly what a public associated function allows.
+    /// The tuple field stays private, so a tuple-struct literal remains the
+    /// one construction path this blocks from outside this module.
     #[must_use]
     pub fn mint() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
