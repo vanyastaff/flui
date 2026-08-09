@@ -161,3 +161,6 @@ pub use wgpu::DebugBackend;
 // wgpu backend exports
 #[cfg(feature = "wgpu-backend")]
 pub use wgpu::{Backend, FontLoader, LayerRender, WgpuPainter};
+// Shared per-owner-thread GPU services (ADR-0045 decision 2).
+#[cfg(feature = "wgpu-backend")]
+pub use wgpu::{GpuResourceGeneration, GpuServices};

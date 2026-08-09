@@ -410,6 +410,18 @@ impl Renderer {
     /// let renderer = Renderer::new(&window).await?;
     /// println!("Using backend: {:?}", renderer.capabilities().backend);
     /// ```
+    ///
+    /// # Superseded (ADR-0045 decision 2)
+    ///
+    /// This builds a whole private `Instance → Adapter → Device → Queue`
+    /// stack per call, which is exactly the per-`Renderer` device
+    /// duplication [`super::gpu_services::GpuServices`] exists to remove.
+    /// `#[doc(hidden)]` as of this slice: kept working (its five call sites
+    /// — four in `flui-app`, one in the Android demo example — still build
+    /// their own private stack, unmigrated) but no longer advertised as the
+    /// entry point for new integrations. Deleted in a later slice once those
+    /// five consumers move to a `GpuServices`-backed constructor.
+    #[doc(hidden)]
     pub async fn new<W>(window: &W) -> EngineResult<Self>
     where
         W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + ?Sized,
@@ -738,6 +750,55 @@ impl Renderer {
         })
     }
 
+    /// Build an offscreen renderer that shares GPU services with every other
+    /// renderer built from the same [`GpuServices`] value on this owner
+    /// thread (ADR-0045 decision 2).
+    ///
+    /// Unlike [`Renderer::new_offscreen`], this performs no
+    /// `Instance`/`Adapter`/`Device` construction and installs no
+    /// device-lost callback of its own — there is no `wgpu::Instance::new`,
+    /// `request_adapter`, `request_device`, or `set_device_lost_callback`
+    /// call anywhere in this function's body. Every field that
+    /// `new_offscreen` would otherwise construct fresh is instead cloned
+    /// from `services`: `Arc::clone` for the device, queue, and device-lost
+    /// flag (cheap, reference-counted, and — for the flag — the exact SAME
+    /// `Arc<AtomicBool>` every other renderer sharing these services
+    /// observes), and `wgpu::Instance`/`wgpu::Adapter`'s own `Clone` impls
+    /// (also reference-counted handles, not new GPU objects) for the other
+    /// two. This is what makes "exactly one device-lost callback install"
+    /// hold structurally rather than by convention: there is no second call
+    /// site anywhere that could install a competing callback against this
+    /// device.
+    ///
+    /// Synchronous, unlike `new_offscreen`: `services` has already resolved
+    /// everything an `.await` would otherwise be needed for.
+    #[must_use]
+    pub fn from_offscreen_services(services: &super::gpu_services::GpuServices) -> Self {
+        Self {
+            instance: services.instance().clone(),
+            adapter: services.adapter().clone(),
+            device: Arc::clone(services.device()),
+            queue: Arc::clone(services.queue()),
+            surface: None,
+            config: None,
+            capabilities: services.capabilities().clone(),
+            painter: None,
+            offscreen: None,
+            supports_copy_src: false,
+            device_lost: services.device_lost_handle(),
+            damage_tracker: flui_layer::damage::DamageTracker::new(),
+            raw_handles: RawHandles {
+                window: None,
+                display: None,
+            },
+            #[cfg(feature = "gpu-profiler")]
+            gpu_profiler: None,
+            #[cfg(test)]
+            force_intermediate: false,
+            force_full_repaint_next_frame: false,
+        }
+    }
+
     /// Returns `true` if the GPU device has been lost.
     ///
     /// After a TDR, driver crash, or GPU hardware failure the device-lost
@@ -891,7 +952,11 @@ impl Renderer {
     }
 
     /// Select appropriate backend for the current platform
-    fn select_backend() -> wgpu::Backends {
+    ///
+    /// `pub(super)`: reused by [`super::gpu_services::GpuServices`]'s own
+    /// adapter-selection paths so backend selection is written in exactly
+    /// one place, not re-derived per construction site.
+    pub(super) fn select_backend() -> wgpu::Backends {
         #[cfg(target_os = "macos")]
         {
             tracing::debug!("Platform: macOS, selecting Metal backend");
@@ -950,7 +1015,13 @@ impl Renderer {
     /// Both callbacks route the fault through `tracing` so it is logged and
     /// diagnosable instead of aborting the process or spinning the render
     /// loop blind.
-    fn install_device_diagnostics(
+    ///
+    /// `pub(super)`: [`super::gpu_services::GpuServices`] is the one other
+    /// call site in the crate — its own construction path calls this exactly
+    /// once per shared device, which is what makes "exactly one
+    /// `set_device_lost_callback` install" true by construction rather than
+    /// by convention (ADR-0045 decision 2's first hazard).
+    pub(super) fn install_device_diagnostics(
         device: &wgpu::Device,
         device_lost_flag: Arc<std::sync::atomic::AtomicBool>,
     ) {
@@ -975,7 +1046,10 @@ impl Renderer {
     ///
     /// Only requests optional features when the adapter actually exposes them,
     /// so device creation never regresses on GPUs that lack them.
-    fn required_features(capabilities: &GpuCapabilities) -> wgpu::Features {
+    ///
+    /// `pub(super)`: shared with [`super::gpu_services::GpuServices`] so both
+    /// construction paths request the same feature set from one definition.
+    pub(super) fn required_features(capabilities: &GpuCapabilities) -> wgpu::Features {
         let mut features = wgpu::Features::empty();
 
         // Always enable texture adapter-specific formats.
@@ -1002,7 +1076,10 @@ impl Renderer {
     }
 
     /// Required GPU limits based on capabilities and adapter support
-    fn required_limits(capabilities: &GpuCapabilities) -> wgpu::Limits {
+    ///
+    /// `pub(super)`: shared with [`super::gpu_services::GpuServices`], same
+    /// rationale as [`Self::required_features`].
+    pub(super) fn required_limits(capabilities: &GpuCapabilities) -> wgpu::Limits {
         let mut limits = wgpu::Limits {
             max_texture_dimension_2d: capabilities.max_texture_size.min(16384),
             ..wgpu::Limits::default()
@@ -2123,6 +2200,98 @@ mod tests {
                 assert!(renderer.config.is_none());
                 assert!(!renderer.capabilities.adapter_name.is_empty());
             }
+        });
+    }
+
+    /// Pins ADR-0045 decision 2's headline property: one `wgpu::Device` per
+    /// owner thread. Two `Renderer`s built from the SAME [`GpuServices`] via
+    /// [`Renderer::from_offscreen_services`] must share the exact device —
+    /// checked by `Arc::ptr_eq`, not by a proxy like equal capability
+    /// strings (two independently-constructed devices on the same adapter
+    /// would report identical `GpuCapabilities` and still be two devices).
+    ///
+    /// # Limitation, stated rather than papered over
+    ///
+    /// This exercises the OFFSCREEN sharing path only. The windowed path has
+    /// no `Renderer`-level sharing constructor in this slice (see
+    /// `gpu_services.rs`'s module doc) — the raw-handle/surface plumbing it
+    /// would need is out of scope here.
+    #[test]
+    fn two_renderers_from_shared_services_share_one_device() {
+        pollster::block_on(async {
+            let Ok(services) = crate::GpuServices::resolve_offscreen().await else {
+                // No GPU in this environment; skip gracefully (matches every
+                // other GPU test in this module).
+                return;
+            };
+
+            let renderer_a = Renderer::from_offscreen_services(&services);
+            let renderer_b = Renderer::from_offscreen_services(&services);
+
+            assert!(
+                Arc::ptr_eq(&renderer_a.device, &renderer_b.device),
+                "two renderers built from the same GpuServices must share \
+                 one wgpu::Device (by Arc pointer identity), not each hold \
+                 their own"
+            );
+            assert!(
+                Arc::ptr_eq(&renderer_a.device, services.device()),
+                "the renderers' shared device must be the SAME device \
+                 GpuServices itself holds, not a third one"
+            );
+        });
+    }
+
+    /// Pins ADR-0045 decision 2's first named hazard: `set_device_lost_callback`
+    /// is last-writer-wins, so a design that installed it once per `Renderer`
+    /// sharing a device would silently orphan every earlier `Renderer`'s
+    /// flag. Proven by mechanism, not by a mock that counts install calls
+    /// (wgpu's `Device` is a concrete FFI-backed type with no seam to mock):
+    /// two renderers built from the same `GpuServices` must hold the exact
+    /// SAME `Arc<AtomicBool>` as each other and as the services value
+    /// itself. If `Renderer::from_offscreen_services` (or any future
+    /// sharing path) ever called `install_device_diagnostics` a second time
+    /// against a fresh flag, this would fail — the two renderers would
+    /// observe different flags, and only the most-recently-installed
+    /// callback would ever fire wgpu's real device-lost callback.
+    #[test]
+    fn two_renderers_from_shared_services_share_one_device_lost_flag() {
+        pollster::block_on(async {
+            let Ok(services) = crate::GpuServices::resolve_offscreen().await else {
+                return;
+            };
+
+            let renderer_a = Renderer::from_offscreen_services(&services);
+            let renderer_b = Renderer::from_offscreen_services(&services);
+
+            assert!(
+                Arc::ptr_eq(&renderer_a.device_lost, &renderer_b.device_lost),
+                "two renderers sharing GpuServices must observe the SAME \
+                 device_lost flag"
+            );
+            assert!(
+                Arc::ptr_eq(&renderer_a.device_lost, &services.device_lost_handle()),
+                "the shared flag must be the exact one GpuServices installed \
+                 its one callback against"
+            );
+
+            // Behavioral corroboration: flipping the flag through ONE handle
+            // must be visible through every other handle, which is only
+            // true if there is exactly one flag in play.
+            assert!(!renderer_a.is_device_lost());
+            assert!(!renderer_b.is_device_lost());
+            assert!(!services.is_device_lost());
+            renderer_a
+                .device_lost
+                .store(true, std::sync::atomic::Ordering::Release);
+            assert!(
+                renderer_b.is_device_lost(),
+                "renderer_b must observe the flip made through renderer_a's handle"
+            );
+            assert!(
+                services.is_device_lost(),
+                "GpuServices itself must observe the flip too"
+            );
         });
     }
 

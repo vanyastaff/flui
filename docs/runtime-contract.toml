@@ -201,6 +201,7 @@ declarations = [
     "pub use raster_options::RasterOptions;",
     "pub use wgpu::DebugBackend;",
     "pub use wgpu::{Backend, FontLoader, LayerRender, WgpuPainter};",
+    "pub use wgpu::{GpuResourceGeneration, GpuServices};",
 ]
 
 [[export_root]]
@@ -2625,6 +2626,23 @@ consumers = [
 ]
 owner_issue = 559
 notes = "Introduced in #556 alongside the reliable in-flight counter (RasterOwner surface entry above) — max_frames_in_flight is the CLOCK-side counting threshold only (flui_scheduler::FrameClock::set_max_in_flight), deliberately never threaded into wgpu::SurfaceConfiguration::desired_maximum_frame_latency (pinned at 1, see crate::wgpu::renderer's own doc); target_frame_rate converts via min_produce_interval() to the Duration FrameClock::set_min_produce_interval expects. flui-engine does not depend on flui-scheduler, so this type carries plain std::num/std::time values rather than referencing FrameClock directly. Production wiring (a live FrameClock actually reading these numbers back) is #559's job, same boundary as RasterOwner/RasterHandle above."
+
+[[surface]]
+path = "flui_engine::{GpuServices, GpuResourceGeneration}"
+crate = "flui-engine"
+kind = "type"
+declared_in = "crates/flui-engine/src/wgpu/gpu_services.rs"
+contains = "pub struct GpuServices"
+classification = "experimental"
+thread_affinity = "not Send-blocked (device_lost is designed to cross to a raster thread); scoped to one owner thread and CHECKED via a #[cfg(debug_assertions)] created_on: ThreadId asserted on every owner-affine accessor"
+owner = "instance/adapter/device/queue/capabilities plus the shared ShaderCache and the one device_lost flag behind exactly one set_device_lost_callback install, for exactly one owner thread (ADR-0045 decision 2) — never process-wide; two realms on two owner threads resolve two independent GpuServices"
+failure_semantics = "typed EngineError (AdapterRequest/DeviceCreation) from the two async resolve_* constructors; the owner-thread check is an assert (BUG-class), not a Result"
+consumers = [
+    "Renderer::from_offscreen_services (the offscreen sharing path)",
+    "unit tests in gpu_services.rs and renderer.rs",
+]
+owner_issue = 559
+notes = "This slice ships the value type, its two resolution paths (resolve_for_surface mirrors Renderer::new's adapter-selection-from-a-surface policy bit-for-bit; resolve_offscreen mirrors Renderer::new_offscreen's), and the offscreen sharing seam (Renderer::from_offscreen_services) that proves the device is actually shared, not merely shareable. NOT wired into flui-app's AppRuntime yet, and Renderer::new's five existing call sites (four in flui-app, one in the Android demo example) are unmigrated — Renderer::new is #[doc(hidden)] this slice as the signal, not deleted. The windowed (surface-owning) path has no Renderer-level sharing constructor yet: that needs the raw-handle/surface-lifecycle plumbing ADR-0045 decision 1 ties to the raster lane, which has zero production consumers today (see the RasterOwner surface entry above) — building it now would be sharing a capability nothing yet exercises end-to-end. Recovery (ReplaceServices, the interior-mutable Option container decision 2 names) is also not built here: this slice's GpuServices values are immutable once constructed, and 'a re-settable container' is a property of whatever later slice stores one (e.g. a RefCell<Option<GpuServices>> on AppRuntime), not of this type itself. ADR-0045 decision 2's own prose calls the generation field 'ResourceGeneration'; it is named GpuResourceGeneration here instead because flui_foundation::epoch already declares a pub struct ResourceGeneration for a different domain (worker-cache freshness) and port-check trigger 10 (SP-3) mechanically forbids the collision — see gpu_services.rs's own doc comment on GpuResourceGeneration for the full reasoning."
 
 [[surface]]
 path = "flui_layer::{SceneSnapshot, DamageRegion}"
