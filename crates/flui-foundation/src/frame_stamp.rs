@@ -18,27 +18,30 @@
 //! false: no value-type construction shape in Rust, positional constructor
 //! or typestate builder alike, makes adding a *required* field additive.
 //! Additivity is available only for *optional* fields, and ADR-0045
-//! decision 4's later `ResourceGeneration` axis cannot be optional (the
+//! decision 4's [`GpuResourceGeneration`] axis cannot be optional (the
 //! decision requires both generations to be checked before a frame
-//! renders). Adding that field will change [`FrameStamp::new`]'s signature
-//! and break every call site that calls it — **six today, across three
-//! crates**, each named directly by the compiler as an arity mismatch: this
-//! module's own unit test and its positive doctest (`flui-foundation`);
-//! `scene_snapshot.rs`'s stamp helper (`flui-layer`); and the
-//! `raster_owner.rs` test helper, the `raster_backpressure` bench and the
-//! `raster_backpressure_allocation` integration test (`flui-engine`). The
-//! `compile_fail` doctest below is a seventh site and needs different
-//! handling — see its own note. An earlier revision of this paragraph said
-//! "three, all in `flui-engine`"; the compiler names six, and a paragraph
-//! whose whole purpose is to be the trustworthy version of a claim that was
-//! previously untrustworthy has to survive being checked.
+//! renders). That field landed for real in the same change as this
+//! paragraph's correction (not merely tested and reverted): adding it
+//! changed [`FrameStamp::new`]'s signature and broke every call site that
+//! called it — **six, across three crates**, each named directly by the
+//! compiler as an arity mismatch: this module's own unit test and its
+//! positive doctest (`flui-foundation`); `scene_snapshot.rs`'s stamp helper
+//! (`flui-layer`); and the `raster_owner.rs` test helper, the
+//! `raster_backpressure` bench and the `raster_backpressure_allocation`
+//! integration test (`flui-engine`). The `compile_fail` doctest below was a
+//! seventh site that needed different handling — see its own note, updated
+//! in the same change rather than left describing a field that had not
+//! landed yet. An earlier revision of this paragraph said "three, all in
+//! `flui-engine`"; the compiler named six, and a paragraph whose whole
+//! purpose is to be the trustworthy version of a claim that was previously
+//! untrustworthy has to survive being checked.
 //! That is a real, compiler-guided, small-blast-radius breaking change —
 //! narrowed from five positional arguments (`SceneSnapshot`'s own former
-//! shape) to three, not eliminated — and no amount of builder ceremony
+//! shape) to four, not eliminated — and no amount of builder ceremony
 //! changes that, so this type uses the plain constructor the honest version
 //! of that claim implies.
 
-use crate::epoch::{FrameEpoch, SurfaceGeneration};
+use crate::epoch::{FrameEpoch, GpuResourceGeneration, SurfaceGeneration};
 use crate::id::PresentationAddress;
 
 /// The identity group that stamps one frame: which presentation produced it,
@@ -55,7 +58,13 @@ use crate::id::PresentationAddress;
 /// only the full pair safely distinguishes them. `surface_generation` is a
 /// separate axis, scoped *per presentation*: it is minted by that
 /// presentation's own raster seam (ADR-0037 §8), never by the realm or by
-/// frame counting.
+/// frame counting. `gpu_resource_generation` is a third, independent axis
+/// (ADR-0045 decision 4): `surface_generation` guards against a torn-down
+/// swapchain, `gpu_resource_generation` guards against a torn-down
+/// `wgpu::Device` — a shared device loss invalidates every surface on its
+/// owner thread at once, which is a materially different failure than one
+/// surface being resized, so the two are checked as separate clauses rather
+/// than folded into one counter.
 ///
 /// # `#[non_exhaustive]`, and what it does and does not do here
 ///
@@ -79,13 +88,18 @@ pub struct FrameStamp {
     pub epoch: FrameEpoch,
     /// The raster surface generation this frame was produced against.
     pub surface_generation: SurfaceGeneration,
+    /// The `flui-engine` `GpuServices` generation this frame was produced
+    /// against (ADR-0045 decision 4). See the type doc above for why this
+    /// is a separate axis from `surface_generation` rather than folded into
+    /// it.
+    pub gpu_resource_generation: GpuResourceGeneration,
 }
 
 impl FrameStamp {
-    /// Packages the three identity/versioning fields the raster boundary
+    /// Packages the four identity/versioning fields the raster boundary
     /// needs to accept, reject, or reconcile a frame.
     ///
-    /// All three fields are distinct newtypes (never the same underlying
+    /// All four fields are distinct newtypes (never the same underlying
     /// type as one another), so transposing two arguments is a compile-time
     /// type error, not a silent bug — see the second example below.
     ///
@@ -93,8 +107,8 @@ impl FrameStamp {
     ///
     /// ```rust
     /// use flui_foundation::{
-    ///     FrameEpoch, FrameStamp, PresentationAddress, PresentationId, RealmId,
-    ///     SurfaceGeneration,
+    ///     FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
+    ///     RealmId, SurfaceGeneration,
     /// };
     ///
     /// let stamp = FrameStamp::new(
@@ -104,6 +118,7 @@ impl FrameStamp {
     ///     },
     ///     FrameEpoch::ZERO,
     ///     SurfaceGeneration::ZERO,
+    ///     GpuResourceGeneration::ZERO,
     /// );
     ///
     /// assert_eq!(stamp.epoch, FrameEpoch::ZERO);
@@ -113,18 +128,20 @@ impl FrameStamp {
     /// underlying representation looks alike (both wrap a `u64` counter) —
     /// does not compile:
     ///
-    /// **This block goes vacuous the moment a fourth field lands.** It would
-    /// then fail on arity rather than on the type transposition its comment
-    /// names, and keep reporting success while testing nothing. Whoever adds
-    /// ADR-0045 decision 4's `resource_generation` axis must update this
-    /// block along with the six ordinary call sites, and re-confirm the
-    /// failure is still `E0308` — a `compile_fail` that fails for the wrong
-    /// reason is the trap this workspace has already shipped once.
+    /// **This block went vacuous once, and was fixed in the same change**
+    /// that added `gpu_resource_generation` as the fourth field: it would
+    /// otherwise fail on arity rather than on the type transposition its
+    /// comment names, reporting success while testing nothing. It is kept
+    /// at four arguments (transposing the same two as before, with the new
+    /// fourth argument supplied correctly) precisely so the failure stays
+    /// `E0308` on the transposed pair rather than becoming `E0061` on the
+    /// count — re-confirmed by extraction against this crate's own source
+    /// after the field landed, not assumed from the shape of the diff.
     ///
     /// ```compile_fail
     /// use flui_foundation::{
-    ///     FrameEpoch, FrameStamp, PresentationAddress, PresentationId, RealmId,
-    ///     SurfaceGeneration,
+    ///     FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
+    ///     RealmId, SurfaceGeneration,
     /// };
     ///
     /// let address = PresentationAddress {
@@ -133,18 +150,25 @@ impl FrameStamp {
     /// };
     /// // ERROR[E0308]: expected `FrameEpoch`, found `SurfaceGeneration` —
     /// // the two arguments are transposed, and each is a distinct newtype.
-    /// let _ = FrameStamp::new(address, SurfaceGeneration::ZERO, FrameEpoch::ZERO);
+    /// let _ = FrameStamp::new(
+    ///     address,
+    ///     SurfaceGeneration::ZERO,
+    ///     FrameEpoch::ZERO,
+    ///     GpuResourceGeneration::ZERO,
+    /// );
     /// ```
     #[must_use]
     pub fn new(
         address: PresentationAddress,
         epoch: FrameEpoch,
         surface_generation: SurfaceGeneration,
+        gpu_resource_generation: GpuResourceGeneration,
     ) -> Self {
         Self {
             address,
             epoch,
             surface_generation,
+            gpu_resource_generation,
         }
     }
 }
@@ -166,12 +190,14 @@ mod tests {
         let address = test_address();
         let epoch = FrameEpoch::ZERO.next();
         let surface_generation = SurfaceGeneration::ZERO.next();
+        let gpu_resource_generation = GpuResourceGeneration::mint();
 
-        let stamp = FrameStamp::new(address, epoch, surface_generation);
+        let stamp = FrameStamp::new(address, epoch, surface_generation, gpu_resource_generation);
 
         assert_eq!(stamp.address, address);
         assert_eq!(stamp.epoch, epoch);
         assert_eq!(stamp.surface_generation, surface_generation);
+        assert_eq!(stamp.gpu_resource_generation, gpu_resource_generation);
     }
 
     #[test]

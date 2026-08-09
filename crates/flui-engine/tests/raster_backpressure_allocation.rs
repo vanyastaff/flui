@@ -16,7 +16,8 @@ use flui_engine::{
     CanvasLayer, DamageRegion, EngineError, Layer, RasterBackend, RasterOwner, Scene, SceneSnapshot,
 };
 use flui_foundation::{
-    FrameEpoch, FrameStamp, PresentationAddress, PresentationId, RealmId, SurfaceGeneration,
+    FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId, RealmId,
+    SurfaceGeneration,
 };
 use flui_types::Size;
 use flui_types::geometry::{Pixels, Rect};
@@ -123,8 +124,18 @@ fn address() -> PresentationAddress {
     }
 }
 
-fn frame(epoch: FrameEpoch) -> SceneSnapshot {
-    let stamp = FrameStamp::new(address(), epoch, SurfaceGeneration::ZERO);
+/// `surface_generation` must be the generation the owner currently considers
+/// valid — ADR-0045 decision 4 rejects `SurfaceGeneration::ZERO` outright, so
+/// callers here prime the owner with one `RasterHandle::resize` call (in the
+/// unmeasured prelude, before the warmup submit) and thread its returned
+/// generation through, rather than stamping the un-configured sentinel.
+fn frame(epoch: FrameEpoch, surface_generation: SurfaceGeneration) -> SceneSnapshot {
+    let stamp = FrameStamp::new(
+        address(),
+        epoch,
+        surface_generation,
+        GpuResourceGeneration::ZERO,
+    );
     SceneSnapshot::new(
         stamp,
         DamageRegion::Full,
@@ -148,11 +159,17 @@ fn submit_pump_retire_cycle_allocates_nothing_on_the_accounting_path() {
     let (mut owner, handle, _ack_rx, _shutdown_complete_rx) =
         RasterOwner::new(NoOpBackend, address());
 
+    // Primes past ADR-0045 decision 4's ZERO-rejection gate, strictly before
+    // any allocation counter is read below — not part of the measured
+    // region, and not itself a source of heap allocation (a mint is a plain
+    // atomic increment).
+    let generation = handle.resize(1, 1);
+
     // Warmup: settles the owner's one-time construction cost and the first
     // `tracing::instrument`d call's one-time callsite-interest caching,
     // neither of which is part of the steady-state accounting path below.
     handle
-        .submit(frame(FrameEpoch::ZERO.next()))
+        .submit(frame(FrameEpoch::ZERO.next(), generation))
         .expect("warmup submit");
     let _ = owner.pump();
 
@@ -171,7 +188,7 @@ fn submit_pump_retire_cycle_allocates_nothing_on_the_accounting_path() {
         epoch = epoch.next();
 
         let bytes_before_frame_construction = read(&ALLOC_BYTES);
-        let snapshot = frame(epoch); // outside the checked region -- see doc above
+        let snapshot = frame(epoch, generation); // outside the checked region -- see doc above
         frame_construction_alloc_bytes += read(&ALLOC_BYTES) - bytes_before_frame_construction;
 
         let count_before = read(&ALLOC_COUNT);

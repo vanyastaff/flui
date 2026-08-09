@@ -41,7 +41,8 @@ use flui_engine::{
     CanvasLayer, DamageRegion, EngineError, Layer, RasterBackend, RasterOwner, Scene, SceneSnapshot,
 };
 use flui_foundation::{
-    FrameEpoch, FrameStamp, PresentationAddress, PresentationId, RealmId, SurfaceGeneration,
+    FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId, RealmId,
+    SurfaceGeneration,
 };
 use flui_types::Size;
 use flui_types::geometry::{Pixels, Rect};
@@ -86,8 +87,18 @@ fn bench_address() -> PresentationAddress {
     }
 }
 
-fn bench_frame(epoch: FrameEpoch) -> SceneSnapshot {
-    let stamp = FrameStamp::new(bench_address(), epoch, SurfaceGeneration::ZERO);
+/// `surface_generation` must be the generation a real [`RasterOwner::pump`]
+/// currently considers valid — ADR-0045 decision 4 rejects
+/// `SurfaceGeneration::ZERO` outright, so every caller here primes the owner
+/// with one `RasterHandle::resize` call and threads its returned generation
+/// through, rather than stamping the un-configured sentinel.
+fn bench_frame(epoch: FrameEpoch, surface_generation: SurfaceGeneration) -> SceneSnapshot {
+    let stamp = FrameStamp::new(
+        bench_address(),
+        epoch,
+        surface_generation,
+        GpuResourceGeneration::ZERO,
+    );
     SceneSnapshot::new(
         stamp,
         DamageRegion::Full,
@@ -110,12 +121,15 @@ fn submit_pump_retire_cycle(c: &mut Criterion) {
     let (mut owner, handle, _ack_rx, _shutdown_complete_rx) =
         RasterOwner::new(NoOpBackend, bench_address());
     let mut epoch = FrameEpoch::ZERO;
+    // Prime the owner past ADR-0045 decision 4's ZERO-rejection gate; applied
+    // by the first timed pump() below, alongside that iteration's frame.
+    let generation = handle.resize(1, 1);
 
     c.bench_function("submit_pump_retire_cycle", |b| {
         b.iter_batched(
             || {
                 epoch = epoch.next();
-                bench_frame(epoch)
+                bench_frame(epoch, generation)
             },
             |frame| {
                 handle.submit(frame).expect("submit");
@@ -134,6 +148,8 @@ fn submit_pump_retire_cycle(c: &mut Criterion) {
 fn in_flight_read_under_retire_storm(c: &mut Criterion) {
     let (owner, handle, _ack_rx, _shutdown_complete_rx) =
         RasterOwner::new(NoOpBackend, bench_address());
+    // Same priming as `submit_pump_retire_cycle` above — see its comment.
+    let generation = handle.resize(1, 1);
 
     let stop = Arc::new(AtomicBool::new(false));
     let storm_handle = handle.clone();
@@ -143,7 +159,7 @@ fn in_flight_read_under_retire_storm(c: &mut Criterion) {
         let mut epoch = FrameEpoch::ZERO;
         while !storm_stop.load(Ordering::Relaxed) {
             epoch = epoch.next();
-            let _ = storm_handle.submit(bench_frame(epoch));
+            let _ = storm_handle.submit(bench_frame(epoch, generation));
             let _ = owner.pump();
         }
     });

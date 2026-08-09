@@ -49,7 +49,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
-use flui_foundation::{FrameEpoch, PresentationAddress, SurfaceGeneration};
+use flui_foundation::{FrameEpoch, GpuResourceGeneration, PresentationAddress, SurfaceGeneration};
 use flui_layer::SceneSnapshot;
 use parking_lot::{Condvar, Mutex};
 
@@ -101,6 +101,19 @@ pub struct SurfaceState {
     /// frame presents successfully — recovery is the consumer's job, this
     /// flag only reports the condition reliably.
     pub device_lost: bool,
+    /// Whether this lane currently has an applied surface configuration at
+    /// all (ADR-0045 decision 4). `false` until the first
+    /// [`RasterHandle::resize`] is applied by [`RasterOwner::pump`] — the
+    /// typed replacement for the web runner's `Option<Renderer>` "the WebGPU
+    /// adapter is not ready yet" state. [`RasterOwner::pump`] rejects every
+    /// frame while this is `false`, in addition to (not instead of)
+    /// rejecting [`SurfaceGeneration::ZERO`] outright: the two checks guard
+    /// different things — `ZERO` catches a frame stamped before its producer
+    /// ever observed a real generation, `attached` catches a lane that has
+    /// none configured right now, which decision 4 names as a state a
+    /// future detach can reach again even after a generation has already
+    /// been minted.
+    pub attached: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -312,8 +325,26 @@ struct MailboxState {
     /// [`RasterHandle::submit`] replaces (never queues behind) this.
     pending_frame: Option<PendingFrame>,
     /// The most recent coalesced resize request, applied before the next
-    /// frame render.
-    pending_resize: Option<(u32, u32)>,
+    /// frame render — carrying the [`SurfaceGeneration`] already minted for
+    /// it by [`RasterHandle::resize`] (ADR-0045 decision 4: the mint is
+    /// generation-forward, at request time, never deferred to apply time —
+    /// see that method's own doc).
+    pending_resize: Option<(u32, u32, SurfaceGeneration)>,
+    /// The most recent coalesced `GpuServices` generation this lane has been
+    /// told to bind to, applied at the top of the next [`RasterOwner::pump`]
+    /// before the frame-freshness compare — the same "applies at its next
+    /// command drain" shape [`pending_resize`](Self::pending_resize) uses.
+    /// Set by [`RasterHandle::bind_gpu_resource_generation`].
+    pending_gpu_resource_generation: Option<GpuResourceGeneration>,
+    /// **The single [`SurfaceGeneration`] counter for this raster lane**
+    /// (ADR-0045 decision 4) — mutated only under this struct's own lock.
+    /// Every mint routes through it: [`RasterHandle::resize`] (the
+    /// owner-thread mint site) and
+    /// [`RasterMailbox::mint_surface_generation`] (the render-failure /
+    /// surface-lost mint site, called from [`RasterOwner::pump`]). Neither
+    /// site keeps a private counter of its own; see the module docs for the
+    /// false-accept defect two independent counters used to produce.
+    current_surface_generation: SurfaceGeneration,
     /// Set by [`RasterHandle::shutdown`]; refuses further submits and tells
     /// the next pump with an empty mailbox to signal shutdown-complete
     /// and stop.
@@ -395,6 +426,40 @@ impl RasterMailbox {
     fn set_device_lost(&self, device_lost: bool) {
         self.surface_state.lock().device_lost = device_lost;
     }
+
+    /// Updates the reliable [`SurfaceState`] slot's `attached` flag. Called
+    /// unconditionally by [`RasterOwner::pump`] whenever it applies a
+    /// coalesced resize — the only site that flips it in this slice; a
+    /// future detach is decision 4's other named mint site and will flip it
+    /// back.
+    fn set_attached(&self, attached: bool) {
+        self.surface_state.lock().attached = attached;
+    }
+
+    /// Mints the next [`SurfaceGeneration`] from the ONE counter this raster
+    /// lane owns (ADR-0045 decision 4) — locks [`Self::state`] for exactly
+    /// the mutation and returns the newly-minted value with the lock
+    /// already released.
+    ///
+    /// This is the render-failure (surface-lost) mint site: it mints AND
+    /// immediately adopts the result as the owner's own
+    /// `current_surface_generation`, since the failure was detected on this
+    /// same call stack rather than carried in from a separate command. The
+    /// resize mint site does not use this helper — [`RasterHandle::resize`]
+    /// needs to write `pending_resize` under the very same lock acquisition
+    /// that performs the mint, which a helper returning only the minted
+    /// value cannot do without a second, separately-racing lock acquisition.
+    ///
+    /// Callers write the reliable `surface_state` slot AFTER this returns,
+    /// with `state`'s lock already released — matching the pump's existing
+    /// mint-then-release-then-write-through lock order; this function never
+    /// touches `surface_state` itself, so no new lock-order edge is
+    /// introduced.
+    fn mint_surface_generation(&self) -> SurfaceGeneration {
+        let mut state = self.state.lock();
+        state.current_surface_generation = state.current_surface_generation.next();
+        state.current_surface_generation
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +522,27 @@ pub enum RasterAck {
         /// should stamp its next `SceneSnapshot` with. The consumer
         /// reconfigures against it and marks a full repaint.
         current: SurfaceGeneration,
+    },
+    /// A frame was dropped because its `GpuResourceGeneration` no longer
+    /// matches the `GpuServices` generation this lane is currently bound to
+    /// (ADR-0045 decision 4's second freshness axis) — rejected proactively
+    /// before ever reaching the backend. Distinct from
+    /// [`RasterAck::SurfaceOutdated`] because the two axes guard different
+    /// failures (a torn-down swapchain vs. a torn-down shared `wgpu::Device`)
+    /// and carry differently-typed generations; folding them into one
+    /// variant would report a resource mismatch as if it were a surface one.
+    #[non_exhaustive]
+    ResourceOutdated {
+        /// The rejected frame's epoch.
+        epoch: FrameEpoch,
+        /// The rejected frame's address, echoed from the submitted
+        /// [`SceneSnapshot`].
+        address: PresentationAddress,
+        /// The `GpuResourceGeneration` the rejected frame was stamped with.
+        stale: GpuResourceGeneration,
+        /// The `GpuResourceGeneration` this lane is currently bound to — the
+        /// value the consumer should stamp its next `SceneSnapshot` with.
+        current: GpuResourceGeneration,
     },
     /// The GPU device was lost while rendering this frame.
     ///
@@ -652,14 +738,63 @@ impl RasterHandle {
 
     /// Coalesces a resize request into the mailbox: any number of pending
     /// requests collapse into the most recent one, applied on the owner's
-    /// next [`RasterOwner::pump`] before that pump renders a pending frame
-    //
+    /// next [`RasterOwner::pump`] before that pump renders a pending frame.
+    ///
+    /// Mints the next [`SurfaceGeneration`] from this lane's ONE counter
+    /// **eagerly, at call time** — not deferred to when [`RasterOwner::pump`]
+    /// actually applies the resize — and returns it (ADR-0045 decision 4).
+    /// This is what makes the design generation-forward and liveness-safe
+    /// without a request/ack handshake: both this call and a frame submit go
+    /// through the same owner-thread entry point, so a caller can stamp its
+    /// very next `SceneSnapshot` with the returned generation immediately,
+    /// before the resize has even been applied, and the pump accepts it once
+    /// it is. A blocking handshake was considered and rejected for exactly
+    /// the reason this method must never block: it would stall the caller
+    /// precisely while the raster side is busy elsewhere (e.g. parked in
+    /// surface acquisition), at drag-resize event rates.
+    ///
+    /// Every call mints, even one whose `(width, height)` a later call
+    /// coalesces away before any pump ever applies it — the mint is not
+    /// deduplicated against what ultimately survives coalescing, since doing
+    /// so would need to inspect pending state this call has no need to
+    /// touch otherwise, for a u64 increment that is not worth avoiding.
     ///
     /// Infallible and best-effort: a resize against a shut-down or dropped
-    /// owner is a harmless no-op — there is nothing left to apply it to.
-    pub fn resize(&self, width: u32, height: u32) {
+    /// owner still mints and returns a generation (nothing downstream will
+    /// ever apply it, but the counter and the reliable
+    /// [`SurfaceState::required_generation`] slot stay consistent regardless
+    /// of lifecycle state) — there is nothing unsafe about minting one extra
+    /// generation nobody consumes.
+    pub fn resize(&self, width: u32, height: u32) -> SurfaceGeneration {
+        let generation = {
+            let mut state = self.mailbox.state.lock();
+            state.current_surface_generation = state.current_surface_generation.next();
+            let generation = state.current_surface_generation;
+            state.pending_resize = Some((width, height, generation));
+            generation
+        };
+        // Reliable, not just the (possibly-full) ack lane — same
+        // requirement as every other surface-(re)configure event.
+        self.mailbox.set_required_generation(generation);
+        self.mailbox.condvar.notify_one();
+        generation
+    }
+
+    /// Coalesces a `GpuServices` generation binding into the mailbox: any
+    /// number of pending bindings collapse into the most recent one, applied
+    /// on the owner's next [`RasterOwner::pump`], before that pump checks a
+    /// pending frame's `GpuResourceGeneration` against it (ADR-0045
+    /// decision 4's second freshness axis).
+    ///
+    /// Unlike [`Self::resize`], this call does not mint: `GpuResourceGeneration`
+    /// is minted by `GpuServices` (an owner-thread resource), never by this
+    /// mailbox, so this method only carries an already-minted value to the
+    /// lane.
+    ///
+    /// Infallible and best-effort, same rationale as [`Self::resize`].
+    pub fn bind_gpu_resource_generation(&self, generation: GpuResourceGeneration) {
         let mut state = self.mailbox.state.lock();
-        state.pending_resize = Some((width, height));
+        state.pending_gpu_resource_generation = Some(generation);
         drop(state);
         self.mailbox.condvar.notify_one();
     }
@@ -795,6 +930,23 @@ pub enum PumpOutcome {
         /// The owner's current surface generation.
         current: SurfaceGeneration,
     },
+    /// The pending frame's `GpuResourceGeneration` no longer matched the
+    /// `GpuServices` generation this lane is bound to; the frame was dropped
+    /// without rendering. Mirrors [`RasterAck::ResourceOutdated`] — see its
+    /// field docs and the type doc above for why this is a distinct variant
+    /// from [`PumpOutcome::SurfaceOutdated`].
+    #[non_exhaustive]
+    ResourceOutdated {
+        /// The rejected frame's epoch.
+        epoch: FrameEpoch,
+        /// The rejected frame's address, echoed from the submitted
+        /// [`SceneSnapshot`].
+        address: PresentationAddress,
+        /// The `GpuResourceGeneration` the rejected frame was stamped with.
+        stale: GpuResourceGeneration,
+        /// This lane's current `GpuResourceGeneration`.
+        current: GpuResourceGeneration,
+    },
     /// The GPU device was lost while rendering this frame.
     #[non_exhaustive]
     DeviceLost {
@@ -822,13 +974,34 @@ pub enum PumpOutcome {
 pub struct RasterOwner<B: RasterBackend> {
     backend: B,
     mailbox: Arc<RasterMailbox>,
-    /// The surface generation this owner currently considers valid
-    // Bumped whenever this owner applies a resize or the
-    /// backend itself reports the surface as outdated — both are
-    /// surface-(re)configure events. A pending frame stamped with any other
-    /// generation is rejected before [`RasterBackend::render_scene`] is
-    /// ever called, so a torn-down swapchain is never presented into.
+    /// The generation of the currently **applied** surface configuration
+    /// (ADR-0045 decision 4). Never independently incremented — always
+    /// assigned from a value the mailbox's single counter already minted:
+    /// either carried in with an applied `pending_resize` command, or
+    /// returned by [`RasterMailbox::mint_surface_generation`] on the
+    /// render-failure (surface-lost) path, which mints and adopts in the
+    /// same step because that failure is detected on this call stack rather
+    /// than carried in from a separate command. A pending frame stamped
+    /// with any other generation is rejected before
+    /// [`RasterBackend::render_scene`] is ever called, so a torn-down
+    /// swapchain is never presented into.
     current_surface_generation: SurfaceGeneration,
+    /// Whether this lane currently has an applied surface configuration —
+    /// the owner-local copy of [`SurfaceState::attached`], mirrored there by
+    /// [`RasterMailbox::set_attached`] every time this changes. See that
+    /// field's own doc.
+    attached: bool,
+    /// The `GpuServices` generation this lane is currently bound to
+    /// (ADR-0045 decision 4's second freshness axis). Assigned only from a
+    /// value carried by an applied `pending_gpu_resource_generation`
+    /// command — this lane never mints one itself, since
+    /// `GpuResourceGeneration` is minted by `GpuServices`, an owner-thread
+    /// resource, not by this mailbox. Starts at
+    /// [`GpuResourceGeneration::ZERO`], which a frame stamped with the same
+    /// unset sentinel matches trivially — see that type's own doc for why
+    /// this axis, unlike `SurfaceGeneration`, does not reject `ZERO`
+    /// outright.
+    current_gpu_resource_generation: GpuResourceGeneration,
     /// Latches once the shutdown-completion signal has been sent, so a
     /// later [`Self::pump`] call on an already-shut-down, empty mailbox
     /// reports [`PumpOutcome::ShutdownComplete`] again without re-sending
@@ -893,6 +1066,7 @@ impl<B: RasterBackend> RasterOwner<B> {
             surface_state: Mutex::new(SurfaceState {
                 required_generation: SurfaceGeneration::ZERO,
                 device_lost: false,
+                attached: false,
             }),
             accounting: Arc::new(InFlightAccounting::new()),
             options,
@@ -901,6 +1075,8 @@ impl<B: RasterBackend> RasterOwner<B> {
             backend,
             mailbox: Arc::clone(&mailbox),
             current_surface_generation: SurfaceGeneration::ZERO,
+            attached: false,
+            current_gpu_resource_generation: GpuResourceGeneration::ZERO,
             has_signaled_shutdown_complete: false,
         };
         (
@@ -941,11 +1117,17 @@ impl<B: RasterBackend> RasterOwner<B> {
     /// and no work happens off this call.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn pump(&mut self) -> PumpOutcome {
-        let (resize, frame, shutting_down) = {
+        let (resize, pending_gpu_resource_generation, frame, shutting_down) = {
             let mut state = self.mailbox.state.lock();
             let resize = state.pending_resize.take();
+            let pending_gpu_resource_generation = state.pending_gpu_resource_generation.take();
             let frame = state.pending_frame.take();
-            (resize, frame, state.shutting_down)
+            (
+                resize,
+                pending_gpu_resource_generation,
+                frame,
+                state.shutting_down,
+            )
         };
 
         // Armed here, before `resize` below, NOT only around `render_scene`
@@ -981,26 +1163,35 @@ impl<B: RasterBackend> RasterOwner<B> {
         };
         let frame = frame;
 
-        if let Some((width, height)) = resize {
+        if let Some((width, height, generation)) = resize {
             self.backend.resize(width, height);
-            // A resize reconfigures the surface — bump the generation this
-            // owner considers valid so a frame stamped
-            // against the pre-resize surface is rejected below rather than
-            // rendered into a torn-down swapchain. `next()` is a plain
-            // `+ 1` (see `SurfaceGeneration`'s own doc) that only panics on
-            // debug-mode `u64::MAX` overflow — that type's own doc already
-            // treats reaching it as not a practical concern for a
-            // per-runtime counter, so this call is not separately guarded;
-            // it still falls inside `wake_guard`'s armed span regardless.
-            self.current_surface_generation = self.current_surface_generation.next();
+            // ADR-0045 decision 4: `generation` was already minted by
+            // `RasterHandle::resize`, through the mailbox's ONE shared
+            // counter — this call ADOPTS that carried value as "the
+            // generation of the currently applied configuration"; it never
+            // independently increments anything, so this owner and the
+            // mailbox's counter can never disagree.
+            self.current_surface_generation = generation;
+            self.attached = true;
             // Reliable, not just the (possibly-full) ack lane: a resize is
             // exactly the kind of surface-(re)configure event a consumer
             // must never miss.
-            self.mailbox
-                .set_required_generation(self.current_surface_generation);
+            self.mailbox.set_required_generation(generation);
+            self.mailbox.set_attached(true);
             tracing::debug!(
-            surface_generation = ?self.current_surface_generation,
-            "raster owner: surface reconfigured by resize"
+                surface_generation = ?generation,
+                "raster owner: surface reconfigured by resize"
+            );
+        }
+
+        if let Some(generation) = pending_gpu_resource_generation {
+            // Same "applies at its next command drain, before the
+            // generation compare" shape as resize above — carried, never
+            // minted here (see `RasterHandle::bind_gpu_resource_generation`).
+            self.current_gpu_resource_generation = generation;
+            tracing::debug!(
+                gpu_resource_generation = ?generation,
+                "raster owner: bound to a new GpuServices generation"
             );
         }
 
@@ -1040,8 +1231,23 @@ impl<B: RasterBackend> RasterOwner<B> {
         // that same wake guarantee to the unwind path for every fallible
         // call from there through `render_scene`.
 
-        let outcome = if frame.snapshot.stamp.surface_generation == self.current_surface_generation
-        {
+        // ADR-0045 decision 4: both axes are checked, and `ZERO` is rejected
+        // outright on the surface axis — this is what replaces the web
+        // runner's `Option<Renderer>` "not ready yet" state with typed data.
+        // `surface_fresh` is deliberately `false` whenever
+        // `frame_surface_generation == SurfaceGeneration::ZERO`, even when
+        // `self.current_surface_generation` also still reads `ZERO` (a
+        // fresh, never-resized owner): a frame that never observed a real
+        // generation must never accidentally match "no configuration
+        // applied yet" by coincidental equality.
+        let frame_surface_generation = frame.snapshot.stamp.surface_generation;
+        let frame_gpu_resource_generation = frame.snapshot.stamp.gpu_resource_generation;
+        let surface_fresh = frame_surface_generation != SurfaceGeneration::ZERO
+            && frame_surface_generation == self.current_surface_generation
+            && self.attached;
+        let resource_fresh = frame_gpu_resource_generation == self.current_gpu_resource_generation;
+
+        let outcome = if surface_fresh && resource_fresh {
             // `DamageRegion::Full` is the only variant that exists today
             // (flui-layer's own doc: fine-grained damage is an additive,
             // `#[non_exhaustive]`-guarded follow-up, so
@@ -1082,15 +1288,16 @@ impl<B: RasterBackend> RasterOwner<B> {
                     error,
                 ),
             }
-        } else {
-            let stale = frame.snapshot.stamp.surface_generation;
+        } else if !surface_fresh {
+            let stale = frame_surface_generation;
             let current = self.current_surface_generation;
             tracing::warn!(
             epoch = ?frame.snapshot.stamp.epoch,
             ?stale,
             ?current,
-            "raster owner: frame stamped with a stale surface generation, \
-            rejecting before render"
+            attached = self.attached,
+            "raster owner: frame stamped with a stale, zero, or unattached \
+            surface generation, rejecting before render"
             );
             self.mailbox.send_ack(RasterAck::SurfaceOutdated {
                 epoch: frame.snapshot.stamp.epoch,
@@ -1099,6 +1306,29 @@ impl<B: RasterBackend> RasterOwner<B> {
                 current,
             });
             PumpOutcome::SurfaceOutdated {
+                epoch: frame.snapshot.stamp.epoch,
+                address: frame.snapshot.stamp.address,
+                stale,
+                current,
+            }
+        } else {
+            // The surface axis passed; the GPU-resource axis did not.
+            let stale = frame_gpu_resource_generation;
+            let current = self.current_gpu_resource_generation;
+            tracing::warn!(
+            epoch = ?frame.snapshot.stamp.epoch,
+            ?stale,
+            ?current,
+            "raster owner: frame stamped with a stale GpuResourceGeneration, \
+            rejecting before render"
+            );
+            self.mailbox.send_ack(RasterAck::ResourceOutdated {
+                epoch: frame.snapshot.stamp.epoch,
+                address: frame.snapshot.stamp.address,
+                stale,
+                current,
+            });
+            PumpOutcome::ResourceOutdated {
                 epoch: frame.snapshot.stamp.epoch,
                 address: frame.snapshot.stamp.address,
                 stale,
@@ -1131,6 +1361,7 @@ impl<B: RasterBackend> RasterOwner<B> {
                 let mut state = self.mailbox.state.lock();
                 while state.pending_frame.is_none()
                     && state.pending_resize.is_none()
+                    && state.pending_gpu_resource_generation.is_none()
                     && !state.shutting_down
                 {
                     self.mailbox.condvar.wait(&mut state);
@@ -1167,13 +1398,18 @@ impl<B: RasterBackend> RasterOwner<B> {
             }
             EngineError::SurfaceLost | EngineError::SurfaceValidation => {
                 // The backend itself detected the surface is gone — a
-                // surface-(re)configure event just like a resize, so it bumps the same generation counter a resize
-                // does. Every frame the consumer has already stamped
+                // surface-(re)configure event just like a resize, so it
+                // mints from the very same ONE mailbox-owned counter a
+                // resize mints from (ADR-0045 decision 4) rather than
+                // bumping a private copy — the fix that makes a resize
+                // issued right after this never re-mint a value this call
+                // already consumed (see the module docs' false-accept
+                // scenario). Every frame the consumer has already stamped
                 // against the old generation (including any submitted
                 // before it observes this ack) is rejected by the
                 // proactive check in `pump` until the consumer catches up.
-                self.current_surface_generation = self.current_surface_generation.next();
-                let current = self.current_surface_generation;
+                let current = self.mailbox.mint_surface_generation();
+                self.current_surface_generation = current;
                 // Same reliability requirement as the resize path above:
                 // the required generation must reach the consumer even if
                 // the ack lane is momentarily full.
@@ -1252,7 +1488,7 @@ mod tests {
     use std::sync::Barrier;
     use std::sync::mpsc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use flui_foundation::{FrameStamp, PresentationId, RealmId};
     use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene};
@@ -1359,6 +1595,12 @@ mod tests {
         RasterOwner::new(backend, test_address())
     }
 
+    /// `gpu_resource_generation` is fixed at [`GpuResourceGeneration::ZERO`]
+    /// — the vast majority of this module's tests are about the
+    /// `SurfaceGeneration` axis only, and `ZERO` on both sides of that axis
+    /// is a deliberate, always-matching "don't care" default (see that
+    /// type's own doc). The handful of tests that exercise the resource axis
+    /// itself use [`test_frame_with_resource_generation`] instead.
     fn test_frame(epoch: FrameEpoch, surface_generation: SurfaceGeneration) -> SceneSnapshot {
         test_frame_for(epoch, test_address(), surface_generation)
     }
@@ -1368,7 +1610,21 @@ mod tests {
         address: PresentationAddress,
         surface_generation: SurfaceGeneration,
     ) -> SceneSnapshot {
-        let stamp = FrameStamp::new(address, epoch, surface_generation);
+        test_frame_with_resource_generation(
+            epoch,
+            address,
+            surface_generation,
+            GpuResourceGeneration::ZERO,
+        )
+    }
+
+    fn test_frame_with_resource_generation(
+        epoch: FrameEpoch,
+        address: PresentationAddress,
+        surface_generation: SurfaceGeneration,
+        gpu_resource_generation: GpuResourceGeneration,
+    ) -> SceneSnapshot {
+        let stamp = FrameStamp::new(address, epoch, surface_generation, gpu_resource_generation);
         SceneSnapshot::new(
             stamp,
             DamageRegion::Full,
@@ -1428,6 +1684,10 @@ mod tests {
         let start = Barrier::new(2);
         let epoch1 = FrameEpoch::ZERO.next();
         let epoch2 = epoch1.next();
+        // Primes past ADR-0045 decision 4's ZERO-rejection gate; coalesced
+        // and applied by the owner thread's first pump, alongside whichever
+        // frame survives the supersede below.
+        let generation = handle.resize(1, 1);
 
         thread::scope(|scope| {
             let owner_thread = scope.spawn(|| {
@@ -1436,10 +1696,10 @@ mod tests {
             });
 
             handle
-                .submit(test_frame(epoch1, SurfaceGeneration::ZERO))
+                .submit(test_frame(epoch1, generation))
                 .expect("first submit");
             handle
-                .submit(test_frame(epoch2, SurfaceGeneration::ZERO))
+                .submit(test_frame(epoch2, generation))
                 .expect("second submit supersedes the first");
             start.wait();
             handle.shutdown();
@@ -1562,10 +1822,13 @@ mod tests {
         let epoch1 = FrameEpoch::ZERO.next();
         let epoch2 = epoch1.next();
         let epoch3 = epoch2.next();
+        // Primes past ADR-0045 decision 4's ZERO-rejection gate; applied by
+        // the first loop iteration's pump, alongside epoch1's frame.
+        let generation = handle.resize(1, 1);
 
         for epoch in [epoch1, epoch2, epoch3] {
             handle
-                .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+                .submit(test_frame(epoch, generation))
                 .expect("submit");
             assert_eq!(
                 owner.pump(),
@@ -1658,8 +1921,12 @@ mod tests {
         let backend = FakeBackend::with_planned([Err(EngineError::NotInitialized)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
+        // Primes past ADR-0045 decision 4's ZERO-rejection gate: this test is
+        // about the render-failure classification, not the freshness check,
+        // so the frame must actually reach `render_scene` to fail there.
+        let generation = handle.resize(1, 1);
         handle
-            .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch, generation))
             .expect("submit");
 
         let outcome = owner.pump();
@@ -1690,14 +1957,26 @@ mod tests {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         handle.resize(100, 100);
         handle.resize(200, 150);
-        handle.resize(320, 240);
+        // ADR-0045 decision 4: the mint is generation-forward — EVERY call
+        // mints, even the two whose (width, height) this coalesces away, so
+        // the third call mints ZERO -> THREE, not ZERO -> ONE. Only the
+        // *pending command* (width/height + the generation it carries)
+        // coalesces to the latest call; the counter itself never skips a
+        // superseded call's mint.
+        let generation = handle.resize(320, 240);
+        assert_eq!(
+            generation,
+            SurfaceGeneration::ZERO.next().next().next(),
+            "each of the three resize calls above must mint forward, even \
+             though only the last one's (width, height) survives coalescing"
+        );
 
         // Stamped against the generation the single coalesced resize will
-        // produce (ZERO -> ONE) inside this same pump — a real compositor
-        // stamps a frame with the generation it observed most recently.
+        // produce inside this same pump — a real compositor stamps a frame
+        // with the generation `resize` most recently returned to it.
         let epoch = FrameEpoch::ZERO.next();
         handle
-            .submit(test_frame(epoch, SurfaceGeneration::ZERO.next()))
+            .submit(test_frame(epoch, generation))
             .expect("submit");
         let outcome = owner.pump();
 
@@ -1727,8 +2006,11 @@ mod tests {
         let backend = FakeBackend::with_planned([Err(EngineError::DeviceLost)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
+        // Primes past ADR-0045 decision 4's ZERO-rejection gate so the frame
+        // actually reaches render_scene, where the injected failure lives.
+        let generation = handle.resize(1, 1);
         handle
-            .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch, generation))
             .expect("submit");
 
         let outcome = owner.pump();
@@ -1760,17 +2042,23 @@ mod tests {
         let backend = FakeBackend::with_planned([Err(EngineError::SurfaceValidation)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
+        // Primes past ADR-0045 decision 4's ZERO-rejection gate so the frame
+        // actually reaches render_scene, where the injected failure lives —
+        // this test is about the render-failure mint, not the proactive
+        // freshness check.
+        let generation = handle.resize(1, 1);
         handle
-            .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch, generation))
             .expect("submit");
 
         let outcome = owner.pump();
-        // A backend-reported surface-outdated condition bumps the owner's
-        // tracked generation the same way a resize does, so
-        // `current` is ZERO.next() — the frame's own stamp (`stale`) stays
-        // ZERO, distinct from it.
-        let stale = SurfaceGeneration::ZERO;
-        let current = SurfaceGeneration::ZERO.next();
+        // A backend-reported surface-outdated condition mints from this
+        // lane's ONE shared counter the same way a resize does (ADR-0045
+        // decision 4), so `current` is one past the priming resize's own
+        // generation — the frame's own stamp (`stale`) stays at the primed
+        // value, distinct from it.
+        let stale = generation;
+        let current = generation.next();
         assert_eq!(
             outcome,
             PumpOutcome::SurfaceOutdated {
@@ -1898,8 +2186,9 @@ mod tests {
             let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
                 RasterOwner::new(FakeBackend::default(), stamp);
             let epoch = FrameEpoch::ZERO.next();
+            let generation = handle.resize(1, 1);
             handle
-                .submit(test_frame_for(epoch, stamp, SurfaceGeneration::ZERO))
+                .submit(test_frame_for(epoch, stamp, generation))
                 .expect("submit");
             assert_eq!(
                 owner.pump(),
@@ -1967,8 +2256,9 @@ mod tests {
             let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
                 RasterOwner::new(backend, stamp);
             let epoch = FrameEpoch::ZERO.next();
+            let generation = handle.resize(1, 1);
             handle
-                .submit(test_frame_for(epoch, stamp, SurfaceGeneration::ZERO))
+                .submit(test_frame_for(epoch, stamp, generation))
                 .expect("submit");
             assert_eq!(
                 owner.pump(),
@@ -2003,12 +2293,9 @@ mod tests {
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
             RasterOwner::new(FakeBackend::default(), incarnation_one);
         let epoch = FrameEpoch::ZERO.next();
+        let generation = handle.resize(1, 1);
         handle
-            .submit(test_frame_for(
-                epoch,
-                incarnation_one,
-                SurfaceGeneration::ZERO,
-            ))
+            .submit(test_frame_for(epoch, incarnation_one, generation))
             .expect("submit");
         assert_eq!(
             owner.pump(),
@@ -2075,14 +2362,29 @@ mod tests {
     fn surface_state_slot_survives_a_full_ack_lane() {
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
 
+        // Prime past ADR-0045 decision 4's ZERO-rejection/not-attached gate.
+        // The first loop iteration below applies this resize AND renders the
+        // first frame in the same pump call — it must still be the FIRST
+        // reconfigure the reliable slot observes, which the assertion right
+        // after the loop checks.
+        let primed = handle.resize(1, 1);
+        assert_eq!(
+            handle.surface_state(),
+            SurfaceState {
+                required_generation: primed,
+                device_lost: false,
+                attached: false,
+            },
+            "resize updates the reliable slot's generation immediately at \
+             request time, but `attached` only flips once pump APPLIES it"
+        );
+
         // Saturate the lossy ack channel with unrelated Presented acks,
         // never draining `ack_rx` — exactly the "consumer fell behind"
         // condition the reliable slot exists for.
         for _ in 0..ACK_CHANNEL_CAPACITY {
             let epoch = FrameEpoch::ZERO.next();
-            handle
-                .submit(test_frame(epoch, SurfaceGeneration::ZERO))
-                .expect("submit");
+            handle.submit(test_frame(epoch, primed)).expect("submit");
             assert_eq!(
                 owner.pump(),
                 PumpOutcome::Presented {
@@ -2097,28 +2399,28 @@ mod tests {
         assert_eq!(
             handle.surface_state(),
             SurfaceState {
-                required_generation: SurfaceGeneration::ZERO,
+                required_generation: primed,
                 device_lost: false,
+                attached: true,
             },
-            "no reconfigure has happened yet"
+            "the priming resize was applied by the first pump above, and \
+             nothing since has reconfigured the surface again"
         );
 
-        // Force a SurfaceOutdated outcome: a resize bumps the generation,
-        // then a frame stamped against the pre-resize generation is
-        // proactively rejected. The channel is still full, so this ack is
-        // the one that gets silently dropped by `send_ack`.
+        // Force a SurfaceOutdated outcome: a second resize bumps the
+        // generation again, then a frame stamped against the pre-resize
+        // generation is proactively rejected. The channel is still full, so
+        // this ack is the one that gets silently dropped by `send_ack`.
         handle.resize(800, 600);
         let epoch = FrameEpoch::ZERO.next();
-        handle
-            .submit(test_frame(epoch, SurfaceGeneration::ZERO))
-            .expect("submit");
-        let current = SurfaceGeneration::ZERO.next();
+        handle.submit(test_frame(epoch, primed)).expect("submit");
+        let current = primed.next();
         assert_eq!(
             owner.pump(),
             PumpOutcome::SurfaceOutdated {
                 epoch,
                 address: test_address(),
-                stale: SurfaceGeneration::ZERO,
+                stale: primed,
                 current,
             }
         );
@@ -2143,6 +2445,7 @@ mod tests {
             SurfaceState {
                 required_generation: current,
                 device_lost: false,
+                attached: true,
             },
             "the reliable slot must reflect the reconfigure even though its \
              ack was dropped by the full lossy channel"
@@ -2159,8 +2462,9 @@ mod tests {
         assert_eq!(handle.in_flight(), 0);
 
         let epoch = FrameEpoch::ZERO.next();
+        let generation = handle.resize(1, 1);
         handle
-            .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch, generation))
             .expect("submit");
         assert_eq!(
             handle.in_flight(),
@@ -2229,8 +2533,9 @@ mod tests {
         let backend = FakeBackend::with_planned([Err(EngineError::DeviceLost)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
+        let generation = handle.resize(1, 1);
         handle
-            .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch, generation))
             .expect("submit");
         assert_eq!(handle.in_flight(), 1);
 
@@ -2287,8 +2592,9 @@ mod tests {
         owner.with_backend(|backend| backend.panic_next_render = true);
 
         let epoch1 = FrameEpoch::ZERO.next();
+        let generation = handle.resize(1, 1);
         handle
-            .submit(test_frame(epoch1, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch1, generation))
             .expect("submit");
         assert_eq!(handle.in_flight(), 1);
 
@@ -2310,7 +2616,7 @@ mod tests {
         // the flag auto-cleared itself) pump must still complete normally.
         let epoch2 = epoch1.next();
         handle
-            .submit(test_frame(epoch2, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch2, generation))
             .expect("submit after the panicking pump");
         assert_eq!(handle.in_flight(), 1);
         assert_eq!(
@@ -2359,8 +2665,9 @@ mod tests {
         }
 
         let epoch1 = FrameEpoch::ZERO.next();
+        let generation = handle.resize(1, 1);
         handle
-            .submit(test_frame(epoch1, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch1, generation))
             .expect("submit");
         assert!(
             !woken.load(Ordering::SeqCst),
@@ -2392,7 +2699,7 @@ mod tests {
         // the counter reading zero by coincidence.
         let epoch2 = epoch1.next();
         handle
-            .submit(test_frame(epoch2, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch2, generation))
             .expect("submit after panic recovery");
         assert_eq!(
             owner.pump(),
@@ -2434,7 +2741,11 @@ mod tests {
 
         // Both a pending resize AND a pending frame, so `pump` extracts
         // both in the same call and runs `resize` first, while the frame's
-        // ticket is already live -- the exact shape the finding named.
+        // ticket is already live -- the exact shape the finding named. The
+        // frame's own stamp is irrelevant to whether the panic reproduces
+        // (`self.backend.resize` panics before `pump` ever reaches the
+        // frame-freshness check), so it stays `ZERO` — this test is about
+        // the wake guard's unwind coverage, not the generation check.
         handle.resize(640, 480);
         let epoch1 = FrameEpoch::ZERO.next();
         handle
@@ -2465,9 +2776,15 @@ mod tests {
         // Capacity is genuinely usable again, not just the counter reading
         // zero by coincidence: a fresh submit and a real (non-panicking --
         // the flag auto-cleared itself) pump must still complete normally.
+        // The panicking resize above never got applied (the panic unwound
+        // before `pump` adopted its carried generation), so the owner is
+        // still un-attached at `SurfaceGeneration::ZERO` — this second
+        // resize is what a real caller would issue to recover, and it is
+        // what this pump actually applies.
         let epoch2 = epoch1.next();
+        let recovered_generation = handle.resize(650, 490);
         handle
-            .submit(test_frame(epoch2, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch2, recovered_generation))
             .expect("submit after panic recovery");
         assert_eq!(
             owner.pump(),
@@ -2486,11 +2803,14 @@ mod tests {
     fn ack_overflow_does_not_corrupt_in_flight_accounting() {
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         let mut epoch = FrameEpoch::ZERO;
+        // Primes past ADR-0045 decision 4's ZERO-rejection gate; applied by
+        // the first loop iteration's pump, alongside that iteration's frame.
+        let generation = handle.resize(1, 1);
 
         for i in 0..=ACK_CHANNEL_CAPACITY {
             epoch = epoch.next();
             handle
-                .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+                .submit(test_frame(epoch, generation))
                 .unwrap_or_else(|e| panic!("submit {i} failed: {e:?}"));
             assert_eq!(handle.in_flight(), 1, "iteration {i}");
             assert_eq!(
@@ -2662,8 +2982,9 @@ mod tests {
         }
 
         let epoch = FrameEpoch::ZERO.next();
+        let generation = handle.resize(1, 1);
         handle
-            .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+            .submit(test_frame(epoch, generation))
             .expect("submit");
         assert_eq!(
             handle.in_flight(),
@@ -2779,5 +3100,432 @@ mod tests {
                  through shutdown, the reliable counter must read exactly zero"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR-0045 decision 4: one SurfaceGeneration counter per lane, owned by
+    // the mailbox. The tests below distinguish the two failure modes the
+    // ADR names by name — a false accept (a stale frame wrongly matched
+    // against a post-reconfigure generation) and permanent starvation (the
+    // two mint sites drifting apart so nothing ever matches again) — plus
+    // the ZERO-rejection/attached gate, the second (GpuResourceGeneration)
+    // freshness axis, and the liveness property a safety oracle alone
+    // cannot catch.
+    // -----------------------------------------------------------------------
+
+    /// ADR-0045 decision 4: `pump` rejects `SurfaceGeneration::ZERO`
+    /// outright — even on a fresh, never-resized owner, whose own
+    /// `current_surface_generation` also still reads `ZERO`. A frame
+    /// stamped with the un-configured sentinel must never be accepted by
+    /// coincidental equality with "no configuration applied yet"; this is
+    /// the typed replacement for the web runner's `Option<Renderer>` "not
+    /// ready" state.
+    ///
+    /// Mutant this kills: drop the
+    /// `frame_surface_generation != SurfaceGeneration::ZERO` conjunct from
+    /// `pump`'s `surface_fresh` check (falling back to bare equality
+    /// against `self.current_surface_generation`, which also reads `ZERO`
+    /// here) — this test's frame would then be wrongly `Presented`.
+    #[test]
+    fn zero_surface_generation_is_rejected_outright_even_on_a_fresh_owner() {
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+        let epoch = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+            .expect("submit");
+
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::SurfaceOutdated {
+                epoch,
+                address: test_address(),
+                stale: SurfaceGeneration::ZERO,
+                current: SurfaceGeneration::ZERO,
+            },
+            "a frame stamped with SurfaceGeneration::ZERO must be rejected \
+             even though the fresh owner's own current generation also \
+             reads ZERO"
+        );
+        owner.with_backend(|backend| {
+            assert_eq!(
+                backend.render_calls, 0,
+                "a ZERO-stamped frame must never reach render_scene"
+            );
+        });
+    }
+
+    /// ADR-0045 decision 4's `attached` gate, checked independently of the
+    /// generation match: a lane whose applied generation happens to equal a
+    /// frame's stamp, but which the owner does not currently consider
+    /// attached, must still reject that frame. Unreachable through public
+    /// API alone in this slice — no detach mechanism exists yet (the ADR
+    /// names "attach and detach" as later mint sites) — so this test
+    /// reaches into this same module's private field directly, the way a
+    /// future detach implementation will flip it.
+    ///
+    /// Mutant this kills: drop the `&& self.attached` conjunct from `pump`'s
+    /// `surface_fresh` check — this test's frame would then be wrongly
+    /// `Presented` despite `attached` reading `false`.
+    #[test]
+    fn frame_is_rejected_when_not_attached_even_with_a_matching_generation() {
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+        let generation = handle.resize(1, 1);
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::Idle,
+            "priming resize alone has no pending frame"
+        );
+        assert!(owner.attached, "the applied resize must have set attached");
+
+        // No detach API exists yet in this slice — simulate the future one
+        // by reaching directly into the private field, the same way `pump`
+        // itself will once a detach command lands.
+        owner.attached = false;
+
+        let epoch = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame(epoch, generation))
+            .expect("submit");
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::SurfaceOutdated {
+                epoch,
+                address: test_address(),
+                stale: generation,
+                current: generation,
+            },
+            "a frame must be rejected while not attached, even though its \
+             stamped generation exactly matches the owner's current one"
+        );
+    }
+
+    /// **The false-accept test — the exact defect ADR-0045 decision 4
+    /// exists to prevent**, from the module's own worked scenario: two
+    /// independent counters (one bumped when the surface is lost, one
+    /// bumped by a resize) can independently mint the SAME next value, so a
+    /// frame produced against the pre-resize configuration and stamped with
+    /// that shared value is wrongly accepted as fresh once the resize
+    /// applies.
+    ///
+    /// Sequence: establish a baseline generation, mint again via the
+    /// surface-lost path (G -> G+1), then resize (which must mint
+    /// G+1 -> G+2 from the SAME counter, never re-deriving G+1 from a
+    /// private copy), then submit a frame stamped with the PRE-resize value
+    /// (G+1) and require it rejected once the resize has applied.
+    ///
+    /// Mutant this kills: change `RasterHandle::resize` to mint from an
+    /// independent counter instead of `self.mailbox.state.lock()`'s shared
+    /// `current_surface_generation` — e.g. reverting it to an owner-local
+    /// `SurfaceGeneration` field bumped by its own `.next()` with no
+    /// mailbox lock involved (the pre-decision-4 shape). Under that mutant
+    /// a resize issued right after the surface-lost mint would re-derive
+    /// `g1.next()` from its own stale last-known value instead of the
+    /// mailbox's true current one, producing the SAME value the surface-lost
+    /// path already minted — so the final frame below, stamped with that
+    /// pre-resize generation, would compare equal to the post-resize
+    /// `current_surface_generation` and be wrongly `Presented` instead of
+    /// rejected `SurfaceOutdated`.
+    #[test]
+    fn single_counter_rejects_a_frame_stamped_before_a_post_loss_resize() {
+        let backend = FakeBackend::with_planned([Ok(true), Err(EngineError::SurfaceLost)]);
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
+
+        // Establish a baseline: both "sides" sit at the same generation G.
+        let g1 = handle.resize(1, 1);
+        let epoch1 = FrameEpoch::ZERO.next();
+        handle.submit(test_frame(epoch1, g1)).expect("submit");
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::Presented {
+                epoch: epoch1,
+                address: test_address(),
+            },
+            "baseline frame at the priming generation must render"
+        );
+
+        // "The surface is lost mid-render": the next frame's render_scene
+        // call fails with SurfaceLost, minting the mailbox's ONE counter
+        // forward — this is the raster-side mint the ADR scenario names.
+        let epoch2 = epoch1.next();
+        handle.submit(test_frame(epoch2, g1)).expect("submit");
+        let after_loss = match owner.pump() {
+            PumpOutcome::SurfaceOutdated { stale, current, .. } => {
+                assert_eq!(stale, g1);
+                current
+            }
+            other => panic!(
+                "expected the surface-lost mint to reject via SurfaceOutdated, got {other:?}"
+            ),
+        };
+        assert_eq!(
+            after_loss,
+            g1.next(),
+            "the surface-lost path must mint exactly one generation forward"
+        );
+
+        // "The owner then issues a resize": must mint from the SAME counter
+        // the surface-lost path just advanced, never re-deriving
+        // `g1.next()` from a private, stale copy.
+        let after_resize = handle.resize(2, 2);
+        assert_ne!(
+            after_resize, after_loss,
+            "a resize must never re-mint the generation the surface-lost \
+             path already consumed"
+        );
+        assert_eq!(
+            after_resize,
+            after_loss.next(),
+            "the single shared counter must continue from where the \
+             surface-lost mint left it"
+        );
+
+        // The exact false-accept check: a frame stamped with the
+        // PRE-resize generation (`after_loss` — produced, per the ADR
+        // scenario, "against the pre-resize configuration") must be
+        // rejected once the resize applies, never accepted by a stale
+        // coincidental match.
+        let epoch3 = epoch2.next();
+        handle
+            .submit(test_frame(epoch3, after_loss))
+            .expect("submit");
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::SurfaceOutdated {
+                epoch: epoch3,
+                address: test_address(),
+                stale: after_loss,
+                current: after_resize,
+            },
+            "a frame stamped with the pre-resize generation must never be \
+             accepted as a false match against the post-resize configuration"
+        );
+    }
+
+    /// The symmetric failure ADR-0045 decision 4 also rules out: repeated
+    /// surface losses interleaved with resizes must never let the mailbox's
+    /// counter and a consumer's own tracking permanently diverge — a frame
+    /// honestly re-stamped with the latest value the reliable
+    /// `SurfaceState` slot reports must always eventually be accepted,
+    /// never rejected forever.
+    ///
+    /// Mutant this kills: same class as the false-accept test above — an
+    /// independent counter on either mint site (resize or surface-lost)
+    /// lets the two drift apart after enough mints that a consumer polling
+    /// `RasterHandle::surface_state()` can never re-derive a value the
+    /// owner's `pump` will actually accept, starving every subsequent frame
+    /// permanently.
+    #[test]
+    fn repeated_losses_and_resizes_never_permanently_starve_a_correctly_stamped_frame() {
+        let backend = FakeBackend::with_planned([
+            Err(EngineError::SurfaceLost),
+            Err(EngineError::SurfaceValidation),
+            Err(EngineError::SurfaceLost),
+            Ok(true),
+        ]);
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
+
+        let mut generation = handle.resize(1, 1);
+        let mut epoch = FrameEpoch::ZERO;
+
+        // Three rounds, alternating which side mints: a submit that fails
+        // inside render_scene (the surface-lost side), then a resize (the
+        // owner/handle side) — driving the shared counter forward through
+        // both mint sites repeatedly.
+        for round in 0u32..3 {
+            epoch = epoch.next();
+            handle
+                .submit(test_frame(epoch, generation))
+                .unwrap_or_else(|e| panic!("round {round} submit failed: {e:?}"));
+            let outcome = owner.pump();
+            let PumpOutcome::SurfaceOutdated { current, .. } = outcome else {
+                panic!(
+                    "round {round}: expected the injected failure to reject \
+                     via SurfaceOutdated, got {outcome:?}"
+                );
+            };
+            // The reliable slot must track every mint from either site — a
+            // consumer has no other way to learn the current generation.
+            assert_eq!(
+                handle.surface_state().required_generation,
+                current,
+                "round {round}: the reliable slot must reflect the \
+                 render-failure mint"
+            );
+            generation = handle.resize(round + 10, 10);
+            assert_eq!(
+                handle.surface_state().required_generation,
+                generation,
+                "round {round}: the reliable slot must reflect the resize \
+                 mint too"
+            );
+        }
+
+        // A frame honestly re-stamped with the latest generation must
+        // finally be accepted — proving the two mint sites never drifted
+        // apart across repeated, alternating mints.
+        epoch = epoch.next();
+        handle
+            .submit(test_frame(epoch, generation))
+            .expect("final submit");
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::Presented {
+                epoch,
+                address: test_address(),
+            },
+            "a frame stamped with the current reliable generation must \
+             never be permanently starved, no matter how many prior mints \
+             came from either site"
+        );
+    }
+
+    /// ADR-0045 decision 4's second freshness axis: a frame whose surface
+    /// generation matches (and whose lane is attached) is still rejected if
+    /// its `GpuResourceGeneration` does not match the lane's currently
+    /// bound one.
+    ///
+    /// Mutant this kills: delete the `else` branch that reports
+    /// `PumpOutcome::ResourceOutdated` (falling through to the render path
+    /// whenever `surface_fresh` holds, ignoring `resource_fresh` entirely)
+    /// — this test's first frame would then be wrongly `Presented`.
+    #[test]
+    fn mismatched_gpu_resource_generation_is_rejected_as_resource_outdated() {
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+        let surface_generation = handle.resize(1, 1);
+
+        let bound = GpuResourceGeneration::mint();
+        handle.bind_gpu_resource_generation(bound);
+
+        // Minted after `bound`, but never bound to this lane.
+        let stale_resource = GpuResourceGeneration::mint();
+        let epoch = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame_with_resource_generation(
+                epoch,
+                test_address(),
+                surface_generation,
+                stale_resource,
+            ))
+            .expect("submit");
+
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::ResourceOutdated {
+                epoch,
+                address: test_address(),
+                stale: stale_resource,
+                current: bound,
+            },
+            "a frame whose surface generation matches but whose \
+             GpuResourceGeneration does not must be rejected as \
+             ResourceOutdated, not rendered"
+        );
+        owner.with_backend(|backend| {
+            assert_eq!(
+                backend.render_calls, 0,
+                "a resource-stale frame must never reach render_scene"
+            );
+        });
+
+        // And the matching case: once stamped with the bound generation,
+        // the frame renders normally — proving the rejection above was
+        // really about the mismatch, not some other defect.
+        let epoch2 = epoch.next();
+        handle
+            .submit(test_frame_with_resource_generation(
+                epoch2,
+                test_address(),
+                surface_generation,
+                bound,
+            ))
+            .expect("submit");
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::Presented {
+                epoch: epoch2,
+                address: test_address(),
+            }
+        );
+    }
+
+    /// **The liveness oracle ADR-0045 decision 4 explicitly asks for**: N
+    /// coalesced resizes must never block the caller, even while the
+    /// raster/pump side is fully occupied elsewhere — the exact drag-resize
+    /// scenario the ADR names, and the reason a bounded request/ack
+    /// handshake on resize was rejected (it "would block the owner thread
+    /// precisely while the raster thread is parked in surface acquisition,
+    /// at drag event rates"). This is a liveness property a safety oracle
+    /// cannot catch: a blocking `resize` would still be perfectly SOUND
+    /// (every generation still minted correctly, no false accept), just
+    /// permanently stuck — only a wall-clock bound distinguishes "correct"
+    /// from "correct but frozen".
+    ///
+    /// Mutant this kills: make `RasterHandle::resize` rendezvous with the
+    /// pump side (e.g. block on an ack channel until `pump` has applied the
+    /// resize) instead of only taking the mailbox's own short-lived lock —
+    /// the burst below would then block for the duration the pump thread is
+    /// deliberately kept busy, failing the elapsed-time assertion.
+    #[test]
+    fn n_coalesced_resizes_never_block_the_caller_even_while_the_pump_thread_is_busy() {
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+
+        // Simulates the raster/pump side being busy elsewhere (e.g. parked
+        // in surface acquisition) for a real, measurable interval before it
+        // ever calls `pump()`.
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let pump_gate = Arc::clone(&gate);
+        let pump_thread = thread::spawn(move || {
+            {
+                let (lock, cvar) = &*pump_gate;
+                let mut ready = lock.lock();
+                while !*ready {
+                    cvar.wait(&mut ready);
+                }
+            }
+            owner.pump()
+        });
+
+        let start = Instant::now();
+        let mut last_generation = SurfaceGeneration::ZERO;
+        const RESIZE_BURST: u32 = 50;
+        for i in 0..RESIZE_BURST {
+            last_generation = handle.resize(100 + i, 100 + i);
+        }
+        let burst_elapsed = start.elapsed();
+        assert!(
+            burst_elapsed < Duration::from_millis(200),
+            "{RESIZE_BURST} coalesced resizes must return promptly even \
+             while the pump thread is still busy elsewhere — a \
+             rendezvousing resize would stall here for as long as the pump \
+             thread stays busy (took {burst_elapsed:?})"
+        );
+
+        // Submit a frame stamped with the last minted generation BEFORE
+        // releasing the pump thread, proving submit is equally non-blocking.
+        let epoch = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame(epoch, last_generation))
+            .expect("submit");
+
+        // Keep the pump thread busy for a real, measurable interval before
+        // releasing it, so the elapsed-time assertion above is checking
+        // something a blocking implementation could actually fail.
+        thread::sleep(Duration::from_millis(300));
+        {
+            let (lock, cvar) = &*gate;
+            *lock.lock() = true;
+            cvar.notify_one();
+        }
+
+        let outcome = pump_thread.join().expect("pump thread must not panic");
+        assert_eq!(
+            outcome,
+            PumpOutcome::Presented {
+                epoch,
+                address: test_address(),
+            },
+            "once released, the pump thread must apply the coalesced \
+             burst's final resize and publish the frame stamped against it"
+        );
     }
 }

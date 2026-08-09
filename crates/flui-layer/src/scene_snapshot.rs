@@ -52,17 +52,18 @@ pub enum DamageRegion {
 /// its next field. That gate is **narrowed, not discharged**. The prior
 /// revision of this doc claimed bundling the identity fields into
 /// `FrameStamp` plus a typestate builder made the *next* field addition
-/// additive; that claim was tested (a `resource_generation` field was
-/// actually added to `FrameStamp`) and found false — see
-/// [`FrameStamp`]'s own doc for why no construction shape makes a required
-/// field additive, and why the correction there matters enough to repeat
-/// here rather than silently drop. What genuinely improved: a positional
-/// constructor argument list of five collapses to three
-/// (`SceneSnapshot::new(stamp, damage, scene)`), and a future field on
-/// `FrameStamp` breaks six call sites today — across `flui-foundation`,
-/// this crate (the stamp helper below) and `flui-engine` — each named
-/// directly by the compiler, rather than an unbounded set of external
-/// callers. Smaller and compiler-guided, not additive.
+/// additive; that claim was tested — a `gpu_resource_generation` field was
+/// actually added to `FrameStamp`, for real, in the ADR-0045 decision 4
+/// slice — and found false — see [`FrameStamp`]'s own doc for why no
+/// construction shape makes a required field additive, and why the
+/// correction there matters enough to repeat here rather than silently
+/// drop. What genuinely improved: a positional constructor argument list of
+/// five collapses to three (`SceneSnapshot::new(stamp, damage, scene)`),
+/// and a future field on `FrameStamp` breaks six call sites today — across
+/// `flui-foundation`, this crate (the stamp helper below) and
+/// `flui-engine` — each named directly by the compiler, rather than an
+/// unbounded set of external callers. Smaller and compiler-guided, not
+/// additive.
 #[non_exhaustive]
 #[derive(Debug)]
 pub struct SceneSnapshot {
@@ -114,6 +115,7 @@ mod tests {
             },
             flui_foundation::FrameEpoch::ZERO.next(),
             flui_foundation::SurfaceGeneration::ZERO,
+            flui_foundation::GpuResourceGeneration::ZERO,
         )
     }
 

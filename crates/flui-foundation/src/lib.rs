@@ -206,7 +206,9 @@ pub use clock::{ManualClock, MonotonicClock, SystemClock};
 // Constants
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
 // Window-runtime generation/version counters + commit-time freshness gate.
-pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};
+pub use epoch::{
+    FrameEpoch, GenerationGate, GpuResourceGeneration, ResourceGeneration, SurfaceGeneration,
+};
 // The frame-identity group bundled for the raster boundary.
 pub use frame_stamp::FrameStamp;
 // Diagnostics
