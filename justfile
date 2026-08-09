@@ -524,13 +524,26 @@ watch-test crate="":
 #   just cross-typecheck  (windows + macos + android backends, type-check only)
 #   just deny             (advisories / bans / licenses / sources)
 #   just miri             (nightly UB check, narrow scope — see its comment)
+# Everything in `ci` except the test suites: ~2 minutes on a warm tree, and
+# what the pre-push hook runs. Every gate this repository lost time to
+# recently was caught by something in here, not by a test.
 [group("ci")]
-[doc("Run local CI gates (fmt-check + inventory + runtime-conformance + panic-policy + port-check + clippy + test + doctests + rustdoc)")]
-ci: fmt-check inventory-check runtime-conformance-check panic-policy-check port-check clippy test-ci test-doc doc-strict
+[doc("The non-test half of `ci` — what the pre-push hook runs")]
+gate: fmt-check inventory-check runtime-conformance-check panic-policy-check port-check clippy doc-strict
+
+[group("ci")]
+[doc("Run local CI gates (gate + test + doctests)")]
+ci: gate test-ci test-doc
 
 # =============================================================================
 # Maintenance
 # =============================================================================
+
+[group("maintenance")]
+[doc("Point git at the repo's checked-in hooks (runs `just gate` before every push)")]
+install-hooks:
+    git config core.hooksPath scripts/githooks
+    @echo "core.hooksPath -> scripts/githooks (git push --no-verify still bypasses it)"
 
 [group("maintenance")]
 [doc("Prune stale build artifacts: current-toolchain sweep + anything older than 7 days (requires cargo-sweep)")]
