@@ -256,9 +256,15 @@ coverage:
 # =============================================================================
 
 [group("quality")]
-[doc("Run clippy on the workspace; fail on warnings (CI gate)")]
+[doc("Run clippy exactly as CI does: workspace, then flui-engine's GPU-gated code")]
 clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
+    # Both invocations, both `--locked`, because that is what the CI job runs.
+    # The second one is not optional: `enable-wgpu-tests` gates a body of code
+    # -- the readback suite and the deterministic-replay tests -- that the
+    # workspace pass never compiles, so a break there is invisible until CI.
+    # A marker sweep missed an entire file for exactly this reason.
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy -p flui-engine --all-targets --locked --features enable-wgpu-tests -- -D warnings
 
 [group("quality")]
 [doc("Run clippy and apply auto-fixes (uncommitted changes only)")]
