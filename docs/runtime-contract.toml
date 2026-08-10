@@ -197,7 +197,7 @@ declarations = [
     "pub use flui_painting::Paint;",
     "pub use traits::{CommandRenderer, LayerStateStack};",
     "pub use raster::RasterBackend;",
-    "pub use raster_owner::{ FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner, RasterSubmitError, SurfaceState, };",
+    "pub use raster_owner::{ FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner, RasterSubmitError, SurfaceState, };",
     "pub use raster_options::RasterOptions;",
     "pub use wgpu::DebugBackend;",
     "pub use wgpu::{Backend, FontLoader, LayerRender, WgpuPainter};",
@@ -949,7 +949,11 @@ The raster seam is a capacity-one latest-frame-wins mailbox with identity-\
 stamped acks, stale-`SurfaceGeneration` rejection before render, a lossy \
 telemetry ack lane, and a dedicated one-shot shutdown handshake — exercised \
 by a threaded protocol harness so the protocol is not vacuously green under \
-the synchronous baseline.\
+the synchronous baseline. The latest frame completion is additionally \
+published through the reliable coalesced `SurfaceState` slot with the \
+backend's actual presented bit. This establishes the non-lossy input the \
+future threaded pacing predicate will consume; the shipping path still \
+bypasses `RasterOwner`, as the adjacent partial contract states.\
 """
 state = "implemented"
 domain = "raster"
@@ -960,6 +964,7 @@ evidence = [
     { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn latest_frame_wins_supersedes_pending" },
     { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn stale_surface_generation_is_rejected_before_render" },
     { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn shutdown_handshake_completes_and_thread_joins" },
+    { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn reliable_completion_preserves_the_backends_actual_presented_bit" },
 ]
 
 [[contract]]
@@ -2602,7 +2607,7 @@ consumers = ["runner frame callbacks", "run_direct", "HeadlessRenderer path"]
 owner_issue = 559
 
 [[surface]]
-path = "flui_engine::{RasterOwner, RasterHandle, RasterAck, FrameDropReason, RasterSubmitError, PumpOutcome}"
+path = "flui_engine::{RasterOwner, RasterHandle, RasterAck, RasterCompletion, FrameDropReason, RasterSubmitError, PumpOutcome}"
 crate = "flui-engine"
 kind = "type"
 declared_in = "crates/flui-engine/src/raster_owner.rs"

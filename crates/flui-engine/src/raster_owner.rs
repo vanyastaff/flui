@@ -25,9 +25,10 @@
 //! stale generation, or never learning its device was lost, forever. The
 //! corresponding `RasterAck` variants still exist and still ride the ack
 //! lane too (existing ack-only consumers keep working unchanged), but this
-//! slot is the one a consumer MUST poll to observe these two conditions
-//! reliably. `Presented`/`Dropped` stay lossy-telemetry-only — they carry no
-//! state a consumer cannot simply infer from submitting again.
+//! slot is the one a consumer MUST poll to observe those conditions
+//! reliably. It also carries [`SurfaceState::last_completion`], whose actual
+//! presented bit feeds pacing; that latest-wins decision must not infer state
+//! from a channel which drops its newest value when full.
 //! - A **load-bearing one-shot shutdown-completion** channel, returned
 //! separately from [`RasterOwner::new`]. Kept structurally apart from the
 //! telemetry channel so no volume of lossy acks (e.g. a frame superseded a
@@ -82,10 +83,26 @@ const SHUTDOWN_COMPLETE_CHANNEL_CAPACITY: usize = 1;
 // Reliable, coalesced surface state
 // ---------------------------------------------------------------------------
 
+/// The latest frame retirement observed by a raster lane.
+///
+/// This is the reliable, latest-wins fact used by owner-side pacing. It is
+/// intentionally separate from the lossy [`RasterAck`] lane and from the
+/// bounded frame-history ring used for latency distributions: pacing asks
+/// only whether the latest completed frame presented.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RasterCompletion {
+    /// The retired frame's epoch, scoped to the presentation address this
+    /// [`RasterOwner`] is bound to.
+    pub epoch: FrameEpoch,
+    /// Whether the backend actually presented the frame.
+    pub presented: bool,
+}
+
 /// Reliable, coalesced surface state — read directly via
 /// [`RasterHandle::surface_state`], never delivered over the lossy
-/// telemetry ack lane. See the module docs for why `SurfaceOutdated` and
-/// `DeviceLost` need this and `Presented`/`Dropped` do not.
+/// telemetry ack lane. See the module docs for why recovery facts and the
+/// latest actual-present result need this reliable carrier.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceState {
@@ -114,6 +131,11 @@ pub struct SurfaceState {
     /// future detach can reach again even after a generation has already
     /// been minted.
     pub attached: bool,
+    /// The most recent frame retired by [`RasterOwner::pump`], if any. Its
+    /// epoch is scoped to this lane's bound presentation address.
+    /// Written unconditionally for every non-panicking frame outcome and
+    /// never routed through the lossy acknowledgement channel.
+    pub last_completion: Option<RasterCompletion>,
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +472,14 @@ impl RasterMailbox {
     /// back.
     fn set_attached(&self, attached: bool) {
         self.surface_state.lock().attached = attached;
+    }
+
+    /// Publishes the latest completed frame independently of the lossy ack
+    /// lane. Coalescing is intentional: owner-side pacing asks only about
+    /// the newest completion, while latency distributions retain their own
+    /// bounded history.
+    fn set_last_completion(&self, completion: RasterCompletion) {
+        self.surface_state.lock().last_completion = Some(completion);
     }
 
     /// Mints the next [`SurfaceGeneration`] from the ONE counter this raster
@@ -1124,6 +1154,7 @@ impl<B: RasterBackend> RasterOwner<B> {
                 required_generation: SurfaceGeneration::ZERO,
                 device_lost: false,
                 attached: false,
+                last_completion: None,
             }),
             accounting: Arc::new(InFlightAccounting::new()),
             options,
@@ -1331,6 +1362,7 @@ impl<B: RasterBackend> RasterOwner<B> {
             && self.attached;
         let resource_fresh = frame_gpu_resource_generation == self.current_gpu_resource_generation;
 
+        let mut presented = false;
         let outcome = if surface_fresh && resource_fresh {
             // `DamageRegion::Full` is the only variant that exists today
             // (flui-layer's own doc: fine-grained damage is an additive,
@@ -1343,15 +1375,14 @@ impl<B: RasterBackend> RasterOwner<B> {
             self.backend.mark_full_repaint();
 
             match self.backend.render_scene(&frame.snapshot.scene) {
-                // `_presented`: this pump's ack protocol predates the
-                // `RasterBackend::render_scene` presented-bool plumbing
-                // (added for App.1's frame-pacing fallback throttle,
-                // unrelated to this module) and is unchanged here —
-                // `RasterOwner` is unwired scaffolding reserved for the
-                // planned threaded raster owner, not yet a consumer of any
-                // pacing model. Any `Ok` still completes the render
-                // attempt with a `Presented` ack.
-                Ok(_presented) => {
+                // The legacy ack/outcome names classify a successful render
+                // attempt. The backend's stricter presented bit is retained
+                // separately in the reliable completion state because the
+                // owner-side pacing predicate must distinguish occluded/no-
+                // damage completion from an actual present without trusting
+                // the lossy ack lane.
+                Ok(did_present) => {
+                    presented = did_present;
                     // A successful present is the recovery signal:
                     // whatever device-lost state the reliable slot was
                     // carrying no longer applies.
@@ -1419,6 +1450,11 @@ impl<B: RasterBackend> RasterOwner<B> {
                 current,
             }
         };
+
+        self.mailbox.set_last_completion(RasterCompletion {
+            epoch: frame.snapshot.stamp.epoch,
+            presented,
+        });
 
         // `outcome` computed without unwinding: disarm `wake_guard` so the
         // explicit retire-then-wake sequence below is the sole wake on
@@ -2522,6 +2558,7 @@ mod tests {
                 required_generation: SurfaceGeneration::ZERO,
                 device_lost: false,
                 attached: false,
+                last_completion: None,
             },
             "the reliable slot must not move until pump actually applies \
              the reconfigure — resize only requests one"
@@ -2550,6 +2587,10 @@ mod tests {
                 required_generation: primed,
                 device_lost: false,
                 attached: true,
+                last_completion: Some(RasterCompletion {
+                    epoch: FrameEpoch::ZERO.next(),
+                    presented: true,
+                }),
             },
             "the priming resize was applied by the first pump above, and \
              nothing since has reconfigured the surface again"
@@ -2594,9 +2635,48 @@ mod tests {
                 required_generation: current,
                 device_lost: false,
                 attached: true,
+                last_completion: Some(RasterCompletion {
+                    epoch,
+                    presented: false,
+                }),
             },
             "the reliable slot must reflect the reconfigure even though its \
              ack was dropped by the full lossy channel"
+        );
+    }
+
+    #[test]
+    fn reliable_completion_preserves_the_backends_actual_presented_bit() {
+        let backend = FakeBackend::with_planned([Ok(false), Ok(true)]);
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
+        let generation = handle.resize(1, 1);
+
+        let skipped_epoch = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame(skipped_epoch, generation))
+            .expect("submit skipped frame");
+        let _ = owner.pump();
+        assert_eq!(
+            handle.surface_state().last_completion,
+            Some(RasterCompletion {
+                epoch: skipped_epoch,
+                presented: false,
+            }),
+            "Ok(false) is a successful backend call but not an actual present"
+        );
+
+        let presented_epoch = skipped_epoch.next();
+        handle
+            .submit(test_frame(presented_epoch, generation))
+            .expect("submit presented frame");
+        let _ = owner.pump();
+        assert_eq!(
+            handle.surface_state().last_completion,
+            Some(RasterCompletion {
+                epoch: presented_epoch,
+                presented: true,
+            }),
+            "the reliable slot must advance latest-wins on every completion"
         );
     }
 
