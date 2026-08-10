@@ -197,7 +197,7 @@ flui-log = { path = "crates/flui-log", version = "0.2.0" }
 wgpu = { version = "29.0", default-features = false, features = ["wgsl", "naga-ir"] }
 # GPU profiling — optional, reused by flui-engine behind the `gpu-profiler` feature.
 # Pins wgpu ^29.0, consistent with the workspace pin above. Excluded from wasm32.
-wgpu-profiler = { version = "0.27", default-features = false }
+wgpu-profiler = { version = "0.28", default-features = false }
 # Shader module composition — resolves #import directives in WGSL at build-time or
 # pipeline-init time.  Pins naga ^29, consistent with wgpu 29's naga dep.
 # Used by flui-engine to compose blend_helpers.wgsl into mode.wgsl / advanced_blend.wgsl.
