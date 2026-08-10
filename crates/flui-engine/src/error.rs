@@ -85,12 +85,10 @@ pub enum EngineError {
     /// Surface texture acquisition failed wgpu validation.
     ///
     /// wgpu's `CurrentSurfaceTexture::Validation` carries no diagnostic
-    /// payload — it signals a surface misconfiguration (format/usage/present
-    /// mode incompatibility) that **cannot** be resolved by retrying
-    /// `get_current_texture`; the surface must be reconfigured before the
-    /// next acquire. Retrying without reconfiguring loops forever, so this
-    /// is classified [`Recoverability::Unrecoverable`]: the caller logs and
-    /// drops the frame, then reconfigures on the next pass.
+    /// payload. The renderer reconfigures the surface and retries once before
+    /// returning this error. A repeated validation failure is classified
+    /// [`Recoverability::Unrecoverable`], so the caller logs and drops the
+    /// frame instead of entering an unbounded retry loop.
     #[error("Surface texture validation error")]
     SurfaceValidation,
 
