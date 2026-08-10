@@ -65,7 +65,7 @@
   по себе баг.)
 - `pipeline/owner.rs:400` — `drain_pending_dirty()` вызывается **только** в `run_frame`, но
   публичный typestate-API позволяет ручной `into_layout().run_layout()`; кросс-тред-запросы
-  (`PipelineOwnerHandle`/async-декоды) тогда теряются. Доки на owner.rs:215 / handle.rs:11-14
+  (private render-invalidation sender/async-декоды) тогда теряются. Доки на owner.rs:215 / handle.rs:11-14
   описывают несуществующее поведение.
 - `view/render_view.rs:368-370` — **`RenderView::hit_test` — заглушка, возвращает `true`** без
   записей, 0 продакшн-вызовов. `pub fn -> true` — публичная ложь. Удалить или делегировать в

@@ -83,7 +83,7 @@ are listed in the render-object harness catalog, and back the public
 > **`RenderAnimatedSize` closure note (verified 2026-07-01):** the blocking architectural gap is closed by
 > [`ADR-0013`](../adr/ADR-0013-render-object-attach-self-dirty-handle.md) — a defaulted `attach`/`detach`
 > lifecycle pair on `RenderObject`/`RenderBox`/`RenderSliver` (mirroring the existing `reassemble` forwarded
-> default), firing off the pipeline's insert/remove paths and reusing the existing `RepaintHandle`
+> default), firing off the pipeline's insert/remove paths and reusing the existing `RenderInvalidationHandle`
 > (extended with `mark_needs_layout`) plus `AnimationController`'s existing `Listenable` impl — no new ticker
 > subsystem, no new `flui-rendering` → `flui-animation` dependency edge. `RenderAnimatedSize` now ships in
 > `flui-objects` (`crates/flui-objects/src/layout/animated_size.rs`), is listed in the render-object harness

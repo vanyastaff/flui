@@ -316,10 +316,17 @@ fn stamp_logical_index(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use flui_foundation::ViewKey;
     use flui_objects::RenderSizedBox;
     use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+    use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, RenderBox, Size};
+    use flui_tree::Leaf;
     use flui_types::geometry::px;
 
     use super::SparseChildren;
@@ -367,17 +374,42 @@ mod tests {
     struct GlobalKeyedLeafBox {
         side: f32,
         key: GlobalKey<Self>,
+        detach_count: Arc<AtomicUsize>,
+    }
+
+    #[derive(Debug)]
+    struct DetachCountingBox {
+        side: f32,
+        detach_count: Arc<AtomicUsize>,
+    }
+
+    impl flui_foundation::Diagnosticable for DetachCountingBox {}
+
+    impl RenderBox for DetachCountingBox {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            Size::new(px(self.side), px(self.side))
+        }
+
+        fn detach(&mut self) {
+            self.detach_count.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     impl RenderView for GlobalKeyedLeafBox {
         type Protocol = flui_rendering::protocol::BoxProtocol;
-        type RenderObject = RenderSizedBox;
+        type RenderObject = DetachCountingBox;
 
         fn create_render_object(
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderSizedBox::new(Some(px(self.side)), Some(px(self.side)))
+            DetachCountingBox {
+                side: self.side,
+                detach_count: Arc::clone(&self.detach_count),
+            }
         }
 
         fn update_render_object(
@@ -385,7 +417,8 @@ mod tests {
             _ctx: &crate::RenderObjectContext<'_>,
             render_object: &mut Self::RenderObject,
         ) -> flui_rendering::RenderUpdateImpact {
-            render_object.set_size(Some(px(self.side)), Some(px(self.side)))
+            render_object.side = self.side;
+            flui_rendering::RenderUpdateImpact::LAYOUT
         }
     }
 
@@ -698,9 +731,11 @@ mod tests {
         let element_count_before = tree.len();
 
         let global_key = GlobalKey::<GlobalKeyedLeafBox>::new();
+        let detach_count = Arc::new(AtomicUsize::new(0));
         let keyed_item = GlobalKeyedLeafBox {
             side: 4.0,
             key: global_key.clone(),
+            detach_count: Arc::clone(&detach_count),
         };
 
         let mut children = SparseChildren::new();
@@ -728,6 +763,12 @@ mod tests {
         children.evict(0, &mut tree, &mut build_owner.element_owner_mut());
 
         assert_eq!(
+            detach_count.load(Ordering::SeqCst),
+            1,
+            "soft removal must detach the render subtree immediately",
+        );
+
+        assert_eq!(
             children.get(0),
             None,
             "evict must clear the SparseChildren map entry"
@@ -747,6 +788,12 @@ mod tests {
         // `finalize_tree` drains the inactive queue and calls `remove_finalized`
         // on each entry, which frees the slab slot.
         build_owner.finalize_tree(&mut tree);
+
+        assert_eq!(
+            detach_count.load(Ordering::SeqCst),
+            1,
+            "finalization must not detach an already-detached render subtree twice",
+        );
 
         assert!(
             !build_owner.has_inactive_elements(),

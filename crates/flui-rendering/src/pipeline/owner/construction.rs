@@ -14,7 +14,7 @@ use crate::testing::parent_data::ParentDataSeed;
 use crate::storage::RenderTree;
 
 use crate::pipeline::{
-    handle::PipelineOwnerHandle,
+    handle::DirtySender,
     notifier::VisualUpdateNotifier,
     phase::{Idle, Layout},
     scheduler::DirtyTracker,
@@ -35,11 +35,12 @@ impl PipelineOwner<Idle> {
     /// the producer profile.
     pub fn new_with_capacity(dirty_channel_capacity: usize) -> Self {
         let notifier = std::sync::Arc::new(parking_lot::RwLock::new(VisualUpdateNotifier::new()));
-        let (handle, dirty_rx) =
-            PipelineOwnerHandle::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
+        let (dirty_sender, dirty_rx) =
+            DirtySender::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
         let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
+            relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),
             render_tree: RenderTree::new(),
             root_id: None,
             notifier,
@@ -54,7 +55,7 @@ impl PipelineOwner<Idle> {
             last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,
             deferred_mutations: crate::pipeline::deferred::DeferredMutations::new(),
-            handle,
+            dirty_sender,
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
@@ -95,13 +96,14 @@ impl PipelineOwner<Idle> {
             notifier.set_semantics_owner_disposed(f);
         }
         let notifier = std::sync::Arc::new(parking_lot::RwLock::new(notifier));
-        let (handle, dirty_rx) = PipelineOwnerHandle::new_pair(
+        let (dirty_sender, dirty_rx) = DirtySender::new_pair(
             DEFAULT_DIRTY_CHANNEL_CAPACITY,
             std::sync::Arc::clone(&notifier),
         );
         let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
+            relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),
             render_tree: RenderTree::new(),
             root_id: None,
             notifier,
@@ -116,7 +118,7 @@ impl PipelineOwner<Idle> {
             last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,
             deferred_mutations: crate::pipeline::deferred::DeferredMutations::new(),
-            handle,
+            dirty_sender,
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
@@ -165,8 +167,7 @@ impl PipelineOwner<Idle> {
         PipelineOwner<Idle>,
         crate::error::RenderResult<Option<LayerTree>>,
     ) {
-        // Observe cross-thread dirty requests (RepaintHandle /
-        // PipelineOwnerHandle producers) before any phase runs — an
+        // Observe node-bound cross-thread invalidation before any phase runs — an
         // async decode that finished while the app idled lands in this
         // frame, not never.
         self.drain_pending_dirty();

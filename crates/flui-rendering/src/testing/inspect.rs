@@ -4,7 +4,7 @@
 //!
 //! - free functions generic over the pipeline phase
 //!   ([`render_offset`], [`box_geometry`], [`sliver_geometry`],
-//!   [`hit_path`]) plus [`LayerTree`] walkers ([`layer_structure`],
+//!   [`hit_path`]) plus [`flui_layer::LayerTree`] walkers ([`layer_structure`],
 //!   [`layer_structure_with_depth`], [`first_picture_bounds`]). These are
 //!   the bodies previously duplicated across the integration tests.
 //! - the [`Probe`] trait, an ergonomic wrapper the run results

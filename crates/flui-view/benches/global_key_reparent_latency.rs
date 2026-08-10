@@ -1,193 +1,267 @@
-//! GlobalKey reparent latency is independent of outer-tree
-//! size. Comparing two reparent runs in a 1K-element tree vs a 10K-
-//! element tree, the wall-clock cost should stay roughly constant
-//! (within ~2x), proving the algorithm is O(subtree depth + 1)
-//! per-reparent, not O(tree size).
+//! Production GlobalKey render-relocation latency.
 //!
-//! Models a single-element reparent via the inactive-queue
-//! reactivation path. The 10-node subtree case the
-//! plan envisions requires the full Variable-arity descent, which
-//! is deferred and out of scope for this bench. Single-element reparent
-//! exercises the same code path (`try_retake_inactive` +
-//! `ReconcileEvent::Reparent` emission) so the latency signal is
-//! representative.
+//! The timed operation updates a destination render parent, retakes an active
+//! keyed render child through `BuildOwner::build_scope`, performs its targeted
+//! provisional synchronization, and commits the coalesced authoritative render
+//! order at the build boundary. Fixture construction is outside the timed
+//! closure.
 
-// Bench harness, not public API; `criterion_group!` generates the
-// undocumentable entry fn.
-//
-// ADR-0027: ElementBuildContext's current test/bench seam still takes
-// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
-// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
-#![allow(missing_docs, clippy::arc_with_non_send_sync)]
-
-use std::sync::Arc;
+// Bench harness, not public API; `criterion_group!` generates the entry point.
+#![allow(missing_docs)]
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use flui_foundation::ViewKey;
-use flui_view::{
-    BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, StatefulView, View, ViewExt,
-    ViewState,
-};
-use parking_lot::RwLock;
+use flui_foundation::{ValueKey, ViewKey};
+use flui_objects::RenderSizedBox;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+use flui_rendering::protocol::BoxProtocol;
+use flui_view::{BoxedView, BuildOwner, ElementTree, GlobalKey, RenderView, View, ViewExt};
 
-/// Spacer scaffold used as parent placeholders.
 #[derive(Clone)]
-struct Spacer;
+struct Leaf {
+    key: ValueKey<usize>,
+}
 
-struct SpacerState;
-impl StatefulView for Spacer {
-    type State = SpacerState;
-    fn create_state(&self) -> Self::State {
-        SpacerState
+impl RenderView for Leaf {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 }
-impl ViewState<Spacer> for SpacerState {
-    fn build(&self, _v: &Spacer, _ctx: &dyn BuildContext) -> impl IntoView {
-        Spacer.boxed()
-    }
-}
-impl View for Spacer {
+
+impl View for Leaf {
     fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
+        flui_view::element::ElementKind::render_variable(self)
     }
-}
 
-/// Keyed leaf that we reparent. Stateless — the reparent code path
-/// is the same regardless of state shape.
-#[derive(Clone)]
-struct KeyedLeaf {
-    key: GlobalKey<KeyedLeafState>,
-}
-
-struct KeyedLeafState;
-impl StatefulView for KeyedLeaf {
-    type State = KeyedLeafState;
-    fn create_state(&self) -> Self::State {
-        KeyedLeafState
-    }
-}
-impl ViewState<KeyedLeaf> for KeyedLeafState {
-    fn build(&self, _v: &KeyedLeaf, _ctx: &dyn BuildContext) -> impl IntoView {
-        Spacer.boxed()
-    }
-}
-impl View for KeyedLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
     fn key(&self) -> Option<&dyn ViewKey> {
         Some(&self.key)
     }
 }
 
-/// Bench fixture tuple: tree handle, build-owner handle, GlobalKey,
-/// and the keyed leaf's mounted ElementId. Extracted to silence
-/// `clippy::type_complexity` on the setup-fn signature.
-type SetupOutputs = (
-    Arc<RwLock<ElementTree>>,
-    Arc<RwLock<BuildOwner>>,
-    GlobalKey<KeyedLeafState>,
-    flui_foundation::ElementId,
-);
+#[derive(Clone)]
+struct GlobalLeaf {
+    key: GlobalKey<()>,
+}
 
-/// Build a tree of `outer_size` spacer elements with a keyed leaf
-/// mounted under spacer index 0. Returns the tree handles, the
-/// keyed-leaf's id, and a fresh GlobalKey clone.
-///
-/// Reviewer fix (adversarial finding #2): the GlobalKey REGISTRY is
-/// a process-wide singleton, and `test_only_set_global_key_registry`
-/// REPLACES the prior handle on every call. With criterion's
-/// `BatchSize::LargeInput`, setups are run in a batch BEFORE the
-/// measurement loop — only the LAST setup's handle survives in
-/// REGISTRY, so an earlier iter's `key.current_element()` resolves
-/// against a later iter's tree (returns None → `.expect()` panics).
-/// Two fixes layered: (1) return the leaf's `ElementId` directly
-/// so the measurement doesn't depend on the REGISTRY at all; (2)
-/// switch to `BatchSize::PerIteration` so setup + measurement
-/// interleave, AND install the registry inside the measurement
-/// closure (each iter installs against its own tree). Either fix
-/// alone would prevent the panic; both layers belt-and-braces
-/// because the registry singleton is fundamentally fragile.
-fn setup_tree(outer_size: usize) -> SetupOutputs {
-    let tree = Arc::new(RwLock::new(ElementTree::new()));
-    let owner = Arc::new(RwLock::new(BuildOwner::new()));
+impl RenderView for GlobalLeaf {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
 
-    let root = tree
-        .write()
-        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
-
-    // Pad the tree to `outer_size` spacers so reparent latency can
-    // be compared at two tree-size points.
-    for _ in 1..outer_size {
-        let _ = tree
-            .write()
-            .insert(&Spacer, root, 0, &mut owner.write().element_owner_mut());
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::shrink()
     }
 
-    let key = GlobalKey::<KeyedLeafState>::new();
-    let leaf = KeyedLeaf { key: key.clone() };
-    let leaf_id = tree
-        .write()
-        .insert(&leaf, root, 0, &mut owner.write().element_owner_mut());
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
 
-    (tree, owner, key, leaf_id)
+impl View for GlobalLeaf {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
+    }
+}
+
+#[derive(Clone)]
+struct Host {
+    key: ValueKey<usize>,
+    children: Vec<BoxedView>,
+}
+
+impl Host {
+    fn new(key: usize, children: Vec<BoxedView>) -> Self {
+        Self {
+            key: ValueKey::new(key),
+            children,
+        }
+    }
+}
+
+impl RenderView for Host {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+
+    fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        for child in &self.children {
+            visitor(child);
+        }
+    }
+}
+
+impl View for Host {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
+    }
+}
+
+struct Fixture {
+    tree: ElementTree,
+    owner: BuildOwner,
+    destination: flui_foundation::ElementId,
+    destination_update: Host,
+    moved_render: flui_foundation::RenderId,
+    pipeline: PipelineCell,
+}
+
+fn direct_children(
+    tree: &ElementTree,
+    parent: flui_foundation::ElementId,
+) -> Vec<flui_foundation::ElementId> {
+    let mut children = tree
+        .iter_nodes()
+        .filter(|(_, node)| node.parent() == Some(parent))
+        .map(|(id, node)| (node.slot(), id))
+        .collect::<Vec<_>>();
+    children.sort_by_key(|&(slot, _)| slot);
+    children.into_iter().map(|(_, id)| id).collect()
+}
+
+fn setup(unrelated_count: usize) -> Fixture {
+    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let mut owner = BuildOwner::new();
+    let mut tree = ElementTree::new();
+    let global = GlobalKey::<()>::new();
+    let mut root_children = vec![
+        Host::new(
+            1,
+            vec![
+                GlobalLeaf {
+                    key: global.clone(),
+                }
+                .boxed(),
+            ],
+        )
+        .boxed(),
+        Host::new(2, Vec::new()).boxed(),
+    ];
+    root_children.extend((0..unrelated_count).map(|index| {
+        Leaf {
+            key: ValueKey::new(index + 10),
+        }
+        .boxed()
+    }));
+    let root = Host::new(0, root_children);
+    let root_id = tree.mount_root_with_pipeline_owner(
+        &root,
+        Some(pipeline.clone()),
+        &mut owner.element_owner_mut(),
+    );
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+    let parents = direct_children(&tree, root_id);
+    let donor = parents[0];
+    let destination = parents[1];
+    let moved = direct_children(&tree, donor)[0];
+    let moved_render = tree
+        .get(moved)
+        .and_then(|node| node.element().render_id())
+        .expect("moved render child");
+
+    Fixture {
+        tree,
+        owner,
+        destination,
+        destination_update: Host::new(
+            2,
+            vec![
+                GlobalLeaf {
+                    key: global.clone(),
+                }
+                .boxed(),
+            ],
+        ),
+        moved_render,
+        pipeline,
+    }
 }
 
 fn bench_reparent(c: &mut Criterion) {
-    let mut group = c.benchmark_group("global_key_reparent_latency");
-
-    // Two tree sizes — reparent cost should not depend on outer
-    // size. 1K vs 10K is the comparison the plan envisions.
-    for &outer_size in &[1_000_usize, 10_000_usize] {
+    let mut group = c.benchmark_group("global_key_render_relocation");
+    for unrelated_count in [32_usize, 256, 1_024] {
         group.bench_with_input(
-            BenchmarkId::from_parameter(outer_size),
-            &outer_size,
-            |b, &outer_size| {
-                // `PerIteration` interleaves setup with measurement.
-                // The batched alternative (`LargeInput`) batched all
-                // setups first, then measured — and the legacy fixture
-                // adapter kept only the last setup's handle, panicking
-                // earlier-iteration measurements.
-                b.iter_batched(
-                    || setup_tree(outer_size),
-                    |(tree, owner, key, leaf_id)| {
-                        // Install the GlobalKey registry handle
-                        // INSIDE the measurement closure so each iter
-                        // gets the handle pointing at its own tree.
-                        flui_view::test_only_set_global_key_registry(&tree, &owner);
-                        let leaf = KeyedLeaf { key: key.clone() };
-                        // Soft-remove (push to inactive queue). Use
-                        // the captured leaf_id directly — no REGISTRY
-                        // lookup that could race.
-                        tree.write()
-                            .remove(leaf_id, &mut owner.write().element_owner_mut());
-                        // Re-insert under a different slot to vary
-                        // from the original mount slot (1 instead of 0).
-                        let root = tree.read().root().expect("tree has root");
-                        let migrated = tree.write().insert(
-                            &leaf,
-                            root,
-                            1,
-                            &mut owner.write().element_owner_mut(),
+            BenchmarkId::new("unrelated_render_nodes", unrelated_count),
+            &unrelated_count,
+            |bencher, &count| {
+                bencher.iter_batched_ref(
+                    || setup(count),
+                    |fixture| {
+                        fixture.tree.update(
+                            fixture.destination,
+                            &fixture.destination_update,
+                            &mut fixture.owner.element_owner_mut(),
                         );
-                        std::hint::black_box(migrated);
-                        // Clear the registry before the next iter's
-                        // setup runs — keeps the singleton in a known
-                        // state and avoids the cross-iter handle leak.
-                        flui_view::test_only_clear_global_key_registry();
+                        fixture.owner.schedule_build_for(
+                            fixture.destination,
+                            fixture
+                                .tree
+                                .get(fixture.destination)
+                                .expect("destination")
+                                .depth(),
+                            flui_view::RebuildReason::ParentUpdate,
+                        );
+                        fixture.owner.build_scope(&mut fixture.tree);
+                        fixture.pipeline.with(|owner| {
+                            std::hint::black_box(
+                                owner
+                                    .render_tree()
+                                    .parent(fixture.moved_render)
+                                    .expect("moved child remains attached"),
+                            );
+                        });
                     },
                     BatchSize::PerIteration,
                 );
             },
         );
     }
-
     group.finish();
-
-    // Final defensive cleanup. The measurement loop clears per-iter,
-    // but if the bench is interrupted mid-iter the last setup's handle
-    // could otherwise leak across to a follow-up bench.
-    flui_view::test_only_clear_global_key_registry();
 }
 
 criterion_group!(benches, bench_reparent);

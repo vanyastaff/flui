@@ -723,9 +723,8 @@ impl PresentationState {
         self.widgets.has_pending_builds()
             || self.has_pending_layout_builder_work()
             || self.renderer.root_pipeline_owner().with_mut(|owner| {
-                // Cross-thread dirty requests (`RepaintHandle`/
-                // `PipelineOwnerHandle` producers — background asset
-                // loaders, the frames-reenable redirty) sit in a channel
+                // Cross-thread dirty requests (`RenderInvalidationHandle` producers —
+                // background asset loaders, the frames-reenable redirty) sit in a channel
                 // until drained; `run_frame` itself always drains before its
                 // first phase, so an UNGATED call here would eventually see
                 // them regardless. This gate runs BEFORE `run_frame` now, so

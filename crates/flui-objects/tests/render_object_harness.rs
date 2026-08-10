@@ -3362,7 +3362,7 @@ fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255
 // a settled frame followed by an external controller tick would leave the
 // pipeline idle (`report.painted == false`) unless `attach`
 // (proxy/animated_opacity.rs) wires the listener to `mark_needs_paint` and
-// the tick actually reaches the owner's paint-dirty set through `RepaintHandle`.
+// the tick actually reaches the owner's paint-dirty set through `RenderInvalidationHandle`.
 #[test]
 fn harness_animated_opacity_tick_marks_needs_paint() {
     let controller = ticking_controller(100, 0.0);
@@ -11828,8 +11828,8 @@ fn assert_transform_point(
 // ── RenderSubtreeAnchor (ADR-0021) ───────────────────────────────────────────
 //
 // The anchor's whole job is identity: publish its own `RenderId` while mounted,
-// clear it when it leaves. `attach(RepaintHandle)` is the first — and only —
-// hook where that id exists (`RepaintHandle::id()`); `detach()` is its mirror.
+// clear it when it leaves. `attach(RenderInvalidationHandle)` is the first — and only —
+// hook where that id exists (`RenderInvalidationHandle::id()`); `detach()` is its mirror.
 // Everything else must be invisible.
 
 /// `attach` publishes the render object's **real** id — the one the pipeline

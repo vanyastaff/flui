@@ -4,8 +4,10 @@
 //! This follows Flutter's approach where Elements form the retained tree.
 
 use std::any::TypeId;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
@@ -26,11 +28,12 @@ fn append_sparse_sliver_children(
         return;
     };
 
+    let desired_membership: HashSet<_> = desired_children.iter().copied().collect();
     let mut sparse_children = parent_node
         .children()
         .iter()
         .copied()
-        .filter(|child| !desired_children.contains(child))
+        .filter(|child| !desired_membership.contains(child))
         .filter_map(|child| {
             let child_node = render_tree.get(child)?;
             if child_node.parent() != Some(parent_render) {
@@ -378,6 +381,27 @@ pub struct ElementTree {
     ///
     /// [`reorder_render_children_after_build`]: ElementTree::reorder_render_children_after_build
     needs_render_reorder: bool,
+    reconcile_state: Rc<ReconcileState>,
+}
+
+#[derive(Debug, Default)]
+struct ReconcileState {
+    active_parent: Cell<Option<ElementId>>,
+}
+
+/// Unwind-safe scope for one non-reentrant child reconciliation.
+///
+/// Current reconciliation is deliberately non-reentrant. A future nested
+/// reconciler must replace the single active parent with a stack and preserve
+/// the forgotten-child protocol at every level before nesting is enabled.
+pub(super) struct ReconcileGuard {
+    state: Rc<ReconcileState>,
+}
+
+impl Drop for ReconcileGuard {
+    fn drop(&mut self) {
+        self.state.active_parent.set(None);
+    }
 }
 
 impl Default for ElementTree {
@@ -394,6 +418,7 @@ impl ElementTree {
             generations: Vec::new(),
             root: None,
             needs_render_reorder: false,
+            reconcile_state: Rc::new(ReconcileState::default()),
         }
     }
 
@@ -404,7 +429,23 @@ impl ElementTree {
             generations: Vec::with_capacity(capacity),
             root: None,
             needs_render_reorder: false,
+            reconcile_state: Rc::new(ReconcileState::default()),
         }
+    }
+
+    pub(super) fn begin_reconcile(&self, parent_id: ElementId) -> ReconcileGuard {
+        assert!(
+            self.reconcile_state.active_parent.get().is_none(),
+            "BUG: child reconciliation is non-reentrant; nested reconciliation must first implement a stacked forgotten-child protocol",
+        );
+        self.reconcile_state.active_parent.set(Some(parent_id));
+        ReconcileGuard {
+            state: Rc::clone(&self.reconcile_state),
+        }
+    }
+
+    fn is_reconciling_parent(&self, parent_id: ElementId) -> bool {
+        self.reconcile_state.active_parent.get() == Some(parent_id)
     }
 
     /// Mint an [`ElementId`] for a freshly-inserted slab slot, threading the
@@ -624,15 +665,56 @@ impl ElementTree {
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
+        self.insert_with_provisional_order(view, parent, slot, owner, &[], &[])
+    }
+
+    pub(super) fn insert_during_reconcile(
+        &mut self,
+        view: &dyn View,
+        parent: ElementId,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+        reconciled_prefix: &[ElementId],
+        unclaimed_old_slots: &[Option<ElementId>],
+    ) -> ElementId {
+        self.insert_with_provisional_order(
+            view,
+            parent,
+            slot,
+            owner,
+            reconciled_prefix,
+            unclaimed_old_slots,
+        )
+    }
+
+    fn insert_with_provisional_order(
+        &mut self,
+        view: &dyn View,
+        parent: ElementId,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+        reconciled_prefix: &[ElementId],
+        unclaimed_old_slots: &[Option<ElementId>],
+    ) -> ElementId {
         // ADV-1 state migration. Before creating a fresh element,
         // check whether `view` has a `GlobalKey` whose hash points at an
         // existing element. If it is inactive, pull it back; if it is still
         // active under a different parent, forget it from that parent and move
         // it here. In both cases the `ElementId` and state survive.
-        if let Some(hash) = global_key_hash_of(view)
-            && let Some(retaken_id) = try_retake_global_key(self, owner, hash, view, parent, slot)
-        {
-            return retaken_id;
+        if let Some(hash) = global_key_hash_of(view) {
+            let destination = RetakeDestination {
+                parent,
+                slot,
+                reconciled_prefix,
+                unclaimed_old_slots,
+            };
+            match try_retake_global_key(self, owner, hash, view, destination) {
+                GlobalKeyRetake::Absent => {}
+                GlobalKeyRetake::Retaken(element_id) => return element_id,
+                GlobalKeyRetake::Rejected => panic!(
+                    "BUG: existing GlobalKey candidate failed relocation preflight; refusing to mount a duplicate"
+                ),
+            }
         }
 
         let mut element = view.create_element();
@@ -828,6 +910,23 @@ impl ElementTree {
         });
     }
 
+    fn reset_ancestor_parent_data(&mut self, child_id: ElementId) {
+        let Some(child) = self.get(child_id) else {
+            return;
+        };
+        let Some(render_id) = child.element().render_id() else {
+            return;
+        };
+        if let Some(pipeline) = child.element().pipeline_owner() {
+            pipeline.with_mut(|owner| {
+                if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
+                    let _ = node.clear_parent_data();
+                }
+            });
+        }
+        self.apply_ancestor_parent_data(child_id);
+    }
+
     /// Reorder every render object's children to match element-slot order.
     ///
     /// A render child appends itself to its render parent during mount, so when
@@ -839,7 +938,8 @@ impl ElementTree {
     /// correct child sequence, and rewrites only those that drifted — the
     /// arena analogue of Flutter slotting each child via `insertRenderObjectChild`.
     ///
-    /// No-op unless an [`insert`](Self::insert) set `needs_render_reorder`.
+    /// No-op unless insertion or committed child reconciliation set
+    /// `needs_render_reorder`.
     /// Average/worst case O(element-tree size) for the DFS, plus O(children) per
     /// drifted render parent. The element walk completes before the pipeline
     /// owner is locked; the lock guards only the render tree.
@@ -860,12 +960,118 @@ impl ElementTree {
     /// exactly the invariant the root-hop parent-link defect violated: a
     /// child recorded in its parent's children list while its own `parent`
     /// link disagreed).
-    pub(crate) fn reorder_render_children_after_build(&mut self) {
+    pub(crate) fn reorder_render_children_after_build(&mut self) -> usize {
         if !self.needs_render_reorder {
-            return;
+            return 0;
         }
         self.needs_render_reorder = false;
+        self.synchronize_render_children()
+    }
 
+    pub(super) fn mark_render_reorder_needed(&mut self) {
+        self.needs_render_reorder = true;
+    }
+
+    /// Synchronize only the destination's nearest render parent's direct
+    /// children for the provisional GlobalKey order.
+    ///
+    /// This must run before the moved element's update and observer callbacks,
+    /// but a global element-tree walk would make each retake O(tree size). The
+    /// walk therefore starts at the destination render element, follows only
+    /// its logical descendants, and stops at each first render boundary.
+    pub(super) fn synchronize_destination_render_children_for_relocation(
+        &mut self,
+        parent_id: ElementId,
+        provisional_children: &[ElementId],
+    ) -> usize {
+        let mut render_element_id = Some(parent_id);
+        let (render_element_id, render_parent_id, pipeline) = loop {
+            let Some(element_id) = render_element_id else {
+                return 0;
+            };
+            let Some(node) = self.get(element_id) else {
+                return 0;
+            };
+            if let Some(render_id) = node.element().render_id() {
+                let Some(pipeline) = node.element().pipeline_owner() else {
+                    return 0;
+                };
+                break (element_id, render_id, pipeline);
+            }
+            render_element_id = node.parent();
+        };
+
+        let root_children = if render_element_id == parent_id {
+            provisional_children
+        } else {
+            self.get(render_element_id)
+                .map_or(&[][..], ElementNode::child_ids)
+        };
+        let mut desired_children = Vec::new();
+        let mut visited = 1;
+        let mut stack: Vec<ElementId> = root_children.iter().rev().copied().collect();
+        while let Some(element_id) = stack.pop() {
+            visited += 1;
+            let Some(node) = self.get(element_id) else {
+                continue;
+            };
+            if let Some(render_id) = node.element().render_id() {
+                desired_children.push(render_id);
+                continue;
+            }
+            let children = if element_id == parent_id {
+                provisional_children
+            } else {
+                node.child_ids()
+            };
+            stack.extend(children.iter().rev().copied());
+        }
+
+        pipeline.with_mut(|owner| {
+            append_sparse_sliver_children(
+                owner.render_tree(),
+                render_parent_id,
+                &mut desired_children,
+            );
+            let children_match = owner
+                .render_tree()
+                .get(render_parent_id)
+                .is_some_and(|node| node.children() == desired_children.as_slice());
+            if children_match {
+                return;
+            }
+            let current = owner
+                .render_tree()
+                .get(render_parent_id)
+                .map_or_else(Vec::new, |node| node.children().to_vec());
+            {
+                let render_tree = owner.render_tree_mut();
+                for &child in &desired_children {
+                    if let Some(node) = render_tree.get_mut(child) {
+                        node.set_parent(Some(render_parent_id));
+                    }
+                }
+                let Some(parent) = render_tree.get_mut(render_parent_id) else {
+                    return;
+                };
+                for child in current {
+                    parent.remove_child(child);
+                }
+                for (index, child) in desired_children.iter().copied().enumerate() {
+                    parent.insert_child(index, child);
+                }
+            }
+            owner.apply_render_update_impact(
+                render_parent_id,
+                flui_rendering::RenderUpdateImpact::LAYOUT
+                    | flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                    | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            );
+        });
+        visited
+    }
+
+    fn synchronize_render_children(&mut self) -> usize {
         // Depth-first in slot order, tracking each node's nearest render
         // ancestor. A render node is appended to that ancestor's target order,
         // then becomes the render ancestor for its own subtree.
@@ -876,6 +1082,7 @@ impl ElementTree {
             Option<flui_foundation::RenderId>,
         > = HashMap::new();
         let mut pipeline_owner: Option<PipelineCell> = None;
+        let mut visited = 0;
 
         let roots: Vec<ElementId> = self
             .iter_nodes()
@@ -887,6 +1094,7 @@ impl ElementTree {
         let mut stack: Vec<(ElementId, Option<flui_foundation::RenderId>)> =
             roots.into_iter().rev().map(|id| (id, None)).collect();
         while let Some((element_id, render_ancestor)) = stack.pop() {
+            visited += 1;
             let Some(node) = self.get(element_id) else {
                 continue;
             };
@@ -902,16 +1110,17 @@ impl ElementTree {
             } else {
                 render_ancestor
             };
-            for &child in node.child_ids().iter().rev() {
+            let children = node.child_ids();
+            for &child in children.iter().rev() {
                 stack.push((child, child_ancestor));
             }
         }
 
         if desired_parent.is_empty() {
-            return;
+            return visited;
         }
         let Some(pipeline_owner) = pipeline_owner else {
-            return;
+            return visited;
         };
 
         // Tree borrows are dropped; the checkout guards only the render tree.
@@ -956,8 +1165,7 @@ impl ElementTree {
                     if !desired_parent.contains_key(parent_render) {
                         continue;
                     }
-                    let mut desired_children =
-                        target.get(parent_render).cloned().unwrap_or_default();
+                    let mut desired_children = target.remove(parent_render).unwrap_or_default();
                     append_sparse_sliver_children(render_tree, *parent_render, &mut desired_children);
                     let Some(parent_node) = render_tree.get_mut(*parent_render) else {
                         continue;
@@ -1019,6 +1227,7 @@ impl ElementTree {
                 }
             }
         });
+        visited
     }
 
     /// Recompute ancestry-derived metadata for the subtree rooted at
@@ -1048,12 +1257,18 @@ impl ElementTree {
             let Some(node) = self.get(id) else {
                 continue;
             };
-            let (parent_map, depth) = match node.parent {
+            let (parent_map, depth, parent_render_id) = match node.parent {
                 Some(parent_id) => self.get(parent_id).map_or_else(
-                    || (Arc::new(HashMap::new()), 0),
-                    |parent| (Arc::clone(&parent.inherited), parent.depth + 1),
+                    || (Arc::new(HashMap::new()), 0, None),
+                    |parent| {
+                        (
+                            Arc::clone(&parent.inherited),
+                            parent.depth + 1,
+                            parent.element().child_render_id(),
+                        )
+                    },
                 ),
-                None => (Arc::new(HashMap::new()), 0),
+                None => (Arc::new(HashMap::new()), 0, None),
             };
             let scope = {
                 let node = self.get(id).expect("id resolved at loop top");
@@ -1062,6 +1277,7 @@ impl ElementTree {
             let node = self.get_mut(id).expect("id resolved at loop top");
             node.inherited = scope;
             node.depth = depth;
+            node.element_mut().set_parent_render_id(parent_render_id);
             stack.extend_from_slice(&node.child_ids);
         }
     }
@@ -1247,8 +1463,24 @@ impl ElementTree {
         // remount.
         if self.nodes[index].registered_global_key_hash.is_some() {
             let depth = self.nodes[index].depth;
+            let former_parent = self.nodes[index].parent;
+            let mut relocation = RenderRelocation {
+                pipeline: self.nodes[index].element().pipeline_owner(),
+                frontier: collect_render_frontier(self, id).unwrap_or_default(),
+                detached_render_subtrees: None,
+            };
+            if let Some(parent_id) = former_parent
+                && let Some(parent) = self.get_mut(parent_id)
+            {
+                parent.child_ids.retain(|child_id| *child_id != id);
+            }
+            detach_render_relocation(&mut relocation);
             self.deactivate_subtree(id, owner);
-            owner.push_inactive(id, depth);
+            if let Some(token) = relocation.detached_render_subtrees {
+                owner.push_inactive_with_detached_render_subtrees(id, depth, token);
+            } else {
+                owner.push_inactive(id, depth);
+            }
             // Detach from active tree but keep the slot alive.
             self.nodes[index].parent = None;
 
@@ -1590,32 +1822,40 @@ fn register_global_key_with_collision_check(
 /// element exists (caller falls back to creating a fresh element).
 ///
 /// Flutter parity: `framework.dart:4571` `_retakeInactiveElement`.
+enum GlobalKeyRetake {
+    Absent,
+    Retaken(ElementId),
+    Rejected,
+}
+
+#[derive(Clone, Copy)]
+struct RetakeDestination<'a> {
+    parent: ElementId,
+    slot: usize,
+    reconciled_prefix: &'a [ElementId],
+    unclaimed_old_slots: &'a [Option<ElementId>],
+}
+
 fn try_retake_global_key(
     tree: &mut ElementTree,
     owner: &mut crate::ElementOwner<'_>,
     hash: u64,
     view: &dyn View,
-    new_parent: ElementId,
-    new_slot: usize,
-) -> Option<ElementId> {
-    let candidate_id = owner.element_for_global_key(hash)?;
+    destination: RetakeDestination<'_>,
+) -> GlobalKeyRetake {
+    let Some(candidate_id) = owner.element_for_global_key(hash) else {
+        return GlobalKeyRetake::Absent;
+    };
     if !can_retake_global_key_candidate(tree, candidate_id, view) {
-        return None;
+        return GlobalKeyRetake::Rejected;
     }
 
-    if owner.is_inactive(candidate_id) {
-        return retake_inactive_global_key(
-            tree,
-            owner,
-            hash,
-            view,
-            candidate_id,
-            new_parent,
-            new_slot,
-        );
-    }
-
-    retake_active_global_key(tree, owner, hash, view, candidate_id, new_parent, new_slot)
+    let retaken = if owner.is_inactive(candidate_id) {
+        retake_inactive_global_key(tree, owner, hash, view, candidate_id, destination)
+    } else {
+        retake_active_global_key(tree, owner, hash, view, candidate_id, destination)
+    };
+    retaken.map_or(GlobalKeyRetake::Rejected, GlobalKeyRetake::Retaken)
 }
 
 fn can_retake_global_key_candidate(
@@ -1638,16 +1878,172 @@ fn can_retake_global_key_candidate(
         .is_some_and(|old_key| new_key.key_eq(old_key))
 }
 
+#[derive(Debug)]
+struct RenderRelocation {
+    pipeline: Option<PipelineCell>,
+    frontier: Vec<(ElementId, RenderId)>,
+    detached_render_subtrees: Option<flui_rendering::pipeline::DetachedRenderSubtrees>,
+}
+
+fn collect_render_frontier(
+    tree: &ElementTree,
+    candidate_id: ElementId,
+) -> Option<Vec<(ElementId, RenderId)>> {
+    let mut frontier = Vec::new();
+    let mut stack = vec![candidate_id];
+    while let Some(element_id) = stack.pop() {
+        let node = tree.get(element_id)?;
+        if let Some(render_id) = node.element().render_id() {
+            frontier.push((element_id, render_id));
+            continue;
+        }
+        stack.extend(node.child_ids().iter().rev().copied());
+    }
+    Some(frontier)
+}
+
+fn preflight_render_relocation(
+    tree: &ElementTree,
+    candidate_id: ElementId,
+    new_parent: ElementId,
+) -> Option<RenderRelocation> {
+    // The destination cannot be inside the candidate's own element subtree.
+    let mut cursor = Some(new_parent);
+    while let Some(element_id) = cursor {
+        if element_id == candidate_id {
+            return None;
+        }
+        cursor = tree.get(element_id).and_then(ElementNode::parent);
+    }
+
+    let candidate = tree.get(candidate_id)?;
+    let destination = tree.get(new_parent)?;
+    let candidate_pipeline = candidate.element().pipeline_owner();
+    let destination_pipeline = destination.element().pipeline_owner();
+    match (&candidate_pipeline, &destination_pipeline) {
+        (Some(candidate), Some(destination)) if !candidate.ptr_eq(destination) => return None,
+        (Some(_), None) | (None, Some(_)) => return None,
+        _ => {}
+    }
+
+    let frontier = collect_render_frontier(tree, candidate_id)?;
+
+    if let Some(pipeline) = &candidate_pipeline {
+        let destination_render_parent = destination.element().child_render_id();
+        let is_valid = pipeline.with(|owner| {
+            let render_tree = owner.render_tree();
+            let mut moved_render_nodes = HashSet::new();
+            let mut stack = Vec::new();
+            for &(_, render_root) in &frontier {
+                if !render_tree.contains(render_root) {
+                    return false;
+                }
+                stack.push(render_root);
+                while let Some(render_id) = stack.pop() {
+                    if !moved_render_nodes.insert(render_id)
+                        || destination_render_parent == Some(render_id)
+                    {
+                        return false;
+                    }
+                    let Some(node) = render_tree.get(render_id) else {
+                        return false;
+                    };
+                    stack.extend(node.children().iter().rev().copied());
+                }
+            }
+            true
+        });
+        if !is_valid {
+            return None;
+        }
+    } else if !frontier.is_empty() {
+        return None;
+    }
+
+    Some(RenderRelocation {
+        pipeline: candidate_pipeline,
+        frontier,
+        detached_render_subtrees: None,
+    })
+}
+
+fn detach_render_relocation(relocation: &mut RenderRelocation) {
+    if relocation.frontier.is_empty() {
+        return;
+    }
+    let Some(pipeline) = &relocation.pipeline else {
+        return;
+    };
+    let token = pipeline.with_mut(|owner| {
+        let roots: Vec<_> = relocation.frontier.iter().map(|&(_, root)| root).collect();
+        owner
+            .detach_render_subtrees(&roots)
+            .expect("BUG: render relocation preflight must guarantee a detachable disjoint batch")
+    });
+    relocation.detached_render_subtrees = Some(token);
+}
+
+fn attach_render_relocation(relocation: &mut RenderRelocation) {
+    if relocation.frontier.is_empty() {
+        return;
+    }
+    let Some(pipeline) = &relocation.pipeline else {
+        return;
+    };
+    let token = relocation
+        .detached_render_subtrees
+        .take()
+        .expect("BUG: a render relocation with a pipeline must own its detached-subtree token");
+    pipeline.with_mut(|owner| {
+        owner.attach_render_subtrees(token).expect(
+            "BUG: destination edge synchronization must preserve the detached render batch",
+        );
+    });
+}
+
+fn provisional_child_order(
+    reconciled_prefix: &[ElementId],
+    candidate_id: ElementId,
+    unclaimed_old_slots: &[Option<ElementId>],
+) -> Vec<ElementId> {
+    let mut order = Vec::with_capacity(reconciled_prefix.len() + unclaimed_old_slots.len() + 1);
+    let mut seen = HashSet::with_capacity(order.capacity());
+    for element_id in reconciled_prefix
+        .iter()
+        .copied()
+        .chain(std::iter::once(candidate_id))
+        .chain(unclaimed_old_slots.iter().flatten().copied())
+    {
+        if seen.insert(element_id) {
+            order.push(element_id);
+        }
+    }
+    order
+}
+
 fn retake_inactive_global_key(
     tree: &mut ElementTree,
     owner: &mut crate::ElementOwner<'_>,
     hash: u64,
     view: &dyn View,
     candidate_id: ElementId,
-    new_parent: ElementId,
-    new_slot: usize,
+    destination: RetakeDestination<'_>,
 ) -> Option<ElementId> {
-    owner.remove_inactive(candidate_id);
+    let new_parent = destination.parent;
+    let new_slot = destination.slot;
+    let mut relocation = preflight_render_relocation(tree, candidate_id, new_parent)?;
+    // A candidate with render nodes can only be reattached through the token
+    // its soft removal minted. Reject *before* dequeueing: `remove_inactive`
+    // is the point of no return, and bailing after it would strand the
+    // element — no finalization record, and its render subtree detached with
+    // nothing left holding the right to reattach or release it.
+    if !relocation.frontier.is_empty()
+        && relocation.pipeline.is_some()
+        && !owner.inactive_holds_detached_render_subtrees(candidate_id)
+    {
+        return None;
+    }
+    relocation.detached_render_subtrees = owner.remove_inactive(candidate_id);
 
     let parent_depth = tree.get(new_parent).map_or(0, ElementNode::depth);
     let child_parent_render_id = tree
@@ -1671,32 +2067,27 @@ fn retake_inactive_global_key(
     // dependencies so their next build registers against the new ancestry.
     tree.activate_subtree(candidate_id, owner);
 
-    {
-        let node = tree.get_mut(candidate_id)?;
-        // Apply the NEW view configuration to the re-taken element. Without
-        // this the element keeps the stale view config from before it was
-        // deactivated — state persists (the whole point of GlobalKey
-        // reparenting) but the view fields, child-list shape, and any
-        // update hooks (`didUpdateWidget`-equivalent) would be silently
-        // skipped. Flutter's `_retakeInactiveElement` does the same in
-        // `framework.dart:4581` (`element.update(newWidget)`) right after
-        // activating.
-        node.element_mut().update(view, owner);
-        // FR-022: re-clone the key from the new view value so
-        // the stored key tracks the re-taken element's current
-        // configuration — the deactivated element's old key may match
-        // structurally (`is_global_key` is true on both sides) but the
-        // concrete `Box<dyn ViewKey>` is the new view's key now.
-        node.set_key(view.key().map(ViewKey::clone_key));
-    }
-
     // The subtree moved under a new parent, so its inherited scopes (built
     // against the OLD ancestor chain) and descendant depths are stale.
     // Recompute both top-down against `new_parent`; this combines Flutter's
     // recursive `_updateDepth` and `_updateInheritance` reactivation work.
     tree.recompute_subtree_ancestry(candidate_id);
-    tree.apply_ancestor_parent_data(candidate_id);
-    tree.needs_render_reorder = true;
+    let provisional = provisional_child_order(
+        destination.reconciled_prefix,
+        candidate_id,
+        destination.unclaimed_old_slots,
+    );
+    tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
+    for &(element_id, _) in &relocation.frontier {
+        tree.reset_ancestor_parent_data(element_id);
+    }
+    attach_render_relocation(&mut relocation);
+
+    {
+        let node = tree.get_mut(candidate_id)?;
+        node.element_mut().update(view, owner);
+        node.set_key(view.key().map(ViewKey::clone_key));
+    }
 
     tracing::debug!(
         candidate = ?candidate_id,
@@ -1738,9 +2129,13 @@ fn retake_active_global_key(
     hash: u64,
     view: &dyn View,
     candidate_id: ElementId,
-    new_parent: ElementId,
-    new_slot: usize,
+    destination: RetakeDestination<'_>,
 ) -> Option<ElementId> {
+    let new_parent = destination.parent;
+    let new_slot = destination.slot;
+    if !tree.is_reconciling_parent(new_parent) {
+        return None;
+    }
     let from_parent = tree.get(candidate_id)?.parent()?;
     if from_parent == new_parent {
         tracing::error!(
@@ -1762,21 +2157,18 @@ fn retake_active_global_key(
         }
     }
 
-    if let Some(old_parent) = tree.get_mut(from_parent) {
-        if let Some(pos) = old_parent
-            .child_ids
-            .iter()
-            .position(|&child| child == candidate_id)
-        {
-            old_parent.child_ids.remove(pos);
-        } else {
-            tracing::warn!(
-                ?candidate_id,
-                ?from_parent,
-                "active GlobalKey candidate was registered under a parent that no longer lists it"
-            );
-        }
+    if !tree
+        .get(from_parent)
+        .is_some_and(|parent| parent.child_ids.contains(&candidate_id))
+    {
+        return None;
     }
+    let mut relocation = preflight_render_relocation(tree, candidate_id, new_parent)?;
+
+    if let Some(old_parent) = tree.get_mut(from_parent) {
+        old_parent.child_ids.retain(|child| *child != candidate_id);
+    }
+    detach_render_relocation(&mut relocation);
 
     let (parent_depth, child_parent_render_id) = tree.get(new_parent).map_or((0, None), |node| {
         (node.depth(), node.element().child_render_id())
@@ -1792,18 +2184,25 @@ fn retake_active_global_key(
             .set_parent_render_id(child_parent_render_id);
     }
     tree.activate_subtree(candidate_id, owner);
+    // Deactivation above synchronously released dependency edges for the
+    // entire subtree. Repair both inherited scopes and recursive depths before
+    // the next dirty-heap drain.
+    tree.recompute_subtree_ancestry(candidate_id);
+    let provisional = provisional_child_order(
+        destination.reconciled_prefix,
+        candidate_id,
+        destination.unclaimed_old_slots,
+    );
+    tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
+    for &(element_id, _) in &relocation.frontier {
+        tree.reset_ancestor_parent_data(element_id);
+    }
+    attach_render_relocation(&mut relocation);
     {
         let node = tree.get_mut(candidate_id)?;
         node.element_mut().update(view, owner);
         node.set_key(view.key().map(ViewKey::clone_key));
     }
-
-    // Deactivation above synchronously released dependency edges for the
-    // entire subtree. Repair both inherited scopes and recursive depths before
-    // the next dirty-heap drain.
-    tree.recompute_subtree_ancestry(candidate_id);
-    tree.apply_ancestor_parent_data(candidate_id);
-    tree.needs_render_reorder = true;
 
     tracing::debug!(
         candidate = ?candidate_id,
@@ -1848,9 +2247,341 @@ mod tests {
     use crate::view::{IntoView, ViewExt};
 
     use crate::{
-        BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, InheritedElement,
-        StatelessView, View,
+        BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, GlobalKey,
+        InheritedElement, ParentDataView, RenderView, StatelessView, View,
     };
+
+    #[derive(Clone)]
+    struct UnitRenderHost;
+
+    impl RenderView for UnitRenderHost {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for UnitRenderHost {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    #[derive(Clone)]
+    struct KeyedUnitRenderHost {
+        key: GlobalKey<()>,
+    }
+
+    impl RenderView for KeyedUnitRenderHost {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for KeyedUnitRenderHost {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    #[derive(Clone)]
+    struct LocallyKeyedUnitRenderHost {
+        key: flui_foundation::ValueKey<u32>,
+    }
+
+    impl RenderView for LocallyKeyedUnitRenderHost {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for LocallyKeyedUnitRenderHost {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    #[derive(Clone)]
+    struct KeyedTransparentView {
+        key: GlobalKey<()>,
+    }
+
+    impl StatelessView for KeyedTransparentView {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            UnitRenderHost.boxed()
+        }
+    }
+
+    impl View for KeyedTransparentView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct RelocationParentDataA {
+        value: u32,
+    }
+
+    impl flui_rendering::ParentData for RelocationParentDataA {}
+
+    #[derive(Clone)]
+    struct ParentDataAView {
+        value: u32,
+        child: KeyedUnitRenderHost,
+    }
+
+    impl ParentDataView for ParentDataAView {
+        type ParentData = RelocationParentDataA;
+
+        fn child(&self) -> &dyn View {
+            &self.child
+        }
+
+        fn create_parent_data(&self) -> Self::ParentData {
+            RelocationParentDataA { value: self.value }
+        }
+
+        fn apply_parent_data(
+            &self,
+            parent_data: &mut Self::ParentData,
+        ) -> flui_rendering::RenderUpdateImpact {
+            parent_data.value = self.value;
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        }
+    }
+
+    crate::impl_parent_data_view!(ParentDataAView);
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct RelocationParentDataB {
+        label: u32,
+    }
+
+    impl flui_rendering::ParentData for RelocationParentDataB {}
+
+    #[derive(Clone)]
+    struct ParentDataBView {
+        label: u32,
+        child: KeyedUnitRenderHost,
+    }
+
+    impl ParentDataView for ParentDataBView {
+        type ParentData = RelocationParentDataB;
+
+        fn child(&self) -> &dyn View {
+            &self.child
+        }
+
+        fn create_parent_data(&self) -> Self::ParentData {
+            RelocationParentDataB { label: self.label }
+        }
+
+        fn apply_parent_data(
+            &self,
+            parent_data: &mut Self::ParentData,
+        ) -> flui_rendering::RenderUpdateImpact {
+            parent_data.label = self.label;
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        }
+    }
+
+    crate::impl_parent_data_view!(ParentDataBView);
+
+    type RelocationEvents = std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>;
+
+    #[derive(Debug)]
+    struct AttachOrderBox {
+        events: RelocationEvents,
+    }
+
+    impl flui_foundation::Diagnosticable for AttachOrderBox {}
+
+    impl flui_rendering::traits::RenderBox for AttachOrderBox {
+        type Arity = flui_tree::Leaf;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            _ctx: &mut flui_rendering::context::BoxLayoutContext<
+                '_,
+                flui_tree::Leaf,
+                Self::ParentData,
+            >,
+        ) -> flui_types::geometry::Size {
+            flui_types::geometry::Size::new(
+                flui_types::geometry::px(1.0),
+                flui_types::geometry::px(1.0),
+            )
+        }
+
+        fn attach(&mut self, _handle: flui_rendering::pipeline::RenderInvalidationHandle) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push("render-attach");
+        }
+
+        fn detach(&mut self) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push("render-detach");
+        }
+    }
+
+    #[derive(Clone)]
+    struct AttachOrderView {
+        key: GlobalKey<()>,
+        events: RelocationEvents,
+    }
+
+    impl RenderView for AttachOrderView {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = AttachOrderBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            AttachOrderBox {
+                events: self.events.clone(),
+            }
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+
+        fn did_unmount_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push("view-unmount");
+        }
+    }
+
+    impl View for AttachOrderView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct AttachOrderParentData {
+        events: RelocationEvents,
+        value: u32,
+    }
+
+    impl flui_rendering::ParentData for AttachOrderParentData {
+        fn detach(&mut self) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push("parent-data-detach");
+        }
+    }
+
+    #[derive(Clone)]
+    struct AttachOrderParentDataView {
+        value: u32,
+        child: AttachOrderView,
+        events: RelocationEvents,
+    }
+
+    impl ParentDataView for AttachOrderParentDataView {
+        type ParentData = AttachOrderParentData;
+
+        fn child(&self) -> &dyn View {
+            &self.child
+        }
+
+        fn create_parent_data(&self) -> Self::ParentData {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push("parent-data-create");
+            AttachOrderParentData {
+                events: self.events.clone(),
+                value: self.value,
+            }
+        }
+
+        fn apply_parent_data(
+            &self,
+            parent_data: &mut Self::ParentData,
+        ) -> flui_rendering::RenderUpdateImpact {
+            parent_data.value = self.value;
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        }
+    }
+
+    crate::impl_parent_data_view!(AttachOrderParentDataView);
 
     #[derive(Clone)]
     struct TestView {
@@ -1876,6 +2607,1237 @@ mod tests {
         assert!(tree.is_empty());
         assert_eq!(tree.len(), 0);
         assert!(tree.root().is_none());
+    }
+
+    #[test]
+    fn relocation_preflight_rejects_cross_pipeline_and_element_cycles_without_mutation() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline_a = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let pipeline_b = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let candidate = tree.mount_root_with_pipeline_owner(
+            &TestView {
+                name: "candidate".into(),
+            },
+            Some(pipeline_a),
+            &mut owner.element_owner_mut(),
+        );
+        let foreign_destination = tree.mount_root_with_pipeline_owner(
+            &TestView {
+                name: "foreign".into(),
+            },
+            Some(pipeline_b),
+            &mut owner.element_owner_mut(),
+        );
+        let before_len = tree.len();
+        let before_candidate_parent = tree.get(candidate).expect("candidate").parent();
+        assert!(preflight_render_relocation(&tree, candidate, foreign_destination).is_none());
+        assert_eq!(tree.len(), before_len);
+        assert_eq!(
+            tree.get(candidate).expect("candidate").parent(),
+            before_candidate_parent
+        );
+
+        let descendant = tree.insert(
+            &TestView {
+                name: "descendant".into(),
+            },
+            candidate,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        tree.get_mut(candidate)
+            .expect("candidate")
+            .set_child_ids(vec![descendant]);
+        let before_descendant_parent = tree.get(descendant).expect("descendant").parent();
+        assert!(preflight_render_relocation(&tree, candidate, descendant).is_none());
+        assert_eq!(
+            tree.get(descendant).expect("descendant").parent(),
+            before_descendant_parent
+        );
+        assert_eq!(
+            tree.get(candidate).expect("candidate").child_ids(),
+            &[descendant]
+        );
+    }
+
+    #[test]
+    fn relocation_preflight_rejects_render_cycles_without_mutation() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let host = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let candidate = tree.insert(
+            &TestView {
+                name: "candidate".into(),
+            },
+            host,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let moved_boundary = tree.insert(
+            &UnitRenderHost,
+            candidate,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let destination = tree.insert(&UnitRenderHost, host, 1, &mut owner.element_owner_mut());
+        tree.get_mut(candidate)
+            .expect("candidate")
+            .set_child_ids(vec![moved_boundary]);
+        tree.get_mut(host)
+            .expect("host")
+            .set_child_ids(vec![candidate, destination]);
+
+        let moved_render = tree
+            .get(moved_boundary)
+            .expect("moved boundary")
+            .element()
+            .render_id()
+            .expect("moved render id");
+        let destination_render = tree
+            .get(destination)
+            .expect("destination")
+            .element()
+            .render_id()
+            .expect("destination render id");
+        pipeline.with_mut(|owner| owner.adopt_render_child(moved_render, destination_render));
+        let before_moved_children = pipeline.with(|owner| {
+            owner
+                .render_tree()
+                .get(moved_render)
+                .expect("moved render")
+                .children()
+                .to_vec()
+        });
+        let before_destination_parent =
+            pipeline.with(|owner| owner.render_tree().parent(destination_render));
+
+        assert!(preflight_render_relocation(&tree, candidate, destination).is_none());
+        assert_eq!(
+            pipeline.with(|owner| owner.render_tree().parent(destination_render)),
+            before_destination_parent,
+        );
+        assert_eq!(
+            pipeline.with(|owner| {
+                owner
+                    .render_tree()
+                    .get(moved_render)
+                    .expect("moved render")
+                    .children()
+                    .to_vec()
+            }),
+            before_moved_children,
+        );
+        assert_eq!(
+            tree.get(candidate).expect("candidate").child_ids(),
+            &[moved_boundary],
+        );
+    }
+
+    #[test]
+    fn production_retake_rejects_cross_pipeline_without_mutating_identity_or_epoch() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline_a = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let pipeline_b = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let donor = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline_a.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let destination = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline_b.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let key = GlobalKey::<()>::new();
+        let keyed = KeyedUnitRenderHost { key: key.clone() };
+        let candidate = tree.insert(&keyed, donor, 0, &mut owner.element_owner_mut());
+        tree.get_mut(donor)
+            .expect("donor")
+            .set_child_ids(vec![candidate]);
+        let render_id = tree
+            .get(candidate)
+            .expect("candidate")
+            .element()
+            .render_id()
+            .expect("candidate render id");
+        pipeline_a.with_mut(|pipeline| {
+            pipeline.clear_all_dirty_nodes();
+            pipeline
+                .render_tree()
+                .get(render_id)
+                .expect("candidate render")
+                .clear_needs_paint();
+        });
+        let old_handle = pipeline_a
+            .with(|pipeline| pipeline.render_invalidation_handle(render_id))
+            .expect("candidate is attached");
+        old_handle.mark_needs_paint().expect("queue old interval");
+        let before_donor_children = tree.get(donor).unwrap().child_ids().to_vec();
+        let before_parent = pipeline_a.with(|pipeline| pipeline.render_tree().parent(render_id));
+        let before_registry = owner.element_for_global_key(key.key_hash());
+
+        let rejected = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = tree.begin_reconcile(destination);
+            tree.insert(&keyed, destination, 0, &mut owner.element_owner_mut());
+        }));
+        assert!(rejected.is_err());
+        assert_eq!(tree.get(donor).unwrap().child_ids(), before_donor_children);
+        assert!(tree.get(destination).unwrap().child_ids().is_empty());
+        assert_eq!(tree.get(candidate).unwrap().parent(), Some(donor));
+        assert_eq!(
+            owner.element_for_global_key(key.key_hash()),
+            before_registry
+        );
+        assert_eq!(
+            pipeline_a.with(|pipeline| pipeline.render_tree().parent(render_id)),
+            before_parent,
+        );
+        assert_eq!(
+            pipeline_a.with_mut(flui_rendering::PipelineOwner::drain_pending_dirty),
+            1,
+        );
+        assert!(
+            pipeline_a.with(|pipeline| {
+                pipeline
+                    .render_tree()
+                    .get(render_id)
+                    .expect("candidate render")
+                    .needs_paint()
+            }),
+            "the request queued before rejection must apply to the unchanged interval",
+        );
+        pipeline_a.with_mut(|pipeline| {
+            pipeline.clear_all_dirty_nodes();
+            pipeline
+                .render_tree()
+                .get(render_id)
+                .expect("candidate render")
+                .clear_needs_paint();
+        });
+        old_handle
+            .mark_needs_paint()
+            .expect("the unchanged attachment interval remains usable");
+        assert_eq!(
+            pipeline_a.with_mut(flui_rendering::PipelineOwner::drain_pending_dirty),
+            1,
+        );
+        assert!(
+            pipeline_a.with(|pipeline| {
+                pipeline
+                    .render_tree()
+                    .get(render_id)
+                    .expect("candidate render")
+                    .needs_paint()
+            }),
+            "the old handle must still apply after rejection because no interval changed",
+        );
+    }
+
+    #[test]
+    fn production_retake_rejects_render_cycle_without_mutating_edges() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let host = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let key = GlobalKey::<()>::new();
+        let keyed = KeyedTransparentView { key: key.clone() };
+        let candidate = tree.insert(&keyed, host, 0, &mut owner.element_owner_mut());
+        let moved_boundary = tree.insert(
+            &UnitRenderHost,
+            candidate,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let destination = tree.insert(&UnitRenderHost, host, 1, &mut owner.element_owner_mut());
+        tree.get_mut(candidate)
+            .expect("candidate")
+            .set_child_ids(vec![moved_boundary]);
+        tree.get_mut(host)
+            .expect("host")
+            .set_child_ids(vec![candidate, destination]);
+        let moved_render = tree
+            .get(moved_boundary)
+            .unwrap()
+            .element()
+            .render_id()
+            .unwrap();
+        let destination_render = tree
+            .get(destination)
+            .unwrap()
+            .element()
+            .render_id()
+            .unwrap();
+        pipeline.with_mut(|owner| owner.adopt_render_child(moved_render, destination_render));
+        let before_candidate_children = tree.get(candidate).unwrap().child_ids().to_vec();
+        let before_moved_children = pipeline.with(|owner| {
+            owner
+                .render_tree()
+                .get(moved_render)
+                .unwrap()
+                .children()
+                .to_vec()
+        });
+        let before_registry = owner.element_for_global_key(key.key_hash());
+
+        let rejected = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = tree.begin_reconcile(destination);
+            tree.insert(&keyed, destination, 0, &mut owner.element_owner_mut());
+        }));
+        assert!(rejected.is_err());
+        assert_eq!(
+            tree.get(candidate).unwrap().child_ids(),
+            before_candidate_children
+        );
+        assert_eq!(tree.get(candidate).unwrap().parent(), Some(host));
+        assert_eq!(
+            owner.element_for_global_key(key.key_hash()),
+            before_registry
+        );
+        assert_eq!(
+            pipeline.with(|owner| owner.render_tree().parent(destination_render)),
+            Some(moved_render),
+        );
+        assert_eq!(
+            pipeline.with(|owner| {
+                owner
+                    .render_tree()
+                    .get(moved_render)
+                    .unwrap()
+                    .children()
+                    .to_vec()
+            }),
+            before_moved_children,
+        );
+    }
+
+    #[test]
+    fn production_retake_rejects_overlapping_render_frontiers_without_mutation() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::PipelineOwner::new());
+        let host = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let key = GlobalKey::<()>::new();
+        let keyed = KeyedTransparentView { key: key.clone() };
+        let candidate = tree.insert(&keyed, host, 0, &mut owner.element_owner_mut());
+        let first_boundary = tree.insert(
+            &UnitRenderHost,
+            candidate,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let second_boundary = tree.insert(
+            &UnitRenderHost,
+            candidate,
+            1,
+            &mut owner.element_owner_mut(),
+        );
+        let destination = tree.insert(&UnitRenderHost, host, 1, &mut owner.element_owner_mut());
+        tree.get_mut(candidate)
+            .expect("candidate")
+            .set_child_ids(vec![first_boundary, second_boundary]);
+        tree.get_mut(host)
+            .expect("host")
+            .set_child_ids(vec![candidate, destination]);
+        let first_render = tree
+            .get(first_boundary)
+            .unwrap()
+            .element()
+            .render_id()
+            .unwrap();
+        let second_render = tree
+            .get(second_boundary)
+            .unwrap()
+            .element()
+            .render_id()
+            .unwrap();
+        pipeline.with_mut(|owner| owner.adopt_render_child(first_render, second_render));
+        let before_first_children = pipeline.with(|owner| {
+            owner
+                .render_tree()
+                .get(first_render)
+                .unwrap()
+                .children()
+                .to_vec()
+        });
+        let before_candidate_children = tree.get(candidate).unwrap().child_ids().to_vec();
+        let before_registry = owner.element_for_global_key(key.key_hash());
+        let old_handle = pipeline
+            .with(|owner| owner.render_invalidation_handle(first_render))
+            .expect("first frontier remains attached");
+
+        let rejected = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = tree.begin_reconcile(destination);
+            tree.insert(&keyed, destination, 0, &mut owner.element_owner_mut());
+        }));
+        assert!(rejected.is_err());
+        assert_eq!(tree.get(candidate).unwrap().parent(), Some(host));
+        assert_eq!(
+            tree.get(candidate).unwrap().child_ids(),
+            before_candidate_children
+        );
+        assert_eq!(
+            owner.element_for_global_key(key.key_hash()),
+            before_registry
+        );
+        assert_eq!(
+            pipeline.with(|owner| owner.render_tree().parent(second_render)),
+            Some(first_render),
+        );
+        assert_eq!(
+            pipeline.with(|owner| {
+                owner
+                    .render_tree()
+                    .get(first_render)
+                    .unwrap()
+                    .children()
+                    .to_vec()
+            }),
+            before_first_children,
+        );
+        old_handle
+            .mark_needs_layout()
+            .expect("rejection must not close the original attachment epoch");
+    }
+
+    #[test]
+    fn production_retake_rejects_element_cycle_without_mutating_membership() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let key = GlobalKey::<()>::new();
+        let keyed = KeyedTransparentView { key: key.clone() };
+        let candidate = tree.mount_root(&keyed, &mut owner.element_owner_mut());
+        let descendant = tree.insert(
+            &TestView {
+                name: "descendant".into(),
+            },
+            candidate,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        tree.get_mut(candidate)
+            .expect("candidate")
+            .set_child_ids(vec![descendant]);
+        let before_children = tree.get(candidate).unwrap().child_ids().to_vec();
+        let before_registry = owner.element_for_global_key(key.key_hash());
+
+        let rejected = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = tree.begin_reconcile(descendant);
+            tree.insert(&keyed, descendant, 0, &mut owner.element_owner_mut());
+        }));
+        assert!(rejected.is_err());
+        assert_eq!(tree.get(candidate).unwrap().parent(), None);
+        assert_eq!(tree.get(candidate).unwrap().child_ids(), before_children);
+        assert_eq!(tree.get(descendant).unwrap().parent(), Some(candidate));
+        assert!(tree.get(descendant).unwrap().child_ids().is_empty());
+        assert_eq!(
+            owner.element_for_global_key(key.key_hash()),
+            before_registry
+        );
+    }
+
+    #[test]
+    fn relocation_preflight_accepts_an_empty_transparent_frontier() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let candidate = tree.mount_root(
+            &TestView {
+                name: "candidate".into(),
+            },
+            &mut owner.element_owner_mut(),
+        );
+        let destination = tree.mount_root(
+            &TestView {
+                name: "destination".into(),
+            },
+            &mut owner.element_owner_mut(),
+        );
+
+        let relocation = preflight_render_relocation(&tree, candidate, destination)
+            .expect("an empty transparent subtree has no render-cycle risk");
+        assert!(relocation.pipeline.is_none());
+        assert!(relocation.frontier.is_empty());
+        assert_eq!(tree.get(candidate).expect("candidate").parent(), None);
+    }
+
+    #[test]
+    fn provisional_child_order_preserves_large_fanout_order_with_linear_deduplication() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let ids = (0..1_024)
+            .map(|index| {
+                tree.mount_root(
+                    &TestView {
+                        name: format!("child-{index}"),
+                    },
+                    &mut owner.element_owner_mut(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let prefix = &ids[..400];
+        let candidate = ids[400];
+        let old_slots = prefix
+            .iter()
+            .copied()
+            .map(Some)
+            .chain([Some(candidate), None])
+            .chain(ids[401..].iter().copied().map(Some))
+            .collect::<Vec<_>>();
+
+        let order = provisional_child_order(prefix, candidate, &old_slots);
+        assert_eq!(order, ids);
+    }
+
+    fn relocate_keyed_render_child_through(
+        destination_wrapper: &dyn View,
+    ) -> (PipelineCell, RenderId) {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let root = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let key = GlobalKey::<()>::new();
+        let keyed_child = KeyedUnitRenderHost { key: key.clone() };
+        let donor_wrapper = tree.insert(
+            &ParentDataAView {
+                value: 7,
+                child: keyed_child.clone(),
+            },
+            root,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let moved = tree.insert(
+            &keyed_child,
+            donor_wrapper,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        tree.get_mut(donor_wrapper)
+            .expect("donor wrapper")
+            .set_child_ids(vec![moved]);
+
+        let destination_render_parent =
+            tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        let destination_wrapper = tree.insert(
+            destination_wrapper,
+            destination_render_parent,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        tree.get_mut(destination_render_parent)
+            .expect("destination render parent")
+            .set_child_ids(vec![destination_wrapper]);
+        tree.get_mut(root)
+            .expect("root")
+            .set_child_ids(vec![donor_wrapper, destination_render_parent]);
+
+        let _reconcile_guard = tree.begin_reconcile(destination_wrapper);
+        let retaken = tree.insert(
+            &keyed_child,
+            destination_wrapper,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        assert_eq!(
+            retaken, moved,
+            "GlobalKey relocation must preserve identity"
+        );
+        assert_eq!(
+            tree.get(moved).expect("moved element").parent(),
+            Some(destination_wrapper),
+        );
+        let render_id = tree
+            .get(moved)
+            .expect("moved element")
+            .element()
+            .render_id()
+            .expect("moved render id");
+        assert_eq!(
+            pipeline.with(|owner| owner.render_tree().parent(render_id)),
+            tree.get(destination_render_parent)
+                .expect("destination render parent")
+                .element()
+                .render_id(),
+        );
+        (pipeline, render_id)
+    }
+
+    #[test]
+    fn relocation_recreates_compatible_parent_data_with_destination_configuration() {
+        let key = GlobalKey::<()>::new();
+        let destination = ParentDataAView {
+            value: 41,
+            child: KeyedUnitRenderHost { key },
+        };
+        let (pipeline, moved_render) = relocate_keyed_render_child_through(&destination);
+        pipeline.with(|owner| {
+            assert_eq!(
+                owner
+                    .render_tree()
+                    .get(moved_render)
+                    .expect("moved render")
+                    .parent_data()
+                    .and_then(|data| data.downcast_ref::<RelocationParentDataA>()),
+                Some(&RelocationParentDataA { value: 41 }),
+            );
+        });
+    }
+
+    #[test]
+    fn relocation_replaces_incompatible_parent_data_with_destination_type() {
+        let key = GlobalKey::<()>::new();
+        let destination = ParentDataBView {
+            label: 73,
+            child: KeyedUnitRenderHost { key },
+        };
+        let (pipeline, moved_render) = relocate_keyed_render_child_through(&destination);
+        pipeline.with(|owner| {
+            let moved = owner.render_tree().get(moved_render).expect("moved render");
+            assert!(
+                moved
+                    .parent_data()
+                    .and_then(|data| data.downcast_ref::<RelocationParentDataA>())
+                    .is_none(),
+            );
+            assert_eq!(
+                moved
+                    .parent_data()
+                    .and_then(|data| data.downcast_ref::<RelocationParentDataB>()),
+                Some(&RelocationParentDataB { label: 73 }),
+            );
+        });
+    }
+
+    #[test]
+    fn relocation_without_destination_configuration_leaves_parent_data_unset() {
+        let destination = TestView {
+            name: "transparent destination".into(),
+        };
+        let (pipeline, moved_render) = relocate_keyed_render_child_through(&destination);
+        pipeline.with(|owner| {
+            assert!(
+                owner
+                    .render_tree()
+                    .get(moved_render)
+                    .expect("moved render")
+                    .parent_data()
+                    .is_none(),
+                "the destination render protocol may lazily supply its default during layout",
+            );
+        });
+    }
+
+    #[test]
+    fn relocation_detaches_old_parent_data_before_render_and_configures_before_attach() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let events = RelocationEvents::default();
+        let root = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let key = GlobalKey::<()>::new();
+        let keyed = AttachOrderView {
+            key,
+            events: events.clone(),
+        };
+        let donor_wrapper = tree.insert(
+            &AttachOrderParentDataView {
+                value: 11,
+                child: keyed.clone(),
+                events: events.clone(),
+            },
+            root,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let moved = tree.insert(&keyed, donor_wrapper, 0, &mut owner.element_owner_mut());
+        tree.get_mut(donor_wrapper)
+            .unwrap()
+            .set_child_ids(vec![moved]);
+        let destination_render_parent =
+            tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        let destination_wrapper = tree.insert(
+            &AttachOrderParentDataView {
+                value: 88,
+                child: keyed.clone(),
+                events: events.clone(),
+            },
+            destination_render_parent,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        tree.get_mut(destination_render_parent)
+            .unwrap()
+            .set_child_ids(vec![destination_wrapper]);
+        tree.get_mut(root)
+            .unwrap()
+            .set_child_ids(vec![donor_wrapper, destination_render_parent]);
+        events.lock().expect("events lock").clear();
+
+        let _guard = tree.begin_reconcile(destination_wrapper);
+        assert_eq!(
+            tree.insert(
+                &keyed,
+                destination_wrapper,
+                0,
+                &mut owner.element_owner_mut(),
+            ),
+            moved,
+        );
+        assert_eq!(
+            *events.lock().expect("events lock"),
+            [
+                "parent-data-detach",
+                "render-detach",
+                "parent-data-create",
+                "parent-data-create",
+                "render-attach",
+            ],
+        );
+        let moved_render = tree.get(moved).unwrap().element().render_id().unwrap();
+        pipeline.with(|owner| {
+            let data = owner
+                .render_tree()
+                .get(moved_render)
+                .unwrap()
+                .parent_data()
+                .and_then(|data| data.downcast_ref::<AttachOrderParentData>())
+                .expect("fresh destination parent data");
+            assert_eq!(data.value, 88);
+        });
+    }
+
+    #[test]
+    fn a_queued_element_without_a_relocation_token_is_rejected_before_it_leaves_the_queue() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let events = RelocationEvents::default();
+        let root = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let keyed_view = AttachOrderView {
+            key: GlobalKey::new(),
+            events,
+        };
+        let keyed_element = tree.insert(&keyed_view, root, 0, &mut owner.element_owner_mut());
+        let destination = tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        tree.get_mut(root)
+            .expect("root element")
+            .set_child_ids(vec![keyed_element, destination]);
+        let hash = tree
+            .get(keyed_element)
+            .expect("keyed element")
+            .registered_global_key_hash
+            .expect("a keyed element registers its global key");
+
+        // Queue the element the way an unkeyed deactivation does — no
+        // relocation token — even though it still owns a render frontier.
+        owner.element_owner_mut().push_inactive(keyed_element, 1);
+
+        let retake = try_retake_global_key(
+            &mut tree,
+            &mut owner.element_owner_mut(),
+            hash,
+            &keyed_view,
+            RetakeDestination {
+                parent: destination,
+                slot: 0,
+                reconciled_prefix: &[],
+                unclaimed_old_slots: &[],
+            },
+        );
+
+        assert!(matches!(retake, GlobalKeyRetake::Rejected));
+        assert!(
+            owner.element_owner_mut().is_inactive(keyed_element),
+            "a rejected retake must leave the element's only finalization record queued",
+        );
+    }
+
+    #[test]
+    fn finalization_releases_token_before_unmount_without_hiding_the_render_object() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let events = RelocationEvents::default();
+        let root = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let keyed_view = AttachOrderView {
+            key: GlobalKey::new(),
+            events: events.clone(),
+        };
+        let keyed_element = tree.insert(&keyed_view, root, 0, &mut owner.element_owner_mut());
+        tree.get_mut(root)
+            .expect("root element")
+            .set_child_ids(vec![keyed_element]);
+        let render_id = tree
+            .get(keyed_element)
+            .expect("keyed element")
+            .element()
+            .render_id()
+            .expect("keyed render id");
+        events.lock().expect("events lock").clear();
+
+        tree.remove(keyed_element, &mut owner.element_owner_mut());
+        assert!(pipeline.with(|pipeline_owner| pipeline_owner.render_tree().contains(render_id)));
+        owner.finalize_tree(&mut tree);
+
+        assert!(!pipeline.with(|pipeline_owner| pipeline_owner.render_tree().contains(render_id)));
+        assert_eq!(
+            events.lock().expect("events lock").as_slice(),
+            &["render-detach", "view-unmount"],
+            "release must preserve the render node for the view hook and must not detach twice",
+        );
+    }
+
+    #[test]
+    fn transparent_multi_frontier_synchronizes_exact_global_dfs_order() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let destination = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let prefix = tree.insert(
+            &UnitRenderHost,
+            destination,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let candidate = tree.insert(
+            &TestView {
+                name: "transparent".into(),
+            },
+            destination,
+            1,
+            &mut owner.element_owner_mut(),
+        );
+        let first_boundary = tree.insert(
+            &UnitRenderHost,
+            candidate,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let second_boundary = tree.insert(
+            &UnitRenderHost,
+            candidate,
+            1,
+            &mut owner.element_owner_mut(),
+        );
+        let nested = tree.insert(
+            &UnitRenderHost,
+            first_boundary,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let suffix = tree.insert(
+            &UnitRenderHost,
+            destination,
+            2,
+            &mut owner.element_owner_mut(),
+        );
+        tree.get_mut(candidate)
+            .expect("candidate")
+            .set_child_ids(vec![first_boundary, second_boundary]);
+        tree.get_mut(first_boundary)
+            .expect("first boundary")
+            .set_child_ids(vec![nested]);
+        tree.get_mut(destination)
+            .expect("destination")
+            .set_child_ids(vec![prefix, candidate, suffix]);
+        for index in 0..128 {
+            tree.mount_root(
+                &TestView {
+                    name: format!("unrelated-{index}"),
+                },
+                &mut owner.element_owner_mut(),
+            );
+        }
+
+        let frontier = collect_render_frontier(&tree, candidate).expect("frontier is live");
+        assert_eq!(
+            frontier
+                .iter()
+                .map(|(_, render_id)| *render_id)
+                .collect::<Vec<_>>(),
+            vec![
+                tree.get(first_boundary)
+                    .unwrap()
+                    .element()
+                    .render_id()
+                    .unwrap(),
+                tree.get(second_boundary)
+                    .unwrap()
+                    .element()
+                    .render_id()
+                    .unwrap(),
+            ],
+            "the nested render subtree stays behind its first boundary",
+        );
+
+        let visited = tree.synchronize_destination_render_children_for_relocation(
+            destination,
+            &[prefix, candidate, suffix],
+        );
+        assert_eq!(
+            visited, 6,
+            "the provisional synchronizer visits only the destination render subtree and stops at first boundaries",
+        );
+        assert!(
+            tree.len() > visited * 20,
+            "fixture must expose a global-scan regression"
+        );
+        let destination_render = tree
+            .get(destination)
+            .unwrap()
+            .element()
+            .render_id()
+            .unwrap();
+        let expected = [prefix, first_boundary, second_boundary, suffix]
+            .map(|element_id| tree.get(element_id).unwrap().element().render_id().unwrap());
+        pipeline.with(|pipeline| {
+            assert_eq!(
+                pipeline
+                    .render_tree()
+                    .get(destination_render)
+                    .unwrap()
+                    .children(),
+                expected.as_slice(),
+            );
+        });
+    }
+
+    #[test]
+    fn active_retake_wires_provisional_order_and_sparse_merge_end_to_end() {
+        type BoxObject =
+            Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let root = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let donor = tree.insert(&UnitRenderHost, root, 0, &mut owner.element_owner_mut());
+        let destination = tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        let key = GlobalKey::<()>::new();
+        let keyed = KeyedTransparentView { key: key.clone() };
+        let candidate = tree.insert(&keyed, donor, 0, &mut owner.element_owner_mut());
+        let first_boundary = tree.insert(
+            &UnitRenderHost,
+            candidate,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let second_boundary = tree.insert(
+            &UnitRenderHost,
+            candidate,
+            1,
+            &mut owner.element_owner_mut(),
+        );
+        let nested = tree.insert(
+            &UnitRenderHost,
+            first_boundary,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let prefix = tree.insert(
+            &UnitRenderHost,
+            destination,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let suffix = tree.insert(
+            &UnitRenderHost,
+            destination,
+            2,
+            &mut owner.element_owner_mut(),
+        );
+        tree.get_mut(root)
+            .expect("root")
+            .set_child_ids(vec![donor, destination]);
+        tree.get_mut(donor)
+            .expect("donor")
+            .set_child_ids(vec![candidate]);
+        tree.get_mut(candidate)
+            .expect("candidate")
+            .set_child_ids(vec![first_boundary, second_boundary]);
+        tree.get_mut(first_boundary)
+            .expect("first boundary")
+            .set_child_ids(vec![nested]);
+        tree.get_mut(destination)
+            .expect("destination")
+            .set_child_ids(vec![prefix, suffix]);
+
+        let destination_render = tree
+            .get(destination)
+            .expect("destination")
+            .element()
+            .render_id()
+            .expect("destination render id");
+        let (sparse_late, sparse_early) = pipeline.with_mut(|owner| {
+            let sparse_late = owner
+                .insert_child_render_object(
+                    destination_render,
+                    Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject,
+                )
+                .expect("late sparse child");
+            let sparse_early = owner
+                .insert_child_render_object(
+                    destination_render,
+                    Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject,
+                )
+                .expect("early sparse child");
+            owner
+                .render_tree_mut()
+                .get_mut(sparse_late)
+                .expect("late sparse node")
+                .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(9)));
+            owner
+                .render_tree_mut()
+                .get_mut(sparse_early)
+                .expect("early sparse node")
+                .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(3)));
+            (sparse_late, sparse_early)
+        });
+
+        let _guard = tree.begin_reconcile(destination);
+        let moved = tree.insert_during_reconcile(
+            &keyed,
+            destination,
+            1,
+            &mut owner.element_owner_mut(),
+            &[prefix],
+            &[Some(suffix)],
+        );
+        assert_eq!(moved, candidate);
+        assert!(
+            !tree
+                .get(donor)
+                .expect("donor")
+                .child_ids()
+                .contains(&candidate),
+        );
+
+        let dense = [prefix, first_boundary, second_boundary, suffix]
+            .map(|element_id| tree.get(element_id).unwrap().element().render_id().unwrap());
+        let expected = dense
+            .into_iter()
+            .chain([sparse_early, sparse_late])
+            .collect::<Vec<_>>();
+        pipeline.with(|owner| {
+            assert_eq!(
+                owner
+                    .render_tree()
+                    .get(destination_render)
+                    .expect("destination render")
+                    .children(),
+                expected,
+            );
+        });
+    }
+
+    #[test]
+    fn reconcile_commit_repairs_suffix_reorder_after_provisional_global_key_move() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let root = tree.mount_root_with_pipeline_owner(
+            &UnitRenderHost,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        let donor = tree.insert(&UnitRenderHost, root, 0, &mut owner.element_owner_mut());
+        let destination = tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        let global_key = GlobalKey::<()>::new();
+        let global = KeyedUnitRenderHost {
+            key: global_key.clone(),
+        };
+        let moved = tree.insert(&global, donor, 0, &mut owner.element_owner_mut());
+        let view_a = LocallyKeyedUnitRenderHost {
+            key: flui_foundation::ValueKey::new(1),
+        };
+        let view_b = LocallyKeyedUnitRenderHost {
+            key: flui_foundation::ValueKey::new(2),
+        };
+        let old_a = tree.insert(&view_a, destination, 0, &mut owner.element_owner_mut());
+        let old_b = tree.insert(&view_b, destination, 1, &mut owner.element_owner_mut());
+        tree.get_mut(root)
+            .expect("root")
+            .set_child_ids(vec![donor, destination]);
+        tree.get_mut(donor)
+            .expect("donor")
+            .set_child_ids(vec![moved]);
+        tree.get_mut(destination)
+            .expect("destination")
+            .set_child_ids(vec![old_a, old_b]);
+
+        let new_views: Vec<Box<dyn View>> = vec![
+            Box::new(global),
+            Box::new(view_b.clone()),
+            Box::new(view_a.clone()),
+        ];
+        crate::tree::id_reconcile::reconcile_children_by_id(
+            &mut tree,
+            destination,
+            &new_views,
+            &mut owner.element_owner_mut(),
+        );
+        assert_eq!(
+            tree.get(destination).expect("destination").child_ids(),
+            &[moved, old_b, old_a],
+        );
+        let expected = [moved, old_b, old_a]
+            .map(|element_id| tree.get(element_id).unwrap().element().render_id().unwrap());
+        let destination_render = tree
+            .get(destination)
+            .unwrap()
+            .element()
+            .render_id()
+            .unwrap();
+        let provisional = [moved, old_a, old_b]
+            .map(|element_id| tree.get(element_id).unwrap().element().render_id().unwrap());
+        pipeline.with(|owner| {
+            assert_eq!(
+                owner
+                    .render_tree()
+                    .get(destination_render)
+                    .unwrap()
+                    .children(),
+                provisional,
+                "retake callbacks observe the provisional prefix/candidate/live suffix order",
+            );
+        });
+        assert!(tree.reorder_render_children_after_build() > 0);
+        assert_eq!(
+            tree.reorder_render_children_after_build(),
+            0,
+            "the authoritative full-tree synchronization is coalesced once per build drain",
+        );
+        pipeline.with(|owner| {
+            assert_eq!(
+                owner
+                    .render_tree()
+                    .get(destination_render)
+                    .unwrap()
+                    .children(),
+                expected,
+            );
+        });
+    }
+
+    #[test]
+    fn sparse_sliver_children_remain_after_dense_dfs_children_in_logical_order() {
+        type BoxObject =
+            Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+        let mut pipeline = flui_rendering::pipeline::PipelineOwner::new();
+        let parent = pipeline.insert(Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject);
+        let dense = pipeline
+            .insert_child_render_object(
+                parent,
+                Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject,
+            )
+            .expect("dense child");
+        let sparse_late = pipeline
+            .insert_child_render_object(
+                parent,
+                Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject,
+            )
+            .expect("late sparse child");
+        let sparse_early = pipeline
+            .insert_child_render_object(
+                parent,
+                Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject,
+            )
+            .expect("early sparse child");
+        pipeline
+            .render_tree_mut()
+            .get_mut(sparse_late)
+            .unwrap()
+            .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(8)));
+        pipeline
+            .render_tree_mut()
+            .get_mut(sparse_early)
+            .unwrap()
+            .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(2)));
+
+        let mut desired = vec![dense];
+        append_sparse_sliver_children(pipeline.render_tree(), parent, &mut desired);
+        assert_eq!(desired, vec![dense, sparse_early, sparse_late]);
+    }
+
+    #[test]
+    fn sparse_merge_preserves_dense_order_and_sorts_large_sparse_fanout() {
+        type BoxObject =
+            Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+        let mut pipeline = flui_rendering::pipeline::PipelineOwner::new();
+        let parent = pipeline.insert(Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject);
+        let children = (0..1_024)
+            .map(|_| {
+                pipeline
+                    .insert_child_render_object(
+                        parent,
+                        Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject,
+                    )
+                    .expect("child")
+            })
+            .collect::<Vec<_>>();
+        let dense = children[..512].to_vec();
+        for (logical_index, &child) in children[512..].iter().rev().enumerate() {
+            pipeline
+                .render_tree_mut()
+                .get_mut(child)
+                .expect("sparse child")
+                .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(
+                    logical_index,
+                )));
+        }
+
+        let mut desired = dense.clone();
+        append_sparse_sliver_children(pipeline.render_tree(), parent, &mut desired);
+        let expected = dense
+            .into_iter()
+            .chain(children[512..].iter().rev().copied())
+            .collect::<Vec<_>>();
+        assert_eq!(desired, expected);
     }
 
     #[test]
@@ -2664,4 +4626,28 @@ mod tests {
 
         crate::test_only_clear_global_key_registry();
     }
+}
+#[cfg(test)]
+#[test]
+fn reconcile_guard_rejects_nesting_and_recovers_after_unwind() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let tree = ElementTree::new();
+    let parent = ElementId::new(1);
+    let outer = tree.begin_reconcile(parent);
+    assert!(catch_unwind(AssertUnwindSafe(|| tree.begin_reconcile(parent))).is_err());
+    drop(outer);
+
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _guard = tree.begin_reconcile(parent);
+            panic!("probe unwind");
+        }))
+        .is_err()
+    );
+
+    let recovered = tree.begin_reconcile(parent);
+    assert!(tree.is_reconciling_parent(parent));
+    drop(recovered);
+    assert!(!tree.is_reconciling_parent(parent));
 }

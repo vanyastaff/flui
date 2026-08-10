@@ -68,12 +68,12 @@ type SemanticsEnabledListener = Arc<dyn Fn(bool) + Send + Sync>;
 /// `RenderingFlutterBinding` reference) so a caller that only holds that
 /// handle can reuse the identical logic instead of re-deriving it.
 pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
-    let repaint_handle = pipeline_owner.with(|root_owner| {
+    let render_invalidation_handle = pipeline_owner.with(|root_owner| {
         root_owner
             .root_id()
-            .and_then(|root_id| root_owner.repaint_handle(root_id))
+            .and_then(|root_id| root_owner.render_invalidation_handle(root_id))
     });
-    if let Some(handle) = repaint_handle
+    if let Some(handle) = render_invalidation_handle
         && let Err(e) = handle.mark_needs_layout()
     {
         tracing::warn!(
@@ -423,14 +423,14 @@ impl RenderingFlutterBinding {
     /// retained scene to re-present either — so the shared logic lives
     /// here, once.
     ///
-    /// Routed through [`PipelineOwner::repaint_handle`]/
-    /// [`RepaintHandle::mark_needs_layout`](flui_rendering::pipeline::RepaintHandle::mark_needs_layout),
+    /// Routed through [`PipelineOwner::render_invalidation_handle`]/
+    /// [`RenderInvalidationHandle::mark_needs_layout`](flui_rendering::pipeline::RenderInvalidationHandle::mark_needs_layout),
     /// not a scheduler reach: a caller may not be the UI thread (an
     /// async-init splash screen resolving on an executor thread, or the
     /// re-enable listener firing from whatever thread drove the lifecycle
     /// change) — resolving a scheduler by any thread-local at fire time from
     /// the wrong thread would silently target the wrong instance and lose
-    /// the wake. `RepaintHandle` is `Send + Sync`, captured over a bounded
+    /// the wake. `RenderInvalidationHandle` is `Send + Sync`, captured over a bounded
     /// channel at `PipelineOwner` construction time, and its
     /// `mark_needs_layout` fires the SAME visual-update notifier a local
     /// dirty mark does — safe and non-blocking from any thread.

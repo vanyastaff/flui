@@ -442,12 +442,18 @@ fn active_global_key_move_through_build_scope_updates_render_parent_links() {
             .iter()
             .map(|dirty| dirty.id)
             .collect::<Vec<_>>();
-        assert_eq!(semantics_ids.len(), 2);
+        assert_eq!(semantics_ids.len(), 3, "{semantics_ids:?}");
         assert!(semantics_ids.contains(&parent_a_render));
         assert!(semantics_ids.contains(&parent_b_render));
-        assert!(
-            pipeline.nodes_needing_paint().is_empty(),
-            "layout owns the eventual paint for both changed parents",
+        assert!(semantics_ids.contains(&moved_render));
+        assert_eq!(
+            pipeline
+                .nodes_needing_paint()
+                .iter()
+                .map(|dirty| dirty.id)
+                .collect::<Vec<_>>(),
+            vec![root_render],
+            "a fresh attachment interval canonically repaints through its boundary",
         );
     });
 }
@@ -482,6 +488,8 @@ fn inactive_global_key_reinsert_applies_full_new_parent_membership_impact() {
     let parent_b_render = tree.get(parent_b).unwrap().element().render_id().unwrap();
     let moved_render = tree.get(moved_id).unwrap().element().render_id().unwrap();
 
+    pipeline_owner.with_mut(|pipeline| pipeline.set_semantics_enabled(true));
+
     let empty_parent_a = MultiBox::host(1, Vec::new());
     tree.update(parent_a, &empty_parent_a, &mut owner.element_owner_mut());
     owner.schedule_build_for(
@@ -494,9 +502,24 @@ fn inactive_global_key_reinsert_applies_full_new_parent_membership_impact() {
         tree.get(moved_id).is_some(),
         "the keyed element remains available for same-frame inactive retake"
     );
+    pipeline_owner.with(|pipeline| {
+        let render_tree = pipeline.render_tree();
+        assert!(render_tree.get(parent_a_render).unwrap().needs_layout());
+        assert!(
+            render_tree
+                .get(parent_a_render)
+                .unwrap()
+                .needs_compositing_bits_update()
+        );
+        assert!(
+            pipeline
+                .nodes_needing_semantics()
+                .iter()
+                .any(|dirty| dirty.id == parent_a_render)
+        );
+    });
 
     pipeline_owner.with_mut(|pipeline| {
-        pipeline.set_semantics_enabled(true);
         pipeline.clear_all_dirty_nodes();
         for render_id in [root_render, parent_a_render, parent_b_render, moved_render] {
             let node = pipeline.render_tree().get(render_id).unwrap();
@@ -530,16 +553,9 @@ fn inactive_global_key_reinsert_applies_full_new_parent_membership_impact() {
             Some(parent_b_render)
         );
         assert!(render_tree.get(parent_b_render).unwrap().needs_layout());
-        assert!(render_tree.get(parent_a_render).unwrap().needs_layout());
         assert!(
             render_tree
                 .get(parent_b_render)
-                .unwrap()
-                .needs_compositing_bits_update()
-        );
-        assert!(
-            render_tree
-                .get(parent_a_render)
                 .unwrap()
                 .needs_compositing_bits_update()
         );
@@ -553,9 +569,16 @@ fn inactive_global_key_reinsert_applies_full_new_parent_membership_impact() {
             .iter()
             .map(|dirty| dirty.id)
             .collect::<Vec<_>>();
-        assert_eq!(semantics_ids.len(), 2);
-        assert!(semantics_ids.contains(&parent_a_render));
+        assert_eq!(semantics_ids.len(), 2, "{semantics_ids:?}");
         assert!(semantics_ids.contains(&parent_b_render));
-        assert!(pipeline.nodes_needing_paint().is_empty());
+        assert!(semantics_ids.contains(&moved_render));
+        assert_eq!(
+            pipeline
+                .nodes_needing_paint()
+                .iter()
+                .map(|dirty| dirty.id)
+                .collect::<Vec<_>>(),
+            vec![root_render],
+        );
     });
 }

@@ -32,7 +32,7 @@ use flui_rendering::{
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     delegates::CustomPainter,
     parent_data::BoxParentData,
-    pipeline::RepaintHandle,
+    pipeline::RenderInvalidationHandle,
     traits::RenderBox,
 };
 
@@ -43,7 +43,7 @@ use flui_rendering::{
 /// [`Self::preferred_size`] (constrained by the incoming
 /// [`BoxConstraints`]).
 // NOT `Clone`: this render object holds live per-node lifecycle state (a
-// `RepaintHandle` bound to its `RenderId` plus repaint-`Listenable`
+// `RenderInvalidationHandle` bound to its `RenderId` plus repaint-`Listenable`
 // subscription ids). Cloning would duplicate ids the clone does not own,
 // so — like `RenderAnimatedSize` (the ADR-0013 sibling) — it is move-only.
 #[derive(Debug)]
@@ -63,7 +63,7 @@ pub struct RenderCustomPaint {
     /// Self-dirty handle, held between [`RenderBox::attach`] and
     /// [`RenderBox::detach`] so a painter's repaint `Listenable` can mark this
     /// node needing paint (ADR-0013). `None` while detached.
-    repaint_handle: Option<RepaintHandle>,
+    render_invalidation_handle: Option<RenderInvalidationHandle>,
     /// Active `add_listener` id on `painter`'s repaint listenable, torn down
     /// in `detach` and on a background-painter swap.
     painter_listener: Option<ListenerId>,
@@ -87,7 +87,7 @@ impl RenderCustomPaint {
             is_complex: false,
             will_change: false,
             has_child: false,
-            repaint_handle: None,
+            render_invalidation_handle: None,
             painter_listener: None,
             foreground_listener: None,
         }
@@ -99,7 +99,7 @@ impl RenderCustomPaint {
     /// the subscription id, or `None` when detached or the painter has no
     /// repaint listenable.
     fn subscribe(&self, painter: Option<&Arc<dyn CustomPainter>>) -> Option<ListenerId> {
-        let handle = self.repaint_handle.as_ref()?;
+        let handle = self.render_invalidation_handle.as_ref()?;
         let listenable = painter?.repaint()?;
         let mark = handle.clone();
         Some(listenable.add_listener(Arc::new(move || {
@@ -412,8 +412,8 @@ impl RenderBox for RenderCustomPaint {
     /// Subscribes both painters' repaint listenables (ADR-0013): a notify from
     /// a painter's `repaint()` listenable now marks this node needing paint,
     /// so an animation-driven painter repaints without a widget rebuild.
-    fn attach(&mut self, handle: RepaintHandle) {
-        self.repaint_handle = Some(handle);
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
+        self.render_invalidation_handle = Some(handle);
         self.painter_listener = self.subscribe(self.painter.as_ref());
         self.foreground_listener = self.subscribe(self.foreground_painter.as_ref());
     }
@@ -425,7 +425,7 @@ impl RenderBox for RenderCustomPaint {
             self.foreground_painter.as_ref(),
             self.foreground_listener.take(),
         );
-        self.repaint_handle = None;
+        self.render_invalidation_handle = None;
     }
 }
 

@@ -538,7 +538,7 @@ pub enum RasterSubmitError {
 /// `Clone + Send + Sync`. A handle can submit a frame, coalesce a resize, or
 /// request shutdown; it never obtains a reference into the owned backend —
 /// the same enqueue-and-wake shape as [`crate`]'s sibling handles
-/// (`PipelineOwnerHandle`, `WindowCommandSender`).
+/// (the private render-invalidation sender, `WindowCommandSender`).
 #[derive(Clone)]
 pub struct RasterHandle {
     mailbox: Arc<RasterMailbox>,

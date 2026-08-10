@@ -26,7 +26,10 @@ use flui_foundation::ViewKey;
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, StatefulView, View, ViewExt,
     ViewState,
-    tree::{ReconcileEventKind, test_utils::CollectedEvent},
+    tree::{
+        ReconcileEventKind,
+        test_utils::{CollectedEvent, reconcile_children},
+    },
 };
 use parking_lot::RwLock;
 
@@ -151,10 +154,6 @@ fn reparent_emits_single_reparent_event() {
     let parent_a = tree
         .write()
         .mount_root(&Spacer, &mut owner.write().element_owner_mut());
-    let parent_b =
-        tree.write()
-            .insert(&Spacer, parent_a, 0, &mut owner.write().element_owner_mut());
-
     let key = GlobalKey::<CounterState>::new();
     let counter = KeyedCounter {
         key: key.clone(),
@@ -162,12 +161,16 @@ fn reparent_emits_single_reparent_event() {
     };
     let key_hash = key.key_hash();
 
-    let original_id = tree.write().insert(
-        &counter,
+    let initial_views: Vec<Box<dyn View>> = vec![Box::new(Spacer), Box::new(counter.clone())];
+    reconcile_children(
+        &mut tree.write(),
         parent_a,
-        1,
+        &initial_views,
         &mut owner.write().element_owner_mut(),
     );
+    let initial_children = direct_children_in_slot_order(&tree.read(), parent_a);
+    let parent_b = initial_children[0];
+    let original_id = initial_children[1];
 
     // Soft-remove pushes to inactive queue (Flutter `deactivateChild`).
     // Capture this step too — it MUST NOT emit a Reparent event
@@ -380,10 +383,6 @@ fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
     let parent_a = tree
         .write()
         .mount_root(&Spacer, &mut owner.write().element_owner_mut());
-    let parent_b =
-        tree.write()
-            .insert(&Spacer, parent_a, 0, &mut owner.write().element_owner_mut());
-
     let key = GlobalKey::<CounterState>::new();
     let counter = KeyedCounter {
         key: key.clone(),
@@ -391,12 +390,16 @@ fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
     };
     let key_hash = key.key_hash();
 
-    let original_id = tree.write().insert(
-        &counter,
+    let initial_views: Vec<Box<dyn View>> = vec![Box::new(Spacer), Box::new(counter.clone())];
+    reconcile_children(
+        &mut tree.write(),
         parent_a,
-        1,
+        &initial_views,
         &mut owner.write().element_owner_mut(),
     );
+    let initial_children = direct_children_in_slot_order(&tree.read(), parent_a);
+    let parent_b = initial_children[0];
+    let original_id = initial_children[1];
     assert_eq!(
         key.with_current_state::<i32>(CounterState::count),
         Some(17),
@@ -405,13 +408,25 @@ fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
 
     let migrated_id = std::cell::Cell::new(None);
     let events = capture(|| {
-        let id = tree.write().insert(
-            &counter,
+        let views: Vec<Box<dyn View>> = vec![Box::new(counter.clone())];
+        reconcile_children(
+            &mut tree.write(),
             parent_b,
-            0,
+            &views,
             &mut owner.write().element_owner_mut(),
         );
-        migrated_id.set(Some(id));
+        migrated_id.set(
+            direct_children_in_slot_order(&tree.read(), parent_b)
+                .first()
+                .copied(),
+        );
+        let donor_views: Vec<Box<dyn View>> = vec![Box::new(Spacer)];
+        reconcile_children(
+            &mut tree.write(),
+            parent_a,
+            &donor_views,
+            &mut owner.write().element_owner_mut(),
+        );
     });
     let migrated_id = migrated_id.get().expect("active insert returned an id");
 
@@ -435,6 +450,10 @@ fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
             direct_children_in_slot_order(&tree, parent_b),
             vec![original_id],
             "new parent must list the moved child at the claimed slot",
+        );
+        assert!(
+            tree.get(original_id).is_some(),
+            "the donor's later child snapshot must not finalize the synchronously forgotten child",
         );
     }
 
@@ -465,6 +484,59 @@ fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
         mount_or_unmount, 0,
         "active reparent must not mount or unmount the migrated subtree",
     );
+
+    flui_view::test_only_clear_global_key_registry();
+}
+
+#[test]
+#[serial_test::serial(global_key_registry)]
+fn active_retake_outside_reconcile_fails_closed_without_mutation() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let (tree, owner) = fresh_tree();
+    let parent_a = tree
+        .write()
+        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
+    let key = GlobalKey::<CounterState>::new();
+    let keyed = KeyedCounter {
+        key: key.clone(),
+        initial: 23,
+    };
+    let initial_views: Vec<Box<dyn View>> = vec![Box::new(Spacer), Box::new(keyed.clone())];
+    reconcile_children(
+        &mut tree.write(),
+        parent_a,
+        &initial_views,
+        &mut owner.write().element_owner_mut(),
+    );
+    let before_children = direct_children_in_slot_order(&tree.read(), parent_a);
+    let destination = before_children[0];
+    let keyed_id = before_children[1];
+    let before_count = tree.read().iter_nodes().count();
+
+    let rejected = catch_unwind(AssertUnwindSafe(|| {
+        tree.write().insert(
+            &keyed,
+            destination,
+            0,
+            &mut owner.write().element_owner_mut(),
+        );
+    }));
+    assert!(
+        rejected.is_err(),
+        "active retake outside reconcile must reject"
+    );
+    assert_eq!(tree.read().iter_nodes().count(), before_count);
+    assert_eq!(
+        direct_children_in_slot_order(&tree.read(), parent_a),
+        before_children
+    );
+    assert!(direct_children_in_slot_order(&tree.read(), destination).is_empty());
+    assert_eq!(
+        owner.read().element_for_global_key(key.key_hash()),
+        Some(keyed_id)
+    );
+    assert_eq!(key.with_current_state::<i32>(CounterState::count), Some(23));
 
     flui_view::test_only_clear_global_key_registry();
 }

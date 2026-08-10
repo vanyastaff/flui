@@ -6,7 +6,7 @@
 //! capability feeding a **bounded** inbox, whose contents the owner commits
 //! **only while the scheduler phase is Idle** — at frame boundaries, never
 //! inside the frame transaction. This is the generalization of the
-//! `RebuildHandle`/`PipelineOwnerHandle` pattern: enqueue-and-wake, never
+//! `RebuildHandle`/`RenderInvalidationHandle` pattern: enqueue-and-wake, never
 //! touch the tree.
 //!
 //! # Coexistence
@@ -271,7 +271,7 @@ pub(crate) struct UiCommandSender {
     presentation_id: PresentationId,
     /// Fired after every successful state change so an idle event loop
     /// produces the drain that observes it — the enqueue-then-wake contract,
-    /// same as `PipelineOwnerHandle`'s notifier.
+    /// same as `RenderInvalidationHandle`'s notifier.
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -4344,13 +4344,21 @@ mod tests {
             let realm = UiRealm::for_test();
             realm.mark_rendered();
 
-            let handle = realm.pipeline_for_test().with(PipelineOwner::handle);
+            let pipeline = realm.pipeline_for_test();
+            let id = pipeline.with_mut(|owner| {
+                owner.insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
+                    as Box<
+                        dyn flui_rendering::traits::RenderObject<
+                                flui_rendering::protocol::BoxProtocol,
+                            >,
+                    >)
+            });
+            let handle = pipeline
+                .with(|owner| owner.render_invalidation_handle(id))
+                .expect("fresh render node is attached");
             std::thread::spawn(move || {
                 handle
-                    .request_mark_dirty(
-                        flui_foundation::RenderId::new(1),
-                        flui_rendering::pipeline::DirtyKind::Paint,
-                    )
+                    .mark_needs_paint()
                     .expect("dirty request should enqueue");
             })
             .join()
@@ -4358,7 +4366,7 @@ mod tests {
 
             assert!(
                 realm.needs_redraw(),
-                "cross-thread dirty requests must wake the owner realm captured \
+                "cross-thread node invalidation must wake the owner realm captured \
                  during UiRealm construction, not resolve a worker-local TLS realm"
             );
         }
@@ -7522,7 +7530,7 @@ mod tests {
             );
         }
 
-        /// A `RepaintHandle` obtained from presentation A's pipeline BEFORE
+        /// A `RenderInvalidationHandle` obtained from presentation A's pipeline BEFORE
         /// A closes, and still held afterward, must fail closed
         /// (`DirtySendError::OwnerGone`) rather than panic when used — the
         /// underlying `PipelineOwner`'s dirty-request channel receiver drops
@@ -7538,15 +7546,15 @@ mod tests {
                     flui_objects::RenderColoredBox::red(10.0, 10.0),
                 ))
             });
-            let repaint_handle = realm
+            let render_invalidation_handle = realm
                 .presentations
                 .primary()
                 .pipeline()
-                .with(|owner| owner.repaint_handle(render_id))
+                .with(|owner| owner.render_invalidation_handle(render_id))
                 .expect("a freshly inserted node has a live repaint handle");
 
             assert!(
-                repaint_handle.mark_needs_layout().is_ok(),
+                render_invalidation_handle.mark_needs_layout().is_ok(),
                 "precondition: the handle works while A is still alive"
             );
 
@@ -7554,10 +7562,10 @@ mod tests {
 
             assert!(
                 matches!(
-                    repaint_handle.mark_needs_layout(),
+                    render_invalidation_handle.mark_needs_layout(),
                     Err(flui_rendering::pipeline::DirtySendError::OwnerGone)
                 ),
-                "a RepaintHandle surviving its presentation's teardown must \
+                "a RenderInvalidationHandle surviving its presentation's teardown must \
                  fail closed, not panic and not silently succeed"
             );
         }

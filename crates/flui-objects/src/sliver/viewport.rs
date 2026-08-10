@@ -23,7 +23,7 @@ use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
-    pipeline::{DirtySendError, RepaintHandle},
+    pipeline::{DirtySendError, RenderInvalidationHandle},
     traits::RenderBox,
     view::{CacheExtentStyle, ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
 };
@@ -60,7 +60,7 @@ impl std::fmt::Debug for OffsetListener {
 /// `scroll_position` module docs) — so this listener can only ever fire from
 /// OUTSIDE `perform_layout`; there is no synchronous mark-during-layout
 /// re-entrancy to guard against here.
-fn offset_relayout_listener(handle: RepaintHandle) -> Arc<dyn Fn() + Send + Sync> {
+fn offset_relayout_listener(handle: RenderInvalidationHandle) -> Arc<dyn Fn() + Send + Sync> {
     Arc::new(move || {
         // `SendError::OwnerGone` (pipeline owner torn down — node/tree gone,
         // this is teardown, not a fault) and any future variant (`SendError`
@@ -107,7 +107,7 @@ fn unregister_offset_listener<O: ViewportOffset>(
 /// `handle`.
 fn register_offset_listener<O: ViewportOffset>(
     offset: &O,
-    handle: RepaintHandle,
+    handle: RenderInvalidationHandle,
 ) -> OffsetListener {
     let listener = offset_relayout_listener(handle);
     offset.add_listener(listener.clone());
@@ -166,7 +166,7 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// `None` before attach / after [`detach`](RenderBox::detach). `set_offset`
     /// clones it to re-register `offset_listener` on a swapped-in offset while
     /// the node is live in a pipeline.
-    repaint_handle: Option<RepaintHandle>,
+    render_invalidation_handle: Option<RenderInvalidationHandle>,
     /// The listener `attach` (or a live `set_offset`) registered on `offset` —
     /// retained so `detach`/`set_offset` can remove the SAME `Arc` via
     /// [`ViewportOffset::remove_listener`]'s ptr-eq contract.
@@ -209,7 +209,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             max_scroll_obstruction_extent: 0.0,
             sliver_obstruction_extents: Vec::new(),
             has_visual_overflow: false,
-            repaint_handle: None,
+            render_invalidation_handle: None,
             offset_listener: None,
         }
     }
@@ -237,7 +237,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// extents (`min_scroll_extent`/`max_scroll_extent`/`viewport_dimension`)
     /// for no reason.
     ///
-    /// If this node is currently attached (a [`RepaintHandle`] was handed to
+    /// If this node is currently attached (a [`RenderInvalidationHandle`] was handed to
     /// [`attach`](RenderBox::attach) and no matching
     /// [`detach`](RenderBox::detach) has run since), the offset-relayout
     /// listener moves with the swap: it is removed from the OLD offset first
@@ -248,7 +248,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     pub fn set_offset(&mut self, offset: O) -> flui_rendering::RenderUpdateImpact {
         unregister_offset_listener(&self.offset, &mut self.offset_listener);
         self.offset = offset;
-        if let Some(handle) = self.repaint_handle.clone() {
+        if let Some(handle) = self.render_invalidation_handle.clone() {
             self.offset_listener = Some(register_offset_listener(&self.offset, handle));
         }
         flui_rendering::RenderUpdateImpact::LAYOUT
@@ -685,14 +685,14 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     // its `ViewportOffset` in `attach` and tears the subscription down in
     // `detach` (`rendering/viewport.dart`). See `offset_relayout_listener`'s
     // docs for what fires the mark and why it can never re-enter `perform_layout`.
-    fn attach(&mut self, handle: RepaintHandle) {
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
         self.offset_listener = Some(register_offset_listener(&self.offset, handle.clone()));
-        self.repaint_handle = Some(handle);
+        self.render_invalidation_handle = Some(handle);
     }
 
     fn detach(&mut self) {
         unregister_offset_listener(&self.offset, &mut self.offset_listener);
-        self.repaint_handle = None;
+        self.render_invalidation_handle = None;
     }
 
     fn perform_layout(
@@ -820,8 +820,8 @@ pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     max_scroll_extent: f32,
     shrink_wrap_extent: f32,
     has_visual_overflow: bool,
-    /// See [`RenderViewport::repaint_handle`]'s matching field docs.
-    repaint_handle: Option<RepaintHandle>,
+    /// See [`RenderViewport::render_invalidation_handle`]'s matching field docs.
+    render_invalidation_handle: Option<RenderInvalidationHandle>,
     /// See [`RenderViewport::offset_listener`]'s matching field docs.
     offset_listener: Option<OffsetListener>,
 }
@@ -859,7 +859,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             max_scroll_extent: 0.0,
             shrink_wrap_extent: 0.0,
             has_visual_overflow: false,
-            repaint_handle: None,
+            render_invalidation_handle: None,
             offset_listener: None,
         }
     }
@@ -886,7 +886,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     pub fn set_offset(&mut self, offset: O) -> flui_rendering::RenderUpdateImpact {
         unregister_offset_listener(&self.offset, &mut self.offset_listener);
         self.offset = offset;
-        if let Some(handle) = self.repaint_handle.clone() {
+        if let Some(handle) = self.render_invalidation_handle.clone() {
             self.offset_listener = Some(register_offset_listener(&self.offset, handle));
         }
         flui_rendering::RenderUpdateImpact::LAYOUT
@@ -1235,14 +1235,14 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
 
     // See `RenderViewport::attach`/`detach`'s matching docs — identical
     // shape over `RenderShrinkWrappingViewport`'s own `offset`.
-    fn attach(&mut self, handle: RepaintHandle) {
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
         self.offset_listener = Some(register_offset_listener(&self.offset, handle.clone()));
-        self.repaint_handle = Some(handle);
+        self.render_invalidation_handle = Some(handle);
     }
 
     fn detach(&mut self) {
         unregister_offset_listener(&self.offset, &mut self.offset_listener);
-        self.repaint_handle = None;
+        self.render_invalidation_handle = None;
     }
 
     fn perform_layout(
@@ -1422,8 +1422,8 @@ mod offset_listener_tests {
     use flui_rendering::traits::RenderObject;
     use flui_rendering::view::ScrollPosition;
 
-    /// Mints a real [`RepaintHandle`] by inserting a throwaway anchor node,
-    /// rooting it, and running one frame — `RepaintHandle::new` is
+    /// Mints a real [`RenderInvalidationHandle`] by inserting a throwaway anchor node,
+    /// rooting it, and running one frame — `RenderInvalidationHandle::new` is
     /// `pub(super)` to `flui_rendering::pipeline`, so a real one can only
     /// come from a live `PipelineOwner`. The one-frame run is the part
     /// `RenderAnimatedOpacity`'s own `anchor_handle` helper
@@ -1434,7 +1434,7 @@ mod offset_listener_tests {
     /// without running that first layout, a behavior test asserting "the
     /// listener marked this node dirty" could never fail — the baseline
     /// dirty entry would already satisfy it regardless of the listener.
-    fn anchor_handle() -> (PipelineOwner, RepaintHandle) {
+    fn anchor_handle() -> (PipelineOwner, RenderInvalidationHandle) {
         let mut owner = PipelineOwner::new();
         let anchor =
             owner
@@ -1445,13 +1445,13 @@ mod offset_listener_tests {
         let (owner, result) = owner.run_frame();
         result.expect("the anchor's first frame must not error");
         let handle = owner
-            .repaint_handle(anchor)
+            .render_invalidation_handle(anchor)
             .expect("the rooted anchor id must still be live after its first frame");
         (owner, handle)
     }
 
     // attach must register a listener and detach must clear it — a
-    // white-box assertion on the private `offset_listener`/`repaint_handle`
+    // white-box assertion on the private `offset_listener`/`render_invalidation_handle`
     // fields is the most direct proof available, mirroring
     // `RenderAnimatedOpacity::attach_registers_listener_and_detach_clears_it`.
     #[test]
@@ -1469,7 +1469,7 @@ mod offset_listener_tests {
             "attach must register a listener"
         );
         assert!(
-            viewport.repaint_handle.is_some(),
+            viewport.render_invalidation_handle.is_some(),
             "attach must retain the handle for a later set_offset re-registration"
         );
 
@@ -1479,7 +1479,7 @@ mod offset_listener_tests {
             "detach must clear the listener"
         );
         assert!(
-            viewport.repaint_handle.is_none(),
+            viewport.render_invalidation_handle.is_none(),
             "detach must clear the retained handle"
         );
     }
@@ -1584,22 +1584,19 @@ mod offset_listener_tests {
         let (mut owner, result) = owner.run_frame();
         result.expect("the anchor's first frame must not error");
         let handle = owner
-            .repaint_handle(anchor)
+            .render_invalidation_handle(anchor)
             .expect("the rooted anchor id must still be live after its first frame");
 
         let position = ScrollPosition::new(0.0);
         let mut viewport = RenderViewport::with_offset(TopToBottom, LeftToRight, position.clone());
         RenderBox::attach(&mut viewport, handle);
 
-        // Saturate the 1-slot channel with a request for a DIFFERENT,
-        // never-inserted id — the drain silently ignores it once processed,
-        // it only needs to exist to occupy the slot the listener wants.
+        // Saturate the one-slot channel with a paint request. It only needs to
+        // occupy the slot the layout listener wants.
         owner
-            .handle()
-            .request_mark_dirty(
-                flui_foundation::RenderId::new(999_999),
-                flui_rendering::pipeline::DirtyKind::Paint,
-            )
+            .render_invalidation_handle(anchor)
+            .expect("the anchor remains attached")
+            .mark_needs_paint()
             .expect("the first send into a freshly-drained 1-capacity channel must fit");
 
         // The offset listener now tries to send and gets ChannelFull —
