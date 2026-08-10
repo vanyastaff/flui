@@ -60,10 +60,10 @@ mod paint_dirty_flag_discipline;
 mod paint_fragment_snapshot;
 #[path = "pipeline_scenarios.rs"]
 mod pipeline_scenarios;
+#[path = "render_invalidation_handle.rs"]
+mod render_invalidation_handle;
 #[path = "render_viewport.rs"]
 mod render_viewport;
-#[path = "repaint_handle.rs"]
-mod repaint_handle;
 #[path = "root_resize_repaint.rs"]
 mod root_resize_repaint;
 #[path = "run_layout_wiring.rs"]

@@ -275,7 +275,7 @@ impl Inner {
         // `RenderViewport`/`RenderShrinkWrappingViewport` (`flui-objects`)
         // register their render-side relayout listener here in `attach`
         // (and re-register it on `set_offset` while attached). That listener
-        // only sends a cross-thread `RepaintHandle::mark_needs_layout()`
+        // only sends a cross-thread `RenderInvalidationHandle::mark_needs_layout()`
         // request — it never calls back into `notify()`/`add_listener`/
         // `remove_listener` synchronously — so unlike `ScrollableViewportOffset`,
         // this list still doesn't need `ScrollableViewportOffset`-style

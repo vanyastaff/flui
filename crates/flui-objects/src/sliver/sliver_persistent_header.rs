@@ -131,7 +131,7 @@ use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    pipeline::RepaintHandle,
+    pipeline::RenderInvalidationHandle,
     protocol::SliverProtocol,
     traits::{RenderObject, RenderSliver},
     view::ScrollDirection,
@@ -1403,7 +1403,7 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
         ctx.hit_test_child_at_layout_offset(0)
     }
 
-    fn attach(&mut self, handle: RepaintHandle) {
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
         if let Some(controller) = self.controller.as_ref() {
             let mark_handle = handle.clone();
             self.listener_id = Some(controller.add_listener(Arc::new(move || {

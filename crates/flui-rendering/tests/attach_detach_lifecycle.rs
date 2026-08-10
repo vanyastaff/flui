@@ -1,10 +1,10 @@
 //! ADR-0013 milestone — the `attach`/`detach` tree-lifecycle hook.
 //!
 //! Proves the pipeline actually fires `RenderObject::attach`/`detach` at
-//! insert/remove, that the handed-over `RepaintHandle` is bound to the
+//! insert/remove, that the handed-over `RenderInvalidationHandle` is bound to the
 //! right node and drives a REAL re-layout on the very next frame, and
 //! that a handle captured before removal degrades to a silent no-op
-//! afterward — the generational-staleness guarantee `RepaintHandle`
+//! afterward — the generational-staleness guarantee `RenderInvalidationHandle`
 //! documents. Reparenting in this codebase has no dedicated API (no
 //! `move_child`/`adopt_child`); it is remove-then-insert, so that case is
 //! exercised the same way a real reparent would hit it.
@@ -12,7 +12,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use flui_rendering::pipeline::{PipelineOwner, RepaintHandle};
+use flui_rendering::pipeline::{PipelineOwner, RenderInvalidationHandle};
 use flui_rendering::prelude::*;
 use flui_rendering::traits::RenderSliver;
 use flui_tree::Leaf;
@@ -32,7 +32,7 @@ struct LifecycleLog {
     attach_count: Arc<AtomicUsize>,
     detach_count: Arc<AtomicUsize>,
     layout_count: Arc<AtomicUsize>,
-    captured_handle: Arc<Mutex<Option<RepaintHandle>>>,
+    captured_handle: Arc<Mutex<Option<RenderInvalidationHandle>>>,
 }
 
 impl LifecycleLog {
@@ -50,7 +50,7 @@ impl LifecycleLog {
 
     /// The most recently captured handle. Panics if `attach` never fired —
     /// every test here calls it only after asserting `attach_count() > 0`.
-    fn captured_handle(&self) -> RepaintHandle {
+    fn captured_handle(&self) -> RenderInvalidationHandle {
         self.captured_handle
             .lock()
             .expect("lock poisoned")
@@ -79,7 +79,7 @@ impl RenderBox for LifecycleProbe {
         self.size
     }
 
-    fn attach(&mut self, handle: RepaintHandle) {
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
         self.log.attach_count.fetch_add(1, Ordering::SeqCst);
         *self.log.captured_handle.lock().expect("lock poisoned") = Some(handle);
     }
@@ -134,7 +134,7 @@ impl RenderSliver for LifecycleProbeSliver {
         }
     }
 
-    fn attach(&mut self, handle: RepaintHandle) {
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
         self.log.attach_count.fetch_add(1, Ordering::SeqCst);
         *self.log.captured_handle.lock().expect("lock poisoned") = Some(handle);
     }
@@ -248,6 +248,506 @@ fn remove_fires_exactly_one_detach() {
         log.detach_count(),
         1,
         "remove must call detach exactly once"
+    );
+}
+
+#[test]
+fn detach_and_reattach_mint_a_new_invalidation_interval() {
+    let (owner, id, log) = rooted_fixture();
+    let mut owner = frame(owner);
+    let first_interval = log.captured_handle();
+
+    first_interval
+        .mark_needs_layout()
+        .expect("the request may enqueue before detach");
+    let token = owner
+        .detach_render_subtrees(&[id])
+        .expect("the live root detaches");
+    first_interval
+        .mark_needs_layout()
+        .expect("the old channel stays live while the node is detached");
+    owner
+        .attach_render_subtrees(token)
+        .expect("the preserved root reattaches");
+    let second_interval = log.captured_handle();
+    assert_eq!(log.attach_count(), 2, "reattach starts one fresh interval");
+    assert_eq!(
+        log.detach_count(),
+        1,
+        "detach closes the first interval once"
+    );
+
+    owner.clear_all_dirty_nodes();
+    owner
+        .render_tree()
+        .get(id)
+        .expect("preserved root remains live")
+        .clear_needs_layout();
+    owner.drain_pending_dirty();
+    assert_eq!(
+        owner.nodes_needing_layout().len(),
+        0,
+        "requests queued before and while detached must not dirty the new interval",
+    );
+
+    first_interval
+        .mark_needs_layout()
+        .expect("an old handle may still enqueue after reattach");
+    owner.drain_pending_dirty();
+    assert_eq!(
+        owner.nodes_needing_layout().len(),
+        0,
+        "a first-interval handle remains inert after the second interval starts",
+    );
+
+    second_interval
+        .mark_needs_layout()
+        .expect("the current interval's handle remains authoritative");
+    owner.drain_pending_dirty();
+    assert_eq!(owner.nodes_needing_layout().len(), 1);
+    let layout_count_before_current_request = log.layout_count();
+    let _owner = frame(owner);
+    assert_eq!(
+        log.layout_count(),
+        layout_count_before_current_request + 1,
+        "the current interval's request must reach layout",
+    );
+}
+
+#[test]
+fn detached_tokens_are_linear_for_box_and_sliver_intervals() {
+    let mut owner = PipelineOwner::new();
+    let box_log = LifecycleLog::default();
+    let sliver_log = LifecycleLog::default();
+    let box_id = owner.insert(probe(box_log.clone()));
+    let sliver_id = owner.insert(sliver_probe(sliver_log.clone()));
+
+    assert_eq!(box_log.attach_count(), 1);
+    assert_eq!(sliver_log.attach_count(), 1);
+
+    let box_token = owner.detach_render_subtrees(&[box_id]).expect("box detach");
+    let sliver_token = owner
+        .detach_render_subtrees(&[sliver_id])
+        .expect("sliver detach");
+    assert!(matches!(
+        owner.detach_render_subtrees(&[box_id]),
+        Err(flui_rendering::pipeline::DetachRenderSubtreesError::AlreadyDetached { .. })
+    ));
+    assert_eq!(box_log.detach_count(), 1);
+    assert_eq!(sliver_log.detach_count(), 1);
+
+    owner.attach_render_subtrees(box_token).expect("box attach");
+    owner
+        .attach_render_subtrees(sliver_token)
+        .expect("sliver attach");
+    assert_eq!(box_log.attach_count(), 2);
+    assert_eq!(sliver_log.attach_count(), 2);
+}
+
+#[test]
+fn subtree_relocation_visits_every_box_and_sliver_node_without_changing_identity_or_edges() {
+    let mut owner = PipelineOwner::new();
+    let root_log = LifecycleLog::default();
+    let sliver_log = LifecycleLog::default();
+    let leaf_log = LifecycleLog::default();
+    let root_id = owner.insert(probe(root_log.clone()));
+    let sliver_id = owner.insert(sliver_probe(sliver_log.clone()));
+    let leaf_id = owner.insert(probe(leaf_log.clone()));
+    owner.adopt_render_child(root_id, sliver_id);
+    owner.adopt_render_child(sliver_id, leaf_id);
+
+    let token = owner
+        .detach_render_subtrees(&[root_id])
+        .expect("subtree detach");
+    assert_eq!(root_log.detach_count(), 1);
+    assert_eq!(sliver_log.detach_count(), 1);
+    assert_eq!(leaf_log.detach_count(), 1);
+    assert_eq!(owner.render_tree().parent(sliver_id), Some(root_id));
+    assert_eq!(owner.render_tree().parent(leaf_id), Some(sliver_id));
+
+    owner.attach_render_subtrees(token).expect("subtree attach");
+    assert_eq!(root_log.attach_count(), 2);
+    assert_eq!(sliver_log.attach_count(), 2);
+    assert_eq!(leaf_log.attach_count(), 2);
+    assert_eq!(owner.render_tree().parent(sliver_id), Some(root_id));
+    assert_eq!(owner.render_tree().parent(leaf_id), Some(sliver_id));
+}
+
+#[test]
+fn multi_frontier_relocation_batches_disjoint_subtrees() {
+    let mut owner = PipelineOwner::new();
+    let first_root_log = LifecycleLog::default();
+    let first_child_log = LifecycleLog::default();
+    let second_root_log = LifecycleLog::default();
+    let second_child_log = LifecycleLog::default();
+    let first_root = owner.insert(probe(first_root_log.clone()));
+    let first_child = owner.insert(sliver_probe(first_child_log.clone()));
+    let second_root = owner.insert(sliver_probe(second_root_log.clone()));
+    let second_child = owner.insert(probe(second_child_log.clone()));
+    owner.adopt_render_child(first_root, first_child);
+    owner.adopt_render_child(second_root, second_child);
+
+    let token = owner
+        .detach_render_subtrees(&[first_root, second_root])
+        .expect("batch detach");
+    assert_eq!(token.node_count(), 4);
+    for log in [
+        &first_root_log,
+        &first_child_log,
+        &second_root_log,
+        &second_child_log,
+    ] {
+        assert_eq!(log.detach_count(), 1);
+    }
+    owner.attach_render_subtrees(token).expect("batch attach");
+    for log in [
+        &first_root_log,
+        &first_child_log,
+        &second_root_log,
+        &second_child_log,
+    ] {
+        assert_eq!(log.attach_count(), 2);
+    }
+    let token = owner
+        .detach_render_subtrees(&[first_root, second_root])
+        .expect("second batch detach");
+    assert!(matches!(
+        owner.detach_render_subtrees(&[first_root, second_root]),
+        Err(flui_rendering::pipeline::DetachRenderSubtreesError::AlreadyDetached { .. })
+    ));
+    owner
+        .release_detached_render_subtrees_for_finalization(token)
+        .expect("release detached batch");
+}
+
+#[test]
+fn batch_lifecycle_rejects_overlap_and_wrong_owner_without_consuming_token() {
+    let mut owner = PipelineOwner::new();
+    let root_log = LifecycleLog::default();
+    let child_log = LifecycleLog::default();
+    let root = owner.insert(probe(root_log.clone()));
+    let child = owner.insert(probe(child_log.clone()));
+    owner.adopt_render_child(root, child);
+
+    assert!(matches!(
+        owner.detach_render_subtrees(&[root, child]),
+        Err(flui_rendering::pipeline::DetachRenderSubtreesError::OverlappingRoots { .. })
+    ));
+    assert_eq!(owner.render_tree().parent(child), Some(root));
+    assert_eq!(root_log.detach_count(), 0);
+    assert_eq!(child_log.detach_count(), 0);
+
+    let token = owner.detach_render_subtrees(&[root]).expect("root detach");
+    let mut foreign_owner = PipelineOwner::new();
+    let failure = foreign_owner
+        .attach_render_subtrees(token)
+        .expect_err("foreign owner must reject the token");
+    assert!(matches!(
+        failure.kind(),
+        flui_rendering::pipeline::AttachRenderSubtreesError::WrongOwner
+    ));
+    let token = failure.into_token();
+    owner.clear_all_dirty_nodes();
+    owner.attach_render_subtrees(token).expect("owner retry");
+    assert_eq!(child_log.attach_count(), 2);
+    assert!(
+        owner
+            .nodes_needing_layout()
+            .iter()
+            .any(|dirty| dirty.id == root)
+    );
+    assert!(
+        owner
+            .nodes_needing_paint()
+            .iter()
+            .any(|dirty| dirty.id == root)
+    );
+}
+
+#[test]
+fn stale_token_failures_retain_the_token_for_a_terminal_retry() {
+    let mut owner = PipelineOwner::new();
+    let render_id = owner.insert(probe(LifecycleLog::default()));
+    let token = owner
+        .detach_render_subtrees(&[render_id])
+        .expect("detach token");
+    assert_eq!(owner.remove_render_object(render_id), 1);
+
+    let attach_failure = owner
+        .attach_render_subtrees(token)
+        .expect_err("removed node makes the token stale");
+    assert!(matches!(
+        attach_failure.kind(),
+        flui_rendering::pipeline::AttachRenderSubtreesError::NodeNotFound {
+            render_id: missing
+        } if *missing == render_id
+    ));
+    let token = attach_failure.into_token();
+
+    let release_failure = owner
+        .release_detached_render_subtrees_for_finalization(token)
+        .expect_err("the stale token remains stale on terminal release");
+    assert!(matches!(
+        release_failure.kind(),
+        flui_rendering::pipeline::ReleaseDetachedRenderSubtreesError::NodeNotFound {
+            render_id: missing
+        } if *missing == render_id
+    ));
+    assert_eq!(release_failure.into_token().node_count(), 1);
+}
+
+// The token is a linear capability: duplicating it would let one detached
+// batch be attached and released, or released twice.
+static_assertions::assert_not_impl_any!(
+    flui_rendering::pipeline::DetachedRenderSubtrees: Clone, Copy
+);
+
+#[test]
+fn detach_rejects_an_empty_batch() {
+    let mut owner = PipelineOwner::new();
+    assert!(matches!(
+        owner.detach_render_subtrees(&[]),
+        Err(flui_rendering::pipeline::DetachRenderSubtreesError::Empty)
+    ));
+}
+
+#[test]
+fn detach_distinguishes_a_duplicate_root_from_an_overlap_and_names_both_roots() {
+    let mut owner = PipelineOwner::new();
+    let root_log = LifecycleLog::default();
+    let child_log = LifecycleLog::default();
+    let root = owner.insert(probe(root_log.clone()));
+    let child = owner.insert(probe(child_log.clone()));
+    owner.adopt_render_child(root, child);
+
+    assert!(
+        matches!(
+            owner.detach_render_subtrees(&[root, root]),
+            Err(flui_rendering::pipeline::DetachRenderSubtreesError::DuplicateRoot {
+                root: duplicated
+            }) if duplicated == root
+        ),
+        "the same root twice is a duplicate, not an overlap"
+    );
+
+    // Both request orders must name the containment the same way round.
+    for roots in [[root, child], [child, root]] {
+        assert!(
+            matches!(
+                owner.detach_render_subtrees(&roots),
+                Err(flui_rendering::pipeline::DetachRenderSubtreesError::OverlappingRoots {
+                    ancestor,
+                    descendant,
+                }) if ancestor == root && descendant == child
+            ),
+            "overlap must report {root:?} as the ancestor of {child:?} for {roots:?}"
+        );
+    }
+
+    assert_eq!(owner.render_tree().parent(child), Some(root));
+    assert_eq!(root_log.detach_count(), 0);
+    assert_eq!(child_log.detach_count(), 0);
+}
+
+#[test]
+fn the_owner_seal_rejects_a_token_whose_render_ids_all_match_the_other_owner() {
+    let mut owner = PipelineOwner::new();
+    let mut twin_owner = PipelineOwner::new();
+    let twin_log = LifecycleLog::default();
+    let render_id = owner.insert(probe(LifecycleLog::default()));
+    let twin_id = twin_owner.insert(probe(twin_log.clone()));
+    assert_eq!(
+        render_id, twin_id,
+        "this proof needs both owners to mint the same render id"
+    );
+
+    // Detaching in both owners leaves the twin's node in exactly the state the
+    // foreign token describes, so identity is the ONLY thing left to reject on.
+    let token = owner
+        .detach_render_subtrees(&[render_id])
+        .expect("detach token");
+    let twin_token = twin_owner
+        .detach_render_subtrees(&[twin_id])
+        .expect("twin detach token");
+
+    let attach_failure = twin_owner
+        .attach_render_subtrees(token)
+        .expect_err("a foreign token must not attach a same-numbered node");
+    assert!(matches!(
+        attach_failure.kind(),
+        flui_rendering::pipeline::AttachRenderSubtreesError::WrongOwner
+    ));
+
+    let release_failure = twin_owner
+        .release_detached_render_subtrees_for_finalization(attach_failure.into_token())
+        .expect_err("a foreign token must not release through the twin either");
+    assert!(matches!(
+        release_failure.kind(),
+        flui_rendering::pipeline::ReleaseDetachedRenderSubtreesError::WrongOwner
+    ));
+    assert_eq!(
+        twin_log.attach_count(),
+        1,
+        "the twin's node must still be detached"
+    );
+
+    owner
+        .release_detached_render_subtrees_for_finalization(release_failure.into_token())
+        .expect("the token releases through its own owner");
+    twin_owner
+        .release_detached_render_subtrees_for_finalization(twin_token)
+        .expect("the twin's own token still releases");
+}
+
+#[test]
+fn a_detached_subtree_that_gained_a_child_is_attachable_again_only_once_repaired() {
+    let mut owner = PipelineOwner::new();
+    let root = owner.insert(probe(LifecycleLog::default()));
+    let child = owner.insert(probe(LifecycleLog::default()));
+    owner.adopt_render_child(root, child);
+
+    let token = owner.detach_render_subtrees(&[root]).expect("detach token");
+    assert_eq!(token.node_count(), 2);
+
+    let interloper = owner.insert(probe(LifecycleLog::default()));
+    owner.adopt_render_child(root, interloper);
+
+    let failure = owner
+        .attach_render_subtrees(token)
+        .expect_err("a grown subtree no longer matches the token");
+    assert!(matches!(
+        failure.kind(),
+        flui_rendering::pipeline::AttachRenderSubtreesError::TopologyChanged
+    ));
+
+    let token = failure.into_token();
+    assert_eq!(owner.remove_render_object(interloper), 1);
+    owner
+        .attach_render_subtrees(token)
+        .expect("the repaired subtree matches the token again");
+}
+
+#[derive(Debug, Clone)]
+struct ParentDataDetachProbe(Arc<AtomicUsize>);
+
+impl flui_rendering::parent_data::ParentData for ParentDataDetachProbe {
+    fn detach(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn clearing_parent_data_runs_its_detach_hook_before_dropping_storage() {
+    let mut owner = PipelineOwner::new();
+    let id = owner.insert(probe(LifecycleLog::default()));
+    let detach_count = Arc::new(AtomicUsize::new(0));
+    let node = owner
+        .render_tree_mut()
+        .get_mut(id)
+        .expect("inserted render node remains live");
+    node.set_parent_data(Box::new(ParentDataDetachProbe(Arc::clone(&detach_count))));
+
+    assert!(node.clear_parent_data());
+    assert_eq!(detach_count.load(Ordering::SeqCst), 1);
+    assert!(node.parent_data().is_none());
+    assert!(
+        !node.clear_parent_data(),
+        "clearing None is an idempotent no-op"
+    );
+    assert_eq!(detach_count.load(Ordering::SeqCst), 1);
+}
+
+#[derive(Debug)]
+struct OrderedDetachRender(Arc<Mutex<Vec<&'static str>>>);
+
+impl flui_foundation::Diagnosticable for OrderedDetachRender {}
+
+impl RenderBox for OrderedDetachRender {
+    type Arity = Leaf;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+        Size::ZERO
+    }
+
+    fn detach(&mut self) {
+        self.0.lock().expect("event log lock").push("render-detach");
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OrderedDetachParentData(Arc<Mutex<Vec<&'static str>>>);
+
+impl flui_rendering::parent_data::ParentData for OrderedDetachParentData {
+    fn detach(&mut self) {
+        self.0.lock().expect("event log lock").push("parent-data");
+    }
+}
+
+#[test]
+fn subtree_detach_drops_edge_and_parent_data_before_render_detach_hook() {
+    let mut owner = PipelineOwner::new();
+    let parent = owner.insert(probe(LifecycleLog::default()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let child = owner
+        .insert_child_render_object(
+            parent,
+            Box::new(OrderedDetachRender(Arc::clone(&events))) as BoxedRenderObject,
+        )
+        .expect("child insert");
+    owner
+        .render_tree_mut()
+        .get_mut(child)
+        .expect("child")
+        .set_parent_data(Box::new(OrderedDetachParentData(Arc::clone(&events))));
+
+    let _token = owner
+        .detach_render_subtrees(&[child])
+        .expect("child detach");
+    assert_eq!(owner.render_tree().parent(child), None);
+    assert!(
+        owner
+            .render_tree()
+            .get(child)
+            .unwrap()
+            .parent_data()
+            .is_none()
+    );
+    assert_eq!(
+        events.lock().expect("event log lock").as_slice(),
+        &["parent-data", "render-detach"],
+    );
+}
+
+#[test]
+fn permanent_subtree_removal_detaches_every_parent_data_before_each_render_hook() {
+    let mut owner = PipelineOwner::new();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let root =
+        owner.insert(Box::new(OrderedDetachRender(Arc::clone(&events))) as BoxedRenderObject);
+    let child = owner
+        .insert_child_render_object(
+            root,
+            Box::new(OrderedDetachRender(Arc::clone(&events))) as BoxedRenderObject,
+        )
+        .expect("child insert");
+    for render_id in [root, child] {
+        owner
+            .render_tree_mut()
+            .get_mut(render_id)
+            .expect("subtree node")
+            .set_parent_data(Box::new(OrderedDetachParentData(Arc::clone(&events))));
+    }
+
+    assert_eq!(owner.remove_render_object(root), 2);
+    assert_eq!(
+        events.lock().expect("event log lock").as_slice(),
+        &[
+            "parent-data",
+            "render-detach",
+            "parent-data",
+            "render-detach",
+        ],
     );
 }
 

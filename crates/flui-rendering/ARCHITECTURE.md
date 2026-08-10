@@ -20,6 +20,15 @@ The deeper architectural write-ups for individual subsystems (protocol, layout, 
 
 The full Flutter class hierarchy is enumerated in the sibling appendix [`flutter-rendering-hierarchy.md`](flutter-rendering-hierarchy.md) (1352 LOC, generated from a class-name sweep of `.flutter/flutter-master/packages/flutter/lib/src/rendering/`). That file is kept as a search index; it is not part of the template proper.
 
+Render-subtree relocation is deliberately narrower than Flutter's ambient
+owner mutation: only `PipelineOwner<Idle>` can detach, attach, or release a
+batch. Detach returns an opaque, non-cloneable `DetachedRenderSubtrees` token
+bound to the originating owner by private `Rc` identity. Reattach and
+finalization release consume that token, returning it inside a typed failure
+after mutation-free preflight when owner, epoch, live-node, or topology checks
+fail. Finalization release does not delete nodes; it authorizes the existing
+deepest-first element unmount so view lifecycle hooks remain canonical.
+
 ---
 
 ## Mapping decisions
@@ -189,7 +198,7 @@ Criterion is already in `flui-rendering` dev-dependencies. The bench harness nee
 
 **Note:** `proptest` is already a dev-dependency and is used in `src/virtualization/tests.rs`. The miri half is LANDED: CI's advisory `miri` job runs `cargo +nightly miri test -p flui-rendering --lib pipeline::owner`, interpreting every unit test under `pipeline::owner` — the raw-pointer `SubtreeArena` substrate and the disjoint-borrow layout walks over it. Widening the filter to `storage::tree`'s own `get_two_mut` / `get_parent_and_children_mut` unit tests remains open alongside loom. The remaining deferred test class:
 
-- **Loom tests** for `AtomicRenderFlags` set/clear/read interleaving + `PipelineOwnerHandle` send/recv sequencing. Needs the `loom` crate gated on `#[cfg(loom)]`.
+- **Loom tests** for `AtomicRenderFlags` set/clear/read interleaving + private dirty-channel send/recv sequencing across attachment epochs. Needs the `loom` crate gated on `#[cfg(loom)]`.
 
 **Shape:** a new file under `crates/flui-rendering/tests/` plus a dev-dependency.
 
@@ -206,4 +215,3 @@ These deep-dives stay as companion documents (not under the per-crate template d
 ## Notes
 
 - **R12 lint promotion path is symbolic for Trigger 1.** [`docs/PORT.md`](../../docs/PORT.md) reactive-lint-promotion rule names `[workspace.lints.clippy]` as the first-promotion mechanism. The clippy lint vocabulary cannot today express "field of type `RwLock<X>` where `X` is a trait object locked in method `foo`". The grep regression in [`scripts/port-check.sh`](../../scripts/port-check.sh) is the durable enforcement layer; the clippy-promotion column waits for ecosystem expressivity (`dylint` plugin or a future clippy feature).
-

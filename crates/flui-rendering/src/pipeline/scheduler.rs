@@ -101,6 +101,9 @@ pub(super) struct DirtyTracker {
     /// callback setters. Both clones point at the same
     /// `RwLock<VisualUpdateNotifier>`.
     notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>,
+
+    #[cfg(test)]
+    eviction_passes: usize,
 }
 
 impl DirtyTracker {
@@ -113,6 +116,8 @@ impl DirtyTracker {
             debug_doing_paint: false,
             debug_doing_semantics: false,
             notifier,
+            #[cfg(test)]
+            eviction_passes: 0,
         }
     }
 
@@ -449,8 +454,17 @@ impl DirtyTracker {
     /// `mid_layout_marks`. Called by `remove_render_object` before the slab
     /// slots are freed so no phase walks a freed id.
     pub(super) fn evict(&mut self, removed_ids: &FxHashSet<RenderId>) {
+        #[cfg(test)]
+        {
+            self.eviction_passes += 1;
+        }
         self.dirty.evict(removed_ids);
         self.mid_layout_marks.evict(removed_ids);
+    }
+
+    #[cfg(test)]
+    pub(super) fn eviction_passes_for_test(&self) -> usize {
+        self.eviction_passes
     }
 
     /// Clears all dirty work without processing it. Use with caution.
@@ -485,6 +499,32 @@ impl DirtyTracker {
     #[inline]
     pub(super) fn has_mid_marks(&self) -> bool {
         self.mid_layout_marks.any()
+    }
+
+    #[cfg(test)]
+    pub(super) fn seed_all_queues_for_test(&mut self, id: RenderId) {
+        for queues in [&mut self.dirty, &mut self.mid_layout_marks] {
+            queues.needs_layout.push(DirtyNode::new(id, 0));
+            queues.needs_compositing.push(DirtyNode::new(id, 0));
+            queues.needs_paint.push(DirtyNode::new(id, 0));
+            queues.needs_semantics.push(DirtyNode::new(id, 0));
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_every_queue_entry_for_test(&self, id: RenderId) -> bool {
+        [&self.dirty, &self.mid_layout_marks]
+            .into_iter()
+            .all(|queues| {
+                [
+                    &queues.needs_layout,
+                    &queues.needs_compositing,
+                    &queues.needs_paint,
+                    &queues.needs_semantics,
+                ]
+                .into_iter()
+                .all(|queue| queue.contains(&id))
+            })
     }
 
     // =========================================================================
@@ -1440,27 +1480,39 @@ mod tests {
     #[test]
     fn evict_removes_from_both_queues() {
         let (mut tracker, _tree) = DirtyTracker::new_test_pair();
-        let id = RenderId::new(42);
+        let removed_id = RenderId::new(42);
+        let retained_id = RenderId::new(43);
 
-        tracker.add_node_needing_layout(id, 0);
-        // Force a mid-mark by flipping the flag.
-        tracker.debug_doing_layout = true;
-        tracker.schedule_paint_boundary(id, 0);
-        tracker.debug_doing_layout = false;
+        for queues in [&mut tracker.dirty, &mut tracker.mid_layout_marks] {
+            for id in [removed_id, retained_id] {
+                queues.needs_layout.push(DirtyNode::new(id, 0));
+                queues.needs_compositing.push(DirtyNode::new(id, 0));
+                queues.needs_paint.push(DirtyNode::new(id, 0));
+                queues.needs_semantics.push(DirtyNode::new(id, 0));
+            }
+        }
 
         let mut removed = FxHashSet::default();
-        removed.insert(id);
+        removed.insert(removed_id);
         tracker.evict(&removed);
 
         assert_eq!(
             tracker.dirty_node_count(),
-            0,
-            "dirty must be empty after evict"
+            4,
+            "all four live queues must retain only the sibling"
         );
-        assert!(
-            !tracker.has_mid_marks(),
-            "mid-marks must be empty after evict"
-        );
+        assert_eq!(tracker.mid_layout_marks.total(), 4);
+        for queues in [&tracker.dirty, &tracker.mid_layout_marks] {
+            for queue in [
+                &queues.needs_layout,
+                &queues.needs_compositing,
+                &queues.needs_paint,
+                &queues.needs_semantics,
+            ] {
+                assert_eq!(queue.len(), 1);
+                assert_eq!(queue.as_slice()[0].id, retained_id);
+            }
+        }
     }
 
     // =========================================================================

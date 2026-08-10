@@ -57,7 +57,7 @@ use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    pipeline::RepaintHandle,
+    pipeline::RenderInvalidationHandle,
     traits::RenderBox,
 };
 
@@ -87,7 +87,7 @@ pub struct RenderAnimatedOpacity {
     animation: ProxyAnimation<f32>,
     /// Alpha cache (`0..=255`), shared with the tick listener closure via
     /// `Arc` so both the listener (running off the owning thread, per
-    /// [`RepaintHandle`]'s cross-thread contract) and `paint_alpha`/
+    /// [`RenderInvalidationHandle`]'s cross-thread contract) and `paint_alpha`/
     /// `skip_paint` (called with `&self` from the pipeline's paint walk)
     /// observe the same up-to-date value. `AtomicU8` over `Mutex<u8>`: a
     /// single-byte cache with no compound invariant needs no lock.
@@ -193,7 +193,7 @@ impl RenderAnimatedOpacity {
     fn recompute_alpha(
         animation: &ProxyAnimation<f32>,
         alpha: &AtomicU8,
-        handle: &RepaintHandle,
+        handle: &RenderInvalidationHandle,
     ) -> bool {
         let new_alpha = Self::opacity_to_alpha(animation.value());
         let old_alpha = alpha.load(Ordering::Relaxed);
@@ -324,7 +324,7 @@ impl RenderBox for RenderAnimatedOpacity {
         Self::is_layered(self.alpha())
     }
 
-    fn attach(&mut self, handle: RepaintHandle) {
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
@@ -372,18 +372,18 @@ mod tests {
         ProxyAnimation::new(parent)
     }
 
-    /// Mints a real [`RepaintHandle`] by inserting a throwaway anchor node —
-    /// `RepaintHandle::new` is `pub(super)` to `flui_rendering::pipeline`, so
+    /// Mints a real [`RenderInvalidationHandle`] by inserting a throwaway anchor node —
+    /// `RenderInvalidationHandle::new` is `pub(super)` to `flui_rendering::pipeline`, so
     /// a real one can only come from a live `PipelineOwner` (matches
     /// `RenderAnimatedSize`'s own tests, which go through `PipelineOwner::insert`
     /// rather than constructing a handle by hand).
-    fn anchor_handle() -> (PipelineOwner, RepaintHandle) {
+    fn anchor_handle() -> (PipelineOwner, RenderInvalidationHandle) {
         let mut owner = PipelineOwner::new();
         let anchor = owner
             .insert(Box::new(render_at(1.0))
                 as Box<dyn flui_rendering::traits::RenderObject<BoxProtocol>>);
         let handle = owner
-            .repaint_handle(anchor)
+            .render_invalidation_handle(anchor)
             .expect("just-inserted id must be live");
         (owner, handle)
     }
@@ -456,7 +456,7 @@ mod tests {
     // `owner` closes the dirty-request channel's receiver, so any further
     // send on `handle` returns `SendError::OwnerGone` — a real, cheaply
     // reproducible failure path (not a channel-full simulation, but exactly
-    // the same code path: `RepaintHandle::mark_needs_paint`/
+    // the same code path: `RenderInvalidationHandle::mark_needs_paint`/
     // `mark_needs_compositing_bits_update` returning `Err`).
     #[test]
     fn recompute_alpha_does_not_advance_the_cache_when_the_mark_send_fails() {

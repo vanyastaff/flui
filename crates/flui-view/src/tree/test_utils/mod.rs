@@ -10,3 +10,13 @@
 pub mod reconcile_event_collector;
 
 pub use reconcile_event_collector::{CollectedEvent, ReconcileEventCollector};
+
+/// Drives the production slab reconciler from integration tests.
+pub fn reconcile_children(
+    tree: &mut super::ElementTree,
+    parent: flui_foundation::ElementId,
+    views: &[Box<dyn crate::View>],
+    owner: &mut crate::ElementOwner<'_>,
+) {
+    super::id_reconcile::reconcile_children_by_id(tree, parent, views, owner);
+}

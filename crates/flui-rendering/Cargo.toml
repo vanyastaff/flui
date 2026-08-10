@@ -48,7 +48,7 @@ smallvec = { workspace = true }
 downcast-rs = { workspace = true }
 dyn-clone = { workspace = true }
 slab = "0.4"                             # For RenderTree storage
-crossbeam-channel = { workspace = true } # PipelineOwnerHandle bounded mark-dirty channel
+crossbeam-channel = { workspace = true } # Private bounded render-invalidation channel
 rustc-hash = { workspace = true }        # FxHashSet for layout cycle guard
 
 # Segmented-stack growth for the recursive pipeline walks (layout /
