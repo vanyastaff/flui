@@ -37,7 +37,7 @@ The entire control-plane `Send + Sync` edifice is forced by **one supertrait**:
 pub trait BindingBase: Sized + Send + Sync + 'static { … }
 ```
 
-It is forced not by any exercised cross-thread access but by the singleton storage mechanics: every binding is stored in a process-wide `OnceLock<$binding>` and handed out as `&'static Self` (`binding.rs:140,187-188`). `OnceLock<T>: Sync` requires `T: Send + Sync`, and returning `&'static Self` to arbitrary callers requires `Self: Sync`. **That is the whole reason the supertrait exists** — confirmed by ADR-001's own 2026-06-09 correction (the only cited cross-thread justification, a tokio gesture timer at `flui-interaction/src/timer.rs:350`, is dead code with zero production callers).
+It is forced not by any exercised cross-thread access but by the singleton storage mechanics: every binding is stored in a process-wide `OnceLock<$binding>` and handed out as `&'static Self` (`binding.rs:140,187-188`). `OnceLock<T>: Sync` requires `T: Send + Sync`, and returning `&'static Self` to arbitrary callers requires `Self: Sync`. **That is the whole reason the supertrait exists** — confirmed by ADR-001's correction: the only cited cross-thread justification was a standalone tokio gesture timer with zero production callers, since retired.
 
 So the control plane (six of seven bindings) is forced `Send + Sync` to satisfy a storage decision, while the **one genuinely data-plane binding** — `PaintingBinding`/`ImageCache` — inherits the bound it actually needs for free. This is the exact inversion of a correct control/data split.
 

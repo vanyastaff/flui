@@ -1916,9 +1916,9 @@ mechanism = "config_field entries below pin each field's non-stable classificati
 [[contract]]
 key = "timer-service-for-frozen-tickers"
 statement = """
-Time-based UX (timeout-shaped animations) must not silently freeze with the \
-frame gate; a wall-clock timer service independent of the frame tick is the \
-named correctness seam. This is not solved by frame pacing. \
+Time-based UX must not silently freeze with the frame gate. Every wall-clock \
+deadline source must have an explicit owner and an inseparable wake-and-drain \
+path; frame pacing alone cannot provide that contract. \
 \
 **Closed for gesture-arena deadlines specifically (#556), design + code, \
 NOT automated-test-covered end to end — kept `planned`, not flipped to \
@@ -1959,41 +1959,20 @@ regression coverage, and the one piece that closes this contract's own \
 has none; flip it only once a genuine live-loop test lands (tracked as \
 future work, not attempted here as a workaround). \
 \
-**Two named residual gaps, not silently closed:** (1) `GestureTimerService` \
-(`flui-interaction`'s standalone timer utility, distinct from the gesture \
-arena) still has ZERO production callers, and `AppRuntime::next_wake` \
-deliberately does NOT fold in `GestureTimerService::next_deadline` — an \
-earlier version composed it in anyway ("forward-composition at zero \
-cost"), but nothing on the wake path this aggregate feeds ever drains it \
-(`check_timers()` has no caller reachable from `draw_frame_entered`/ \
-`tick_deadlines`), so a timer scheduled through the public \
-`global_timer_service()` API would arm a `WaitUntil` that stays undrained \
-and therefore stays in the past once its instant elapses — the identical \
-unbounded-spin shape the winit actuator (above) closed, arriving from the \
-timer side. Caught in review, fixed by excluding the source from the \
-aggregate rather than inventing a drain call into a per-realm loop for a \
-service nothing schedules through; standalone-probe-measured: ~310K–390K \
-`about_to_wait` iterations per 500ms with the fold-in and the actuator \
-both present, vs. 6 excluded (same figure as the actuator fix's own \
-measurement) — pinned by \
-`next_wake_never_surfaces_the_global_timer_services_undrained_deadline` \
-(`crates/flui-app/src/app/runner.rs`), mutant-confirmed (restoring the \
-fold-in fails the test red). A hypothetical app-level "timeout animation" \
-that isn't a gesture-arena recognizer still has no wall-clock wake of its \
-own — composing this service back in is future work, gated on it gaining \
-a real drain call on this thread's own wake cycle first. (2) A REALM fully \
+**Standalone timer residual closed:** `GestureTimerService` and its ambient \
+`global_timer_service()` accessor were retired after confirming that every \
+production gesture deadline runs through a realm-owned arena. This removes \
+the undrained deadline source instead of wiring duplicate process-global \
+state into the wake aggregate. `next_wake_is_none_when_no_realm_owned_\
+deadline_is_armed` pins the resulting owner-local source set. \
+\
+**Remaining named gap:** a REALM fully \
 backgrounded via the pre-existing, coarser `AppLifecycleState::Hidden`/ \
 `Paused`/`Detached` `frames_enabled` gate routes through \
 `WakeAction::PumpAsync`, which never calls `draw_frame_entered` at all — \
 so `tick_deadlines` does not run in THAT case either; fixing it would mean \
 touching the pre-#556 `PumpAsync` arm, a different, larger, unscoped \
 change this issue does not attempt.\
-\
-**Handed off, not silently dropped, as issue #556 itself closes:** an \
-app-level wall-clock timeout that isn't a gesture-arena recognizer still \
-has no consumer wiring `GestureTimerService` into a real wake path — \
-tracked as its own follow-up under issue #619 rather than staying an \
-unowned residual of a now-closed issue.\
 """
 state = "planned"
 domain = "application"
@@ -2002,7 +1981,6 @@ mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-interaction/src/arena/mod.rs", contains = "fn next_deadline(&self) -> Option<Instant>" },
     { kind = "symbol", file = "crates/flui-interaction/src/binding.rs", contains = "pub fn next_deadline(&self) -> Option<web_time::Instant>" },
-    { kind = "symbol", file = "crates/flui-interaction/src/timer.rs", contains = "pub fn next_deadline(&self) -> Option<Instant>" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn next_wake(&self) -> Option<web_time::Instant>" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(super) fn next_wake(&self) -> Option<web_time::Instant>" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_wake_deadline_hook" },
@@ -2012,7 +1990,7 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn new_events" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn next_wake_never_surfaces_the_global_timer_services_undrained_deadline" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn next_wake_is_none_when_no_realm_owned_deadline_is_armed" },
 ]
 
 # Event-loop affinity capability
@@ -2822,19 +2800,16 @@ notes = "Overlay renders, but the renderer ignores the frame counter and the Per
 # constants and caches that are never reached AMBIENTLY (they're fields,
 # not zero-arg free functions callable from anywhere) — a signature-blind
 # scan for the primitive alone would flag those as false positives faster
-# than it would catch a new ambient accessor, and the three residuals this
-# migration actually needs tracked (`global_timer_service`,
-# `AssetRegistry::global`, `shared_font_system`) are already fully
-# enumerated by name. A generic detector is worth building once a FOURTH
+# than it would catch a new ambient accessor, and the two residuals this
+# migration actually needs tracked (`AssetRegistry::global`,
+# `shared_font_system`) are already fully enumerated by name. A generic
+# detector is worth building once a third
 # ambient accessor shape appears that the curated list doesn't already
 # name; until then the curated list is the honest, low-false-positive
-# choice, not an oversight.
-
-[[ambient_reach]]
-file = "crates/flui-interaction/src/timer.rs"
-grammar = "ambient-static"
-owner_issue = 553
-note = "global_timer_service(): named residual, unresolved by this migration -- the pending-gesture-timer drop-isolation probe inside `dropping_realm_a_cannot_wake_realm_b` (crates/flui-app/src/app/ui_realm.rs) bounds its cross-realm blast radius (a callback scheduled through it after one realm drops can only ever touch whatever the closure explicitly captured, never the other live realm's wake/gesture state), but the service itself stays process-global"
+# choice, not an oversight. The marker for the retired
+# `global_timer_service()` signature deliberately remains in the checker:
+# reintroducing that ambient API must fail until it gains a new explicit
+# registry entry and owner.
 
 [[ambient_reach]]
 file = "crates/flui-assets/src/registry/mod.rs"

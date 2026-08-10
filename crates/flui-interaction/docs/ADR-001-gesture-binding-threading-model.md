@@ -25,15 +25,10 @@ load-bearing facts:
    (`arena/mod.rs`), so anything added must be `Send + Sync`.
 2. `GestureBinding::instance()` returns `&'static Self` via a `OnceLock`
    singleton (`flui-foundation`), so the binding type must be `Sync`.
-3. ~~`GestureTimerService` offers an **optional** `tokio::spawn` mode
-   (`timer.rs`), so a deadline callback can fire on a worker thread.~~
-   **Corrected (2026-06-09): this path is dead.** `run_async` /
-   `run_until_shutdown` / `check_timers` have zero production callers; no
-   recogniser uses `GestureTimerService` — deadlines are polled inline via
-   `Instant::now()`. So fact #3 does **not** justify cross-thread recogniser
-   access today; the `Send+Sync` bound is incidental (storage mechanics:
-   `OnceLock<T>: Sync` + the `BindingBase: Send+Sync` supertrait), not
-   exercised.
+3. The former standalone timer service was retired after confirming it had
+   zero production callers. Recognizer deadlines are polled through each
+   realm-owned arena, so no timer callback can introduce cross-thread
+   recognizer access.
 
 Flutter's gesture pipeline is single-threaded; its recognisers are plain
 mutable objects on the platform thread. The FLUI port reproduces Flutter's

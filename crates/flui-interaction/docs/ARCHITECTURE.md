@@ -34,7 +34,6 @@ crate-root `team.rs` and `signal_resolver.rs` (the back-compat shims at
 | `sampling_clock.dart`                           | `processing/sampling_clock.rs`       |
 | `input_predictor.dart`                          | `processing/prediction.rs`           |
 | `gesture_settings.dart`                         | `settings.rs`                        |
-| `gesture_timer.dart`                            | `timer.rs`                           |
 
 ## Subsystems
 
@@ -45,7 +44,6 @@ crate-root `team.rs` and `signal_resolver.rs` (the back-compat shims at
 | `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (kalman-style pointer extrapolation), `RawInputHandler` (low-level stream adapter), and the shared `lsq_solver` + `sampling_clock` helpers. |
 | `routing` | Event dispatch infrastructure: `EventRouter`, `PointerRouter`, owner-thread TLS `FocusManager`, `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, and the `TransformGuard` stack-RAII for the transform stack. Off the per-pointer hot path. |
 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
-| `timer` | `GestureTimer` / `GestureTimerService` — async timer for the long-press 500 ms deadline and similar gesture-timed waits. `global_timer_service()` is the crate-level singleton; the tokio runtime backs the async side. |
 | `observability` | Observability substrate. `GestureEvent` is a typed `Display` enum of recogniser / arena event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` are span-name constants; `pointer_event_kind` summarises a `PointerEvent` to a short string for span fields. `#[tracing::instrument]` is applied on `RecognizerBase` start_tracking / stop_tracking and on every public `GestureArena` method. |
 
 ## Ownership and synchronization

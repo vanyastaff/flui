@@ -161,7 +161,6 @@ pub mod routing;
 
 pub mod arena;
 pub mod recognizers;
-pub mod timer;
 
 // ============================================================================
 // Input processing
@@ -287,7 +286,6 @@ pub use testing::{
     GestureBuilder, GesturePlayer, GestureRecorder, GestureRecording, ModifiersBuilder,
     RecordedEvent, RecordedEventType,
 };
-pub use timer::{GestureTimer, GestureTimerService, TimerId, global_timer_service};
 // ============================================================================
 // Re-exports: Traits
 // ============================================================================

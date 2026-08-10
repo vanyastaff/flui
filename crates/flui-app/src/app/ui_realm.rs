@@ -3940,23 +3940,6 @@ mod tests {
     /// realms: dropping realm A must leave realm B's wake counter and inbox
     /// completely untouched, and A's own senders must turn `OwnerGone`
     /// rather than silently reaching B.
-    ///
-    /// Also bounds the blast radius of `global_timer_service()` (a NAMED
-    /// ambient-reach residual — `docs/runtime-contract.toml`'s ratchet;
-    /// unlike the realm construction guard or the retired `UpdateScheduler`
-    /// singleton, this one is process-global BY DESIGN, not by omission).
-    /// Stated precisely, not aspirationally: `global_timer_service()` has
-    /// **zero production callers** today (verified by grep) — FLUI's actual
-    /// long-press/double-tap deadlines are driven through each realm's OWN
-    /// gesture arena (`tick_deadlines()`/`has_pending_deadlines()`, polled
-    /// every frame; see `long_press_fires_at_its_deadline_with_no_further_input`),
-    /// never through this ambient service. The residual's real bound,
-    /// PROVEN here rather than merely asserted: a callback that captures
-    /// LIVE realm-A state (its own `UiCommandSender`, cloned before the
-    /// drop) and fires from this process-global service AFTER realm A is
-    /// gone reaches only the typed `OwnerGone` failure path — never a
-    /// crash, never realm B — even though nothing in production wires this
-    /// service to any realm at all.
     #[test]
     fn dropping_realm_a_cannot_wake_realm_b() {
         // Realm A's own wake counter has nothing left to assert once A is
@@ -4004,72 +3987,10 @@ mod tests {
         assert_eq!(report.invoked, 1);
         assert_eq!(report.dropped_stale, 0);
 
-        // Pending-gesture-timer probe, strengthened: `global_timer_service()`
-        // has no production caller and no realm ever registers with it (see
-        // this test's own doc comment) -- so instead of pretending a realm
-        // "armed" a timer, capture realm A's OWN sender (cloned before the
-        // drop above) directly into the fired closure, and observe what
-        // happens when this unrelated ambient service invokes it well after
-        // realm A is gone.
-        let sender_a_for_timer = sender_a.clone();
-        let navigator_for_timer = NavigatorHandle::new();
-        navigator_for_timer.seed_initial(test_route("/"));
-        let target_for_timer = navigator_for_timer.command_target();
-        let observed_owner_gone = Arc::new(AtomicBool::new(false));
-        let observed_owner_gone_marker = Arc::clone(&observed_owner_gone);
-        let _timer = flui_interaction::global_timer_service().schedule(
-            std::time::Duration::ZERO,
-            move || {
-                let result = sender_a_for_timer
-                    .send_navigation(NavigatorCommand::maybe_pop(target_for_timer));
-                observed_owner_gone_marker.store(
-                    matches!(result, Err(CommandSendError::OwnerGone { .. })),
-                    Ordering::SeqCst,
-                );
-            },
-        );
-        // `wakes_b` already sits at 1 from the legitimate send above; the
-        // probe asserts it stays EXACTLY there (unchanged), not that it is
-        // zero.
-        let wakes_b_before_timer = wakes_b.load(Ordering::Relaxed);
-
-        // Deliberately NOT asserting on this call's own `check_timers()`
-        // return value: `global_timer_service()` is process-global BY
-        // DESIGN (unlike every other retired singleton), so under `cargo
-        // test`'s shared-process parallelism (never under `cargo nextest
-        // run`, which gives every test its own process) a second,
-        // concurrently-running test that also happens to call
-        // `check_timers()` could drain and fire THIS test's timer before
-        // this call gets to it -- the closure still runs exactly the same
-        // either way (state mutation doesn't care which caller triggered
-        // it), only trusting THIS call's local return count would be
-        // fragile. Polling the actual observable instead
-        // (`observed_owner_gone`), with `check_timers()` as a same-process
-        // nudge and a bounded deadline so a genuine failure to fire still
-        // fails loudly rather than hanging, tolerates that interleaving
-        // without needing new cross-test lock infrastructure.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !observed_owner_gone.load(Ordering::SeqCst) {
-            flui_interaction::global_timer_service().check_timers();
-            if observed_owner_gone.load(Ordering::SeqCst) {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the scheduled timer never fired -- observed_owner_gone stayed false"
-            );
-            std::thread::yield_now();
-        }
-        assert!(
-            observed_owner_gone.load(Ordering::SeqCst),
-            "a callback capturing realm A's own sender, fired from this ambient \
-             service after realm A is gone, must reach the typed OwnerGone \
-             failure path -- never a crash, never realm B"
-        );
         assert_eq!(
             wakes_b.load(Ordering::Relaxed),
-            wakes_b_before_timer,
-            "the global timer residual must never reach into a coexisting realm's wake state"
+            1,
+            "only realm B's own command may wake realm B"
         );
         assert_eq!(
             realm_b.gestures().active_pointer_count(),
