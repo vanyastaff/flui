@@ -1,8 +1,6 @@
-//! Transition widgets — rebuild their child each animation tick, mapping an
-//! `Animation` value onto a visual property. The reactive spine is
-//! [`AnimatedView`](flui_view::prelude::AnimatedView): the element subscribes to
-//! the animation's listenable, and a tick schedules a rebuild that re-reads the
-//! value.
+//! Transition widgets. Most map animation ticks through `AnimatedView` rebuilds;
+//! [`FadeTransition`] instead keeps a persistent render-layer subscription so
+//! opacity ticks never rebuild its child subtree.
 
 mod animated_builder;
 mod fade_transition;

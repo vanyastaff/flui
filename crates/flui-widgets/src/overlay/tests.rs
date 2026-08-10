@@ -388,9 +388,8 @@ fn overlay_mark_needs_build_rebuilds_only_that_entry() {
 ///
 /// What actually makes a removed entry inert is [`OverlayEntry::remove`] *taking*
 /// the overlay back-reference: a second `remove()` then finds nothing and cannot
-/// schedule another overlay rebuild. Red-check: make `detach` clone instead of
-/// `take`; the trailing `entry_a.remove()` dirties the overlay and B's builder runs a
-/// third time.
+/// schedule another overlay rebuild. The surviving B entry retains its element
+/// and does not rerun its builder merely because the overlay list changed.
 ///
 /// A `removed` flag guarding `mark_needs_build` was also written, and deleted: a
 /// red-check proved it unreachable. The overlay's rebuild unmounts A's element
@@ -418,7 +417,7 @@ fn removed_entry_cannot_reinsert_or_rebuild_silently() {
 
     harness.tick();
     assert_eq!(calls_a.get(), 1, "the removed entry never rebuilt");
-    assert_eq!(calls_b.get(), 2, "the overlay rebuild reran B's builder");
+    assert_eq!(calls_b.get(), 1, "the surviving entry does not rebuild");
     assert_eq!(layer_count(&mut harness), 1);
 
     // Still inert once unmounted, and it dirties nothing.
@@ -427,7 +426,7 @@ fn removed_entry_cannot_reinsert_or_rebuild_silently() {
     harness.tick();
     assert_eq!(
         (calls_a.get(), calls_b.get()),
-        (1, 2),
+        (1, 1),
         "no further rebuilds"
     );
 }
@@ -749,7 +748,11 @@ fn overlay_setting_opaque_to_the_same_value_is_a_noop() {
 
     entry.set_opaque(true);
     harness.tick();
-    assert_eq!(calls.get(), 2, "a real change rebuilds the overlay");
+    assert_eq!(
+        calls.get(),
+        1,
+        "the overlay rebuild preserves an unchanged entry view"
+    );
 }
 
 /// `set_maintain_state` goes through the same `_didChangeEntryOpacity` path, so
@@ -802,33 +805,17 @@ fn overlay_entry_opaque_set_before_attachment_is_honored_on_insert() {
     assert_eq!(top_calls.get(), 1);
 }
 
-/// Ported, but **red by design against the oracle's actual regression
-/// guard** — the oracle test is `'OverlayEntries do not rebuild when
+/// Regression guard for `'OverlayEntries do not rebuild when
 /// opaqueness changes'` (`overlay_test.dart`, tag `3.44.0`), Flutter's own
 /// regression test for flutter/flutter#45797: a covered `maintainState`
 /// entry stays mounted (already pinned by
 /// `overlay_maintain_state_keeps_covered_entry_built`) *and its builder must
 /// not rerun* just because the overlay above it changed.
 ///
-/// FLUI does not have that second half. `OverlayState::build` reconciles a
-/// fresh (but key-equal) `OverlayEntryView` for every survivor on every
-/// overlay rebuild, and `OverlayEntryView` does not override
-/// [`View::should_skip_rebuild`](flui_view::View::should_skip_rebuild) (nor
-/// wrap itself in [`flui_view::view::Memo`], the opt-in that would) — so the
-/// framework's documented safe default (`flui_view::view::memo`'s module
-/// docs: always rebuild unless a view opts out) applies, and every survivor's
-/// content rebuilds on every overlay-level structural change, not just the
-/// one that actually triggered it. This is a real, previously-undocumented
-/// gap, not a test-porting artifact — filed as `docs/ROADMAP.md`'s Cross.H
-/// "Overlay entries always rebuild on any overlay-level change" entry.
-///
-/// This assertion is deliberately the oracle's own expectation, not FLUI's
-/// current behavior: weakening it to `(2, 2, 2)` would launder a real gap as
-/// a passing parity test. Left `#[ignore]`, not deleted, so the fix (opting
-/// `OverlayEntryView` into `Memo`, once `OverlayEntry`/`OverlayHandle` gain
-/// the `PartialEq` that requires) has a pinned target to turn green.
+/// `OverlayEntryView::should_skip_rebuild` compares both entry and overlay
+/// identity, so an overlay-level structural update preserves every unchanged
+/// survivor while `OverlayEntry::mark_needs_build` remains authoritative.
 #[test]
-#[ignore = "known gap, docs/ROADMAP.md Cross.H — OverlayEntryView does not opt into Memo, so surviving entries rebuild on every overlay-level change; see this test's doc comment"]
 fn overlay_maintain_state_entries_are_not_rebuilt_when_opaqueness_changes() {
     let (bottom, middle, top) = (Calls::default(), Calls::default(), Calls::default());
     let entry_a = counting_entry(&bottom).with_maintain_state(true);
@@ -861,7 +848,6 @@ fn overlay_maintain_state_entries_are_not_rebuilt_when_opaqueness_changes() {
 /// already-mounted `maintainState` entries should not rebuild either of them.
 /// See the sibling test's doc comment for the root cause and the filed gap.
 #[test]
-#[ignore = "known gap, docs/ROADMAP.md Cross.H — same root cause as overlay_maintain_state_entries_are_not_rebuilt_when_opaqueness_changes"]
 fn overlay_maintain_state_entries_are_not_rebuilt_when_an_opaque_entry_is_added() {
     let (bottom, top) = (Calls::default(), Calls::default());
     let entry_a = counting_entry(&bottom).with_maintain_state(true);

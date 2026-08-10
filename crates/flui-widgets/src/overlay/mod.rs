@@ -575,6 +575,10 @@ impl View for OverlayEntryView {
     fn key(&self) -> Option<&dyn ViewKey> {
         Some(&self.key)
     }
+
+    fn should_skip_rebuild(&self, previous: &Self) -> bool {
+        self.entry.is_same(&previous.entry) && self.overlay.is_same(&previous.overlay)
+    }
 }
 
 impl StatefulView for OverlayEntryView {

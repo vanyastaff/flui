@@ -131,12 +131,12 @@ fn press_opacity_fades_out_then_back_in_over_the_oracle_durations() {
     );
 
     let opacity_id = laid
-        .find_by_render_type("RenderOpacity")
-        .expect("CupertinoButton should mount a FadeTransition -> Opacity render node");
+        .find_by_render_type("RenderAnimatedOpacity")
+        .expect("CupertinoButton should mount a FadeTransition render node");
 
     let read_opacity = |laid: &common::LaidOut| -> f32 {
         laid.render_property(opacity_id, "opacity")
-            .expect("RenderOpacity should report its opacity diagnostic")
+            .expect("RenderAnimatedOpacity should report its opacity diagnostic")
             .parse()
             .expect("opacity diagnostic should be a plain float")
     };

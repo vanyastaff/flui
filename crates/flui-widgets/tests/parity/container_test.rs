@@ -44,12 +44,7 @@
 //!   [`container_with_no_color_or_decoration_is_not_hittable`]. The
 //!   `foregroundDecoration` leg is dropped (same missing field as above).
 //! - `'Container discards alignment when the child parameter is null and
-//!   constraints is not Tight'` — ported as an `#[ignore]`d oracle-expectation
-//!   test: FLUI's `Container::build` wraps `alignment` unconditionally
-//!   whenever it is set, where Flutter's `if (child == null && ...) { … }
-//!   else if (alignment != null) { current = Align(...) }` only applies
-//!   `Align` when the childless-placeholder branch was *not* taken — a real
-//!   divergence, filed as a `docs/ROADMAP.md` Cross.H known gap —
+//!   constraints is not Tight'` —
 //!   [`container_discards_alignment_when_childless_and_constraints_not_tight`].
 //! - `'Container does not crash at zero area'` —
 //!   [`container_does_not_crash_at_zero_area`].
@@ -78,7 +73,7 @@ use flui_geometry::Matrix4;
 use flui_geometry::px;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color};
+use flui_types::{Alignment, Color, Size};
 use flui_widgets::{Center, Container, GestureDetector, SizedBox, Text};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -382,25 +377,16 @@ fn tapped_on_tap(flag: &Arc<AtomicBool>) {
     flag.store(true, Ordering::SeqCst);
 }
 
-/// `Container` composes `Align` unconditionally whenever `alignment` is set,
-/// regardless of whether it has a child. Flutter's `Container.build` only
-/// does that in the `else if` branch of `if (child == null && (constraints
+/// Flutter's `Container.build` only composes `Align` in the `else if` branch
+/// of `if (child == null && (constraints
 /// == null || !constraints!.isTight)) { current = <placeholder> } else if
 /// (alignment != null) { current = Align(...) }` — when `child` is `None`
 /// and `constraints` is null (the case here), the placeholder branch is
 /// taken and `alignment` is discarded entirely; no `Align` is ever mounted.
 ///
-/// This is a real, confirmed divergence — see `docs/ROADMAP.md` Cross.H
-/// (`crates/flui-widgets/src/container.rs`, `Container::build`). Red-checked:
-/// this test fails against the current `Container::build` (which always
-/// mounts `RenderAlign` when `alignment` is set), confirming the gap is
-/// real, not a mistaken expectation.
-///
 /// Flutter parity: container_test.dart `'Container discards alignment when
 /// the child parameter is null and constraints is not Tight'` (3.44.0).
 #[test]
-#[ignore = "known divergence: Container::build wraps Align unconditionally; \
-            see docs/ROADMAP.md Cross.H"]
 fn container_discards_alignment_when_childless_and_constraints_not_tight() {
     let laid = lay_out(
         Container::new()
@@ -413,6 +399,58 @@ fn container_discards_alignment_when_childless_and_constraints_not_tight() {
         laid.find_all_by_render_type("RenderAlign").is_empty(),
         "Container must not mount an Align/RenderAlign when child is None \
          and constraints is not tight — alignment is discarded in that case"
+    );
+}
+
+/// Flutter's mutually-exclusive childless branches use the Container's
+/// effective constraints, not the incoming parent constraints. Tight
+/// effective constraints suppress the placeholder and permit Align even with
+/// no child.
+#[test]
+fn childless_container_tightness_selects_placeholder_or_alignment_exactly() {
+    let non_tight = lay_out(
+        Container::new()
+            .constraints(BoxConstraints::loose(Size::new(px(40.0), px(30.0))))
+            .alignment(Alignment::CENTER_LEFT),
+        loose(100.0),
+    );
+    assert!(non_tight.find_all_by_render_type("RenderAlign").is_empty());
+    assert_eq!(
+        non_tight.find_all_by_render_type("RenderLimitedBox").len(),
+        1,
+        "a childless non-tight Container uses the placeholder"
+    );
+
+    let tight_aligned = lay_out(
+        Container::new()
+            .width(40.0)
+            .height(30.0)
+            .alignment(Alignment::CENTER_LEFT),
+        loose(100.0),
+    );
+    assert_eq!(
+        tight_aligned.find_all_by_render_type("RenderAlign").len(),
+        1,
+        "a childless tight aligned Container retains Align"
+    );
+    assert!(
+        tight_aligned
+            .find_all_by_render_type("RenderLimitedBox")
+            .is_empty(),
+        "tight effective constraints suppress the placeholder"
+    );
+
+    let tight_unaligned = lay_out(Container::new().width(40.0).height(30.0), loose(100.0));
+    assert!(
+        tight_unaligned
+            .find_all_by_render_type("RenderAlign")
+            .is_empty()
+    );
+    assert!(
+        tight_unaligned
+            .find_all_by_render_type("RenderLimitedBox")
+            .is_empty(),
+        "a childless tight unaligned Container adds no inner wrapper"
     );
 }
 

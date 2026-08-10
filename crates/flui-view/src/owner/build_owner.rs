@@ -29,6 +29,11 @@ use crate::{
     view::View,
 };
 
+#[cfg(test)]
+thread_local! {
+    static LAYOUT_SCOPE_CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A cloneable, owned handle that lets a listener callback — an animation tick
 /// fired *outside* any frame, with no `&mut BuildOwner` in scope — enqueue an
 /// element for the next [`BuildOwner::build_scope`] drain and request a frame.
@@ -116,6 +121,32 @@ impl std::fmt::Debug for ExternalBuildScheduler {
 pub(crate) struct DirtyElement {
     id: ElementId,
     depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuildScopeTarget {
+    /// Drain every dirty element. Used when no layout-builder scopes exist.
+    All,
+    /// Drain only elements outside every live layout-builder scope.
+    Global,
+    /// Drain the builder itself and descendants whose nearest live scope is it.
+    LayoutBuilder(ElementId),
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct BuildDrainResult {
+    pub(crate) any_rebuilt: bool,
+    pub(crate) target_rebuilt: bool,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct BuildScopeQueues {
+    /// Dirty work currently outside every live layout-builder scope.
+    root: BinaryHeap<Reverse<DirtyElement>>,
+    /// Dirty work keyed by its current nearest live layout-builder scope.
+    isolated: HashMap<ElementId, BinaryHeap<Reverse<DirtyElement>>>,
+    /// Reused while rerouting after scope removal or tree reparenting.
+    scratch: Vec<DirtyElement>,
 }
 
 impl DirtyElement {
@@ -278,6 +309,11 @@ pub struct BuildOwner {
     /// Empty unless a `LayoutBuilder` is mounted; the seam is inert until one is.
     pub(crate) layout_builder_registry: LayoutBuilderRegistry,
 
+    /// Lazily allocated root/isolated dirty-work buckets. A nonempty isolated
+    /// bucket is the sole pending-scope authority; no parallel scope set can
+    /// drift from the queued work.
+    pub(crate) build_scope_queues: Option<Box<BuildScopeQueues>>,
+
     /// The focus tree owned by this element tree.
     ///
     /// Every `BuildOwner` has exactly one manager. Presentation composition
@@ -401,7 +437,8 @@ impl BuildOwner {
             on_build_scheduled: None,
             external_inbox: Arc::new(Mutex::new(HashMap::new())),
             child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
-            layout_builder_registry: Arc::new(Mutex::new(HashMap::new())),
+            layout_builder_registry: LayoutBuilderRegistry::default(),
+            build_scope_queues: None,
             focus_manager,
             async_driver: None,
             post_frame_handle: None,
@@ -655,6 +692,154 @@ impl BuildOwner {
         }
     }
 
+    /// Return the nearest mounted layout-builder scope containing `element`.
+    /// The search includes `element` itself, matching Flutter's BuildScope
+    /// ownership rule for the scope root.
+    fn live_layout_scope_ids(&self, tree: &ElementTree) -> HashSet<ElementId> {
+        self.layout_builder_registry.with_entries(|entries| {
+            entries
+                .values()
+                .filter(|entry| tree.contains(entry.element))
+                .map(|entry| entry.element)
+                .collect()
+        })
+    }
+
+    fn nearest_layout_builder_scope(
+        tree: &ElementTree,
+        element: ElementId,
+        live_scopes: &HashSet<ElementId>,
+    ) -> Option<ElementId> {
+        #[cfg(test)]
+        LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
+        let mut cursor = Some(element);
+        while let Some(candidate) = cursor {
+            if live_scopes.contains(&candidate) && tree.contains(candidate) {
+                return Some(candidate);
+            }
+            cursor = tree
+                .get(candidate)
+                .and_then(crate::tree::ElementNode::parent);
+        }
+        None
+    }
+
+    fn defer_dirty_element(&mut self, scope: Option<ElementId>, dirty: DirtyElement) {
+        let queues = self
+            .build_scope_queues
+            .get_or_insert_with(|| Box::new(BuildScopeQueues::default()));
+        if let Some(scope) = scope {
+            queues
+                .isolated
+                .entry(scope)
+                .or_default()
+                .push(Reverse(dirty));
+        } else {
+            queues.root.push(Reverse(dirty));
+        }
+    }
+
+    fn collect_partitioned_dirty(&mut self) {
+        let mut scratch = self
+            .build_scope_queues
+            .as_mut()
+            .map_or_else(Vec::new, |queues| std::mem::take(&mut queues.scratch));
+        if let Some(queues) = self.build_scope_queues.as_mut() {
+            scratch.extend(
+                std::mem::take(&mut queues.root)
+                    .into_iter()
+                    .map(|Reverse(dirty)| dirty),
+            );
+            for bucket in std::mem::take(&mut queues.isolated).into_values() {
+                scratch.extend(bucket.into_iter().map(|Reverse(dirty)| dirty));
+            }
+        }
+        scratch.extend(
+            std::mem::take(&mut self.dirty_elements)
+                .into_iter()
+                .map(|Reverse(dirty)| dirty),
+        );
+        self.build_scope_queues
+            .get_or_insert_with(|| Box::new(BuildScopeQueues::default()))
+            .scratch = scratch;
+    }
+
+    pub(crate) fn repartition_dirty(
+        &mut self,
+        tree: &ElementTree,
+        live_scopes: &HashSet<ElementId>,
+    ) {
+        self.collect_partitioned_dirty();
+        while let Some(mut dirty) = self
+            .build_scope_queues
+            .as_mut()
+            .expect("BUG: repartition creates scoped queues")
+            .scratch
+            .pop()
+        {
+            dirty.depth = tree.get(dirty.id()).map_or(0, |node| node.depth);
+            let scope = Self::nearest_layout_builder_scope(tree, dirty.id(), live_scopes);
+            self.defer_dirty_element(scope, dirty);
+        }
+    }
+
+    pub(crate) fn activate_build_target(&mut self, target: BuildScopeTarget) {
+        let Some(queues) = self.build_scope_queues.as_mut() else {
+            return;
+        };
+        let mut active = match target {
+            BuildScopeTarget::All => return,
+            BuildScopeTarget::Global => std::mem::take(&mut queues.root),
+            BuildScopeTarget::LayoutBuilder(scope) => {
+                queues.isolated.remove(&scope).unwrap_or_default()
+            }
+        };
+        self.dirty_elements.append(&mut active);
+    }
+
+    pub(crate) fn ready_layout_scopes(&self) -> Vec<ElementId> {
+        self.build_scope_queues
+            .as_ref()
+            .map_or_else(Vec::new, |queues| queues.isolated.keys().copied().collect())
+    }
+
+    pub(crate) fn has_pending_layout_scope(&self, scope: ElementId) -> bool {
+        self.build_scope_queues
+            .as_ref()
+            .is_some_and(|queues| queues.isolated.contains_key(&scope))
+    }
+
+    pub(crate) fn has_pending_global_builds(&self) -> bool {
+        self.build_scope_queues
+            .as_ref()
+            .is_some_and(|queues| !queues.root.is_empty())
+    }
+
+    pub(crate) fn has_partitioned_builds(&self) -> bool {
+        self.build_scope_queues.as_ref().is_some_and(|queues| {
+            !queues.root.is_empty() || queues.isolated.values().any(|bucket| !bucket.is_empty())
+        })
+    }
+
+    pub(crate) fn collapse_empty_build_scope_queues(&mut self) {
+        let is_empty = self.build_scope_queues.as_ref().is_some_and(|queues| {
+            queues.root.is_empty() && queues.isolated.is_empty() && queues.scratch.is_empty()
+        });
+        if is_empty {
+            self.build_scope_queues = None;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_layout_scope_classifications() {
+        LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(0));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn layout_scope_classifications() -> usize {
+        LAYOUT_SCOPE_CLASSIFICATIONS.with(std::cell::Cell::get)
+    }
+
     /// Acquire an [`ElementOwner`](super::ElementOwner) split-borrow
     /// handle for the duration of an Element lifecycle traversal.
     ///
@@ -664,9 +849,11 @@ impl BuildOwner {
     /// `unmount` / `update` path may write. The borrow checker proves
     /// non-aliasing because each field is borrowed once.
     pub fn element_owner_mut(&mut self) -> super::ElementOwner<'_> {
+        let partitioned_dirty_count = self.partitioned_dirty_count();
         super::ElementOwner {
             global_keys: &mut self.global_keys,
             dirty_elements: &mut self.dirty_elements,
+            partitioned_dirty_count,
             dirty_reasons: &mut self.dirty_reasons,
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
@@ -786,14 +973,23 @@ impl BuildOwner {
     /// Check if there are dirty elements.
     pub fn has_dirty_elements(&self) -> bool {
         !self.dirty_elements.is_empty()
+            || self.build_scope_queues.as_ref().is_some_and(|queues| {
+                !queues.root.is_empty() || queues.isolated.values().any(|bucket| !bucket.is_empty())
+            })
     }
 
     /// Get the number of dirty elements.
     pub fn dirty_count(&self) -> usize {
-        self.dirty_elements.len()
+        self.dirty_elements.len() + self.partitioned_dirty_count()
     }
 
-    /// Process all dirty elements.
+    fn partitioned_dirty_count(&self) -> usize {
+        self.build_scope_queues.as_ref().map_or(0, |queues| {
+            queues.root.len() + queues.isolated.values().map(BinaryHeap::len).sum::<usize>()
+        })
+    }
+
+    /// Process all dirty elements outside layout-builder scopes.
     ///
     /// Rebuilds elements in depth order (shallowest first). This ensures
     /// that when a parent rebuilds, any children that become dirty are
@@ -803,6 +999,53 @@ impl BuildOwner {
     ///
     /// * `tree` - The element tree to rebuild
     pub fn build_scope(&mut self, tree: &mut ElementTree) {
+        let has_partitioned_work = self
+            .build_scope_queues
+            .as_ref()
+            .is_some_and(|queues| !queues.root.is_empty() || !queues.isolated.is_empty());
+        if !self.layout_builder_registry.is_empty()
+            && !has_partitioned_work
+            && self.dirty_elements.is_empty()
+            && self.external_inbox.lock().is_empty()
+        {
+            // A mounted but clean layout builder must not turn the lazy scoped
+            // queues into a per-frame allocation. There is no work to route.
+            return;
+        }
+        let target = if self.layout_builder_registry.is_empty() && !has_partitioned_work {
+            // Preserve the pre-scope hot path exactly when the feature is inert.
+            BuildScopeTarget::All
+        } else {
+            BuildScopeTarget::Global
+        };
+        self.build_scope_target(tree, target);
+        self.collapse_empty_build_scope_queues();
+    }
+
+    pub(crate) fn build_scope_target(&mut self, tree: &mut ElementTree, target: BuildScopeTarget) {
+        let live_scopes = match target {
+            BuildScopeTarget::All => None,
+            BuildScopeTarget::Global | BuildScopeTarget::LayoutBuilder(_) => {
+                let live_scopes = self.live_layout_scope_ids(tree);
+                self.repartition_dirty(tree, &live_scopes);
+                self.activate_build_target(target);
+                Some(live_scopes)
+            }
+        };
+        let _ = self.drain_prepared_build_target(tree, target, live_scopes.as_ref());
+    }
+
+    pub(crate) fn drain_prepared_build_target(
+        &mut self,
+        tree: &mut ElementTree,
+        target: BuildScopeTarget,
+        live_scopes: Option<&HashSet<ElementId>>,
+    ) -> BuildDrainResult {
+        #[cfg(not(debug_assertions))]
+        if matches!(target, BuildScopeTarget::All) {
+            return self.drain_build_scope(tree, target, live_scopes);
+        }
+
         #[cfg(debug_assertions)]
         {
             assert!(!self.building, "build_scope called while already building");
@@ -810,6 +1053,34 @@ impl BuildOwner {
             self.scope_depth += 1;
         }
 
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.drain_build_scope(tree, target, live_scopes)
+        }));
+
+        if outcome.is_err() && !matches!(target, BuildScopeTarget::All) {
+            let live_scopes = live_scopes.expect("BUG: scoped drain owns a live-scope snapshot");
+            self.repartition_dirty(tree, live_scopes);
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            self.building = false;
+            self.scope_depth -= 1;
+        }
+
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    fn drain_build_scope(
+        &mut self,
+        tree: &mut ElementTree,
+        target: BuildScopeTarget,
+        live_scopes: Option<&HashSet<ElementId>>,
+    ) -> BuildDrainResult {
+        let mut result = BuildDrainResult::default();
         // Drain elements scheduled from OUTSIDE a frame (animation / listenable
         // ticks whose mark-dirty callback holds an `ExternalBuildScheduler`).
         // Pushed straight onto the heap — we are already in a frame, so the
@@ -884,9 +1155,30 @@ impl BuildOwner {
         // is released before the handle is reborrowed.
         while let Some(Reverse(dirty)) = self.dirty_elements.pop() {
             let id = dirty.id();
-            let reasons = self
+            let nearest_scope = match target {
+                BuildScopeTarget::All => None,
+                BuildScopeTarget::Global | BuildScopeTarget::LayoutBuilder(_) => {
+                    Self::nearest_layout_builder_scope(
+                        tree,
+                        id,
+                        live_scopes.expect("BUG: scoped drain owns a live-scope snapshot"),
+                    )
+                }
+            };
+            let target_accepts = match target {
+                BuildScopeTarget::All => true,
+                BuildScopeTarget::Global => nearest_scope.is_none(),
+                BuildScopeTarget::LayoutBuilder(scope) => nearest_scope == Some(scope),
+            };
+            if !target_accepts {
+                self.defer_dirty_element(nearest_scope, dirty);
+                continue;
+            }
+
+            let reasons_at_start = self
                 .dirty_reasons
-                .remove(&id)
+                .get(&id)
+                .copied()
                 .expect("BUG: every dirty heap entry must own rebuild reasons");
 
             // Flutter parity (`framework.dart:5977-5982`): if this
@@ -894,7 +1186,7 @@ impl BuildOwner {
             // last build, fire `ViewState::did_change_dependencies` BEFORE
             // the build. Consumed here so the typed hook runs exactly once
             // per dependency-change-then-rebuild cycle.
-            let needs_did_change = self.pending_dependency_changes.remove(&id);
+            let needs_did_change = self.pending_dependency_changes.contains(&id);
 
             // Guard (still holding only a brief `&mut node`): an
             // inherited-dependency change marks an otherwise-clean dependent
@@ -906,12 +1198,16 @@ impl BuildOwner {
             {
                 let Some(node) = tree.get_mut(id) else {
                     // Stale / removed id — nothing to build.
+                    self.dirty_reasons.remove(&id);
+                    self.pending_dependency_changes.remove(&id);
                     continue;
                 };
                 if needs_did_change {
                     node.element_mut().mark_needs_build();
                 }
                 if !node.element().lifecycle().can_build() || !node.element().is_dirty() {
+                    self.dirty_reasons.remove(&id);
+                    self.pending_dependency_changes.remove(&id);
                     continue;
                 }
             }
@@ -919,7 +1215,7 @@ impl BuildOwner {
             let rebuild_span = tracing::info_span!(
                 "element_rebuild",
                 element = ?id,
-                reasons = %reasons,
+                reasons = %reasons_at_start,
             );
             let _rebuild_entered = rebuild_span.enter();
 
@@ -951,10 +1247,12 @@ impl BuildOwner {
             // `ELEMENT_PRESENT` panic. `AssertUnwindSafe` is sound because the
             // sole cross-unwind invariant — the slot is whole again — is
             // re-established by the unconditional `put_element` below.
+            let partitioned_dirty_count = self.partitioned_dirty_count();
             let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
                     global_keys: &mut self.global_keys,
                     dirty_elements: &mut self.dirty_elements,
+                    partitioned_dirty_count,
                     dirty_reasons: &mut self.dirty_reasons,
                     inactive_elements: &mut self.inactive_elements,
                     pending_dependency_changes: &mut self.pending_dependency_changes,
@@ -1000,8 +1298,20 @@ impl BuildOwner {
                 // it did before (no behavior change beyond keeping the slab
                 // consistent). Partial `dep_sink` records are intentionally
                 // dropped — the build did not complete.
-                Err(payload) => std::panic::resume_unwind(payload),
+                Err(payload) => {
+                    self.dirty_elements.push(Reverse(dirty));
+                    std::panic::resume_unwind(payload)
+                }
             };
+
+            let reasons = self
+                .dirty_reasons
+                .remove(&id)
+                .expect("BUG: a completed rebuild must retain its rebuild reasons");
+            result.any_rebuilt = true;
+            result.target_rebuilt |=
+                matches!(target, BuildScopeTarget::LayoutBuilder(scope) if scope == id);
+            self.pending_dependency_changes.remove(&id);
 
             // ADR-0040: the build ran to completion (the resume_unwind branch
             // can no longer take it) and the slot is restored — safe window
@@ -1035,9 +1345,11 @@ impl BuildOwner {
             // slab-resident children with a fresh `&mut tree`. Newly inserted
             // children are scheduled inside the reconciler so this same drain
             // loop reaches them.
+            let partitioned_dirty_count = self.partitioned_dirty_count();
             let mut element_owner = super::ElementOwner {
                 global_keys: &mut self.global_keys,
                 dirty_elements: &mut self.dirty_elements,
+                partitioned_dirty_count,
                 dirty_reasons: &mut self.dirty_reasons,
                 inactive_elements: &mut self.inactive_elements,
                 pending_dependency_changes: &mut self.pending_dependency_changes,
@@ -1071,12 +1383,7 @@ impl BuildOwner {
         // insert flagged a possible drift), so a render sibling that attached
         // before a component-deferred sibling does not invert their layout.
         tree.reorder_render_children_after_build();
-
-        #[cfg(debug_assertions)]
-        {
-            self.building = false;
-            self.scope_depth -= 1;
-        }
+        result
     }
 
     // ========================================================================
@@ -1205,9 +1512,11 @@ impl BuildOwner {
                 .unwrap_or((0, usize::MAX));
 
             // Inline split-borrow (same pattern as `build_scope` catch_unwind).
+            let partitioned_dirty_count = self.partitioned_dirty_count();
             let mut inline_owner = super::ElementOwner {
                 global_keys: &mut self.global_keys,
                 dirty_elements: &mut self.dirty_elements,
+                partitioned_dirty_count,
                 dirty_reasons: &mut self.dirty_reasons,
                 inactive_elements: &mut self.inactive_elements,
                 pending_dependency_changes: &mut self.pending_dependency_changes,
@@ -1339,9 +1648,11 @@ impl BuildOwner {
         // The handle survives `tree.get_mut` borrows because it points into
         // disjoint `BuildOwner` fields. No live build runs here, so the
         // build-time tree handle is absent.
+        let partitioned_dirty_count = self.partitioned_dirty_count();
         let mut element_owner = super::ElementOwner {
             global_keys: &mut self.global_keys,
             dirty_elements: &mut self.dirty_elements,
+            partitioned_dirty_count,
             dirty_reasons: &mut self.dirty_reasons,
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
@@ -1540,7 +1851,7 @@ impl Drop for BuildOwner {
 impl std::fmt::Debug for BuildOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BuildOwner")
-            .field("dirty_count", &self.dirty_elements.len())
+            .field("dirty_count", &self.dirty_count())
             .field("global_keys", &self.global_keys.len())
             .finish_non_exhaustive()
     }
@@ -1571,11 +1882,16 @@ fn notify_detached(observer: &dyn flui_foundation::observe::TreeObserver) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use flui_objects::RenderSizedBox;
-    use flui_rendering::protocol::BoxProtocol;
+    use flui_rendering::{
+        pipeline::{PipelineCell, PipelineOwner},
+        protocol::BoxProtocol,
+    };
 
     use super::*;
-    use crate::{View, tree::ElementTree};
+    use crate::{BoxedView, View, ViewExt, element::LayoutBuilder, tree::ElementTree};
 
     /// A render-family leaf view with no child views.
     #[derive(Clone)]
@@ -1604,6 +1920,285 @@ mod tests {
     impl View for TestView {
         fn create_element(&self) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    fn insert_child(
+        tree: &mut ElementTree,
+        owner: &mut BuildOwner,
+        parent: ElementId,
+        slot: usize,
+    ) -> ElementId {
+        tree.insert(&TestView, parent, slot, &mut owner.element_owner_mut())
+    }
+
+    fn settle_initial_builds(tree: &mut ElementTree, owner: &mut BuildOwner) {
+        owner.build_scope(tree);
+    }
+
+    #[test]
+    fn scoped_descendant_waits_for_its_layout_builder_without_ancestor_reconcile() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+        let scope = insert_child(&mut tree, &mut owner, root, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+        let descendant = insert_child(&mut tree, &mut owner, scope, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+
+        let _cell = owner.register_layout_builder_for_test(RenderId::new(41), scope);
+        tree.mark_needs_build(descendant);
+        owner.schedule_build_for(descendant, 2, RebuildReason::StateChange);
+
+        owner.build_scope(&mut tree);
+        assert!(
+            owner.pending_rebuild_reasons(descendant).is_some(),
+            "the global drain must quarantine explicit dirty work below a layout builder"
+        );
+
+        owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope));
+        assert!(owner.pending_rebuild_reasons(descendant).is_none());
+        assert!(
+            !tree
+                .get(descendant)
+                .expect("descendant")
+                .element()
+                .is_dirty()
+        );
+    }
+
+    #[test]
+    fn nested_scope_quarantines_work_until_its_own_drain() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+        let outer = insert_child(&mut tree, &mut owner, root, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+        let inner = insert_child(&mut tree, &mut owner, outer, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+        let descendant = insert_child(&mut tree, &mut owner, inner, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+
+        let _outer_cell = owner.register_layout_builder_for_test(RenderId::new(51), outer);
+        let _inner_cell = owner.register_layout_builder_for_test(RenderId::new(52), inner);
+        tree.mark_needs_build(descendant);
+        owner.schedule_build_for(descendant, 3, RebuildReason::StateChange);
+
+        owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(outer));
+        assert!(owner.pending_rebuild_reasons(descendant).is_some());
+        assert!(owner.has_pending_layout_scope(inner));
+
+        owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(inner));
+        assert!(owner.pending_rebuild_reasons(descendant).is_none());
+    }
+
+    #[test]
+    fn removing_a_scope_reroutes_its_queued_descendant_to_the_global_drain() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+        let scope = insert_child(&mut tree, &mut owner, root, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+        let descendant = insert_child(&mut tree, &mut owner, scope, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+        let render_id = RenderId::new(53);
+        let _cell = owner.register_layout_builder_for_test(render_id, scope);
+
+        tree.mark_needs_build(descendant);
+        owner.schedule_build_for(descendant, 2, RebuildReason::StateChange);
+        owner.build_scope(&mut tree);
+        assert!(owner.pending_rebuild_reasons(descendant).is_some());
+
+        owner
+            .element_owner_mut()
+            .unregister_layout_builder(render_id);
+        owner.build_scope(&mut tree);
+        assert!(
+            owner.pending_rebuild_reasons(descendant).is_none(),
+            "once the scope is gone, live queued work is global rather than lost"
+        );
+    }
+
+    #[derive(Clone)]
+    struct SelfInvalidatingView {
+        build_calls: Arc<AtomicUsize>,
+        should_invalidate: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    struct SelfInvalidatingState;
+
+    impl crate::StatefulView for SelfInvalidatingView {
+        type State = SelfInvalidatingState;
+
+        fn create_state(&self) -> Self::State {
+            SelfInvalidatingState
+        }
+    }
+
+    impl crate::ViewState<SelfInvalidatingView> for SelfInvalidatingState {
+        fn build(
+            &self,
+            view: &SelfInvalidatingView,
+            ctx: &dyn crate::BuildContext,
+        ) -> impl crate::IntoView {
+            view.build_calls.fetch_add(1, Ordering::Relaxed);
+            if view.should_invalidate.swap(false, Ordering::Relaxed) {
+                ctx.mark_needs_build();
+            }
+            TestView
+        }
+    }
+
+    impl View for SelfInvalidatingView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+    }
+
+    #[test]
+    fn current_building_scope_root_is_not_replayed_when_it_invalidates_itself() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let should_invalidate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let scope = tree.mount_root(
+            &SelfInvalidatingView {
+                build_calls: Arc::clone(&build_calls),
+                should_invalidate: Arc::clone(&should_invalidate),
+            },
+            &mut owner.element_owner_mut(),
+        );
+        settle_initial_builds(&mut tree, &mut owner);
+        let calls_before_scoped_rebuild = build_calls.load(Ordering::Relaxed);
+        let _cell = owner.register_layout_builder_for_test(RenderId::new(54), scope);
+
+        should_invalidate.store(true, Ordering::Relaxed);
+        tree.mark_needs_build(scope);
+        owner.schedule_build_for(scope, 0, RebuildReason::StateChange);
+        owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope));
+
+        assert_eq!(
+            build_calls.load(Ordering::Relaxed),
+            calls_before_scoped_rebuild + 1,
+            "the scoped rebuild runs once; current self is not replayed"
+        );
+        assert!(owner.pending_rebuild_reasons(scope).is_none());
+    }
+
+    #[test]
+    fn scoped_rebuild_consumes_reason_union_and_pending_dependency_once() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+        let scope = insert_child(&mut tree, &mut owner, root, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+        let descendant = insert_child(&mut tree, &mut owner, scope, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+        let _cell = owner.register_layout_builder_for_test(RenderId::new(61), scope);
+
+        tree.mark_needs_build(descendant);
+        owner.schedule_build_for(descendant, 2, RebuildReason::StateChange);
+        owner.schedule_build_for(descendant, 2, RebuildReason::DependencyChange);
+        owner.pending_dependency_changes.insert(descendant);
+        let pending = owner
+            .pending_rebuild_reasons(descendant)
+            .expect("reasons must be queued");
+        assert!(pending.contains(RebuildReason::StateChange));
+        assert!(pending.contains(RebuildReason::DependencyChange));
+
+        owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope));
+        assert!(owner.pending_rebuild_reasons(descendant).is_none());
+        assert!(!owner.pending_dependency_changes.contains(&descendant));
+    }
+
+    #[derive(Clone)]
+    struct DependencyPanicView {
+        hook_calls: Arc<AtomicUsize>,
+    }
+
+    struct DependencyPanicState {
+        hook_calls: Arc<AtomicUsize>,
+    }
+
+    impl crate::StatefulView for DependencyPanicView {
+        type State = DependencyPanicState;
+
+        fn create_state(&self) -> Self::State {
+            DependencyPanicState {
+                hook_calls: Arc::clone(&self.hook_calls),
+            }
+        }
+    }
+
+    impl crate::ViewState<DependencyPanicView> for DependencyPanicState {
+        fn build(
+            &self,
+            _view: &DependencyPanicView,
+            _ctx: &dyn crate::BuildContext,
+        ) -> impl crate::IntoView {
+            TestView
+        }
+
+        fn did_change_dependencies(&mut self, _ctx: &dyn crate::BuildContext) {
+            self.hook_calls.fetch_add(1, Ordering::Relaxed);
+            panic!("dependency hook panic");
+        }
+    }
+
+    impl View for DependencyPanicView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+    }
+
+    #[test]
+    fn scoped_drain_unwind_restores_foreign_work_reasons_dependency_and_flags() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+        let scope = insert_child(&mut tree, &mut owner, root, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+        let hook_calls = Arc::new(AtomicUsize::new(0));
+        let panicking = tree.insert(
+            &DependencyPanicView {
+                hook_calls: Arc::clone(&hook_calls),
+            },
+            scope,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let foreign = insert_child(&mut tree, &mut owner, root, 1);
+        settle_initial_builds(&mut tree, &mut owner);
+        let _cell = owner.register_layout_builder_for_test(RenderId::new(71), scope);
+
+        tree.mark_needs_build(panicking);
+        owner.schedule_build_for(panicking, 2, RebuildReason::DependencyChange);
+        owner.pending_dependency_changes.insert(panicking);
+        tree.mark_needs_build(foreign);
+        owner.schedule_build_for(foreign, 1, RebuildReason::StateChange);
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope));
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(hook_calls.load(Ordering::Relaxed), 1);
+        assert!(owner.pending_rebuild_reasons(panicking).is_some());
+        assert!(owner.pending_dependency_changes.contains(&panicking));
+        assert!(owner.pending_rebuild_reasons(foreign).is_some());
+        assert_eq!(
+            owner.dirty_count(),
+            2,
+            "active and foreign heap work restored"
+        );
+        #[cfg(debug_assertions)]
+        {
+            assert!(!owner.is_building());
+            assert_eq!(owner.scope_depth(), 0);
         }
     }
 
@@ -1834,6 +2429,320 @@ mod tests {
         fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
             Some(&self.key)
         }
+    }
+
+    #[derive(Clone)]
+    struct KeyedDependencyView {
+        key: crate::GlobalKey<()>,
+        build_calls: Arc<AtomicUsize>,
+        dependency_calls: Arc<AtomicUsize>,
+    }
+
+    struct KeyedDependencyState {
+        dependency_calls: Arc<AtomicUsize>,
+    }
+
+    impl crate::StatefulView for KeyedDependencyView {
+        type State = KeyedDependencyState;
+
+        fn create_state(&self) -> Self::State {
+            KeyedDependencyState {
+                dependency_calls: Arc::clone(&self.dependency_calls),
+            }
+        }
+    }
+
+    impl crate::ViewState<KeyedDependencyView> for KeyedDependencyState {
+        fn build(
+            &self,
+            view: &KeyedDependencyView,
+            _ctx: &dyn crate::BuildContext,
+        ) -> impl crate::IntoView {
+            view.build_calls.fetch_add(1, Ordering::Relaxed);
+            TestView
+        }
+
+        fn did_change_dependencies(&mut self, _ctx: &dyn crate::BuildContext) {
+            self.dependency_calls.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl View for KeyedDependencyView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    #[derive(Clone)]
+    struct ReparentingLayoutHost {
+        children: Vec<BoxedView>,
+    }
+
+    impl ReparentingLayoutHost {
+        fn nested(keyed_child: KeyedDependencyView) -> Self {
+            Self {
+                children: vec![
+                    TestView.boxed(),
+                    LayoutBuilder::new(move |_ctx, _constraints| keyed_child.clone()).boxed(),
+                ],
+            }
+        }
+    }
+
+    impl crate::RenderView for ReparentingLayoutHost {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+
+        fn has_children(&self) -> bool {
+            true
+        }
+
+        fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+            for child in &self.children {
+                visitor(child);
+            }
+        }
+    }
+
+    impl View for ReparentingLayoutHost {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    #[test]
+    fn frame_service_drains_reparented_work_after_final_scope_unregistration() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let dependency_calls = Arc::new(AtomicUsize::new(0));
+        let key = crate::GlobalKey::new();
+        let keyed_child = KeyedDependencyView {
+            key: key.clone(),
+            build_calls: Arc::clone(&build_calls),
+            dependency_calls: Arc::clone(&dependency_calls),
+        };
+        let host = ReparentingLayoutHost::nested(keyed_child.clone());
+        let root = tree.mount_root_with_pipeline_owner(
+            &host,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        tree.mark_needs_build(root);
+        owner.schedule_build_for(root, 0, RebuildReason::StateChange);
+        owner.build_scope(&mut tree);
+        assert_eq!(owner.layout_builder_count(), 1);
+
+        let (scope_render, cell) = owner.layout_builder_registry.with_entries(|entries| {
+            let (render_id, entry) = entries
+                .iter()
+                .next()
+                .expect("live LayoutBuilder registration");
+            (*render_id, Arc::clone(&entry.cell))
+        });
+        cell.publish(flui_rendering::constraints::BoxConstraints::tight_for(
+            Some(flui_types::geometry::px(100.0)),
+            Some(flui_types::geometry::px(100.0)),
+        ));
+        assert!(owner.service_layout_builders(&mut tree, &pipeline));
+        let moved = owner
+            .element_for_global_key(key.id())
+            .expect("keyed descendant mounted below LayoutBuilder");
+        let builds_after_mount = build_calls.load(Ordering::Relaxed);
+
+        tree.mark_needs_build(moved);
+        let depth = tree.get(moved).expect("live keyed descendant").depth;
+        owner.schedule_build_for(moved, depth, RebuildReason::StateChange);
+        owner.schedule_build_for(moved, depth, RebuildReason::DependencyChange);
+        owner.pending_dependency_changes.insert(moved);
+        owner.build_scope(&mut tree);
+        assert!(owner.pending_rebuild_reasons(moved).is_some());
+
+        tree.remove(moved, &mut owner.element_owner_mut());
+        let migrated = tree.insert(&keyed_child, root, 2, &mut owner.element_owner_mut());
+        assert_eq!(migrated, moved, "GlobalKey reparent preserves identity");
+        owner
+            .element_owner_mut()
+            .unregister_layout_builder(scope_render);
+        assert_eq!(
+            owner.layout_builder_count(),
+            0,
+            "the final scope was removed"
+        );
+        assert_eq!(owner.element_for_global_key(key.id()), Some(moved));
+
+        assert!(
+            owner.service_layout_builders(&mut tree, &pipeline),
+            "service must drain work bucketed under the removed final scope"
+        );
+        assert_eq!(build_calls.load(Ordering::Relaxed), builds_after_mount + 1);
+        assert_eq!(dependency_calls.load(Ordering::Relaxed), 1);
+        assert!(owner.pending_rebuild_reasons(moved).is_none());
+        assert!(!owner.pending_dependency_changes.contains(&moved));
+        assert_eq!(owner.dirty_count(), 0);
+    }
+
+    #[test]
+    fn queued_work_follows_a_live_global_key_reparent_across_build_scopes() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        let root = tree.mount_root_with_pipeline_owner(
+            &TestView,
+            Some(pipeline),
+            &mut owner.element_owner_mut(),
+        );
+        settle_initial_builds(&mut tree, &mut owner);
+        let scope_a = insert_child(&mut tree, &mut owner, root, 0);
+        let scope_b = insert_child(&mut tree, &mut owner, root, 1);
+        settle_initial_builds(&mut tree, &mut owner);
+        let _scope_a_cell = owner.register_layout_builder_for_test(RenderId::new(81), scope_a);
+        let _scope_b_cell = owner.register_layout_builder_for_test(RenderId::new(82), scope_b);
+
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let dependency_calls = Arc::new(AtomicUsize::new(0));
+        let keyed = KeyedDependencyView {
+            key: crate::GlobalKey::new(),
+            build_calls: Arc::clone(&build_calls),
+            dependency_calls: Arc::clone(&dependency_calls),
+        };
+        let moved = tree.insert(&keyed, scope_a, 0, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+        let builds_after_mount = build_calls.load(Ordering::Relaxed);
+
+        tree.mark_needs_build(moved);
+        owner.schedule_build_for(moved, 2, RebuildReason::StateChange);
+        owner.schedule_build_for(moved, 2, RebuildReason::DependencyChange);
+        owner.pending_dependency_changes.insert(moved);
+        owner.build_scope(&mut tree);
+        assert!(owner.pending_rebuild_reasons(moved).is_some());
+
+        tree.remove(moved, &mut owner.element_owner_mut());
+        let migrated = tree.insert(&keyed, scope_b, 0, &mut owner.element_owner_mut());
+        assert_eq!(migrated, moved, "GlobalKey reparent preserves identity");
+        assert_eq!(
+            tree.get(moved).and_then(crate::tree::ElementNode::parent),
+            Some(scope_b)
+        );
+
+        owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope_a));
+        assert!(
+            owner.pending_rebuild_reasons(moved).is_some(),
+            "the old scope cannot consume work after the live reparent"
+        );
+        assert!(owner.pending_dependency_changes.contains(&moved));
+        owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope_b));
+        assert!(owner.pending_rebuild_reasons(moved).is_none());
+        assert!(!owner.pending_dependency_changes.contains(&moved));
+        assert_eq!(dependency_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(build_calls.load(Ordering::Relaxed), builds_after_mount + 1);
+
+        tree.mark_needs_build(moved);
+        owner.schedule_build_for(moved, 2, RebuildReason::StateChange);
+        owner.schedule_build_for(moved, 2, RebuildReason::DependencyChange);
+        owner.pending_dependency_changes.insert(moved);
+        owner.build_scope(&mut tree);
+        assert!(owner.pending_rebuild_reasons(moved).is_some());
+
+        tree.remove(moved, &mut owner.element_owner_mut());
+        let migrated_global = tree.insert(&keyed, root, 2, &mut owner.element_owner_mut());
+        assert_eq!(migrated_global, moved);
+        assert_eq!(
+            tree.get(moved).and_then(crate::tree::ElementNode::parent),
+            Some(root)
+        );
+        owner.build_scope(&mut tree);
+
+        assert!(owner.pending_rebuild_reasons(moved).is_none());
+        assert!(!owner.pending_dependency_changes.contains(&moved));
+        assert_eq!(dependency_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(build_calls.load(Ordering::Relaxed), builds_after_mount + 2);
+    }
+
+    #[test]
+    fn frame_service_consumes_work_reparented_from_a_scope_to_global() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        let root = tree.mount_root_with_pipeline_owner(
+            &TestView,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        settle_initial_builds(&mut tree, &mut owner);
+        let scope = insert_child(&mut tree, &mut owner, root, 0);
+        settle_initial_builds(&mut tree, &mut owner);
+        let scope_render = pipeline.with_mut(|pipeline_owner| {
+            pipeline_owner.insert::<BoxProtocol>(Box::new(RenderSizedBox::shrink()))
+        });
+        let _scope_cell = owner.register_layout_builder_for_test(scope_render, scope);
+
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let dependency_calls = Arc::new(AtomicUsize::new(0));
+        let frame_requests = Arc::new(AtomicUsize::new(0));
+        let observed_frame_requests = Arc::clone(&frame_requests);
+        owner.set_on_build_scheduled(move || {
+            observed_frame_requests.fetch_add(1, Ordering::Relaxed);
+        });
+        let keyed = KeyedDependencyView {
+            key: crate::GlobalKey::new(),
+            build_calls: Arc::clone(&build_calls),
+            dependency_calls: Arc::clone(&dependency_calls),
+        };
+        let moved = tree.insert(&keyed, scope, 0, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+        let builds_after_mount = build_calls.load(Ordering::Relaxed);
+
+        tree.mark_needs_build(moved);
+        owner.schedule_build_for(moved, 2, RebuildReason::StateChange);
+        owner.schedule_build_for(moved, 2, RebuildReason::DependencyChange);
+        owner.pending_dependency_changes.insert(moved);
+        owner.build_scope(&mut tree);
+        assert!(owner.pending_rebuild_reasons(moved).is_some());
+
+        tree.remove(moved, &mut owner.element_owner_mut());
+        let migrated = tree.insert(&keyed, root, 1, &mut owner.element_owner_mut());
+        assert_eq!(migrated, moved, "GlobalKey reparent preserves identity");
+        let requests_before_service = frame_requests.load(Ordering::Relaxed);
+
+        assert!(
+            owner.service_layout_builders(&mut tree, &pipeline),
+            "frame service must report the globally rerouted rebuild"
+        );
+        assert!(
+            !owner.has_dirty_elements(),
+            "no root-bucket work is stranded"
+        );
+        assert!(owner.pending_rebuild_reasons(moved).is_none());
+        assert!(!owner.pending_dependency_changes.contains(&moved));
+        assert_eq!(dependency_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(build_calls.load(Ordering::Relaxed), builds_after_mount + 1);
+        assert_eq!(
+            frame_requests.load(Ordering::Relaxed),
+            requests_before_service + 1,
+            "the rebuilt child may request a frame during reconciliation, but the active global \
+             drain consumes that newly scheduled work immediately"
+        );
     }
 
     /// A GlobalKey reparent to a deeper parent must update the moved

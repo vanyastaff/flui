@@ -14,7 +14,7 @@ is a **small immutable configuration object** in one of these shapes:
 | Multi-child render widget | `RenderView` (hand-written `impl View`, generic over `C: ViewSeq`) | lays out a child sequence | `Flex`/`Row`/`Column` |
 | Composition widget | `StatelessView` + `#[derive(StatelessView)]` | builds other widgets | `Container` |
 | Parent-data widget | `ParentDataView` + `impl_parent_data_view!` | configures a child's parent-layout data | `Flexible`/`Expanded`/`Positioned` |
-| Transition widget | `AnimatedView` + `impl_animated_view!` | rebuilds each `Animation` tick | `FadeTransition` |
+| Render-driven transition | `StatefulView` + persistent `ProxyAnimation` + private `RenderView` | render object repaints each `Animation` tick | `FadeTransition` |
 
 The render *machine* (layout/paint/compositing) lives in `flui-rendering` +
 `flui-objects`. **Do not** put layout math here — a widget only *configures* a
