@@ -39,7 +39,11 @@ impl RenderView for Foo {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFoo;
     fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject { /* build from config */ }
-    fn update_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>, ro: &mut Self::RenderObject) { /* set_* or `*ro = …` */ }
+    fn update_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>, ro: &mut Self::RenderObject) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= ro.set_config(self.config);
+        impact
+    }
     fn has_children(&self) -> bool { self.child.is_some() }
     fn visit_child_views(&self, v: &mut dyn FnMut(&dyn View)) {
         if let Some(c) = self.child.as_ref() { v(c); }
@@ -55,8 +59,12 @@ impl_render_view!(Foo);
   static `column!`/`row!` tuple path and the dynamic `Vec<BoxedView>` path work
   (contract **C2**). Generic widgets can't use `impl_render_view!`; use the
   crate-local `generic_render_view_element!` macro in `support.rs`.
-- If a render object exposes no setter, rebuild it in `update_render_object`
-  (`*ro = …`) — the render-tree links live in the arena, not in the object.
+- Public render-object setters for phase-affecting configuration return their
+  exact `RenderUpdateImpact`; unchanged values return `NONE`. Widgets return
+  the union of every setter impact they invoke.
+- Setters own equality checks and layout/paint/compositing/semantics policy. If
+  one is missing, add it to `flui-objects`; do not whole-replace a stateful
+  render object or reconstruct its phase policy in the widget.
 
 ## Flutter-parity gotchas already hit
 
