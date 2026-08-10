@@ -96,9 +96,11 @@ impl RenderView for ClipRRect {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_clip_behavior(self.clip_behavior);
-        render_object.set_border_radius(Some(self.clip_source()));
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
+        impact |= render_object.set_border_radius(Some(self.clip_source()));
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -113,3 +115,33 @@ impl RenderView for ClipRRect {
 }
 
 impl_render_view!(ClipRRect);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+
+    #[test]
+    fn border_radius_update_reports_paint_and_semantics_only_on_change() {
+        let initial = ClipRRect::new();
+        let mut render_object =
+            initial.create_render_object(&flui_view::RenderObjectContext::detached());
+
+        assert_eq!(
+            initial.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            ClipRRect::circular(8.0).update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+}

@@ -67,25 +67,6 @@ use flui_rendering::{
     traits::RenderBox,
 };
 
-/// Outcome of [`RenderFlow::set_delegate`] — whether swapping delegates
-/// requires relayout, just a repaint, or neither.
-///
-/// Flutter's `RenderFlow.delegate` setter (oracle L216-234) checks
-/// `runtimeType` explicitly, in addition to `shouldRelayout`/
-/// `shouldRepaint` — unlike `RenderCustomPaint`'s simpler `_didUpdatePainter`
-/// (no such check), a delegate *type* swap always relayouts, even when the
-/// new delegate's own `should_relayout` would say otherwise (it has no
-/// same-type old delegate to meaningfully compare against).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DelegateChange {
-    /// Neither layout nor paint needs to be redone.
-    None,
-    /// Only paint needs to be redone.
-    Repaint,
-    /// Layout (and therefore paint) needs to be redone.
-    Relayout,
-}
-
 /// Positions children with paint-time transform matrices chosen by a
 /// [`FlowDelegate`], rather than layout-time offsets.
 ///
@@ -206,7 +187,10 @@ impl RenderFlow {
     /// `should_repaint`. The caller is responsible for actually marking
     /// the render object dirty — this is paint/layout-affecting state,
     /// not a side-effecting setter.
-    pub fn set_delegate(&mut self, delegate: Arc<dyn FlowDelegate>) -> DelegateChange {
+    pub fn set_delegate(
+        &mut self,
+        delegate: Arc<dyn FlowDelegate>,
+    ) -> flui_rendering::RenderUpdateImpact {
         let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();
         let relayout = type_changed || delegate.should_relayout(&*self.delegate);
         let repaint = !relayout && delegate.should_repaint(&*self.delegate);
@@ -217,21 +201,21 @@ impl RenderFlow {
         self.delegate = delegate;
         self.delegate_listener = self.subscribe();
         if relayout {
-            DelegateChange::Relayout
+            flui_rendering::RenderUpdateImpact::LAYOUT
         } else if repaint {
-            DelegateChange::Repaint
+            flui_rendering::RenderUpdateImpact::PAINT
         } else {
-            DelegateChange::None
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 
-    /// Updates the clip behavior; returns `true` if the value changed.
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> bool {
+    /// Updates the clip behavior, affecting paint and the semantics clip.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -603,11 +587,16 @@ mod tests {
     #[test]
     fn set_clip_behavior_reports_change_flag() {
         let mut flow = RenderFlow::new(linear(0.0));
-        assert!(
-            !flow.set_clip_behavior(Clip::HardEdge),
+        assert_eq!(
+            flow.set_clip_behavior(Clip::HardEdge),
+            flui_rendering::RenderUpdateImpact::NONE,
             "same value, no change"
         );
-        assert!(flow.set_clip_behavior(Clip::None));
+        assert_eq!(
+            flow.set_clip_behavior(Clip::None),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
     }
 
     #[test]
@@ -615,12 +604,12 @@ mod tests {
         let mut flow = RenderFlow::new(linear(10.0));
         assert_eq!(
             flow.set_delegate(linear(10.0)),
-            DelegateChange::None,
+            flui_rendering::RenderUpdateImpact::NONE,
             "identical spacing must not require relayout or repaint"
         );
         assert_eq!(
             flow.set_delegate(linear(20.0)),
-            DelegateChange::Relayout,
+            flui_rendering::RenderUpdateImpact::LAYOUT,
             "different spacing must trigger relayout (should_relayout true)"
         );
     }
@@ -633,7 +622,7 @@ mod tests {
         // check must still force a relayout.
         assert_eq!(
             flow.set_delegate(Arc::new(OtherFlowDelegate)),
-            DelegateChange::Relayout,
+            flui_rendering::RenderUpdateImpact::LAYOUT,
         );
     }
 
@@ -667,7 +656,7 @@ mod tests {
         let mut flow = RenderFlow::new(Arc::new(RepaintOnlyDelegate));
         assert_eq!(
             flow.set_delegate(Arc::new(RepaintOnlyDelegate)),
-            DelegateChange::Repaint,
+            flui_rendering::RenderUpdateImpact::PAINT,
         );
     }
 

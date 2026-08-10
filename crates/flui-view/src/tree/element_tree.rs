@@ -744,25 +744,25 @@ impl ElementTree {
         id
     }
 
-    /// Write the nearest ancestor `ParentDataView`'s configuration onto
-    /// `child_id`'s render node, and mark the owning render parent dirty.
+    /// Install or update the nearest ancestor `ParentDataView`'s typed
+    /// configuration on `child_id`'s render node.
     ///
     /// No-op unless `child_id` owns a render node. Walks strictly upward from
     /// the child, taking the *nearest* `parent_data_config()` and stopping the
     /// search at the first ancestor render object (the render parent that reads
     /// the data during layout) — Flutter's `_findAncestorParentDataElement`
-    /// fused with `_findAncestorRenderObjectElement`. The nearest config wins
-    /// (`set_parent_data` replaces), matching Flutter taking the closest
-    /// `ParentDataWidget`.
+    /// fused with `_findAncestorRenderObjectElement`. The nearest config wins.
+    /// Existing data is mutated through the typed hook so layout-owned fields
+    /// survive; its returned impact controls the render-parent dirty work.
     ///
     /// Average case O(1) — for a plain render child the very first ancestor is
     /// the render parent, so the walk stops in one hop and never touches the
     /// pipeline owner. Worst case O(proxy-nesting depth) between the render
     /// child and its render parent.
     ///
-    /// The tree borrow is fully dropped before the pipeline owner is locked:
-    /// the collected config and owner handle are owned values, and the write
-    /// targets the render tree, never `self`.
+    /// The element tree and render tree are disjoint stores. The typed element
+    /// hook reads widget configuration while the pipeline checkout mutates only
+    /// the render node.
     fn apply_ancestor_parent_data(&mut self, child_id: ElementId) {
         let Some(child) = self.get(child_id) else {
             return;
@@ -773,7 +773,7 @@ impl ElementTree {
         let pipeline_owner = child.element().pipeline_owner();
         let mut cursor = child.parent();
 
-        let mut nearest_config: Option<Box<dyn flui_rendering::parent_data::ParentData>> = None;
+        let mut nearest_parent_data_element: Option<ElementId> = None;
         let mut parent_render_id: Option<flui_foundation::RenderId> = None;
         while let Some(ancestor_id) = cursor {
             let Some(node) = self.get(ancestor_id) else {
@@ -783,28 +783,47 @@ impl ElementTree {
                 parent_render_id = Some(render_id);
                 break;
             }
-            if nearest_config.is_none() {
-                nearest_config = node.element().parent_data_config();
+            if nearest_parent_data_element.is_none()
+                && node.element().parent_data_config().is_some()
+            {
+                nearest_parent_data_element = Some(ancestor_id);
             }
             cursor = node.parent();
         }
 
         // Nothing to apply unless a ParentDataView sits between this render
         // child and its render parent.
-        let Some(config) = nearest_config else {
+        let Some(parent_data_element_id) = nearest_parent_data_element else {
             return;
         };
         let Some(pipeline_owner) = pipeline_owner else {
             return;
         };
 
-        // Tree borrows are dropped; the checkout guards only the render tree.
+        let parent_data_element = self
+            .get(parent_data_element_id)
+            .expect("BUG: located ParentDataView element must remain live");
+        // The element-tree borrow and render-tree checkout are disjoint.
         pipeline_owner.with_mut(|owner| {
-            if let Some(node) = owner.render_tree_mut().get_mut(child_render_id) {
-                node.set_parent_data(config);
-            }
+            let impact = {
+                let Some(node) = owner.render_tree_mut().get_mut(child_render_id) else {
+                    return;
+                };
+                if let Some(parent_data) = node.parent_data_mut() {
+                    parent_data_element
+                        .element()
+                        .apply_parent_data_config(parent_data)
+                } else {
+                    let config = parent_data_element
+                        .element()
+                        .parent_data_config()
+                        .expect("BUG: located ParentDataView must create parent data");
+                    node.set_parent_data(config);
+                    flui_rendering::RenderUpdateImpact::NONE
+                }
+            };
             if let Some(parent_render_id) = parent_render_id {
-                owner.mark_needs_layout(parent_render_id);
+                owner.apply_render_update_impact(parent_render_id, impact);
             }
         });
     }
@@ -898,6 +917,8 @@ impl ElementTree {
         // Tree borrows are dropped; the checkout guards only the render tree.
         pipeline_owner.with_mut(|owner| {
             let mut dirty_render_parents: HashSet<flui_foundation::RenderId> = HashSet::new();
+            let mut membership_changed_parents: HashSet<flui_foundation::RenderId> =
+                HashSet::new();
             {
                 let render_tree = owner.render_tree_mut();
                 let render_ids: Vec<_> = render_tree.iter().map(|(id, _)| id).collect();
@@ -916,9 +937,11 @@ impl ElementTree {
                     if current != desired {
                         if let Some(parent) = current {
                             dirty_render_parents.insert(parent);
+                            membership_changed_parents.insert(parent);
                         }
                         if let Some(parent) = desired {
                             dirty_render_parents.insert(parent);
+                            membership_changed_parents.insert(parent);
                         }
                         node.set_parent(desired);
                     }
@@ -985,7 +1008,14 @@ impl ElementTree {
 
             for parent in dirty_render_parents {
                 if owner.render_tree().contains(parent) {
-                    owner.mark_needs_layout(parent);
+                    let impact = if membership_changed_parents.contains(&parent) {
+                        flui_rendering::RenderUpdateImpact::LAYOUT
+                            | flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                            | flui_rendering::RenderUpdateImpact::SEMANTICS
+                    } else {
+                        flui_rendering::RenderUpdateImpact::LAYOUT
+                    };
+                    owner.apply_render_update_impact(parent, impact);
                 }
             }
         });
@@ -1816,6 +1846,7 @@ impl std::fmt::Debug for ElementTree {
 mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
+
     use crate::{
         BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, InheritedElement,
         StatelessView, View,

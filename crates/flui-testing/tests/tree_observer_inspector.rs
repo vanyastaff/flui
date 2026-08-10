@@ -13,6 +13,7 @@ use flui_devtools::inspector::InspectorCounters;
 use flui_foundation::observe::TreeObserver;
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_view::{BuildOwner, ElementTree, RebuildReason, RenderView, View, ViewExt};
 
 #[derive(Clone)]
@@ -43,7 +44,8 @@ impl RenderView for KeyedLeafBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 }
 
@@ -89,7 +91,8 @@ impl RenderView for MultiBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {
@@ -119,6 +122,18 @@ fn live_children(tree: &ElementTree, parent: ElementId) -> Vec<ElementId> {
     children.into_iter().map(|(_, id)| id).collect()
 }
 
+fn mount_root_with_pipeline(
+    tree: &mut ElementTree,
+    view: &dyn View,
+    owner: &mut BuildOwner,
+) -> ElementId {
+    tree.mount_root_with_pipeline_owner(
+        view,
+        Some(PipelineCell::new(PipelineOwner::new())),
+        &mut owner.element_owner_mut(),
+    )
+}
+
 /// Drives mount → first builds → keyed reorder → shrink (eager unmounts) →
 /// clear, asserting exact counts at each step. Any emission site silently
 /// removed fails a specific assertion here (red→green verified during
@@ -132,7 +147,7 @@ fn inspector_counts_mounts_moves_rebuilds_and_unmounts_exactly() {
 
     // Mount the root; its three keyed children mount during the first
     // build_scope (phase-2 reconcile of the root's build output).
-    let root_id = tree.mount_root(&MultiBox::keyed(&[1, 2, 3]), &mut owner.element_owner_mut());
+    let root_id = mount_root_with_pipeline(&mut tree, &MultiBox::keyed(&[1, 2, 3]), &mut owner);
     let after_root = counters.snapshot();
     assert_eq!(
         after_root.mounts, 1,
@@ -227,7 +242,7 @@ fn seeded_replay_gives_a_mid_run_attach_an_exact_baseline() {
     let mut tree = ElementTree::new();
 
     // Build a 1+3 tree with NO observer installed.
-    let root_id = tree.mount_root(&MultiBox::keyed(&[1, 2, 3]), &mut owner.element_owner_mut());
+    let root_id = mount_root_with_pipeline(&mut tree, &MultiBox::keyed(&[1, 2, 3]), &mut owner);
     owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
@@ -281,7 +296,7 @@ fn panicking_observer_is_detached_and_the_tree_survives() {
 
     // The mount emission panics inside the observer; the emission helper
     // contains it, detaches the observer, and the mount itself completes.
-    let root_id = tree.mount_root(&MultiBox::keyed(&[1]), &mut owner.element_owner_mut());
+    let root_id = mount_root_with_pipeline(&mut tree, &MultiBox::keyed(&[1]), &mut owner);
     assert!(tree.get(root_id).is_some(), "the mount itself must survive");
     assert!(
         owner.tree_observer().is_none(),

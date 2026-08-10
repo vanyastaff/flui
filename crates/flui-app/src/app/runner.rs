@@ -3327,8 +3327,11 @@ mod realm_dispatch_tests {
                 &self,
                 _ctx: &flui_view::RenderObjectContext<'_>,
                 render_object: &mut Self::RenderObject,
-            ) {
-                *render_object = flui_objects::RenderSizedBox::shrink();
+            ) -> flui_rendering::RenderUpdateImpact {
+                render_object.set_size(
+                    Some(flui_types::Pixels::ZERO),
+                    Some(flui_types::Pixels::ZERO),
+                )
             }
         }
 
@@ -7570,8 +7573,11 @@ mod device_recovery_tests {
             &self,
             _ctx: &flui_view::RenderObjectContext<'_>,
             render_object: &mut flui_objects::RenderSizedBox,
-        ) {
-            *render_object = flui_objects::RenderSizedBox::shrink();
+        ) -> flui_rendering::RenderUpdateImpact {
+            render_object.set_size(
+                Some(flui_types::Pixels::ZERO),
+                Some(flui_types::Pixels::ZERO),
+            )
         }
     }
 

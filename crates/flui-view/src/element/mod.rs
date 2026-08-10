@@ -140,6 +140,6 @@ pub type AnimatedElement<V> = Element<V, Single, AnimatedBehavior<V>>;
 /// This is the element type created for views implementing `ParentDataView`
 /// (`Flexible`, `Expanded`, `Positioned`). It is a transparent proxy: it
 /// reconciles its wrapped child unchanged, and additionally surfaces the
-/// view's configured parent-data through `parent_data_config()` so the
-/// `ElementTree` insert/update seams can write it onto the child render node.
+/// view's initial parent data through `parent_data_config()` and routes reused
+/// data through `apply_parent_data_config()` so layout-owned metadata survives.
 pub type ParentDataElement<V> = Element<V, Single, ParentDataBehavior>;

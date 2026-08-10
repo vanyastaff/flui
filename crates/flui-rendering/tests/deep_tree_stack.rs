@@ -100,17 +100,9 @@ fn deep_chain_survives_compositing_bits_walk() {
     }
     owner.set_root_id(Some(root));
 
-    // Mark the full path the way a production boundary flip does
-    // (Flutter `markNeedsCompositingBitsUpdate` flags the node and
-    // walks up flagging every ancestor).
-    for id in owner.render_tree().collect_subtree_ids(root) {
-        owner
-            .render_tree()
-            .get(id)
-            .expect("live chain node")
-            .mark_needs_compositing_bits_update();
-    }
-    owner.add_node_needing_compositing_bits_update(root, 0);
+    // Mark the leaf the way a production boundary flip does. The canonical
+    // Flutter walk flags every non-boundary ancestor and queues the root.
+    owner.mark_needs_compositing_bits_update(leaf);
 
     let owner = owner.into_layout();
     let mut owner = owner.into_compositing();

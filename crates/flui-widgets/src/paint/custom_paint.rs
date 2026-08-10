@@ -79,10 +79,10 @@ impl RenderView for CustomPaint {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_painter(self.painter.clone());
-        render_object.set_foreground_painter(self.foreground_painter.clone());
-        render_object.set_preferred_size(self.size);
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_painter(self.painter.clone())
+            | render_object.set_foreground_painter(self.foreground_painter.clone())
+            | render_object.set_preferred_size(self.size)
     }
 
     fn has_children(&self) -> bool {
@@ -162,13 +162,18 @@ mod tests {
             CustomPaint::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(render_object.painter().is_none());
 
-        CustomPaint::new()
+        let impact = CustomPaint::new()
             .painter(painter())
             .size(Size::new(px(5.0), px(5.0)))
             .update_render_object(
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             );
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
 
         assert!(render_object.painter().is_some());
         assert!(render_object.foreground_painter().is_none());

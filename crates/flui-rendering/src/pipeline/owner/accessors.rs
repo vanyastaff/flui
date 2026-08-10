@@ -10,6 +10,7 @@ use flui_foundation::RenderId;
 use flui_types::{Matrix4, Offset};
 
 use crate::{
+    RenderUpdateImpact,
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     pipeline::{
         dirty::DirtyNode,
@@ -114,21 +115,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             //
             // Pre-fix this pushed raw queue entries: a layout request
             // for a non-boundary node became a bogus dirty ROOT, a
-            // compositing request skipped the flag (the silent-loss
-            // footgun `add_node_needing_compositing_bits_update`
-            // exists to prevent), and dead ids were replayed verbatim.
-            let Some(node) = self.render_tree.get(req.id) else {
+            // compositing request skipped the canonical ancestor walk, and
+            // dead ids were replayed verbatim.
+            if self.render_tree.get(req.id).is_none() {
                 tracing::trace!(?req, "drain_pending_dirty: stale id, dropped");
                 continue;
-            };
-            let depth = node.depth() as usize;
+            }
             match req.kind {
                 DirtyKind::Layout => self.mark_needs_layout(req.id),
-                DirtyKind::Compositing => {
-                    self.add_node_needing_compositing_bits_update(req.id, depth);
-                }
+                DirtyKind::Compositing => self.mark_needs_compositing_bits_update(req.id),
                 DirtyKind::Paint => self.mark_needs_paint(req.id),
-                DirtyKind::Semantics => self.add_node_needing_semantics(req.id, depth),
+                DirtyKind::Semantics => self.mark_needs_semantics(req.id),
             }
         }
         drained
@@ -420,6 +417,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
              between-frame work",
         );
 
+        let former_parent = self.render_tree.parent(id);
         let subtree = self.render_tree.collect_subtree_ids(id);
         if subtree.is_empty() {
             return 0;
@@ -447,8 +445,51 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if self.root_id == Some(id) {
             self.root_id = None;
         }
+        if let Some(parent_id) = former_parent {
+            self.note_render_child_membership_changed(parent_id);
+        }
         tracing::debug!(?id, count, "remove_render_object: subtree disposed");
         count
+    }
+
+    /// Adopt an existing render node and invalidate every parent phase whose
+    /// output depends on child membership.
+    pub fn adopt_render_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        let former_parent = self.render_tree.parent(child_id);
+        if former_parent == Some(parent_id) {
+            return;
+        }
+        if let Some(former_parent_id) = former_parent {
+            self.render_tree.drop_child(former_parent_id, child_id);
+        }
+        self.render_tree.adopt_child(parent_id, child_id);
+        if let Some(former_parent_id) = former_parent.filter(|id| *id != parent_id) {
+            self.note_render_child_membership_changed(former_parent_id);
+        }
+        self.note_render_child_membership_changed(parent_id);
+    }
+
+    /// Detach an existing render child without deleting it and invalidate the
+    /// surviving parent's membership-dependent phases.
+    pub fn drop_render_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        self.render_tree.drop_child(parent_id, child_id);
+        self.note_render_child_membership_changed(parent_id);
+    }
+
+    /// Invalidates every parent phase whose output depends on child membership.
+    pub(crate) fn note_render_child_membership_changed(&mut self, parent_id: RenderId) {
+        self.apply_render_update_impact(
+            parent_id,
+            RenderUpdateImpact::LAYOUT
+                | RenderUpdateImpact::COMPOSITING_BITS
+                | RenderUpdateImpact::SEMANTICS,
+        );
+    }
+
+    /// Record a pure sibling-order change. Membership and semantics content
+    /// are unchanged, but the parent must lay its children out again.
+    pub fn note_render_children_reordered(&mut self, parent_id: RenderId) {
+        self.apply_render_update_impact(parent_id, RenderUpdateImpact::LAYOUT);
     }
 
     /// Hit-tests the render tree at `position` (root-local
@@ -1039,13 +1080,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id
     }
 
-    /// Inserts a render object as a child and marks it as needing layout.
+    /// Inserts a Box-protocol child and records canonical membership impacts.
     ///
     /// This method:
     /// 1. Inserts the render object as a child in the RenderTree
-    /// 2. Adds the node to the dirty layout list
-    /// 3. Adds the node to the dirty paint list
-    /// 4. Marks the parent as needing layout (since child structure changed)
+    /// 2. Adds the child to the dirty layout list
+    /// 3. Applies `LAYOUT | COMPOSITING_BITS | SEMANTICS` to the parent
+    ///    (semantics queueing remains gated by whether semantics is enabled)
+    /// 4. Defers paint queueing until the successful layout pass
     ///
     /// Use this instead of `render_tree_mut().insert_child()` to ensure proper
     /// dirty tracking.
@@ -1080,19 +1122,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // ADR-0013: hand the freshly-inserted child its self-dirty handle.
         self.attach_inserted_node(child_id);
 
-        // The child starts with NEEDS_PAINT but owns no retained output yet.
-        // Repaint the established ancestor that will install its first layer.
+        // Layout commits the child's geometry and schedules its eventual paint;
+        // membership invalidation applies the parent's other required phases.
         self.add_node_needing_layout(child_id, child_depth as usize);
-        self.mark_needs_paint(parent_id);
-
-        // Mark parent as needing layout (child structure changed)
-        self.add_node_needing_layout(parent_id, parent_depth as usize);
+        self.note_render_child_membership_changed(parent_id);
 
         Some(child_id)
     }
 
-    /// Inserts a Sliver-protocol render object as a child and marks it as
-    /// needing layout.
+    /// Inserts a Sliver-protocol child and records canonical membership
+    /// impacts.
     ///
     /// The Sliver-protocol counterpart of [`Self::insert_child_render_object`]
     /// — same dirty tracking and ADR-0013 attach wiring, backed by
@@ -1107,9 +1146,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// This method:
     /// 1. Inserts the render object as a Sliver child in the RenderTree
     /// 2. Hands it its ADR-0013 self-dirty handle via `attach`
-    /// 3. Adds the node to the dirty layout list
-    /// 4. Adds the node to the dirty paint list
-    /// 5. Marks the parent as needing layout (since child structure changed)
+    /// 3. Adds the child to the dirty layout list
+    /// 4. Applies `LAYOUT | COMPOSITING_BITS | SEMANTICS` to the parent
+    ///    (semantics queueing remains gated by whether semantics is enabled)
+    /// 5. Defers paint queueing until the successful layout pass
     ///
     /// # Arguments
     ///
@@ -1141,13 +1181,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // ADR-0013: hand the freshly-inserted child its self-dirty handle.
         self.attach_inserted_node(child_id);
 
-        // The child starts with NEEDS_PAINT but owns no retained output yet.
-        // Repaint the established ancestor that will install its first layer.
+        // Layout commits the child's geometry and schedules its eventual paint;
+        // membership invalidation applies the parent's other required phases.
         self.add_node_needing_layout(child_id, child_depth as usize);
-        self.mark_needs_paint(parent_id);
-
-        // Mark parent as needing layout (child structure changed)
-        self.add_node_needing_layout(parent_id, parent_depth as usize);
+        self.note_render_child_membership_changed(parent_id);
 
         Some(child_id)
     }
@@ -1437,27 +1474,50 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             .schedule_paint_boundary(id, node.depth() as usize);
     }
 
-    /// Adds a node to the compositing bits dirty list.
+    /// Marks compositing bits dirty using Flutter's repaint-boundary walk.
     ///
-    /// Also sets `NEEDS_COMPOSITING_BITS_UPDATE` on the node (atomic) so the
-    /// `run_compositing` walk's short-circuit cannot drop this entry. Routes
-    /// via `debug_doing_layout` (compositing shares the layout flag). See
-    /// `DirtyTracker::add_node_needing_compositing_bits_update` for the
-    /// full contract.
-    ///
-    /// The `scheduler` and `render_tree` are disjoint fields: the shared
-    /// borrow `&self.render_tree` passed to the scheduler compiles cleanly.
-    pub fn add_node_needing_compositing_bits_update(&mut self, node_id: RenderId, depth: usize) {
+    /// A stale ID is a no-op. The walk marks the necessary ancestor chain and
+    /// queues exactly the node responsible for recomputing the affected bits.
+    pub fn mark_needs_compositing_bits_update(&mut self, node_id: RenderId) {
         self.scheduler
-            .add_node_needing_compositing_bits_update(&self.render_tree, node_id, depth);
+            .mark_needs_compositing_bits_update(&self.render_tree, node_id);
     }
 
-    /// Adds a node to the semantics dirty list.
+    /// Marks a live node as needing semantics when semantics are enabled.
     ///
-    /// Routes via `debug_doing_semantics`. See
-    /// `DirtyTracker::add_node_needing_semantics` for the full contract.
-    pub fn add_node_needing_semantics(&mut self, node_id: RenderId, depth: usize) {
-        self.scheduler.add_node_needing_semantics(node_id, depth);
+    /// Semantics dirtiness is currently queue-authoritative: the legacy
+    /// `NEEDS_SEMANTICS` render-state flag is not set by this method because
+    /// the semantics pass does not consume or clear it. Disabled semantics and
+    /// stale IDs are no-ops.
+    pub fn mark_needs_semantics(&mut self, node_id: RenderId) {
+        if !self.semantics_enabled() {
+            return;
+        }
+        let Some(node) = self.render_tree.get(node_id) else {
+            return;
+        };
+        self.scheduler
+            .add_node_needing_semantics(node_id, node.depth() as usize);
+    }
+
+    /// Applies the pipeline work returned by a render-object update.
+    ///
+    /// Work is scheduled in layout, compositing, paint, then semantics order.
+    /// Layout owns its eventual paint, so an impact containing layout never
+    /// adds a redundant immediate paint mark.
+    pub fn apply_render_update_impact(&mut self, node_id: RenderId, impact: RenderUpdateImpact) {
+        if impact.needs_layout() {
+            self.mark_needs_layout(node_id);
+        }
+        if impact.needs_compositing_bits_update() {
+            self.mark_needs_compositing_bits_update(node_id);
+        }
+        if impact.needs_paint() && !impact.needs_layout() {
+            self.mark_needs_paint(node_id);
+        }
+        if impact.needs_semantics_update() {
+            self.mark_needs_semantics(node_id);
+        }
     }
 
     // ========================================================================
@@ -1506,8 +1566,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
             self.notifier.read().fire_semantics_owner_created();
             if let Some(root_id) = self.root_id {
-                let depth = self.render_tree.depth(root_id).unwrap_or(0) as usize;
-                self.add_node_needing_semantics(root_id, depth);
+                self.mark_needs_semantics(root_id);
             }
         } else if !enabled && was_enabled {
             if let Some(mut owner) = self.semantics_owner.take() {

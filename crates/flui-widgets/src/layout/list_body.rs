@@ -142,8 +142,10 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderListBody,
-    ) {
-        render_object.set_axis_direction(self.axis_direction);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_axis_direction(self.axis_direction);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -279,10 +281,11 @@ mod tests {
             axis_direction: AxisDirection::RightToLeft,
             children: Vec::<BoxedView>::new(),
         };
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.axis_direction(), AxisDirection::RightToLeft);
     }

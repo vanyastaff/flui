@@ -62,8 +62,10 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_item_extent(self.item_extent);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_item_extent(self.item_extent);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -119,10 +121,11 @@ mod tests {
             list.create_render_object(&flui_view::RenderObjectContext::detached());
 
         let updated = SliverFixedExtentList::new(75.0, Vec::<flui_view::BoxedView>::new());
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         // No public getter on RenderSliverFixedExtentList; confirm via Debug
         // that the field actually changed rather than merely not panicking.

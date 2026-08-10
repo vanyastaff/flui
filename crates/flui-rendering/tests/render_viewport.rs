@@ -773,7 +773,10 @@ fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
             ScrollableViewportOffset::zero(),
         );
         if growth == GrowthDirection::Reverse {
-            viewport.set_center_sliver_index(center);
+            assert_eq!(
+                viewport.set_center_sliver_index(center),
+                flui_rendering::RenderUpdateImpact::LAYOUT,
+            );
         }
 
         let mut owner = PipelineOwner::new();
@@ -803,7 +806,10 @@ fn viewport_reverse_section_passes_reverse_growth_to_slivers() {
         AxisDirection::LeftToRight,
         ScrollableViewportOffset::zero(),
     );
-    viewport.set_center_sliver_index(Some(0));
+    assert_eq!(
+        viewport.set_center_sliver_index(Some(0)),
+        flui_rendering::RenderUpdateImpact::LAYOUT,
+    );
 
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(viewport));
@@ -839,7 +845,10 @@ fn viewport_center_partition_lays_out_forward_then_reverse() {
         AxisDirection::LeftToRight,
         ScrollableViewportOffset::zero(),
     );
-    viewport.set_center_sliver_index(Some(1));
+    assert_eq!(
+        viewport.set_center_sliver_index(Some(1)),
+        flui_rendering::RenderUpdateImpact::LAYOUT,
+    );
 
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(viewport));
@@ -875,7 +884,10 @@ fn viewport_reverse_slivers_produce_negative_min_scroll_extent() {
         AxisDirection::LeftToRight,
         ScrollableViewportOffset::zero(),
     );
-    viewport.set_center_sliver_index(Some(0));
+    assert_eq!(
+        viewport.set_center_sliver_index(Some(0)),
+        flui_rendering::RenderUpdateImpact::LAYOUT,
+    );
 
     let (owner, root_id, _) = laid_out_viewport_with_sliver(viewport, 50.0);
     let viewport = viewport_from_owner(&owner, root_id);
@@ -895,7 +907,10 @@ fn viewport_center_at_child_count_behaves_like_no_center() {
             test_cross_axis_direction(axis),
             ScrollableViewportOffset::zero(),
         );
-        with_center.set_center_sliver_index(Some(1));
+        assert_eq!(
+            with_center.set_center_sliver_index(Some(1)),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
 
         let without_center = RenderViewport::with_offset(
             axis,
@@ -978,7 +993,10 @@ fn viewport_hit_test_maps_each_axis_direction_into_sliver_main_axis() {
             ScrollableViewportOffset::zero(),
         );
         if let Some(center_index) = center {
-            viewport.set_center_sliver_index(Some(center_index));
+            assert_eq!(
+                viewport.set_center_sliver_index(Some(center_index)),
+                flui_rendering::RenderUpdateImpact::LAYOUT,
+            );
         }
 
         let mut owner = PipelineOwner::new();
@@ -1089,7 +1107,10 @@ fn viewport_hit_tests_in_opposite_paint_order() {
         AxisDirection::LeftToRight,
         ScrollableViewportOffset::zero(),
     );
-    viewport.set_paint_order(SliverPaintOrder::LastIsTop);
+    assert_eq!(
+        viewport.set_paint_order(SliverPaintOrder::LastIsTop),
+        flui_rendering::RenderUpdateImpact::PAINT,
+    );
 
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(viewport));
@@ -1121,7 +1142,10 @@ fn viewport_hit_tests_in_opposite_paint_order() {
         AxisDirection::LeftToRight,
         ScrollableViewportOffset::zero(),
     );
-    viewport.set_paint_order(SliverPaintOrder::FirstIsTop);
+    assert_eq!(
+        viewport.set_paint_order(SliverPaintOrder::FirstIsTop),
+        flui_rendering::RenderUpdateImpact::NONE,
+    );
 
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(viewport));

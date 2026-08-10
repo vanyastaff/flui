@@ -60,8 +60,8 @@ impl RenderView for CustomSingleChildLayout {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_delegate(self.delegate.clone());
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_delegate(self.delegate.clone())
     }
 
     fn has_children(&self) -> bool {
@@ -109,10 +109,12 @@ mod tests {
                 .is::<CenterLayoutDelegate>()
         );
 
-        CustomSingleChildLayout::new(Arc::new(AspectRatioDelegate::new(2.0))).update_render_object(
-            &flui_view::RenderObjectContext::detached(),
-            &mut render_object,
-        );
+        let impact = CustomSingleChildLayout::new(Arc::new(AspectRatioDelegate::new(2.0)))
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert!(
             render_object

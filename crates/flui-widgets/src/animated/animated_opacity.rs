@@ -200,8 +200,9 @@ impl RenderView for AnimatedOpacityRenderView {
         &self,
         _ctx: &RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         // Intentionally empty — see the struct doc.
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {

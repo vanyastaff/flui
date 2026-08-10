@@ -80,8 +80,8 @@ impl RenderView for Align {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.build_render_object();
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.update_configuration(self.alignment, self.width_factor, self.height_factor)
     }
 
     fn has_children(&self) -> bool {
@@ -96,3 +96,26 @@ impl RenderView for Align {
 }
 
 impl_render_view!(Align);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+
+    #[test]
+    fn update_reports_layout_only_for_changed_configuration() {
+        let initial = Align::new(Alignment::CENTER).width_factor(2.0);
+        let mut render = initial.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(
+            initial.update_render_object(&flui_view::RenderObjectContext::detached(), &mut render,),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            Align::new(Alignment::BOTTOM_RIGHT)
+                .width_factor(2.0)
+                .update_render_object(&flui_view::RenderObjectContext::detached(), &mut render,),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+    }
+}

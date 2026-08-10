@@ -328,9 +328,8 @@ impl PipelineOwner<Layout> {
                 logical_index,
                 initial_parent_data,
             } => {
-                // A deferred insert must schedule the new child (and re-dirty
-                // its parent) for layout and paint — mirroring
-                // `insert_child_render_object`. Without this the fresh node
+                // A deferred insert must schedule the new child and apply the
+                // canonical membership impact to its parent. Without this the fresh node
                 // carries NEEDS_LAYOUT but is absent from every dirty queue,
                 // so it is laid out never and painted never (invisible child).
                 let Some(parent_depth) = self.render_tree.depth(parent_id) else {
@@ -420,17 +419,11 @@ impl PipelineOwner<Layout> {
                 // (e.g. a snap-animation controller) of its handle.
                 self.attach_inserted_node(child_id);
                 self.add_node_needing_layout(child_id, child_depth);
-                self.mark_needs_paint(parent_id);
-                // `mark_needs_layout` (not `add_node_needing_layout`) so the
-                // parent's NEEDS_LAYOUT flag is actually set and its relayout
-                // boundary is enqueued — the dirty-root walk skips queued
-                // entries whose flag is clear, so a flagless enqueue would
-                // leave the new child unpositioned at the origin.
-                self.mark_needs_layout(parent_id);
+                self.note_render_child_membership_changed(parent_id);
                 tracing::trace!(
                     ?parent_id,
                     ?child_id,
-                    "apply_deferred_mutation: inserted child and scheduled layout + paint"
+                    "apply_deferred_mutation: inserted child and scheduled membership work"
                 );
             }
             DeferredMutation::Remove {
@@ -789,5 +782,72 @@ impl PipelineOwner<Layout> {
         self.pending_retain_bands.extend(pending_retain_bands);
 
         result
+    }
+}
+
+#[cfg(test)]
+mod deferred_insert_tests {
+    use flui_tree::Leaf;
+    use flui_types::Size;
+
+    use super::*;
+    use crate::{
+        context::BoxLayoutContext, parent_data::BoxParentData,
+        pipeline::deferred::DeferredRenderObject, traits::RenderBox,
+    };
+
+    #[derive(Debug)]
+    struct LeafBox;
+
+    impl flui_foundation::Diagnosticable for LeafBox {}
+
+    impl RenderBox for LeafBox {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            Size::ZERO
+        }
+    }
+
+    #[test]
+    fn deferred_insert_applies_exact_parent_membership_impact() {
+        let mut idle_owner = PipelineOwner::new();
+        let parent = idle_owner.set_root_render_object(Box::new(LeafBox));
+        idle_owner.set_semantics_enabled(true);
+        idle_owner.clear_all_dirty_nodes();
+        let parent_node = idle_owner.render_tree().get(parent).unwrap();
+        parent_node.clear_needs_layout();
+        parent_node.clear_needs_paint();
+        parent_node.clear_needs_compositing_bits_update();
+
+        let mut owner = idle_owner.into_layout();
+        owner.apply_deferred_mutation(DeferredMutation::Insert {
+            parent_id: parent,
+            render_object: DeferredRenderObject::Box(Box::new(LeafBox)),
+            index: None,
+            logical_index: None,
+            initial_parent_data: None,
+        });
+
+        let child = owner.render_tree().get(parent).unwrap().children()[0];
+        let layout_ids = owner
+            .nodes_needing_layout()
+            .iter()
+            .map(|dirty| dirty.id)
+            .collect::<Vec<_>>();
+        assert!(layout_ids.contains(&parent));
+        assert!(layout_ids.contains(&child));
+        assert!(owner.render_tree().get(parent).unwrap().needs_layout());
+        assert!(
+            owner
+                .render_tree()
+                .get(parent)
+                .unwrap()
+                .needs_compositing_bits_update()
+        );
+        assert_eq!(owner.nodes_needing_compositing_bits_update()[0].id, parent);
+        assert_eq!(owner.nodes_needing_semantics()[0].id, parent);
+        assert!(owner.nodes_needing_paint().is_empty());
     }
 }

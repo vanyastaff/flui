@@ -174,59 +174,83 @@ impl RenderCustomPaint {
 
     /// Replaces the background painter.
     ///
-    /// Returns `true` when the swap requires a repaint: `None` ↔ `Some` in
-    /// either direction, or a `Some → Some` swap whose
-    /// [`CustomPainter::should_repaint`] reports a difference (Flutter
-    /// `RenderCustomPaint._didUpdatePainter`'s repaint half, oracle
-    /// L450-459). Paint-only state: the caller is responsible for the
-    /// repaint mark.
-    pub fn set_painter(&mut self, painter: Option<Arc<dyn CustomPainter>>) -> bool {
-        let changed = painter_changed(self.painter.as_deref(), painter.as_deref());
+    /// Returns the independently evaluated paint and semantics work required
+    /// by Flutter's `_didUpdatePainter` contract. Absence and concrete-type
+    /// transitions require both; same-type replacements consult
+    /// [`CustomPainter::should_repaint`] and
+    /// [`CustomPainter::should_rebuild_semantics`] separately.
+    pub fn set_painter(
+        &mut self,
+        painter: Option<Arc<dyn CustomPainter>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let impact = painter_update_impact(self.painter.as_ref(), painter.as_ref());
         // Migrate the repaint subscription to the new painter (no-op while
         // detached: `unsubscribe` skips a `None` id and `subscribe` returns
         // `None` without a handle).
         Self::unsubscribe(self.painter.as_ref(), self.painter_listener.take());
         self.painter = painter;
         self.painter_listener = self.subscribe(self.painter.as_ref());
-        changed
+        impact
     }
 
     /// Replaces the foreground painter. See [`Self::set_painter`] for the
     /// change-detection rule.
-    pub fn set_foreground_painter(&mut self, painter: Option<Arc<dyn CustomPainter>>) -> bool {
-        let changed = painter_changed(self.foreground_painter.as_deref(), painter.as_deref());
+    pub fn set_foreground_painter(
+        &mut self,
+        painter: Option<Arc<dyn CustomPainter>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let impact = painter_update_impact(self.foreground_painter.as_ref(), painter.as_ref());
         Self::unsubscribe(
             self.foreground_painter.as_ref(),
             self.foreground_listener.take(),
         );
         self.foreground_painter = painter;
         self.foreground_listener = self.subscribe(self.foreground_painter.as_ref());
-        changed
+        impact
     }
 
     /// Replaces the preferred size used when childless.
     ///
-    /// Returns `true` when the value actually changed — layout-affecting
-    /// state, so the pipeline should invalidate layout in that case
-    /// (mirrors [`crate::RenderConstrainedBox::set_additional_constraints`]'s
-    /// bool-return convention).
-    pub fn set_preferred_size(&mut self, preferred_size: Size) -> bool {
+    /// Returns `LAYOUT` when the value actually changed, otherwise `NONE`.
+    pub fn set_preferred_size(
+        &mut self,
+        preferred_size: Size,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.preferred_size == preferred_size {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.preferred_size = preferred_size;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 }
 
-/// Flutter `_didUpdatePainter`'s repaint-decision half (oracle L450-459):
-/// `None` ↔ `Some` in either direction is always a change; a `Some → Some`
-/// swap defers to [`CustomPainter::should_repaint`].
-fn painter_changed(old: Option<&dyn CustomPainter>, new: Option<&dyn CustomPainter>) -> bool {
+/// Flutter `_didUpdatePainter` (oracle L450-469), with paint and semantics
+/// decisions kept independent for same-type delegates.
+fn painter_update_impact(
+    old: Option<&Arc<dyn CustomPainter>>,
+    new: Option<&Arc<dyn CustomPainter>>,
+) -> flui_rendering::RenderUpdateImpact {
     match (old, new) {
-        (None, None) => false,
-        (None, Some(_)) | (Some(_), None) => true,
-        (Some(old), Some(new)) => new.should_repaint(old),
+        (None, None) => flui_rendering::RenderUpdateImpact::NONE,
+        (None, Some(_)) | (Some(_), None) => {
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+        (Some(old), Some(new)) if Arc::ptr_eq(old, new) => flui_rendering::RenderUpdateImpact::NONE,
+        (Some(old), Some(new)) if old.as_any().type_id() != new.as_any().type_id() => {
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+        (Some(old), Some(new)) => {
+            let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+            if new.should_repaint(old.as_ref()) {
+                impact |= flui_rendering::RenderUpdateImpact::PAINT;
+            }
+            if new.should_rebuild_semantics(old.as_ref()) {
+                impact |= flui_rendering::RenderUpdateImpact::SEMANTICS;
+            }
+            impact
+        }
     }
 }
 
@@ -408,11 +432,36 @@ impl RenderBox for RenderCustomPaint {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_rendering::context::intrinsics_test_support::{leaf_dry_layout, leaf_intrinsics};
     use flui_types::geometry::px;
 
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct CountingPainter {
+        repaint_calls: AtomicUsize,
+        semantics_calls: AtomicUsize,
+    }
+
+    impl CustomPainter for CountingPainter {
+        fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+
+        fn should_repaint(&self, _old_delegate: &dyn CustomPainter) -> bool {
+            self.repaint_calls.fetch_add(1, Ordering::Relaxed);
+            false
+        }
+
+        fn should_rebuild_semantics(&self, _old_delegate: &dyn CustomPainter) -> bool {
+            self.semantics_calls.fetch_add(1, Ordering::Relaxed);
+            false
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
 
     #[derive(Debug)]
     struct StubPainter {
@@ -427,6 +476,10 @@ mod tests {
                 Some(old) => old.tag != self.tag,
                 None => true,
             }
+        }
+
+        fn should_rebuild_semantics(&self, _old_delegate: &dyn CustomPainter) -> bool {
+            false
         }
 
         fn as_any(&self) -> &dyn Any {
@@ -451,6 +504,35 @@ mod tests {
 
     fn stub(tag: &'static str) -> Arc<dyn CustomPainter> {
         Arc::new(StubPainter { tag })
+    }
+
+    #[derive(Debug)]
+    struct DecisionPainter {
+        repaint: bool,
+        rebuild_semantics: bool,
+    }
+
+    impl CustomPainter for DecisionPainter {
+        fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+
+        fn should_repaint(&self, _old_delegate: &dyn CustomPainter) -> bool {
+            self.repaint
+        }
+
+        fn should_rebuild_semantics(&self, _old_delegate: &dyn CustomPainter) -> bool {
+            self.rebuild_semantics
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    fn decision_painter(repaint: bool, rebuild_semantics: bool) -> Arc<dyn CustomPainter> {
+        Arc::new(DecisionPainter {
+            repaint,
+            rebuild_semantics,
+        })
     }
 
     /// A painter whose `repaint()` returns a caller-controlled
@@ -480,34 +562,110 @@ mod tests {
     #[test]
     fn set_painter_none_to_some_reports_changed() {
         let mut node = RenderCustomPaint::new(None, None, Size::ZERO);
-        assert!(node.set_painter(Some(stub("a"))));
+        assert_eq!(
+            node.set_painter(Some(stub("a"))),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
     }
 
     #[test]
     fn set_painter_some_to_none_reports_changed() {
         let mut node = RenderCustomPaint::new(Some(stub("a")), None, Size::ZERO);
-        assert!(node.set_painter(None));
+        assert_eq!(
+            node.set_painter(None),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+
+    #[test]
+    fn set_painter_same_instance_is_none_without_delegate_callbacks() {
+        let concrete = Arc::new(CountingPainter::default());
+        let painter = concrete.clone() as Arc<dyn CustomPainter>;
+        let mut node = RenderCustomPaint::new(Some(painter.clone()), None, Size::ZERO);
+        assert_eq!(
+            node.set_painter(Some(painter)),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(concrete.repaint_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(concrete.semantics_calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn set_painter_same_type_defers_to_should_repaint() {
         let mut node = RenderCustomPaint::new(Some(stub("a")), None, Size::ZERO);
         // Same tag -> StubPainter::should_repaint returns false.
-        assert!(!node.set_painter(Some(stub("a"))));
+        assert_eq!(
+            node.set_painter(Some(stub("a"))),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
         // Different tag -> should_repaint returns true.
-        assert!(node.set_painter(Some(stub("b"))));
+        assert_eq!(
+            node.set_painter(Some(stub("b"))),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
     }
 
     #[test]
     fn set_painter_type_change_always_repaints() {
         let mut node = RenderCustomPaint::new(Some(stub("a")), None, Size::ZERO);
-        assert!(node.set_painter(Some(Arc::new(OtherPainter))));
+        assert_eq!(
+            node.set_painter(Some(Arc::new(OtherPainter))),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+
+    #[test]
+    fn set_painter_type_change_forces_paint_and_semantics_even_when_callbacks_decline() {
+        let mut node = RenderCustomPaint::new(Some(stub("a")), None, Size::ZERO);
+        assert_eq!(
+            node.set_painter(Some(decision_painter(false, false))),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+
+    #[test]
+    fn background_and_foreground_painters_evaluate_paint_and_semantics_independently() {
+        let cases = [
+            (false, false, flui_rendering::RenderUpdateImpact::NONE),
+            (true, false, flui_rendering::RenderUpdateImpact::PAINT),
+            (false, true, flui_rendering::RenderUpdateImpact::SEMANTICS),
+            (
+                true,
+                true,
+                flui_rendering::RenderUpdateImpact::PAINT
+                    | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            ),
+        ];
+
+        for (repaint, rebuild_semantics, expected) in cases {
+            let mut background =
+                RenderCustomPaint::new(Some(decision_painter(false, false)), None, Size::ZERO);
+            assert_eq!(
+                background.set_painter(Some(decision_painter(repaint, rebuild_semantics))),
+                expected,
+            );
+
+            let mut foreground =
+                RenderCustomPaint::new(None, Some(decision_painter(false, false)), Size::ZERO);
+            assert_eq!(
+                foreground
+                    .set_foreground_painter(Some(decision_painter(repaint, rebuild_semantics,))),
+                expected,
+            );
+        }
     }
 
     #[test]
     fn set_painter_none_to_none_reports_unchanged() {
         let mut node = RenderCustomPaint::new(None, None, Size::ZERO);
-        assert!(!node.set_painter(None));
+        assert_eq!(
+            node.set_painter(None),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
     }
 
     #[test]
@@ -560,7 +718,9 @@ mod tests {
         // mark against a node that isn't in the tree).
         let notifier = Arc::new(flui_foundation::ChangeNotifier::new());
         let mut node = RenderCustomPaint::new(None, None, Size::ZERO);
-        node.set_painter(Some(Arc::new(RepaintingPainter { repaint: notifier })));
+        let impact = node.set_painter(Some(Arc::new(RepaintingPainter { repaint: notifier })));
+        assert!(impact.needs_paint());
+        assert!(impact.needs_semantics_update());
         assert!(
             node.painter_listener.is_none(),
             "no subscription may exist while detached",
@@ -570,8 +730,14 @@ mod tests {
     #[test]
     fn set_preferred_size_reports_change_flag() {
         let mut node = RenderCustomPaint::new(None, None, Size::ZERO);
-        assert!(node.set_preferred_size(Size::new(px(10.0), px(10.0))));
-        assert!(!node.set_preferred_size(Size::new(px(10.0), px(10.0))));
+        assert_eq!(
+            node.set_preferred_size(Size::new(px(10.0), px(10.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+        assert_eq!(
+            node.set_preferred_size(Size::new(px(10.0), px(10.0))),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
     }
 
     #[test]

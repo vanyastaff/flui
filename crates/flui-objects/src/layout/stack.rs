@@ -290,31 +290,31 @@ impl RenderStack {
         self.has_visual_overflow
     }
 
-    /// Updates the fit; returns true if the value changed.
-    pub fn set_fit(&mut self, fit: StackFit) -> bool {
+    /// Updates the fit and reports layout when changed.
+    pub fn set_fit(&mut self, fit: StackFit) -> flui_rendering::RenderUpdateImpact {
         if self.fit == fit {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.fit = fit;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Updates the alignment; returns true if the value changed.
-    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
+    /// Updates the alignment and reports layout when changed.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
         if self.alignment == alignment {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.alignment = alignment;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Updates the clip behavior; returns true if the value changed.
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> bool {
+    /// Updates the clip behavior and reports paint plus semantics when changed.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Returns the constraints to pass to non-positioned children for
@@ -640,13 +640,13 @@ impl RenderIndexedStack {
         self.index
     }
 
-    /// Updates the displayed child index; returns true if the value changed.
-    pub fn set_index(&mut self, index: Option<usize>) -> bool {
+    /// Updates the displayed child index and reports layout when changed.
+    pub fn set_index(&mut self, index: Option<usize>) -> flui_rendering::RenderUpdateImpact {
         if self.index == index {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.index = index;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Returns the current fit.
@@ -673,18 +673,18 @@ impl RenderIndexedStack {
         self.stack.has_visual_overflow()
     }
 
-    /// Updates the fit; returns true if the value changed.
-    pub fn set_fit(&mut self, fit: StackFit) -> bool {
+    /// Updates the fit and reports its exact impact.
+    pub fn set_fit(&mut self, fit: StackFit) -> flui_rendering::RenderUpdateImpact {
         self.stack.set_fit(fit)
     }
 
-    /// Updates the alignment; returns true if the value changed.
-    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
+    /// Updates the alignment and reports its exact impact.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
         self.stack.set_alignment(alignment)
     }
 
-    /// Updates the clip behavior; returns true if the value changed.
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> bool {
+    /// Updates the clip behavior and reports its exact impact.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         self.stack.set_clip_behavior(clip_behavior)
     }
 
@@ -1060,12 +1060,25 @@ mod tests {
     }
 
     #[test]
-    fn setters_return_change_flag() {
+    fn setters_return_exact_impacts() {
         let mut stack = RenderStack::new();
-        assert!(stack.set_fit(StackFit::Expand));
-        assert!(!stack.set_fit(StackFit::Expand));
-        assert!(stack.set_alignment(Alignment::CENTER));
-        assert!(stack.set_clip_behavior(Clip::AntiAlias));
+        assert_eq!(
+            stack.set_fit(StackFit::Expand),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            stack.set_fit(StackFit::Expand),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            stack.set_alignment(Alignment::CENTER),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            stack.set_clip_behavior(Clip::AntiAlias),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
     }
 
     // ---------- non_positioned_constraints --------------------------------

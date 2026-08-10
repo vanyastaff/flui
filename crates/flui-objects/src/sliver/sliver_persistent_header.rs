@@ -421,6 +421,14 @@ impl PersistentHeaderCore {
     }
 }
 
+fn layout_impact(changed: bool) -> flui_rendering::RenderUpdateImpact {
+    if changed {
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    } else {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
+
 /// Positions the sliver's Box child (if any) using the shared
 /// `child_paint_offset` helper, reusing the trick already established by
 /// `RenderSliverToBoxAdapter`/`RenderSliverFillRemaining*`: the helper wants
@@ -490,22 +498,22 @@ impl RenderSliverScrollingPersistentHeader {
         self.core.max_extent
     }
 
-    /// Replaces the minimum extent; returns `true` if it changed.
-    pub fn set_min_extent(&mut self, min_extent: f32) -> bool {
-        self.core.set_min_extent(min_extent)
+    /// Replaces the minimum extent and reports layout when changed.
+    pub fn set_min_extent(&mut self, min_extent: f32) -> flui_rendering::RenderUpdateImpact {
+        layout_impact(self.core.set_min_extent(min_extent))
     }
 
-    /// Replaces the maximum extent; returns `true` if it changed.
-    pub fn set_max_extent(&mut self, max_extent: f32) -> bool {
-        self.core.set_max_extent(max_extent)
+    /// Replaces the maximum extent and returns the exact pipeline impact.
+    pub fn set_max_extent(&mut self, max_extent: f32) -> flui_rendering::RenderUpdateImpact {
+        layout_impact(self.core.set_max_extent(max_extent))
     }
 
     /// Replaces the stretch configuration; returns `true` if presence changed.
     pub fn set_stretch_configuration(
         &mut self,
         stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> bool {
-        self.core.set_stretch_configuration(stretch)
+    ) -> flui_rendering::RenderUpdateImpact {
+        layout_impact(self.core.set_stretch_configuration(stretch))
     }
 
     /// Mirrors `updateGeometry` (`:365-383`) exactly: the return value uses
@@ -638,22 +646,22 @@ impl RenderSliverPinnedPersistentHeader {
         self.core.max_extent
     }
 
-    /// Replaces the minimum extent; returns `true` if it changed.
-    pub fn set_min_extent(&mut self, min_extent: f32) -> bool {
-        self.core.set_min_extent(min_extent)
+    /// Replaces the minimum extent and returns the exact pipeline impact.
+    pub fn set_min_extent(&mut self, min_extent: f32) -> flui_rendering::RenderUpdateImpact {
+        layout_impact(self.core.set_min_extent(min_extent))
     }
 
-    /// Replaces the maximum extent; returns `true` if it changed.
-    pub fn set_max_extent(&mut self, max_extent: f32) -> bool {
-        self.core.set_max_extent(max_extent)
+    /// Replaces the maximum extent and returns the exact pipeline impact.
+    pub fn set_max_extent(&mut self, max_extent: f32) -> flui_rendering::RenderUpdateImpact {
+        layout_impact(self.core.set_max_extent(max_extent))
     }
 
     /// Replaces the stretch configuration; returns `true` if presence changed.
     pub fn set_stretch_configuration(
         &mut self,
         stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> bool {
-        self.core.set_stretch_configuration(stretch)
+    ) -> flui_rendering::RenderUpdateImpact {
+        layout_impact(self.core.set_stretch_configuration(stretch))
     }
 }
 
@@ -1001,22 +1009,22 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         self.core.max_extent
     }
 
-    /// Replaces the minimum extent; returns `true` if it changed.
-    pub fn set_min_extent(&mut self, min_extent: f32) -> bool {
-        self.core.set_min_extent(min_extent)
+    /// Replaces the minimum extent and returns the exact pipeline impact.
+    pub fn set_min_extent(&mut self, min_extent: f32) -> flui_rendering::RenderUpdateImpact {
+        layout_impact(self.core.set_min_extent(min_extent))
     }
 
-    /// Replaces the maximum extent; returns `true` if it changed.
-    pub fn set_max_extent(&mut self, max_extent: f32) -> bool {
-        self.core.set_max_extent(max_extent)
+    /// Replaces the maximum extent and returns the exact pipeline impact.
+    pub fn set_max_extent(&mut self, max_extent: f32) -> flui_rendering::RenderUpdateImpact {
+        layout_impact(self.core.set_max_extent(max_extent))
     }
 
     /// Replaces the stretch configuration; returns `true` if presence changed.
     pub fn set_stretch_configuration(
         &mut self,
         stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> bool {
-        self.core.set_stretch_configuration(stretch)
+    ) -> flui_rendering::RenderUpdateImpact {
+        layout_impact(self.core.set_stretch_configuration(stretch))
     }
 
     /// Replaces the snap configuration. Inert setter (matches the oracle's
@@ -1376,8 +1384,14 @@ mod tests {
     fn pinned_header_set_max_extent_reports_change_flag() {
         let mut header = RenderSliverPinnedPersistentHeader::new(40.0, 120.0);
         assert_eq!(header.min_extent(), 40.0);
-        assert!(header.set_max_extent(150.0));
-        assert!(!header.set_max_extent(150.0), "no-op set reports unchanged");
+        assert_eq!(
+            header.set_max_extent(150.0),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            header.set_max_extent(150.0),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
         assert_eq!(header.max_extent(), 150.0);
     }
 

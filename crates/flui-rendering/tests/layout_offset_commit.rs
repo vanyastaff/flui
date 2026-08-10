@@ -74,7 +74,10 @@ fn relayout_overwrites_committed_offset() {
 
     // Change padding → re-position on the next layout pass.
     run.update::<RenderPadding>(pad, |padding| {
-        padding.set_padding(EdgeInsets::all(px(9.0)));
+        assert_eq!(
+            padding.set_padding(EdgeInsets::all(px(9.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     });
     run.relayout();
 

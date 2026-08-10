@@ -126,6 +126,88 @@ impl ParentDataView for Positioned {
         }
         data
     }
+
+    fn apply_parent_data(
+        &self,
+        parent_data: &mut Self::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let changed = parent_data.left != self.left
+            || parent_data.top != self.top
+            || parent_data.right != self.right
+            || parent_data.bottom != self.bottom
+            || parent_data.width != self.width
+            || parent_data.height != self.height;
+        if !changed {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        parent_data.left = self.left;
+        parent_data.top = self.top;
+        parent_data.right = self.right;
+        parent_data.bottom = self.bottom;
+        parent_data.width = self.width;
+        parent_data.height = self.height;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
 }
 
 impl_parent_data_view!(Positioned);
+
+#[cfg(test)]
+mod tests {
+    use flui_foundation::RenderId;
+    use flui_types::{Offset, geometry::px};
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn positioned_parent_data_reports_exact_impact_and_preserves_layout_fields() {
+        let mut data = StackParentData::new().with_left(1.0).with_top(2.0);
+        data.offset = Offset::new(px(8.0), px(13.0));
+        data.container.previous_sibling = Some(RenderId::new(7));
+        data.container.next_sibling = Some(RenderId::new(9));
+        let unchanged = Positioned::new(SizedBox::shrink()).left(1.0).top(2.0);
+        assert_eq!(
+            unchanged.apply_parent_data(&mut data),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        let changed = Positioned::new(SizedBox::shrink())
+            .right(3.0)
+            .bottom(4.0)
+            .width(5.0)
+            .height(6.0);
+        assert_eq!(
+            changed.apply_parent_data(&mut data),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(data.offset, Offset::new(px(8.0), px(13.0)));
+        assert_eq!(data.container.previous_sibling, Some(RenderId::new(7)));
+        assert_eq!(data.container.next_sibling, Some(RenderId::new(9)));
+    }
+
+    #[test]
+    fn positioned_each_geometry_field_independently_requires_layout() {
+        let configurations = [
+            Positioned::new(SizedBox::shrink()).left(1.0),
+            Positioned::new(SizedBox::shrink()).top(2.0),
+            Positioned::new(SizedBox::shrink()).right(3.0),
+            Positioned::new(SizedBox::shrink()).bottom(4.0),
+            Positioned::new(SizedBox::shrink()).width(5.0),
+            Positioned::new(SizedBox::shrink()).height(6.0),
+        ];
+
+        for configuration in configurations {
+            let mut data = StackParentData::new();
+            data.offset = Offset::new(px(8.0), px(13.0));
+            data.container.previous_sibling = Some(RenderId::new(7));
+            data.container.next_sibling = Some(RenderId::new(9));
+            assert_eq!(
+                configuration.apply_parent_data(&mut data),
+                flui_rendering::RenderUpdateImpact::LAYOUT,
+            );
+            assert_eq!(data.offset, Offset::new(px(8.0), px(13.0)));
+            assert_eq!(data.container.previous_sibling, Some(RenderId::new(7)));
+            assert_eq!(data.container.next_sibling, Some(RenderId::new(9)));
+        }
+    }
+}

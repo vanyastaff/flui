@@ -426,9 +426,7 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
             if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
                 pipeline_owner.with_mut(|owner| {
-                    owner
-                        .render_tree_mut()
-                        .adopt_child(parent_id, *child_render_id);
+                    owner.adopt_render_child(parent_id, *child_render_id);
                 });
             }
         }
@@ -445,6 +443,9 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
             old_slot,
             new_slot
         );
+        if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id) {
+            pipeline_owner.with_mut(|owner| owner.note_render_children_reordered(parent_id));
+        }
     }
 
     fn remove_render_object_child(&mut self, child: &dyn Any, slot: RenderSlot) {
@@ -461,9 +462,7 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
             if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
                 pipeline_owner.with_mut(|owner| {
-                    owner
-                        .render_tree_mut()
-                        .drop_child(parent_id, *child_render_id);
+                    owner.drop_render_child(parent_id, *child_render_id);
                 });
             }
         }
@@ -531,7 +530,8 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             _render_object: &mut Self::RenderObject,
-        ) {
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 

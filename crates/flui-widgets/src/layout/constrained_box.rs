@@ -48,8 +48,10 @@ impl RenderView for ConstrainedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_additional_constraints(self.constraints);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_additional_constraints(self.constraints);
+        impact
     }
 
     fn has_children(&self) -> bool {

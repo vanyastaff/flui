@@ -218,9 +218,13 @@ impl RenderSliverListLazy {
     /// (`O(|delta| · log n)` average and worst case — tree edits, not a
     /// full rebuild).
     #[inline]
-    pub fn set_item_count(&mut self, n: usize) {
+    pub fn set_item_count(&mut self, n: usize) -> flui_rendering::RenderUpdateImpact {
+        if self.item_count == n {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.item_count = n;
         self.virtualizer.set_count(n);
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Current total item count.

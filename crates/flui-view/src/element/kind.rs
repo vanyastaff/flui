@@ -712,6 +712,13 @@ impl ElementBase for ElementKind {
         self.element().parent_data_config()
     }
 
+    fn apply_parent_data_config(
+        &self,
+        parent_data: &mut dyn flui_rendering::parent_data::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.element().apply_parent_data_config(parent_data)
+    }
+
     fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn std::any::Any) -> bool {
         self.element().on_notification(type_id, notification)
     }

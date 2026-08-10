@@ -54,8 +54,10 @@ impl RenderView for RotatedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_quarter_turns(self.quarter_turns);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_quarter_turns(self.quarter_turns);
+        impact
     }
 
     fn has_children(&self) -> bool {

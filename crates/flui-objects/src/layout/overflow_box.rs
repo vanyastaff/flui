@@ -113,60 +113,76 @@ impl RenderConstrainedOverflowBox {
         )
     }
 
-    // --- setters that return a change flag -----------------------------------
+    // --- authoritative impact setters ----------------------------------------
 
     /// Replaces the child alignment.
     ///
     /// Delegates to the inner shared alignment component's own setter, which
     /// mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
     /// (`shifted_box.dart:339-345`) — a relayout-affecting change.
-    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
-        self.inner.set_alignment(alignment)
+    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
+        if self.inner.set_alignment(alignment) {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
     }
 
     /// Replaces the optional minimum-width override.
-    pub fn set_min_width(&mut self, min_width: Option<Pixels>) -> bool {
+    pub fn set_min_width(
+        &mut self,
+        min_width: Option<Pixels>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.min_width == min_width {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.min_width = min_width;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Replaces the optional maximum-width override.
-    pub fn set_max_width(&mut self, max_width: Option<Pixels>) -> bool {
+    pub fn set_max_width(
+        &mut self,
+        max_width: Option<Pixels>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.max_width == max_width {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.max_width = max_width;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Replaces the optional minimum-height override.
-    pub fn set_min_height(&mut self, min_height: Option<Pixels>) -> bool {
+    pub fn set_min_height(
+        &mut self,
+        min_height: Option<Pixels>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.min_height == min_height {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.min_height = min_height;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Replaces the optional maximum-height override.
-    pub fn set_max_height(&mut self, max_height: Option<Pixels>) -> bool {
+    pub fn set_max_height(
+        &mut self,
+        max_height: Option<Pixels>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.max_height == max_height {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.max_height = max_height;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Replaces the fit mode.
-    pub fn set_fit(&mut self, fit: OverflowBoxFit) -> bool {
+    pub fn set_fit(&mut self, fit: OverflowBoxFit) -> flui_rendering::RenderUpdateImpact {
         if self.fit == fit {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.fit = fit;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     // --- helpers -------------------------------------------------------------
@@ -363,17 +379,24 @@ impl RenderSizedOverflowBox {
     /// Delegates to the inner shared alignment component's own setter, which
     /// mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
     /// (`shifted_box.dart:339-345`) — a relayout-affecting change.
-    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
-        self.inner.set_alignment(alignment)
+    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
+        if self.inner.set_alignment(alignment) {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
     }
 
-    /// Replaces the requested size; returns `true` if the value changed.
-    pub fn set_requested_size(&mut self, requested_size: Size) -> bool {
+    /// Replaces the requested size and reports layout when changed.
+    pub fn set_requested_size(
+        &mut self,
+        requested_size: Size,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.requested_size == requested_size {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.requested_size = requested_size;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 }
 
@@ -559,8 +582,14 @@ mod tests {
     fn sized_overflow_box_setter_returns_change_flag() {
         let mut node = RenderSizedOverflowBox::centered(80.0, 60.0);
         let new_size = Size::new(px(100.0), px(100.0));
-        assert!(node.set_requested_size(new_size));
-        assert!(!node.set_requested_size(new_size));
+        assert_eq!(
+            node.set_requested_size(new_size),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_requested_size(new_size),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 
     #[test]

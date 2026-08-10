@@ -99,8 +99,12 @@ impl RenderSliverGridLazy {
     }
 
     /// Updates the known item count.  Call when the data source length changes.
-    pub fn set_item_count(&mut self, count: usize) {
+    pub fn set_item_count(&mut self, count: usize) -> flui_rendering::RenderUpdateImpact {
+        if self.item_count == count {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.item_count = count;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Current effective item count used for delegate scroll extent.
@@ -110,11 +114,20 @@ impl RenderSliverGridLazy {
         self.item_count
     }
 
-    /// Replaces the grid delegate.  In the lazy pipeline the next frame always
-    /// re-runs `perform_layout`, so no explicit "mark needs layout" is needed.
-    pub fn set_grid_delegate(&mut self, new_delegate: Arc<dyn SliverGridDelegate>) {
-        let _relayout_needed = new_delegate.should_relayout(&*self.grid_delegate);
+    /// Replaces the grid delegate. A concrete delegate type change always
+    /// requires layout; otherwise `should_relayout` is authoritative.
+    pub fn set_grid_delegate(
+        &mut self,
+        new_delegate: Arc<dyn SliverGridDelegate>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let type_changed = new_delegate.as_any().type_id() != self.grid_delegate.as_any().type_id();
+        let impact = if type_changed || new_delegate.should_relayout(&*self.grid_delegate) {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        };
         self.grid_delegate = new_delegate;
+        impact
     }
 
     /// Returns the current grid delegate.
@@ -339,12 +352,46 @@ impl RenderSliver for RenderSliverGridLazy {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use flui_rendering::constraints::{GrowthDirection, SliverConstraints};
-    use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
+    use flui_rendering::delegates::{SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout};
     use flui_rendering::view::ScrollDirection;
     use flui_types::layout::AxisDirection;
 
     use super::*;
+    use crate::RenderSliverGrid;
+
+    #[derive(Debug)]
+    struct FalseRelayout;
+
+    #[derive(Debug)]
+    struct OtherFalseRelayout;
+
+    #[derive(Debug)]
+    struct TrueRelayout;
+
+    macro_rules! impl_grid_delegate {
+        ($type:ty, $relayout:expr) => {
+            impl SliverGridDelegate for $type {
+                fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
+                    SliverGridDelegateWithFixedCrossAxisCount::new(2).get_layout(constraints)
+                }
+
+                fn should_relayout(&self, _old_delegate: &dyn SliverGridDelegate) -> bool {
+                    $relayout
+                }
+
+                fn as_any(&self) -> &dyn Any {
+                    self
+                }
+            }
+        };
+    }
+
+    impl_grid_delegate!(FalseRelayout, false);
+    impl_grid_delegate!(OtherFalseRelayout, false);
+    impl_grid_delegate!(TrueRelayout, true);
 
     fn two_column_grid(item_count: usize) -> RenderSliverGridLazy {
         RenderSliverGridLazy::new(
@@ -387,7 +434,10 @@ mod tests {
     #[test]
     fn set_item_count_updates_field() {
         let mut grid = two_column_grid(50);
-        grid.set_item_count(100);
+        assert_eq!(
+            grid.set_item_count(100),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
         assert_eq!(grid.item_count, 100);
     }
 
@@ -396,7 +446,10 @@ mod tests {
         let mut grid = two_column_grid(10);
         let new_delegate: Arc<dyn SliverGridDelegate> =
             Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(3));
-        grid.set_grid_delegate(new_delegate.clone());
+        assert_eq!(
+            grid.set_grid_delegate(new_delegate.clone()),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
         let actual_count = grid
             .grid_delegate()
             .as_any()
@@ -404,6 +457,39 @@ mod tests {
             .expect("delegate must downcast to SliverGridDelegateWithFixedCrossAxisCount")
             .cross_axis_count;
         assert_eq!(actual_count, 3);
+    }
+
+    #[test]
+    fn eager_and_lazy_grid_delegate_updates_honor_type_and_relayout_decisions() {
+        let mut eager = RenderSliverGrid::new(Arc::new(FalseRelayout));
+        assert_eq!(
+            eager.set_grid_delegate(Arc::new(FalseRelayout)),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            eager.set_grid_delegate(Arc::new(OtherFalseRelayout)),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+        let mut eager_true = RenderSliverGrid::new(Arc::new(TrueRelayout));
+        assert_eq!(
+            eager_true.set_grid_delegate(Arc::new(TrueRelayout)),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+
+        let mut lazy = RenderSliverGridLazy::new(Arc::new(FalseRelayout), 0);
+        assert_eq!(
+            lazy.set_grid_delegate(Arc::new(FalseRelayout)),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            lazy.set_grid_delegate(Arc::new(OtherFalseRelayout)),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+        let mut lazy_true = RenderSliverGridLazy::new(Arc::new(TrueRelayout), 0);
+        assert_eq!(
+            lazy_true.set_grid_delegate(Arc::new(TrueRelayout)),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     }
 
     #[test]

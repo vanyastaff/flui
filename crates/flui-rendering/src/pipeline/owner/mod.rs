@@ -550,7 +550,7 @@ mod tests {
         let mut owner = PipelineOwner::new();
         owner.add_node_needing_layout(RenderId::new(1), 0);
         owner.scheduler.schedule_paint_boundary(RenderId::new(2), 1);
-        owner.add_node_needing_compositing_bits_update(RenderId::new(3), 2);
+        owner.mark_needs_compositing_bits_update(RenderId::new(3));
 
         let (owner, result) = owner.run_frame();
         let _layer_tree = result.expect("frame should succeed");
@@ -728,7 +728,7 @@ mod tests {
         let mut owner = PipelineOwner::new();
         owner.add_node_needing_layout(RenderId::new(1), 0);
         owner.scheduler.schedule_paint_boundary(RenderId::new(2), 1);
-        owner.add_node_needing_semantics(RenderId::new(3), 2);
+        owner.mark_needs_semantics(RenderId::new(3));
 
         owner.clear_all_dirty_nodes();
 
@@ -815,13 +815,19 @@ mod tests {
             None::<fn()>,
             None::<fn()>,
         );
+        let render_id = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
 
         // An initial layout mark wakes; clear so we start from 0 for this test.
         owner.clear_all_dirty_nodes();
+        owner
+            .render_tree()
+            .get(render_id)
+            .expect("inserted render node")
+            .clear_needs_compositing_bits_update();
         let baseline = wake_count.load(Ordering::Relaxed);
 
         // First compositing mark on a fresh owner — must wake.
-        owner.add_node_needing_compositing_bits_update(RenderId::new(10), 0);
+        owner.mark_needs_compositing_bits_update(render_id);
         assert_eq!(
             wake_count.load(Ordering::Relaxed),
             baseline + 1,
@@ -830,7 +836,7 @@ mod tests {
         );
 
         // Duplicate mark — frame already scheduled, must NOT double-wake.
-        owner.add_node_needing_compositing_bits_update(RenderId::new(10), 0);
+        owner.mark_needs_compositing_bits_update(render_id);
         assert_eq!(
             wake_count.load(Ordering::Relaxed),
             baseline + 1,
@@ -852,12 +858,14 @@ mod tests {
             None::<fn()>,
             None::<fn()>,
         );
+        let render_id = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        owner.set_semantics_enabled(true);
 
         owner.clear_all_dirty_nodes();
         let baseline = wake_count.load(Ordering::Relaxed);
 
         // First semantics mark on a fresh owner — must wake.
-        owner.add_node_needing_semantics(RenderId::new(20), 0);
+        owner.mark_needs_semantics(render_id);
         assert_eq!(
             wake_count.load(Ordering::Relaxed),
             baseline + 1,
@@ -866,13 +874,145 @@ mod tests {
         );
 
         // Duplicate mark — frame already scheduled, must NOT double-wake.
-        owner.add_node_needing_semantics(RenderId::new(20), 0);
+        owner.mark_needs_semantics(render_id);
         assert_eq!(
             wake_count.load(Ordering::Relaxed),
             baseline + 1,
             "add_node_needing_semantics: duplicate entry must not fire a \
              second wake"
         );
+    }
+
+    #[test]
+    fn apply_layout_defers_paint_until_layout_completes() {
+        let mut owner = PipelineOwner::new();
+        let render_id = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        owner.set_root_constraints(Some(crate::constraints::BoxConstraints::tight(Size::new(
+            px(10.0),
+            px(10.0),
+        ))));
+        owner.clear_all_dirty_nodes();
+        let node = owner
+            .render_tree()
+            .get(render_id)
+            .expect("inserted render node");
+        node.clear_needs_paint();
+        match owner
+            .render_tree_mut()
+            .get_mut(render_id)
+            .expect("inserted render node")
+        {
+            crate::storage::RenderNode::Box(entry) => entry.state().clear_needs_layout(),
+            crate::storage::RenderNode::Sliver(entry) => entry.state().clear_needs_layout(),
+        }
+
+        owner.apply_render_update_impact(render_id, crate::RenderUpdateImpact::LAYOUT);
+
+        assert_eq!(owner.nodes_needing_layout().len(), 1);
+        assert!(
+            owner.nodes_needing_paint().is_empty(),
+            "layout impact must not add a redundant immediate paint root",
+        );
+
+        let mut owner = owner.into_layout();
+        owner.run_layout().expect("layout succeeds");
+        assert_eq!(
+            owner.nodes_needing_paint().len(),
+            1,
+            "successful layout schedules its eventual paint",
+        );
+    }
+
+    #[test]
+    fn apply_combines_compositing_paint_and_semantics_once() {
+        let mut owner = PipelineOwner::new();
+        let render_id = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        owner.set_semantics_enabled(true);
+        owner.clear_all_dirty_nodes();
+        let node = owner
+            .render_tree()
+            .get(render_id)
+            .expect("inserted render node");
+        node.clear_needs_paint();
+        node.clear_needs_compositing_bits_update();
+
+        let impact =
+            crate::RenderUpdateImpact::COMPOSITING_BITS | crate::RenderUpdateImpact::SEMANTICS;
+        owner.apply_render_update_impact(render_id, impact);
+        owner.apply_render_update_impact(render_id, impact);
+
+        assert_eq!(owner.nodes_needing_compositing_bits_update().len(), 1);
+        assert_eq!(owner.nodes_needing_paint().len(), 1);
+        assert_eq!(owner.nodes_needing_semantics().len(), 1);
+        assert!(owner.nodes_needing_layout().is_empty());
+    }
+
+    fn clear_structural_update_state(owner: &mut PipelineOwner, ids: &[RenderId]) {
+        owner.clear_all_dirty_nodes();
+        for &id in ids {
+            let node = owner.render_tree().get(id).expect("structural test node");
+            node.clear_needs_paint();
+            node.clear_needs_compositing_bits_update();
+            match owner
+                .render_tree_mut()
+                .get_mut(id)
+                .expect("structural test node")
+            {
+                crate::storage::RenderNode::Box(entry) => entry.state().clear_needs_layout(),
+                crate::storage::RenderNode::Sliver(entry) => entry.state().clear_needs_layout(),
+            }
+        }
+    }
+
+    #[test]
+    fn child_membership_invalidates_layout_compositing_and_semantics_once() {
+        let mut owner = PipelineOwner::new();
+        let parent = owner.insert(Box::new(SemanticLeaf::empty()));
+        let child = owner.insert(Box::new(SemanticLeaf::empty()));
+        owner.set_semantics_enabled(true);
+        clear_structural_update_state(&mut owner, &[parent, child]);
+
+        owner.adopt_render_child(parent, child);
+        owner.adopt_render_child(parent, child);
+
+        assert_eq!(owner.nodes_needing_layout().len(), 1);
+        assert_eq!(owner.nodes_needing_compositing_bits_update().len(), 1);
+        assert_eq!(owner.nodes_needing_semantics().len(), 1);
+        assert!(owner.nodes_needing_paint().is_empty());
+    }
+
+    #[test]
+    fn cross_parent_adoption_invalidates_both_parents() {
+        let mut owner = PipelineOwner::new();
+        let old_parent = owner.insert(Box::new(SemanticLeaf::empty()));
+        let new_parent = owner.insert(Box::new(SemanticLeaf::empty()));
+        let child = owner.insert(Box::new(SemanticLeaf::empty()));
+        owner.adopt_render_child(old_parent, child);
+        clear_structural_update_state(&mut owner, &[old_parent, new_parent, child]);
+
+        owner.adopt_render_child(new_parent, child);
+
+        let layout_ids: rustc_hash::FxHashSet<_> = owner
+            .nodes_needing_layout()
+            .iter()
+            .map(|entry| entry.id)
+            .collect();
+        let expected = rustc_hash::FxHashSet::from_iter([old_parent, new_parent]);
+        assert_eq!(layout_ids, expected);
+    }
+
+    #[test]
+    fn removal_invalidates_the_surviving_parent() {
+        let mut owner = PipelineOwner::new();
+        let parent = owner.insert(Box::new(SemanticLeaf::empty()));
+        let child = owner.insert(Box::new(SemanticLeaf::empty()));
+        owner.adopt_render_child(parent, child);
+        clear_structural_update_state(&mut owner, &[parent, child]);
+
+        assert_eq!(owner.remove_render_object(child), 1);
+
+        assert_eq!(owner.nodes_needing_layout()[0].id, parent);
+        assert_eq!(owner.nodes_needing_compositing_bits_update()[0].id, parent);
     }
 
     /// The boundary-walking `mark_needs_layout` fires the wake when it

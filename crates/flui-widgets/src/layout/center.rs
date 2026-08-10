@@ -70,8 +70,8 @@ impl RenderView for Center {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.build_render_object();
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.update_factors(self.width_factor, self.height_factor)
     }
 
     fn has_children(&self) -> bool {
@@ -121,10 +121,11 @@ mod tests {
         assert_eq!(render_object.height_factor(), None);
 
         let updated = Center::new().width_factor(1.5).height_factor(3.0);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.width_factor(), Some(1.5));
         assert_eq!(render_object.height_factor(), Some(3.0));
@@ -140,10 +141,11 @@ mod tests {
         assert_eq!(render_object.height_factor(), Some(0.5));
 
         let updated = Center::new();
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.width_factor(), None);
         assert_eq!(render_object.height_factor(), None);

@@ -42,16 +42,10 @@ fn default_constraints() -> BoxConstraints {
     BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0))
 }
 
-/// Depth of `id` in the render tree (root = 0), for paint-dirty enqueue.
-fn node_depth<P: crate::pipeline::PipelinePhase>(owner: &PipelineOwner<P>, id: RenderId) -> usize {
-    owner.render_tree().depth(id).unwrap_or(0) as usize
-}
-
 /// Marks `id` for repaint: compositing bits (layer structure may change when
 /// paint effects like opacity cross the fully-opaque threshold) then paint.
 fn mark_needs_paint<P: crate::pipeline::PipelinePhase>(owner: &mut PipelineOwner<P>, id: RenderId) {
-    let depth = node_depth(owner, id);
-    owner.add_node_needing_compositing_bits_update(id, depth);
+    owner.mark_needs_compositing_bits_update(id);
     owner.mark_needs_paint(id);
 }
 

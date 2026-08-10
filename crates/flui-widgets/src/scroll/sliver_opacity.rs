@@ -47,8 +47,8 @@ impl RenderView for SliverOpacity {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_opacity(self.opacity);
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_opacity(self.opacity)
     }
 
     fn has_children(&self) -> bool {
@@ -63,3 +63,35 @@ impl RenderView for SliverOpacity {
 }
 
 impl_render_view!(SliverOpacity);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+
+    #[test]
+    fn update_reports_exact_alpha_transition_impacts() {
+        let original = SliverOpacity::new(1.0);
+        let context = flui_view::RenderObjectContext::detached();
+        let mut render_object = original.create_render_object(&context);
+
+        assert_eq!(
+            original.update_render_object(&context, &mut render_object),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            SliverOpacity::new(0.5).update_render_object(&context, &mut render_object),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
+        assert_eq!(
+            SliverOpacity::new(0.25).update_render_object(&context, &mut render_object),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
+        assert_eq!(
+            SliverOpacity::new(0.0).update_render_object(&context, &mut render_object),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+}

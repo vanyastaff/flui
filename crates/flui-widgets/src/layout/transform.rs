@@ -110,8 +110,10 @@ impl RenderView for Transform {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.build_render_object();
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_transform(self.transform)
+            | render_object.set_alignment(self.alignment)
+            | render_object.set_origin(self.origin)
     }
 
     fn has_children(&self) -> bool {
@@ -126,3 +128,37 @@ impl RenderView for Transform {
 }
 
 impl_render_view!(Transform);
+
+#[cfg(test)]
+mod tests {
+    use flui_types::geometry::px;
+    use flui_view::RenderView;
+
+    use super::*;
+
+    #[test]
+    fn update_reports_exact_geometry_impact_and_dedupes_identical_configuration() {
+        let initial = Transform::translate(2.0, 3.0);
+        let mut render_object =
+            initial.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(
+            initial.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+
+        let changed = Transform::scale(2.0, 2.0)
+            .alignment(Alignment::BOTTOM_RIGHT)
+            .origin(Offset::new(px(4.0), px(5.0)));
+        assert_eq!(
+            changed.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+}

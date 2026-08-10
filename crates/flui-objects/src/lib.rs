@@ -45,8 +45,8 @@ mod text;
 
 // --- flat re-exports (layout) ---
 pub use layout::{
-    AnimatedSizeState, CrossAxisAlignment, DelegateChange, FlexDirection, MainAxisAlignment,
-    MainAxisSize, OverflowBoxFit, PositionedSpec, StackFit, TranslationFraction, WrapAlignment,
+    AnimatedSizeState, CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize,
+    OverflowBoxFit, PositionedSpec, StackFit, TranslationFraction, WrapAlignment,
     WrapCrossAlignment,
 };
 pub use layout::{
@@ -62,12 +62,12 @@ pub use layout::{
 
 // --- flat re-exports (proxy) ---
 pub use proxy::{
-    ClipGeometry, DecorationPosition, Oval, RenderAnimatedOpacity, RenderBackdropFilter,
-    RenderClip, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox,
-    RenderCustomPaint, RenderDecoratedBox, RenderFollowerLayer, RenderIgnoreBaseline,
-    RenderLeaderLayer, RenderOpacity, RenderPhysicalModel, RenderPhysicalShape,
-    RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask, RenderSubtreeAnchor,
-    SubtreeAnchor,
+    ClipGeometry, DecorationPosition, Oval, PathClipConfiguration, PathClipSourceToken,
+    RenderAnimatedOpacity, RenderBackdropFilter, RenderClip, RenderClipOval, RenderClipPath,
+    RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint, RenderDecoratedBox,
+    RenderFollowerLayer, RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity,
+    RenderPhysicalModel, RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations,
+    RenderShaderMask, RenderSubtreeAnchor, SubtreeAnchor,
 };
 pub use proxy::{RenderExcludeSemantics, RenderMergeSemantics};
 

@@ -40,7 +40,7 @@
 //!   keeps the same shape, but the bool is exposed publicly without
 //!   getters; here it lives behind `offstage()` / `set_offstage(...)`
 //!   so the change-flag pipeline-discipline applies uniformly.
-//! * Setter returns `bool` for pipeline `mark_needs_layout` short-circuit.
+//! * The setter returns the exact pipeline impact.
 
 use flui_tree::Single;
 use flui_types::{Offset, Size};
@@ -96,13 +96,13 @@ impl RenderOffstage {
         self.offstage
     }
 
-    /// Updates the offstage flag; returns true if the value changed.
-    pub fn set_offstage(&mut self, offstage: bool) -> bool {
+    /// Updates the offstage flag and reports layout plus semantics when changed.
+    pub fn set_offstage(&mut self, offstage: bool) -> flui_rendering::RenderUpdateImpact {
         if self.offstage == offstage {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.offstage = offstage;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -284,9 +284,14 @@ mod tests {
     #[test]
     fn set_offstage_returns_change_flag() {
         let mut node = RenderOffstage::visible();
-        assert!(node.set_offstage(true));
-        assert!(!node.set_offstage(true)); // no-op
-        assert!(node.set_offstage(false));
+        let changed = flui_rendering::RenderUpdateImpact::LAYOUT
+            | flui_rendering::RenderUpdateImpact::SEMANTICS;
+        assert_eq!(node.set_offstage(true), changed);
+        assert_eq!(
+            node.set_offstage(true),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(node.set_offstage(false), changed);
     }
 
     #[test]

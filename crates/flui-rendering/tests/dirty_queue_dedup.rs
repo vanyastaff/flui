@@ -73,8 +73,8 @@ fn repeated_add_compositing_dedups_to_single_entry() {
     let (mut owner, id) = fresh_owner_with_one_node();
     owner.clear_all_dirty_nodes();
 
-    owner.add_node_needing_compositing_bits_update(id, 0);
-    owner.add_node_needing_compositing_bits_update(id, 0);
+    owner.mark_needs_compositing_bits_update(id);
+    owner.mark_needs_compositing_bits_update(id);
 
     let comp_entries: Vec<DirtyNode> = owner.nodes_needing_compositing_bits_update().to_vec();
     assert_eq!(
@@ -87,10 +87,11 @@ fn repeated_add_compositing_dedups_to_single_entry() {
 #[test]
 fn repeated_add_semantics_dedups_to_single_entry() {
     let (mut owner, id) = fresh_owner_with_one_node();
+    owner.set_semantics_enabled(true);
     owner.clear_all_dirty_nodes();
 
-    owner.add_node_needing_semantics(id, 0);
-    owner.add_node_needing_semantics(id, 0);
+    owner.mark_needs_semantics(id);
+    owner.mark_needs_semantics(id);
 
     let sem_entries: Vec<DirtyNode> = owner.nodes_needing_semantics().to_vec();
     assert_eq!(

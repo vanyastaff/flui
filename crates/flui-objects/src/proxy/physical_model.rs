@@ -59,11 +59,14 @@ use flui_types::{
 
 use flui_foundation::DiagnosticsBuilder;
 use flui_rendering::{
+    RenderUpdateImpact,
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     hit_testing::{PathClipTarget, resolve_path_clip_target},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
+
+use super::clip::PathClipSourceToken;
 
 // =============================================================================
 // PhysicalClipShape — shape-level operations (RRect, Path)
@@ -281,17 +284,38 @@ impl PhysicalClipSource for RectangleClip {
 ///
 /// Stored as `Option` (matching the oracle's nullable base-class `clipper`
 /// field) because clearing it falls back to the whole-box rectangle default.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PathClip {
     /// The active owner-lane path target, or `None` to fall back to the
     /// whole-box rect.
     pub target: Option<PathClipTarget>,
+    /// Stable identity of the widget-owned source registered at `target`.
+    source_token: Option<PathClipSourceToken>,
+    /// Effective declarative configuration for clippers that can compare
+    /// their source by value rather than callback identity.
+    configuration: Option<PathClipConfiguration>,
+}
+
+/// Comparable configuration for the built-in size-dependent path clippers.
+///
+/// This lets higher-level shape widgets implement Flutter's
+/// `ShapeBorderClipper::shouldReclip` contract without comparing callback
+/// addresses or replacing an unchanged owner-lane clipper.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum PathClipConfiguration {
+    /// A rounded rectangle with fixed physical corner radii.
+    RoundedRect(BorderRadius),
+    /// A stadium whose radius is half its laid-out shortest side.
+    Stadium,
 }
 
 impl fmt::Debug for PathClip {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PathClip")
             .field("has_custom_clipper", &self.target.is_some())
+            .field("has_source_token", &self.source_token.is_some())
+            .field("configuration", &self.configuration)
             .finish()
     }
 }
@@ -398,18 +422,17 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
         self
     }
 
-    /// Replaces the elevation; returns `true` if the value changed.
-    /// Paint-only — Flutter parity: `markNeedsPaint()`, never a relayout.
-    pub fn set_elevation(&mut self, elevation: f32) -> bool {
+    /// Replaces the elevation and reports paint when it changed.
+    pub fn set_elevation(&mut self, elevation: f32) -> RenderUpdateImpact {
         debug_assert!(
             elevation >= 0.0,
             "RenderPhysicalModelBase: elevation must be non-negative, got {elevation}"
         );
         if self.elevation == elevation {
-            return false;
+            return RenderUpdateImpact::NONE;
         }
         self.elevation = elevation;
-        true
+        RenderUpdateImpact::PAINT
     }
 
     /// The current fill color.
@@ -425,13 +448,13 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
         self
     }
 
-    /// Replaces the fill color; returns `true` if the value changed.
-    pub fn set_color(&mut self, color: Color) -> bool {
+    /// Replaces the fill color and returns the exact pipeline impact.
+    pub fn set_color(&mut self, color: Color) -> RenderUpdateImpact {
         if self.color == color {
-            return false;
+            return RenderUpdateImpact::NONE;
         }
         self.color = color;
-        true
+        RenderUpdateImpact::PAINT
     }
 
     /// The current shadow color.
@@ -447,13 +470,13 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
         self
     }
 
-    /// Replaces the shadow color; returns `true` if the value changed.
-    pub fn set_shadow_color(&mut self, shadow_color: Color) -> bool {
+    /// Replaces the shadow color and returns the exact pipeline impact.
+    pub fn set_shadow_color(&mut self, shadow_color: Color) -> RenderUpdateImpact {
         if self.shadow_color == shadow_color {
-            return false;
+            return RenderUpdateImpact::NONE;
         }
         self.shadow_color = shadow_color;
-        true
+        RenderUpdateImpact::PAINT
     }
 
     /// The current clip behavior.
@@ -469,13 +492,13 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
         self
     }
 
-    /// Replaces the clip behavior; returns `true` if the value changed.
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> bool {
+    /// Replaces the clip behavior and returns the exact pipeline impact.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
-            return false;
+            return RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        true
+        RenderUpdateImpact::PAINT
     }
 }
 
@@ -520,24 +543,24 @@ impl RenderPhysicalModelBase<RectangleClip> {
         self.clip_source.border_radius
     }
 
-    /// Replaces the box shape; returns `true` if the value changed.
+    /// Replaces the box shape and returns the exact pipeline impact.
     /// Paint/hit-test only — Flutter parity: `_markNeedsClip()`, never a
     /// relayout (the clip shape never affects `size`).
-    pub fn set_shape(&mut self, shape: BoxShape) -> bool {
+    pub fn set_shape(&mut self, shape: BoxShape) -> RenderUpdateImpact {
         if self.clip_source.shape == shape {
-            return false;
+            return RenderUpdateImpact::NONE;
         }
         self.clip_source.shape = shape;
-        true
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
     }
 
-    /// Replaces the border radius; returns `true` if the value changed.
-    pub fn set_border_radius(&mut self, border_radius: Option<BorderRadius>) -> bool {
+    /// Replaces the border radius and returns the exact pipeline impact.
+    pub fn set_border_radius(&mut self, border_radius: Option<BorderRadius>) -> RenderUpdateImpact {
         if self.clip_source.border_radius == border_radius {
-            return false;
+            return RenderUpdateImpact::NONE;
         }
         self.clip_source.border_radius = border_radius;
-        true
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -548,7 +571,14 @@ impl RenderPhysicalModelBase<PathClip> {
     /// connected with [`with_path_clip_target`](Self::with_path_clip_target);
     /// this render object never stores executable clipper callbacks.
     pub fn new(color: Color) -> Self {
-        Self::with_clip_source(PathClip { target: None }, color)
+        Self::with_clip_source(
+            PathClip {
+                target: None,
+                source_token: None,
+                configuration: None,
+            },
+            color,
+        )
     }
 
     /// Builder: sets the owner-lane path clip target.
@@ -556,6 +586,47 @@ impl RenderPhysicalModelBase<PathClip> {
     pub fn with_path_clip_target(mut self, target: PathClipTarget) -> Self {
         self.clip_source.target = Some(target);
         self
+    }
+
+    /// Builder: records the widget-owned path source identity.
+    #[must_use]
+    pub fn with_path_clip_source_token(mut self, source_token: PathClipSourceToken) -> Self {
+        self.clip_source.source_token = Some(source_token);
+        self
+    }
+
+    /// Replaces the widget-owned path source identity.
+    pub fn set_path_clip_source_token(
+        &mut self,
+        source_token: &PathClipSourceToken,
+    ) -> RenderUpdateImpact {
+        if self.clip_source.source_token.as_ref() == Some(source_token) {
+            return RenderUpdateImpact::NONE;
+        }
+        self.clip_source.source_token = Some(source_token.clone());
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+    }
+
+    /// Builder: records a comparable declarative path-clip configuration.
+    #[must_use]
+    pub fn with_path_clip_configuration(mut self, configuration: PathClipConfiguration) -> Self {
+        self.clip_source.configuration = Some(configuration);
+        self
+    }
+
+    /// Replaces the comparable path-clip configuration.
+    ///
+    /// A changed shape affects paint and the clipped semantics geometry; an
+    /// identical configuration does not replace the registered callback.
+    pub fn set_path_clip_configuration(
+        &mut self,
+        configuration: PathClipConfiguration,
+    ) -> RenderUpdateImpact {
+        if self.clip_source.configuration.as_ref() == Some(&configuration) {
+            return RenderUpdateImpact::NONE;
+        }
+        self.clip_source.configuration = Some(configuration);
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
     }
 
     /// Returns the owner-lane path clip target, if one is installed.
@@ -571,7 +642,7 @@ impl RenderPhysicalModelBase<PathClip> {
         self.clip_source.target.is_some()
     }
 
-    /// Replaces the path clip target; returns `true` if the value changed
+    /// Replaces the path clip target; returns paint plus semantics if changed
     /// (`None` -> `Some`, `Some` -> `None`, or a swap between two distinct
     /// targets). `None` falls back to the whole-box rectangle default clip
     /// (oracle `:2296`).
@@ -582,12 +653,12 @@ impl RenderPhysicalModelBase<PathClip> {
     /// whenever it differs (`_markNeedsClip()`), including a swap between two
     /// distinct non-null clippers — a presence-only check would silently miss
     /// that swap and never signal a repaint.
-    pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) -> bool {
+    pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) -> RenderUpdateImpact {
         if self.clip_source.target == target {
-            return false;
+            return RenderUpdateImpact::NONE;
         }
         self.clip_source.target = target;
-        true
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -760,7 +831,11 @@ mod tests {
 
     #[test]
     fn path_clip_falls_back_to_whole_rect_without_clipper() {
-        let source = PathClip { target: None };
+        let source = PathClip {
+            target: None,
+            source_token: None,
+            configuration: None,
+        };
         let path = source.compute_clip(Size::new(px(60.0), px(30.0)));
         assert!(path.contains(Point::new(px(30.0), px(15.0))));
         assert!(!path.contains(Point::new(px(200.0), px(200.0))));
@@ -783,6 +858,8 @@ mod tests {
                 .expect("register path target");
             let source = PathClip {
                 target: Some(target),
+                source_token: None,
+                configuration: None,
             };
             let path = source.compute_clip(Size::new(px(100.0), px(100.0)));
             // Inset by 10px on each side: (5, 5) is outside, (50, 50) is inside.
@@ -844,10 +921,10 @@ mod tests {
         let mut node = RenderPhysicalModel::new(Color::from_argb(0xffff_00ff));
         assert!(!node.always_needs_compositing());
 
-        node.set_elevation(1.0);
+        assert_eq!(node.set_elevation(1.0), RenderUpdateImpact::PAINT);
         assert!(!node.always_needs_compositing());
 
-        node.set_elevation(0.0);
+        assert_eq!(node.set_elevation(0.0), RenderUpdateImpact::PAINT);
         assert!(!node.always_needs_compositing());
     }
 
@@ -861,34 +938,47 @@ mod tests {
         let mut node = RenderPhysicalShape::new(Color::from_argb(0xffff_00ff));
         assert!(!node.always_needs_compositing());
 
-        node.set_elevation(1.0);
+        assert_eq!(node.set_elevation(1.0), RenderUpdateImpact::PAINT);
         assert!(!node.always_needs_compositing());
 
-        node.set_elevation(0.0);
+        assert_eq!(node.set_elevation(0.0), RenderUpdateImpact::PAINT);
         assert!(!node.always_needs_compositing());
     }
 
     #[test]
-    fn set_elevation_returns_change_flag() {
+    fn set_elevation_returns_exact_impact() {
         let mut node = RenderPhysicalModel::new(Color::RED);
-        assert!(node.set_elevation(4.0));
-        assert!(!node.set_elevation(4.0));
+        assert_eq!(node.set_elevation(4.0), RenderUpdateImpact::PAINT);
+        assert_eq!(node.set_elevation(4.0), RenderUpdateImpact::NONE);
     }
 
     #[test]
-    fn set_clip_behavior_returns_change_flag() {
+    fn set_clip_behavior_returns_exact_impact() {
         let mut node = RenderPhysicalModel::new(Color::RED);
-        assert!(node.set_clip_behavior(Clip::AntiAlias));
-        assert!(!node.set_clip_behavior(Clip::AntiAlias));
+        assert_eq!(
+            node.set_clip_behavior(Clip::AntiAlias),
+            RenderUpdateImpact::PAINT,
+        );
+        assert_eq!(
+            node.set_clip_behavior(Clip::AntiAlias),
+            RenderUpdateImpact::NONE,
+        );
     }
 
     #[test]
-    fn set_shape_and_border_radius_return_change_flags() {
+    fn set_shape_and_border_radius_return_exact_impacts() {
         let mut node = RenderPhysicalModel::new(Color::RED);
-        assert!(node.set_shape(BoxShape::Circle));
-        assert!(!node.set_shape(BoxShape::Circle));
-        assert!(node.set_border_radius(Some(BorderRadius::circular(px(4.0)))));
-        assert!(!node.set_border_radius(Some(BorderRadius::circular(px(4.0)))));
+        let clip_geometry_impact = RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS;
+        assert_eq!(node.set_shape(BoxShape::Circle), clip_geometry_impact);
+        assert_eq!(node.set_shape(BoxShape::Circle), RenderUpdateImpact::NONE);
+        assert_eq!(
+            node.set_border_radius(Some(BorderRadius::circular(px(4.0)))),
+            clip_geometry_impact,
+        );
+        assert_eq!(
+            node.set_border_radius(Some(BorderRadius::circular(px(4.0)))),
+            RenderUpdateImpact::NONE,
+        );
     }
 
     #[test]
@@ -905,11 +995,33 @@ mod tests {
                 .expect("register path target");
             let mut node = RenderPhysicalShape::new(Color::BLUE).with_path_clip_target(target);
             assert!(node.has_custom_clipper());
-            assert!(node.set_path_clip_target(None));
+            assert_eq!(
+                node.set_path_clip_target(None),
+                RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+            );
             assert!(!node.has_custom_clipper());
-            assert!(node.set_path_clip_target(Some(target)));
+            assert_eq!(
+                node.set_path_clip_target(Some(target)),
+                RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+            );
             assert!(node.has_custom_clipper());
         });
+    }
+
+    #[test]
+    fn set_path_clip_source_token_returns_exact_impact() {
+        let source_token = PathClipSourceToken::fresh();
+        let mut node =
+            RenderPhysicalShape::new(Color::BLUE).with_path_clip_source_token(source_token.clone());
+
+        assert_eq!(
+            node.set_path_clip_source_token(&source_token),
+            RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_path_clip_source_token(&PathClipSourceToken::fresh()),
+            RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+        );
     }
 
     // Oracle parity (`proxy_box_test.dart`, `RenderPhysicalShape` group,
@@ -921,13 +1033,8 @@ mod tests {
     // test: `set_path_clip_target` now compares the full
     // `Option<PathClipTarget>`, not just its `is_some()` presence.
     //
-    // The `PhysicalShape` view (`flui-widgets`) ignores this setter's
-    // returned change flag — its repaint comes from the element layer's
-    // unconditional needs-layout/paint mark after `update_render_object` —
-    // so the oracle's own observable (`debugNeedsPaint` flipped by the
-    // setter) still has no consumer to port against. This tests the
-    // setter's own change-detection contract instead, the precondition a
-    // flag-consuming diff layer would rely on.
+    // The authoritative setter returns the exact paint-plus-semantics impact;
+    // the `PhysicalShape` view unions it without reconstructing phase policy.
     #[test]
     fn set_path_clip_target_detects_target_swap_not_just_presence() {
         let lane = InteractionLane::try_new().expect("lane");
@@ -954,14 +1061,16 @@ mod tests {
             let mut node = RenderPhysicalShape::new(Color::BLUE).with_path_clip_target(target_a);
 
             // "Same shape, no repaint" (oracle).
-            assert!(
-                !node.set_path_clip_target(Some(target_a)),
+            assert_eq!(
+                node.set_path_clip_target(Some(target_a)),
+                RenderUpdateImpact::NONE,
                 "re-setting the identical target must report no change"
             );
             // "Different shape triggers repaint" (oracle) — both sides are
             // `Some`, so presence alone cannot distinguish this case.
-            assert!(
+            assert_eq!(
                 node.set_path_clip_target(Some(target_b)),
+                RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS,
                 "swapping to a distinct target must report a change even \
                  though presence (Some -> Some) never toggles"
             );

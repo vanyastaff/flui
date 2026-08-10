@@ -1315,8 +1315,7 @@ fn toggling_explicit_child_nodes_reuses_the_contributors_accessibility_id() {
     run.update::<SemanticsContainer>(group_render_id, |container| {
         container.explicit_child_nodes = true;
     });
-    run.owner_mut()
-        .add_node_needing_semantics(group_render_id, 1);
+    run.owner_mut().mark_needs_semantics(group_render_id);
     run.pump();
 
     let explicit = snapshot(&run);
@@ -1358,8 +1357,7 @@ fn toggling_explicit_child_nodes_reuses_the_contributors_accessibility_id() {
     run.update::<SemanticsContainer>(group_render_id, |container| {
         container.explicit_child_nodes = false;
     });
-    run.owner_mut()
-        .add_node_needing_semantics(group_render_id, 1);
+    run.owner_mut().mark_needs_semantics(group_render_id);
     run.pump();
 
     let merged_again = snapshot(&run);
@@ -1391,8 +1389,7 @@ fn toggling_explicit_child_nodes_reuses_the_contributors_accessibility_id() {
     run.update::<SemanticsContainer>(group_render_id, |container| {
         container.explicit_child_nodes = true;
     });
-    run.owner_mut()
-        .add_node_needing_semantics(group_render_id, 1);
+    run.owner_mut().mark_needs_semantics(group_render_id);
     run.pump();
 
     let explicit_again = snapshot(&run);
@@ -1482,8 +1479,7 @@ fn full_snapshot_uses_render_identity_and_keeps_it_across_configuration_updates(
     assert_eq!(initial_child.rect().height(), px(20.0));
 
     run.update::<SemanticsLeaf>(child_render_id, |leaf| leaf.label = Some("After"));
-    run.owner_mut()
-        .add_node_needing_semantics(child_render_id, 1);
+    run.owner_mut().mark_needs_semantics(child_render_id);
     run.pump();
 
     let updated = snapshot(&run);
@@ -1529,7 +1525,7 @@ fn sibling_insert_and_reorder_preserve_existing_accessibility_ids() {
             Box::new(SemanticsLeaf::new(20.0).with_label("Gamma").with_boundary()),
         )
         .expect("root must accept a third child");
-    run.owner_mut().add_node_needing_semantics(root, 0);
+    run.owner_mut().mark_needs_semantics(root);
     run.pump();
 
     let inserted = snapshot(&run);
@@ -1542,7 +1538,7 @@ fn sibling_insert_and_reorder_preserve_existing_accessibility_ids() {
         tree.adopt_child(root, alpha);
     }
     run.owner_mut().mark_needs_layout(root);
-    run.owner_mut().add_node_needing_semantics(root, 0);
+    run.owner_mut().mark_needs_semantics(root);
     run.pump();
 
     let reordered = snapshot(&run);
@@ -1610,7 +1606,7 @@ fn removal_updates_parent_children_and_recycled_render_slot_gets_a_new_id() {
 
     assert_eq!(run.owner_mut().remove_render_object(removed_branch), 2);
     run.owner_mut().mark_needs_layout(root);
-    run.owner_mut().add_node_needing_semantics(root, 0);
+    run.owner_mut().mark_needs_semantics(root);
     run.pump();
 
     let removed = snapshot(&run);
@@ -1641,7 +1637,7 @@ fn removal_updates_parent_children_and_recycled_render_slot_gets_a_new_id() {
         "the test must exercise actual slab-slot reuse",
     );
     assert_ne!(replacement.generation(), removed_branch.generation());
-    run.owner_mut().add_node_needing_semantics(root, 0);
+    run.owner_mut().mark_needs_semantics(root);
     run.pump();
 
     let reused = snapshot(&run);

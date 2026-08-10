@@ -180,6 +180,7 @@ pub use element::{RootElement, RootElementImpl};
 pub use element::{StatefulBehavior, StatelessBehavior};
 // Re-export from flui-foundation
 pub use flui_foundation::{ElementId, RenderId};
+pub use flui_rendering::RenderUpdateImpact;
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
 // Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
@@ -214,6 +215,7 @@ pub mod prelude {
     // Straight from `tracing`. A framework crate emits events and has no
     // opinion about where they go, so nothing here reaches the backend.
     pub use flui_foundation::{ElementId, RenderId};
+    pub use flui_rendering::RenderUpdateImpact;
     pub use tracing::{debug, error, info, trace, warn};
     // The proc-macro derives ship from `flui-macros` but are surfaced
     // here so a single `use flui_view::prelude::*;` picks them up

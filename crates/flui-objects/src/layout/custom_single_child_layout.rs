@@ -53,14 +53,21 @@ impl RenderCustomSingleChildLayoutBox {
     /// Mirrors Flutter's setter: the identical delegate instance is a no-op;
     /// changing the concrete delegate type forces relayout; otherwise the new
     /// delegate's `should_relayout(old_delegate)` decides.
-    pub fn set_delegate(&mut self, delegate: Arc<dyn SingleChildLayoutDelegate>) -> bool {
+    pub fn set_delegate(
+        &mut self,
+        delegate: Arc<dyn SingleChildLayoutDelegate>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if Arc::ptr_eq(&self.delegate, &delegate) {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();
         let relayout = type_changed || delegate.should_relayout(&*self.delegate);
         self.delegate = delegate;
-        relayout
+        if relayout {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
     }
 
     /// Flutter's private `_getSize`: delegate size, then incoming constraints.

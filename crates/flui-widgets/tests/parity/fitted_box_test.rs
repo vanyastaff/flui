@@ -248,7 +248,7 @@ fn fitted_box_with_no_child_measures_zero() {
 /// FittedBox's transform, to the SAME absolute point its own
 /// `localToGlobal`-equivalent box-space computation reaches.
 #[test]
-fn fitted_box_alignment_and_fit_changes_relayout_across_pump_widget_swaps() {
+fn fitted_box_alignment_and_fit_changes_refresh_transform_across_widget_swaps() {
     fn build(alignment: Alignment, fit: BoxFit, child_size: (f32, f32)) -> Center {
         Center::new().child(
             SizedBox::square(100.0).child(

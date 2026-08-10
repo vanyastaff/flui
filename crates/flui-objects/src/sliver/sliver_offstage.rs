@@ -17,7 +17,7 @@
 //! # Rust-native improvements
 //!
 //! * The `offstage` flag is a typed `bool` boundary; no `Visibility`
-//!   enum overload. Setter returns a `bool` change-flag for pipeline
+//!   enum overload. The setter returns the exact pipeline impact.
 //!   `mark_needs_layout` short-circuit.
 //! * Scroll-offset correction returned by the offstage child is
 //!   propagated upward unchanged — the viewport reruns layout next
@@ -77,13 +77,13 @@ impl RenderSliverOffstage {
         self.offstage
     }
 
-    /// Updates the `offstage` flag; returns `true` iff the value changed.
-    pub fn set_offstage(&mut self, offstage: bool) -> bool {
+    /// Updates the `offstage` flag and reports layout plus semantics when changed.
+    pub fn set_offstage(&mut self, offstage: bool) -> flui_rendering::RenderUpdateImpact {
         if self.offstage == offstage {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.offstage = offstage;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -172,9 +172,14 @@ mod tests {
     #[test]
     fn set_offstage_returns_change_flag() {
         let mut node = RenderSliverOffstage::visible();
-        assert!(node.set_offstage(true));
-        assert!(!node.set_offstage(true)); // no-op
-        assert!(node.set_offstage(false));
+        let changed = flui_rendering::RenderUpdateImpact::LAYOUT
+            | flui_rendering::RenderUpdateImpact::SEMANTICS;
+        assert_eq!(node.set_offstage(true), changed);
+        assert_eq!(
+            node.set_offstage(true),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(node.set_offstage(false), changed);
     }
 
     #[test]

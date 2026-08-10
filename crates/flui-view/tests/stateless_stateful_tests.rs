@@ -69,7 +69,8 @@ impl flui_view::RenderView for LeafView {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 }
 
@@ -164,7 +165,13 @@ fn test_stateless_element_mark_needs_build() {
     };
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root_with_pipeline_owner(
+        &view,
+        Some(flui_rendering::pipeline::PipelineCell::new(
+            flui_rendering::pipeline::PipelineOwner::new(),
+        )),
+        &mut owner.element_owner_mut(),
+    );
 
     owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);

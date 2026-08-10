@@ -86,15 +86,17 @@ impl RenderConstrainedBox {
     /// Replaces the additional constraints applied to the child.
     ///
     /// Re-rounds the constraints before storing them. The pipeline should
-    /// invalidate layout when this returns `true`, signalling the value
-    /// actually changed.
-    pub fn set_additional_constraints(&mut self, additional_constraints: BoxConstraints) -> bool {
+    /// Returns layout impact when the rounded value actually changes.
+    pub fn set_additional_constraints(
+        &mut self,
+        additional_constraints: BoxConstraints,
+    ) -> flui_rendering::RenderUpdateImpact {
         let rounded = additional_constraints.round_for_cache();
         if self.additional_constraints == rounded {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.additional_constraints = rounded;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 }
 
@@ -303,7 +305,10 @@ mod tests {
     #[test]
     fn set_additional_constraints_returns_true_on_change() {
         let mut node = RenderConstrainedBox::new(BoxConstraints::UNCONSTRAINED);
-        assert!(node.set_additional_constraints(tight(100.0, 50.0)));
+        assert_eq!(
+            node.set_additional_constraints(tight(100.0, 50.0)),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     }
 
     #[test]
@@ -311,7 +316,10 @@ mod tests {
         let extra = bounded(10.0, 20.0, 30.0, 40.0);
         let mut node = RenderConstrainedBox::new(extra);
         // Setting the same normalized constraints is a no-op.
-        assert!(!node.set_additional_constraints(extra));
+        assert_eq!(
+            node.set_additional_constraints(extra),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 
     // ---------- intrinsic dimensions --------------------------------------

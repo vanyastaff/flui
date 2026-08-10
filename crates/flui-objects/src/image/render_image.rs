@@ -172,52 +172,79 @@ impl RenderImage {
     /// Sets the image source and updates the intrinsic size from its
     /// dimensions.
     ///
-    /// The caller is responsible for marking the node layout-dirty.
-    pub fn set_image(&mut self, image: Option<Image>) {
+    pub fn set_image(&mut self, image: Option<Image>) -> flui_rendering::RenderUpdateImpact {
+        if self.image == image {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        let old_intrinsic_size = self.intrinsic_size;
         if let Some(ref img) = image {
             self.intrinsic_size = img.size();
         }
         self.image = image;
+        if self.intrinsic_size == old_intrinsic_size {
+            flui_rendering::RenderUpdateImpact::PAINT
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        }
     }
 
     /// Sets the intrinsic (natural) size of the image.
-    pub fn set_intrinsic_size(&mut self, size: Size) {
+    pub fn set_intrinsic_size(&mut self, size: Size) -> flui_rendering::RenderUpdateImpact {
+        if self.intrinsic_size == size {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.intrinsic_size = size;
-        // Caller responsible for marking layout dirty
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Sets the fit mode for the image.
-    pub fn set_fit(&mut self, fit: ImageFit) {
+    pub fn set_fit(&mut self, fit: ImageFit) -> flui_rendering::RenderUpdateImpact {
+        if self.fit == fit {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.fit = fit;
-        // Caller responsible for marking layout dirty
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Sets the alignment of the image within the box.
-    pub fn set_alignment(&mut self, alignment: ImageAlignment) {
+    pub fn set_alignment(
+        &mut self,
+        alignment: ImageAlignment,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.alignment == alignment {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.alignment = alignment;
-        // Caller responsible for marking repaint dirty
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Sets the forced logical width (`None` to derive from the image aspect).
-    pub fn set_width(&mut self, width: Option<Pixels>) {
+    pub fn set_width(&mut self, width: Option<Pixels>) -> flui_rendering::RenderUpdateImpact {
+        if self.width == width {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.width = width;
-        // Caller responsible for marking the node layout-dirty.
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Sets the forced logical height (`None` to derive from the image aspect).
-    pub fn set_height(&mut self, height: Option<Pixels>) {
+    pub fn set_height(&mut self, height: Option<Pixels>) -> flui_rendering::RenderUpdateImpact {
+        if self.height == height {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.height = height;
-        // Caller responsible for marking the node layout-dirty.
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Sets the image-pixels-per-logical-pixel scale. A non-finite or
     /// non-positive value is rejected (the previous scale is kept) because it
     /// would make the logical aspect source NaN or zero.
-    pub fn set_scale(&mut self, scale: f32) {
-        if scale.is_finite() && scale > 0.0 {
-            self.scale = scale;
+    pub fn set_scale(&mut self, scale: f32) -> flui_rendering::RenderUpdateImpact {
+        if !scale.is_finite() || scale <= 0.0 || self.scale == scale {
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
-        // Caller responsible for marking the node layout-dirty.
+        self.scale = scale;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Computes the destination rectangle for the image content within a box
@@ -554,14 +581,47 @@ mod tests {
         );
         assert!(image.image().is_none());
 
-        image.set_image(Some(test_image_2x2()));
+        assert_eq!(
+            image.set_image(Some(test_image_2x2())),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
         assert_eq!(image.intrinsic_size, Size::new(px(2.0), px(2.0)));
         assert!(image.image().is_some());
 
-        image.set_image(None);
+        assert_eq!(
+            image.set_image(None),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
         assert!(image.image().is_none());
         // Clearing the image leaves the last intrinsic size unchanged.
         assert_eq!(image.intrinsic_size, Size::new(px(2.0), px(2.0)));
+    }
+
+    #[test]
+    fn configuration_setters_report_exact_independent_impacts() {
+        let mut image = RenderImage::new(
+            Size::new(px(10.0), px(20.0)),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        assert_eq!(
+            image.set_fit(ImageFit::Contain)
+                | image.set_alignment(ImageAlignment::Center)
+                | image.set_width(None)
+                | image.set_height(None)
+                | image.set_scale(1.0),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            image.set_fit(ImageFit::Cover) | image.set_alignment(ImageAlignment::TopLeft),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
+        assert_eq!(
+            image.set_width(Some(px(30.0)))
+                | image.set_height(Some(px(40.0)))
+                | image.set_scale(2.0),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     }
 
     #[test]
@@ -735,7 +795,10 @@ mod tests {
             ImageFit::Contain,
             ImageAlignment::Center,
         );
-        img.set_width(Some(px(40.0)));
+        assert_eq!(
+            img.set_width(Some(px(40.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
         assert_eq!(
             img.compute_size(&BoxConstraints::UNCONSTRAINED),
             Size::new(px(40.0), px(40.0)),
@@ -750,7 +813,10 @@ mod tests {
             ImageFit::Fill,
             ImageAlignment::Center,
         );
-        img.set_scale(2.0);
+        assert_eq!(
+            img.set_scale(2.0),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
         assert_eq!(
             img.compute_size(&BoxConstraints::UNCONSTRAINED),
             Size::new(px(100.0), px(50.0)),
@@ -819,7 +885,10 @@ mod tests {
             ImageFit::Contain,
             ImageAlignment::Center,
         );
-        img.set_width(Some(px(80.0)));
+        assert_eq!(
+            img.set_width(Some(px(80.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
         // A forced width makes the min-intrinsic-width report it (80).
         assert_eq!(
             leaf_intrinsics(|c| img.compute_min_intrinsic_width(f32::INFINITY, c)),
@@ -841,7 +910,10 @@ mod tests {
             ImageFit::Contain,
             ImageAlignment::Center,
         );
-        img.set_width(Some(px(40.0)));
+        assert_eq!(
+            img.set_width(Some(px(40.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
         let constraints = BoxConstraints {
             min_width: px(50.0),
             max_width: px(200.0),
@@ -869,7 +941,10 @@ mod tests {
             ImageFit::None,
             ImageAlignment::TopLeft,
         );
-        img.set_scale(2.0);
+        assert_eq!(
+            img.set_scale(2.0),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
         let rect = img
             .paint_rect_in(Size::new(px(400.0), px(400.0)))
             .expect("paint rect");

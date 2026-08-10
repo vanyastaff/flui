@@ -47,10 +47,12 @@ impl RenderColoredBox {
 
     /// Sets the fill color (RGBA, each channel `0.0..=1.0`).
     ///
-    /// The caller is responsible for marking the node for repaint; the
-    /// render object does not reach back into the pipeline.
-    pub fn set_color(&mut self, color: [f32; 4]) {
+    pub fn set_color(&mut self, color: [f32; 4]) -> flui_rendering::RenderUpdateImpact {
+        if self.color == color {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.color = color;
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Returns the preferred size.
@@ -60,10 +62,13 @@ impl RenderColoredBox {
 
     /// Sets the preferred size.
     ///
-    /// Takes effect on the next layout; the caller is responsible for
-    /// marking the node layout-dirty.
-    pub fn set_preferred_size(&mut self, size: Size) {
+    /// Takes effect on the next layout.
+    pub fn set_preferred_size(&mut self, size: Size) -> flui_rendering::RenderUpdateImpact {
+        if self.preferred_size == size {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.preferred_size = size;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 }
 

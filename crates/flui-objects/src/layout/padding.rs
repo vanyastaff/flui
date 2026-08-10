@@ -75,12 +75,16 @@ impl RenderPadding {
     ///
     /// Debug builds panic if any inset is negative, for the reason given on
     /// [`RenderPadding::new`].
-    pub fn set_padding(&mut self, padding: EdgeInsets) {
+    pub fn set_padding(&mut self, padding: EdgeInsets) -> flui_rendering::RenderUpdateImpact {
         debug_assert!(
             padding.is_non_negative(),
             "RenderPadding insets must be non-negative, got {padding:?}"
         );
+        if self.padding == padding {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.padding = padding;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Deflates constraints by padding amount.
@@ -278,7 +282,10 @@ mod tests {
         // The invariant is non-*negative*, not positive: zero on every side is
         // the identity padding and must not trip the guard.
         let mut p = RenderPadding::new(EdgeInsets::all(px(0.0)));
-        p.set_padding(EdgeInsets::all(px(0.0)));
+        assert_eq!(
+            p.set_padding(EdgeInsets::all(px(0.0))),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
         assert_eq!(p.padding(), EdgeInsets::all(px(0.0)));
     }
 
@@ -297,6 +304,9 @@ mod tests {
     #[should_panic(expected = "non-negative")]
     fn set_padding_rejects_a_negative_inset() {
         let mut p = RenderPadding::all(4.0);
-        p.set_padding(EdgeInsets::new(px(0.0), px(0.0), px(-3.0), px(0.0)));
+        assert_eq!(
+            p.set_padding(EdgeInsets::new(px(0.0), px(0.0), px(-3.0), px(0.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     }
 }

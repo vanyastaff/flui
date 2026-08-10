@@ -79,13 +79,23 @@ impl RenderOpacity {
     /// # Arguments
     ///
     /// * `opacity` - Opacity value (0.0 = transparent, 1.0 = opaque).
-    pub fn set_opacity(&mut self, opacity: f32) {
+    pub fn set_opacity(&mut self, opacity: f32) -> flui_rendering::RenderUpdateImpact {
         let clamped = opacity.clamp(0.0, 1.0);
-        if (self.opacity - clamped).abs() > f32::EPSILON {
-            self.opacity = clamped;
-            self.alpha = Self::opacity_to_alpha(clamped);
-            // In full implementation, would mark needs paint
+        if (self.opacity - clamped).abs() <= f32::EPSILON {
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
+        let old_needs_compositing = self.needs_compositing();
+        let old_is_visible = self.alpha > 0;
+        self.opacity = clamped;
+        self.alpha = Self::opacity_to_alpha(clamped);
+        let mut impact = flui_rendering::RenderUpdateImpact::PAINT;
+        if old_needs_compositing != self.needs_compositing() {
+            impact |= flui_rendering::RenderUpdateImpact::COMPOSITING_BITS;
+        }
+        if old_is_visible != (self.alpha > 0) {
+            impact |= flui_rendering::RenderUpdateImpact::SEMANTICS;
+        }
+        impact
     }
 
     /// Returns the alpha value (0-255).
@@ -98,8 +108,15 @@ impl RenderOpacity {
     /// When true, an opacity layer is always created even when opacity is 1.0.
     /// This can be useful for animations where you want consistent compositing
     /// behavior.
-    pub fn set_always_needs_compositing(&mut self, value: bool) {
+    pub fn set_always_needs_compositing(
+        &mut self,
+        value: bool,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.always_needs_compositing == value {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.always_needs_compositing = value;
+        flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
     }
 
     /// Returns whether compositing is needed.
@@ -234,7 +251,10 @@ mod tests {
     #[test]
     fn test_opacity_set() {
         let mut opacity = RenderOpacity::new(1.0);
-        opacity.set_opacity(0.25);
+        assert_eq!(
+            opacity.set_opacity(0.25),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
         assert!((opacity.opacity() - 0.25).abs() < f32::EPSILON);
         assert_eq!(opacity.alpha(), 64); // 0.25 * 255 ≈ 64
     }
@@ -244,12 +264,57 @@ mod tests {
         let mut opacity = RenderOpacity::new(1.0);
         assert!(!opacity.needs_compositing());
 
-        opacity.set_opacity(0.5);
+        assert_eq!(
+            opacity.set_opacity(0.5),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
         assert!(opacity.needs_compositing());
 
-        opacity.set_opacity(1.0);
-        opacity.set_always_needs_compositing(true);
+        assert_eq!(
+            opacity.set_opacity(1.0),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
+        assert_eq!(
+            opacity.set_always_needs_compositing(true),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
         assert!(opacity.needs_compositing());
+    }
+
+    #[test]
+    fn opacity_impacts_track_paint_compositing_and_semantics_independently() {
+        let mut opacity = RenderOpacity::new(0.25);
+        assert_eq!(
+            opacity.set_opacity(0.5),
+            flui_rendering::RenderUpdateImpact::PAINT,
+            "a visible change within the composited range only repaints",
+        );
+        assert_eq!(
+            opacity.set_opacity(0.5),
+            flui_rendering::RenderUpdateImpact::NONE,
+            "an identical non-zero opacity is a no-op",
+        );
+        assert_eq!(
+            opacity.set_opacity(1.0),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+            "leaving the composited range updates compositing and paints",
+        );
+        assert_eq!(
+            opacity.set_opacity(0.0),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            "becoming invisible changes paint and semantics without changing compositing",
+        );
+        assert_eq!(
+            opacity.set_opacity(0.0),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            opacity.set_opacity(0.5),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            "becoming visible and composited affects both independent phases",
+        );
     }
 
     #[test]
@@ -295,7 +360,10 @@ mod tests {
     #[test]
     fn paint_alpha_returns_some_when_transparent_but_forced() {
         let mut o = RenderOpacity::transparent();
-        o.set_always_needs_compositing(true);
+        assert_eq!(
+            o.set_always_needs_compositing(true),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
         assert_eq!(o.paint_alpha(), Some(0));
         assert!(!o.skip_paint());
     }

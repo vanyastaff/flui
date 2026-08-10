@@ -269,16 +269,12 @@ bitflags! {
         /// node — or some descendant — needs a compositing layer for
         /// the upcoming paint).
         ///
-        /// Set via `AtomicRenderFlags::mark_needs_compositing_bits_update`
-        /// (typically reached through `RenderNode::mark_needs_compositing_bits_update`)
-        /// by callers that schedule a compositing-bits recompute; the
-        /// caller is then expected to enqueue the node via
-        /// [`PipelineOwner::add_node_needing_compositing_bits_update`](crate::pipeline::PipelineOwner::add_node_needing_compositing_bits_update),
-        /// which appends to `dirty.needs_compositing` but does not
-        /// itself touch this flag. The two steps are split to match
-        /// the layout-side pattern (`mark_layout_flag` + queue push)
-        /// and so test code can mark a node dirty without going through
-        /// the full ancestor walk.
+        /// Set through
+        /// [`PipelineOwner::mark_needs_compositing_bits_update`](crate::pipeline::PipelineOwner::mark_needs_compositing_bits_update),
+        /// which performs the Flutter-equivalent ancestor walk before it
+        /// queues the responsible root. Setting this flag and pushing a raw
+        /// queue entry separately is insufficient because it can skip that
+        /// walk.
         ///
         /// Cleared by `run_compositing` after the subtree walk finishes
         /// (analogous to how `NEEDS_LAYOUT` clears post-layout).
@@ -760,8 +756,8 @@ impl AtomicRenderFlags {
     /// on the next `run_compositing` invocation.
     ///
     /// Distinct from `mark_needs_compositing` — this is the *scheduling*
-    /// signal (paired with the dirty-queue push in
-    /// [`PipelineOwner::add_node_needing_compositing_bits_update`](crate::pipeline::PipelineOwner::add_node_needing_compositing_bits_update)),
+    /// signal used by
+    /// [`PipelineOwner::mark_needs_compositing_bits_update`](crate::pipeline::PipelineOwner::mark_needs_compositing_bits_update),
     /// whereas `NEEDS_COMPOSITING` is the *computed result* of the
     /// walk.
     ///

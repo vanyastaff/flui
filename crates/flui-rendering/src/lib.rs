@@ -98,6 +98,7 @@ pub mod virtualization; // PORT-CHECK-OK-SP4: agnostic windowing core; intra-cra
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod traits;
+mod update;
 pub mod view;
 
 /// Re-export layer types from flui-layer crate for convenience.
@@ -147,6 +148,7 @@ pub mod prelude {
     // Tree types
     pub use crate::storage::{RenderNode, RenderTree};
     pub use crate::{
+        RenderUpdateImpact,
         binding::{
             RendererBinding, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
             debug_dump_render_tree, debug_dump_semantics_tree,
@@ -218,3 +220,4 @@ pub use protocol::{
     SliverProtocol,
 };
 pub use traits::RenderObject;
+pub use update::RenderUpdateImpact;

@@ -54,13 +54,13 @@ impl RenderIgnorePointer {
         self.ignoring
     }
 
-    /// Updates the ignoring flag; returns true if the value changed.
-    pub fn set_ignoring(&mut self, ignoring: bool) -> bool {
+    /// Updates the ignoring flag and reports semantics when changed.
+    pub fn set_ignoring(&mut self, ignoring: bool) -> flui_rendering::RenderUpdateImpact {
         if self.ignoring == ignoring {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.ignoring = ignoring;
-        true
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -137,9 +137,18 @@ mod tests {
     #[test]
     fn set_ignoring_returns_change_flag() {
         let mut node = RenderIgnorePointer::new(false);
-        assert!(node.set_ignoring(true));
-        assert!(!node.set_ignoring(true));
-        assert!(node.set_ignoring(false));
+        assert_eq!(
+            node.set_ignoring(true),
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
+        assert_eq!(
+            node.set_ignoring(true),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_ignoring(false),
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
     }
 
     #[test]

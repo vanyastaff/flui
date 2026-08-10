@@ -64,14 +64,16 @@ impl RenderListBody {
         self.axis_direction
     }
 
-    /// Updates the axis direction; returns true when layout-affecting state
-    /// changed.
-    pub fn set_axis_direction(&mut self, axis_direction: AxisDirection) -> bool {
+    /// Updates the axis direction and reports layout when changed.
+    pub fn set_axis_direction(
+        &mut self,
+        axis_direction: AxisDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.axis_direction == axis_direction {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.axis_direction = axis_direction;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     fn main_axis(&self) -> Axis {

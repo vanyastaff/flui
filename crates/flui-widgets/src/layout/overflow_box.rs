@@ -119,13 +119,15 @@ impl RenderView for OverflowBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_alignment(self.alignment);
-        render_object.set_min_width(self.min_width);
-        render_object.set_max_width(self.max_width);
-        render_object.set_min_height(self.min_height);
-        render_object.set_max_height(self.max_height);
-        render_object.set_fit(self.fit);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_min_width(self.min_width);
+        impact |= render_object.set_max_width(self.max_width);
+        impact |= render_object.set_min_height(self.min_height);
+        impact |= render_object.set_max_height(self.max_height);
+        impact |= render_object.set_fit(self.fit);
+        impact
     }
 
     fn has_children(&self) -> bool {

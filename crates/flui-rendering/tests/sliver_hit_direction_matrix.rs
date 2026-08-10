@@ -219,7 +219,10 @@ fn viewport_hit_direction_matrix_matches_box_host_semantics() {
         AxisDirection::LeftToRight,
         ScrollableViewportOffset::zero(),
     );
-    viewport.set_center_sliver_index(Some(0));
+    assert_eq!(
+        viewport.set_center_sliver_index(Some(0)),
+        flui_rendering::RenderUpdateImpact::LAYOUT,
+    );
     let root_id = owner.insert(Box::new(viewport));
     let sliver_id = owner
         .render_tree_mut()

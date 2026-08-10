@@ -170,6 +170,47 @@ pub struct SemanticsConfiguration {
     role: SemanticsRole,
 }
 
+impl PartialEq for SemanticsConfiguration {
+    fn eq(&self, other: &Self) -> bool {
+        let actions_are_identical = self.actions.len() == other.actions.len()
+            && self.actions.iter().all(|(action, handler)| {
+                other
+                    .actions
+                    .get(action)
+                    .is_some_and(|other_handler| Arc::ptr_eq(handler, other_handler))
+            });
+
+        self.has_been_annotated == other.has_been_annotated
+            && self.is_semantics_boundary == other.is_semantics_boundary
+            && self.blocks_user_actions == other.blocks_user_actions
+            && self.explicit_child_nodes == other.explicit_child_nodes
+            && self.descendant_semantics_merge == other.descendant_semantics_merge
+            && self.flags == other.flags
+            && actions_are_identical
+            && self.label == other.label
+            && self.value == other.value
+            && self.increased_value == other.increased_value
+            && self.decreased_value == other.decreased_value
+            && self.hint == other.hint
+            && self.tooltip == other.tooltip
+            && self.text_direction == other.text_direction
+            && self.custom_actions == other.custom_actions
+            && self.tags == other.tags
+            && self.sort_key == other.sort_key
+            && self.hint_overrides == other.hint_overrides
+            && self.scroll_position == other.scroll_position
+            && self.scroll_extent_max == other.scroll_extent_max
+            && self.scroll_extent_min == other.scroll_extent_min
+            && self.index_in_parent == other.index_in_parent
+            && self.scroll_index == other.scroll_index
+            && self.scroll_child_count == other.scroll_child_count
+            && self.platform_view_id == other.platform_view_id
+            && self.max_value_length == other.max_value_length
+            && self.current_value_length == other.current_value_length
+            && self.role == other.role
+    }
+}
+
 impl SemanticsConfiguration {
     /// Creates a new empty configuration.
     pub fn new() -> Self {
@@ -1278,6 +1319,26 @@ impl std::fmt::Debug for SemanticsConfiguration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn semantic_equality_compares_values_and_action_handler_identity() {
+        let mut first = SemanticsConfiguration::new();
+        first.set_label("label");
+        let first_handler: SemanticsActionHandler = Arc::new(|_, _| {});
+        first.add_action(SemanticsAction::Tap, Arc::clone(&first_handler));
+
+        assert_eq!(first, first.clone());
+
+        let mut same_values_with_distinct_handler = SemanticsConfiguration::new();
+        same_values_with_distinct_handler.set_label("label");
+        same_values_with_distinct_handler.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        assert_ne!(first, same_values_with_distinct_handler);
+
+        let mut same_values_and_handler = SemanticsConfiguration::new();
+        same_values_and_handler.set_label("label");
+        same_values_and_handler.add_action(SemanticsAction::Tap, first_handler);
+        assert_eq!(first, same_values_and_handler);
+    }
 
     fn populated_first_wins_configuration(prefix: &str, offset: i32) -> SemanticsConfiguration {
         let mut config = SemanticsConfiguration::new();

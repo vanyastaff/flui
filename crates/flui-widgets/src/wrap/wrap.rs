@@ -150,8 +150,15 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderWrap,
-    ) {
-        *render_object = self.build_render_object();
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.update_configuration(
+            self.direction,
+            self.alignment,
+            self.spacing,
+            self.run_alignment,
+            self.run_spacing,
+            self.cross_axis_alignment,
+        )
     }
 
     fn has_children(&self) -> bool {
@@ -255,6 +262,13 @@ mod tests {
         let mut render_object =
             initial.create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(format!("{render_object:?}").contains("spacing: 1.0"));
+        assert_eq!(
+            initial.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
 
         let updated: Wrap = Wrap::new(Vec::new())
             .direction(Axis::Vertical)
@@ -263,10 +277,11 @@ mod tests {
             .run_alignment(WrapAlignment::Center)
             .run_spacing(5.0)
             .cross_axis_alignment(WrapCrossAlignment::End);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         let debug = format!("{render_object:?}");
         assert!(

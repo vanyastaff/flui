@@ -63,12 +63,19 @@ impl RenderSliverFillViewport {
     ///
     /// Panics when `viewport_fraction <= 0.0`.
     #[inline]
-    pub fn set_viewport_fraction(&mut self, viewport_fraction: f32) {
+    pub fn set_viewport_fraction(
+        &mut self,
+        viewport_fraction: f32,
+    ) -> flui_rendering::RenderUpdateImpact {
         assert!(
             viewport_fraction > 0.0,
             "viewport_fraction must be greater than zero"
         );
+        if self.viewport_fraction == viewport_fraction {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.viewport_fraction = viewport_fraction;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Whether all children should be available to semantics even when outside

@@ -466,11 +466,6 @@ fn should_relayout_is_consulted_when_the_delegate_is_replaced() {
 /// today's behaviour in as the expected result and turn the eventual fix into
 /// a red "regression".
 #[test]
-#[ignore = "divergence pin: needs BOTH the discarded set_delegate verdict and \
-            the unconditional needs-layout mark in RenderBehavior::on_update \
-            fixed -- see the should_relayout gap in docs/ROADMAP.md (same gap \
-            custom_single_child_layout_test.rs already pins for the \
-            single-child delegate)"]
 fn a_false_should_relayout_prevents_relayout_pin() {
     let (first, _first_recording) = RecordingDelegate::recording_pair(false);
     let mut laid = harness::pump_widget(build_frame(first), harness::screen());

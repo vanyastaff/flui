@@ -167,49 +167,58 @@ impl RenderFollowerLayer {
         self.follower_anchor
     }
 
-    /// Replaces the layer link; returns `true` if the value changed.
-    pub fn set_link(&mut self, link: LayerLink) -> bool {
+    /// Replaces the layer link and returns the exact pipeline impact.
+    pub fn set_link(&mut self, link: LayerLink) -> flui_rendering::RenderUpdateImpact {
         if self.link == link {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.link = link;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Replaces `show_when_unlinked`; returns `true` if the value changed.
-    pub fn set_show_when_unlinked(&mut self, show_when_unlinked: bool) -> bool {
+    pub fn set_show_when_unlinked(
+        &mut self,
+        show_when_unlinked: bool,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.show_when_unlinked == show_when_unlinked {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.show_when_unlinked = show_when_unlinked;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
-    /// Replaces `offset`; returns `true` if the value changed.
-    pub fn set_offset(&mut self, offset: Offset) -> bool {
+    /// Replaces `offset` and returns the exact pipeline impact.
+    pub fn set_offset(&mut self, offset: Offset) -> flui_rendering::RenderUpdateImpact {
         if self.offset == offset {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.offset = offset;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Replaces `leader_anchor`; returns `true` if the value changed.
-    pub fn set_leader_anchor(&mut self, leader_anchor: Alignment) -> bool {
+    pub fn set_leader_anchor(
+        &mut self,
+        leader_anchor: Alignment,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.leader_anchor == leader_anchor {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.leader_anchor = leader_anchor;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Replaces `follower_anchor`; returns `true` if the value changed.
-    pub fn set_follower_anchor(&mut self, follower_anchor: Alignment) -> bool {
+    pub fn set_follower_anchor(
+        &mut self,
+        follower_anchor: Alignment,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.follower_anchor == follower_anchor {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.follower_anchor = follower_anchor;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 }
 
@@ -339,21 +348,51 @@ mod tests {
         let link_b = LayerLink::new();
         let mut node = RenderFollowerLayer::new(link_a);
 
-        assert!(node.set_link(link_b));
-        assert!(!node.set_link(link_b));
+        assert_eq!(
+            node.set_link(link_b),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_link(link_b),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
 
-        assert!(node.set_show_when_unlinked(false));
-        assert!(!node.set_show_when_unlinked(false));
+        assert_eq!(
+            node.set_show_when_unlinked(false),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_show_when_unlinked(false),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
 
         let offset = Offset::new(flui_types::geometry::px(1.0), flui_types::geometry::px(2.0));
-        assert!(node.set_offset(offset));
-        assert!(!node.set_offset(offset));
+        assert_eq!(
+            node.set_offset(offset),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_offset(offset),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
 
-        assert!(node.set_leader_anchor(Alignment::CENTER));
-        assert!(!node.set_leader_anchor(Alignment::CENTER));
+        assert_eq!(
+            node.set_leader_anchor(Alignment::CENTER),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_leader_anchor(Alignment::CENTER),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
 
-        assert!(node.set_follower_anchor(Alignment::CENTER));
-        assert!(!node.set_follower_anchor(Alignment::CENTER));
+        assert_eq!(
+            node.set_follower_anchor(Alignment::CENTER),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_follower_anchor(Alignment::CENTER),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 
     #[test]

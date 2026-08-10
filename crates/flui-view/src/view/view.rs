@@ -620,6 +620,36 @@ pub trait ElementBase: Downcast + 'static {
         None
     }
 
+    /// Apply this element's parent-data configuration to an existing value.
+    ///
+    /// This object-safe framework hook preserves layout-owned fields when a
+    /// [`ParentDataView`](crate::ParentDataView) updates configuration owned by
+    /// the view. Ordinary elements keep the default `NONE`; parent-data
+    /// elements downcast to their associated parent-data type and panic with a
+    /// `BUG:` invariant message if render storage contains the wrong type.
+    /// Implementors of custom element families should not report an impact
+    /// unless they also mutate the supplied value.
+    /// The element-tree caller ends the child render-node borrow before it
+    /// applies the returned impact to the render parent.
+    ///
+    /// ```
+    /// use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData};
+    /// use flui_view::{ElementBase, ErrorView, View};
+    ///
+    /// let element = ErrorView::new("ordinary element").create_element();
+    /// let mut parent_data = BoxParentData::default();
+    /// assert_eq!(
+    ///     element.apply_parent_data_config(&mut parent_data),
+    ///     RenderUpdateImpact::NONE,
+    /// );
+    /// ```
+    fn apply_parent_data_config(
+        &self,
+        _parent_data: &mut dyn flui_rendering::parent_data::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+
     // ========================================================================
     // Notification handler protocol
     // ========================================================================

@@ -56,13 +56,13 @@ impl RenderAbsorbPointer {
         self.absorbing
     }
 
-    /// Updates the absorbing flag; returns true if the value changed.
-    pub fn set_absorbing(&mut self, absorbing: bool) -> bool {
+    /// Updates the absorbing flag and reports a semantics update when changed.
+    pub fn set_absorbing(&mut self, absorbing: bool) -> flui_rendering::RenderUpdateImpact {
         if self.absorbing == absorbing {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.absorbing = absorbing;
-        true
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -142,9 +142,18 @@ mod tests {
     #[test]
     fn set_absorbing_returns_change_flag() {
         let mut node = RenderAbsorbPointer::new(false);
-        assert!(node.set_absorbing(true));
-        assert!(!node.set_absorbing(true));
-        assert!(node.set_absorbing(false));
+        assert_eq!(
+            node.set_absorbing(true),
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
+        assert_eq!(
+            node.set_absorbing(true),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_absorbing(false),
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
     }
 
     #[test]

@@ -387,8 +387,18 @@ pub(crate) fn reconcile_children_by_id(
     // removal cannot affect the parent, but a stale parent is handled
     // defensively): if it no longer resolves we drop the result rather
     // than panic.
+    let render_children_changed = old_ids != result;
     if let Some(parent_node) = tree.get_mut(parent_id) {
         parent_node.set_child_ids(result);
+    }
+    if render_children_changed && let Some(parent_node) = tree.get(parent_id) {
+        let element = parent_node.element();
+        if let Some(render_id) = element.render_id() {
+            let pipeline = element.pipeline_owner().expect(
+                "BUG: active render element must have a PipelineOwner when children reorder",
+            );
+            pipeline.with_mut(|owner| owner.note_render_children_reordered(render_id));
+        }
     }
 }
 

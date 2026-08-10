@@ -187,7 +187,7 @@ impl RenderEditable {
     }
 
     /// Replaces the text span and returns the invalidation level.
-    pub fn set_text(&mut self, text: impl Into<InlineSpan>) -> Invalidation {
+    pub fn set_text(&mut self, text: impl Into<InlineSpan>) -> flui_rendering::RenderUpdateImpact {
         let text = text.into();
         self.plain_text = text.to_plain_text();
         self.caret_byte_offset = self.safe_caret_offset(self.caret_byte_offset);
@@ -199,20 +199,72 @@ impl RenderEditable {
             .composing_range
             .take()
             .map(|range| self.clamp_composing_range(range));
-        self.painter.set_text(Some(text))
+        match self.painter.set_text(Some(text)) {
+            Invalidation::None => flui_rendering::RenderUpdateImpact::NONE,
+            Invalidation::Paint => flui_rendering::RenderUpdateImpact::PAINT,
+            Invalidation::Layout => {
+                flui_rendering::RenderUpdateImpact::LAYOUT
+                    | flui_rendering::RenderUpdateImpact::SEMANTICS
+            }
+        }
     }
 
     /// Replaces the composing-region range and returns the invalidation
     /// level — always paint-only: the composing region changes what gets an
     /// underline, never glyph shaping.
-    pub fn set_composing_range(&mut self, range: Option<Range<usize>>) -> Invalidation {
+    pub fn set_composing_range(
+        &mut self,
+        range: Option<Range<usize>>,
+    ) -> flui_rendering::RenderUpdateImpact {
         let clamped = range.map(|r| self.clamp_composing_range(r));
         if clamped == self.composing_range {
-            Invalidation::None
+            flui_rendering::RenderUpdateImpact::NONE
         } else {
             self.composing_range = clamped;
-            Invalidation::Paint
+            flui_rendering::RenderUpdateImpact::PAINT
         }
+    }
+
+    /// Updates the caret byte position.
+    pub fn set_caret_byte_offset(&mut self, offset: usize) -> flui_rendering::RenderUpdateImpact {
+        let offset = self.safe_caret_offset(offset);
+        if self.caret_byte_offset == offset {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.caret_byte_offset = offset;
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    /// Updates caret visibility.
+    pub fn set_show_caret(&mut self, show_caret: bool) -> flui_rendering::RenderUpdateImpact {
+        if self.show_caret == show_caret {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.show_caret = show_caret;
+        flui_rendering::RenderUpdateImpact::PAINT
+    }
+
+    /// Updates caret dimensions.
+    pub fn set_caret_size(
+        &mut self,
+        width: f32,
+        height: f32,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.caret_width == width && self.caret_height == height {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.caret_width = width;
+        self.caret_height = height;
+        flui_rendering::RenderUpdateImpact::PAINT
+    }
+
+    /// Updates the caret fill color.
+    pub fn set_caret_color(&mut self, color: Color) -> flui_rendering::RenderUpdateImpact {
+        if self.caret_color == color {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.caret_color = color;
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// The composing region's bounding rect in this object's local painted
@@ -574,14 +626,23 @@ mod tests {
 
         assert_eq!(
             editable.set_composing_range(Some(1..3)),
-            Invalidation::Paint
+            flui_rendering::RenderUpdateImpact::PAINT
         );
-        assert_eq!(editable.set_composing_range(Some(1..3)), Invalidation::None);
+        assert_eq!(
+            editable.set_composing_range(Some(1..3)),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
         assert_eq!(
             editable.set_composing_range(Some(1..4)),
-            Invalidation::Paint
+            flui_rendering::RenderUpdateImpact::PAINT
         );
-        assert_eq!(editable.set_composing_range(None), Invalidation::Paint);
-        assert_eq!(editable.set_composing_range(None), Invalidation::None);
+        assert_eq!(
+            editable.set_composing_range(None),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
+        assert_eq!(
+            editable.set_composing_range(None),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
     }
 }

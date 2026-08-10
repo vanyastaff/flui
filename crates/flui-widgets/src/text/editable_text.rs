@@ -967,8 +967,18 @@ impl RenderView for EditableTextRenderView {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.build_render_object();
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut span = TextSpan::new(self.text.clone());
+        if let Some(style) = self.text_style.clone() {
+            span = span.with_style(style);
+        }
+        let mut impact = render_object.set_text(span);
+        impact |= render_object.set_caret_byte_offset(self.caret_byte_offset);
+        impact |= render_object.set_show_caret(self.show_caret);
+        impact |= render_object.set_caret_size(2.0, self.caret_height);
+        impact |= render_object.set_caret_color(self.caret_color);
+        impact |= render_object.set_composing_range(self.composing_range.clone());
+        impact
     }
 }
 

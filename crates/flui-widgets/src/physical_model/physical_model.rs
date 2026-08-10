@@ -117,26 +117,31 @@ impl RenderView for PhysicalModel {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        let mut render_object = RenderPhysicalModel::new(self.color)
+        let render_object = RenderPhysicalModel::new(self.color)
             .with_shape(self.shape)
             .with_clip_behavior(self.clip_behavior)
             .with_elevation(self.elevation)
             .with_shadow_color(self.shadow_color);
-        render_object.set_border_radius(self.border_radius);
-        render_object
+        if let Some(border_radius) = self.border_radius {
+            render_object.with_border_radius(border_radius)
+        } else {
+            render_object
+        }
     }
 
     fn update_render_object(
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_shape(self.shape);
-        render_object.set_clip_behavior(self.clip_behavior);
-        render_object.set_border_radius(self.border_radius);
-        render_object.set_elevation(self.elevation);
-        render_object.set_color(self.color);
-        render_object.set_shadow_color(self.shadow_color);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_shape(self.shape);
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
+        impact |= render_object.set_border_radius(self.border_radius);
+        impact |= render_object.set_elevation(self.elevation);
+        impact |= render_object.set_color(self.color);
+        impact |= render_object.set_shadow_color(self.shadow_color);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -200,13 +205,18 @@ mod tests {
         let mut render_object = PhysicalModel::new(Color::RED).create_render_object(&detached());
 
         let br = BorderRadius::circular(flui_types::geometry::px(8.0));
-        PhysicalModel::new(Color::BLUE)
+        let impact = PhysicalModel::new(Color::BLUE)
             .shape(BoxShape::Circle)
             .clip_behavior(Clip::HardEdge)
             .border_radius(br)
             .elevation(3.0)
             .shadow_color(Color::GREEN)
             .update_render_object(&detached(), &mut render_object);
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
 
         assert_eq!(render_object.shape(), BoxShape::Circle);
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
@@ -224,8 +234,51 @@ mod tests {
             .create_render_object(&detached());
         assert_eq!(render_object.border_radius(), Some(br));
 
-        PhysicalModel::new(Color::RED).update_render_object(&detached(), &mut render_object);
+        let impact =
+            PhysicalModel::new(Color::RED).update_render_object(&detached(), &mut render_object);
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
         assert_eq!(render_object.border_radius(), None);
+    }
+
+    #[test]
+    fn shape_change_reports_paint_and_semantics_and_identical_is_none() {
+        let original = PhysicalModel::new(Color::RED);
+        let mut render_object = original.create_render_object(&detached());
+        assert_eq!(
+            original.update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            original
+                .clone()
+                .shape(BoxShape::Circle)
+                .update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+
+    #[test]
+    fn clip_behavior_change_reports_paint_only_and_identical_is_none() {
+        let original = PhysicalModel::new(Color::RED);
+        let mut render_object = original.create_render_object(&detached());
+        assert_eq!(
+            original.update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        let changed = original.clip_behavior(Clip::AntiAlias);
+        assert_eq!(
+            changed.update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
+        assert_eq!(
+            changed.update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
     }
 
     #[test]

@@ -125,18 +125,22 @@ impl RenderAnimatedSize {
         }
     }
 
-    /// Updates the alignment; returns `true` if the value changed.
-    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
-        self.inner.set_alignment(alignment)
+    /// Updates the alignment and reports layout when changed.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
+        if self.inner.set_alignment(alignment) {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
     }
 
-    /// Updates the clip behavior; returns `true` if the value changed.
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> bool {
+    /// Updates the clip behavior and reports paint when changed.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Sets the base forward duration on the owned controller. An inert
@@ -157,10 +161,14 @@ impl RenderAnimatedSize {
     /// curve. Safe to rebuild unconditionally: `restart_animation` only ever
     /// runs the controller forward, so `CurvedAnimation`'s reverse-curve-lock
     /// state has nothing to lose across the rebuild.
-    pub fn set_curve(&mut self, curve: ArcCurve) {
+    pub fn set_curve(&mut self, curve: ArcCurve) -> flui_rendering::RenderUpdateImpact {
+        if self.curve == curve {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         let parent: Arc<dyn Animation<f32>> = Arc::new(self.controller.clone());
         self.animation = CurvedAnimation::new(parent, curve.clone());
         self.curve = curve;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// The current alignment.
@@ -695,24 +703,30 @@ mod tests {
     // ---- setters ------------------------------------------------------------
 
     #[test]
-    fn set_alignment_reports_change_flag() {
+    fn set_alignment_reports_exact_impact() {
         let mut ro = render(50);
-        assert!(
-            !ro.set_alignment(Alignment::CENTER),
-            "same value, no change"
+        assert_eq!(
+            ro.set_alignment(Alignment::CENTER),
+            flui_rendering::RenderUpdateImpact::NONE
         );
-        assert!(ro.set_alignment(Alignment::TOP_LEFT));
+        assert_eq!(
+            ro.set_alignment(Alignment::TOP_LEFT),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
         assert_eq!(ro.alignment(), Alignment::TOP_LEFT);
     }
 
     #[test]
-    fn set_clip_behavior_reports_change_flag() {
+    fn set_clip_behavior_reports_exact_impact() {
         let mut ro = render(50);
-        assert!(
-            !ro.set_clip_behavior(Clip::HardEdge),
-            "same value, no change"
+        assert_eq!(
+            ro.set_clip_behavior(Clip::HardEdge),
+            flui_rendering::RenderUpdateImpact::NONE
         );
-        assert!(ro.set_clip_behavior(Clip::None));
+        assert_eq!(
+            ro.set_clip_behavior(Clip::None),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
         assert_eq!(ro.clip_behavior(), Clip::None);
     }
 
@@ -721,7 +735,10 @@ mod tests {
         let mut ro = render(100);
         let _ = ro.controller.forward_from(Some(0.5));
         let before = ro.animation.value();
-        ro.set_curve(ArcCurve::new(flui_animation::Curves::Linear));
+        assert_eq!(
+            ro.set_curve(ArcCurve::new(flui_animation::Curves::Linear)),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
         let after = ro.animation.value();
         assert!(
             (before - after).abs() < 1e-6,

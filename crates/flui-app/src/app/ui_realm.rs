@@ -4115,8 +4115,11 @@ mod tests {
                 &self,
                 _ctx: &flui_view::RenderObjectContext<'_>,
                 render_object: &mut Self::RenderObject,
-            ) {
-                *render_object = flui_objects::RenderSizedBox::shrink();
+            ) -> flui_rendering::RenderUpdateImpact {
+                render_object.set_size(
+                    Some(flui_types::Pixels::ZERO),
+                    Some(flui_types::Pixels::ZERO),
+                )
             }
         }
 
@@ -4294,8 +4297,11 @@ mod tests {
                 &self,
                 _ctx: &flui_view::RenderObjectContext<'_>,
                 render_object: &mut Self::RenderObject,
-            ) {
-                *render_object = flui_objects::RenderSizedBox::shrink();
+            ) -> flui_rendering::RenderUpdateImpact {
+                render_object.set_size(
+                    Some(flui_types::Pixels::ZERO),
+                    Some(flui_types::Pixels::ZERO),
+                )
             }
         }
 

@@ -106,6 +106,7 @@ use flui_interaction::routing::{MouseTracker, PointerMotionKind};
 use flui_objects::*;
 use flui_painting::{Canvas, Paint};
 use flui_rendering::{
+    RenderUpdateImpact,
     constraints::{BoxConstraints, SliverConstraints},
     context::BoxIntrinsicsCtx,
     delegates::{
@@ -558,6 +559,45 @@ impl MultiChildLayoutDelegate for HarnessMultiChildLayoutDelegate {
 
 fn custom_multi_child_delegate(size: Size) -> Arc<dyn MultiChildLayoutDelegate> {
     Arc::new(HarnessMultiChildLayoutDelegate::new(size))
+}
+
+#[test]
+fn custom_layout_delegate_setters_report_exact_impact() {
+    let single = custom_single_child_delegate(
+        Size::new(px(120.0), px(80.0)),
+        BoxConstraints::tight(Size::new(px(30.0), px(20.0))),
+        Offset::new(px(5.0), px(7.0)),
+    );
+    let mut single_render = RenderCustomSingleChildLayoutBox::new(single.clone());
+    assert_eq!(single_render.set_delegate(single), RenderUpdateImpact::NONE,);
+    assert_eq!(
+        single_render.set_delegate(custom_single_child_delegate(
+            Size::new(px(120.0), px(80.0)),
+            BoxConstraints::tight(Size::new(px(30.0), px(20.0))),
+            Offset::new(px(5.0), px(7.0)),
+        )),
+        RenderUpdateImpact::NONE,
+    );
+    assert_eq!(
+        single_render.set_delegate(custom_single_child_delegate(
+            Size::new(px(140.0), px(80.0)),
+            BoxConstraints::tight(Size::new(px(30.0), px(20.0))),
+            Offset::new(px(5.0), px(7.0)),
+        )),
+        RenderUpdateImpact::LAYOUT,
+    );
+
+    let multi = custom_multi_child_delegate(Size::new(px(120.0), px(90.0)));
+    let mut multi_render = RenderCustomMultiChildLayoutBox::new(multi.clone());
+    assert_eq!(multi_render.set_delegate(multi), RenderUpdateImpact::NONE,);
+    assert_eq!(
+        multi_render.set_delegate(custom_multi_child_delegate(Size::new(px(120.0), px(90.0)))),
+        RenderUpdateImpact::NONE,
+    );
+    assert_eq!(
+        multi_render.set_delegate(custom_multi_child_delegate(Size::new(px(140.0), px(90.0)))),
+        RenderUpdateImpact::LAYOUT,
+    );
 }
 
 fn multi_child_layout_parent_data(id: &str) -> MultiChildLayoutParentData {
@@ -2005,7 +2045,15 @@ fn harness_baseline_relayout_recomputes_offset_and_size_ladder() {
     for (step, &baseline_offset) in [0.0f32, 25.0, 90.0, 100.0, 110.0].iter().enumerate() {
         if step > 0 {
             run.update::<RenderBaseline>(root, |render_baseline| {
-                render_baseline.set_baseline_offset(px(baseline_offset));
+                let expected_impact = if render_baseline.baseline_offset() == px(baseline_offset) {
+                    flui_rendering::RenderUpdateImpact::NONE
+                } else {
+                    flui_rendering::RenderUpdateImpact::LAYOUT
+                };
+                assert_eq!(
+                    render_baseline.set_baseline_offset(px(baseline_offset)),
+                    expected_impact,
+                );
             });
             run.relayout();
         }
@@ -3016,7 +3064,11 @@ fn harness_offstage_toggle_relayouts_and_restores_hit_testing() {
 
     let root = run.root();
     run.update::<RenderOffstage>(root, |node| {
-        node.set_offstage(false);
+        assert_eq!(
+            node.set_offstage(false),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
     });
     run.relayout();
 
@@ -3027,7 +3079,11 @@ fn harness_offstage_toggle_relayouts_and_restores_hit_testing() {
     );
 
     run.update::<RenderOffstage>(root, |node| {
-        node.set_offstage(true);
+        assert_eq!(
+            node.set_offstage(true),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
     });
     run.relayout();
 
@@ -3354,11 +3410,16 @@ fn harness_animated_opacity_boundary_crossing_tick_marks_compositing_bits() {
 
     assert!(
         run.owner()
-            .nodes_needing_compositing_bits_update()
-            .iter()
-            .any(|dirty| dirty.id == id),
-        "crossing the layered/unlayered alpha threshold must mark compositing \
-         bits dirty (RepaintHandle::mark_needs_compositing_bits_update)"
+            .render_tree()
+            .get(id)
+            .is_some_and(flui_rendering::storage::RenderNode::needs_compositing_bits_update),
+        "the changed opacity node must participate in the compositing-bits walk"
+    );
+    let queued = run.owner().nodes_needing_compositing_bits_update();
+    assert_eq!(queued.len(), 1, "the ancestor walk must queue one root");
+    assert_eq!(
+        queued[0].id, id,
+        "a root opacity boundary transition must queue exactly that root"
     );
 }
 
@@ -3598,6 +3659,54 @@ fn harness_fitted_box_cover_crops_the_source_and_offsets_the_transform() {
          (100, 100), got ({}, {})",
         x.get(),
         y.get(),
+    );
+}
+
+#[test]
+fn harness_fitted_box_paint_only_updates_refresh_retained_transform_and_overflow() {
+    let mut run = RenderTester::mount(
+        box_node(RenderFittedBox::new(
+            BoxFit::Contain,
+            Alignment::CENTER,
+            Clip::None,
+        ))
+        .child(box_node(RenderColoredBox::red(100.0, 50.0)).label("child")),
+    )
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_layout();
+
+    let root = run.root();
+    let fitted = run
+        .owner_mut()
+        .render_tree_mut()
+        .get_mut(root)
+        .and_then(|node| node.downcast_render_object_mut::<RenderFittedBox>())
+        .expect("root should be a RenderFittedBox");
+    let contain_transform = fitted.effective_transform();
+    assert!(!fitted.has_visual_overflow());
+
+    assert_eq!(
+        fitted.set_fit(BoxFit::Cover),
+        flui_rendering::RenderUpdateImpact::PAINT,
+    );
+    assert!(fitted.has_visual_overflow());
+    assert_ne!(fitted.effective_transform(), contain_transform);
+    assert_eq!(fitted.source_offset(), Offset::new(px(25.0), px(0.0)));
+    assert_eq!(
+        fitted.set_fit(BoxFit::Cover),
+        flui_rendering::RenderUpdateImpact::NONE,
+    );
+
+    let centered_cover_transform = fitted.effective_transform();
+    assert_eq!(
+        fitted.set_alignment(Alignment::TOP_LEFT),
+        flui_rendering::RenderUpdateImpact::PAINT,
+    );
+    assert_ne!(fitted.effective_transform(), centered_cover_transform);
+    assert_eq!(fitted.source_offset(), Offset::ZERO);
+    assert_eq!(
+        fitted.set_alignment(Alignment::TOP_LEFT),
+        flui_rendering::RenderUpdateImpact::NONE,
     );
 }
 
@@ -4897,7 +5006,11 @@ fn harness_physical_shape_falls_back_to_whole_rect_when_clipper_cleared() {
     );
 
     run.update::<RenderPhysicalShape>(run.id("shape"), |node| {
-        assert!(node.set_path_clip_target(None));
+        assert_eq!(
+            node.set_path_clip_target(None),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
     });
     run.relayout();
 
@@ -6328,7 +6441,8 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
     // `Ok`; only THIS render object's own state is at risk, which is what
     // the rest of this test verifies directly).
     run.update::<RenderSliverGrid>(grid_id, |grid| {
-        grid.set_grid_delegate(Arc::new(ZeroCrossAxisCountDelegate));
+        let impact = grid.set_grid_delegate(Arc::new(ZeroCrossAxisCountDelegate));
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
     });
     let result = run.owner_mut().run_layout();
     assert!(
@@ -6479,7 +6593,8 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_ge
     // resilience, not something this test needs to force one way or the
     // other to prove its point).
     run.update::<RenderSliverGrid>(grid_id, |grid| {
-        grid.set_grid_delegate(Arc::new(NegativeMainAxisStrideDelegate));
+        let impact = grid.set_grid_delegate(Arc::new(NegativeMainAxisStrideDelegate));
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
     });
     let _ = run.owner_mut().run_layout();
 
@@ -7069,7 +7184,10 @@ fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
 
     // Pass 2: grow item 0 to 84 px, scroll backward to 72 px.
     run.update::<RenderColoredBox>(item0_id, |b| {
-        b.set_preferred_size(Size::new(px(300.0), px(84.0)));
+        assert_eq!(
+            b.set_preferred_size(Size::new(px(300.0), px(84.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     });
     run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
         vp.offset_mut().set_pixels(72.0);
@@ -7156,7 +7274,10 @@ fn harness_sliver_opacity_repaints_on_paint_mutation() {
 
     let opacity = run.id("opacity");
     let report = run.advance_paint::<RenderSliverOpacity>(opacity, |o| {
-        o.set_opacity(0.5);
+        assert_eq!(
+            o.set_opacity(0.5),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+        );
     });
     assert!(
         report.painted,
@@ -7383,11 +7504,18 @@ fn harness_sliver_animated_opacity_boundary_crossing_tick_marks_compositing_bits
 
     assert!(
         run.owner()
-            .nodes_needing_compositing_bits_update()
-            .iter()
-            .any(|dirty| dirty.id == id),
-        "crossing the layered/unlayered alpha threshold must mark compositing \
-         bits dirty (RepaintHandle::mark_needs_compositing_bits_update)"
+            .render_tree()
+            .get(id)
+            .is_some_and(flui_rendering::storage::RenderNode::needs_compositing_bits_update),
+        "the changed opacity sliver must participate in the compositing-bits walk"
+    );
+    let responsible_root = run.root();
+    let queued = run.owner().nodes_needing_compositing_bits_update();
+    assert_eq!(queued.len(), 1, "the ancestor walk must queue one root");
+    assert_eq!(
+        queued[0].id, responsible_root,
+        "a newly introduced opacity boundary must walk through its \
+         non-boundary sliver and viewport ancestors"
     );
 }
 
@@ -7487,7 +7615,10 @@ fn harness_viewport_reverse_group_overlap_is_always_zero() {
     // scroll range so `50.0` is a valid, unclamped offset; child 1 lays out
     // with reverse growth — the oracle's `leadingNegativeChild` case, where
     // `overlap` must be `0.0` for BOTH sequences (not just the forward one).
-    viewport.set_center_sliver_index(Some(1));
+    assert_eq!(
+        viewport.set_center_sliver_index(Some(1)),
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    );
     let node = box_node(viewport)
         .label("viewport")
         .child(
@@ -10191,7 +10322,10 @@ fn harness_table_unset_cell_alignment_follows_a_later_default_change_but_an_expl
     assert_eq!(run.offset(run.id("explicit_top")).dy, px(0.0));
 
     run.update::<RenderTable>(run.root(), |table| {
-        table.set_default_vertical_alignment(TableCellVerticalAlignment::Bottom);
+        assert_eq!(
+            table.set_default_vertical_alignment(TableCellVerticalAlignment::Bottom),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     });
     run.pump();
 
@@ -10288,7 +10422,10 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     // Grow the child: Stable -> Changed (begin = last committed size = 10,
     // end = 50), controller restarts at t = 0.
     run.update::<RenderColoredBox>(run.id("child"), |b| {
-        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+        assert_eq!(
+            b.set_preferred_size(Size::new(px(50.0), px(50.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     });
     run.pump();
     assert_eq!(
@@ -10358,7 +10495,10 @@ fn harness_render_animated_size_clip_appears_mid_animation_and_disappears_once_s
     );
 
     run.update::<RenderColoredBox>(run.id("child"), |b| {
-        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+        assert_eq!(
+            b.set_preferred_size(Size::new(px(50.0), px(50.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     });
     run.pump();
     assert!(
@@ -10395,7 +10535,10 @@ fn harness_render_animated_size_respects_alignment_for_the_oversized_child_mid_a
     .run_frame();
 
     run.update::<RenderColoredBox>(run.id("child"), |b| {
-        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+        assert_eq!(
+            b.set_preferred_size(Size::new(px(50.0), px(50.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     });
     run.pump();
 
@@ -10431,7 +10574,10 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
     // (the child's size holds steady for one frame, so the ORIGINAL
     // interpolation span is left running rather than being touched).
     run.update::<RenderColoredBox>(run.id("child"), |b| {
-        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+        assert_eq!(
+            b.set_preferred_size(Size::new(px(50.0), px(50.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     });
     run.pump();
     driver.tick_at(0.05); // t=0.5 of the 10->50 span
@@ -10450,7 +10596,10 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
     // from the Changed->Unstable degenerate-collapse case tested at the unit
     // level.
     run.update::<RenderColoredBox>(run.id("child"), |b| {
-        b.set_preferred_size(Size::new(px(90.0), px(90.0)));
+        assert_eq!(
+            b.set_preferred_size(Size::new(px(90.0), px(90.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     });
     run.pump();
     let retarget_frame_size = run.box_geometry(run.root());
@@ -10534,7 +10683,10 @@ fn harness_render_animated_size_fast_path_tight_constraints_snaps_and_leaves_off
     // Grow the child under loose constraints (the general path): BOTTOM_RIGHT
     // records a real, non-zero offset for the (temporarily oversized) child.
     run.update::<RenderColoredBox>(run.id("child"), |b| {
-        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+        assert_eq!(
+            b.set_preferred_size(Size::new(px(50.0), px(50.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     });
     run.pump();
     assert_eq!(

@@ -153,6 +153,27 @@ impl RenderAlign {
     pub fn height_factor(&self) -> Option<f32> {
         self.height_factor
     }
+
+    /// Updates all widget-owned layout configuration without replacing
+    /// layout-computed child offsets or baseline caches.
+    pub fn update_configuration(
+        &mut self,
+        alignment: Alignment,
+        width_factor: Option<f32>,
+        height_factor: Option<f32>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let alignment_changed = self.inner.set_alignment(alignment);
+        let changed = alignment_changed
+            || self.width_factor != width_factor
+            || self.height_factor != height_factor;
+        self.width_factor = width_factor;
+        self.height_factor = height_factor;
+        if changed {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
 }
 
 impl flui_foundation::Diagnosticable for RenderAlign {

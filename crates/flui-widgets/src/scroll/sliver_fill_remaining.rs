@@ -75,8 +75,9 @@ impl RenderView for SliverFillRemaining {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         // No configurable fields on RenderSliverFillRemaining.
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {
@@ -144,8 +145,9 @@ impl RenderView for SliverFillRemainingWithScrollable {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         // No configurable fields on RenderSliverFillRemainingWithScrollable.
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {
@@ -209,8 +211,9 @@ impl RenderView for SliverFillRemainingAndOverscroll {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         // No configurable fields on RenderSliverFillRemainingAndOverscroll.
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {

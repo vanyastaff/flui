@@ -243,7 +243,7 @@ impl RenderView for Listener {
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         // Rebuild replaces the handler INSIDE the existing cell, so an active
         // cached route observes the new configuration (ADR-0027 §rebuild).
         match render_object.target() {
@@ -255,6 +255,7 @@ impl RenderView for Listener {
             None => render_object.set_target(self.register(ctx)),
         }
         render_object.set_behavior(self.behavior);
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn did_unmount_render_object(

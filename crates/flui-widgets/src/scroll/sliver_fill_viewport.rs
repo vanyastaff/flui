@@ -82,8 +82,10 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_viewport_fraction(self.viewport_fraction);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_viewport_fraction(self.viewport_fraction);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -141,10 +143,11 @@ mod tests {
             sliver.create_render_object(&flui_view::RenderObjectContext::detached());
 
         let updated = SliverFillViewport::new(0.5, Vec::<flui_view::BoxedView>::new());
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         // No public getter on RenderSliverFillViewport; confirm via Debug
         // that the field actually changed rather than merely not panicking.

@@ -50,7 +50,8 @@ impl RenderView for KeyedLeafBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 }
 
@@ -96,7 +97,8 @@ impl RenderView for MultiBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {

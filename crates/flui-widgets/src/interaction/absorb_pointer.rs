@@ -62,8 +62,10 @@ impl RenderView for AbsorbPointer {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_absorbing(self.absorbing);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_absorbing(self.absorbing);
+        impact
     }
 
     fn has_children(&self) -> bool {

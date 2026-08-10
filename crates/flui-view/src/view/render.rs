@@ -305,25 +305,33 @@ impl<'a> RenderObjectContext<'a> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
+/// use flui_objects::RenderColoredBox;
+/// use flui_rendering::RenderUpdateImpact;
+/// use flui_rendering::protocol::BoxProtocol;
+/// use flui_types::Size;
+/// use flui_types::geometry::px;
 /// use flui_view::{RenderObjectContext, RenderView};
-/// use flui_rendering::RenderBox;
 ///
+/// #[derive(Clone)]
 /// struct ColoredBox {
-///     color: Color,
-///     child: Option<Box<dyn View>>,
+///     color: [f32; 4],
 /// }
 ///
 /// impl RenderView for ColoredBox {
-///     type Protocol = flui_rendering::protocol::BoxProtocol;
-///     type RenderObject = RenderDecoratedBox;
+///     type Protocol = BoxProtocol;
+///     type RenderObject = RenderColoredBox;
 ///
 ///     fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
-///         RenderDecoratedBox::new(self.color)
+///         RenderColoredBox::new(self.color, Size::new(px(40.0), px(24.0)))
 ///     }
 ///
-///     fn update_render_object(&self, _ctx: &RenderObjectContext<'_>, render: &mut Self::RenderObject) {
-///         render.set_color(self.color);
+///     fn update_render_object(
+///         &self,
+///         _ctx: &RenderObjectContext<'_>,
+///         render: &mut Self::RenderObject,
+///     ) -> RenderUpdateImpact {
+///         render.set_color(self.color)
 ///     }
 /// }
 /// ```
@@ -347,7 +355,7 @@ pub trait RenderView: Clone + 'static + Sized {
         &self,
         ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    );
+    ) -> flui_rendering::RenderUpdateImpact;
 
     /// Release owner-runtime resources associated with a render object before it
     /// is removed from the render tree.
@@ -442,11 +450,9 @@ mod tests {
         fn update_render_object(
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
-            _render_object: &mut Self::RenderObject,
-        ) {
-            // RenderSizedBox doesn't have setters for width/height after
-            // creation In a real implementation, we'd update the
-            // constraints
+            render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            render_object.set_size(Some(px(self.width)), Some(px(self.height)))
         }
     }
 
@@ -454,6 +460,93 @@ mod tests {
         fn create_element(&self) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
+    }
+
+    #[derive(Clone)]
+    struct ImpactView {
+        impact: flui_rendering::RenderUpdateImpact,
+    }
+
+    impl RenderView for ImpactView {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::new(Some(px(10.0)), Some(px(10.0)))
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            self.impact
+        }
+    }
+
+    impl View for ImpactView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    #[test]
+    fn render_behavior_applies_none_without_scheduling_work() {
+        let view = ImpactView {
+            impact: flui_rendering::RenderUpdateImpact::NONE,
+        };
+        let mut element = RenderElement::new(&view, RenderBehavior::new());
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        element.set_pipeline_owner(pipeline_owner.clone());
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
+        pipeline_owner.with_mut(PipelineOwner::clear_all_dirty_nodes);
+
+        element.update(&view, &mut build_owner.element_owner_mut());
+
+        pipeline_owner.with(|owner| {
+            assert!(owner.nodes_needing_layout().is_empty());
+            assert!(owner.nodes_needing_compositing_bits_update().is_empty());
+            assert!(owner.nodes_needing_paint().is_empty());
+            assert!(owner.nodes_needing_semantics().is_empty());
+        });
+    }
+
+    #[test]
+    fn render_behavior_applies_an_exact_union_once() {
+        let impact = flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+            | flui_rendering::RenderUpdateImpact::SEMANTICS;
+        let view = ImpactView { impact };
+        let mut element = RenderElement::new(&view, RenderBehavior::new());
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        element.set_pipeline_owner(pipeline_owner.clone());
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
+        let render_id = element
+            .render_id()
+            .expect("mounted render element must have a render ID");
+        pipeline_owner.with_mut(|owner| {
+            owner.set_semantics_enabled(true);
+            owner.clear_all_dirty_nodes();
+            let node = owner
+                .render_tree()
+                .get(render_id)
+                .expect("mounted render ID must resolve");
+            node.clear_needs_paint();
+            node.clear_needs_compositing_bits_update();
+        });
+
+        element.update(&view, &mut build_owner.element_owner_mut());
+
+        pipeline_owner.with(|owner| {
+            assert!(owner.nodes_needing_layout().is_empty());
+            assert_eq!(owner.nodes_needing_compositing_bits_update().len(), 1);
+            assert_eq!(owner.nodes_needing_paint().len(), 1);
+            assert_eq!(owner.nodes_needing_semantics().len(), 1);
+        });
     }
 
     #[test]
@@ -482,6 +575,117 @@ mod tests {
 
         assert_eq!(element.lifecycle(), Lifecycle::Active);
         assert!(element.render_id().is_none()); // No PipelineOwner, so no render_id
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG: active RenderBehavior must have a PipelineOwner during update")]
+    fn active_render_element_update_without_pipeline_owner_panics() {
+        let view = SizedBoxView {
+            width: 100.0,
+            height: 100.0,
+        };
+        let mut element = RenderElement::new(&view, RenderBehavior::new());
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
+
+        element.update(
+            &SizedBoxView {
+                width: 120.0,
+                height: 100.0,
+            },
+            &mut build_owner.element_owner_mut(),
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "BUG: RenderBehavior with a PipelineOwner must own a RenderId during update"
+    )]
+    fn render_element_update_without_render_id_panics() {
+        let view = SizedBoxView {
+            width: 100.0,
+            height: 100.0,
+        };
+        let mut element = RenderElement::new(&view, RenderBehavior::new());
+        element.set_pipeline_owner(PipelineCell::new(PipelineOwner::new()));
+        let mut build_owner = crate::BuildOwner::new();
+
+        element.update(
+            &SizedBoxView {
+                width: 120.0,
+                height: 100.0,
+            },
+            &mut build_owner.element_owner_mut(),
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "BUG: RenderBehavior's RenderId must resolve to a live node during update"
+    )]
+    fn render_element_update_with_stale_render_id_panics() {
+        let view = SizedBoxView {
+            width: 100.0,
+            height: 100.0,
+        };
+        let mut element = RenderElement::new(&view, RenderBehavior::new());
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        element.set_pipeline_owner(pipeline_owner.clone());
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
+        let render_id = element
+            .render_id()
+            .expect("mounted render element must have a render ID");
+        pipeline_owner.with_mut(|owner| {
+            owner.remove_render_object(render_id);
+        });
+
+        element.update(
+            &SizedBoxView {
+                width: 120.0,
+                height: 100.0,
+            },
+            &mut build_owner.element_owner_mut(),
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "BUG: RenderBehavior's live node must match RenderView::RenderObject during update"
+    )]
+    fn render_element_update_with_wrong_render_object_type_panics() {
+        use flui_rendering::{protocol::BoxProtocol, traits::RenderObject};
+
+        let view = SizedBoxView {
+            width: 100.0,
+            height: 100.0,
+        };
+        let mut element = RenderElement::new(&view, RenderBehavior::new());
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        element.set_pipeline_owner(pipeline_owner.clone());
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
+        let render_id = element
+            .render_id()
+            .expect("mounted render element must have a render ID");
+        pipeline_owner.with_mut(|owner| {
+            let node = owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .expect("mounted render ID must resolve");
+            *node = flui_rendering::storage::RenderNode::from(Box::new(
+                flui_objects::RenderColoredBox::red(20.0, 20.0),
+            )
+                as Box<dyn RenderObject<BoxProtocol>>);
+        });
+
+        element.update(
+            &SizedBoxView {
+                width: 120.0,
+                height: 100.0,
+            },
+            &mut build_owner.element_owner_mut(),
+        );
     }
 
     #[test]

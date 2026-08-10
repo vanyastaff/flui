@@ -118,13 +118,16 @@ impl RenderIntrinsicWidth {
         self.step_width
     }
 
-    /// Replaces the step-width quantum; returns `true` if the value changed.
-    pub fn set_step_width(&mut self, step_width: Option<f32>) -> bool {
+    /// Replaces the step-width quantum and reports layout when changed.
+    pub fn set_step_width(
+        &mut self,
+        step_width: Option<f32>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.step_width == step_width {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.step_width = step_width;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Returns the current step-height quantum.
@@ -133,13 +136,16 @@ impl RenderIntrinsicWidth {
         self.step_height
     }
 
-    /// Replaces the step-height quantum; returns `true` if the value changed.
-    pub fn set_step_height(&mut self, step_height: Option<f32>) -> bool {
+    /// Replaces the step-height quantum and reports layout when changed.
+    pub fn set_step_height(
+        &mut self,
+        step_height: Option<f32>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.step_height == step_height {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.step_height = step_height;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Computes the tight child constraints using an `intrinsic` closure.
@@ -387,9 +393,18 @@ mod tests {
         let mut node = RenderIntrinsicWidth::new(Some(10.0), Some(5.0));
         assert_eq!(node.step_width(), Some(10.0));
         assert_eq!(node.step_height(), Some(5.0));
-        assert!(node.set_step_width(Some(20.0)));
-        assert!(!node.set_step_width(Some(20.0)));
-        assert!(node.set_step_height(None));
+        assert_eq!(
+            node.set_step_width(Some(20.0)),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_step_width(Some(20.0)),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_step_height(None),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
         assert_eq!(node.step_height(), None);
     }
 

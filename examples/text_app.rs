@@ -61,8 +61,8 @@ impl RenderView for TextLabel {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_text(greeting());
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_text(greeting())
     }
 }
 

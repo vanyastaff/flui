@@ -214,38 +214,6 @@ where
 // RenderBehavior helpers
 // ============================================================================
 
-/// Body of `RenderBehavior::on_update`: mark the associated `RenderObject`
-/// as needing layout + paint. No-op if the behavior has no `RenderId`
-/// yet (the `on_mount` callback creates it once a `PipelineOwner` is in
-/// scope) or no `PipelineOwner` is plumbed through the core.
-///
-/// Mirrors Flutter's
-/// `RenderObjectElement.update` → `RenderObject.markNeedsLayout` +
-/// `markNeedsPaint` flow.
-pub(crate) fn mark_render_needs_layout_and_paint<V, A>(
-    core: &ElementCore<V, A>,
-    render_id: Option<RenderId>,
-    behavior_name: &'static str,
-) where
-    V: Clone + 'static,
-    A: ElementArity,
-{
-    if let Some(render_id) = render_id
-        && let Some(pipeline_owner) = core.pipeline_owner()
-    {
-        pipeline_owner.with_mut(|owner| {
-            owner.mark_needs_layout(render_id);
-            owner.mark_needs_paint(render_id);
-        });
-
-        tracing::debug!(
-            "{}::on_update marked render_id={:?} dirty through layout and paint boundary walks",
-            behavior_name,
-            render_id
-        );
-    }
-}
-
 /// Body of `RenderBehavior::on_unmount`: remove the associated
 /// `RenderObject` from the `RenderTree`. No-op if the behavior never
 /// got a `RenderId` (e.g. unmount before mount with no `PipelineOwner`).
@@ -486,21 +454,13 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // mark_render_needs_layout_and_paint + remove_render_object_from_tree
+    // remove_render_object_from_tree
     // ------------------------------------------------------------------
     //
     // These helpers are pure no-ops when there is no PipelineOwner and
     // no RenderId. We assert that contract directly — the
     // PipelineOwner-bearing path is exercised end-to-end through
     // `crates/flui-view/tests/*` and `view::render::tests`.
-
-    #[test]
-    fn mark_render_needs_layout_and_paint_is_noop_without_pipeline_owner() {
-        let core = ElementCore::<TestView, Leaf>::new(TestView);
-        // No render_id, no pipeline_owner — the helper must not panic
-        // and must not need to talk to a PipelineOwner.
-        mark_render_needs_layout_and_paint(&core, None, "TestBehavior");
-    }
 
     #[test]
     fn remove_render_object_from_tree_is_noop_without_pipeline_owner() {

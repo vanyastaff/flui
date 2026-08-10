@@ -138,22 +138,25 @@ impl RenderFractionalTranslation {
         self.transform_hit_tests
     }
 
-    /// Updates the translation; returns true if the value changed.
-    pub fn set_translation(&mut self, translation: TranslationFraction) -> bool {
+    /// Updates the translation and reports its paint and semantics impact.
+    pub fn set_translation(
+        &mut self,
+        translation: TranslationFraction,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.translation == translation {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.translation = translation;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
-    /// Updates the hit-test transform flag; returns true if changed.
-    pub fn set_transform_hit_tests(&mut self, value: bool) -> bool {
+    /// Updates the hit-test transform flag, which schedules no pipeline pass.
+    pub fn set_transform_hit_tests(&mut self, value: bool) -> flui_rendering::RenderUpdateImpact {
         if self.transform_hit_tests == value {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.transform_hit_tests = value;
-        true
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     /// Resolved pixel offset for the given laid-out size.
@@ -335,11 +338,28 @@ mod tests {
 
     #[test]
     fn setters_return_change_flag() {
-        let mut node = RenderFractionalTranslation::default();
-        assert!(node.set_translation(TranslationFraction::new(0.1, 0.2)));
-        assert!(!node.set_translation(TranslationFraction::new(0.1, 0.2)));
-        assert!(node.set_transform_hit_tests(false));
-        assert!(!node.set_transform_hit_tests(false));
+        let mut node = RenderFractionalTranslation {
+            has_child: true,
+            ..RenderFractionalTranslation::default()
+        };
+        assert_eq!(
+            node.set_translation(TranslationFraction::new(0.1, 0.2)),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+        assert_eq!(
+            node.set_translation(TranslationFraction::new(0.1, 0.2)),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            node.set_transform_hit_tests(false),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert!(node.has_child);
+        assert_eq!(
+            node.set_transform_hit_tests(false),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
     }
 
     #[test]

@@ -116,27 +116,34 @@ impl RenderConstraintsTransformBox {
         self.has_visual_overflow
     }
 
-    /// Replaces the child alignment; returns `true` if the value changed.
-    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
-        self.inner.set_alignment(alignment)
+    /// Replaces the child alignment and reports layout when changed.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
+        if self.inner.set_alignment(alignment) {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
     }
 
-    /// Replaces the retained axis; returns `true` if the value changed.
-    pub fn set_constrained_axis(&mut self, constrained_axis: Option<Axis>) -> bool {
+    /// Replaces the retained axis and reports layout when changed.
+    pub fn set_constrained_axis(
+        &mut self,
+        constrained_axis: Option<Axis>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.constrained_axis == constrained_axis {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.constrained_axis = constrained_axis;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Replaces the clip behavior; returns `true` if the value changed.
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> bool {
+    /// Replaces the clip behavior and reports paint plus semantics when changed.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Narrows `constraints` to the retained axis, freeing the other (or
@@ -365,11 +372,27 @@ mod tests {
     #[test]
     fn setters_return_change_flag() {
         let mut node = RenderConstraintsTransformBox::new(Alignment::CENTER, None, Clip::None);
-        assert!(node.set_constrained_axis(Some(Axis::Horizontal)));
-        assert!(!node.set_constrained_axis(Some(Axis::Horizontal)));
-        assert!(node.set_clip_behavior(Clip::AntiAlias));
-        assert!(!node.set_clip_behavior(Clip::AntiAlias));
-        assert!(node.set_alignment(Alignment::TOP_LEFT));
+        assert_eq!(
+            node.set_constrained_axis(Some(Axis::Horizontal)),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_constrained_axis(Some(Axis::Horizontal)),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_clip_behavior(Clip::AntiAlias),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
+        assert_eq!(
+            node.set_clip_behavior(Clip::AntiAlias),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_alignment(Alignment::TOP_LEFT),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     }
 
     #[test]

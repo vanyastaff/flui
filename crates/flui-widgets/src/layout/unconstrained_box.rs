@@ -118,10 +118,12 @@ impl RenderView for UnconstrainedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_alignment(self.alignment);
-        render_object.set_constrained_axis(self.constrained_axis);
-        render_object.set_clip_behavior(self.clip_behavior);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_constrained_axis(self.constrained_axis);
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -173,11 +175,16 @@ mod tests {
     fn update_render_object_pushes_every_field() {
         let mut render_object = UnconstrainedBox::new().create_render_object(&detached());
 
-        UnconstrainedBox::new()
+        let impact = UnconstrainedBox::new()
             .alignment(Alignment::BOTTOM_RIGHT)
             .constrained_axis(Axis::Vertical)
             .clip_behavior(Clip::HardEdge)
             .update_render_object(&detached(), &mut render_object);
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
 
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
         assert_eq!(render_object.constrained_axis(), Some(Axis::Vertical));
@@ -191,8 +198,27 @@ mod tests {
             .create_render_object(&detached());
         assert_eq!(render_object.constrained_axis(), Some(Axis::Horizontal));
 
-        UnconstrainedBox::new().update_render_object(&detached(), &mut render_object);
+        let impact = UnconstrainedBox::new().update_render_object(&detached(), &mut render_object);
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
         assert_eq!(render_object.constrained_axis(), None);
+    }
+
+    #[test]
+    fn clip_only_update_reports_paint_and_semantics() {
+        let original = UnconstrainedBox::new();
+        let mut render_object = original.create_render_object(&detached());
+        assert_eq!(
+            original.update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            original
+                .clone()
+                .clip_behavior(Clip::HardEdge)
+                .update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
     }
 
     #[test]

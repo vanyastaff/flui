@@ -245,40 +245,62 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// registered on the new offset. Not attached yet — the listener is left
     /// for `attach` to install once the node actually enters a pipeline.
     #[inline]
-    pub fn set_offset(&mut self, offset: O) {
+    pub fn set_offset(&mut self, offset: O) -> flui_rendering::RenderUpdateImpact {
         unregister_offset_listener(&self.offset, &mut self.offset_listener);
         self.offset = offset;
         if let Some(handle) = self.repaint_handle.clone() {
             self.offset_listener = Some(register_offset_listener(&self.offset, handle));
         }
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Sets the sliver paint order. Hit testing uses the opposite order.
     #[inline]
-    pub const fn set_paint_order(&mut self, paint_order: SliverPaintOrder) {
+    pub fn set_paint_order(
+        &mut self,
+        paint_order: SliverPaintOrder,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.paint_order == paint_order {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.paint_order = paint_order;
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Sets the cache extent and interpretation mode.
     #[inline]
-    pub const fn set_cache_extent(&mut self, cache_extent: f32, style: CacheExtentStyle) {
+    pub const fn set_cache_extent(
+        &mut self,
+        cache_extent: f32,
+        style: CacheExtentStyle,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let same_style = matches!(
+            (self.cache_extent_style, style),
+            (CacheExtentStyle::Pixel, CacheExtentStyle::Pixel)
+                | (CacheExtentStyle::Viewport, CacheExtentStyle::Viewport)
+        );
+        if self.cache_extent == cache_extent && same_style {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.cache_extent = cache_extent;
         self.cache_extent_style = style;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Sets the scroll axis direction, re-deriving the cross-axis direction.
     ///
-    /// Returns `true` when the axis actually changed — layout-affecting, so a
-    /// widget's `update_render_object` that reused this render object across a
-    /// vertical↔horizontal rebuild must invalidate layout on a `true`.
+    /// Reports layout when the axis actually changed.
     #[inline]
-    pub fn set_axis_direction(&mut self, axis_direction: AxisDirection) -> bool {
+    pub fn set_axis_direction(
+        &mut self,
+        axis_direction: AxisDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.axis_direction == axis_direction {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.axis_direction = axis_direction;
         self.cross_axis_direction = default_cross_axis_direction(axis_direction);
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Sets the index of the center sliver for forward/reverse growth partitioning.
@@ -287,8 +309,15 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// `Some(index)`, children `[0..index)` use forward growth and `[index..)` use
     /// reverse growth from the trailing edge.
     #[inline]
-    pub fn set_center_sliver_index(&mut self, index: Option<usize>) {
+    pub fn set_center_sliver_index(
+        &mut self,
+        index: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.center_sliver_index == index {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.center_sliver_index = index;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Returns the configured center sliver index, if any.
@@ -854,40 +883,62 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     /// caller injecting an external offset must follow, and for the
     /// attached-listener re-registration this mirrors exactly.
     #[inline]
-    pub fn set_offset(&mut self, offset: O) {
+    pub fn set_offset(&mut self, offset: O) -> flui_rendering::RenderUpdateImpact {
         unregister_offset_listener(&self.offset, &mut self.offset_listener);
         self.offset = offset;
         if let Some(handle) = self.repaint_handle.clone() {
             self.offset_listener = Some(register_offset_listener(&self.offset, handle));
         }
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Sets the sliver paint order. Hit testing uses the opposite order.
     #[inline]
-    pub const fn set_paint_order(&mut self, paint_order: SliverPaintOrder) {
+    pub fn set_paint_order(
+        &mut self,
+        paint_order: SliverPaintOrder,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.paint_order == paint_order {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.paint_order = paint_order;
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Sets the cache extent and interpretation mode.
     #[inline]
-    pub const fn set_cache_extent(&mut self, cache_extent: f32, style: CacheExtentStyle) {
+    pub const fn set_cache_extent(
+        &mut self,
+        cache_extent: f32,
+        style: CacheExtentStyle,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let same_style = matches!(
+            (self.cache_extent_style, style),
+            (CacheExtentStyle::Pixel, CacheExtentStyle::Pixel)
+                | (CacheExtentStyle::Viewport, CacheExtentStyle::Viewport)
+        );
+        if self.cache_extent == cache_extent && same_style {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.cache_extent = cache_extent;
         self.cache_extent_style = style;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Sets the scroll axis direction, re-deriving the cross-axis direction.
     ///
-    /// Returns `true` when the axis actually changed — layout-affecting, so a
-    /// widget's `update_render_object` that reused this render object across a
-    /// vertical↔horizontal rebuild must invalidate layout on a `true`.
+    /// Reports layout when the axis actually changed.
     #[inline]
-    pub fn set_axis_direction(&mut self, axis_direction: AxisDirection) -> bool {
+    pub fn set_axis_direction(
+        &mut self,
+        axis_direction: AxisDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.axis_direction == axis_direction {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.axis_direction = axis_direction;
         self.cross_axis_direction = default_cross_axis_direction(axis_direction);
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Last total scroll extent reported by the sliver sequence.
@@ -1487,7 +1538,10 @@ mod offset_listener_tests {
             RenderViewport::with_offset(TopToBottom, LeftToRight, old_position.clone());
 
         RenderBox::attach(&mut viewport, handle);
-        viewport.set_offset(new_position.clone());
+        assert_eq!(
+            viewport.set_offset(new_position.clone()),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
         owner.drain_pending_dirty();
         assert!(
             owner.nodes_needing_layout().iter().all(|d| d.id != anchor),

@@ -45,8 +45,9 @@ impl RenderView for SliverToBoxAdapter {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         // The adapter carries no configuration — nothing to update.
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {

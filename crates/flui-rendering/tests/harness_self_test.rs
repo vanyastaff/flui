@@ -246,7 +246,10 @@ fn simulate_advances_layout_across_ticks() {
     let reports = run.simulate([0.25, 0.5, 1.0], |t, run| {
         let padding = 5.0 + 50.0 * t as f32;
         run.update::<RenderPadding>(pad, |p| {
-            p.set_padding(EdgeInsets::all(px(padding)));
+            assert_eq!(
+                p.set_padding(EdgeInsets::all(px(padding))),
+                flui_rendering::RenderUpdateImpact::LAYOUT,
+            );
         });
     });
 
@@ -267,7 +270,10 @@ fn advance_paint_changes_color_without_layout() {
 
     let leaf = run.id("leaf");
     let report = run.advance_paint::<RenderColoredBox>(leaf, |box_| {
-        box_.set_color([0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(
+            box_.set_color([0.0, 1.0, 0.0, 1.0]),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
     });
 
     assert!(report.painted);
@@ -287,7 +293,12 @@ fn advance_paint_opacity_tracks_layer_alpha() {
     .run_frame();
 
     let fade = run.root();
-    let report = run.advance_paint::<RenderOpacity>(fade, |o| o.set_opacity(0.5));
+    let report = run.advance_paint::<RenderOpacity>(fade, |opacity| {
+        assert_eq!(
+            opacity.set_opacity(0.5),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
+    });
     assert!(report.painted, "opacity change must repaint: {report}");
     assert!(
         run.structure().contains(&"Opacity"),
@@ -314,7 +325,10 @@ fn update_then_pump_relayouts() {
     assert_eq!(run.offset(child), Offset::new(px(5.0), px(5.0)));
 
     run.update::<RenderPadding>(run.root(), |padding| {
-        padding.set_padding(EdgeInsets::all(px(20.0)));
+        assert_eq!(
+            padding.set_padding(EdgeInsets::all(px(20.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     });
     run.pump();
 

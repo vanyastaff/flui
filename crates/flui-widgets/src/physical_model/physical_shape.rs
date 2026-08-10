@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use flui_objects::RenderPhysicalShape;
+use flui_objects::{PathClipSourceToken, RenderPhysicalShape};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Color;
 use flui_types::Size;
@@ -37,6 +37,7 @@ type PathClipper = Rc<dyn Fn(Size) -> Path>;
 #[derive(Clone)]
 pub struct PhysicalShape {
     clipper: PathClipper,
+    clip_source_token: PathClipSourceToken,
     clip_behavior: Clip,
     elevation: f32,
     color: Color,
@@ -52,6 +53,7 @@ impl PhysicalShape {
     pub fn new(clipper: impl Fn(Size) -> Path + 'static, color: Color) -> Self {
         Self {
             clipper: Rc::new(clipper),
+            clip_source_token: PathClipSourceToken::fresh(),
             clip_behavior: Clip::None,
             elevation: 0.0,
             color,
@@ -100,23 +102,27 @@ impl PhysicalShape {
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderPhysicalShape,
-    ) {
+        replace_existing: bool,
+    ) -> flui_rendering::RenderUpdateImpact {
         let clipper = Rc::clone(&self.clipper);
         match render_object.path_clip_target() {
-            Some(target) => {
+            Some(target) if replace_existing => {
                 if let Err(error) = ctx.replace_path_clipper(target, move |size| clipper(size)) {
                     tracing::warn!(?error, "PhysicalShape clipper replacement failed");
                 }
+                render_object.set_path_clip_target(Some(target))
             }
+            Some(_) => flui_rendering::RenderUpdateImpact::NONE,
             None => match ctx.register_path_clipper(move |size| clipper(size)) {
-                Ok(target) => {
-                    render_object.set_path_clip_target(Some(target));
+                Ok(target) => render_object.set_path_clip_target(Some(target)),
+                Err(error) => {
+                    tracing::debug!(
+                        ?error,
+                        "PhysicalShape mounted without an active interaction lane; \
+                         custom path clipper will not be resolved"
+                    );
+                    flui_rendering::RenderUpdateImpact::NONE
                 }
-                Err(error) => tracing::debug!(
-                    ?error,
-                    "PhysicalShape mounted without an active interaction lane; \
-                     custom path clipper will not be resolved"
-                ),
             },
         }
     }
@@ -139,10 +145,13 @@ impl RenderView for PhysicalShape {
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         let mut render_object = RenderPhysicalShape::new(self.color)
+            .with_path_clip_source_token(self.clip_source_token.clone())
             .with_clip_behavior(self.clip_behavior)
             .with_elevation(self.elevation)
             .with_shadow_color(self.shadow_color);
-        self.sync_path_clip_target(ctx, &mut render_object);
+        // Creation is not a mounted update; the initial target is already
+        // reflected in the new render object's first frame.
+        let _initial_target_impact = self.sync_path_clip_target(ctx, &mut render_object, false);
         render_object
     }
 
@@ -150,12 +159,16 @@ impl RenderView for PhysicalShape {
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_clip_behavior(self.clip_behavior);
-        render_object.set_elevation(self.elevation);
-        render_object.set_color(self.color);
-        render_object.set_shadow_color(self.shadow_color);
-        self.sync_path_clip_target(ctx, render_object);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
+        impact |= render_object.set_elevation(self.elevation);
+        impact |= render_object.set_color(self.color);
+        impact |= render_object.set_shadow_color(self.shadow_color);
+        let source_impact = render_object.set_path_clip_source_token(&self.clip_source_token);
+        impact |= source_impact;
+        impact |= self.sync_path_clip_target(ctx, render_object, !source_impact.is_none());
+        impact
     }
 
     fn did_unmount_render_object(
@@ -167,7 +180,9 @@ impl RenderView for PhysicalShape {
             if let Err(error) = ctx.unregister_path_clipper(target) {
                 tracing::debug!(?error, "PhysicalShape clipper unregistration failed");
             }
-            render_object.set_path_clip_target(None);
+            // Unmount has no owner-side update application; unregistering
+            // removes the target before the render node is disposed.
+            let _unmount_target_impact = render_object.set_path_clip_target(None);
         }
     }
 
@@ -238,12 +253,17 @@ mod tests {
     fn update_render_object_pushes_every_field() {
         let mut render_object = physical_shape().create_render_object(&detached());
 
-        physical_shape()
+        let impact = physical_shape()
             .clip_behavior(Clip::HardEdge)
             .elevation(3.0)
             .color(Color::BLUE)
             .shadow_color(Color::GREEN)
             .update_render_object(&detached(), &mut render_object);
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
 
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
         assert_eq!(render_object.elevation(), 3.0);
@@ -255,6 +275,42 @@ mod tests {
     fn detached_creation_does_not_install_a_path_clipper() {
         let render_object = physical_shape().create_render_object(&detached());
         assert!(!render_object.has_custom_clipper());
+    }
+
+    #[test]
+    fn clipper_source_token_distinguishes_clone_from_separate_construction() {
+        let shape = physical_shape();
+        let mut render_object = shape.create_render_object(&detached());
+        assert_eq!(
+            shape
+                .clone()
+                .update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            physical_shape().update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+
+    #[test]
+    fn clip_behavior_change_reports_paint_only_and_identical_is_none() {
+        let original = physical_shape();
+        let mut render_object = original.create_render_object(&detached());
+        assert_eq!(
+            original.update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        let changed = original.clip_behavior(Clip::AntiAlias);
+        assert_eq!(
+            changed.update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
+        assert_eq!(
+            changed.update_render_object(&detached(), &mut render_object),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
     }
 
     #[test]

@@ -341,6 +341,25 @@ impl Virtualizer {
         self.clamp_anchor();
     }
 
+    /// Replaces the estimate used by every still-unmeasured item and by
+    /// future growth, preserving already-measured extents.
+    ///
+    /// Returns whether the estimate changed.
+    pub fn set_default_estimate(&mut self, estimate: f32) -> bool {
+        let estimate = estimate.max(0.0);
+        if self.default_estimate == estimate {
+            return false;
+        }
+        self.default_estimate = estimate;
+        for index in 0..self.tree.len() {
+            if matches!(self.tree.get(index), ItemExtent::Unmeasured { .. }) {
+                self.tree
+                    .set(index, ItemExtent::Unmeasured { hint: estimate });
+            }
+        }
+        true
+    }
+
     /// Records the real measured `extent` for the item at `index`, replacing its
     /// estimate (or a previous measurement).
     ///

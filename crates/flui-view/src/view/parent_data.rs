@@ -51,6 +51,14 @@
 //!             bottom: self.bottom,
 //!         }
 //!     }
+//!
+//!     fn apply_parent_data(
+//!         &self,
+//!         data: &mut Self::ParentData,
+//!     ) -> flui_rendering::RenderUpdateImpact {
+//!         // Compare and mutate only `left`/`top`/`right`/`bottom`.
+//!         # flui_rendering::RenderUpdateImpact::NONE
+//!     }
 //! }
 //! impl_parent_data_view!(Positioned);
 //! ```
@@ -132,11 +140,13 @@ pub trait ParentDataView: Clone + 'static + Sized {
 
     /// Apply parent data changes to an existing parent data instance.
     ///
-    /// This is called when the View updates. The default implementation
-    /// replaces the entire parent data.
-    fn apply_parent_data(&self, parent_data: &mut Self::ParentData) {
-        *parent_data = self.create_parent_data();
-    }
+    /// This is called when the View updates. Implementations mutate only the
+    /// configuration-owned fields, preserving layout-owned offsets and
+    /// container metadata, and report the required invalidation.
+    fn apply_parent_data(
+        &self,
+        parent_data: &mut Self::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact;
 }
 
 /// Implement View for a ParentDataView type.
@@ -148,6 +158,7 @@ pub trait ParentDataView: Clone + 'static + Sized {
 ///     type ParentData = StackParentData;
 ///     fn child(&self) -> &dyn View { &*self.child }
 ///     fn create_parent_data(&self) -> Self::ParentData { ... }
+///     fn apply_parent_data(&self, data: &mut Self::ParentData) -> RenderUpdateImpact { ... }
 /// }
 /// impl_parent_data_view!(Positioned);
 /// ```
@@ -207,7 +218,8 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             _render_object: &mut Self::RenderObject,
-        ) {
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 
@@ -240,9 +252,60 @@ mod tests {
                 fit: self.fit,
             }
         }
+
+        fn apply_parent_data(
+            &self,
+            parent_data: &mut Self::ParentData,
+        ) -> flui_rendering::RenderUpdateImpact {
+            if parent_data.flex == self.flex && parent_data.fit == self.fit {
+                return flui_rendering::RenderUpdateImpact::NONE;
+            }
+            parent_data.flex = self.flex;
+            parent_data.fit = self.fit;
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        }
     }
 
     impl_parent_data_view!(TestFlexible);
+
+    #[derive(Clone)]
+    struct ParentHost {
+        child: TestFlexible,
+    }
+
+    impl crate::RenderView for ParentHost {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+
+        fn has_children(&self) -> bool {
+            true
+        }
+
+        fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+            visitor(&self.child);
+        }
+    }
+
+    impl View for ParentHost {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
 
     /// The macro-built View resolves to the unified `ParentDataBehavior`
     /// element, whose `parent_data_config()` surfaces the view's configured
@@ -266,6 +329,127 @@ mod tests {
             .expect("the surfaced config is the view's concrete ParentData type");
         assert!((data.flex - 2.0).abs() < f64::EPSILON);
         assert!(data.fit);
+    }
+
+    #[test]
+    fn element_kind_forwards_parent_data_updates() {
+        let view = TestFlexible {
+            flex: 3.0,
+            fit: false,
+            child: DummyChild,
+        };
+        let element = view.create_element();
+        let mut data = TestParentData {
+            flex: 1.0,
+            fit: true,
+        };
+
+        let impact = element.element().apply_parent_data_config(&mut data);
+
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
+        assert!((data.flex - 3.0).abs() < f64::EPSILON);
+        assert!(!data.fit);
+        assert_eq!(
+            element.element().apply_parent_data_config(&mut data),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "BUG: ParentDataView must match the existing render-node parent-data type"
+    )]
+    fn parent_data_type_mismatch_panics() {
+        let view = TestFlexible {
+            flex: 1.0,
+            fit: true,
+            child: DummyChild,
+        };
+        let element = view.create_element();
+        let mut wrong = flui_rendering::parent_data::BoxParentData::zero();
+
+        let unexpected_impact = element.element().apply_parent_data_config(&mut wrong);
+        panic!("type mismatch unexpectedly returned {unexpected_impact:?}");
+    }
+
+    #[test]
+    fn tree_parent_data_updates_schedule_only_real_changes() {
+        let initial_child = TestFlexible {
+            flex: 2.0,
+            fit: true,
+            child: DummyChild,
+        };
+        let root_view = ParentHost {
+            child: initial_child.clone(),
+        };
+        let pipeline = flui_rendering::pipeline::PipelineCell::new(
+            flui_rendering::pipeline::PipelineOwner::new(),
+        );
+        let mut tree = crate::ElementTree::new();
+        let mut owner = crate::BuildOwner::new();
+        let root = tree.mount_root_with_pipeline_owner(
+            &root_view,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
+        owner.build_scope(&mut tree);
+
+        let parent_data_element = tree.get(root).expect("root").child_ids()[0];
+        let render_child_element = tree
+            .get(parent_data_element)
+            .expect("parent-data element")
+            .child_ids()[0];
+        let render_child = tree
+            .get(render_child_element)
+            .and_then(|node| node.element().render_id())
+            .expect("render child");
+        let render_parent = tree
+            .get(root)
+            .and_then(|node| node.element().render_id())
+            .expect("render parent");
+        pipeline.with_mut(|pipeline_owner| {
+            let installed = pipeline_owner
+                .render_tree()
+                .get(render_child)
+                .and_then(flui_rendering::storage::RenderNode::parent_data)
+                .and_then(|data| data.downcast_ref::<TestParentData>())
+                .expect("initial parent data installed");
+            assert!((installed.flex - 2.0).abs() < f64::EPSILON);
+            pipeline_owner.clear_all_dirty_nodes();
+            if let Some(flui_rendering::storage::RenderNode::Box(entry)) =
+                pipeline_owner.render_tree_mut().get_mut(render_parent)
+            {
+                entry.state().clear_needs_layout();
+            }
+        });
+
+        tree.update(
+            parent_data_element,
+            &initial_child,
+            &mut owner.element_owner_mut(),
+        );
+        owner.schedule_build_for(parent_data_element, 1, crate::RebuildReason::StateChange);
+        owner.build_scope(&mut tree);
+        pipeline.with(|pipeline_owner| {
+            assert!(pipeline_owner.nodes_needing_layout().is_empty());
+        });
+
+        let changed_child = TestFlexible {
+            flex: 4.0,
+            ..initial_child
+        };
+        tree.update(
+            parent_data_element,
+            &changed_child,
+            &mut owner.element_owner_mut(),
+        );
+        owner.schedule_build_for(parent_data_element, 1, crate::RebuildReason::StateChange);
+        owner.build_scope(&mut tree);
+        pipeline.with(|pipeline_owner| {
+            assert_eq!(pipeline_owner.nodes_needing_layout().len(), 1);
+            assert_eq!(pipeline_owner.nodes_needing_layout()[0].id, render_parent);
+        });
     }
 
     /// E3 regression: a ParentData element scheduled in the tree actually
