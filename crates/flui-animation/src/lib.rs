@@ -188,3 +188,17 @@ pub mod prelude {
         FrameBudget, FramePhase, Priority, TaskQueue, Ticker, TickerProvider, UpdateScheduler,
     };
 }
+
+// Keep standalone prose examples inside the existing workspace doctest gate.
+// Context-dependent fragments in these files are explicitly `rust,ignore`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_examples {}
+
+#[cfg(doctest)]
+#[doc = include_str!("../docs/GUIDE.md")]
+mod guide_examples {}
+
+#[cfg(doctest)]
+#[doc = include_str!("../docs/PERFORMANCE.md")]
+mod performance_examples {}

@@ -2,13 +2,17 @@
 
 Animation system for FLUI, based on Flutter's proven architecture.
 
+Standalone `rust` blocks in this document are compiled as doctests. Blocks
+marked `rust,ignore` are excerpts that depend on values introduced by the
+surrounding narrative rather than complete programs.
+
 ## Core Concepts
 
 ### The Animation Model
 
 Animations in FLUI follow Flutter's model: an `Animation<T>` produces values of type `T` over time. The animation itself doesn't know about time—it's driven externally by a ticker.
 
-```
+```text
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │     Ticker      │────▶│   Controller    │────▶│    Animation    │
 │  (time source)  │     │  (0.0 → 1.0)    │     │   (any value)   │
@@ -22,7 +26,7 @@ The separation allows:
 
 ### Animation Status
 
-```rust
+```rust,ignore
 pub enum AnimationStatus {
     Dismissed,  // At the beginning (value = lower_bound)
     Forward,    // Playing toward end
@@ -40,6 +44,12 @@ Status indicates direction, not position. A `Completed` animation at value 1.0 t
 The primary driver. Holds a value in `[lower_bound, upper_bound]` (default 0.0–1.0) and drives it over a duration.
 
 ```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
+# let duration = Duration::from_millis(300);
 let controller = AnimationController::new(
     Duration::from_millis(300),
     &scheduler,
@@ -51,11 +61,14 @@ let controller = AnimationController::builder(duration, &scheduler)
     .initial_value(0.5)
     .reverse_duration(Duration::from_millis(200))
     .build()?;
+# controller.dispose();
+# Ok(())
+# }
 ```
 
 ### Driving Animations
 
-```rust
+```rust,ignore
 controller.forward()?;           // Animate to upper_bound
 controller.reverse()?;           // Animate to lower_bound
 controller.forward_from(0.5)?;   // Jump to 0.5, then animate forward
@@ -66,14 +79,14 @@ controller.reset();              // Jump to lower_bound, status = Dismissed
 
 ### Repeating
 
-```rust
+```rust,ignore
 controller.repeat()?;                    // Loop: 0→1→0→1→...
 controller.repeat_with_reverse(true)?;   // Bounce: 0→1→0→1→...
 ```
 
 ### Physics-Based Animation
 
-```rust
+```rust,ignore
 // Fling with velocity (uses spring physics)
 controller.fling(1.0)?;   // velocity toward upper_bound
 controller.fling(-1.0)?;  // velocity toward lower_bound
@@ -89,7 +102,7 @@ controller.animate_with(sim)?;
 
 ### Listening
 
-```rust
+```rust,ignore
 // Value changes
 let id = controller.add_listener(|| println!("value changed"));
 controller.remove_listener(id);
@@ -104,7 +117,7 @@ let id = controller.add_status_listener(|status| {
 
 ### Lifecycle
 
-```rust
+```rust,ignore
 controller.dispose();  // Stop animation, release ticker
 // Controller is unusable after dispose
 ```
@@ -119,7 +132,7 @@ A `Curve` maps `t ∈ [0, 1]` to an output in `[0, 1]`. Used for easing.
 
 ### Predefined Curves
 
-```rust
+```rust,ignore
 use flui_animation::Curves;
 
 Curves::Linear        // Identity
@@ -141,7 +154,7 @@ Curves::Decelerate    // Fast start, gradual stop
 
 ### Custom Curves
 
-```rust
+```rust,ignore
 // Cubic bezier (CSS-style)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 
@@ -165,7 +178,7 @@ let spline = CatmullRomCurve::with_points(vec![
 
 ### Curve Modifiers
 
-```rust
+```rust,ignore
 let flipped = curve.flipped();   // Output: 1.0 - curve(t)
 let reversed = curve.reversed(); // Input: curve(1.0 - t)
 ```
@@ -180,7 +193,7 @@ A `Tween<T>` is an `Animatable` with explicit `begin` and `end` values.
 
 ### Built-in Tweens
 
-```rust
+```rust,ignore
 // Numeric
 FloatTween::new(0.0, 100.0)
 IntTween::new(0, 255)      // Rounds to nearest
@@ -201,7 +214,7 @@ ConstantTween::new(42.0)
 
 ### Using Tweens
 
-```rust
+```rust,ignore
 let tween = FloatTween::new(0.0, 100.0);
 let value = tween.transform(0.5);  // 50.0
 
@@ -213,7 +226,7 @@ let position = tween.transform(controller.value());
 
 Chain tweens with weights:
 
-```rust
+```rust,ignore
 let sequence = TweenSequence::new(vec![
     TweenSequenceItem::new(FloatTween::new(0.0, 100.0), 1.0),   // 0.0–0.25
     TweenSequenceItem::new(FloatTween::new(100.0, 100.0), 2.0), // 0.25–0.75 (hold)
@@ -228,7 +241,7 @@ let sequence = TweenSequence::new(vec![
 
 ### Tween Composition
 
-```rust
+```rust,ignore
 use flui_animation::TweenAnimatableExt;
 
 // Chain: first tween, then second
@@ -245,7 +258,7 @@ let reversed = tween.reversed();
 
 Apply a curve as an Animatable:
 
-```rust
+```rust,ignore
 let curve_tween = CurveTween::new(Curves::EaseIn);
 let eased = curve_tween.transform(0.5);  // EaseIn applied to 0.5
 ```
@@ -258,7 +271,7 @@ let eased = curve_tween.transform(0.5);  // EaseIn applied to 0.5
 
 Apply a curve to an animation's output:
 
-```rust
+```rust,ignore
 let curved = CurvedAnimation::new(controller.clone(), Curves::EaseInOut);
 
 // Value is: curve.transform(controller.value())
@@ -269,7 +282,7 @@ let value = curved.value();
 
 Map animation output through a tween:
 
-```rust
+```rust,ignore
 let tween = FloatTween::new(0.0, 300.0);
 let animated = TweenAnimation::new(controller.clone(), tween);
 
@@ -281,7 +294,7 @@ let pixels = animated.value();  // 0.0 to 300.0
 
 Invert an animation:
 
-```rust
+```rust,ignore
 let reversed = ReverseAnimation::new(controller.clone());
 
 // value = 1.0 - parent.value()
@@ -292,7 +305,7 @@ let reversed = ReverseAnimation::new(controller.clone());
 
 Hot-swap the parent animation:
 
-```rust
+```rust,ignore
 let proxy = ProxyAnimation::new(controller1.clone());
 
 // Later, switch to different animation
@@ -303,7 +316,7 @@ proxy.set_parent(controller2.clone());
 
 Combine two animations with an operator:
 
-```rust
+```rust,ignore
 use flui_animation::AnimationOperator;
 
 // Arithmetic
@@ -324,7 +337,7 @@ let mean = CompoundAnimation::mean(a.clone(), b.clone());
 
 Animation with a fixed value (never changes):
 
-```rust
+```rust,ignore
 let stopped = ConstantAnimation::new(0.5, AnimationStatus::Completed);
 let complete = ConstantAnimation::completed(1.0);
 let dismissed = ConstantAnimation::dismissed(0.0);
@@ -337,7 +350,7 @@ use flui_animation::{ALWAYS_COMPLETE, ALWAYS_DISMISSED};
 
 Switch between animations when they cross:
 
-```rust
+```rust,ignore
 let switch = AnimationSwitch::new(anim1.clone(), Some(anim2.clone()));
 
 // When anim1 and anim2 values cross, switches to anim2
@@ -350,7 +363,7 @@ let switch = AnimationSwitch::new(anim1.clone(), Some(anim2.clone()));
 
 ### AnimationExt
 
-```rust
+```rust,ignore
 use flui_animation::AnimationExt;
 
 let anim: Arc<dyn Animation<f32>> = Arc::new(controller);
@@ -373,7 +386,7 @@ let quot = anim.clone().divide(other);
 
 ### AnimatableExt (for tweens)
 
-```rust
+```rust,ignore
 use flui_animation::TweenAnimatableExt;
 
 let tween = FloatTween::new(0.0, 100.0);
@@ -393,7 +406,7 @@ let reversed = tween.reversed();
 
 ### CurveExt
 
-```rust
+```rust,ignore
 use flui_animation::CurveExt;
 
 // Convert curve to CurveTween
@@ -411,7 +424,7 @@ let combined = Curves::EaseIn.then(Curves::EaseOut);
 
 Defines spring physics parameters:
 
-```rust
+```rust,ignore
 // Explicit parameters
 let spring = SpringDescription::new(
     1.0,    // mass
@@ -439,7 +452,7 @@ spring.bounce();         // Inverse of damping ratio
 
 ### SpringSimulation
 
-```rust
+```rust,ignore
 let sim = SpringSimulation::new(
     spring,
     0.0,    // start position
@@ -456,7 +469,7 @@ sim.is_done(0.1); // Within tolerance?
 
 Deceleration with drag:
 
-```rust
+```rust,ignore
 let sim = FrictionSimulation::new(
     0.05,   // drag coefficient (0 < drag < 1, drag ≠ 1)
     0.0,    // initial position
@@ -471,7 +484,7 @@ sim.time_at_x(x);  // Time to reach position x
 
 Constant acceleration:
 
-```rust
+```rust,ignore
 let sim = GravitySimulation::new(
     9.8,    // acceleration
     0.0,    // initial position
@@ -484,7 +497,7 @@ let sim = GravitySimulation::new(
 
 All simulations use tolerance for `is_done()`:
 
-```rust
+```rust,ignore
 let tolerance = Tolerance {
     distance: 0.01,   // Position tolerance
     velocity: 0.01,   // Velocity tolerance  
@@ -498,7 +511,7 @@ let sim = SpringSimulation::with_tolerance(spring, 0.0, 1.0, 0.0, tolerance);
 
 ## Error Handling
 
-```rust
+```rust,ignore
 pub enum AnimationError {
     InvalidBounds,      // lower_bound >= upper_bound
     InvalidValue,       // Value outside bounds

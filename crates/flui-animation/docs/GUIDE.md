@@ -2,6 +2,10 @@
 
 Practical guide to using `flui_animation`.
 
+Standalone `rust` blocks are compiled as doctests. Blocks marked
+`rust,ignore` are intentionally context-dependent continuations of the setup
+or controller created by an earlier section.
+
 ## Setup
 
 ```rust
@@ -21,6 +25,11 @@ let scheduler = Arc::new(UpdateScheduler::new());
 ### Creating
 
 ```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
 // Simple
 let controller = AnimationController::new(
     Duration::from_millis(300),
@@ -44,11 +53,14 @@ let controller = AnimationController::builder(
 .initial_value(50.0)
 .reverse_duration(Duration::from_millis(500))
 .build()?;
+# controller.dispose();
+# Ok(())
+# }
 ```
 
 ### Driving
 
-```rust
+```rust,ignore
 // Forward (toward upper_bound)
 controller.forward()?;
 
@@ -71,7 +83,7 @@ controller.set_value(0.5);
 
 ### Repeating
 
-```rust
+```rust,ignore
 // Loop: 0→1, 0→1, 0→1, ...
 controller.repeat()?;
 
@@ -84,7 +96,7 @@ controller.stop();
 
 ### Physics
 
-```rust
+```rust,ignore
 use flui_animation::{SpringDescription, SpringSimulation};
 
 // Fling with velocity
@@ -102,7 +114,7 @@ controller.animate_with(sim)?;
 
 ### Reading State
 
-```rust
+```rust,ignore
 let value = controller.value();      // Current value
 let status = controller.status();    // AnimationStatus
 
@@ -113,7 +125,7 @@ controller.is_dismissed();  // At lower_bound
 
 ### Listening
 
-```rust
+```rust,ignore
 // Value changes
 let id = controller.add_listener(|| {
     println!("value: {}", controller.value());
@@ -133,7 +145,7 @@ controller.remove_status_listener(id);
 
 ### Cleanup
 
-```rust
+```rust,ignore
 controller.dispose();
 // All operations now return Err(AlreadyDisposed)
 ```
@@ -144,7 +156,7 @@ controller.dispose();
 
 ### Using Predefined Curves
 
-```rust
+```rust,ignore
 use flui_animation::Curves;
 
 let value = Curves::EaseIn.transform(0.5);
@@ -169,7 +181,7 @@ let value = Curves::ElasticOut.transform(t);
 
 ### Custom Curves
 
-```rust
+```rust,ignore
 use flui_animation::{Cubic, ElasticOutCurve, Interval, Threshold};
 
 // Cubic bezier (CSS-style control points)
@@ -187,7 +199,7 @@ let step = Threshold::new(0.5);
 
 ### Splines
 
-```rust
+```rust,ignore
 use flui_animation::CatmullRomCurve;
 
 let spline = CatmullRomCurve::with_points(vec![
@@ -200,7 +212,7 @@ let spline = CatmullRomCurve::with_points(vec![
 
 ### Modifiers
 
-```rust
+```rust,ignore
 let flipped = curve.flipped();   // 1.0 - curve(t)
 let reversed = curve.reversed(); // curve(1.0 - t)
 ```
@@ -211,7 +223,7 @@ let reversed = curve.reversed(); // curve(1.0 - t)
 
 ### Basic Usage
 
-```rust
+```rust,ignore
 use flui_animation::{FloatTween, Animatable};
 
 let tween = FloatTween::new(0.0, 100.0);
@@ -220,7 +232,7 @@ let value = tween.transform(0.5);  // 50.0
 
 ### Available Tweens
 
-```rust
+```rust,ignore
 use flui_animation::*;
 use flui_types::styling::Color;
 use flui_types::geometry::{Size, Offset, Rect};
@@ -250,7 +262,7 @@ ConstantTween::new(42.0)
 
 ### Tween Sequences
 
-```rust
+```rust,ignore
 use flui_animation::{TweenSequence, TweenSequenceItem, FloatTween};
 
 let sequence = TweenSequence::new(vec![
@@ -267,7 +279,7 @@ let sequence = TweenSequence::new(vec![
 
 ### Chaining and Composition
 
-```rust
+```rust,ignore
 use flui_animation::TweenAnimatableExt;
 
 // Apply curve
@@ -288,7 +300,7 @@ let reversed = tween.reversed();
 
 Apply curve to animation output:
 
-```rust
+```rust,ignore
 use flui_animation::CurvedAnimation;
 
 let curved = CurvedAnimation::new(
@@ -304,7 +316,7 @@ let curved = Arc::new(controller).curved(Curves::EaseInOut);
 
 Map 0–1 to any type:
 
-```rust
+```rust,ignore
 use flui_animation::TweenAnimation;
 
 let animated = TweenAnimation::new(
@@ -317,7 +329,7 @@ let pixels = animated.value();  // 0.0 to 300.0
 
 ### ReverseAnimation
 
-```rust
+```rust,ignore
 use flui_animation::ReverseAnimation;
 
 let reversed = ReverseAnimation::new(controller.clone());
@@ -330,7 +342,7 @@ let reversed = Arc::new(controller).reversed();
 
 ### CompoundAnimation
 
-```rust
+```rust,ignore
 use flui_animation::{CompoundAnimation, AnimationOperator};
 
 let sum = CompoundAnimation::new(a, b, AnimationOperator::Add);
@@ -346,7 +358,7 @@ let diff = Arc::new(a).subtract(Arc::new(b));
 
 Hot-swap parent:
 
-```rust
+```rust,ignore
 use flui_animation::ProxyAnimation;
 
 let proxy = ProxyAnimation::new(controller1.clone());
@@ -358,7 +370,7 @@ proxy.set_parent(controller2.clone());
 
 Fixed value:
 
-```rust
+```rust,ignore
 use flui_animation::{ConstantAnimation, ALWAYS_COMPLETE, ALWAYS_DISMISSED};
 
 let stopped = ConstantAnimation::new(0.5, AnimationStatus::Completed);
@@ -373,7 +385,7 @@ let _ = ALWAYS_DISMISSED.value(); // 0.0
 
 Switch at crossover:
 
-```rust
+```rust,ignore
 use flui_animation::AnimationSwitch;
 
 let switch = AnimationSwitch::new(anim1, Some(anim2));
@@ -386,7 +398,7 @@ let switch = AnimationSwitch::new(anim1, Some(anim2));
 
 ### SpringDescription
 
-```rust
+```rust,ignore
 use flui_animation::SpringDescription;
 
 // Explicit parameters
@@ -412,7 +424,7 @@ let spring = SpringDescription::with_duration_and_bounce(
 
 ### SpringSimulation
 
-```rust
+```rust,ignore
 use flui_animation::SpringSimulation;
 
 let sim = SpringSimulation::new(spring, start, end, velocity);
@@ -424,7 +436,7 @@ sim.is_done(0.1); // within tolerance?
 
 ### FrictionSimulation
 
-```rust
+```rust,ignore
 use flui_animation::FrictionSimulation;
 
 let sim = FrictionSimulation::new(
@@ -439,7 +451,7 @@ sim.time_at_x(x);  // time to reach x
 
 ### GravitySimulation
 
-```rust
+```rust,ignore
 use flui_animation::GravitySimulation;
 
 let sim = GravitySimulation::new(
@@ -454,7 +466,7 @@ let sim = GravitySimulation::new(
 
 ## Error Handling
 
-```rust
+```rust,ignore
 use flui_animation::AnimationError;
 
 match controller.forward() {
@@ -480,7 +492,7 @@ fn animate() -> Result<(), AnimationError> {
 
 ### Always Dispose
 
-```rust
+```rust,ignore
 let controller = AnimationController::new(duration, &scheduler);
 // ... use controller ...
 controller.dispose();  // Required
@@ -488,7 +500,7 @@ controller.dispose();  // Required
 
 ### Use Arc for Sharing
 
-```rust
+```rust,ignore
 let controller = Arc::new(AnimationController::new(...));
 let curved1 = CurvedAnimation::new(controller.clone(), Curves::EaseIn);
 let curved2 = CurvedAnimation::new(controller.clone(), Curves::EaseOut);
@@ -496,7 +508,7 @@ let curved2 = CurvedAnimation::new(controller.clone(), Curves::EaseOut);
 
 ### Prefer Extension Traits
 
-```rust
+```rust,ignore
 // Verbose
 let curved = CurvedAnimation::new(Arc::new(controller), curve);
 
@@ -506,7 +518,7 @@ let curved = Arc::new(controller).curved(curve);
 
 ### Reuse Controllers
 
-```rust
+```rust,ignore
 // Don't create new controller each time
 controller.reset();
 controller.forward()?;
@@ -514,7 +526,7 @@ controller.forward()?;
 
 ### Use Status Listeners (Not Polling)
 
-```rust
+```rust,ignore
 // Bad: check every frame
 if controller.status() == AnimationStatus::Completed { ... }
 
