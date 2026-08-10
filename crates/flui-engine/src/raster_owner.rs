@@ -3528,12 +3528,21 @@ mod tests {
             // The concurrent resize: mints from the mailbox's counter,
             // which is still at g0 (nothing else has minted yet).
             let g1 = handle.resize(2, 2);
-            assert_eq!(g1, g0.next());
 
-            // Release the pump thread: render_scene returns
-            // Err(SurfaceLost), minting one past g1 via the
-            // render-failure path.
+            // Release the pump thread BEFORE asserting anything. An
+            // assertion that panics here would otherwise skip `open()`, and
+            // `thread::scope`'s implicit join would then block forever on a
+            // pump thread parked in `render_scene` -- an unbounded hang, not
+            // a test failure, and there is no `nextest.toml` in this repo to
+            // impose a `terminate-after`. That matters because
+            // mutation-checking is routine discipline on this issue: a
+            // mutant unrelated to this test would hang the suite rather
+            // than redden it. Measured at 59s to SIGTERM before this moved.
+            //
+            // `render_scene` returns `Err(SurfaceLost)` on release, minting
+            // one past `g1` via the render-failure path.
             gate.open();
+            assert_eq!(g1, g0.next());
             let outcome = pump_thread.join().expect("pump thread must not panic");
             (outcome, g1)
         });
@@ -3848,14 +3857,24 @@ mod tests {
     /// pump thread, the FIRST call in the burst would block forever
     /// waiting for a pump that is itself parked behind a gate this test
     /// only opens once the (never-finishing) burst returns — a genuine
-    /// deadlock, not a slow assertion. This revision opens the gate from an
-    /// independent timer thread that answers to nothing the burst does,
-    /// which is what actually turns "a rendezvousing resize" into "the
-    /// elapsed-time assertion below fails" rather than "this test process
-    /// hangs": even a fully rendezvousing `resize` gets unblocked once the
-    /// timer fires, so the burst always eventually completes and its
-    /// elapsed time is always eventually measured — just far past the
-    /// bound, for a blocking implementation.
+    /// deadlock, not a slow assertion.
+    ///
+    /// **This test does not catch a blocking `resize`, and three attempts to
+    /// make it do so have each been wrong in a different way.** The last one
+    /// released the gate from an independent timer, which unblocks the
+    /// *first* call of the burst; call two then blocks forever with no pump
+    /// left to satisfy it, so the hang moves from iteration 1 to iteration 2
+    /// and nothing is measured. A gated thread servicing exactly one request
+    /// cannot bound a burst of N — the released side has to be able to
+    /// satisfy every caller, not just the first.
+    ///
+    /// What this test genuinely pins, and all it is now claimed to pin: with
+    /// the real non-blocking implementation, N coalesced resizes complete
+    /// promptly and a frame published afterwards presents. The oracle for
+    /// "a blocking `resize` would be caught" is
+    /// `resize_stamp_submit_pump_interleaved_across_two_threads_never_stalls_entirely`,
+    /// where the pumping thread runs continuously and a blocked stamper is
+    /// converted into a diagnosed panic by that test's own pump cap.
     ///
     /// Mutant this kills: make `RasterHandle::resize` rendezvous with the
     /// pump side (e.g. block on an ack channel until `pump` has applied the
@@ -4000,6 +4019,14 @@ mod tests {
         }
         stamper.join().expect("stamping thread must not panic");
 
+        // The racing phase is stress, not the oracle. `presented > 0` was
+        // measured over 18 runs at min 1 / median ~8 -- one scheduling
+        // accident on a loaded runner from a false red, and equally unable
+        // to tell healthy from near-frozen. So it stays as a floor, and the
+        // real assertion is the quiesced round below: with no other thread
+        // running, resize -> stamp with the returned generation -> submit ->
+        // pump MUST present. That is deterministic, and it is the property
+        // the no-handshake design actually promises.
         assert!(
             presented > 0,
             "across {ROUNDS} racing resize/stamp/submit/pump rounds on two \
@@ -4007,6 +4034,19 @@ mod tests {
              Presented -- zero would mean the pipeline stalled entirely \
              under the exact race ADR-0045 decision 4's no-handshake \
              design is supposed to stay live under"
+        );
+
+        let generation = handle.resize(640, 480);
+        let epoch = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame(epoch, generation))
+            .expect("a quiesced submit must be accepted");
+        assert!(
+            matches!(owner.pump(), PumpOutcome::Presented { .. }),
+            "after the race quiesces, a frame stamped with the generation \
+             `resize` just returned must present -- if this fails the \
+             generation-forward mint is not live, and no amount of the \
+             racing phase above would have told us apart from bad luck"
         );
     }
 }
