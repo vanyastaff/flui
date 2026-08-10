@@ -188,6 +188,10 @@ impl View for LayoutBuilder {
             LayoutBuilderBehavior::new(),
         )))
     }
+
+    fn should_skip_rebuild(&self, previous: &Self) -> bool {
+        Rc::ptr_eq(&self.builder, &previous.builder)
+    }
 }
 
 /// `LayoutBuilder` uses a custom behavior, so it needs its own
@@ -528,6 +532,22 @@ mod tests {
         BoxConstraints::tight(Size::new(px(w), px(h)))
     }
 
+    #[test]
+    fn layout_builder_skip_predicate_uses_builder_rc_identity_only() {
+        let shared = LayoutBuilder::new(|_ctx, _constraints| FixedBox(10.0, 10.0));
+        let same_builder = shared.clone();
+        let distinct_builder = LayoutBuilder::new(|_ctx, _constraints| FixedBox(10.0, 10.0));
+
+        assert!(
+            same_builder.should_skip_rebuild(&shared),
+            "the same builder Rc is configuration-identical"
+        );
+        assert!(
+            !distinct_builder.should_skip_rebuild(&shared),
+            "a distinct builder Rc must rebuild even when its output is equivalent"
+        );
+    }
+
     // ── 1. first frame ──────────────────────────────────────────────────────
 
     /// The builder receives the REAL incoming constraints on the first frame,
@@ -691,6 +711,33 @@ mod tests {
             log.lock().len(),
             1,
             "the builder must run once; unchanged constraints are not a rebuild trigger"
+        );
+    }
+
+    #[test]
+    fn explicit_dirtiness_reinvokes_same_builder_with_unchanged_constraints() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_builder = Arc::clone(&calls);
+        let view = LayoutBuilder::new(move |_ctx, _constraints| {
+            calls_for_builder.fetch_add(1, Ordering::Relaxed);
+            FixedBox(10.0, 10.0)
+        });
+        let constraints = tight(120.0, 80.0);
+        let mut harness = Harness::mount(&view, constraints);
+        harness.frame();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        let depth = harness.tree.get(harness.root).map_or(0, |node| node.depth);
+        harness.tree.mark_needs_build(harness.root);
+        harness
+            .owner
+            .schedule_build_for(harness.root, depth, crate::RebuildReason::StateChange);
+        harness.frame();
+
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "explicit dirtiness remains authoritative over the configuration skip predicate"
         );
     }
 

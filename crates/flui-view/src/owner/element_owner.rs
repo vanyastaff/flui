@@ -116,6 +116,12 @@ pub struct ElementOwner<'a> {
     /// frame start.
     pub(crate) dirty_elements: &'a mut BinaryHeap<Reverse<DirtyElement>>,
 
+    /// Dirty elements held in root/isolated build-scope buckets when this
+    /// split-borrow was created. Lifecycle operations can add to the main heap
+    /// but do not mutate those private buckets, so this snapshot keeps
+    /// diagnostics authoritative without exposing queue internals.
+    pub(crate) partitioned_dirty_count: usize,
+
     /// Accumulated causes for ids already in `dirty_elements`.
     pub(crate) dirty_reasons: &'a mut HashMap<ElementId, RebuildReasons>,
 
@@ -442,7 +448,7 @@ impl ElementOwner<'_> {
 
     /// Number of dirty elements pending rebuild.
     pub fn dirty_count(&self) -> usize {
-        self.dirty_elements.len()
+        self.dirty_elements.len() + self.partitioned_dirty_count
     }
 
     // ========================================================================
@@ -492,7 +498,6 @@ impl ElementOwner<'_> {
         cell: Arc<LayoutConstraintsCell>,
     ) {
         self.layout_builder_registry
-            .lock()
             .insert(render_id, LayoutBuilderEntry { element, cell });
     }
 
@@ -503,7 +508,7 @@ impl ElementOwner<'_> {
     /// render node anyway, but relying on that is how the sliver adaptor grew
     /// its stale-entry bug.
     pub(crate) fn unregister_layout_builder(&mut self, render_id: RenderId) {
-        self.layout_builder_registry.lock().remove(&render_id);
+        self.layout_builder_registry.remove(render_id);
     }
 }
 
@@ -511,7 +516,7 @@ impl std::fmt::Debug for ElementOwner<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ElementOwner")
             .field("global_keys", &self.global_keys.len())
-            .field("dirty_elements", &self.dirty_elements.len())
+            .field("dirty_count", &self.dirty_count())
             .field("inactive_elements", &self.inactive_elements.len())
             .finish()
     }

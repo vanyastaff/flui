@@ -8,7 +8,7 @@
 //! - `AnimatedSwitcher` → a `StatefulView` composing `layout_builder`'s output
 //!   (default: [`Stack`] → `RenderStack`) over each entry's
 //!   `transition_builder` output (default: [`FadeTransition`] →
-//!   [`Opacity`](crate) → `RenderOpacity`)
+//!   [`RenderAnimatedOpacity`](flui_objects::RenderAnimatedOpacity))
 //!   (`crates/flui-widgets/src/animated/animated_switcher.rs`).
 //!
 //! Key-based substitution: the oracle forces "not `Widget.canUpdate`-compatible"
@@ -141,7 +141,7 @@ fn fades_in_a_new_child() {
     let mut laid = lay_out_animated(root, screen(), vsync.clone());
 
     let opacities = |laid: &common::LaidOut| -> Vec<f32> {
-        laid.find_all_by_render_type("RenderOpacity")
+        laid.find_all_by_render_type("RenderAnimatedOpacity")
             .iter()
             .map(|&id| laid.opacity(id))
             .collect()
@@ -283,7 +283,7 @@ fn back_to_back_swaps() {
 /// Oracle: `animated_switcher_test.dart`, tag `3.44.0`. Two keyless
 /// `ColoredBox` values (same concrete type, same `None` key) are
 /// `can_update`-compatible — the entry updates in place, no second
-/// `FadeTransition`/`RenderOpacity` mounts, and the existing one stays at its
+/// `FadeTransition`/`RenderAnimatedOpacity` mounts, and the existing one stays at its
 /// already-settled opacity.
 #[test]
 fn same_type_keyless_child_does_not_transition() {
@@ -293,8 +293,14 @@ fn same_type_keyless_child_does_not_transition() {
         AnimatedSwitcher::new(RUN).child(ColoredBox::new(Color::rgba(0, 0, 0, 0))),
     );
     let mut laid = lay_out_animated(root, screen(), vsync.clone());
-    assert_eq!(laid.find_all_by_render_type("RenderOpacity").len(), 1);
-    assert_eq!(laid.opacity(laid.find_by_render_type("RenderOpacity")), 1.0);
+    assert_eq!(
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
+        1
+    );
+    assert_eq!(
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
+        1.0
+    );
 
     laid.pump_widget(VsyncScope::new(
         vsync.clone(),
@@ -303,12 +309,12 @@ fn same_type_keyless_child_does_not_transition() {
     laid.pump_for(Duration::from_millis(50));
 
     assert_eq!(
-        laid.find_all_by_render_type("RenderOpacity").len(),
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
         1,
         "a can_update-compatible child update must not start a second transition"
     );
     assert_eq!(
-        laid.opacity(laid.find_by_render_type("RenderOpacity")),
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
         1.0,
         "the untouched entry stays at its already-settled opacity"
     );
@@ -327,7 +333,10 @@ fn handles_no_child() {
     let vsync = Vsync::new();
     let root = VsyncScope::new(vsync.clone(), AnimatedSwitcher::new(RUN));
     let mut laid = lay_out_animated(root, screen(), vsync.clone());
-    assert_eq!(laid.find_all_by_render_type("RenderOpacity").len(), 0);
+    assert_eq!(
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
+        0
+    );
 
     laid.pump_widget(VsyncScope::new(
         vsync.clone(),
@@ -335,7 +344,10 @@ fn handles_no_child() {
     ));
     laid.pump_for(Duration::ZERO); // detection tick: anchors the fresh forward run
     laid.pump_for(Duration::from_millis(50));
-    assert_eq!(laid.opacity(laid.find_by_render_type("RenderOpacity")), 0.5);
+    assert_eq!(
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
+        0.5
+    );
     laid.pump_for(RUN);
 
     laid.pump_widget(VsyncScope::new(
@@ -343,12 +355,12 @@ fn handles_no_child() {
         AnimatedSwitcher::new(RUN).child(ColoredBox::new(Color::rgba(0, 0, 0, 0))),
     ));
     assert_eq!(
-        laid.find_all_by_render_type("RenderOpacity").len(),
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
         1,
         "same-type keyless swap updates in place, does not start a None-shaped transition"
     );
     assert_eq!(
-        laid.opacity(laid.find_by_render_type("RenderOpacity")),
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
         1.0,
         "an in-place update does not restart the transition; opacity stays at its settled value"
     );
@@ -357,7 +369,7 @@ fn handles_no_child() {
     laid.pump_for(Duration::ZERO); // detection tick: anchors the fresh reverse run
     laid.pump_for(Duration::from_millis(50));
     assert_eq!(
-        laid.opacity(laid.find_by_render_type("RenderOpacity")),
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
         0.5,
         "child -> None transitions out exactly like child -> child"
     );
@@ -378,7 +390,7 @@ fn handles_no_child() {
     // wrongly restarted the reverse run, this tick would show ~0.5
     // (a fresh run's detection tick) instead of continuing down to ~0.01.
     laid.pump_for(Duration::from_millis(49));
-    let opacity = laid.opacity(laid.find_by_render_type("RenderOpacity"));
+    let opacity = laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity"));
     assert!(
         (opacity - 0.01).abs() < 1e-3,
         "the no-op reconfigure must not restart the reverse run: total elapsed \
@@ -479,7 +491,7 @@ fn uses_custom_transitions() {
     let mut laid = lay_out_animated(root, screen(), vsync.clone());
     assert_eq!(laid.find_all_by_render_type("RenderTransform").len(), 1);
     assert_eq!(
-        laid.find_all_by_render_type("RenderOpacity").len(),
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
         0,
         "no default fade is built"
     );
@@ -602,7 +614,10 @@ fn isomorphic_rebuild_does_not_animate() {
     );
     let mut laid = lay_out_animated(root, screen(), vsync.clone());
     laid.pump_for(Duration::from_millis(10));
-    assert_eq!(laid.opacity(laid.find_by_render_type("RenderOpacity")), 1.0);
+    assert_eq!(
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
+        1.0
+    );
     assert!(laid.find_text("1").is_some());
     assert!(laid.find_text("2").is_none());
 
@@ -613,11 +628,14 @@ fn isomorphic_rebuild_does_not_animate() {
     laid.pump_for(Duration::from_millis(20));
 
     assert_eq!(
-        laid.find_all_by_render_type("RenderOpacity").len(),
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
         1,
         "same type, no key: updates the one existing entry, no second transition"
     );
-    assert_eq!(laid.opacity(laid.find_by_render_type("RenderOpacity")), 1.0);
+    assert_eq!(
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
+        1.0
+    );
     assert!(laid.find_text("1").is_none());
     assert!(laid.find_text("2").is_some());
 }
@@ -661,7 +679,7 @@ fn transition_builder_change_updates_every_cached_entry() {
     laid.pump_for(Duration::from_millis(5));
 
     assert_eq!(
-        laid.find_all_by_render_type("RenderOpacity").len(),
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
         3,
         "three entries (child_a, child_b outgoing; child_c current) are in flight"
     );
@@ -677,7 +695,7 @@ fn transition_builder_change_updates_every_cached_entry() {
     ));
 
     assert_eq!(
-        laid.find_all_by_render_type("RenderOpacity").len(),
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
         0,
         "every cached transition (current AND both outgoing) was rebuilt under the new builder"
     );
@@ -756,7 +774,7 @@ fn reentering_a_still_dismissing_key_starts_a_fresh_entry_not_a_duplicate() {
 
     laid.pump_for(RUN);
     assert_eq!(
-        laid.find_all_by_render_type("RenderOpacity").len(),
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
         1,
         "the run settles to exactly one entry"
     );
@@ -824,19 +842,22 @@ fn reverse_needs_a_detection_tick_before_progress_is_observable() {
     );
     let mut laid = lay_out_animated(root, screen(), vsync.clone());
     laid.register_controller(controller.clone());
-    assert_eq!(laid.opacity(laid.find_by_render_type("RenderOpacity")), 1.0);
+    assert_eq!(
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
+        1.0
+    );
 
     let _ = controller.reverse();
     laid.pump_for(Duration::from_millis(50));
     assert_eq!(
-        laid.opacity(laid.find_by_render_type("RenderOpacity")),
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
         1.0,
         "the FIRST tick after reverse() only anchors the run; it must not advance the value"
     );
 
     laid.pump_for(Duration::from_millis(50));
     assert_eq!(
-        laid.opacity(laid.find_by_render_type("RenderOpacity")),
+        laid.opacity(laid.find_by_render_type("RenderAnimatedOpacity")),
         0.5,
         "the SECOND tick observes real elapsed time against the anchor set by the first"
     );

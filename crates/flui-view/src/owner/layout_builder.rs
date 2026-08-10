@@ -30,24 +30,30 @@
 //! This is seam infrastructure. `LayoutBuilder` is public,
 //! but only its element registers here; app code never touches the registry.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::LayoutConstraintsCell;
 use flui_rendering::pipeline::PipelineCell;
 use parking_lot::Mutex;
 
-use super::BuildOwner;
+use super::{BuildOwner, build_owner::BuildScopeTarget};
 use crate::tree::ElementTree;
 
 /// Upper bound on layout↔build passes within one frame.
 ///
 /// Steady state is a single pass: `needs_build` is edge-triggered, so a builder
-/// whose constraints did not change never re-dirties its element. A second pass
-/// happens when a builder actually rebuilt; a third when a *nested* builder's
-/// constraints only became known once its ancestor's fresh child was laid out.
-/// Beyond that, a builder's own output is changing the constraints it receives —
-/// a bug in the builder, not in the seam.
+/// whose constraints did not change never re-dirties its element. Every scope
+/// whose constraints were published by the same layout pass drains from its own
+/// bucket in one service step, regardless of nesting depth. Another pass is
+/// needed only when a newly mounted nested builder first publishes constraints.
+/// Reaching the bound means builder output keeps changing incoming constraints.
 ///
 /// Flutter asserts on the same class of bug. We bound the loop so a release
 /// build degrades to a stale frame rather than hanging the UI thread.
@@ -65,14 +71,75 @@ pub(crate) struct LayoutBuilderEntry {
 
 /// Registry of live build-during-layout nodes, keyed by render id.
 ///
-/// `Arc<Mutex<…>>` (not a plain `HashMap`) so [`ElementOwner`] can carry a
-/// `&'a` reference to it — the same pattern as `child_manager_registry` and
-/// `external_inbox`.
+/// The map stays behind a private mutex because element lifecycle paths hold a
+/// split borrow of the registry. An atomic length keeps the empty-registry frame
+/// path lock-free; insertion/removal updates it while holding the map lock.
 ///
 /// [`ElementOwner`]: super::ElementOwner
-pub(crate) type LayoutBuilderRegistry = Arc<Mutex<HashMap<RenderId, LayoutBuilderEntry>>>;
+#[derive(Debug, Default)]
+pub(crate) struct LayoutBuilderRegistry {
+    entries: Mutex<HashMap<RenderId, LayoutBuilderEntry>>,
+    len: AtomicUsize,
+}
+
+impl LayoutBuilderRegistry {
+    pub(crate) fn insert(&self, render_id: RenderId, entry: LayoutBuilderEntry) {
+        let mut entries = self.entries.lock();
+        entries.insert(render_id, entry);
+        self.len.store(entries.len(), Ordering::Release);
+    }
+
+    pub(crate) fn remove(&self, render_id: RenderId) {
+        let mut entries = self.entries.lock();
+        entries.remove(&render_id);
+        self.len.store(entries.len(), Ordering::Release);
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len.load(Ordering::Acquire) == 0
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(crate) fn len(&self) -> usize {
+        self.len.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn with_entries<R>(
+        &self,
+        f: impl FnOnce(&HashMap<RenderId, LayoutBuilderEntry>) -> R,
+    ) -> R {
+        f(&self.entries.lock())
+    }
+
+    pub(crate) fn with_entries_mut<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<RenderId, LayoutBuilderEntry>) -> R,
+    ) -> R {
+        let mut entries = self.entries.lock();
+        let result = f(&mut entries);
+        self.len.store(entries.len(), Ordering::Release);
+        result
+    }
+}
 
 impl BuildOwner {
+    fn unchanged_layout_builder_registrations(
+        &self,
+        scheduled: &HashMap<ElementId, (RenderId, Arc<LayoutConstraintsCell>)>,
+    ) -> HashSet<ElementId> {
+        self.layout_builder_registry.with_entries(|registry| {
+            scheduled
+                .iter()
+                .filter_map(|(element, (render_id, cell))| {
+                    registry.get(render_id).and_then(|entry| {
+                        (entry.element == *element && Arc::ptr_eq(&entry.cell, cell))
+                            .then_some(*element)
+                    })
+                })
+                .collect()
+        })
+    }
+
     /// Rebuild every registered layout builder whose constraints changed, then
     /// mark its render node for re-layout.
     ///
@@ -113,68 +180,158 @@ impl BuildOwner {
              build_scope would panic as soon as a builder mounts a child"
         );
 
+        if self.layout_builder_registry.is_empty() {
+            if !self.has_partitioned_builds() {
+                return false;
+            }
+
+            // The last scope can disappear after the frame's global build has
+            // already quarantined a dirty descendant beneath it. Reclassify
+            // those surviving buckets against an empty live-scope set and
+            // drain them globally now; otherwise no registry entry remains to
+            // request another layout-service pass.
+            let live_scopes = HashSet::new();
+            self.repartition_dirty(tree, &live_scopes);
+            self.activate_build_target(BuildScopeTarget::Global);
+            let drain = self.drain_prepared_build_target(
+                tree,
+                BuildScopeTarget::Global,
+                Some(&live_scopes),
+            );
+            if drain.any_rebuilt {
+                self.finalize_tree(tree);
+            }
+            self.collapse_empty_build_scope_queues();
+            return drain.any_rebuilt;
+        }
+
         // Prune stale entries and collect the ones that need a build, in one
         // pass over the registry. Both the registry lock and the pipeline
         // borrow are released before `build_scope` runs.
-        let mut scheduled: Vec<(RenderId, ElementId, Arc<LayoutConstraintsCell>)> = Vec::new();
+        let mut scheduled: HashMap<ElementId, (RenderId, Arc<LayoutConstraintsCell>)> =
+            HashMap::new();
+        let mut live_entries: HashMap<ElementId, (RenderId, Arc<LayoutConstraintsCell>)> =
+            HashMap::new();
+        let mut live_scopes = HashSet::new();
         pipeline.with(|pipeline_owner| {
-            let mut registry = self.layout_builder_registry.lock();
-            registry.retain(|render_id, entry| {
-                let element_alive = tree.contains(entry.element);
-                let render_alive = pipeline_owner.render_tree().get(*render_id).is_some();
-                if !element_alive || !render_alive {
-                    tracing::debug!(
-                        ?render_id,
-                        element = ?entry.element,
-                        element_alive,
-                        render_alive,
-                        "service_layout_builders: pruning stale layout-builder entry"
-                    );
-                    return false;
-                }
-                if entry.cell.needs_build() {
-                    scheduled.push((*render_id, entry.element, Arc::clone(&entry.cell)));
-                }
-                true
+            self.layout_builder_registry.with_entries_mut(|registry| {
+                registry.retain(|render_id, entry| {
+                    let element_alive = tree.contains(entry.element);
+                    let render_alive = pipeline_owner.render_tree().get(*render_id).is_some();
+                    if !element_alive || !render_alive {
+                        tracing::debug!(
+                            ?render_id,
+                            element = ?entry.element,
+                            element_alive,
+                            render_alive,
+                            "service_layout_builders: pruning stale layout-builder entry"
+                        );
+                        return false;
+                    }
+                    live_scopes.insert(entry.element);
+                    live_entries.insert(entry.element, (*render_id, Arc::clone(&entry.cell)));
+                    if entry.cell.needs_build() {
+                        scheduled.insert(entry.element, (*render_id, Arc::clone(&entry.cell)));
+                    }
+                    true
+                });
             });
         });
 
-        if scheduled.is_empty() {
-            return false;
-        }
-
-        tracing::debug!(
-            count = scheduled.len(),
-            "service_layout_builders: rebuilding layout builders with fresh constraints"
-        );
-
-        // 1. Schedule each dirty builder's element.
-        for (_, element, _) in &scheduled {
+        for element in scheduled.keys() {
             let depth = tree.get(*element).map_or(0, |node| node.depth);
             tree.mark_needs_build(*element);
             self.schedule_build_for(*element, depth, super::RebuildReason::LayoutChange);
         }
 
-        // 2. Run the builders — with NO pipeline lock held, so a builder that
-        //    mounts a child can insert its render objects. `build_scope` asserts
-        //    `!self.building`, the standing proof we are not inside a layout walk.
-        self.build_scope(tree);
+        if scheduled.is_empty()
+            && !self.has_dirty_elements()
+            && self.external_inbox.lock().is_empty()
+        {
+            // Keep the scoped queues genuinely lazy on clean frames. In
+            // particular, do not allocate scratch/bucket state merely because
+            // a live layout builder is registered.
+            return false;
+        }
 
-        // 3. Commit each cell (published -> last_built, clearing `needs_build`)
-        //    and dirty the render node so the next pass lays out the new child.
-        //    Commit happens *after* the build, so a builder that observed
-        //    constraints C is recorded as having built against C.
+        // One authoritative routing pass per service call. Work quarantined by
+        // earlier global/scoped drains is reclassified against the current tree,
+        // so scope removal and GlobalKey reparenting cannot strand it.
+        self.repartition_dirty(tree, &live_scopes);
+
+        // Global work is shallower than every isolated scope and must drain
+        // first. Repartitioning can create this bucket when a queued element
+        // was reparented out of a scope or its scope was unregistered between
+        // the frame's global build and this layout-service boundary.
+        let mut any_rebuilt = false;
+        if self.has_pending_global_builds() {
+            self.activate_build_target(BuildScopeTarget::Global);
+            any_rebuilt |= self
+                .drain_prepared_build_target(tree, BuildScopeTarget::Global, Some(&live_scopes))
+                .any_rebuilt;
+        }
+
+        let mut ready_scopes: Vec<ElementId> = self
+            .ready_layout_scopes()
+            .into_iter()
+            .filter(|scope| {
+                live_entries
+                    .get(scope)
+                    .is_some_and(|(_, cell)| cell.constraints().is_some())
+            })
+            .collect();
+        ready_scopes.extend(
+            scheduled
+                .keys()
+                .copied()
+                .filter(|scope| !self.has_pending_layout_scope(*scope)),
+        );
+        if ready_scopes.is_empty() {
+            if any_rebuilt {
+                self.finalize_tree(tree);
+            }
+            self.collapse_empty_build_scope_queues();
+            return any_rebuilt;
+        }
+        ready_scopes.sort_by_key(|scope| tree.get(*scope).map_or(0, |node| node.depth));
+
+        tracing::debug!(
+            fresh_constraints = scheduled.len(),
+            ready_scopes = ready_scopes.len(),
+            "service_layout_builders: draining isolated layout-builder scopes"
+        );
+
+        let mut rebuilt_scopes = HashSet::new();
+        for scope in &ready_scopes {
+            self.activate_build_target(BuildScopeTarget::LayoutBuilder(*scope));
+            let drain = self.drain_prepared_build_target(
+                tree,
+                BuildScopeTarget::LayoutBuilder(*scope),
+                Some(&live_scopes),
+            );
+            any_rebuilt |= drain.any_rebuilt;
+            if drain.target_rebuilt {
+                rebuilt_scopes.insert(*scope);
+            }
+        }
+
+        let unchanged_registrations = self.unchanged_layout_builder_registrations(&scheduled);
         pipeline.with_mut(|pipeline_owner| {
-            for (render_id, _, cell) in &scheduled {
-                cell.commit();
-                pipeline_owner.mark_needs_layout(*render_id);
+            for (element, (render_id, cell)) in &scheduled {
+                if rebuilt_scopes.contains(element)
+                    && unchanged_registrations.contains(element)
+                    && tree.contains(*element)
+                    && pipeline_owner.render_tree().get(*render_id).is_some()
+                {
+                    cell.commit();
+                    pipeline_owner.mark_needs_layout(*render_id);
+                }
             }
         });
 
-        // 4. Unmount children the reconcile replaced.
         self.finalize_tree(tree);
-
-        true
+        self.collapse_empty_build_scope_queues();
+        any_rebuilt
     }
 
     /// Run one frame, settling every build-during-layout node before paint.
@@ -280,7 +437,7 @@ impl BuildOwner {
         element: ElementId,
     ) -> Arc<LayoutConstraintsCell> {
         let cell = Arc::new(LayoutConstraintsCell::new());
-        self.layout_builder_registry.lock().insert(
+        self.layout_builder_registry.insert(
             render_id,
             LayoutBuilderEntry {
                 element,
@@ -293,7 +450,7 @@ impl BuildOwner {
     /// Number of live entries in the layout-builder registry.
     #[must_use]
     pub fn layout_builder_count(&self) -> usize {
-        self.layout_builder_registry.lock().len()
+        self.layout_builder_registry.len()
     }
 }
 
@@ -326,7 +483,7 @@ mod tests {
     use flui_rendering::protocol::BoxProtocol;
     use flui_types::geometry::px;
 
-    use crate::View;
+    use crate::{RebuildReason, View};
 
     /// A render-family leaf view, mirroring `build_owner.rs`'s `TestView`.
     ///
@@ -393,6 +550,21 @@ mod tests {
             pipeline_owner.insert::<BoxProtocol>(Box::new(RenderSizedBox::shrink()))
         });
         (render_id, element)
+    }
+
+    fn insert_child(
+        owner: &mut BuildOwner,
+        tree: &mut ElementTree,
+        parent: ElementId,
+        slot: usize,
+    ) -> ElementId {
+        tree.insert(&TestView, parent, slot, &mut owner.element_owner_mut())
+    }
+
+    fn insert_render_node(pipeline: &PipelineCell) -> RenderId {
+        pipeline.with_mut(|pipeline_owner| {
+            pipeline_owner.insert::<BoxProtocol>(Box::new(RenderSizedBox::shrink()))
+        })
     }
 
     // ── the bound ───────────────────────────────────────────────────────────
@@ -485,7 +657,200 @@ mod tests {
         assert_eq!(owner.layout_builder_count(), 1);
     }
 
+    #[test]
+    fn scheduled_cell_is_not_authoritative_after_registration_replacement() {
+        let mut owner = BuildOwner::new();
+        let render_id = RenderId::new(7_001);
+        let element = ElementId::new(7_001);
+        let original = owner.register_layout_builder_for_test(render_id, element);
+        let scheduled = HashMap::from([(element, (render_id, Arc::clone(&original)))]);
+        assert!(
+            owner
+                .unchanged_layout_builder_registrations(&scheduled)
+                .contains(&element)
+        );
+
+        owner
+            .element_owner_mut()
+            .unregister_layout_builder(render_id);
+        let replacement = owner.register_layout_builder_for_test(render_id, element);
+        assert!(!Arc::ptr_eq(&original, &replacement));
+        assert!(
+            owner
+                .unchanged_layout_builder_registrations(&scheduled)
+                .is_empty(),
+            "a replaced registration must not commit the stale scheduled cell"
+        );
+    }
+
     // ── service ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn scoped_queue_state_is_lazy_and_collapses_after_last_scope_removal() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let pipeline = shared_pipeline();
+        assert!(owner.build_scope_queues.is_none());
+
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        owner.build_scope(&mut tree);
+        assert!(
+            owner.build_scope_queues.is_none(),
+            "the no-scope build path must not allocate queue state"
+        );
+        tree.mark_needs_build(root);
+        owner.schedule_build_for(root, 0, RebuildReason::StateChange);
+        BuildOwner::reset_layout_scope_classifications();
+        owner.build_scope(&mut tree);
+        assert_eq!(BuildOwner::layout_scope_classifications(), 0);
+        assert!(owner.build_scope_queues.is_none());
+
+        let scope = insert_child(&mut owner, &mut tree, root, 0);
+        owner.build_scope(&mut tree);
+        let descendant = insert_child(&mut owner, &mut tree, scope, 0);
+        owner.build_scope(&mut tree);
+        let render_id = insert_render_node(&pipeline);
+        let cell = owner.register_layout_builder_for_test(render_id, scope);
+        cell.publish(constraints(100.0));
+        cell.commit();
+        owner.build_scope(&mut tree);
+        assert!(owner.build_scope_queues.is_none());
+        assert!(!owner.service_layout_builders(&mut tree, &pipeline));
+        assert!(
+            owner.build_scope_queues.is_none(),
+            "a clean live scope must not allocate queue state"
+        );
+        tree.mark_needs_build(descendant);
+        owner.schedule_build_for(descendant, 2, RebuildReason::StateChange);
+        owner.build_scope(&mut tree);
+        assert!(owner.has_dirty_elements());
+        assert_eq!(owner.dirty_count(), 1, "bucketed work remains observable");
+        assert_eq!(
+            owner.element_owner_mut().dirty_count(),
+            1,
+            "the lifecycle split-borrow must report bucketed work too"
+        );
+        assert!(
+            format!("{owner:?}").contains("dirty_count: 1"),
+            "BuildOwner diagnostics must report the authoritative total"
+        );
+
+        owner
+            .element_owner_mut()
+            .unregister_layout_builder(render_id);
+        owner.build_scope(&mut tree);
+        assert!(!owner.has_dirty_elements());
+        assert!(
+            owner.build_scope_queues.is_none(),
+            "the last unregister drains to global and releases lazy state"
+        );
+    }
+
+    #[test]
+    fn scope_without_published_constraints_remains_quarantined() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let pipeline = shared_pipeline();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        owner.build_scope(&mut tree);
+        let scope = insert_child(&mut owner, &mut tree, root, 0);
+        owner.build_scope(&mut tree);
+        let descendant = insert_child(&mut owner, &mut tree, scope, 0);
+        owner.build_scope(&mut tree);
+        let render_id = insert_render_node(&pipeline);
+        let cell = owner.register_layout_builder_for_test(render_id, scope);
+
+        tree.mark_needs_build(descendant);
+        owner.schedule_build_for(descendant, 2, RebuildReason::StateChange);
+        owner.build_scope(&mut tree);
+        assert!(!owner.service_layout_builders(&mut tree, &pipeline));
+        assert!(owner.pending_rebuild_reasons(descendant).is_some());
+
+        cell.publish(constraints(100.0));
+        cell.commit();
+        assert!(owner.service_layout_builders(&mut tree, &pipeline));
+        assert!(owner.pending_rebuild_reasons(descendant).is_none());
+    }
+
+    fn sibling_scope_classifications(scope_count: usize) -> usize {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let pipeline = shared_pipeline();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        owner.build_scope(&mut tree);
+
+        for slot in 0..scope_count {
+            let scope = insert_child(&mut owner, &mut tree, root, slot);
+            owner.build_scope(&mut tree);
+            let descendant = insert_child(&mut owner, &mut tree, scope, 0);
+            owner.build_scope(&mut tree);
+            let render_id = insert_render_node(&pipeline);
+            let cell = owner.register_layout_builder_for_test(render_id, scope);
+            cell.publish(constraints(100.0));
+            cell.commit();
+            tree.mark_needs_build(descendant);
+            owner.schedule_build_for(descendant, 2, RebuildReason::StateChange);
+        }
+
+        owner.build_scope(&mut tree);
+        BuildOwner::reset_layout_scope_classifications();
+        assert!(owner.service_layout_builders(&mut tree, &pipeline));
+        BuildOwner::layout_scope_classifications()
+    }
+
+    #[test]
+    fn many_sibling_scopes_classify_each_dirty_element_a_constant_number_of_times() {
+        for scope_count in [32, 256] {
+            let classifications = sibling_scope_classifications(scope_count);
+            assert_eq!(
+                classifications,
+                scope_count * 2,
+                "each dirty element is classified once at the service boundary \
+                 and once when popped for live-move revalidation"
+            );
+        }
+    }
+
+    #[test]
+    fn more_than_ten_nested_stable_scopes_are_serviced_in_one_fixpoint_step() {
+        const SCOPE_COUNT: usize = MAX_LAYOUT_BUILD_PASSES + 3;
+
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let pipeline = shared_pipeline();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        owner.build_scope(&mut tree);
+        let mut parent = root;
+        let mut descendants = Vec::with_capacity(SCOPE_COUNT);
+
+        for _ in 0..SCOPE_COUNT {
+            let scope = insert_child(&mut owner, &mut tree, parent, 0);
+            owner.build_scope(&mut tree);
+            let descendant = insert_child(&mut owner, &mut tree, scope, 1);
+            owner.build_scope(&mut tree);
+            let render_id = insert_render_node(&pipeline);
+            let cell = owner.register_layout_builder_for_test(render_id, scope);
+            cell.publish(constraints(100.0));
+            cell.commit();
+            descendants.push(descendant);
+            parent = scope;
+        }
+
+        for descendant in &descendants {
+            tree.mark_needs_build(*descendant);
+            let depth = tree.get(*descendant).expect("live descendant").depth;
+            owner.schedule_build_for(*descendant, depth, RebuildReason::StateChange);
+        }
+        owner.build_scope(&mut tree);
+
+        assert!(owner.service_layout_builders(&mut tree, &pipeline));
+        for descendant in descendants {
+            assert!(
+                owner.pending_rebuild_reasons(descendant).is_none(),
+                "all initially pending nested buckets must drain in one service step"
+            );
+        }
+    }
 
     #[test]
     fn layout_builder_service_is_a_noop_with_an_empty_registry() {
@@ -497,6 +862,7 @@ mod tests {
             !owner.service_layout_builders(&mut tree, &pipeline),
             "no builders ⇒ no further layout pass"
         );
+        assert!(owner.build_scope_queues.is_none());
     }
 
     /// A registered builder whose element and render node never existed is
@@ -611,6 +977,27 @@ mod tests {
             !owner.service_layout_builders(&mut tree, &pipeline),
             "an unchanged builder must not re-dirty itself — this is what makes \
              the fixpoint converge"
+        );
+    }
+
+    #[test]
+    fn scheduled_cell_is_not_committed_when_scope_root_cannot_rebuild() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let pipeline = shared_pipeline();
+        let (render_id, element) = live_entry(&mut owner, &mut tree, &pipeline);
+        owner.build_scope(&mut tree);
+        let cell = owner.register_layout_builder_for_test(render_id, element);
+        tree.get_mut(element)
+            .expect("live element")
+            .element_mut()
+            .deactivate();
+        cell.publish(constraints(44.0));
+
+        assert!(!owner.service_layout_builders(&mut tree, &pipeline));
+        assert!(
+            cell.needs_build(),
+            "commit requires a completed rebuild of the exact scope root"
         );
     }
 

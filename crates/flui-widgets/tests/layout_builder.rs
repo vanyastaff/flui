@@ -148,8 +148,8 @@ fn layout_builder_constraint_change_rebuilds_in_the_same_frame() {
     // inputs. Pinned here so a change to that behavior is deliberate.
     assert_eq!(
         seen.len(),
-        3,
-        "1 mount + 1 stale-constraints rebuild + 1 fresh (see ADR-0017 divergence)"
+        2,
+        "one mount build plus one rebuild with fresh constraints"
     );
 
     let builder_node = laid.only_child(laid.current_root());
