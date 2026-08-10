@@ -28,14 +28,19 @@ use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{
     AsyncDriver, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,
+    input_to_present_histogram, produce_to_present_histogram,
 };
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding};
-use web_time::Instant;
+use web_time::{Duration, Instant};
 
 use super::semantics_host::SemanticsHost;
 use crate::bindings::RenderingFlutterBinding;
+
+fn format_millis(duration: Duration) -> String {
+    format!("{:.1}ms", duration.as_secs_f64() * 1_000.0)
+}
 
 /// Realm-supplied capabilities threaded into a presentation at assembly
 /// time (ADR-0043 §1): [`Self::global_key_scope`] is installed FIRST — the
@@ -668,15 +673,6 @@ impl PresentationState {
     /// never incremented by a `FrameClock` deferral (hidden/backpressure):
     /// see `FrameClock::produces_deferred`'s own doc for why the two stay
     /// structurally separate counter families.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- forwarded only by \
-                      UiRealm::frames_dropped, exercised by \
-                      frame_clock_segment_gate's frames-dropped-vs-deferred pin"
-        )
-    )]
     pub(crate) fn frames_dropped(&self) -> u64 {
         self.frames_dropped.get()
     }
@@ -813,6 +809,22 @@ impl PresentationState {
         let mut overlay =
             PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
         overlay.update_stats(stats);
+
+        let snapshots = self.clock.frames_since(None);
+        let present_p99 = produce_to_present_histogram(&snapshots)
+            .p99()
+            .map_or_else(|| "n/a".to_owned(), format_millis);
+        let input_p99 = input_to_present_histogram(&snapshots)
+            .p99()
+            .map_or_else(|| "n/a".to_owned(), format_millis);
+        let input_truncated = snapshots
+            .iter()
+            .any(|snapshot| snapshot.input_epochs.overflowed());
+        overlay.set_diagnostic_line(Some(format!(
+            "present_p99={present_p99} input_p99={input_p99} deferred={} dropped={} input_truncated={input_truncated}",
+            self.clock.produces_deferred(),
+            self.frames_dropped(),
+        )));
 
         let overlay_id = layer_tree.insert(Layer::PerformanceOverlay(Box::new(overlay)));
         // `insert` does not link the node — parent and child sides are set
@@ -1389,6 +1401,58 @@ mod tests {
                 stats.total_frames(),
                 1,
                 "re-enabling starts a fresh window rather than resuming the old count"
+            );
+        }
+
+        #[test]
+        fn overlay_line_surfaces_tail_quality_and_keeps_deferrals_distinct_from_drops() {
+            let presentation = presentation();
+            let clock = presentation.clock();
+            let now = Instant::now();
+
+            clock.set_hidden(true);
+            clock.mark_demand(flui_scheduler::DemandKind::Host);
+            assert!(matches!(
+                clock.poll(now),
+                flui_scheduler::PollDecision::Skip(flui_scheduler::SkipReason::Hidden)
+            ));
+            clock.set_hidden(false);
+            assert!(matches!(
+                clock.poll(now),
+                flui_scheduler::PollDecision::Produce
+            ));
+
+            for _ in 0..=flui_scheduler::MAX_COALESCED_INPUT_EPOCHS {
+                clock.stamp_input_epoch(now);
+            }
+            clock.record_frame(
+                presentation.id(),
+                now,
+                now,
+                now,
+                now + Duration::from_millis(8),
+                flui_scheduler::PresentOutcome::Presented,
+            );
+            presentation.record_frame_dropped();
+            presentation.set_performance_overlay(true);
+
+            let (mut tree, _) = tree_with_root();
+            presentation.attach_performance_overlay(&mut tree);
+            let overlay_id = *tree_root_children(&tree).last().expect("overlay present");
+            let line = tree
+                .get_layer(overlay_id)
+                .expect("overlay layer")
+                .as_performance_overlay()
+                .expect("performance overlay variant")
+                .diagnostic_line()
+                .expect("runtime telemetry line");
+
+            assert!(line.contains("present_p99=8.0ms"), "line was {line:?}");
+            assert!(line.contains("deferred=1"), "line was {line:?}");
+            assert!(line.contains("dropped=1"), "line was {line:?}");
+            assert!(
+                line.contains("input_truncated=true"),
+                "an overflow-biased input tail must be labelled: {line:?}"
             );
         }
 

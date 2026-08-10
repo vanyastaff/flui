@@ -8,7 +8,7 @@
 //!
 //! Run: `cargo run -p flui --example screenshot -- <demo> [width] [height] [out.png]`
 //! where `<demo>` is `material` | `cupertino` | `vertical-slice` | `gallery` |
-//! `animated-box` | `colored-box` | `text`.
+//! `animated-box` | `colored-box` | `text` | `telemetry-overlay`.
 //! Defaults: `material`, 900 x 760, `<demo>.png`.
 //!
 //! Captures one frame at mount time (t=0): animated examples show their initial
@@ -43,7 +43,7 @@ mod text_app;
 mod widgets_gallery;
 
 use flui_engine::wgpu::HeadlessRenderer;
-use flui_layer::LayerTree;
+use flui_layer::{Layer, LayerTree, PerformanceOverlayLayer};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
@@ -71,10 +71,11 @@ fn main() {
         "animated-box" => render_view_to_layers(animated_box_app::App::new(), width, height),
         "colored-box" => render_view_to_layers(colored_box_app::App, width, height),
         "text" => render_view_to_layers(text_app::App, width, height),
+        "telemetry-overlay" => telemetry_overlay_layers(),
         other => {
             eprintln!(
                 "unknown demo {other:?}; expected: material | cupertino | vertical-slice | \
-                 gallery | animated-box | colored-box | text"
+                 gallery | animated-box | colored-box | text | telemetry-overlay"
             );
             std::process::exit(2);
         }
@@ -95,6 +96,18 @@ fn main() {
     .expect("encode the captured pixels as PNG");
 
     println!("wrote {out_path} ({demo}, {width}x{height})");
+}
+
+fn telemetry_overlay_layers() -> LayerTree {
+    let mut overlay = PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
+    overlay.set_diagnostic_line(Some(
+        "present_p99=16ms input_p99=24ms deferred=3 dropped=1 input_truncated=false".to_string(),
+    ));
+
+    let mut tree = LayerTree::new();
+    let root = tree.insert(Layer::PerformanceOverlay(Box::new(overlay)));
+    tree.set_root(Some(root));
+    tree
 }
 
 /// Mount `root_view` headlessly at `width`×`height` and drive one frame,

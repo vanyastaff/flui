@@ -44,8 +44,8 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_scheduler::{
-    AppLifecycleState, DemandKind, Instant, LocalPostFrameLane, PresentOutcome, SchedulerPhase,
-    UpdateScheduler,
+    AppLifecycleState, DemandKind, FrameSnapshot, Instant, LocalPostFrameLane, PresentOutcome,
+    SchedulerPhase, UpdateScheduler,
 };
 use flui_semantics::SemanticsActionRequest;
 use flui_types::{HapticFeedback, Size, geometry::px};
@@ -2677,29 +2677,65 @@ impl UiRealm {
         epochs: EpochDisposition,
     ) {
         if let Some((segment_start, segment_end)) = presentation.take_last_segment_span() {
-            match epochs {
-                EpochDisposition::Drain => {
-                    presentation.clock().record_frame(
-                        presentation.id(),
-                        segment_start,
-                        segment_start,
-                        segment_end,
-                        submit_at,
-                        present_outcome,
-                    );
-                }
-                EpochDisposition::Retain => {
-                    presentation.clock().record_frame_retaining_epochs(
-                        presentation.id(),
-                        segment_start,
-                        segment_start,
-                        segment_end,
-                        submit_at,
-                        present_outcome,
-                    );
-                }
-            }
+            let snapshot = match epochs {
+                EpochDisposition::Drain => presentation.clock().record_frame(
+                    presentation.id(),
+                    segment_start,
+                    segment_start,
+                    segment_end,
+                    submit_at,
+                    present_outcome,
+                ),
+                EpochDisposition::Retain => presentation.clock().record_frame_retaining_epochs(
+                    presentation.id(),
+                    segment_start,
+                    segment_start,
+                    segment_end,
+                    submit_at,
+                    present_outcome,
+                ),
+            };
+            Self::emit_frame_telemetry(presentation, &snapshot);
         }
+    }
+
+    fn emit_frame_telemetry(presentation: &PresentationState, snapshot: &FrameSnapshot) {
+        if !tracing::enabled!(target: "flui.frame", tracing::Level::TRACE) {
+            return;
+        }
+
+        let outcome = match snapshot.present_outcome {
+            PresentOutcome::Presented => "presented",
+            PresentOutcome::Errored => "errored",
+            _ => "unknown",
+        };
+        let input_latency_max_us = snapshot
+            .latencies()
+            .map(|(_, latency)| Self::duration_micros_saturated(latency))
+            .max()
+            .unwrap_or(0);
+
+        tracing::trace!(
+            target: "flui.frame",
+            event = "frame_telemetry",
+            presentation = %snapshot.presentation,
+            frame_id = %snapshot.frame_id,
+            present_outcome = outcome,
+            segment_us = Self::duration_micros_saturated(snapshot.segment_span()),
+            produce_to_present_us = Self::duration_micros_saturated(
+                snapshot.submit_at.saturating_duration_since(snapshot.clock_timestamp)
+            ),
+            input_count = snapshot.input_epochs.len(),
+            input_latency_max_us,
+            input_epochs_overflowed = snapshot.input_epochs.overflowed(),
+            produces_deferred = presentation.clock().produces_deferred(),
+            frames_dropped = presentation.frames_dropped(),
+            "frame telemetry"
+        );
+    }
+
+    fn duration_micros_saturated(duration: std::time::Duration) -> u64 {
+        u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
     }
 
     // ========================================================================
@@ -7564,7 +7600,55 @@ mod tests {
     /// behavior unedited) — these are the NEW clock-level guarantees this
     /// slice adds.
     mod frame_clock_segment_gate {
+        use std::sync::Mutex as StdMutex;
+
+        use tracing::field::{Field, Visit};
+        use tracing::{Event, Subscriber};
+        use tracing_subscriber::layer::{Context, SubscriberExt as _};
+        use tracing_subscriber::registry::LookupSpan;
+        use tracing_subscriber::{Layer as TracingLayer, Registry};
+
         use super::*;
+
+        #[derive(Clone, Default)]
+        struct FrameEventCapture(Arc<StdMutex<Vec<(String, String)>>>);
+
+        struct FrameFieldVisitor<'a>(&'a mut Vec<(String, String)>);
+
+        impl Visit for FrameFieldVisitor<'_> {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.0.push((field.name().to_owned(), format!("{value:?}")));
+            }
+
+            fn record_str(&mut self, field: &Field, value: &str) {
+                self.0.push((field.name().to_owned(), value.to_owned()));
+            }
+
+            fn record_u64(&mut self, field: &Field, value: u64) {
+                self.0.push((field.name().to_owned(), value.to_string()));
+            }
+
+            fn record_bool(&mut self, field: &Field, value: bool) {
+                self.0.push((field.name().to_owned(), value.to_string()));
+            }
+        }
+
+        impl<S> TracingLayer<S> for FrameEventCapture
+        where
+            S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+        {
+            fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+                if event.metadata().target() != "flui.frame" {
+                    return;
+                }
+                let mut fields = Vec::new();
+                event.record(&mut FrameFieldVisitor(&mut fields));
+                self.0
+                    .lock()
+                    .expect("BUG: frame capture is locked only by this test")
+                    .extend(fields);
+            }
+        }
 
         fn table_constraints() -> BoxConstraints {
             BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
@@ -8890,6 +8974,38 @@ mod tests {
                 "the real submit failure must not also inflate the deferral counter -- \
                  the two stay structurally separate"
             );
+        }
+
+        #[test]
+        fn successful_submit_emits_structured_frame_telemetry_with_tail_quality() {
+            let realm = mount_root_here();
+            let capture = FrameEventCapture::default();
+            let subscriber = Registry::default().with(capture.clone());
+            let mut backend = AlwaysPresentBackend;
+
+            tracing::subscriber::with_default(subscriber, || {
+                assert!(realm.render_frame_entered(&mut backend));
+            });
+
+            let fields = capture
+                .0
+                .lock()
+                .expect("BUG: frame capture is locked only by this test")
+                .clone();
+            let field = |name: &str| {
+                fields
+                    .iter()
+                    .find_map(|(field, value)| (field == name).then_some(value.as_str()))
+            };
+
+            assert_eq!(field("event"), Some("frame_telemetry"));
+            assert_eq!(field("present_outcome"), Some("presented"));
+            assert_eq!(field("input_epochs_overflowed"), Some("false"));
+            assert_eq!(field("produces_deferred"), Some("0"));
+            assert_eq!(field("frames_dropped"), Some("0"));
+            assert!(field("presentation").is_some());
+            assert!(field("frame_id").is_some());
+            assert!(field("produce_to_present_us").is_some());
         }
 
         /// Multi-presentation attribution, red-exploit for the bug where

@@ -393,11 +393,12 @@ impl CommandRenderer for DebugBackend {
         fps: f32,
         frame_time_ms: f32,
         total_frames: u64,
+        diagnostic_line: Option<&str>,
     ) {
         self.log_command(
             "add_performance_overlay",
             &format!(
-                "options_mask={options_mask}, bounds={bounds:?}, fps={fps:.1}, frame_time={frame_time_ms:.2}ms, total_frames={total_frames}"
+                "options_mask={options_mask}, bounds={bounds:?}, fps={fps:.1}, frame_time={frame_time_ms:.2}ms, total_frames={total_frames}, diagnostic_line={diagnostic_line:?}"
             ),
         );
     }

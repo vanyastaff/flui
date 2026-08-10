@@ -442,6 +442,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Performan
             self.fps(),
             self.frame_time_ms(),
             self.total_frames(),
+            self.diagnostic_line(),
         );
     }
 
@@ -475,11 +476,15 @@ mod tests {
 
     struct MockRenderer {
         calls: Vec<String>,
+        diagnostic_lines: Vec<Option<String>>,
     }
 
     impl MockRenderer {
         fn new() -> Self {
-            Self { calls: Vec::new() }
+            Self {
+                calls: Vec::new(),
+                diagnostic_lines: Vec::new(),
+            }
         }
     }
 
@@ -732,8 +737,11 @@ mod tests {
             _fps: f32,
             _frame_time_ms: f32,
             _total_frames: u64,
+            diagnostic_line: Option<&str>,
         ) {
             self.calls.push("add_performance_overlay".to_string());
+            self.diagnostic_lines
+                .push(diagnostic_line.map(str::to_owned));
         }
     }
 
@@ -781,6 +789,26 @@ mod tests {
         fn pop_image_filter(&mut self) {
             self.calls.push("pop_image_filter".to_string());
         }
+    }
+
+    // ========================================================================
+    // PerformanceOverlayLayer tests
+    // ========================================================================
+
+    #[test]
+    fn performance_overlay_forwards_the_runtime_diagnostic_line() {
+        let mut renderer = MockRenderer::new();
+        let mut layer =
+            PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
+        layer.set_diagnostic_line(Some("deferred=2 dropped=1".to_owned()));
+
+        layer.render(&mut renderer);
+
+        assert_eq!(renderer.calls, vec!["add_performance_overlay"]);
+        assert_eq!(
+            renderer.diagnostic_lines,
+            vec![Some("deferred=2 dropped=1".to_owned())]
+        );
     }
 
     // ========================================================================

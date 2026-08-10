@@ -1864,13 +1864,14 @@ ring on `FrameClock`. `LatencyHistogram::record` is an index-and-increment \
 into a fixed `[u32; N]` array (the type is `Copy`, so it cannot own a heap \
 allocation in safe Rust); percentiles are therefore bucket-boundary \
 approximations, not exact values — stated in the module's own doc, not \
-implied. Two things this contract does NOT claim: a structured `tracing` \
-emission point and an on-screen overlay line are not wired — computing the \
-metric and exposing it through those two channels are different scopes of \
-work, and only the former is done here, left as a named follow-up with no \
-single owner issue yet. This mechanism also has zero non-test callers at \
-this HEAD, the same honest gap `exportable-frame-telemetry-with-input-\
-attribution` already states for the snapshot ring it is built over.\
+implied. Shipping consumers now expose the measurements through two distinct \
+contracts: every recorded frame emits a structured `flui.frame` tracing event \
+with raw semantic fields, while the opt-in on-screen overlay reduces pulled \
+snapshots into a presentation-ready p99/counter line. The overlay explicitly \
+reports `input_truncated` when a frame overflowed its bounded input-attribution \
+buffer, so a biased input p99 cannot masquerade as complete data. Disabled \
+overlays do not pull or allocate snapshot vectors; the tracing event remains a \
+low-level observation point for external collectors.\
 """
 state = "implemented"
 domain = "presentation"
@@ -1879,6 +1880,8 @@ mechanism = "pinned known-distribution percentile tests (exact bucket values ass
 evidence = [
     { kind = "symbol", file = "crates/flui-scheduler/src/frame_histogram.rs", contains = "pub struct LatencyHistogram" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_histogram.rs", contains = "fn percentiles_land_on_the_expected_bucket_boundaries_for_a_known_distribution" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn successful_submit_emits_structured_frame_telemetry_with_tail_quality" },
+    { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn overlay_line_surfaces_tail_quality_and_keeps_deferrals_distinct_from_drops" },
 ]
 
 [[contract]]
@@ -2770,7 +2773,7 @@ contains = "pub show_performance_overlay: bool"
 status = "partially-wired"
 classification = "transitional"
 owner_issue = 565
-notes = "Overlay renders, but the renderer ignores the frame counter and the PerformanceOverlayOption mask."
+notes = "Overlay renders FPS plus runtime p99/counter telemetry; the renderer still ignores the frame counter and the PerformanceOverlayOption mask."
 
 # =============================================================================
 # Ambient singleton allowlist

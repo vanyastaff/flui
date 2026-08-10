@@ -274,18 +274,23 @@ pub struct PerformanceOverlayLayer {
 
     /// Cached total frame count
     cached_total_frames: u64,
+
+    /// Presentation-ready diagnostic line supplied by the runtime telemetry
+    /// owner. Keeping this as text lets the app evolve metric selection
+    /// without growing the renderer's semantic API for every new counter.
+    diagnostic_line: Option<String>,
 }
 
 impl PerformanceOverlayLayer {
     /// The extent a host should give the overlay when it has no better idea.
     ///
-    /// Sized to what the renderer actually draws — two labelled rows at 11px
-    /// starting 14px below the top edge, values at x+50 — plus a small inset.
+    /// Sized to what the renderer actually draws — two timing rows plus one
+    /// runtime-telemetry line — with a small inset.
     /// Both the compositing host and the renderer must agree on this, so it
     /// lives here, next to the layer, rather than being spelled twice.
     #[must_use]
     pub fn default_bounds() -> Rect<Pixels> {
-        Rect::from_ltwh(px(8.0), px(8.0), px(150.0), px(44.0))
+        Rect::from_ltwh(px(8.0), px(8.0), px(480.0), px(58.0))
     }
 
     /// Creates a new performance overlay layer.
@@ -304,6 +309,7 @@ impl PerformanceOverlayLayer {
             cached_fps: 0.0,
             cached_frame_time_ms: 0.0,
             cached_total_frames: 0,
+            diagnostic_line: None,
         }
     }
 
@@ -331,6 +337,21 @@ impl PerformanceOverlayLayer {
     #[inline]
     pub fn total_frames(&self) -> u64 {
         self.cached_total_frames
+    }
+
+    /// The optional runtime-owned diagnostic line rendered below the legacy
+    /// FPS rows.
+    #[inline]
+    pub fn diagnostic_line(&self) -> Option<&str> {
+        self.diagnostic_line.as_deref()
+    }
+
+    /// Replace the runtime-owned diagnostic line.
+    pub fn set_diagnostic_line(&mut self, line: Option<String>) {
+        if self.diagnostic_line != line {
+            self.diagnostic_line = line;
+            self.needs_add_to_scene = true;
+        }
     }
 
     /// Creates a performance overlay showing all raster statistics.
@@ -433,6 +454,7 @@ impl Default for PerformanceOverlayLayer {
             cached_fps: 0.0,
             cached_frame_time_ms: 0.0,
             cached_total_frames: 0,
+            diagnostic_line: None,
         }
     }
 }
