@@ -254,6 +254,22 @@ impl PipelineOwner<Idle> {
     ///     owner.detach_render_subtrees(&[RenderId::new(1)]);
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`DetachRenderSubtreesError::Empty`] for a batch with no roots;
+    /// [`DetachRenderSubtreesError::DuplicateRoot`] when one root is supplied
+    /// twice; [`DetachRenderSubtreesError::OverlappingRoots`] when one root
+    /// lies inside another's subtree; [`DetachRenderSubtreesError::NodeNotFound`]
+    /// when a root or descendant is not live in this owner; and
+    /// [`DetachRenderSubtreesError::AlreadyDetached`] when a node does not begin
+    /// in an attached interval.
+    ///
+    /// Each is decided during preflight, so a failure leaves edges, parent data,
+    /// attachment intervals, dirty queues, and poison records exactly as it
+    /// found them. That guarantee covers rejection only: a panic raised part-way
+    /// through the mutation is fatal, and no unwind rollback is attempted or
+    /// promised.
     pub fn detach_render_subtrees(
         &mut self,
         root_ids: &[RenderId],
@@ -319,6 +335,24 @@ impl PipelineOwner<Idle> {
     ///     owner.attach_render_subtrees(token);
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`AttachRenderSubtreesError::WrongOwner`] when the token was minted by a
+    /// different pipeline owner — checked by allocation identity, so it still
+    /// rejects a token whose recorded [`RenderId`]s all happen to match live
+    /// nodes here; [`AttachRenderSubtreesError::NodeNotFound`] when a recorded
+    /// node was removed or its slot reused;
+    /// [`AttachRenderSubtreesError::AttachmentChanged`] when a node no longer
+    /// sits in the detached interval the token captured; and
+    /// [`AttachRenderSubtreesError::TopologyChanged`] when descendant membership
+    /// or order drifted while the batch was detached.
+    ///
+    /// The failure owns the token, so a rejected call costs nothing: recover it
+    /// with [`AttachRenderSubtreesFailure::into_token`] and either retry after
+    /// repairing the destination or release it for finalization. Validation
+    /// completes before the first interval reopens; a panic part-way through the
+    /// attach loop is fatal, and the intervals already reopened are not undone.
     pub fn attach_render_subtrees(
         &mut self,
         token: DetachedRenderSubtrees,
@@ -391,6 +425,19 @@ impl PipelineOwner<Idle> {
     ///     owner.release_detached_render_subtrees_for_finalization(token);
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// The same four conditions [`Self::attach_render_subtrees`] rejects,
+    /// reported as [`ReleaseDetachedRenderSubtreesError`]: `WrongOwner`,
+    /// `NodeNotFound`, `AttachmentChanged`, and `TopologyChanged`. Release
+    /// validates rather than trusting the caller because the token may have sat
+    /// in an inactive-element record across an arbitrary stretch of the frame.
+    ///
+    /// The failure returns the token via
+    /// [`ReleaseDetachedRenderSubtreesFailure::into_token`]. This method mutates
+    /// nothing in any case: on success it only consumes the token, which is what
+    /// authorizes the ordinary unmount path to proceed.
     pub fn release_detached_render_subtrees_for_finalization(
         &mut self,
         token: DetachedRenderSubtrees,
