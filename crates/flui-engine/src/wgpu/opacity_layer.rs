@@ -620,13 +620,13 @@ impl GpuReplay {
                 // Z-order within the layer follows each item's `draw_order` position
                 // and the replay loop — NOT match-arm textual position. The filter's
                 // input segment is rendered to an isolated grown-bounds offscreen
-                // (Task 6: fb_dim sized, not full-viewport), the pass chain is folded,
+                // (`fb_dim` sized, not full-viewport), the pass chain is folded,
                 // and the result is composited onto the layer's offscreen_view at the
                 // integer-grid dst_rect with src_uv=[0,1] (non-negotiable #1).
                 //
                 // G2: no `_` arm — future Slice variants force a compile error here.
                 DrawItem::Filter(mut op) => {
-                    // 1. Render content to grown-bounds intermediate (Task 6).
+                    // 1. Render content to the grown-bounds intermediate.
                     let content_tex = self.render_segment_to_grown_offscreen(
                         &mut op.input,
                         op.fb_origin,

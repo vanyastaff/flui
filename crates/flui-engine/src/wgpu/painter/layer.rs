@@ -38,7 +38,7 @@ impl WgpuPainter {
 
     /// Compute the integer-aligned offscreen frame rectangle for a filter intermediate.
     ///
-    /// ## Integer-grid composite invariant (Task 6)
+    /// ## Integer-grid composite invariant
     ///
     /// The texture-batch composite sampler is **bilinear** (`default_sampler` Linear
     /// in `replay.rs`).  Production `grown_bounds` may have fractional edges after
@@ -595,8 +595,8 @@ impl WgpuPainter {
                         // union) rather than the full viewport.  This is the producer wiring
                         // that makes grown-bounds VRAM reduction real: when bounds=None was
                         // passed to save_layer_with_image_filter, composite_bounds was
-                        // previously always the full viewport (the inert façade that Task 6
-                        // identified and this code fixes).  content_aabb falls back to the
+                        // previously always the full viewport (the inert façade this
+                        // producer wiring fixes). content_aabb falls back to the
                         // viewport if the segment is empty or contains an un-boundable kind.
                         let composite_bounds = {
                             let vp = self.viewport_bounds();

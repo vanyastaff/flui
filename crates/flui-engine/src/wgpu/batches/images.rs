@@ -56,7 +56,7 @@
 //! - `cached_images` entries are `(TextureId, TextureInstance, ScissorRect)`.
 //! - `external_images` entries are `(flui_types::painting::TextureId, TextureInstance,
 //!   ScissorRect)` — no `wgpu::TextureView` in the IR; resolution to a view
-//!   happens in `flush_segment_external_images` at replay time (T10a).
+//!   happens in `flush_segment_external_images` at replay time.
 //! - The SrcOver `draw_image_repeat`/`draw_image_nine_slice` → `draw_image`
 //!   delegation produces identical per-tile/per-region calls; loop bounds and
 //!   dst rects are byte-identical to the painter originals.
@@ -64,8 +64,8 @@
 //!   and routes the result through `draw_image`.  `ColorFilter::Mode` CPU-bakes
 //!   per-pixel, then delegates with `paint.blend_mode` for GPU compositing; the
 //!   Matrix / gamma branches delegate with `SrcOver` (no GPU-blend override).
-//! - `texture_batch` is **not touched** by any method here — it remains a
-//!   painter field for T10.
+//! - `texture_batch` is **not touched** by any method here; replay owns that
+//!   scratch batch.
 
 use flui_painting::BlendMode;
 use flui_types::{

@@ -830,7 +830,7 @@ impl GpuReplay {
     }
 
     // =========================================================================
-    // Texture-batch flush methods (from T10b, updated: 5 params → self fields)
+    // Texture-batch flush methods (shared plumbing now lives on self)
     // =========================================================================
 
     /// Flush the texture instance batch with straight-alpha blending.

@@ -54,7 +54,7 @@
 //! `PooledTexture` (which wraps `wgpu::Texture`) and are therefore NOT Clone.  The
 //! tests use a draw scene that produces only `DrawItem::Segment` items (no `save_layer`,
 //! no offscreen compositing) to stay within the cloneable subset.  The opacity-layer
-//! path is covered by existing readback tests (T8 layer readback suite).
+//! path is covered by the existing layer readback suite.
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
@@ -484,7 +484,7 @@ mod tests {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Test 2: filter-layer A/B deterministic replay (Task 0 / G3 identity gate)
+    // Test 2: filter-layer A/B deterministic replay (identity-fidelity gate)
     // ──────────────────────────────────────────────────────────────────────────
 
     /// Build a `DrawItem::Filter(Identity)` wrapping a rect geometry segment
@@ -513,8 +513,8 @@ mod tests {
             passes: smallvec![ImageFilterPass::Identity],
             content_bounds,
             grown_bounds: content_bounds, // Identity grows by 0
-            fb_origin: (10, 10),          // floor(grown.left/top) — integer-aligned (Task 6)
-            fb_dim: (20, 20),             // ceil(grown.right/bottom) - fb_origin (Task 6)
+            fb_origin: (10, 10),          // floor(grown.left/top) — integer-aligned
+            fb_dim: (20, 20),             // ceil(grown.right/bottom) - fb_origin
         };
 
         vec![DrawItem::Filter(op)]
@@ -534,7 +534,7 @@ mod tests {
     /// `DrawItem::Segment` would introduce a 1-LSB difference from the extra
     /// offscreen round-trip's premultiplied composite.
     ///
-    /// For Task 0 we compare against another Filter(Identity) replay (A vs B),
+    /// We compare against another Filter(Identity) replay (A vs B),
     /// not against a raw Segment, so this note is informational only; the
     /// identity-fidelity is proved by A == B being byte-exact over real geometry.
     fn build_baseline_segment_items() -> Vec<DrawItem> {
@@ -552,7 +552,7 @@ mod tests {
     /// Deterministic A/B replay of a `DrawItem::Filter(Identity)`
     /// scene, proving:
     /// 1. `FilterOp` is `Clone` + handle-free (the `op.clone()` below won't
-    ///    compile without the Task 0 seam — the "red→green" structural gate).
+    ///    compile without the filter IR seam — the "red→green" structural gate).
     /// 2. Two independent replays of the same filter scene produce byte-identical
     ///    pixel output (determinism).
     /// 3. The replayed output has at least one non-zero RGB pixel (non-vacuous).
@@ -564,7 +564,7 @@ mod tests {
     ///    byte-identical because the filter routes through a full-viewport offscreen
     ///    (clear → draw → composite-to-grown_bounds) while Segment draws directly.
     ///    The correct byte-identical oracle is `DrawItem::OffscreenTexture` (same
-    ///    composite path). For Task 0 we verify content presence at the composite
+    ///    composite path). We verify content presence at the composite
     ///    area, not byte-equality. Byte-exact oracle deferred to Slice 1.
     #[test]
     fn filter_layer_identity_replay_is_deterministic_and_faithful() {
@@ -763,8 +763,8 @@ mod tests {
                 passes: smallvec::SmallVec::new(), // empty fold — same round-trip, zero passes
                 content_bounds,
                 grown_bounds: content_bounds,
-                fb_origin: (10, 10), // floor(grown.left/top) — integer-aligned (Task 6)
-                fb_dim: (20, 20),    // ceil(grown.right/bottom) - fb_origin (Task 6)
+                fb_origin: (10, 10), // floor(grown.left/top) — integer-aligned
+                fb_dim: (20, 20),    // ceil(grown.right/bottom) - fb_origin
             }
         };
         let (target_d, view_d) = make_render_target(&device);

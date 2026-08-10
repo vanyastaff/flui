@@ -13,7 +13,7 @@
 //! - `state: &GpuStateStack`          — read-only transform/scissor queries
 //! - `opacity: f32`                   — current opacity (Copy-read before call)
 //!
-//! This is the borrow seam described in the T9a chief-architect verdict.  Four
+//! This borrow seam permits four
 //! disjoint `WgpuPainter` fields are borrowed simultaneously; reading `opacity`
 //! into a `f32` local before the call prevents `compositor` from being borrowed
 //! across the batcher invocation.
@@ -21,13 +21,13 @@
 //! # Shader dispatch
 //!
 //! `dispatch_shader_rect` (gradient/shader fills for rect/rrect/circle) lives on
-//! `DrawBatcher` (T9c).  The gradient methods (`gradient_rect`,
+//! `DrawBatcher`. The gradient methods (`gradient_rect`,
 //! `radial_gradient_rect`, `sweep_gradient_rect`) and `shadow_rect` also live here,
 //! taking `(&mut DrawSegment, &GpuStateStack, …)` via the same borrow seam.
 //! Each painter shim (`rect`/`rrect`/`circle`) folds the shader pre-check into the
 //! batcher call; the shim becomes a thin opacity-read + delegation.
 //!
-//! `draw_path` and `draw_vertices` also live here (T9d), using the same seam.
+//! `draw_path` and `draw_vertices` also live here, using the same seam.
 //! `draw_path` owns the tessellation cache hit/miss logic; `draw_vertices` owns
 //! the per-vertex color/uv assembly and u16→u32 index conversion.
 //!

@@ -72,7 +72,7 @@ impl RenderBox for ChildIntrinsicQueryingWidget {
 /// Asserts the walk completes without panic or UB. Under miri this is the
 /// regression check: it reports aliasing UB without the `is_in_flight` gate.
 #[test]
-fn u21b_borrowed_intrinsic_walk_skips_in_flight_cyclic_child() {
+fn borrowed_intrinsic_walk_skips_in_flight_cyclic_child() {
     let mut pipeline = PipelineOwner::new().into_layout();
 
     let w1 = pipeline
