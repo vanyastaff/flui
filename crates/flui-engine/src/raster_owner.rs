@@ -314,14 +314,34 @@ struct WakeGuard {
     /// while this guard is alive, which an `&InFlightAccounting` borrow of
     /// `self` would conflict with. Cloning is a cheap atomic increment.
     accounting: Arc<InFlightAccounting>,
+    /// The mailbox and epoch this guard publishes a `presented: false`
+    /// completion through when it retires a frame during an unwind. `None`
+    /// exactly when the guard is unarmed (a resize-only pump has no frame and
+    /// so has no completion to publish).
+    unwind_completion: Option<(Arc<RasterMailbox>, FrameEpoch)>,
     armed: bool,
 }
 
 impl Drop for WakeGuard {
     fn drop(&mut self) {
-        if self.armed {
-            self.accounting.notify_retired();
+        if !self.armed {
+            return;
         }
+        // Publish BEFORE waking. `notify_retired` drops `in_flight` to zero
+        // and fires the wake hook, and the woken consumer reads
+        // `last_completion` to decide its next move. Without this write it
+        // would see the PREVIOUS frame's completion — `presented: true` for an
+        // older epoch — while `in_flight()` says nothing is outstanding, which
+        // contradicts the latest-completion contract and can let a retry skip
+        // the no-present fallback pace. The panic itself stays fatal; this only
+        // keeps the published state honest for whoever observes it first.
+        if let Some((mailbox, epoch)) = &self.unwind_completion {
+            mailbox.set_last_completion(RasterCompletion {
+                epoch: *epoch,
+                presented: false,
+            });
+        }
+        self.accounting.notify_retired();
     }
 }
 
@@ -1261,6 +1281,9 @@ impl<B: RasterBackend> RasterOwner<B> {
         // pending frame can never spuriously wake even if `resize` panics.
         let mut wake_guard = WakeGuard {
             accounting: Arc::clone(&self.mailbox.accounting),
+            unwind_completion: frame
+                .as_ref()
+                .map(|frame| (Arc::clone(&self.mailbox), frame.snapshot.stamp.epoch)),
             armed: frame.is_some(),
         };
         let frame = frame;
@@ -2805,6 +2828,62 @@ mod tests {
             "dropping the owner with a frame still sitting unstarted in the mailbox must \
              retire it -- a stranded ticket here means every future poll sees permanent \
              capacity exhaustion with nothing left alive to ever retire it"
+        );
+    }
+
+    /// A panic mid-render must publish its own `presented: false` completion.
+    ///
+    /// The wake fired from `WakeGuard`'s unwind path drops `in_flight` to zero,
+    /// and the woken consumer reads `last_completion` to decide what to do
+    /// next. Without a write on this path it reads the PREVIOUS frame's
+    /// completion -- an older epoch, `presented: true` -- while `in_flight()`
+    /// says nothing is outstanding, which is exactly the false "the last frame
+    /// reached the screen" this reliable carrier exists to prevent, and can let
+    /// a retry skip the no-present fallback pace.
+    ///
+    /// Reverting the `set_last_completion` call in `WakeGuard::drop` leaves
+    /// this asserting the stale epoch1/`presented: true` pair.
+    #[test]
+    fn a_panic_mid_render_publishes_a_not_presented_completion_for_its_own_epoch() {
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+        let generation = handle.resize(1, 1);
+
+        // A frame that really presents, so `last_completion` holds a
+        // `presented: true` value the panicking frame could be mistaken for.
+        let epoch1 = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame(epoch1, generation))
+            .expect("submit");
+        let _ = owner.pump();
+        assert_eq!(
+            handle.surface_state().last_completion,
+            Some(RasterCompletion {
+                epoch: epoch1,
+                presented: true,
+            }),
+        );
+
+        owner.with_backend(|backend| backend.panic_next_render = true);
+        let epoch2 = epoch1.next();
+        handle
+            .submit(test_frame(epoch2, generation))
+            .expect("submit the frame that will panic");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.pump()));
+        assert!(
+            result.is_err(),
+            "the injected panic must propagate out of pump()"
+        );
+
+        assert_eq!(handle.in_flight(), 0, "the ticket still retires via RAII");
+        assert_eq!(
+            handle.surface_state().last_completion,
+            Some(RasterCompletion {
+                epoch: epoch2,
+                presented: false,
+            }),
+            "the panicking frame must publish its OWN epoch as not-presented, not leave \
+             the previous frame's presented: true standing while in_flight() reads 0"
         );
     }
 
