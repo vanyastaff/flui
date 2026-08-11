@@ -394,7 +394,7 @@ struct ReconcileState {
 /// Current reconciliation is deliberately non-reentrant. A future nested
 /// reconciler must replace the single active parent with a stack and preserve
 /// the forgotten-child protocol at every level before nesting is enabled.
-pub(super) struct ReconcileGuard {
+pub(crate) struct ReconcileGuard {
     state: Rc<ReconcileState>,
 }
 
@@ -433,7 +433,7 @@ impl ElementTree {
         }
     }
 
-    pub(super) fn begin_reconcile(&self, parent_id: ElementId) -> ReconcileGuard {
+    pub(crate) fn begin_reconcile(&self, parent_id: ElementId) -> ReconcileGuard {
         assert!(
             self.reconcile_state.active_parent.get().is_none(),
             "BUG: child reconciliation is non-reentrant; nested reconciliation must first implement a stacked forgotten-child protocol",
