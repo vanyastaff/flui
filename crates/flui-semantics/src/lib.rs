@@ -64,7 +64,10 @@
 // ============================================================================
 
 pub mod accessibility;
-pub mod accesskit_translation;
+// Private: the curated entry point is re-exported below. Publishing the module
+// would enrol its internal helpers (`to_node`, `resolve_role`) in the crate's
+// contract, and a translation detail is not something a consumer should pin.
+mod accesskit_translation;
 pub mod action;
 pub mod configuration;
 pub mod event;
@@ -90,7 +93,7 @@ pub use accessibility::AccessibilityFeatures;
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation
 // ============================================================================
-pub use accesskit_translation::{resolve_role, to_node, to_tree_update, tree_to_update};
+pub use accesskit_translation::tree_to_update;
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================
