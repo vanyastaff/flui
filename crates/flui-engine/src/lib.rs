@@ -151,8 +151,8 @@ pub use traits::{CommandRenderer, LayerStateStack};
 pub use raster::RasterBackend;
 // Raster mailbox + dedicated ack channel boundary.
 pub use raster_owner::{
-    FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner, RasterSubmitError,
-    SurfaceState,
+    FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner,
+    RasterSubmitError, SurfaceState,
 };
 // Advanced raster pacing/capacity configuration.
 pub use raster_options::RasterOptions;
