@@ -153,7 +153,7 @@ serde_json = "1.0"
 bon = "3.8"
 
 # DX TOOLING - flui-cli / flui-build / flui-devtools
-indicatif = "0.17" # progress bars (build/cli)
+indicatif = "0.18" # progress bars (build/cli)
 tempfile = "3"     # scratch dirs/files (build/cli tests)
 which = "8"        # locate toolchain executables (build/cli)
 
