@@ -127,12 +127,13 @@ impl<C> Viewport<C> {
         let mut render_object =
             RenderViewport::with_offset(self.axis_direction, cross_axis_direction, position);
         if let Some((extent, style)) = self.cache_extent {
-            let initial_impact = render_object.set_cache_extent(extent, style);
-            debug_assert_eq!(
-                initial_impact,
-                flui_rendering::RenderUpdateImpact::LAYOUT,
-                "an explicit cache extent differs from the render object's default",
-            );
+            // The returned impact is deliberately dropped. This runs before the
+            // render object joins a tree, so there is nothing to invalidate —
+            // and a caller may legitimately pass the render object's own
+            // default (250.0 logical pixels, `Pixel` style), for which
+            // `set_cache_extent` correctly reports `NONE`. Asserting `LAYOUT`
+            // here made that call panic in every debug and test build.
+            let _ = render_object.set_cache_extent(extent, style);
         }
         render_object
     }
@@ -361,3 +362,19 @@ where
 }
 
 generic_render_view_element!(ShrinkWrappingViewport);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A caller may be explicit about the value the render object already
+    /// defaults to. `set_cache_extent` correctly reports `NONE` for that, and
+    /// `build_render_object` must not treat "no change" as a contract
+    /// violation — an earlier `debug_assert_eq!(.., LAYOUT)` here panicked on
+    /// this exact call in every debug and test build.
+    #[test]
+    fn an_explicit_cache_extent_equal_to_the_default_builds_without_panicking() {
+        let viewport = Viewport::new(()).cache_extent(250.0, CacheExtentStyle::Pixel);
+        let _render_object = viewport.build_render_object();
+    }
+}

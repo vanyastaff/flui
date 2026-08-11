@@ -236,9 +236,13 @@ impl RenderView for AnchoredBox {
         RenderSubtreeAnchor::new(self.anchor.clone())
     }
 
-    /// The anchor identity is fixed for the life of the node. Reconciliation
-    /// The anchor carries identity only; child adoption schedules any layout
-    /// required by a replacement child.
+    /// Always reports `RenderUpdateImpact::NONE`.
+    ///
+    /// The anchor's identity is fixed for the life of the node, and the anchor
+    /// carries identity only — no geometry, paint, or semantics state that a
+    /// rebuild could invalidate. When reconciliation swaps the child, it is
+    /// adopting that child that schedules the layout the replacement needs;
+    /// this update has nothing of its own to invalidate.
     fn update_render_object(
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,

@@ -157,3 +157,25 @@ fn idle_frame_retains_committed_output_without_reporting_paint() {
         "retained presentation must not be reported as current-frame paint"
     );
 }
+
+/// A rebuild whose render update reports `NONE` must keep the committed
+/// layer output and not repaint. Lived in `tests/common/mod.rs` until it was
+/// noticed that every integration crate doing `mod common;` compiled and ran
+/// it — four copies of one test.
+#[test]
+fn identical_none_update_retains_committed_pixels_without_repainting() {
+    let mut laid = lay_out(
+        flui_widgets::ColoredBox::new(flui_types::Color::rgb(12, 34, 56)),
+        tight(800.0, 600.0),
+    );
+    let committed_layers = laid.layer_kinds();
+    let painted_frames = laid.painted_frame_count();
+    assert!(laid.did_paint_last_frame());
+    assert!(committed_layers.contains(&"Picture"));
+
+    laid.pump();
+
+    assert_eq!(laid.layer_kinds(), committed_layers);
+    assert!(!laid.did_paint_last_frame());
+    assert_eq!(laid.painted_frame_count(), painted_frames);
+}

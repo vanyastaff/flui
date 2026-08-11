@@ -1230,21 +1230,3 @@ pub fn offset(dx: f32, dy: f32) -> Offset {
 fn base_type_name(type_name: &str) -> &str {
     type_name.split('<').next().unwrap_or(type_name)
 }
-
-#[test]
-fn identical_none_update_retains_committed_pixels_without_repainting() {
-    let mut laid = lay_out(
-        flui_widgets::ColoredBox::new(flui_types::Color::rgb(12, 34, 56)),
-        tight(800.0, 600.0),
-    );
-    let committed_layers = laid.layer_kinds();
-    let painted_frames = laid.painted_frame_count();
-    assert!(laid.did_paint_last_frame());
-    assert!(committed_layers.contains(&"Picture"));
-
-    laid.pump();
-
-    assert_eq!(laid.layer_kinds(), committed_layers);
-    assert!(!laid.did_paint_last_frame());
-    assert_eq!(laid.painted_frame_count(), painted_frames);
-}
