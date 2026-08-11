@@ -57,12 +57,15 @@ pub type AccessibilityActionListener = Arc<dyn Fn(ActionRequest) + Send + Sync>;
 pub trait PlatformAccessibility: Send + Sync {
     /// Hand the platform the current tree.
     ///
-    /// Implementations are expected to skip the work when no assistive
-    /// technology is attached. `update` is borrowed rather than owned precisely
-    /// so an inactive implementation can drop it without paying for a clone —
-    /// [`accesskit::TreeUpdate`] is `Clone`, so an active one clones inside its
-    /// own active-check.
-    fn publish(&self, update: &TreeUpdate);
+    /// Taken **by value** so an implementation can move it into the platform's
+    /// own update call instead of cloning. A full-tree update is what
+    /// `SemanticsOwner::flush` produces, so on the active path a borrowed
+    /// parameter would charge one whole-tree clone per publish, per frame that
+    /// changed anything — see the cost issue on the semantics pipeline.
+    ///
+    /// An implementation with nothing attached simply drops it, which costs
+    /// nothing the caller had not already spent building it.
+    fn publish(&self, update: TreeUpdate);
 
     /// Whether assistive technology is currently attached.
     ///
