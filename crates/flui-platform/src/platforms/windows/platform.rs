@@ -465,28 +465,66 @@ impl WindowsPlatform {
         }
     }
 
-    /// Main window procedure for all FLUI windows
+    /// Main window procedure for all FLUI windows.
+    ///
+    /// No Rust panic may cross this ABI boundary. A panic may leave window
+    /// or framework state partially updated, so recovery is deliberately not
+    /// attempted: the boundary records the message and panic payload, then
+    /// aborts the process.
     ///
     /// # Safety
     ///
-    /// Called by Win32 as a `WNDPROC` for windows of `WINDOW_CLASS_NAME`,
-    /// registered as this exact function in `register_window_class`. Win32
-    /// guarantees `hwnd`/`msg`/`wparam`/`lparam` are well-formed for the
-    /// message being delivered, and always dispatches on the thread that
-    /// owns the window's message queue. `acquire_window_context` turns the
+    /// Called by Win32 as the `WNDPROC` registered for `WINDOW_CLASS_NAME`.
+    /// Win32 guarantees that the four arguments are well-formed for the
+    /// delivered message.
+    unsafe extern "system" fn window_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: Win32 established this function's safety contract before
+            // entering the ABI boundary, and the captured arguments are copied
+            // unchanged into the internal dispatcher.
+            unsafe { Self::dispatch_window_message(hwnd, msg, wparam, lparam) }
+        }));
+
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => {
+                let panic_message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("<non-string panic payload>");
+
+                // A custom tracing subscriber is application code and may itself
+                // panic. Keep that secondary failure inside the ABI boundary too;
+                // the process is aborting regardless, so logging is best-effort.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    tracing::error!(
+                        ?hwnd,
+                        message = msg,
+                        panic_message,
+                        "panic while dispatching a Win32 window message; aborting"
+                    );
+                }));
+                std::process::abort();
+            }
+        }
+    }
+
+    /// Dispatches one well-formed Win32 message inside the ABI panic boundary.
+    ///
+    /// # Safety
+    ///
+    /// `hwnd`/`msg`/`wparam`/`lparam` must be the unchanged values supplied by
+    /// Win32 to [`Self::window_proc`]. Win32 must dispatch on the thread that
+    /// owns the window's message queue; `acquire_window_context` then turns the
     /// slot-owned raw Arc reference into an invocation-local strong reference
     /// before any callback can reentrantly destroy the HWND.
-    ///
-    /// Known gap (not fixed by this comment, not UB — flagged for the
-    /// audit): none of the callback dispatches below (`ctx.callbacks.*`,
-    /// `ctx.dispatch_event`) are wrapped in `catch_unwind`. A panic inside a
-    /// framework-supplied callback unwinds into this `extern "system"`
-    /// frame; stable Rust aborts the process rather than invoking UB when
-    /// that happens (FFI boundaries are implicitly `nounwind`), but that is
-    /// still whole-process termination from a single window's callback,
-    /// unlike the `winit` backend's `window_proc`-equivalent path, which
-    /// does guard its callback boundary with `catch_unwind`.
-    unsafe extern "system" fn window_proc(
+    unsafe fn dispatch_window_message(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
