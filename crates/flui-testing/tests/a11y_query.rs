@@ -69,11 +69,35 @@ fn binding_with(leaf: SemanticLeaf) -> HeadlessBinding {
     )
 }
 
-/// A single-child container, so a test can put the focused control somewhere
-/// other than the root. A single-node tree cannot distinguish "focus was
-/// derived" from "focus fell back to the root" — they are the same node.
+/// A single-child container. Two jobs: it lets a test put the focused control
+/// somewhere other than the root (a single-node tree cannot distinguish "focus
+/// was derived" from "focus fell back to the root" — same node), and it carries
+/// the boundary/merge/exclude configuration the assembly phase acts on.
 #[derive(Debug, Default)]
-struct SemanticContainer;
+struct SemanticContainer {
+    label: Option<&'static str>,
+    boundary: bool,
+    merge_descendants: bool,
+    exclude_descendants: bool,
+}
+
+impl SemanticContainer {
+    fn merging(label: &'static str) -> Self {
+        Self {
+            label: Some(label),
+            boundary: true,
+            merge_descendants: true,
+            exclude_descendants: false,
+        }
+    }
+
+    fn excluding() -> Self {
+        Self {
+            exclude_descendants: true,
+            ..Self::default()
+        }
+    }
+}
 
 impl flui_foundation::Diagnosticable for SemanticContainer {}
 
@@ -95,12 +119,26 @@ impl RenderBox for SemanticContainer {
     flui_rendering::forward_single_child_box_queries!();
 
     fn paint(&self, _ctx: &mut PaintCx<'_, Single>) {}
+
+    fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
+        config.set_semantics_boundary(self.boundary);
+        if self.merge_descendants {
+            config.set_merging_semantics_of_descendants(true);
+        }
+        if let Some(label) = self.label {
+            config.set_label(label);
+        }
+    }
+
+    fn excludes_semantics_subtree(&self) -> bool {
+        self.exclude_descendants
+    }
 }
 
 /// A container root with `leaf` as its only child, so the leaf is not the root.
 fn binding_with_child(leaf: SemanticLeaf) -> HeadlessBinding {
     let mut owner = PipelineOwner::new();
-    let root = owner.insert::<BoxProtocol>(Box::new(SemanticContainer));
+    let root = owner.insert::<BoxProtocol>(Box::new(SemanticContainer::default()));
     owner
         .insert_child_render_object(root, Box::new(leaf))
         .expect("the container accepts one child");
@@ -285,5 +323,115 @@ fn focus_names_the_focused_child_rather_than_the_root() {
         focused.id(),
         tree.raw().tree.as_ref().expect("tree").root,
         "the fixture is only meaningful while the focused node is not the root"
+    );
+}
+
+/// Builds root -> middle -> leaf, so merge/exclude configuration on `middle`
+/// has a descendant to act on.
+fn binding_with_chain(middle: SemanticContainer, leaf: SemanticLeaf) -> HeadlessBinding {
+    let mut owner = PipelineOwner::new();
+    let root = owner.insert::<BoxProtocol>(Box::new(SemanticContainer::default()));
+    let middle_id = owner
+        .insert_child_render_object(root, Box::new(middle))
+        .expect("root accepts one child");
+    owner
+        .insert_child_render_object(middle_id, Box::new(leaf))
+        .expect("middle accepts one child");
+    owner.set_root_id(Some(root));
+    owner.set_root_constraints(Some(BoxConstraints::new(
+        px(0.0),
+        px(200.0),
+        px(0.0),
+        px(200.0),
+    )));
+
+    HeadlessBinding::with_tree(
+        BuildOwner::new(),
+        ElementTree::new(),
+        PipelineCell::new(owner),
+    )
+}
+
+/// Merge-descendants collapses a boundary descendant into its ancestor during
+/// assembly. The published tree must show the collapsed shape — one node
+/// carrying the combined label, with no child — because a translation that
+/// walked the render tree, or re-expanded children from anywhere but the
+/// assembled semantics tree, would republish the descendant the merge removed.
+///
+/// Oracle: `run_semantics_merge_descendants_collapses_boundary_grandchild`
+/// (flui-rendering), which pins the same shape one layer down.
+#[test]
+fn merge_descendants_survives_translation() {
+    let mut binding = binding_with_chain(
+        SemanticContainer::merging("Group"),
+        SemanticLeaf {
+            label: "Child".to_string(),
+            ..Default::default()
+        },
+    );
+
+    binding.enable_semantics().expect("binding is tree-bound");
+    pump(&mut binding);
+
+    let tree = binding.a11y_tree().expect("tree exists");
+
+    assert_eq!(
+        tree.len(),
+        2,
+        "root plus the merged node, and nothing else: {}",
+        tree.describe()
+    );
+    let merged = tree
+        .find_by_label("Group Child")
+        .unwrap_or_else(|e| panic!("the merged node must carry the combined label: {e}"));
+    assert!(
+        merged.child_ids().is_empty(),
+        "merge-descendants suppressed the descendant, so the published node has no children"
+    );
+    assert!(
+        tree.find_all_by_label("Child").is_empty(),
+        "the merged-away descendant must not reappear as its own node"
+    );
+}
+
+/// Exclude-subtree drops a descendant's semantics during assembly. The published
+/// tree must not contain it — this is the case where leaking would be worst,
+/// since the app deliberately hid that content from assistive technology.
+///
+/// Oracle: `run_semantics_excluding_node_skips_descendant_subtree`
+/// (flui-rendering).
+#[test]
+fn exclude_subtree_survives_translation() {
+    let mut binding = binding_with_chain(
+        SemanticContainer::excluding(),
+        SemanticLeaf {
+            label: "Hidden label".to_string(),
+            button: true,
+            ..Default::default()
+        },
+    );
+
+    binding.enable_semantics().expect("binding is tree-bound");
+    pump(&mut binding);
+
+    let tree = binding.a11y_tree().expect("tree exists");
+
+    // A positive shape assertion first: pure absence would also "pass" against
+    // a tree that failed to assemble at all.
+    assert_eq!(
+        tree.len(),
+        1,
+        "only the root survives the exclusion: {}",
+        tree.describe()
+    );
+    assert!(
+        tree.find_all_by_label("Hidden label").is_empty(),
+        "excluded content must not reach the published tree: {}",
+        tree.describe()
+    );
+    assert!(
+        tree.find_all(Role::Button).is_empty(),
+        "nor its role: {}",
+        tree.describe()
     );
 }
