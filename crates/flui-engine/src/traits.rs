@@ -375,6 +375,7 @@ pub trait CommandRenderer {
     /// * `fps` - Current frames per second
     /// * `frame_time_ms` - Average frame time in milliseconds
     /// * `total_frames` - Total frames rendered
+    /// * `diagnostic_line` - Optional runtime-owned structured-metric summary
     fn add_performance_overlay(
         &mut self,
         options_mask: u32,
@@ -382,6 +383,7 @@ pub trait CommandRenderer {
         fps: f32,
         frame_time_ms: f32,
         total_frames: u64,
+        diagnostic_line: Option<&str>,
     );
 }
 

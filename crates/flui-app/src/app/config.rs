@@ -100,21 +100,24 @@ pub struct AppConfig {
     /// grows the plumbing end to end.
     pub fullscreen: bool,
 
-    /// Whether to show the performance overlay — FPS and average frame time,
-    /// drawn over the app's own content.
+    /// Whether to show the performance overlay — FPS, average frame time, and
+    /// runtime tail-latency/counter telemetry drawn over the app's own content.
     ///
     /// Scope, deliberately narrow: the renderer
-    /// (`flui_engine::wgpu::Backend::add_performance_overlay`) currently draws
-    /// two rows and ignores both the frame counter and the option mask, so
+    /// (`flui_engine::wgpu::Backend::add_performance_overlay`) draws three rows
+    /// but still ignores both the frame counter and the option mask, so
     /// `PerformanceOverlayOption` has no observable effect yet. The sampled
     /// interval is between *composited* frames — an idle frame produces no layer
-    /// tree, so it is a repaint rate, not a wall-clock frame rate.
+    /// tree, so it is a repaint rate, not a wall-clock frame rate. The telemetry
+    /// row reports p99 present/input latency, deferred/dropped counts, and
+    /// whether input attribution was truncated by the bounded per-frame buffer.
     ///
     /// Flutter's `showPerformanceOverlay`. The bootstrap runner forwards this
     /// to `UiRealm::set_performance_overlay`, which is what actually starts
     /// the rolling frame-time window; the frame path then appends a
-    /// `PerformanceOverlayLayer` as the root layer's last child. Off costs one
-    /// uncontended lock and a `None` check per frame.
+    /// `PerformanceOverlayLayer` as the root layer's last child. Off costs a
+    /// cheap `None` check per frame; snapshot collection, percentile reduction,
+    /// and line formatting run only while the overlay is enabled.
     ///
     /// `From<&AppConfig> for flui_platform::WindowOptions` drops this field —
     /// it is a compositing concern, not a window-creation one.

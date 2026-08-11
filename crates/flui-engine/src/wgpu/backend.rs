@@ -1366,6 +1366,7 @@ impl CommandRenderer for Backend<'_> {
         fps: f32,
         frame_time_ms: f32,
         total_frames: u64,
+        diagnostic_line: Option<&str>,
     ) {
         use flui_layer::PerformanceOverlayOption;
 
@@ -1433,6 +1434,16 @@ impl CommandRenderer for Backend<'_> {
             8.0,
             &Paint::fill(gray),
         );
+
+        if let Some(line) = diagnostic_line {
+            y += px(14.0);
+            // This is the highest-density row in the overlay. Keep it brighter
+            // and slightly larger than unit suffixes so the diagnostic signal
+            // remains legible after glyph antialiasing and display scaling.
+            let diagnostic_color = Color::rgba(205, 205, 210, 255);
+            self.painter
+                .text(line, Point::new(x, y), 9.0, &Paint::fill(diagnostic_color));
+        }
 
         let _ = total_frames;
     }

@@ -42,7 +42,7 @@
 
 use web_time::Duration;
 
-use crate::frame_telemetry::FrameSnapshot;
+use crate::frame_telemetry::{FrameSnapshot, PresentOutcome};
 
 /// Upper bound, in microseconds, of each finite bucket — roughly
 /// power-of-two spaced from sub-frame (500µs) to a full second, dense
@@ -188,16 +188,35 @@ pub fn frame_interval_histogram(snapshots: &[FrameSnapshot]) -> LatencyHistogram
 /// backend returned from consuming the scene (present-inclusive on the
 /// production backend — see [`FrameSnapshot::submit_at`]) — from a
 /// `frames_since`-pulled slice.
+///
+/// **Only [`PresentOutcome::Presented`] snapshots are folded in.** An
+/// `Errored` submit never reached the screen, so its span is not a
+/// present latency; including it would report a number for a frame the user
+/// never saw.
 #[must_use]
 pub fn produce_to_present_histogram(snapshots: &[FrameSnapshot]) -> LatencyHistogram {
     let mut histogram = LatencyHistogram::new();
-    for snapshot in snapshots {
+    for snapshot in presented(snapshots) {
         let span = snapshot
             .submit_at
             .saturating_duration_since(snapshot.clock_timestamp);
         histogram.record(span);
     }
     histogram
+}
+
+/// The presented subset of `snapshots`.
+///
+/// Both present-latency histograms filter through this. A failed submit is
+/// excluded for two independent reasons: nothing reached the screen, and a
+/// *retryable* failure deliberately retains its input epochs so the retry can
+/// attribute them (see `EpochDisposition::Retain`) — so folding the failed
+/// attempt in would also count those same inputs a second time when the retry
+/// succeeds.
+fn presented(snapshots: &[FrameSnapshot]) -> impl Iterator<Item = &FrameSnapshot> {
+    snapshots
+        .iter()
+        .filter(|snapshot| snapshot.present_outcome == PresentOutcome::Presented)
 }
 
 /// Build a [`LatencyHistogram`] of input-to-present latencies — every
@@ -216,10 +235,16 @@ pub fn produce_to_present_histogram(snapshots: &[FrameSnapshot]) -> LatencyHisto
 /// treating this histogram's tail as complete. The frame-interval and
 /// produce-to-present histograms are unaffected — they take one value per
 /// frame and no ring bounds them.
+///
+/// **Only [`PresentOutcome::Presented`] snapshots are folded in**, for the
+/// double-count reason as much as the never-presented one: a retryable failure
+/// retains its input epochs so the retry can attribute them, so counting the
+/// failed attempt would record those inputs once here and again when the retry
+/// presents.
 #[must_use]
 pub fn input_to_present_histogram(snapshots: &[FrameSnapshot]) -> LatencyHistogram {
     let mut histogram = LatencyHistogram::new();
-    for snapshot in snapshots {
+    for snapshot in presented(snapshots) {
         for (_, latency) in snapshot.latencies() {
             histogram.record(latency);
         }
@@ -374,6 +399,36 @@ mod tests {
         let histogram = produce_to_present_histogram(&snapshots);
         assert_eq!(histogram.count(), 1);
         assert_eq!(histogram.p50(), Some(Duration::from_millis(8)));
+    }
+
+    /// A failed submit never reached the screen, so it is not a present
+    /// latency. Without the `Presented` filter this histogram counts 2.
+    #[test]
+    fn produce_to_present_histogram_excludes_a_failed_submit() {
+        let base = Instant::now();
+        let mut errored = snapshot(
+            2,
+            base,
+            base + Duration::from_millis(90),
+            InputEpochs::default(),
+        );
+        errored.present_outcome = PresentOutcome::Errored;
+        let snapshots = vec![
+            snapshot(
+                1,
+                base,
+                base + Duration::from_micros(4_500),
+                InputEpochs::default(),
+            ),
+            errored,
+        ];
+
+        let histogram = produce_to_present_histogram(&snapshots);
+        assert_eq!(
+            histogram.count(),
+            1,
+            "the errored frame must not contribute a present latency"
+        );
     }
 
     /// Two coalesced inputs in one real, `FrameClock`-produced frame (driven
