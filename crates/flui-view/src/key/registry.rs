@@ -31,7 +31,7 @@
 //! active handle and releases the TLS `RefCell` borrow before invoking either
 //! framework or user code.
 
-use std::{cell::RefCell, sync::Arc};
+use std::{cell::RefCell, mem::ManuallyDrop, sync::Arc};
 
 use crate::view::ElementBase;
 use flui_foundation::ElementId;
@@ -177,12 +177,33 @@ pub(crate) fn build_composite(members: Vec<GlobalKeyRegistryHandle>) -> GlobalKe
     )
 }
 
+type RegistryStack = RefCell<Vec<GlobalKeyRegistryHandle>>;
+type TestRegistrySlot = RefCell<Option<GlobalKeyRegistryHandle>>;
+type DropFreeRegistryStack = ManuallyDrop<RegistryStack>;
+type DropFreeTestRegistrySlot = ManuallyDrop<TestRegistrySlot>;
+
+// These thread-locals are instantiated inside hot-reloadable cdylibs. A TLS
+// destructor owned by such an image can make dlclose defer unmapping it, so a
+// same-path reload silently serves stale code. ManuallyDrop prevents destructor
+// registration; the scoped activation and explicit fixture take paths remain
+// responsible for returning the payloads to their empty quiescent states.
+const _: () = assert!(!std::mem::needs_drop::<DropFreeRegistryStack>());
+const _: () = assert!(!std::mem::needs_drop::<DropFreeTestRegistrySlot>());
+
 thread_local! {
     /// Active registry stack for this owner thread. A stack, rather than a
     /// replaceable singleton, makes nested realm entry restore correctly.
-    static REGISTRY_STACK: RefCell<Vec<GlobalKeyRegistryHandle>> = const { RefCell::new(Vec::new()) };
+    ///
+    /// `ManuallyDrop` is required because this module can be instantiated in a
+    /// hot-reload cdylib. `RegistryActivation` empties the stack explicitly.
+    static REGISTRY_STACK: DropFreeRegistryStack = const {
+        ManuallyDrop::new(RefCell::new(Vec::new()))
+    };
     /// Legacy fixture lane. It never mutates the production activation stack.
-    static TEST_REGISTRY: RefCell<Option<GlobalKeyRegistryHandle>> = const { RefCell::new(None) };
+    /// `take_registry` is its explicit teardown path.
+    static TEST_REGISTRY: DropFreeTestRegistrySlot = const {
+        ManuallyDrop::new(RefCell::new(None))
+    };
 }
 
 /// RAII activation token. Private so only the binding's scoped entry method
@@ -265,6 +286,12 @@ mod tests {
     #[test]
     fn no_active_registry_is_none() {
         assert_eq!(current(), None);
+    }
+
+    #[test]
+    fn tls_storage_has_no_drop_glue() {
+        assert!(!std::mem::needs_drop::<DropFreeRegistryStack>());
+        assert!(!std::mem::needs_drop::<DropFreeTestRegistrySlot>());
     }
 
     #[test]

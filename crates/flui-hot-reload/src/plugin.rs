@@ -217,6 +217,10 @@ macro_rules! hot_reload_worker {
 /// unconditionally drop-glue-free, so no TLS destructor is ever registered
 /// for it — deliberately trading "run `PluginPipeline::drop`" for "never put
 /// this image's unload behavior at the mercy of pending TLS destructors".
+/// Thread affinity is identified by a drop-free, per-thread monotonic token
+/// in the same TLS payload. Calling `std::thread::current` from the cdylib is
+/// deliberately avoided: Rust's private std copy can otherwise register a
+/// pthread-key destructor whose callback also lives in the unloadable image.
 ///
 /// # Generated Symbols
 ///
@@ -261,19 +265,31 @@ macro_rules! hot_reload_worker {
 #[macro_export]
 macro_rules! app_plugin {
     ($root_view:expr) => {
-        /// The OS thread that won the first `flui_app_build` call for this
-        /// plugin image — the ABI's calling-thread pin (see `app_plugin!`'s
-        /// "Thread affinity" docs). `None` (unset) until that first call.
-        static __FLUI_APP_PINNED_THREAD: ::std::sync::OnceLock<::std::thread::ThreadId> =
-            ::std::sync::OnceLock::new();
+        /// Monotonic identity of the TLS lane that won the first build call.
+        /// This deliberately does not use `std::thread::current`: a Rust
+        /// cdylib's private std copy registers a pthread-key destructor in
+        /// its own image when that API is first touched, leaving an invalid
+        /// callback after `dlclose` on runtimes that unmap immediately.
+        static __FLUI_APP_PINNED_THREAD: ::std::sync::OnceLock<u64> = ::std::sync::OnceLock::new();
 
-        /// The thread-local pipeline slot's exact type, named once so the
-        /// `thread_local!` declaration and the `needs_drop` assertion right
-        /// below can never drift apart (they'd otherwise be two independent
-        /// spellings of the same type, and only the declaration's copy is
-        /// what's actually load-bearing).
+        /// Per-image source for never-reused TLS lane identities. Zero stays
+        /// reserved for an uninitialized lane.
+        static __FLUI_APP_NEXT_THREAD_TOKEN: ::std::sync::atomic::AtomicU64 =
+            ::std::sync::atomic::AtomicU64::new(1);
+
+        /// The inner pipeline slot type. The compile-time assertion below is
+        /// intentionally over the complete `__FluiAppThreadState`, so adding
+        /// any future droppable field to the actual TLS payload fails closed.
         type __FluiAppPipelineSlot =
             ::std::option::Option<::std::mem::ManuallyDrop<$crate::PluginPipeline>>;
+
+        /// The complete TLS payload. Both fields are drop-glue-free: the
+        /// token is plain data and the pipeline is explicitly leaked on image
+        /// unload, matching the macro's documented lifecycle contract.
+        struct __FluiAppThreadState {
+            token: ::std::cell::Cell<u64>,
+            pipeline: ::std::cell::RefCell<__FluiAppPipelineSlot>,
+        }
 
         ::std::thread_local! {
             /// Thread-confined pipeline storage. `PluginPipeline` bundles a
@@ -305,8 +321,12 @@ macro_rules! app_plugin {
             /// was already the contract `app_plugin!` shipped ("hot restart:
             /// state lost"). This preserves that byte-for-byte; it does not
             /// introduce it.
-            static __FLUI_APP_PIPELINE: ::std::cell::RefCell<__FluiAppPipelineSlot> =
-                ::std::cell::RefCell::new(::std::option::Option::None);
+            static __FLUI_APP_STATE: __FluiAppThreadState = const {
+                __FluiAppThreadState {
+                    token: ::std::cell::Cell::new(0),
+                    pipeline: ::std::cell::RefCell::new(::std::option::Option::None),
+                }
+            };
         }
 
         // Compile-time proof the thread-local above truly carries no drop
@@ -315,8 +335,8 @@ macro_rules! app_plugin {
         // something that needs dropping, this fails to compile instead of
         // silently reintroducing the dlclose hazard.
         const _: () = assert!(
-            !::std::mem::needs_drop::<__FluiAppPipelineSlot>(),
-            "app_plugin!'s thread-local pipeline slot must stay drop-glue-free \
+            !::std::mem::needs_drop::<__FluiAppThreadState>(),
+            "app_plugin!'s complete thread-local state must stay drop-glue-free \
              (wrapped in ManuallyDrop) — a droppable thread-local registers a \
              TLS destructor tied to the plugin image, which dlclose cannot \
              safely unwind past on every runtime"
@@ -339,31 +359,48 @@ macro_rules! app_plugin {
         /// either.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_app_build(width: f32, height: f32) -> *mut ::std::ffi::c_void {
-            let caller = ::std::thread::current().id();
-            let pinned = *__FLUI_APP_PINNED_THREAD.get_or_init(|| caller);
-            if pinned != caller {
-                $crate::__private_tracing::error!(
-                    pinned = ?pinned,
-                    caller = ?caller,
-                    "flui_app_build called from a thread other than the one \
-                     that first built this plugin; app_plugin!'s ABI pins to \
-                     the first caller — refusing to build a Scene from a \
-                     foreign thread"
-                );
-                return ::std::ptr::null_mut();
-            }
+            __FLUI_APP_STATE.with(|state| {
+                let caller = match state.token.get() {
+                    0 => {
+                        let token = __FLUI_APP_NEXT_THREAD_TOKEN.fetch_update(
+                            ::std::sync::atomic::Ordering::Relaxed,
+                            ::std::sync::atomic::Ordering::Relaxed,
+                            |next| next.checked_add(1),
+                        );
+                        let Ok(token) = token else {
+                            $crate::__private_tracing::error!(
+                                "app_plugin! exhausted its per-image thread-token space; \
+                                 refusing to build a Scene"
+                            );
+                            return ::std::ptr::null_mut();
+                        };
+                        state.token.set(token);
+                        token
+                    }
+                    token => token,
+                };
+                let pinned = *__FLUI_APP_PINNED_THREAD.get_or_init(|| caller);
+                if pinned != caller {
+                    $crate::__private_tracing::error!(
+                        pinned,
+                        caller,
+                        "flui_app_build called from a thread other than the one \
+                         that first built this plugin; app_plugin!'s ABI pins to \
+                         the first caller — refusing to build a Scene from a \
+                         foreign thread"
+                    );
+                    return ::std::ptr::null_mut();
+                }
 
-            __FLUI_APP_PIPELINE.with(|cell| {
-                let mut slot = cell.borrow_mut();
+                let mut slot = state.pipeline.borrow_mut();
                 let pipeline = slot.get_or_insert_with(|| {
                     ::std::mem::ManuallyDrop::new($crate::PluginPipeline::mount(
-                        $root_view,
-                        width,
-                        height,
+                        $root_view, width, height,
                     ))
                 });
                 let scene = pipeline.draw_frame(width, height);
-                ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene)).cast::<::std::ffi::c_void>()
+                ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene))
+                    .cast::<::std::ffi::c_void>()
             })
         }
 

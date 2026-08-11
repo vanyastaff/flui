@@ -41,7 +41,7 @@
 //! produces a non-functional pipeline across a real load → drive → dlclose →
 //! reload → drive cycle.
 //!
-//! # What this test ALSO found, that the storage repair does not fix
+//! # GlobalKey registry and affinity TLS regression
 //!
 //! `fixture_tick` — a counter independent of `app_plugin!`'s own symbols —
 //! lets a fresh mapping be told apart from a stale, reused one: a genuinely
@@ -54,25 +54,20 @@
 //! second session's first tick reads 4 (continuing session one's count of
 //! 3), not 1.
 //!
-//! That is real, but it is **not** `app_plugin!`'s own storage — the
-//! `needs_drop` assertion already proves that slot carries no drop glue.
-//! It's `flui-view`'s `key::registry` module: `REGISTRY_STACK` and
-//! `TEST_REGISTRY` (`crates/flui-view/src/key/registry.rs`) are
-//! `thread_local!`s holding `GlobalKeyRegistryHandle`, which contains
-//! `Arc<GlobalKeyRegistryInner>` — genuinely needs drop, unconditionally (no
-//! feature gate elides it). `PluginPipeline::mount`/`draw_frame` call
-//! `WidgetsBinding::with_global_key_registry`, which touches both on every
-//! `flui_app_build` call — so ANY `app_plugin!` image registers this TLS
-//! destructor, entirely independent of the storage this repair flipped.
-//! Fixing it means auditing/reshaping `flui-view`'s GlobalKey registry
-//! machinery (core view-tree infrastructure every consumer of the framework
-//! uses, not only hot-reload plugins) — squarely out of this repair's bounded
-//! scope (the pipeline type itself was deliberately left as-is; only the
-//! `Send` requirement its storage imposed was removed).
-//! [`dlclose_then_reload_same_path_serves_a_fresh_image`] records this
-//! honestly: written, deterministic, currently `#[ignore]`d with this exact
-//! reason rather than deleted, weakened, or silently left passing on a false
-//! premise.
+//! The remaining source was `flui-view`'s `key::registry` module:
+//! `REGISTRY_STACK` and `TEST_REGISTRY` held `Arc`-containing handles directly
+//! in droppable thread-locals. They are now drop-glue-free containers with
+//! explicit quiescent teardown, guarded by compile-time `needs_drop`
+//! assertions. [`dlclose_then_reload_same_path_serves_a_fresh_image`] is the
+//! dynamic proof: reloading the unchanged same path must map a fresh image and
+//! reset this image-local counter.
+//!
+//! Removing that deferred-unmap pin exposed a second hazard: the old affinity
+//! check called `std::thread::current` inside the cdylib. The plugin's private
+//! std copy registered a pthread-key destructor pointing into its own image;
+//! after a real unmap, test-thread exit called the stale pointer. The affinity
+//! guard now uses a monotonic token in drop-free TLS instead. The lifecycle
+//! tests therefore prove both fresh remapping and safe thread teardown.
 //!
 //! Producing two BYTE-DIFFERENT fixture builds (to assert "serves new code"
 //! by content instead of by this proxy) would need either an unstable cargo
@@ -202,13 +197,11 @@ fn fixture_artifact_path() -> PathBuf {
     })
 }
 
-/// Resolve and call the fixture's `fixture_tick` symbol through a dedicated
-/// `DynLib` handle onto `path` (independent of whatever `ScenePlugin` handle
-/// may also be open on the same path — `dlopen` on an already-loaded path
-/// just bumps a refcount, this crate's own `DynLib` docs already rely on
-/// that).
-fn tick(path: &Path) -> u32 {
-    let lib = DynLib::open(path).expect("fixture must be a loadable library");
+/// Resolve and call the fixture's `fixture_tick` symbol through an already
+/// open handle. Keeping one handle across several calls proves the counter is
+/// image-local (1 → 2 → 3); dropping it before opening the next handle then
+/// proves whether `dlclose` really unmapped that image.
+fn tick(lib: &DynLib) -> u32 {
     // SAFETY: `fixture_tick` is the fixture's own exported `extern "C" fn()
     // -> u32` (see examples/hot_reload_lifecycle_fixture/src/lib.rs); the
     // symbol name and signature are this test's own contract with that
@@ -264,23 +257,14 @@ fn dlclose_then_reload_keeps_the_lifecycle_working() {
     load_drive_unload(work.path());
     // Reload: same path, unchanged bytes. Must work exactly like the first
     // time — a fresh, empty thread-local slot mounts a fresh pipeline either
-    // way, whether or not the underlying mapping was reused (see the
-    // `#[ignore]`d test below for that separate question).
+    // way, whether or not the underlying mapping was reused (the stricter
+    // test below checks that separate question).
     load_drive_unload(work.path());
 }
 
-/// Strict freshness check — see this file's module doc, "What this test ALSO
-/// found, that the storage repair does not fix". Written, deterministic, and
-/// currently failing for a real but out-of-scope reason: `flui-view`'s
-/// `key::registry::{REGISTRY_STACK, TEST_REGISTRY}` thread-locals hold
-/// `Arc`-containing `GlobalKeyRegistryHandle`s and are touched by every
-/// `flui_app_build` call, registering their own TLS destructor independent
-/// of the `PluginPipeline` storage this repair flipped. Left `#[ignore]`d
-/// rather than deleted, weakened, or silently passed: this is the exact
-/// test to re-enable once that separate gap closes.
-#[ignore = "blocked on flui-view's key::registry thread-locals (REGISTRY_STACK/TEST_REGISTRY) \
-            also carrying drop glue, independent of the PluginPipeline storage fix here — \
-            see this file's module doc"]
+/// Strict freshness check for the GlobalKey registry TLS contract. A stale
+/// mapping returns 4 on the final assertion; a freshly unloaded and remapped
+/// image restarts its independent counter at 1.
 #[test]
 fn dlclose_then_reload_same_path_serves_a_fresh_image() {
     let source = fixture_artifact_path();
@@ -288,12 +272,17 @@ fn dlclose_then_reload_same_path_serves_a_fresh_image() {
     std::fs::copy(&source, work.path()).expect("copy fixture to the watched work path");
 
     load_drive_unload(work.path());
-    assert_eq!(tick(work.path()), 1);
-    assert_eq!(tick(work.path()), 2);
-    assert_eq!(tick(work.path()), 3);
+
+    let first_image = DynLib::open(work.path()).expect("fixture must be a loadable library");
+    assert_eq!(tick(&first_image), 1);
+    assert_eq!(tick(&first_image), 2);
+    assert_eq!(tick(&first_image), 3);
+    drop(first_image);
+
+    let second_image = DynLib::open(work.path()).expect("fixture must reload from the same path");
 
     assert_eq!(
-        tick(work.path()),
+        tick(&second_image),
         1,
         "a reload of the same path must start this fixture's tick counter fresh (1), \
          not continue the previous session's count"
