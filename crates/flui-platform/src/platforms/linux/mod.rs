@@ -72,10 +72,14 @@
 //! let platform = LinuxPlatform::new();
 //! ```
 
+#[cfg(all(target_os = "linux", feature = "a11y"))]
+mod accessibility;
 mod window_ext;
 
 use std::sync::Arc;
 
+#[cfg(all(target_os = "linux", feature = "a11y"))]
+pub use accessibility::UnixAccessibility;
 use anyhow::Result;
 pub use window_ext::*;
 
