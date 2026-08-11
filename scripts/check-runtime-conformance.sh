@@ -452,8 +452,11 @@ for crate in RUNTIME_CRATES + [
 #   ambient-static -- a curated marker list of known ambient accessor
 #                     signatures, distinct from the macro-generated `fn
 #                     instance() -> &'static` the singleton net above already
-#                     owns: `AssetRegistry::global()`, `global_timer_service()`,
-#                     `shared_font_system()`.
+#                     owns: `AssetRegistry::global()` and
+#                     `shared_font_system()`. The retired
+#                     `global_timer_service()` signature remains a marker so
+#                     restoring that ambient API requires an explicit new
+#                     registry entry and owner.
 #
 # This is a RATCHET, not a ban: `instance-call` is meant to shrink to empty
 # as later changes retire each remaining singleton (checked bidirectionally

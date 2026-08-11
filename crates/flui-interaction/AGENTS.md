@@ -19,7 +19,6 @@ Event routing, hit testing, focus management, and gesture recognition.
 - **`testing` feature** — gates `testing/` submodule (gesture recording, replay, builders) + `PointerEventData`/`make_*_event` helpers. Auto-enabled via `cfg(any(test, feature = "testing"))`.
 - **4 benchmarks** — `velocity_tracker_bench`, `gesture_arena_bench`, `tap_detector_bench`, `pointer_resampler_bench`. Bench fixtures use `testing` feature helpers.
 - **`PointerId`** — re-exported from `ui-events` crate (`NonZeroU64`-backed). `FocusNodeId` and `HandlerId` are crate-local `NonZeroU64` newtypes.
-- **Async dependency** — `tokio` with `time`, `sync`, `macros`, `rt` features. Used for gesture timing.
 - **Owner-local callbacks** — gesture/focus handlers may capture `Rc` state;
   data-plane IDs and hit paths stay `Send + Sync`.
 - **Hosted-node cleanup** — use `FocusNodeRegistration` for widget-installed
