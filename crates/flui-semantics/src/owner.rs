@@ -27,7 +27,7 @@ use crate::{
 ///
 /// Called when the semantics tree changes and needs to be sent to the platform.
 ///
-/// The payload is an [`accesskit::TreeUpdate`] — the shape a platform
+/// The payload is a [`TreeUpdate`](crate::TreeUpdate) — the shape a platform
 /// accessibility adapter consumes directly — rather than FLUI's own node type.
 /// Two reasons, and the second is structural:
 ///
@@ -38,7 +38,7 @@ use crate::{
 ///   in a tree the pipeline rebuilds every pass. It cannot express the stable
 ///   `AccessibilityNodeId` an adapter must publish and route actions back
 ///   through — see [`crate::tree_to_update`].
-pub type SemanticsUpdateCallback = Arc<dyn Fn(&accesskit::TreeUpdate) + Send + Sync>;
+pub type SemanticsUpdateCallback = Arc<dyn Fn(&crate::TreeUpdate) + Send + Sync>;
 
 // ============================================================================
 // ACTION RESOLUTION
@@ -525,8 +525,14 @@ impl SemanticsOwner {
     /// extraneous events, so this is correct-but-chatty. Incremental diffing
     /// needs the identity to be carried per node and gets its own oracle.
     ///
-    /// A clean tree publishes nothing: the dirty check is the trigger, so an
-    /// idle frame costs one flag test and no translation.
+    /// A clean tree publishes nothing and performs no translation. The trigger
+    /// is [`SemanticsTree::has_dirty_nodes`], which scans until it finds dirt:
+    /// O(1) average on a dirty tree (it stops at the first dirty node), O(n)
+    /// worst case — and the worst case is the *idle* frame, since a clean tree
+    /// is the one that must be scanned to the end. `n` is the number of
+    /// semantics boundaries, not widgets. A cached dirty count would make this
+    /// O(1) unconditionally; that is a separate change, with a benchmark, not
+    /// an assertion made in a doc comment.
     pub fn flush(&mut self) {
         if !self.enabled || !self.tree.has_dirty_nodes() {
             return;
@@ -538,6 +544,14 @@ impl SemanticsOwner {
             // No root yet — nothing an adapter could apply. Leave the tree
             // dirty so the next flush retries once assembly has rooted it,
             // rather than silently swallowing the first real update.
+            //
+            // A tree that *loses* its root after publishing takes this path
+            // too, and nothing withdraws the tree already sent: the adapter
+            // keeps presenting it. Withdrawal is the adapter's deactivation
+            // signal rather than an empty update — `TreeUpdate` has no
+            // representation for "no tree" — so it is defined with the
+            // adapter lifecycle rather than invented here without one. See
+            // the teardown item in the Linux bridge issue.
             return;
         };
 
