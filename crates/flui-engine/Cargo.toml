@@ -77,7 +77,7 @@ smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 # Raster mailbox + dedicated ack channel — bounded, typed
-# backpressure, same precedent as PipelineOwnerHandle's dirty channel.
+# backpressure, following the render invalidation channel's precedent.
 crossbeam-channel = { workspace = true }
 # Compile-time Send/Sync pins (ADR-0045 decision 1's `Renderer: Send`
 # derivation and `!Sync` posture) — same convention as flui-app/flui-view/

@@ -45,7 +45,7 @@ use super::PipelineOwner;
 /// `RenderView::owner`, both deleted as part of this same change). A render object holding a
 /// `PipelineCell` would close `cell -> owner -> tree -> object -> cell`, an
 /// `Rc` cycle nothing frees. Dirty-marking from inside a render object goes
-/// through [`RepaintHandle`](crate::pipeline::RepaintHandle) instead -- a
+/// through [`RenderInvalidationHandle`](crate::pipeline::RenderInvalidationHandle) instead -- a
 /// weak, generational, least-privilege handle built for exactly this seam.
 #[derive(Clone)]
 pub struct PipelineCell(Rc<RefCell<PipelineOwner>>);

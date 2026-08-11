@@ -146,13 +146,13 @@ impl TreeNode {
         self
     }
 
-    /// Convenience wrapper for [`StackParentData`] on [`RenderStack`] children.
+    /// Convenience wrapper for [`StackParentData`] on `RenderStack` children.
     #[must_use]
     pub fn with_stack_parent_data(self, data: StackParentData) -> Self {
         self.with_parent_data_seed(ParentDataSeed::Stack(data))
     }
 
-    /// Convenience wrapper for [`FlexParentData`] on [`RenderFlex`] children.
+    /// Convenience wrapper for [`FlexParentData`] on `RenderFlex` children.
     #[must_use]
     pub fn with_flex_parent_data(self, data: FlexParentData) -> Self {
         self.with_parent_data_seed(ParentDataSeed::Flex(data))
@@ -168,7 +168,7 @@ impl TreeNode {
     }
 
     /// Convenience wrapper for [`SliverMultiBoxAdaptorParentData`] on
-    /// [`RenderSliverList`] / [`RenderSliverListLazy`] children.
+    /// [`RenderSliverList`] / `RenderSliverListLazy` children.
     ///
     /// Stamps the logical `index` onto the child before layout so the
     /// virtualizer band walk can discover it in `logical_to_slot` and treat

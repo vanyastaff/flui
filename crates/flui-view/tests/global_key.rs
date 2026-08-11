@@ -25,9 +25,10 @@
 use std::sync::Arc;
 
 use flui_foundation::ViewKey;
+use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulElement,
-    StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, RenderView,
+    StatefulElement, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 use parking_lot::RwLock;
 
@@ -105,6 +106,47 @@ impl View for KeyedCounter {
 
     fn key(&self) -> Option<&dyn ViewKey> {
         Some(&self.key)
+    }
+}
+
+#[derive(Clone)]
+struct DuplicateHost {
+    children: Vec<flui_view::BoxedView>,
+}
+
+impl RenderView for DuplicateHost {
+    type Protocol = BoxProtocol;
+    type RenderObject = flui_objects::RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        flui_objects::RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+
+    fn has_children(&self) -> bool {
+        true
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        for child in &self.children {
+            visitor(child);
+        }
+    }
+}
+
+impl View for DuplicateHost {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -342,25 +384,17 @@ fn duplicate_global_key_panics_in_debug() {
         initial: 2,
     };
 
-    let root_id = tree
+    let root_id = tree.write().mount_root_with_pipeline_owner(
+        &DuplicateHost {
+            children: vec![counter_a.boxed(), counter_b.boxed()],
+        },
+        Some(PipelineCell::new(PipelineOwner::new())),
+        &mut owner.write().element_owner_mut(),
+    );
+    owner
         .write()
-        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
-
-    // First mount registers the key.
-    let _ = tree.write().insert(
-        &counter_a,
-        root_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    // Second mount with the same GlobalKey should hit the debug-panic.
-    let _ = tree.write().insert(
-        &counter_b,
-        root_id,
-        1,
-        &mut owner.write().element_owner_mut(),
-    );
+        .schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.write().build_scope(&mut tree.write());
 }
 
 // ============================================================================

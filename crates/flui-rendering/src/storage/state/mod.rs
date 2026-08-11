@@ -310,6 +310,14 @@ impl<P: Protocol> RenderState<P> {
         self.parent_data = Some(data);
     }
 
+    pub(super) fn clear_parent_data(&mut self) -> bool {
+        let Some(mut parent_data) = self.parent_data.take() else {
+            return false;
+        };
+        parent_data.detach();
+        true
+    }
+
     /// Returns a downcasted reference to the parent data, if the type matches.
     ///
     /// This is the typed read path — the parent calls this with its

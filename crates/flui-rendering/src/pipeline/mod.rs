@@ -8,7 +8,7 @@
 
 mod deferred;
 mod dirty;
-mod handle;
+pub(crate) mod handle;
 mod notifier;
 mod owner;
 pub mod phase;
@@ -24,11 +24,13 @@ pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, Po
 pub use deferred::{DeferredMutation, DeferredMutations, DeferredRenderObject};
 pub use dirty::{DirtyNode, DirtySets};
 pub use flui_types::painting::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
-pub use handle::{
-    DirtyKind, DirtyRequest, PipelineOwnerHandle, RepaintHandle, SendError as DirtySendError,
-};
+pub use handle::{RenderInvalidationHandle, SendError as DirtySendError};
 pub use notifier::VisualUpdateNotifier;
-pub use owner::{PipelineCell, PipelineOwner};
+pub use owner::{
+    AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
+    DetachedRenderSubtrees, PipelineCell, PipelineOwner, ReleaseDetachedRenderSubtreesError,
+    ReleaseDetachedRenderSubtreesFailure,
+};
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
 
 // Re-export contexts from context module (canonical location)

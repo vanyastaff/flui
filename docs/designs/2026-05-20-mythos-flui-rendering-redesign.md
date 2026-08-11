@@ -8,6 +8,21 @@ applies-to: crates/flui-rendering
 
 # Mythos Design Verdict
 
+> **2026-08-10 migration correction.** The historical `PipelineOwnerHandle`,
+> public `DirtyRequest`/`DirtyKind`, and `PipelineOwner::handle()` snippets below
+> describe the design's former raw channel seam, not the shipped API.
+> `RenderInvalidationHandle` is now the sole public invalidation capability. Each handle
+> is bound to one stable `RenderId` and one private attachment epoch; the owner
+> accepts queued work only for the exact currently attached pair. Owner-mediated
+> subtree relocation is idle-only and linear:
+> `detach_render_subtrees` returns an opaque `DetachedRenderSubtrees` token,
+> which is consumed by either `attach_render_subtrees` after destination edges
+> and parent data are established or
+> `release_detached_render_subtrees_for_finalization` before ordinary element
+> unmount. Failed consumers return the token. Consumers migrate from raw
+> requests to a node-bound handle obtained with
+> `PipelineOwner::render_invalidation_handle`.
+
 ## What `flui-rendering` should be
 
 A **single-owner render-tree storage and synchronous frame-pipeline driver** with a tight public surface: insert a render object, mark dirty, run a frame, get back a layer tree. Nothing else.

@@ -515,7 +515,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// delegate's repaint notifier driving paint) and self-mark on notify
     /// via the handle. Default: no-op. See
     /// [`RenderObject::attach`].
-    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+    fn attach(&mut self, handle: crate::pipeline::RenderInvalidationHandle) {
         let _ = handle;
     }
 
@@ -799,7 +799,7 @@ where
         <T as RenderBox>::reassemble(self);
     }
 
-    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+    fn attach(&mut self, handle: crate::pipeline::RenderInvalidationHandle) {
         <T as RenderBox>::attach(self, handle);
     }
 

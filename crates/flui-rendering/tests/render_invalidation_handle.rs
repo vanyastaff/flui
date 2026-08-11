@@ -1,4 +1,4 @@
-//! `RepaintHandle` (D4): cross-thread repaint capability with wake.
+//! `RenderInvalidationHandle` (D4): cross-thread repaint capability with wake.
 //!
 //! The production story this pins: an async producer (image decode,
 //! arriving asset) finishes while the app idles; its `mark_needs_paint`
@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_objects::RenderColoredBox;
 use flui_rendering::{
     constraints::BoxConstraints,
-    pipeline::{DirtyKind, DirtySendError, PipelineOwner},
+    pipeline::{DirtySendError, PipelineOwner},
 };
 use flui_types::{Size, geometry::px};
 
@@ -42,7 +42,7 @@ fn cross_thread_repaint_lands_in_the_next_frame() {
     owner = next;
     assert!(!painted, "clean tree idles");
 
-    let handle = owner.repaint_handle(node).expect("live node");
+    let handle = owner.render_invalidation_handle(node).expect("live node");
     std::thread::spawn(move || {
         handle.mark_needs_paint().expect("owner alive");
     })
@@ -68,7 +68,7 @@ fn request_fires_the_visual_update_wake() {
         counter.fetch_add(1, Ordering::Relaxed);
     });
 
-    let handle = owner.repaint_handle(node).expect("live node");
+    let handle = owner.render_invalidation_handle(node).expect("live node");
     let before = wakes.load(Ordering::Relaxed);
     handle.mark_needs_paint().expect("owner alive");
     assert!(
@@ -83,7 +83,7 @@ fn stale_handle_is_a_silent_noop() {
     let (owner, node) = fixture();
     let (mut owner, _) = frame(owner);
 
-    let handle = owner.repaint_handle(node).expect("live node");
+    let handle = owner.render_invalidation_handle(node).expect("live node");
     owner.remove_render_object(node);
     owner.set_root_id(None);
 
@@ -103,13 +103,9 @@ fn layout_request_routes_through_the_boundary_walk() {
     let (owner, node) = fixture();
     let (owner, _) = frame(owner);
 
-    // Raw pipeline handle, Layout kind: the drain must route through
-    // mark_needs_layout (boundary walk + dedup), not push a raw queue
-    // entry. Only identity and intent cross threads; tree metadata stays
-    // owner-authoritative.
-    let pipeline_handle = owner.handle();
-    pipeline_handle
-        .request_mark_dirty(node, DirtyKind::Layout)
+    let render_invalidation_handle = owner.render_invalidation_handle(node).expect("live node");
+    render_invalidation_handle
+        .mark_needs_layout()
         .expect("owner alive");
 
     let (owner, painted) = frame(owner);
@@ -121,7 +117,7 @@ fn layout_request_routes_through_the_boundary_walk() {
 #[test]
 fn dropped_owner_reports_owner_gone() {
     let (owner, node) = fixture();
-    let handle = owner.repaint_handle(node).expect("live node");
+    let handle = owner.render_invalidation_handle(node).expect("live node");
     drop(owner);
     assert!(
         matches!(handle.mark_needs_paint(), Err(DirtySendError::OwnerGone)),

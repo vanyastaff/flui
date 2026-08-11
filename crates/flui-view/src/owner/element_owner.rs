@@ -401,13 +401,50 @@ impl ElementOwner<'_> {
         self.inactive_elements.push(InactiveElement::new(id, depth));
     }
 
+    /// Push an inactive element together with its exclusive render-relocation token.
+    pub(crate) fn push_inactive_with_detached_render_subtrees(
+        &mut self,
+        id: ElementId,
+        depth: usize,
+        detached_render_subtrees: flui_rendering::pipeline::DetachedRenderSubtrees,
+    ) {
+        self.inactive_elements
+            .push(InactiveElement::with_detached_render_subtrees(
+                id,
+                depth,
+                detached_render_subtrees,
+            ));
+    }
+
+    /// Whether the queued entry for `id` still owns a render-relocation token.
+    ///
+    /// `false` when `id` is not queued at all. A retake asks this *before*
+    /// [`Self::remove_inactive`], because dequeueing is the point of no
+    /// return: the entry is the element's only finalization record and its
+    /// token the only right to reattach the detached render subtree.
+    pub(crate) fn inactive_holds_detached_render_subtrees(&self, id: ElementId) -> bool {
+        self.inactive_elements
+            .iter()
+            .find(|entry| entry.id() == id)
+            .is_some_and(super::build_owner::InactiveElement::holds_detached_render_subtrees)
+    }
+
     /// Remove an element from the inactive queue.
     ///
     /// Used when an element is re-activated mid-frame (Flutter
     /// reparenting via `GlobalKey`). No-op if the id
     /// isn't queued.
-    pub fn remove_inactive(&mut self, id: ElementId) {
-        self.inactive_elements.retain(|entry| entry.id() != id);
+    pub(crate) fn remove_inactive(
+        &mut self,
+        id: ElementId,
+    ) -> Option<flui_rendering::pipeline::DetachedRenderSubtrees> {
+        let position = self
+            .inactive_elements
+            .iter()
+            .position(|entry| entry.id() == id)?;
+        self.inactive_elements
+            .remove(position)
+            .take_detached_render_subtrees()
     }
 
     /// Whether the given element is currently queued for finalization.
@@ -565,7 +602,7 @@ mod tests {
         assert_eq!(handle.inactive_len(), 1);
         assert!(handle.finalize_inactive().any(|e| e == id));
 
-        handle.remove_inactive(id);
+        let _ = handle.remove_inactive(id);
         assert_eq!(handle.inactive_len(), 0);
     }
 

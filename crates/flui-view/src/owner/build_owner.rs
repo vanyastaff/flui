@@ -15,6 +15,7 @@ use std::{
 
 use flui_foundation::{ElementId, RebuildReasons, RenderId};
 use flui_interaction::FocusManager;
+use flui_rendering::pipeline::DetachedRenderSubtrees;
 use parking_lot::Mutex;
 
 use crate::{
@@ -381,16 +382,34 @@ pub struct BuildOwner {
 /// `&mut Vec<InactiveElement>` split-borrow reference. End-of-frame
 /// finalization (`BuildOwner::finalize_tree`) drains the queue
 /// deepest-first using the recorded `depth`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub(crate) struct InactiveElement {
     id: ElementId,
     depth: usize,
+    detached_render_subtrees: Option<DetachedRenderSubtrees>,
 }
 
 impl InactiveElement {
     /// Construct a new inactive-element record.
     pub(crate) fn new(id: ElementId, depth: usize) -> Self {
-        Self { id, depth }
+        Self {
+            id,
+            depth,
+            detached_render_subtrees: None,
+        }
+    }
+
+    /// Construct a record that also owns the element's render-relocation token.
+    pub(crate) fn with_detached_render_subtrees(
+        id: ElementId,
+        depth: usize,
+        detached_render_subtrees: DetachedRenderSubtrees,
+    ) -> Self {
+        Self {
+            id,
+            depth,
+            detached_render_subtrees: Some(detached_render_subtrees),
+        }
     }
 
     /// The element id queued for end-of-frame unmount.
@@ -399,9 +418,22 @@ impl InactiveElement {
     }
 
     /// Depth used to order finalization (deepest first).
-    #[allow(dead_code)] // Used by finalize_tree's sort, kept for symmetry.
     pub(crate) fn depth(&self) -> usize {
         self.depth
+    }
+
+    /// Whether this record still owns a render-relocation token.
+    ///
+    /// Lets a retake reject *before* dequeueing: removing an entry it cannot
+    /// use would strand the element with no finalization record and no right
+    /// to reattach its detached render subtree.
+    pub(crate) fn holds_detached_render_subtrees(&self) -> bool {
+        self.detached_render_subtrees.is_some()
+    }
+
+    /// Take the record's render-relocation token, leaving the record behind.
+    pub(crate) fn take_detached_render_subtrees(&mut self) -> Option<DetachedRenderSubtrees> {
+        self.detached_render_subtrees.take()
     }
 }
 
@@ -1596,11 +1628,19 @@ impl BuildOwner {
         self.inactive_elements.push(InactiveElement::new(id, depth));
     }
 
-    /// Remove an element from the inactive list.
+    /// Remove an element from the inactive list and return its relocation token.
     ///
     /// Called when an element is reactivated (e.g., moved via GlobalKey).
-    pub fn remove_from_inactive(&mut self, id: ElementId) {
-        self.inactive_elements.retain(|e| e.id() != id);
+    /// A returned token must be reattached or released for finalization.
+    #[must_use]
+    pub fn remove_from_inactive(&mut self, id: ElementId) -> Option<DetachedRenderSubtrees> {
+        let index = self
+            .inactive_elements
+            .iter()
+            .position(|inactive| inactive.id() == id)?;
+        self.inactive_elements
+            .remove(index)
+            .take_detached_render_subtrees()
     }
 
     /// Check if there are inactive elements pending unmount.
@@ -1637,6 +1677,30 @@ impl BuildOwner {
         // discipline as `ChangeNotifier::notify_listeners` (foundation
         // notifier.rs:158-163).
         let inactive_elements: Vec<_> = std::mem::take(&mut self.inactive_elements);
+        let mut inactive_elements = inactive_elements;
+
+        // Consume every linear relocation token before ordinary unmount begins.
+        // This authorizes finalization without deleting render nodes or firing
+        // callbacks; the existing deepest-first unmount below remains the sole
+        // lifecycle and render-disposal path.
+        for inactive in &mut inactive_elements {
+            let Some(token) = inactive.take_detached_render_subtrees() else {
+                continue;
+            };
+            let pipeline = tree
+                .get(inactive.id())
+                .and_then(|node| node.element().pipeline_owner())
+                .expect(
+                    "BUG: an inactive element with a detached render token must retain its pipeline owner",
+                );
+            pipeline.with_mut(|pipeline_owner| {
+                pipeline_owner
+                    .release_detached_render_subtrees_for_finalization(token)
+                    .expect(
+                        "BUG: an inactive element's detached render token must remain valid until finalization",
+                    );
+            });
+        }
 
         // Collect all elements to unmount (including children)
         let mut elements_to_unmount = Vec::new();

@@ -125,6 +125,8 @@ pub(crate) fn reconcile_children_by_id(
     new_views: &[Box<dyn View>],
     owner: &mut crate::ElementOwner<'_>,
 ) {
+    let _reconcile_guard = tree.begin_reconcile(parent_id);
+
     // ── Step 1: extract. Clone the parent's current child ids into an
     // OWNED vec, then DROP the parent borrow. From here on no reference
     // into the slab outlives a single statement.
@@ -284,7 +286,8 @@ pub(crate) fn reconcile_children_by_id(
             // for a fresh element, or `Reparent` when it retakes a GlobalKey
             // element (`try_retake_global_key`). Emitting `Mount`
             // here too would double-fire on the retake path.
-            let new_id = tree.insert(new_view, parent_id, new_slot, owner);
+            let new_id = tree
+                .insert_during_reconcile(new_view, parent_id, new_slot, owner, &result, &old_slots);
             scheduling_reasons.insert(new_id, crate::RebuildReason::InitialMount);
             result.push(new_id);
         }
@@ -390,6 +393,13 @@ pub(crate) fn reconcile_children_by_id(
     let render_children_changed = old_ids != result;
     if let Some(parent_node) = tree.get_mut(parent_id) {
         parent_node.set_child_ids(result);
+    }
+    if render_children_changed {
+        // A retake installs its destination-local provisional order before
+        // update/observer callbacks. Later keyed claims may still permute the
+        // suffix, so request one authoritative full-tree synchronization after
+        // the entire build drain instead of scanning globally per parent.
+        tree.mark_render_reorder_needed();
     }
     if render_children_changed && let Some(parent_node) = tree.get(parent_id) {
         let element = parent_node.element();

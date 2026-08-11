@@ -1,6 +1,6 @@
 # `RenderAnimatedSize` + `AnimatedSize` — plan (oracle-verified)
 
-Core.2 Slice C of ADR-0013 (`docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`). Slices A/B are implemented: `RepaintHandle::mark_needs_layout` (`crates/flui-rendering/src/pipeline/handle.rs:261-264`), and defaulted `attach(&mut self, RepaintHandle)`/`detach(&mut self)` on `RenderObject<P>`/`RenderBox`/`RenderSliver` (`crates/flui-rendering/src/traits/render_object.rs:568-585`, forwarded at `render_box.rs:469-478,733-737`), wired by the pipeline's insert/remove paths and proven by `crates/flui-rendering/tests/attach_detach_lifecycle.rs`. This plan is the deferred DEV task the ADR named: `RenderAnimatedSize`'s own design, DoD-checked against `.flutter/flutter-master/packages/flutter/lib/src/rendering/animated_size.dart`.
+Core.2 Slice C of ADR-0013 (`docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`). Slices A/B are implemented: `RenderInvalidationHandle::mark_needs_layout` (`crates/flui-rendering/src/pipeline/handle.rs:261-264`), and defaulted `attach(&mut self, RenderInvalidationHandle)`/`detach(&mut self)` on `RenderObject<P>`/`RenderBox`/`RenderSliver` (`crates/flui-rendering/src/traits/render_object.rs:568-585`, forwarded at `render_box.rs:469-478,733-737`), wired by the pipeline's insert/remove paths and proven by `crates/flui-rendering/tests/attach_detach_lifecycle.rs`. This plan is the deferred DEV task the ADR named: `RenderAnimatedSize`'s own design, DoD-checked against `.flutter/flutter-master/packages/flutter/lib/src/rendering/animated_size.dart`.
 
 ## Headline: the mid-flight-retarget state machine is confirmed as the trickiest part — but not for the reason a first read suggests
 
@@ -97,9 +97,9 @@ pub struct RenderAnimatedSize {
 ```
 
 - **Constructor**: `RenderAnimatedSize::new(controller: AnimationController, curve: ArcCurve, alignment: Alignment, clip_behavior: Clip, on_end: Option<Arc<dyn Fn() + Send + Sync>>) -> Self` — takes an **already-built** `AnimationController` per ADR D2 (never a `Vsync`/`Duration` it builds one from internally). Builds `animation = CurvedAnimation::new(Arc::new(controller.clone()) as Arc<dyn Animation<f32>>, curve.clone())` — no `.with_reverse_curve(...)` (oracle's `AnimatedSize` widget has no `reverseCurve` param at all, only `reverseDuration`, so the reverse-curve-lock machinery in `CurvedAnimation` is never exercised — a nice, confirmed non-issue since `restart_animation` only ever runs `Forward`, never `Reverse`).
-- **`attach(&mut self, handle: RepaintHandle)`**: subscribe to `self.controller` (the `Listenable`, NOT `self.animation`, matching oracle's `_controller.addListener`):
+- **`attach(&mut self, handle: RenderInvalidationHandle)`**: subscribe to `self.controller` (the `Listenable`, NOT `self.animation`, matching oracle's `_controller.addListener`):
   ```rust
-  fn attach(&mut self, handle: RepaintHandle) {
+  fn attach(&mut self, handle: RenderInvalidationHandle) {
       let mark_handle = handle.clone();
       self.listener_id = Some(self.controller.add_listener(Arc::new(move || {
           let _ = mark_handle.mark_needs_layout();
@@ -126,7 +126,7 @@ pub struct RenderAnimatedSize {
 - **Setters** (called from the widget's `update_render_object`, changed-flag convention matching `RenderFlow`/`RenderStack`): `set_alignment(&mut self, alignment: Alignment) -> bool` (oracle's alignment setter triggers relayout, `shifted_box.dart:339-345` — `AligningShiftedBox` has no setter today; add one, or reconstruct it — cheap either way since it holds no other state); `set_clip_behavior(&mut self, clip: Clip) -> bool` (paint-only, oracle `:178-184`); `set_duration(&self, d: Duration)`/`set_reverse_duration(&self, d: Duration)` (thin forwards straight to `self.controller.set_duration`/`set_reverse_duration` — no restart, matching oracle's plain field-assignment setters `:148-162`); `set_curve(&mut self, curve: ArcCurve)` (rebuilds `self.animation = CurvedAnimation::new(Arc::new(self.controller.clone()), curve.clone()); self.curve = curve;` — safe because direction never flips for this object, so `CurvedAnimation`'s reverse-curve-lock state losing its capture on rebuild is a confirmed non-issue, §3); `set_on_end(&self, cb: Option<Arc<dyn Fn() + Send + Sync>>) { *self.on_end.lock() = cb; }` (no dirty-marking at all, matches oracle's inert setter).
 - **`Diagnosticable`**: expose `alignment` (via a getter added to `AligningShiftedBox` or stored redundantly — small detail), `clip_behavior`, `state`, mirroring `RenderAlign`'s `debug_fill_properties`.
 
-**Confirmed-safe-to-skip micro-optimization**: oracle's `_lastValue` guard (only `markNeedsLayout` if `_controller.value != _lastValue`) is **not required for correctness** in FLUI — `RepaintHandle::mark_needs_layout` is a cheap buffered-channel enqueue, and Flutter's own `markNeedsLayout()` is *also* a no-op when already dirty, so the guard is a defensive micro-optimization on both sides, not a correctness dependency. Recommend omitting it (simplifies the listener closure, no shared last-value cell needed) — see §8.
+**Confirmed-safe-to-skip micro-optimization**: oracle's `_lastValue` guard (only `markNeedsLayout` if `_controller.value != _lastValue`) is **not required for correctness** in FLUI — `RenderInvalidationHandle::mark_needs_layout` is a cheap buffered-channel enqueue, and Flutter's own `markNeedsLayout()` is *also* a no-op when already dirty, so the guard is a defensive micro-optimization on both sides, not a correctness dependency. Recommend omitting it (simplifies the listener closure, no shared last-value cell needed) — see §8.
 
 ## 5. `AnimatedSize` widget (`crates/flui-widgets/src/animated/animated_size.rs`, new)
 

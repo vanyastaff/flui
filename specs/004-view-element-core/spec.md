@@ -6,6 +6,12 @@
 **Status**: Closed (2026-06-30 — all four phases delivered with executable evidence; see `docs/ROADMAP-TRACKER.md` N5: Phase 0 S1/S2 spikes, Phase 1 storage/key round-trip tests, Phase 2 production keyed reconciliation + GlobalKey reparent tests, Phase 3 `IntoView`/derive/macro/port-check authoring surface)
 **Input**: Lock the FLUI Core Contracts — heterogeneous children (C2), widget-authoring API (C3), and the View / Element / Reconciliation core (C4 + C6) from `docs/FOUNDATIONS.md` Part III. Co-designed as one atomic merge unit because the four contracts share files and propagate constraints across each other (the `ViewSeq` shape forces the reconciler signature; `impl IntoView` ergonomics force the authoring surface; the element-storage shape couples to the heterogeneous-children boundary).
 
+> **2026-08-10 migration correction:** FR-023's historical prohibition on modifying
+> `PipelineOwnerHandle` no longer describes the shipped render boundary. The public raw owner
+> handle/request/kind seam was removed; a private bounded sender now stamps requests with an
+> attachment epoch, and `RenderInvalidationHandle` is the sole public node-bound capability.
+> The Slab/ID/storage protections FR-023 intended remain unchanged.
+
 ---
 
 ## Context

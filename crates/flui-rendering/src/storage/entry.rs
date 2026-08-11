@@ -27,7 +27,35 @@ use std::fmt::Debug;
 use flui_foundation::RenderId;
 
 use super::{links::NodeLinks, state::RenderState};
+use crate::pipeline::handle::AttachmentEpoch;
 use crate::protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, RenderObject};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachmentState {
+    Detached(Option<AttachmentEpoch>),
+    Attached(AttachmentEpoch),
+}
+
+impl AttachmentState {
+    fn next_epoch(self) -> Option<AttachmentEpoch> {
+        match self {
+            Self::Detached(None) => Some(AttachmentEpoch::FIRST),
+            Self::Detached(Some(previous)) => Some(previous.next()),
+            Self::Attached(_) => None,
+        }
+    }
+
+    fn epoch(self) -> Option<AttachmentEpoch> {
+        match self {
+            Self::Attached(epoch) => Some(epoch),
+            Self::Detached(_) => None,
+        }
+    }
+
+    fn is_detached_after(self, epoch: AttachmentEpoch) -> bool {
+        self == Self::Detached(Some(epoch))
+    }
+}
 
 /// Protocol-specific render entry.
 ///
@@ -72,6 +100,11 @@ pub struct RenderEntry<P: Protocol> {
 
     /// Tree structure links (parent, children, depth).
     links: NodeLinks,
+
+    /// Exact interval in which this node is attached to its pipeline owner.
+    /// Kept outside `RenderState`: attachment is storage lifecycle, not
+    /// protocol geometry or per-frame state.
+    attachment: AttachmentState,
 }
 
 impl<P: Protocol> Debug for RenderEntry<P>
@@ -104,6 +137,7 @@ impl<P: Protocol> RenderEntry<P> {
             render_object,
             state: RenderState::new(),
             links: NodeLinks::new(),
+            attachment: AttachmentState::Detached(None),
         }
     }
 
@@ -117,7 +151,40 @@ impl<P: Protocol> RenderEntry<P> {
             render_object,
             state: RenderState::new(),
             links: NodeLinks::with_parent(parent, depth),
+            attachment: AttachmentState::Detached(None),
         }
+    }
+
+    pub(crate) fn next_attachment_epoch(&self) -> Option<AttachmentEpoch> {
+        self.attachment.next_epoch()
+    }
+
+    pub(crate) fn begin_attachment(&mut self, epoch: AttachmentEpoch) -> bool {
+        if self.attachment.next_epoch() != Some(epoch) {
+            return false;
+        }
+        self.attachment = AttachmentState::Attached(epoch);
+        true
+    }
+
+    pub(crate) fn end_attachment(&mut self) -> bool {
+        let AttachmentState::Attached(epoch) = self.attachment else {
+            return false;
+        };
+        self.attachment = AttachmentState::Detached(Some(epoch));
+        true
+    }
+
+    pub(crate) fn is_attached_for(&self, epoch: AttachmentEpoch) -> bool {
+        self.attachment.epoch() == Some(epoch)
+    }
+
+    pub(crate) fn attachment_epoch(&self) -> Option<AttachmentEpoch> {
+        self.attachment.epoch()
+    }
+
+    pub(crate) fn is_detached_after(&self, epoch: AttachmentEpoch) -> bool {
+        self.attachment.is_detached_after(epoch)
     }
 }
 
