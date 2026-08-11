@@ -65,6 +65,24 @@ ignore = [
     { id = "RUSTSEC-2026-0194" },
     { id = "RUSTSEC-2026-0195" },
 
+    # RUSTSEC-2026-0253: lru <0.18.2 `LruCache::pop()` is not panic-safe — a
+    # panicking key `Drop` skips `detach()`, leaving a dangling node in the
+    # linked list for a later eviction to write through (UAF / double-free).
+    # Source: lru v0.16.4 ← glyphon v0.11 ← flui-engine.
+    #
+    # Not reachable here, on two independent grounds, both checked against
+    # glyphon 0.11.0's source rather than assumed:
+    #   1. The advisory needs a key whose `Drop` can panic. `GlyphonCacheKey`
+    #      derives `Copy` (text_render.rs), and Rust forbids `Copy + Drop`, so
+    #      the precondition is structurally impossible rather than unlikely.
+    #   2. glyphon never calls the vulnerable function — zero `.pop(` sites in
+    #      its source, and its cache is `unbounded_with_hasher`, so no eviction
+    #      path runs at all.
+    # Unfixable locally: glyphon still caps lru at ^0.16.2 as of 0.12.0 (its
+    # latest), which additionally requires wgpu ^30. Drop this ignore when
+    # glyphon releases against lru >=0.18.2.
+    { id = "RUSTSEC-2026-0253" },
+
     # RUSTSEC-2026-0186: memmap2 ≤0.9.10 passes an unchecked pointer offset to
     # madvise/msync syscalls.  PRE-EXISTING on main (pinned by cosmic-text 0.18.2
     # → fontdb → memmap2 0.9.10; cosmic-text caps the version).
