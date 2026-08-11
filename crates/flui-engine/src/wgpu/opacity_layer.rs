@@ -624,7 +624,8 @@ impl GpuReplay {
                 // and the result is composited onto the layer's offscreen_view at the
                 // integer-grid dst_rect with src_uv=[0,1] (non-negotiable #1).
                 //
-                // G2: no `_` arm — future Slice variants force a compile error here.
+                // Deliberately no `_` arm: a new `Slice` variant must fail to
+                // compile here rather than be silently skipped during folding.
                 DrawItem::Filter(mut op) => {
                     // 1. Render content to the grown-bounds intermediate.
                     let content_tex = self.render_segment_to_grown_offscreen(

@@ -249,9 +249,10 @@ mod layer_blend_tests;
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod shape_blend_tests;
 
-// gradient_image_blend_tests contains PR-5 GPU acceptance tests for gradient
-// and image advanced blend (dispatch_shader_rect + draw_image* paths).
-// Gradient-diversion unit tests are inline in batches/mod.rs.
+// gradient_image_blend_tests holds the GPU acceptance tests for advanced
+// (dst-read) blend on gradients and images — the `dispatch_shader_rect` and
+// `draw_image*` paths. Gradient-diversion unit tests are inline in
+// batches/mod.rs.
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gradient_image_blend_tests;
 
