@@ -391,6 +391,7 @@ fn multi_frontier_relocation_batches_disjoint_subtrees() {
         .detach_render_subtrees(&[first_root, second_root])
         .expect("batch detach");
     assert_eq!(token.node_count(), 4);
+    assert_eq!(token.root_count(), 2);
     for log in [
         &first_root_log,
         &first_child_log,
@@ -625,6 +626,83 @@ fn a_detached_subtree_that_gained_a_child_is_attachable_again_only_once_repaired
     owner
         .attach_render_subtrees(token)
         .expect("the repaired subtree matches the token again");
+}
+
+#[test]
+fn reordering_a_detached_subtree_invalidates_the_token_even_at_the_same_node_count() {
+    let mut owner = PipelineOwner::new();
+    let root = owner.insert(probe(LifecycleLog::default()));
+    let first = owner.insert(probe(LifecycleLog::default()));
+    let second = owner.insert(probe(LifecycleLog::default()));
+    owner.adopt_render_child(root, first);
+    owner.adopt_render_child(root, second);
+
+    let token = owner.detach_render_subtrees(&[root]).expect("detach token");
+    assert_eq!(token.node_count(), 3);
+    assert_eq!(token.root_count(), 1);
+
+    // Park a child elsewhere and re-adopt it, which appends it after its
+    // sibling. The node SET is unchanged and the count still matches, so only
+    // the recorded per-node order can catch this.
+    let bystander = owner.insert(probe(LifecycleLog::default()));
+    owner.adopt_render_child(bystander, first);
+    owner.adopt_render_child(root, first);
+    assert_eq!(
+        owner.render_tree().get(root).expect("root").children(),
+        [second, first]
+    );
+
+    let failure = owner
+        .attach_render_subtrees(token)
+        .expect_err("a reordered subtree no longer matches the token");
+    assert!(matches!(
+        failure.kind(),
+        flui_rendering::pipeline::AttachRenderSubtreesError::TopologyChanged
+    ));
+
+    // Restoring the recorded order makes the same token attach again.
+    let token = failure.into_token();
+    owner.adopt_render_child(bystander, second);
+    owner.adopt_render_child(root, second);
+    owner
+        .attach_render_subtrees(token)
+        .expect("the restored order matches the token again");
+}
+
+#[test]
+fn relocation_failures_surface_their_kind_through_display_debug_and_source() {
+    let mut owner = PipelineOwner::new();
+    let mut foreign_owner = PipelineOwner::new();
+    let render_id = owner.insert(probe(LifecycleLog::default()));
+    let token = owner
+        .detach_render_subtrees(&[render_id])
+        .expect("detach token");
+    assert!(
+        format!("{token:?}").contains("node_count"),
+        "the token's Debug redacts contents but must still report its shape"
+    );
+
+    let attach_failure = foreign_owner
+        .attach_render_subtrees(token)
+        .expect_err("foreign owner rejects");
+    assert_eq!(
+        attach_failure.to_string(),
+        attach_failure.kind().to_string()
+    );
+    assert!(std::error::Error::source(&attach_failure).is_some());
+
+    let release_failure = foreign_owner
+        .release_detached_render_subtrees_for_finalization(attach_failure.into_token())
+        .expect_err("foreign owner rejects the release too");
+    assert_eq!(
+        release_failure.to_string(),
+        release_failure.kind().to_string()
+    );
+    assert!(std::error::Error::source(&release_failure).is_some());
+
+    owner
+        .release_detached_render_subtrees_for_finalization(release_failure.into_token())
+        .expect("the owning pipeline still releases it");
 }
 
 #[derive(Debug, Clone)]
