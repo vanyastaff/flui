@@ -1885,6 +1885,7 @@ dependencies = [
 name = "flui-testing"
 version = "0.2.0"
 dependencies = [
+ "accesskit",
  "criterion",
  "flui-animation",
  "flui-devtools",
@@ -1893,10 +1894,12 @@ dependencies = [
  "flui-objects",
  "flui-rendering",
  "flui-scheduler",
+ "flui-semantics",
  "flui-types",
  "flui-view",
  "parking_lot",
  "static_assertions",
+ "thiserror 2.0.19",
  "tracing",
 ]
 

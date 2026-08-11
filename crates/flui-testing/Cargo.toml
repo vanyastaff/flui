@@ -45,6 +45,19 @@ flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # Names the shared `Arc<RwLock<PipelineOwner>>` the element tree and the binding
 # both hold (render-object attachment shares the owner; the binding does not own
 # it exclusively).
+# The accessibility tree the query-by-role API asserts against. flui-testing
+# reads the assembled `SemanticsOwner` tree out of the pipeline owner and
+# translates it with `flui_semantics::tree_to_update` -- the SAME translation a
+# platform adapter uses, so a test and a screen reader cannot disagree.
+flui-semantics = { path = "../flui-semantics", version = "0.2.0" }
+# Deliberately part of this crate's public contract: `A11yTree` hands back
+# AccessKit roles/nodes rather than a test-only mirror of them. The named types
+# are re-exported from `a11y` so a consumer does not have to add (and
+# version-match) accesskit itself.
+accesskit = { workspace = true }
+# Typed query-failure errors (`A11yQueryError`), per the workspace convention:
+# thiserror in libraries, anyhow only in binaries.
+thiserror = { workspace = true }
 parking_lot = { workspace = true }
 # Reports secondary panics without replacing the first transaction unwind.
 tracing = { workspace = true }
