@@ -64,17 +64,12 @@
 //!   for the ported invariant; its exact invocation count reflects an
 //!   already-documented ADR-0017 divergence — see that test's doc comment).
 //! - `'LayoutBuilder and Inherited -- do not rebuild when not using
-//!   inherited'` → [`layout_builder_inherited_no_rebuild_without_dependency`]
-//!   — **`#[ignore]`d, confirmed divergence, filed to `docs/ROADMAP.md`
-//!   Cross.H** (see that test's doc comment for the root cause).
+//!   inherited'` → [`layout_builder_inherited_no_rebuild_without_dependency`].
 //! - `'LayoutBuilder and Inherited -- do rebuild when using inherited'` →
 //!   [`layout_builder_inherited_rebuilds_when_dependency_used`] (green, with
 //!   a caveat on proof strength noted in its doc comment).
 //! - `'LayoutBuilder rebuilds once in the same frame'` →
-//!   [`layout_builder_dependent_descendant_rebuilds_once_per_pump`] —
-//!   **`#[ignore]`d, confirmed divergence, filed to `docs/ROADMAP.md`
-//!   Cross.H** (calls goes `1 -> 3`, not Flutter's `1 -> 2`; see that test's
-//!   doc comment).
+//!   [`layout_builder_dependent_descendant_rebuilds_once_per_pump`].
 //! - `'LayoutBuilder does not call builder when layout happens but layout
 //!   constraints do not change'` →
 //!   [`layout_builder_layout_only_invalidation_does_not_reinvoke_the_builder`]
@@ -207,19 +202,9 @@ fn layout_builder_child_state_change_resizes_without_rebuilding_the_builder() {
 /// (the mechanism `tests/layout_builder.rs`'s constraint-change case already
 /// exercises) or by `LaidOut::pump` (a root-level `mark_needs_build`).
 ///
-/// ## Confirmed divergence (already documented, not re-filed here)
-/// The reactive rebuild logs the constraints TWICE for the one resize
-/// (`[10×20, 10×20, 100×200]`, not `[10×20, 100×200]`) — verified by running
-/// this exact case. This is the same "stale pass, then fresh pass" shape
-/// `tests/layout_builder.rs::layout_builder_constraint_change_rebuilds_in_the_same_frame`
-/// already documents under ADR-0017 for a `pump_widget`-driven update; this
-/// case shows the identical mechanism also fires for a `ValueListenableBuilder`
-/// `tick()`-driven ancestor rebuild, because both routes reconcile a freshly
-/// reconstructed `LayoutBuilder` view into the same element, and `LayoutBuilder`
-/// has no `should_skip_rebuild` override to recognize the new view as
-/// unchanged (`crates/flui-view/src/view/view.rs:140` default `false`). Not a
-/// new gap — the final geometry is still correct, so only the exact
-/// invocation count reflects the pre-existing, already-filed divergence.
+/// The isolated scope prevents the stale-constraints pre-layout rebuild: the
+/// builder runs once with the old constraints at mount and once with the new
+/// constraints after the ancestor resize.
 #[test]
 fn layout_builder_parent_state_change_drives_a_constraint_change() {
     let (notifier, cell) = size_cell(10.0, 20.0);
@@ -255,10 +240,7 @@ fn layout_builder_parent_state_change_drives_a_constraint_change() {
 
     assert_eq!(
         log.lock().as_slice(),
-        // 3, not 2: the pre-existing ADR-0017 stale/fresh double-invocation
-        // (see the doc comment above) — the resize still reaches LayoutBuilder
-        // as a real constraint change, just logged twice for this one tick.
-        &[tight(10.0, 20.0), tight(10.0, 20.0), tight(100.0, 200.0)],
+        &[tight(10.0, 20.0), tight(100.0, 200.0)],
         "an ancestor resize delivered via a reactive rebuild (not pump_widget/pump) \
          must reach LayoutBuilder as a real constraint change"
     );
@@ -274,28 +256,11 @@ fn layout_builder_parent_state_change_drives_a_constraint_change() {
 /// never reads `MediaQuery`, so the ancestor's data change must not reinvoke
 /// it.
 ///
-/// ## Confirmed divergence — filed to `docs/ROADMAP.md` Cross.H
-///
-/// Running this exact case shows `calls` go `1 -> 2`, not `1 -> 1`.
-/// Root cause: `LayoutBuilder` (`crates/flui-view/src/element/layout_builder.rs`)
-/// has no [`flui_view::View::should_skip_rebuild`] override, and the default
-/// (`crates/flui-view/src/view/view.rs:140`) unconditionally returns `false`
-/// — so `dispatch_view_update`
-/// (`crates/flui-view/src/element/dispatch.rs:119-136`) marks it dirty on
-/// EVERY reconcile-driven update, regardless of whether the change reaching
-/// it is something its builder actually depends on. Flutter's
-/// `_LayoutBuilderElement` only reinvokes the builder when the constraints
-/// changed or its own `updateShouldRebuild` (or a used `InheritedWidget`
-/// dependency) says so; FLUI has neither a `should_skip_rebuild` override
-/// nor a `Memo<V>` wrapping for `LayoutBuilder`, so any ancestor-triggered
-/// reconcile pass rebuilds it unconditionally. Kept `#[ignore]`d, pinning the
-/// oracle's real expectation — un-ignore when `LayoutBuilder` gains a
-/// content-equality `should_skip_rebuild` (or a `Memo<LayoutBuilder>`-style
-/// opt-in) that recognizes "the same builder, reused" independent of
-/// ancestor churn.
+/// `LayoutBuilder::should_skip_rebuild` uses `Rc::ptr_eq` for the builder
+/// configuration, so reusing the same closure identity skips unrelated
+/// ancestor reconciliation while dependency and layout invalidations remain
+/// authoritative.
 #[test]
-#[ignore = "known divergence: LayoutBuilder has no should_skip_rebuild override, so any \
-            ancestor reconcile always reinvokes it — see docs/ROADMAP.md Cross.H"]
 fn layout_builder_inherited_no_rebuild_without_dependency() {
     let calls = Arc::new(AtomicUsize::new(0));
     let target = LayoutBuilder::new({
@@ -396,24 +361,11 @@ impl StatelessView for DependentCounter {
 /// descendant exactly once, not twice — Flutter's own count goes `1 -> 2`
 /// across the pump (one build per `pumpWidget` call), never landing on 3.
 ///
-/// ## Confirmed divergence — filed to `docs/ROADMAP.md` Cross.H
-///
-/// Running this exact, faithful (both constraints AND `MediaQuery` data
-/// change together) scenario shows `calls` go `1 -> 3`, not `1 -> 2`. An
-/// earlier version of this port held the `SizedBox` size fixed to make the
-/// assertion pass — that silently converts a real divergence into a
-/// green "port", locking in the wrong behavior as if it were correct. Kept
-/// `#[ignore]`d instead, pinning Flutter's real expectation (`2`, not the
-/// `3` FLUI actually produces) — un-ignore when the gap closes. See that
-/// test's own doc comment on `layout_builder_inherited_no_rebuild_without_dependency`
-/// above and the ROADMAP entry for the two candidate contributing
-/// mechanisms (not fully isolated from each other): the ADR-0017 stale/fresh
-/// double-invocation on a real constraint change, and the `should_skip_rebuild`
-/// gap (default `false`, so any reconcile-driven update always rebuilds)
-/// already filed for the Inherited case above.
+/// The isolated layout-builder build scope drains the builder and only the
+/// descendants owned by its nearest live scope. A dependent already rebuilt
+/// globally is therefore not rebuilt a second time when fresh constraints are
+/// serviced in the same pump.
 #[test]
-#[ignore = "known divergence: calls goes 1 -> 3 on a simultaneous constraint + \
-            MediaQuery change, not Flutter's 1 -> 2 — see docs/ROADMAP.md Cross.H"]
 fn layout_builder_dependent_descendant_rebuilds_once_per_pump() {
     let calls = Arc::new(AtomicUsize::new(0));
     let target = LayoutBuilder::new({

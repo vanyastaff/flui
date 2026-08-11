@@ -59,8 +59,9 @@ Each is **behavior-loyal to Flutter** (same layout/paint algorithm) with a
 - **Parent-data widget** — `Flexible`/`Expanded`/`Positioned`: a `ParentDataView`
   that writes layout data (flex factor, edge offsets) onto its child's render
   node, which the parent `RenderFlex`/`RenderStack` reads.
-- **Transition widget** — `FadeTransition`: an `AnimatedView` that subscribes to
-  an `Animation` and rebuilds each tick, mapping the value onto a child property.
+- **Render-driven transition** — `FadeTransition`: a state-owned persistent
+  `ProxyAnimation` drives `RenderAnimatedOpacity`, so ticks repaint without
+  rebuilding the widget subtree.
 
 It is **reactive**: a `setState`/rebuild that changes a widget's configuration
 updates its render object in place (no remount), and an `Animation` tick
@@ -72,7 +73,7 @@ This is the [Core.1 vertical slice](../../docs/ROADMAP.md) — it proves the who
 `build → layout → paint → composite → reconcile` pipeline on live widget code,
 including parent-data layout (`Flexible`/`Expanded`/`Positioned`), scrolling
 (`ListView`/`SingleChildScrollView` over slivers), and animation
-(`FadeTransition` driven by an `Animation` through the build-scheduling spine).
+(`FadeTransition` driven directly at the render layer by an `Animation`).
 Interaction landed too: `Listener` (raw pointer routing — its handler rides on
 the hit-test entry, with Flutter's `HitTestBehavior`: `DeferToChild` default /
 `Opaque`) and `GestureDetector` (`on_tap` plus `on_pan_start`/`on_pan_update`/

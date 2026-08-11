@@ -2,7 +2,7 @@
 //! alignment, sizing, decoration, margin, and a transform around a child.
 
 use flui_geometry::{EdgeInsets, Matrix4};
-use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::constraints::{BoxConstraints, Constraints};
 use flui_types::geometry::px;
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, Pixels};
@@ -141,31 +141,63 @@ impl Container {
 
 impl StatelessView for Container {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let effective_constraints = self.effective_constraints();
+        let child = self.child.clone().into_inner();
+
         // Innermost: the child, or Flutter's childless placeholder
         // (LimitedBox(0,0) over a ConstrainedBox.expand()) so a childless
         // container fills bounded space and collapses under unbounded space.
-        let mut current: BoxedView = match self.child.clone().into_inner() {
-            Some(boxed) => boxed,
+        // Tight effective constraints suppress that placeholder; only then may
+        // a childless alignment produce an empty Align, matching Flutter's
+        // mutually-exclusive `if (...) placeholder else if (...) Align`.
+        let use_placeholder = child.is_none()
+            && effective_constraints
+                .as_ref()
+                .is_none_or(|constraints| !constraints.is_tight());
+        let mut current: Option<BoxedView> = if use_placeholder {
+            Some(
+                LimitedBox::new(0.0, 0.0)
+                    .child(ConstrainedBox::new(BoxConstraints::expand()))
+                    .boxed(),
+            )
+        } else if let Some(alignment) = self.alignment {
+            Some(match child {
+                Some(child) => Align::new(alignment).child(child).boxed(),
+                None => Align::new(alignment).boxed(),
+            })
+        } else {
+            child
+        };
+        if let Some(padding) = self.padding {
+            current = Some(match current {
+                Some(child) => Padding::new(padding).child(child).boxed(),
+                None => Padding::new(padding).boxed(),
+            });
+        }
+        if let Some(color) = self.color {
+            current = Some(match current {
+                Some(child) => ColoredBox::new(color).child(child).boxed(),
+                None => ColoredBox::new(color).boxed(),
+            });
+        }
+        if let Some(decoration) = &self.decoration {
+            current = Some(match current {
+                Some(child) => DecoratedBox::new(decoration.clone()).child(child).boxed(),
+                None => DecoratedBox::new(decoration.clone()).boxed(),
+            });
+        }
+        if let Some(constraints) = effective_constraints {
+            current = Some(match current {
+                Some(child) => ConstrainedBox::new(constraints).child(child).boxed(),
+                None => ConstrainedBox::new(constraints).boxed(),
+            });
+        }
+        let mut current = match current {
+            Some(current) => current,
             None => LimitedBox::new(0.0, 0.0)
                 .child(ConstrainedBox::new(BoxConstraints::expand()))
                 .boxed(),
         };
-
-        if let Some(alignment) = self.alignment {
-            current = Align::new(alignment).child(current).boxed();
-        }
-        if let Some(padding) = self.padding {
-            current = Padding::new(padding).child(current).boxed();
-        }
-        if let Some(color) = self.color {
-            current = ColoredBox::new(color).child(current).boxed();
-        }
-        if let Some(decoration) = &self.decoration {
-            current = DecoratedBox::new(decoration.clone()).child(current).boxed();
-        }
-        if let Some(constraints) = self.effective_constraints() {
-            current = ConstrainedBox::new(constraints).child(current).boxed();
-        }
         if let Some(margin) = self.margin {
             current = Padding::new(margin).child(current).boxed();
         }
