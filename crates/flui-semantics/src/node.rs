@@ -292,6 +292,7 @@ impl SemanticsNode {
             hint: self.config.hint().map(|h| h.string.clone()),
             tooltip: self.config.tooltip().map(Into::into),
             text_direction: self.config.text_direction(),
+            role: self.config.role(),
             rect: self.rect,
             transform: self.transform.unwrap_or(Matrix4::IDENTITY),
             children: self.children.iter().map(|c| (c.get() - 1) as u64).collect(),
@@ -498,5 +499,43 @@ mod tests {
             SemanticsAction::DidGainAccessibilityFocus.value(),
         );
         assert_eq!(data.rect, node.rect());
+    }
+}
+
+#[cfg(test)]
+mod role_propagation_tests {
+    use super::*;
+    use crate::role::SemanticsRole;
+
+    /// A role set on the configuration must survive into the serialized node
+    /// data, which is the only thing a platform accessibility bridge ever sees.
+    ///
+    /// `to_node_data` copies roughly fifteen fields off the config — flags,
+    /// actions, label, value, hint, tooltip, text direction — and used to omit
+    /// exactly one: the role. So `Semantics(role: ColumnHeader)` in
+    /// `flui-material`'s `DataTable`, and `Tab`/`TabBar` in `NavigationBar`,
+    /// reached the test-only snapshot and nothing else. Screen readers use the
+    /// structural roles for navigation, and none of them were being published.
+    #[test]
+    fn an_explicit_role_survives_into_the_serialized_node_data() {
+        let mut node = SemanticsNode::new();
+        node.config_mut().set_role(SemanticsRole::ColumnHeader);
+
+        let data = node.to_node_data(SemanticsId::new(1));
+
+        assert_eq!(
+            data.role,
+            SemanticsRole::ColumnHeader,
+            "the role a widget set must reach the platform payload, not stop at the snapshot"
+        );
+    }
+
+    /// The common controls carry no explicit role — they are identified by a
+    /// flag — so the default must stay `None` rather than being invented.
+    #[test]
+    fn a_node_without_an_explicit_role_reports_none() {
+        let node = SemanticsNode::new();
+        let data = node.to_node_data(SemanticsId::new(1));
+        assert_eq!(data.role, SemanticsRole::None);
     }
 }

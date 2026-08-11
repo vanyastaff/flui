@@ -8,6 +8,7 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::properties::TextDirection;
+use crate::role::SemanticsRole;
 
 // ============================================================================
 // SemanticsNodeData
@@ -61,6 +62,16 @@ pub struct SemanticsNodeData {
     pub scroll_index: Option<i32>,
     /// Scroll child count.
     pub scroll_child_count: Option<i32>,
+    /// The node's explicit accessibility role.
+    ///
+    /// Carried separately from [`Self::flags`] because the two encode role at
+    /// different granularities, exactly as Flutter does. The common controls —
+    /// button, link, text field, slider — are identified by a *flag* and leave
+    /// this [`SemanticsRole::None`]; the structural roles a screen reader needs
+    /// for navigation — `Tab`, `Table`, `ColumnHeader`, `MenuItemRadio` — have
+    /// no flag and live only here. A consumer reading one and not the other
+    /// sees half the tree's meaning.
+    pub role: SemanticsRole,
 }
 
 impl Default for SemanticsNodeData {
@@ -78,6 +89,7 @@ impl Default for SemanticsNodeData {
             text_direction: None,
             rect: Rect::ZERO,
             transform: Matrix4::IDENTITY,
+            role: SemanticsRole::None,
             children: SmallVec::new(),
             platform_view_id: None,
             max_value_length: None,
