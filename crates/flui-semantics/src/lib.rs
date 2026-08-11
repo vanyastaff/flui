@@ -94,6 +94,13 @@ pub use accessibility::AccessibilityFeatures;
 // RE-EXPORTS - AccessKit Translation
 // ============================================================================
 pub use accesskit_translation::tree_to_update;
+// `SemanticsUpdateCallback` names `TreeUpdate` in its signature, so a consumer
+// implementing that callback must be able to name it without adding accesskit
+// itself at a version that must match ours. `NodeId` comes along because
+// addressing a published node is the first thing such a consumer does. Named
+// items only — a glob would enrol every future accesskit item into this crate's
+// contract without anyone deciding to.
+pub use accesskit::{NodeId, TreeUpdate};
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================

@@ -1695,5 +1695,5 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 /// render harness, or `debug_dump_semantics_tree` until a real bridge
 /// lands.
 fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback {
-    std::sync::Arc::new(|_updates: &[flui_semantics::SemanticsNodeUpdate]| {})
+    std::sync::Arc::new(|_update: &flui_semantics::TreeUpdate| {})
 }
