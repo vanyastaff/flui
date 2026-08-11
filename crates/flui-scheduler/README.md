@@ -118,7 +118,8 @@ if budget.is_over_budget() {
 
 // Get statistics
 let build_stats = budget.build_stats();
-println!("Build took {:.2}ms ({:.1}% of budget)", 
+// `Percentage`'s Display already renders one decimal and the `%` sign.
+println!("Build took {:.2}ms ({} of budget)",
          build_stats.duration_ms(), build_stats.budget_percent);
 ```
 
