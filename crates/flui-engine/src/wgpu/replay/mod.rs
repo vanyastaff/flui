@@ -3,19 +3,8 @@
 //! `GpuReplay` owns the five static GPU plumbing fields shared by every flush
 //! method, the per-frame texture-instance scratch batch, all six segment
 //! flushers that submit recorded `DrawSegment` IR to the GPU, the top-level
-//! `submit` dispatch loop, and opacity-layer recursion.  This completes
-//! the T10d step of the record/replay split.
-//!
-//! | T10 step    | What moved                                                     |
-//! |-------------|----------------------------------------------------------------|
-//! | T10b        | `texture_batch` field + `flush_texture_batch*` family          |
-//! | T10c        | `viewport_buffer`, `viewport_bind_group`, `unit_quad_buffer`,  |
-//! |             | `unit_quad_index_buffer`, `default_sampler` + the six segment  |
-//! |             | flushers (`flush_segment`, `flush_all_instanced_batches`,       |
-//! |             | `flush_gradient_batches`, `flush_tessellated_geometry`,         |
-//! |             | `flush_segment_cached_images`, `flush_segment_external_images`) |
-//! | T10d (this) | `submit` dispatch loop, `flush_opacity_layer`,                 |
-//! |             | `reintegrate_offscreen_content`                                |
+//! `submit` dispatch loop, and opacity-layer recursion. The split keeps record
+//! and replay ownership explicit while each implementation unit stays bounded.
 //!
 //! ## Flush order — R1 invariant
 //!
@@ -78,7 +67,7 @@ use super::{
 // `wgpu::Sampler` are opaque GPU handles with no useful `Debug` impl.
 #[allow(missing_debug_implementations)]
 pub(super) struct GpuReplay {
-    // ── Static GPU plumbing (moved from WgpuPainter in T10c) ─────────────────
+    // ── Static GPU plumbing moved from WgpuPainter ───────────────────────────
     /// Viewport uniform buffer (updated on resize, read by all instanced
     /// and gradient pipelines as group 0 binding 0).
     viewport_buffer: wgpu::Buffer,
@@ -105,7 +94,7 @@ pub(super) struct GpuReplay {
     /// second sampler field.  The `wgpu` module boundary is `super` here.
     pub(super) default_sampler: wgpu::Sampler,
 
-    // ── Per-frame texture-instance scratch batch (from T10b) ─────────────────
+    // ── Per-frame texture-instance scratch batch ─────────────────────────────
     /// Per-frame scratch batch for texture instances.
     ///
     /// Allocated once at construction time (1 024-instance capacity) and
@@ -234,7 +223,7 @@ impl GpuReplay {
     }
 
     // =========================================================================
-    // Top-level dispatch loop (T10d)
+    // Top-level dispatch loop
     // =========================================================================
 
     /// Consume the drained draw-item list and submit all recorded GPU work to
@@ -466,7 +455,7 @@ impl GpuReplay {
                         "GpuReplay: SSAA path tile composited"
                     );
                 }
-                // ── Image-filter (bounds-growing) — Task 0 / Slice 0 ────────
+                // ── Bounds-growing image filter ─────────────────────────────
                 //
                 // Z-correctness: z-order is set by each item's position in
                 // `draw_order` and the `for item in items` replay loop — NOT by
@@ -480,8 +469,8 @@ impl GpuReplay {
                 // to the pool. The `apply_image_filter_passes` fold maintains ≤2
                 // live textures regardless of chain length.
                 DrawItem::Filter(mut op) => {
-                    // 1. Render the isolated input segment to a GROWN-BOUNDS offscreen
-                    //    (Task 6): sized to fb_dim instead of the full viewport.
+                    // 1. Render the isolated input segment to a grown-bounds offscreen,
+                    //    sized to fb_dim instead of the full viewport.
                     //    Vertex positions are pre-transformed to fb-local NDC so that
                     //    dividing by the unchanged viewport uniform yields correct NDC
                     //    inside the smaller render target (non-negotiable #2).
@@ -499,7 +488,7 @@ impl GpuReplay {
                     );
 
                     // 2. Fold the pass chain over the grown-bounds intermediate.
-                    //    Task 0: Identity → returns content_tex unchanged.
+                    //    Identity returns content_tex unchanged.
                     //    Blur/Morph: each sub-pass acquires a fb_dim texture and uses
                     //    fb-local UV for the content_rect decal (non-negotiable #3).
                     let filtered_tex = apply_image_filter_passes(
@@ -524,7 +513,7 @@ impl GpuReplay {
                     //
                     //    Using fractional grown_bounds as dst_rect over an integer-
                     //    origin texture would shift every pixel by frac(grown_left)
-                    //    (the composite-grid shift, risk #1 in the Task 6 spec).
+                    //    (the composite-grid shift this integer-grid contract prevents).
                     let (fb_origin_x, fb_origin_y) = op.fb_origin;
                     let (fb_w, fb_h) = op.fb_dim;
                     #[allow(

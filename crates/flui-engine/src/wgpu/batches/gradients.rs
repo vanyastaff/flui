@@ -20,7 +20,7 @@ use super::{
 impl DrawBatcher {
     /// Record a rectangle with a linear gradient.
     ///
-    /// Takes `segment` and `state` as disjoint borrows (borrow seam, T9c).
+    /// Takes `segment` and `state` as disjoint borrows.
     /// No draw-order slot is consumed — gradient instances are instanced (no
     /// tessellation, no non-`SrcOver` seal).
     ///
@@ -95,7 +95,7 @@ impl DrawBatcher {
 
     /// Record a rectangle with a radial gradient.
     ///
-    /// Takes `segment` and `state` as disjoint borrows (borrow seam, T9c).
+    /// Takes `segment` and `state` as disjoint borrows.
     /// No draw-order slot — instanced, no tessellation.
     ///
     /// # Arguments
@@ -166,7 +166,7 @@ impl DrawBatcher {
 
     /// Record a rectangle with a sweep (angular/conic) gradient.
     ///
-    /// Takes `segment` and `state` as disjoint borrows (borrow seam, T9c).
+    /// Takes `segment` and `state` as disjoint borrows.
     /// No draw-order slot — instanced, no tessellation.
     ///
     /// # Arguments

@@ -11,9 +11,12 @@
 //! | `layer_texture_pool`         | `GpuResources::layer_texture_pool`      |
 //! | `external_texture_registry`  | `GpuResources::external_texture_registry` |
 //!
-//! **Ownership note:** `layer_texture_pool` is owned here so that a future
-//! `LayerCompositor` (task T8) can *borrow* it from `GpuResources` without
-//! requiring a separate field on the painter.
+//! **Ownership note:** `layer_texture_pool` is owned here so that the
+//! offscreen-effect passes can *borrow* it from `GpuResources` without
+//! requiring a separate field on the painter. Those borrowers are the passes
+//! that render into an intermediate texture — `advanced_blend`, `blur`,
+//! `color_matrix`, `gamma`, and `mode` — each reaching it through
+//! [`GpuResources::layer_texture_pool_mut`].
 //!
 //! **RAII is preserved verbatim.** `PooledTexture` returns to its pool on
 //! `Drop`, `BufferPool` resets `in_use` counters on `BufferPool::reset()`, and
@@ -58,7 +61,7 @@ pub(crate) struct GpuResources {
 
     /// Pool of offscreen textures used for opacity-layer compositing.
     ///
-    /// Owned here so `LayerCompositor` (task T8) can borrow it via
+    /// Owned here so `LayerCompositor` can borrow it via
     /// `layer_texture_pool_mut`. Each acquire returns a `PooledTexture` RAII
     /// handle that returns the texture to this pool on `Drop`.
     layer_texture_pool: TexturePool,
@@ -132,7 +135,7 @@ impl GpuResources {
 
     /// Exclusive reference to the offscreen layer texture pool.
     ///
-    /// `LayerCompositor` (task T8) will borrow this from `GpuResources` to
+    /// `LayerCompositor` borrows this from `GpuResources` to
     /// acquire and return offscreen compositing textures.
     pub(crate) fn layer_texture_pool_mut(&mut self) -> &mut TexturePool {
         &mut self.layer_texture_pool

@@ -1606,18 +1606,18 @@ fn blend_clear_respects_draw_order() {
     );
 }
 
-// ===== T9a Characterisation readback safety-net =====
+// ===== Shape-batcher characterisation readback safety net =====
 //
 // Locks down the relocated batcher slow path (non-axis-aligned rect with a
 // non-SrcOver blend mode).  A regression in the moved branch would pass the
 // instanced-path tests but silently break the tessellated-path segment seal.
 
-/// T9a-1: rotated rect with `BlendMode::Clear` seals its segment so a later
+/// A rotated rect with `BlendMode::Clear` seals its segment so a later
 /// `SrcOver` instanced rect composites correctly.
 ///
 /// # What this covers
 ///
-/// After T9a extracted `DrawBatcher::rect`, the *slow path* inside that
+/// After extracting `DrawBatcher::rect`, the *slow path* inside that
 /// method — reached when the transform is NOT axis-aligned OR the blend mode
 /// is not `SrcOver` — calls `add_tessellated_with_key`, which in turn calls
 /// `finish_current_segment` for any non-`SrcOver` blend.  This is the moved
@@ -1703,7 +1703,7 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
         center[1] > 200 && center[0] < 10 && center[2] < 10,
         "center pixel = {center:?}, expected GREEN ~(0,255,0,255). \
              A transparent or red result means the rotated-Clear rect did not seal \
-             its segment before the subsequent SrcOver rect (T9a slow-path seal broken)."
+             its segment before the subsequent SrcOver rect (slow-path seal broken)."
     );
     assert_eq!(
         center[3], 255,
@@ -1719,7 +1719,7 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
 // These tests lock down the SDF-clip baking (clip_rrect / clip_rsuperellipse
 // corner cutouts) and the nested save+clip+restore scissor restoration that
 // had ZERO pixel coverage before T6. They are characterisation tests: they
-// pass on the current (correct) code and will FAIL if T7 (GpuStateStack
+// pass on the current (correct) code and will FAIL if the GpuStateStack
 // extraction) breaks clip/scissor behaviour.
 //
 // Each test discriminates: the assertion would fail if the clip were a plain
@@ -1970,7 +1970,7 @@ fn nested_save_clip_restore_removes_scissor() {
     );
 }
 
-/// Verify that `DrawBatcher::draw_shadow` (T9b) keeps its `save`/`restore`
+/// Verify that `DrawBatcher::draw_shadow` keeps its `save`/`restore`
 /// calls balanced so the CTM is unchanged after the call returns.
 ///
 /// # Discriminating strategy
@@ -2043,8 +2043,9 @@ fn draw_shadow_save_restore_is_balanced() {
     );
 }
 
-/// T9c characterisation: `rect` with a `Fill` + `LinearGradient` shader routes
-/// through `DrawBatcher::dispatch_shader_rect` → `DrawBatcher::gradient_rect`.
+/// Gradient-dispatch characterisation: `rect` with a `Fill` + `LinearGradient`
+/// shader routes through `DrawBatcher::dispatch_shader_rect` →
+/// `DrawBatcher::gradient_rect`.
 ///
 /// # Discriminating strategy
 ///
@@ -2120,7 +2121,7 @@ fn linear_gradient_rect_dispatches_through_thin_shim() {
     );
 }
 
-/// T9d characterisation: `draw_path` cache-hit branch uses the *current*
+/// Path-cache characterisation: `draw_path` cache-hit branch uses the *current*
 /// `paint.color`, not the color from the first (cache-miss) tessellation.
 ///
 /// # Discriminating strategy
@@ -2201,7 +2202,7 @@ fn draw_path_cache_hit_uses_current_paint_color() {
 /// `draw_image_filtered` with `ColorFilter::Mode` must tint an **opaque**
 /// image — the tint has to composite *over* the image, not under it.
 ///
-/// This is the regression guard for the pre-T9 bug: the old `Mode` branch
+/// This is the regression guard for the previous bug: the old `Mode` branch
 /// drew the image into `cached_images` and a half-alpha tint rect into
 /// `rect_batch`, but `flush_segment` flushes `rect_batch` *before*
 /// `cached_images`, so an opaque image fully occluded the tint and the color
@@ -2463,13 +2464,13 @@ fn draw_image_filtered_distinct_filters_do_not_alias() {
     );
 }
 
-/// T10a: external-texture resolution happens at replay time, not record time.
+/// External-texture resolution happens at replay time, not record time.
 ///
 /// Register a solid-RED texture under ID 77, record `draw_texture`, then
 /// call `update()` on the same ID replacing it with a solid-GREEN texture —
 /// all BEFORE `render()`.  Assert the readback shows GREEN, not RED.
 ///
-/// This test FAILS before T10a (record-time resolution → RED survives the
+/// This test fails with record-time resolution (the stale view survives the
 /// update) and PASSES after (replay-time resolution → GREEN wins).
 ///
 /// Flutter reference: `Texture` widget and the engine's `ExternalTextureRegistry`
@@ -2664,13 +2665,13 @@ fn external_texture_resolves_at_replay_not_record_time() {
         i32::from(pixel[2]),
     );
     // Must be GREEN (updated texture), NOT RED (originally recorded texture).
-    // Failure here means resolution happened at record time (T10a regressed).
+    // Failure here means resolution happened at record time.
     assert!(
         g > 200 && r < 20,
         "Center pixel = {pixel:?}: expected GREEN (G>200, R<20) to prove \
-             replay-time resolution (T10a). \
+             replay-time resolution. \
              RED (R>200, G<20) means the TextureView was captured at record time \
-             and the update() was invisible — regression in T10a record/replay seam."
+             and the update() was invisible — regression in the record/replay seam."
     );
     assert!(
         b < 20,
@@ -2678,7 +2679,7 @@ fn external_texture_resolves_at_replay_not_record_time() {
     );
 }
 
-/// T10a edge: unregistered external texture at replay time is warn-skipped, not rendered.
+/// An unregistered external texture at replay time is warn-skipped, not rendered.
 ///
 /// Sequence:
 /// 1. Register a solid-GREEN texture under ID 88.
@@ -2787,7 +2788,7 @@ fn external_texture_unregistered_at_replay_is_skipped() {
         tl_g < 20 && tl_r < 20,
         "Top-left center pixel = {tl:?}: expected near-BLACK (unregistered external \
              texture must be skipped, not composited). High G={tl_g} means the GREEN texture \
-             was rendered despite being unregistered before render() — T10a skip-on-missing contract broken."
+             was rendered despite being unregistered before render() — skip-on-missing contract broken."
     );
 
     // Assert (b): bottom-right quadrant center IS RED — the skip did not abort the frame.

@@ -392,7 +392,7 @@ mod tests {
 
     /// A `debug_assert_balanced` call on an unbalanced compositor must panic.
     ///
-    /// Mirrors the equivalent test for `GpuStateStack` (T7 pattern).
+    /// Mirrors the equivalent `GpuStateStack` balance test.
     /// Debug-only: the guard it exercises compiles out in release, so without
     /// the gate `cargo test --release` reports "did not panic as expected".
     #[test]

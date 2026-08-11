@@ -73,7 +73,7 @@ impl DrawBatcher {
     /// / `state.restore()`.  The save/restore balance is maintained strictly:
     /// every iteration pushes exactly one save and pops it before the next
     /// iteration.  The net depth change across the entire call is zero, so the
-    /// T7 frame-boundary `debug_assert_balanced` remains satisfied.
+    /// frame-boundary `debug_assert_balanced` remains satisfied.
     ///
     /// # Algorithm
     ///

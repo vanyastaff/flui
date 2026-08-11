@@ -944,7 +944,7 @@ mod gpu_tests {
             }],
             content_bounds: content_rect,
             grown_bounds: grown_rect,
-            // Integer-aligned (Task 6): grown_left/top are already integers here.
+            // Integer-aligned: grown_left/top are already integers here.
             fb_origin: (grown_left, grown_top),
             fb_dim: (grown_right - grown_left, grown_bottom - grown_top),
         };
@@ -992,15 +992,15 @@ mod gpu_tests {
         );
     }
 
-    // ── B6: Off-origin readback — Task 6 grown-bounds sizing discriminator ───
+    // ── B6: Off-origin readback — grown-bounds sizing discriminator ─────────
 
     /// B6: Content rect NOT at origin (`[34,34]→[54,54]`), blur σ=4.
     ///
-    /// ## What this tests (Task 6 non-negotiables)
+    /// ## What this tests
     ///
     /// With the pre-Task-6 full-viewport intermediate the pixel values are correct:
     /// the texel grid aligns with the device-pixel grid regardless of content position.
-    /// After Task 6 the intermediate is `fb_dim`-sized and the content is rendered at
+    /// The intermediate is `fb_dim`-sized and the content is rendered at
     /// pixel `(0,0)` of the intermediate via a vertex pre-transform (non-negotiable #2).
     ///
     /// A wrong implementation that uses:
@@ -1147,7 +1147,7 @@ mod gpu_tests {
         // ── Assertion 2: oracle match ±3 LSB ─────────────────────────────────
         //
         // The oracle runs on the full 64×64 surface. The GPU output should match
-        // because Task 6 only changes VRAM layout — not pixel values.
+        // because grown-bounds sizing changes VRAM layout, not pixel values.
         let source_premul: [u8; 4] = [
             source_color.r,
             source_color.g,

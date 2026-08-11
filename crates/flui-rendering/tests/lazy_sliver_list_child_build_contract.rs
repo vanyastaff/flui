@@ -218,7 +218,7 @@ fn collect_child_indices(
 /// catches. The convergence test covers many offsets; this test fixes the
 /// discriminating edge at index=2.
 #[test]
-fn step3_logical_index_stamped_on_deferred_insert() {
+fn logical_index_stamped_on_deferred_insert() {
     let item_height = 50.0_f32;
     let scroll_offset = 100.0_f32; // visible band starts at item 2
     // N=5 so item 2 and its neighbours are valid; viewport (300 px) fits items 2–7.
@@ -268,7 +268,7 @@ fn step3_logical_index_stamped_on_deferred_insert() {
 /// contains exactly the pre-existing child B plus newly inserted C (not also
 /// the removed child A).
 #[test]
-fn step7_deferred_remove_before_insert_ordering() {
+fn deferred_remove_before_insert_ordering() {
     let mut owner = PipelineOwner::new();
 
     // A Box parent with two children A and B.
@@ -339,7 +339,7 @@ fn step7_deferred_remove_before_insert_ordering() {
 /// This test fails if logical_index is 0 for all children when
 /// scroll_offset > 0, i.e. if the insert-time stamp is missing.
 #[test]
-fn u3c_9a_convergence_logical_indices_reconcile() {
+fn convergence_logical_indices_reconcile() {
     let n_items = 1_000;
     let item_height = 50.0_f32;
     let viewport_height = 500.0_f32;
@@ -424,7 +424,7 @@ fn u3c_9a_convergence_logical_indices_reconcile() {
 /// This test fails with unbounded growth if dispose never fires, and passes
 /// with bounded growth once off-band children are evicted.
 #[test]
-fn u3c_9b_bounded_child_count_after_scroll() {
+fn bounded_child_count_after_scroll() {
     let n_items = 1_000usize;
     let item_height = 50.0_f32;
     let viewport_height = 300.0_f32;
@@ -540,7 +540,7 @@ fn u3c_9b_bounded_child_count_after_scroll() {
 ///     to the tail of the list (not stuck near 0), reaching within the last
 ///     visible band of item N-1.
 #[test]
-fn u3c_9c_full_range_scroll_reaches_tail_with_bounded_children() {
+fn full_range_scroll_reaches_tail_with_bounded_children() {
     let n_items = 1_000usize;
     let item_height = 50.0_f32;
     let viewport_height = 300.0_f32;

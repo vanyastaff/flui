@@ -12,6 +12,7 @@ mod attach_detach_lifecycle;
 mod compositing_bits_walk;
 #[path = "cross_protocol_layout.rs"]
 mod cross_protocol_layout;
+mod cyclic_intrinsic_query;
 #[path = "decorated_box_pipeline.rs"]
 mod decorated_box_pipeline;
 #[path = "deep_tree_stack.rs"]
@@ -78,5 +79,3 @@ mod sliver_hit_direction_matrix;
 mod sliver_to_box_adapter;
 #[path = "transform_to.rs"]
 mod transform_to;
-#[path = "u21b_cyclic_intrinsic_query.rs"]
-mod u21b_cyclic_intrinsic_query;

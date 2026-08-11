@@ -267,7 +267,7 @@ mod gpu_tests {
     /// The tessellated rect has aliased edges at `sample_count=1`.  At the last
     /// row/column of the viewport the `flush_tessellated_geometry` path may leave
     /// partial-alpha edge pixels.  We skip those boundary texels (same policy as
-    /// T6/T10 in `layer_blend_tests.rs`).
+    /// the corresponding readback cases in `layer_blend_tests.rs`).
     #[test]
     fn multiply_rect_matches_cpu_oracle() {
         let (device, queue) = acquire_test_device_and_queue();

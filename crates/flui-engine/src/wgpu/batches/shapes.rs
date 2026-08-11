@@ -30,10 +30,10 @@ impl DrawBatcher {
     // directly; after the file→directory split the child files are one level
     // deeper, so `pub(in super::super)` preserves the identical access scope.
     ///
-    /// Shader/gradient fills are dispatched first (T9c): when `paint.style` is
+    /// Shader/gradient fills are dispatched first: when `paint.style` is
     /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called and the
     /// method returns early.  The non-shader fill and stroke paths are unchanged
-    /// from T9a.
+    /// from the pre-extraction behavior.
     pub(in super::super) fn rect(
         &mut self,
         segment: &mut DrawSegment,
@@ -192,10 +192,10 @@ impl DrawBatcher {
 
     /// Record a filled rounded rectangle or a stroked one.
     ///
-    /// Shader/gradient fills are dispatched first (T9c): when `paint.style` is
+    /// Shader/gradient fills are dispatched first: when `paint.style` is
     /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called with the
     /// max per-corner radii and returns early.  The non-shader fill and stroke
-    /// paths are unchanged from T9a.
+    /// paths preserve the pre-extraction behavior.
     pub(in super::super) fn rrect(
         &mut self,
         segment: &mut DrawSegment,
@@ -370,15 +370,16 @@ impl DrawBatcher {
 
     /// Record a filled circle or a stroked circle.
     ///
-    /// Shader/gradient fills are dispatched first (T9c): when `paint.style` is
+    /// Shader/gradient fills are dispatched first: when `paint.style` is
     /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called with
     /// `[radius; 4]` corner radii and the center±radius bounding rect, then
-    /// returns early.  The non-shader fill and stroke paths are unchanged from T9a.
+    /// returns early. The non-shader fill and stroke paths preserve the
+    /// pre-extraction behavior.
     #[allow(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/opacity are disjoint WgpuPainter \
                   fields passed as separate borrows; merging them into a context struct defeats \
-                  the T9a borrow split"
+                  the disjoint-field borrow split"
     )]
     pub(in super::super) fn circle(
         &mut self,

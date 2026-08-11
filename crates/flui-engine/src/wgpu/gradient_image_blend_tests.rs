@@ -1,6 +1,6 @@
-//! PR-5 GPU acceptance gate: gradient and image advanced (dst-read) blend.
+//! GPU acceptance gate for advanced (dst-read) blend on gradients and images.
 //!
-//! Unit tests for gradient diversion (G1-G6) live in `batches/mod.rs` as an
+//! Unit tests for gradient diversion live in `batches/mod.rs` as an
 //! inline `#[cfg(test)] mod unit_tests` block — they exercise `dispatch_shader_rect`
 //! without a GPU device.
 //!

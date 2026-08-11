@@ -218,9 +218,9 @@ pub(crate) enum ImageFilterPass {
     /// Passthrough: render the input segment and copy it through unchanged.
     ///
     /// Exercises the `DrawItem::Filter` seam end-to-end with zero filter math
-    /// (Task 0). Grows `FilterOp::grown_bounds` by 0 pixels.
-    // Constructed by the CI-visible `task0_ir_witnesses` tests below; there is no
-    // production producer until Slice 1 wires a public painter API. So the variant
+    /// and grows `FilterOp::grown_bounds` by 0 pixels.
+    // Constructed by the CI-visible `filter_ir_purity_witnesses` tests below;
+    // there is no production producer until a public painter API is wired. So the variant
     // is genuinely unconstructed only in NON-test builds — scope the allow to those
     // (the lint stays live under `cfg(test)`, where the witnesses construct it).
     #[cfg_attr(not(test), allow(dead_code))]
@@ -295,7 +295,7 @@ pub(crate) enum ImageFilterPass {
 /// Textures are acquired at REPLAY time (never held in the IR), matching the
 /// discipline of `AdvancedShapeOp` and `SsaaPathOp`.
 ///
-/// ## Integer-grid composite (Task 6 — grown-bounds intermediate sizing)
+/// ## Integer-grid composite
 ///
 /// The intermediate offscreen is sized to the integer-aligned bounding box of
 /// `grown_bounds` (floor origin, ceil far corner, clamped to viewport) rather
@@ -312,7 +312,7 @@ pub(crate) enum ImageFilterPass {
 /// `fb_origin` and `fb_dim` are computed at **record time** in `painter::layer`'s
 /// `restore_layer` and stored here so BOTH composite arms (top-level in
 /// `replay` + nested in `opacity_layer.rs`) re-read ONE source — eliminating
-/// arm-drift (risk #4 in the Task 6 spec).
+/// drift between the two composite arms.
 #[derive(Debug, Clone)]
 pub(crate) struct FilterOp {
     /// Foreground content the filter consumes, rendered to an offscreen
@@ -326,12 +326,12 @@ pub(crate) struct FilterOp {
     /// Pre-filter content AABB in physical pixels (record-time geometry bound).
     pub(crate) content_bounds: Rect<Pixels>,
     /// `content_bounds` expanded by the accumulated pass radius, clipped to
-    /// the layer bounds. For Task 0 this equals `content_bounds` (Identity
-    /// grows bounds by 0 pixels). Slice 4 computes the real growth via
+    /// the layer bounds. For Identity this equals `content_bounds` because the
+    /// pass grows bounds by 0 pixels. Growing filters compute their pad via
     /// `kernel_radius(sigma)`.
     ///
     /// The composite uses `fb_origin`/`fb_dim` (integer-aligned) rather than
-    /// `grown_bounds` directly (Task 6 non-negotiable #1). `grown_bounds` is
+    /// `grown_bounds` directly. `grown_bounds` is
     /// retained for diagnostics, tracing, and future tooling (e.g. damage-region
     /// tracking or spec-verify audits that check halo extent in floating-point).
     // Retained for diagnostics: the composite arms now use fb_origin/fb_dim but
@@ -344,14 +344,13 @@ pub(crate) struct FilterOp {
     /// Computed as `(floor(grown_bounds.left), floor(grown_bounds.top))`.
     /// Integer-aligned so the bilinear composite produces an aligned texel blit
     /// (no sub-pixel shift). Stored on the IR so both composite arms share one
-    /// authoritative value (Task 6 non-negotiable #4).
+    /// authoritative value.
     pub(crate) fb_origin: (u32, u32),
     /// Integer-aligned dimensions of the offscreen intermediate in device pixels.
     ///
     /// Computed as `(ceil(far.x) - fb_origin.x, ceil(far.y) - fb_origin.y)`,
     /// clamped so `fb_origin + fb_dim ≤ viewport`. This is the exact size passed
-    /// to `pool.acquire` and used as `texture_size` in all filter sub-passes
-    /// (Task 6 non-negotiables #2 and #3).
+    /// to `pool.acquire` and used as `texture_size` in all filter sub-passes.
     pub(crate) fb_dim: (u32, u32),
 }
 
@@ -755,9 +754,9 @@ pub(crate) enum DrawItem {
     /// Z-order is the insertion position in `draw_order` (R1 arm order). This
     /// arm is placed LAST in `GpuReplay::submit` so all prior draw-order items
     /// are flushed to the target before the filter result is composited on top.
-    // Constructed by the CI-visible `task0_ir_witnesses` tests below; there is no
-    // production producer until Slice 1 wires a public painter API (e.g.
-    // `push_image_filter`). The variant is genuinely unconstructed only in
+    // Constructed by the CI-visible `filter_ir_purity_witnesses` tests below;
+    // there is no production producer until a public painter API (for example,
+    // `push_image_filter`) is wired. The variant is genuinely unconstructed only in
     // NON-test builds, so scope the allow there (the lint stays live under
     // `cfg(test)`, where the witnesses construct + match it).
     #[cfg_attr(not(test), allow(dead_code))]
@@ -800,7 +799,7 @@ pub(crate) struct PendingOpacityLayer {
     pub(crate) filters: LayerFilterChain,
 }
 
-// ─── Task 0 IR-purity witnesses (CI-visible) ──────────────────────────────────
+// ─── Filter IR-purity witnesses (CI-visible) ──────────────────────────────────
 //
 // These run in the standard CI `cargo nextest --lib` pass — a PLAIN `#[cfg(test)]`
 // module in a non-feature-gated file (NOT under `feature = "enable-wgpu-tests"`),
@@ -812,7 +811,7 @@ pub(crate) struct PendingOpacityLayer {
 //   2. assert the new IR is `Clone` + handle-free (the IR-purity witness), so any future field
 //      holding a live GPU handle fails to compile — guarding IR purity in CI.
 #[cfg(test)]
-mod task0_ir_witnesses {
+mod filter_ir_purity_witnesses {
     use flui_types::{Rect, geometry::px};
     use smallvec::smallvec;
 
