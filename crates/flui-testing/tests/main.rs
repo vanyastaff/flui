@@ -10,6 +10,8 @@
 //! flui-testing's integration tests do — both drive a per-test
 //! `HeadlessBinding` instance (no singletons, no env vars, no statics).
 
+#[path = "a11y_query.rs"]
+mod a11y_query;
 #[path = "async_driver.rs"]
 mod async_driver;
 #[path = "controller_restart.rs"]

@@ -266,7 +266,11 @@ declarations = [
 
 [[export_root]]
 file = "crates/flui-testing/src/lib.rs"
-declarations = ["pub struct HeadlessBinding {"]
+declarations = [
+    "pub mod a11y;",
+    "pub use a11y::{A11yNode, A11yQuery, A11yQueryError, A11yTree, NotTreeBound};",
+    "pub struct HeadlessBinding {",
+]
 
 # Owner-affine UI realms
 

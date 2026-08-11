@@ -292,6 +292,25 @@ pub(crate) fn to_node(data: &SemanticsNodeData, children: Vec<NodeId>) -> Node {
     node
 }
 
+/// The node claiming [`SemanticsFlag::IsFocused`], if exactly one does.
+///
+/// Two nodes claiming focus is a malformed tree, and guessing between them
+/// would make the published focus depend on arena order. Reporting `None` sends
+/// focus to the root, which is at least a node the adapter has definitely seen.
+fn focused_node(tree: &crate::tree::SemanticsTree) -> Option<flui_foundation::SemanticsId> {
+    let mut claiming = tree
+        .iter()
+        .filter(|(_, node)| node.config().is_focused())
+        .map(|(id, _)| id);
+
+    let first = claiming.next()?;
+    if claiming.next().is_some() {
+        tracing::warn!("semantics tree has more than one focused node; publishing the root");
+        return None;
+    }
+    Some(first)
+}
+
 /// Translate a whole [`SemanticsTree`](crate::tree::SemanticsTree) into one
 /// AccessKit [`TreeUpdate`].
 ///
@@ -327,6 +346,16 @@ pub(crate) fn to_node(data: &SemanticsNodeData, children: Vec<NodeId>) -> Node {
 /// hand-constructed node is dropped rather than exported under a fabricated id
 /// that could collide with a real one.
 ///
+/// # Focus
+///
+/// An explicit `focus` wins. Otherwise focus is derived from the node carrying
+/// [`SemanticsFlag::IsFocused`], because that is where the framework records it
+/// — a caller should not have to re-derive what the tree already states, and a
+/// caller that forgets would silently publish the root as focused. Focus falls
+/// back to the root only when no node claims it, or when the named node is not
+/// in the published set: AccessKit requires a valid target, and pointing at a
+/// node the adapter has never seen is worse than pointing at the root.
+///
 /// Returns `None` for a tree whose root is missing or unaddressable, which
 /// cannot produce an applicable update.
 #[must_use]
@@ -356,6 +385,7 @@ pub fn tree_to_update(
         .collect();
 
     let focus = focus
+        .or_else(|| focused_node(tree))
         .and_then(stable_id)
         .filter(|wanted| nodes.iter().any(|(id, _)| id == wanted))
         .unwrap_or(root_node_id);
@@ -713,6 +743,84 @@ mod tests {
             root_node.children().is_empty(),
             "the parent must not reference a node that was not published"
         );
+    }
+
+    /// **The focus contract.** A focused non-root control must be published as
+    /// the focus target. Deriving it from the tree is what stops every caller
+    /// that passes `None` from silently announcing the root as focused.
+    #[test]
+    fn focus_is_derived_from_the_focused_node_when_the_caller_names_none() {
+        let mut tree = SemanticsTree::new();
+        let child_render = render_id(31);
+        let mut child_node = SemanticsNode::new().with_source_render_id(child_render);
+        child_node.config_mut().set_focused(true);
+        let child = tree.insert(child_node);
+
+        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(30));
+        root_node.add_child(child);
+        let root = tree.insert(root_node);
+        tree.set_root(Some(root));
+
+        let update = tree_to_update(&tree, None).expect("rooted");
+
+        assert_eq!(
+            update.focus,
+            NodeId(AccessibilityNodeId::from(child_render).as_u64()),
+            "the focused control, not the root"
+        );
+        assert_ne!(
+            update.focus,
+            update.tree.as_ref().expect("tree").root,
+            "the fixture is only meaningful while the two differ"
+        );
+    }
+
+    /// An explicit target overrides the flag, so a caller can publish a focus
+    /// the tree does not yet record.
+    #[test]
+    fn an_explicit_focus_overrides_the_focused_flag() {
+        let mut tree = SemanticsTree::new();
+        let mut flagged = SemanticsNode::new().with_source_render_id(render_id(41));
+        flagged.config_mut().set_focused(true);
+        let flagged_id = tree.insert(flagged);
+
+        let other_render = render_id(42);
+        let other = tree.insert(SemanticsNode::new().with_source_render_id(other_render));
+
+        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(40));
+        root_node.add_child(flagged_id);
+        root_node.add_child(other);
+        let root = tree.insert(root_node);
+        tree.set_root(Some(root));
+
+        let update = tree_to_update(&tree, Some(other)).expect("rooted");
+        assert_eq!(
+            update.focus,
+            NodeId(AccessibilityNodeId::from(other_render).as_u64())
+        );
+    }
+
+    /// Two nodes claiming focus is malformed. Picking one would make the
+    /// published focus depend on arena order, so it falls back to the root.
+    #[test]
+    fn two_focused_nodes_fall_back_to_the_root() {
+        let mut tree = SemanticsTree::new();
+        let mut make_focused = |index: u32| {
+            let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
+            node.config_mut().set_focused(true);
+            tree.insert(node)
+        };
+        let first = make_focused(51);
+        let second = make_focused(52);
+
+        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(50));
+        root_node.add_child(first);
+        root_node.add_child(second);
+        let root = tree.insert(root_node);
+        tree.set_root(Some(root));
+
+        let update = tree_to_update(&tree, None).expect("rooted");
+        assert_eq!(update.focus, update.tree.as_ref().expect("tree").root);
     }
 
     /// An unrooted tree cannot produce an applicable update, and inventing a

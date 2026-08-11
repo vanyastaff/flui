@@ -85,6 +85,10 @@
 // Ship bar (wave 3): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
+pub mod a11y;
+
+pub use a11y::{A11yNode, A11yQuery, A11yQueryError, A11yTree, NotTreeBound};
+
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
@@ -531,6 +535,68 @@ impl HeadlessBinding {
     #[must_use]
     pub fn did_paint_last_frame(&self) -> bool {
         self.last_frame_painted
+    }
+
+    /// Turns the semantics phase on, so subsequent frames assemble an
+    /// accessibility tree.
+    ///
+    /// Semantics is off by default here for the same reason it is in
+    /// production: assembly costs a tree walk that nothing should pay for until
+    /// an assistive technology (or a test) asks. Call this **before** the
+    /// [`pump_frame`](Self::pump_frame) whose tree you intend to query — the
+    /// phase is a no-op while disabled, so enabling it afterwards leaves
+    /// [`a11y_tree`](Self::a11y_tree) returning `None` until the next frame.
+    ///
+    /// Enabling lazily creates the `SemanticsOwner`, matching
+    /// `PipelineOwner::set_semantics_enabled`.
+    ///
+    /// # Errors
+    ///
+    /// [`NotTreeBound`] if the binding drives no tree. This is a `Result`
+    /// rather than a panic so the failure cannot be silently ignored: a no-op
+    /// `enable_semantics` would surface far away, as
+    /// [`a11y_tree`](Self::a11y_tree) returning `None`, and read as "this UI
+    /// has no semantics" instead of "the call did nothing".
+    pub fn enable_semantics(&mut self) -> Result<(), NotTreeBound> {
+        self.tree
+            .as_ref()
+            .ok_or(NotTreeBound)?
+            .pipeline_owner
+            .with_mut(|owner| owner.set_semantics_enabled(true));
+        Ok(())
+    }
+
+    /// Whether the semantics phase is assembling a tree.
+    ///
+    /// `false` for a binding with no tree bound, which has no pipeline to ask.
+    #[must_use]
+    pub fn semantics_enabled(&self) -> bool {
+        self.tree.as_ref().is_some_and(|tree_binding| {
+            tree_binding
+                .pipeline_owner
+                .with(flui_rendering::pipeline::PipelineOwner::semantics_enabled)
+        })
+    }
+
+    /// The accessibility tree as an assistive technology would receive it.
+    ///
+    /// `None` until [`enable_semantics`](Self::enable_semantics) has been called
+    /// *and* a frame has run — there is no tree to translate before then, and
+    /// returning an empty one would let a query assert "no buttons" against a
+    /// tree that was never built.
+    ///
+    /// The snapshot is translated by `flui_semantics::tree_to_update`, the same
+    /// function a platform adapter calls, so an assertion here is an assertion
+    /// about what a screen reader is told. See [`a11y`] for the
+    /// query surface.
+    #[must_use]
+    pub fn a11y_tree(&self) -> Option<A11yTree> {
+        let update = self.tree.as_ref()?.pipeline_owner.with(|owner| {
+            owner
+                .semantics_owner()
+                .and_then(|semantics| semantics.to_accesskit_tree_update(None))
+        })?;
+        Some(A11yTree::new(update))
     }
 
     /// Number of frames that have produced a fresh layer tree.
