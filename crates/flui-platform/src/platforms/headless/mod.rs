@@ -2,4 +2,6 @@
 
 mod platform;
 
-pub use platform::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform};
+pub use platform::{
+    FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform,
+};

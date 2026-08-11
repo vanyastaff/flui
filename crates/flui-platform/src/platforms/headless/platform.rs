@@ -456,6 +456,7 @@ struct MockWindow {
     callbacks: Arc<WindowCallbacks>,
     text_input: Arc<FakeTextInput>,
     haptics: Arc<FakeHaptics>,
+    accessibility: Arc<FakeAccessibility>,
     /// Back-reference to the platform this window was opened on, so
     /// closing it can remove its own entry from `HeadlessState::windows`
     /// and — only once every tracked window is gone — consult the
@@ -525,6 +526,7 @@ impl MockWindow {
             callbacks: Arc::new(WindowCallbacks::new()),
             text_input: Arc::new(FakeTextInput::new()),
             haptics: Arc::new(FakeHaptics::new()),
+            accessibility: Arc::new(FakeAccessibility::new()),
             platform_state,
         }
     }
@@ -750,6 +752,10 @@ impl crate::traits::PlatformWindow for MockWindow {
         Some(Arc::clone(&self.text_input) as Arc<dyn PlatformTextInput>)
     }
 
+    fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
+        Some(Arc::clone(&self.accessibility) as Arc<dyn crate::traits::PlatformAccessibility>)
+    }
+
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
         Some(Arc::clone(&self.haptics) as Arc<dyn PlatformHaptics>)
     }
@@ -856,6 +862,108 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+/// Recording fake for [`PlatformAccessibility`](crate::traits::PlatformAccessibility),
+/// backing the headless backend's [`PlatformWindow::accessibility`].
+///
+/// Records every published tree so a test can assert what an assistive
+/// technology would actually have been told — the roles, labels and ids — not
+/// merely that publishing did not panic. Activation is driveable
+/// ([`set_active`](Self::set_active)) because the interesting behaviour is
+/// conditional on it: a composition root must start assembly on attach and stop
+/// on detach, and neither is observable without being able to fake the signal.
+#[derive(Default)]
+pub struct FakeAccessibility {
+    state: Mutex<FakeAccessibilityState>,
+}
+
+#[derive(Default)]
+struct FakeAccessibilityState {
+    active: bool,
+    published: Vec<accesskit::TreeUpdate>,
+    activation_listener: Option<crate::traits::AccessibilityActivationListener>,
+    action_listener: Option<crate::traits::AccessibilityActionListener>,
+}
+
+impl FakeAccessibility {
+    /// Create a fresh recorder, inactive and with nothing published.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every tree published while active, in order.
+    #[must_use]
+    pub fn published(&self) -> Vec<accesskit::TreeUpdate> {
+        self.state.lock().published.clone()
+    }
+
+    /// How many trees were published while active.
+    #[must_use]
+    pub fn published_count(&self) -> usize {
+        self.state.lock().published.len()
+    }
+
+    /// Simulate assistive technology attaching or detaching, notifying the
+    /// registered listener.
+    ///
+    /// The listener is cloned out of the lock before being called, so a
+    /// listener that publishes (or otherwise re-enters this fake) does not
+    /// deadlock against the guard that dispatched it — the same
+    /// clone-and-release discipline the real platform paths use.
+    pub fn set_active(&self, active: bool) {
+        let listener = {
+            let mut state = self.state.lock();
+            state.active = active;
+            state.activation_listener.clone()
+        };
+        if let Some(listener) = listener {
+            listener(active);
+        }
+    }
+
+    /// Simulate assistive technology requesting an action.
+    pub fn request_action(&self, request: accesskit::ActionRequest) {
+        let listener = self.state.lock().action_listener.clone();
+        if let Some(listener) = listener {
+            listener(request);
+        }
+    }
+}
+
+impl std::fmt::Debug for FakeAccessibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.lock();
+        f.debug_struct("FakeAccessibility")
+            .field("active", &state.active)
+            .field("published_count", &state.published.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl crate::traits::PlatformAccessibility for FakeAccessibility {
+    fn publish(&self, update: &accesskit::TreeUpdate) {
+        let mut state = self.state.lock();
+        // Inactive means no assistive technology is listening, so the clone is
+        // skipped entirely — the same shape as the real adapter's
+        // `update_if_active`, which is what this fake stands in for.
+        if state.active {
+            state.published.push(update.clone());
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.state.lock().active
+    }
+
+    fn set_activation_listener(&self, listener: crate::traits::AccessibilityActivationListener) {
+        self.state.lock().activation_listener = Some(listener);
+    }
+
+    fn set_action_listener(&self, listener: crate::traits::AccessibilityActionListener) {
+        self.state.lock().action_listener = Some(listener);
     }
 }
 

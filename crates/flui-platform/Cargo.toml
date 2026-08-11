@@ -14,6 +14,12 @@ description = "Platform abstraction layer for FLUI - cross-platform window and i
 autotests = false
 
 [dependencies]
+# The accessibility tree this crate's `PlatformAccessibility` capability
+# speaks. Data model only -- the per-OS `accesskit_*` adapters are separate and
+# feature-gated. This crate is layer 2 and cannot name `flui-semantics` (layer
+# 3) types, so an already-translated `accesskit::TreeUpdate` is what crosses
+# the seam.
+accesskit = { workspace = true }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 # Layer-legal downward edge (foundation sits below platform in the DAG),
 # carrying two seams: OwnerAffinity — the ADR-0039 owner-thread backstop,

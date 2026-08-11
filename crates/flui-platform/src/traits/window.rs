@@ -10,6 +10,7 @@ use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
 use super::{
+    accessibility::PlatformAccessibility,
     display::PlatformDisplay,
     haptics::PlatformHaptics,
     input::{DispatchEventResult, Modifiers, PlatformInput},
@@ -191,6 +192,16 @@ pub trait PlatformWindow: Send + Sync {
     /// [`PlatformHaptics`]'s module doc for the full per-window-not-global
     /// rationale.
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+        None
+    }
+
+    /// Get this window's accessibility capability, if the backend exposes one.
+    ///
+    /// `None` for a backend with no accessibility integration — which is every
+    /// backend until its per-OS adapter is wired, and permanently for one with
+    /// no such platform API. A composition root that gets `None` simply never
+    /// enables semantics assembly, so the cost is not paid either.
+    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
         None
     }
 

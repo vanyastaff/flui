@@ -197,7 +197,9 @@ pub use platforms::IOSPlatform;
 pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
-pub use platforms::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform};
+pub use platforms::{
+    FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform,
+};
 // Web platform
 #[cfg(target_arch = "wasm32")]
 pub use platforms::WebPlatform;
@@ -214,8 +216,9 @@ pub use shared::{PlatformHandlers, WindowCallbacks};
 pub use task::{Priority, Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
-    Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId,
-    MobileCapabilities, PathPromptOptions, Platform, PlatformCapabilities, PlatformDisplay,
+    AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
+    CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities,
+    PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay,
     PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
     PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowEvent, WindowId, WindowMode, WindowOptions,
