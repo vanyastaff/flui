@@ -1694,6 +1694,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 /// assembled tree is inspected via [`PipelineOwner::semantics_owner`], the
 /// render harness, or `debug_dump_semantics_tree` until a real bridge
 /// lands.
+///
+/// The callback receives an already-translated `accesskit::TreeUpdate`, so a
+/// real bridge forwards it to the platform capability without touching
+/// semantics types — which is what keeps `flui-platform` (layer 2) free of a
+/// dependency on `flui-semantics` (layer 3).
 fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback {
-    std::sync::Arc::new(|_updates: &[flui_semantics::SemanticsNodeUpdate]| {})
+    std::sync::Arc::new(|_update: &flui_semantics::TreeUpdate| {})
 }

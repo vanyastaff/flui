@@ -26,8 +26,19 @@ use crate::{
 /// Callback for semantics updates.
 ///
 /// Called when the semantics tree changes and needs to be sent to the platform.
-/// The callback receives a list of changed semantics nodes with their data.
-pub type SemanticsUpdateCallback = Arc<dyn Fn(&[SemanticsNodeUpdate]) + Send + Sync>;
+///
+/// The payload is a [`TreeUpdate`](crate::TreeUpdate) — the shape a platform
+/// accessibility adapter consumes directly — rather than FLUI's own node type.
+/// Two reasons, and the second is structural:
+///
+/// - The platform capability speaks accesskit types only, because
+///   `flui-platform` (layer 2) cannot depend on `flui-semantics` (layer 3).
+///   Translating on the producing side is what keeps that edge absent.
+/// - [`SemanticsNodeUpdate`] carries `SemanticsId`s, which are arena positions
+///   in a tree the pipeline rebuilds every pass. It cannot express the stable
+///   `AccessibilityNodeId` an adapter must publish and route actions back
+///   through — see [`crate::tree_to_update`].
+pub type SemanticsUpdateCallback = Arc<dyn Fn(&crate::TreeUpdate) + Send + Sync>;
 
 // ============================================================================
 // ACTION RESOLUTION
@@ -230,12 +241,6 @@ pub struct SemanticsOwner {
 
     /// Whether semantics is enabled.
     enabled: bool,
-
-    /// Reusable buffer for `flush` so per-frame `Vec<SemanticsNodeUpdate>`
-    /// allocations are amortized to zero across steady-state composite
-    /// passes. Cleared at the top of each `flush`; capacity grows on
-    /// demand and persists between frames.
-    updates_buffer: Vec<SemanticsNodeUpdate>,
 }
 
 impl std::fmt::Debug for SemanticsOwner {
@@ -244,7 +249,6 @@ impl std::fmt::Debug for SemanticsOwner {
             .field("tree", &self.tree)
             .field("callback", &self.callback.as_ref().map(|_| "<callback>"))
             .field("enabled", &self.enabled)
-            .field("updates_buffer_len", &self.updates_buffer.len())
             .finish()
     }
 }
@@ -256,7 +260,6 @@ impl SemanticsOwner {
             tree: SemanticsTree::new(),
             callback: Some(callback),
             enabled: true,
-            updates_buffer: Vec::new(),
         }
     }
 
@@ -272,7 +275,6 @@ impl SemanticsOwner {
             tree: SemanticsTree::new(),
             callback: None,
             enabled: true,
-            updates_buffer: Vec::new(),
         }
     }
 
@@ -282,7 +284,6 @@ impl SemanticsOwner {
             tree: SemanticsTree::with_capacity(capacity),
             callback: Some(callback),
             enabled: true,
-            updates_buffer: Vec::with_capacity(capacity),
         }
     }
 
@@ -516,69 +517,52 @@ impl SemanticsOwner {
 
     // ========== Flush to Platform ==========
 
-    /// Flushes dirty nodes to the platform.
+    /// Publishes the tree to the platform when anything has changed.
     ///
-    /// Walks [`SemanticsTree::iter_dirty`] in one pass, building each
-    /// update directly into the reusable `updates_buffer`. Hands the
-    /// buffer's slice to the platform callback via the clone-and-release
-    /// lock pattern, then marks the tree clean.
+    /// Assembly is a classic full rebuild (ADR-0014), so the published
+    /// [`accesskit::TreeUpdate`] carries every node rather than a diff. That is
+    /// what `TreeUpdate` permits but does not require; adapters suppress
+    /// extraneous events, so this is correct-but-chatty. Incremental diffing
+    /// needs the identity to be carried per node and gets its own oracle.
     ///
-    /// Allocation profile per call:
-    /// - **Tree clean** (no dirty nodes): zero heap allocation; the
-    ///   `iter_dirty` iterator runs once, finds nothing, and returns.
-    ///   The reusable `updates_buffer` stays at its previous capacity.
-    /// - **Tree dirty**: each `SemanticsNodeUpdate` carries a
-    ///   `Vec<SemanticsId>` of children (cloned from the node's
-    ///   children slice); that allocation is intrinsic to the data
-    ///   shape, not flush overhead. The `updates_buffer` capacity
-    ///   grows on demand and persists between frames, so the buffer's
-    ///   own backing allocation is amortized to zero after the first
-    ///   dirty frame.
-    ///
-    /// The loop previously went through a
-    /// `dirty_nodes().collect::<Vec<_>>()` intermediate to decouple the borrow
-    /// from the mutable `updates_buffer`. The current
-    /// `SemanticsTree::iter_dirty` returns `(id, &SemanticsNode)` pairs
-    /// so the per-node `tree.get(id)?` re-lookup goes away too — both
-    /// borrows live on the same iterator step.
+    /// A clean tree publishes nothing and performs no translation. The trigger
+    /// is [`SemanticsTree::has_dirty_nodes`], which scans until it finds dirt:
+    /// O(1) average on a dirty tree (it stops at the first dirty node), O(n)
+    /// worst case — and the worst case is the *idle* frame, since a clean tree
+    /// is the one that must be scanned to the end. `n` is the number of
+    /// semantics boundaries, not widgets. A cached dirty count would make this
+    /// O(1) unconditionally; that is a separate change, with a benchmark, not
+    /// an assertion made in a doc comment.
     pub fn flush(&mut self) {
-        if !self.enabled {
+        if !self.enabled || !self.tree.has_dirty_nodes() {
             return;
         }
 
-        self.updates_buffer.clear();
-
-        // Walk dirty nodes in one pass; build updates inline. The
-        // `iter_dirty` iterator and `updates_buffer` borrow disjoint
-        // fields (`self.tree` and `self.updates_buffer`) — but to
-        // satisfy the borrow checker we destructure `self` once.
-        let Self {
-            tree,
-            updates_buffer,
-            ..
-        } = self;
-        for (id, node) in tree.iter_dirty() {
-            updates_buffer.push(
-                SemanticsNodeUpdate::new(id, node.to_node_data(id))
-                    .with_parent(node.parent())
-                    .with_children(node.children().to_vec()),
-            );
-        }
-
-        if self.updates_buffer.is_empty() {
+        // Translate before touching the callback so the borrow of `self.tree`
+        // ends first.
+        let Some(update) = crate::tree_to_update(&self.tree, None) else {
+            // No root yet — nothing an adapter could apply. Leave the tree
+            // dirty so the next flush retries once assembly has rooted it,
+            // rather than silently swallowing the first real update.
+            //
+            // A tree that *loses* its root after publishing takes this path
+            // too, and nothing withdraws the tree already sent: the adapter
+            // keeps presenting it. Withdrawal is the adapter's deactivation
+            // signal rather than an empty update — `TreeUpdate` has no
+            // representation for "no tree" — so it is defined with the
+            // adapter lifecycle rather than invented here without one. See
+            // the teardown item in the Linux bridge issue.
             return;
+        };
+
+        // Clone-and-release: cloning the `Arc` out of `self.callback`
+        // decouples the invocation from any lock the owner may hold, so the
+        // callback never runs while one is held.
+        let callback = self.callback.as_ref().map(Arc::clone);
+        if let Some(callback) = callback {
+            callback(&update);
         }
 
-        // Send to platform via clone-and-release: cloning the Arc out of
-        // `self.callback` decouples the callback invocation from any
-        // future locks the owner may hold around the buffer, so the
-        // callback never runs while a lock is held.
-        let cb = self.callback.as_ref().map(Arc::clone);
-        if let Some(cb) = cb {
-            cb(&self.updates_buffer);
-        }
-
-        // Mark all nodes clean for the next composite cycle.
         self.tree.mark_all_clean();
     }
 
@@ -628,7 +612,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
 
         let callback: SemanticsUpdateCallback = Arc::new(move |updates| {
-            counter_clone.fetch_add(updates.len(), Ordering::SeqCst);
+            counter_clone.fetch_add(updates.nodes.len(), Ordering::SeqCst);
         });
 
         let owner = SemanticsOwner::new(callback);
@@ -695,23 +679,33 @@ mod tests {
         assert_eq!(owner.root(), Some(id));
     }
 
+    /// A production-shaped node. Assembly always attaches the boundary's render
+    /// object (`rebuild_semantics_owner`), and that is where the OS-facing
+    /// identity comes from — a node without one is not publishable at all.
+    fn addressable(index: u32) -> SemanticsNode {
+        SemanticsNode::new().with_source_render_id(flui_foundation::RenderId::new_gen(
+            index,
+            core::num::NonZeroU32::new(1).expect("fixture generation is non-zero"),
+        ))
+    }
+
     #[test]
     fn test_semantics_owner_flush() {
         let update_count = Arc::new(AtomicUsize::new(0));
         let update_count_clone = Arc::clone(&update_count);
 
         let callback: SemanticsUpdateCallback = Arc::new(move |updates| {
-            update_count_clone.fetch_add(updates.len(), Ordering::SeqCst);
+            update_count_clone.fetch_add(updates.nodes.len(), Ordering::SeqCst);
         });
 
         let mut owner = SemanticsOwner::new(callback);
 
         // Insert some nodes (they start dirty)
-        let mut node1 = SemanticsNode::new();
+        let mut node1 = addressable(1);
         node1.config_mut().set_button(true);
         let id1 = owner.insert(node1);
 
-        let mut node2 = SemanticsNode::new();
+        let mut node2 = addressable(2);
         node2.config_mut().set_label("Child");
         let id2 = owner.insert(node2);
 
@@ -720,7 +714,7 @@ mod tests {
 
         assert!(owner.needs_flush());
 
-        // Flush should send 2 updates
+        // The published update carries the whole tree, not a per-node diff.
         owner.flush();
 
         assert_eq!(update_count.load(Ordering::SeqCst), 2);
@@ -733,7 +727,7 @@ mod tests {
         let update_count_clone = Arc::clone(&update_count);
 
         let callback: SemanticsUpdateCallback = Arc::new(move |updates| {
-            update_count_clone.fetch_add(updates.len(), Ordering::SeqCst);
+            update_count_clone.fetch_add(updates.nodes.len(), Ordering::SeqCst);
         });
 
         let mut owner = SemanticsOwner::new(callback);
@@ -754,14 +748,17 @@ mod tests {
         let update_count_clone = Arc::clone(&update_count);
 
         let callback: SemanticsUpdateCallback = Arc::new(move |updates| {
-            update_count_clone.fetch_add(updates.len(), Ordering::SeqCst);
+            update_count_clone.fetch_add(updates.nodes.len(), Ordering::SeqCst);
         });
 
         let mut owner = SemanticsOwner::new(callback);
 
-        // Insert and flush
-        let _ = owner.insert(SemanticsNode::new());
-        let _ = owner.insert(SemanticsNode::new());
+        // Insert, root, and flush. A rooted tree is required: the payload is a
+        // `TreeUpdate`, and an unrooted tree has nothing an adapter can apply.
+        let root = owner.insert(addressable(1));
+        let child = owner.insert(addressable(2));
+        owner.add_child(root, child);
+        owner.set_root(Some(root));
         owner.flush();
         assert_eq!(update_count.load(Ordering::SeqCst), 2);
 
@@ -770,11 +767,89 @@ mod tests {
         assert_eq!(update_count.load(Ordering::SeqCst), 4); // 2 + 2
     }
 
+    /// An unrooted tree has nothing an adapter could apply, and inventing a root
+    /// would publish a tree the application does not have. The dirt is
+    /// deliberately **retained** so the first real update is not swallowed once
+    /// assembly roots the tree — dropping it here would lose a frame's content
+    /// permanently, with no later event to recover it.
+    #[test]
+    fn an_unrooted_tree_publishes_nothing_and_stays_dirty() {
+        let published = Arc::new(AtomicUsize::new(0));
+        let published_clone = Arc::clone(&published);
+        let callback: SemanticsUpdateCallback = Arc::new(move |_| {
+            published_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let mut owner = SemanticsOwner::new(callback);
+        let id = owner.insert(addressable(1));
+
+        owner.flush();
+
+        assert_eq!(published.load(Ordering::SeqCst), 0);
+        assert!(
+            owner.get(id).expect("node is live").is_dirty(),
+            "the update must survive to the flush that follows rooting"
+        );
+
+        owner.set_root(Some(id));
+        owner.flush();
+        assert_eq!(published.load(Ordering::SeqCst), 1);
+    }
+
+    /// A clean tree costs one flag test: no translation, no callback.
+    #[test]
+    fn a_clean_tree_publishes_nothing() {
+        let published = Arc::new(AtomicUsize::new(0));
+        let published_clone = Arc::clone(&published);
+        let callback: SemanticsUpdateCallback = Arc::new(move |_| {
+            published_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let mut owner = SemanticsOwner::new(callback);
+        let id = owner.insert(addressable(1));
+        owner.set_root(Some(id));
+
+        owner.flush();
+        assert_eq!(published.load(Ordering::SeqCst), 1);
+
+        // Nothing changed since.
+        owner.flush();
+        assert_eq!(
+            published.load(Ordering::SeqCst),
+            1,
+            "an idle frame must not republish"
+        );
+    }
+
+    /// The published ids are the stable space actions come back in, all the way
+    /// through the owner's own publish path — not just the raw translation.
+    #[test]
+    fn published_ids_are_stable_accessibility_ids() {
+        let seen: Arc<parking_lot::Mutex<Vec<u64>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let seen_clone = Arc::clone(&seen);
+        let callback: SemanticsUpdateCallback = Arc::new(move |update| {
+            *seen_clone.lock() = update.nodes.iter().map(|(id, _)| id.0).collect();
+        });
+
+        let mut owner = SemanticsOwner::new(callback);
+        let id = owner.insert(addressable(7));
+        owner.set_root(Some(id));
+        owner.flush();
+
+        let expected = owner
+            .get(id)
+            .and_then(SemanticsNode::accessibility_id)
+            .expect("a render-backed node is addressable")
+            .as_u64();
+        assert_eq!(*seen.lock(), vec![expected]);
+    }
+
     #[test]
     fn test_semantics_owner_mark_dirty() {
         let mut owner = SemanticsOwner::new_without_callback();
 
-        let id = owner.insert(SemanticsNode::new());
+        let id = owner.insert(addressable(1));
+        owner.set_root(Some(id));
 
         // Initially dirty
         assert!(owner.get(id).unwrap().is_dirty());
