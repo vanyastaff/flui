@@ -2734,7 +2734,11 @@ impl UiRealm {
         );
     }
 
-    fn duration_micros_saturated(duration: std::time::Duration) -> u64 {
+    /// Takes `web_time::Duration` to match the telemetry API it consumes.
+    /// That is the same type as `std::time::Duration` on every target —
+    /// `web_time` re-exports `std::time::*` and overrides only `Instant` and
+    /// `SystemTime` — so this is a readability choice, not a portability one.
+    fn duration_micros_saturated(duration: web_time::Duration) -> u64 {
         u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
     }
 

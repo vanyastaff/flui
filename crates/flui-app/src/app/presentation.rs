@@ -795,6 +795,16 @@ impl PresentationState {
     /// the overlay under (a frame that painted nothing). The overlay is
     /// added as the root's LAST child so it composites above the
     /// presentation's own content.
+    ///
+    /// # The overlay is inside what it measures
+    ///
+    /// When enabled, this pulls `frames_since(None)` and rebuilds both
+    /// histograms on every composited frame. The cost is bounded — the
+    /// telemetry ring is fixed-capacity, so it is O(ring), not O(session) —
+    /// and no frame pays it while the overlay is off. But it is not free, and
+    /// it lands *inside* the frames the overlay subsequently reports: read the
+    /// displayed percentiles as the cost of running with the overlay on, not
+    /// as the app's cost without it.
     pub(crate) fn attach_performance_overlay(&self, layer_tree: &mut LayerTree) {
         let mut slot = self.performance_overlay.borrow_mut();
         let Some(stats) = slot.as_mut() else {
