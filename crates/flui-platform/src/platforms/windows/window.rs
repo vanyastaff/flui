@@ -243,10 +243,12 @@ impl WindowsWindow {
                 focused: false,
                 title: options.title.clone(),
                 mode: WindowMode::Normal,
-                last_size: Size::new(
-                    DevicePixels(logical_to_device(width as f32, scale_factor)),
-                    DevicePixels(logical_to_device(height as f32, scale_factor)),
-                ),
+                // `width`/`height` are ALREADY device pixels — they were
+                // converted from `options.size` above. Converting again here
+                // squared the scale factor, so a 2x display recorded a
+                // `last_size` four times the logical size, which restore and
+                // minimize sizing then read back.
+                last_size: Size::new(DevicePixels(width), DevicePixels(height)),
                 is_hovered: false,
                 modifiers: keyboard_types::Modifiers::empty(),
                 cursor: CursorIcon::default(),
@@ -783,7 +785,7 @@ impl PlatformWindow for WindowsWindow {
         Ok(())
     }
 
-    // ==================== Query Methods (US2) ====================
+    // ==================== Query Methods ====================
 
     fn bounds(&self) -> Bounds<Pixels> {
         self.state.lock().bounds
@@ -925,7 +927,7 @@ impl PlatformWindow for WindowsWindow {
         self.state.lock().title.clone()
     }
 
-    // ==================== Control Methods (US2) ====================
+    // ==================== Control Methods ====================
 
     fn set_title(&self, title: &str) {
         // SAFETY: `title_str` is a live, locally-owned `HSTRING` for the

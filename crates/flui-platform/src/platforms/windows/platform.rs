@@ -894,7 +894,7 @@ impl WindowsPlatform {
                         // the current live HWND; Win32 does not retain it.
                         let _ = unsafe { TrackMouseEvent(&raw mut tme) };
 
-                        // Track hover state (T034)
+                        // Track hover state so WM_MOUSELEAVE can fire an exit exactly once.
                         let scale_factor = {
                             let mut state = ctx.state.lock();
                             state.is_hovered = true;
@@ -1054,7 +1054,7 @@ impl WindowsPlatform {
                             WindowsWindow::set_fullscreen_for_context(hwnd, ctx, enter_fullscreen);
                         }
 
-                        // Track modifiers (T035)
+                        // Mirror the modifier state the next key/pointer event will carry.
                         ctx.state.lock().modifiers = current_modifiers();
 
                         // Dispatch keyboard event via per-window callback
@@ -1068,7 +1068,7 @@ impl WindowsPlatform {
 
                 WM_KEYUP | WM_SYSKEYUP => {
                     if let Some(ctx) = ctx.as_deref() {
-                        // Track modifiers (T035)
+                        // Mirror the modifier state the next key/pointer event will carry.
                         ctx.state.lock().modifiers = current_modifiers();
 
                         use super::events::key_up_event;
@@ -1120,10 +1120,10 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
-                // T025: Mouse hover tracking — WM_MOUSELEAVE (0x02A3)
+                // Mouse hover tracking — WM_MOUSELEAVE (0x02A3)
                 0x02A3 => {
                     if let Some(ctx) = ctx.as_deref() {
-                        // Track hover state (T034)
+                        // Track hover state so WM_MOUSELEAVE can fire an exit exactly once.
                         ctx.state.lock().is_hovered = false;
 
                         ctx.callbacks.dispatch_hover_status_change(false);
@@ -1131,7 +1131,7 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
-                // T026: System theme/appearance change
+                // System theme/appearance change
                 WM_SETTINGCHANGE => {
                     if let Some(ctx) = ctx.as_deref() {
                         ctx.callbacks.dispatch_appearance_changed();
@@ -1139,7 +1139,7 @@ impl WindowsPlatform {
                     default_window_proc(hwnd, msg, wparam, lparam)
                 }
 
-                // T046: Keyboard layout change
+                // Keyboard layout change
                 WM_INPUTLANGCHANGE => {
                     if let Some(ctx) = ctx.as_deref() {
                         // Dispatch keyboard layout change via take/restore pattern
@@ -1312,7 +1312,7 @@ impl Platform for WindowsPlatform {
         self.handlers.lock().keyboard_layout_changed = Some(callback);
     }
 
-    // ==================== App Activation (US3 T038) ====================
+    // ==================== App Activation ====================
 
     fn activate(&self, _ignoring_other_apps: bool) {
         // SAFETY: `GetForegroundWindow`/`SetForegroundWindow` take no
@@ -1332,7 +1332,7 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    // ==================== Appearance (US3 T040) ====================
+    // ==================== Appearance ====================
 
     fn window_appearance(&self) -> WindowAppearance {
         // Read system theme from registry: AppsUseLightTheme
@@ -1393,7 +1393,7 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    // ==================== File Operations (US3 T041) ====================
+    // ==================== File Operations ====================
 
     fn open_url(&self, url: &str) {
         use windows::Win32::UI::Shell::ShellExecuteW;
@@ -1456,7 +1456,7 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    // ==================== File Dialogs (US3 T042-T043) ====================
+    // ==================== File Dialogs ====================
 
     fn prompt_for_paths(
         &self,
@@ -1618,7 +1618,7 @@ impl Platform for WindowsPlatform {
         })
     }
 
-    // ==================== Keyboard (US3 T045) ====================
+    // ==================== Keyboard ====================
 
     fn keyboard_layout(&self) -> String {
         use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayoutNameW;
@@ -1709,7 +1709,7 @@ impl Drop for WindowsPlatform {
 
 // ==================== Helper Functions ====================
 
-/// Read current keyboard modifier state from Win32 (T035)
+/// Read current keyboard modifier state from Win32.
 fn current_modifiers() -> keyboard_types::Modifiers {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
