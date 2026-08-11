@@ -100,6 +100,79 @@ macro_rules! epoch_counters {
     };
 }
 
+/// Generational stamp for a `flui-engine` `GpuServices` construction
+/// (ADR-0045 decisions 2 and 4).
+///
+/// Lives here, not in `flui-engine`, for exactly the reason
+/// [`SurfaceGeneration`] does: decision 4 compares this axis at the same
+/// frame-freshness gate as `SurfaceGeneration` inside a [`crate::FrameStamp`],
+/// and `FrameStamp` (this crate, layer 1) cannot name a type declared in
+/// `flui-engine` (layer 4) without inverting the workspace's dependency
+/// direction — `flui-layer`'s `SceneSnapshot`, which carries a `FrameStamp`,
+/// cannot either (layer 3). `flui-engine` re-exports this type from its own
+/// root (`flui_engine::GpuResourceGeneration`) so its own call sites read
+/// unchanged; the definition here is the single one port-check trigger 10
+/// (SP-3) requires.
+///
+/// # Named `GpuResourceGeneration`, not `ResourceGeneration`
+///
+/// [`ResourceGeneration`] already exists in this module for a different
+/// domain (worker-cache freshness); trigger 10 forbids a second `pub struct`
+/// under that identifier anywhere in the framework crates, and the two
+/// concepts are genuinely different — see `flui-engine`'s
+/// `wgpu::gpu_services` module doc for the full reasoning this type's
+/// original home recorded.
+///
+/// # Not one of the `epoch_counters!` family
+///
+/// The macro's `next()` is an owner bumping an existing value **in place**;
+/// this type is minted **fresh** from a process-wide counter with no
+/// persistent owner (a `GpuServices` value never advances its own
+/// generation — a new one is a new construction), so it gets its own
+/// hand-written `mint()` instead of forcing that different mint model
+/// through `next()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct GpuResourceGeneration(u64);
+
+impl GpuResourceGeneration {
+    /// The sentinel value: no `GpuServices` bound yet. Never returned by
+    /// [`Self::mint`] (its counter starts at 1), so a frame stamped with
+    /// this value trivially matches only a checker that has likewise never
+    /// bound one — the same "typed absence" role [`SurfaceGeneration::ZERO`]
+    /// plays for "no surface configured", though (unlike that axis) ADR-0045
+    /// decision 4 does not reject this value outright: a backend with no
+    /// notion of shared GPU services at all is legitimately, permanently at
+    /// `ZERO` on both sides of the comparison.
+    pub const ZERO: Self = Self(0);
+
+    /// Mints the next generation from a process-wide monotonic counter.
+    ///
+    /// Public because minting now crosses the `flui-foundation`/`flui-engine`
+    /// boundary: `GpuServices::resolve_offscreen` is the only production
+    /// call site, but this function is not otherwise restricted to it —
+    /// `flui-engine`'s own test suites call it directly to fabricate test
+    /// values, which is exactly what a public associated function allows.
+    /// The tuple field stays private, so a tuple-struct literal remains the
+    /// one construction path this blocks from outside this module.
+    #[must_use]
+    pub fn mint() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// The raw counter value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for GpuResourceGeneration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
 epoch_counters! {
     /// A `UiRealm`'s monotonic per-frame counter.
     ///
@@ -225,7 +298,9 @@ impl Default for GenerationGate {
 
 #[cfg(test)]
 mod tests {
-    use super::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};
+    use super::{
+        FrameEpoch, GenerationGate, GpuResourceGeneration, ResourceGeneration, SurfaceGeneration,
+    };
 
     #[test]
     fn zero_is_default() {
@@ -311,5 +386,34 @@ mod tests {
     fn generation_gate_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<GenerationGate>();
+    }
+
+    // -----------------------------------------------------------------------
+    // GpuResourceGeneration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn gpu_resource_generation_zero_is_default_and_never_minted() {
+        assert_eq!(
+            GpuResourceGeneration::default(),
+            GpuResourceGeneration::ZERO
+        );
+        assert_eq!(GpuResourceGeneration::ZERO.get(), 0);
+        // The counter starts at 1 (see `mint`'s own doc), so ZERO stays a
+        // sentinel a real mint can never collide with.
+        assert_ne!(GpuResourceGeneration::mint(), GpuResourceGeneration::ZERO);
+    }
+
+    #[test]
+    fn gpu_resource_generation_mint_is_monotonic_across_calls() {
+        let first = GpuResourceGeneration::mint();
+        let second = GpuResourceGeneration::mint();
+        assert!(second.get() > first.get());
+    }
+
+    #[test]
+    fn gpu_resource_generation_display_shows_raw_value() {
+        let minted = GpuResourceGeneration::mint();
+        assert_eq!(minted.to_string(), minted.get().to_string());
     }
 }

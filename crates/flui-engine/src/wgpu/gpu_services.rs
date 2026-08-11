@@ -40,10 +40,9 @@
 //! offscreen path plus [`Renderer::from_offscreen_services`] — is what
 //! decision 2 needs to be checkable at all: "one device per owner thread"
 //! is proven only for that path.
-use std::fmt;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
 };
 #[cfg(debug_assertions)]
 use std::thread::ThreadId;
@@ -52,70 +51,35 @@ use super::renderer::{GpuCapabilities, Renderer};
 use super::shader_compiler::ShaderCache;
 use crate::error::{EngineError, EngineResult};
 
-/// Monotonic stamp minted exactly once per [`GpuServices`] construction;
-/// never equal across two constructions, even sequential ones on the same
-/// thread. The private tuple field means nothing outside this module can
-/// fabricate one — see `crates/flui-engine/tests/compile_fail/
-/// gpu_resource_generation_private_field.rs`.
+/// Re-exported so `flui_engine::GpuResourceGeneration` keeps resolving —
+/// this module's own call site below ([`GpuServices::resolve_offscreen`])
+/// is unchanged apart from the import.
 ///
-/// # Named `GpuResourceGeneration`, not `ResourceGeneration`
+/// # Why the definition moved to `flui-foundation` (ADR-0045 decision 4)
 ///
-/// ADR-0045 decision 2 calls this field "`ResourceGeneration`", but
-/// `flui_foundation::epoch` already declares a `pub struct ResourceGeneration`
-/// for a different domain (worker-cache freshness), and port-check trigger
-/// 10 (SP-3) forbids the same identifier in two framework crates. Renamed
-/// per SP-3's own remedy rather than allowlisted — this is a brand-new type
-/// with no callers to break, and the two concepts are genuinely different
-/// (see the ADR amendment for the full reasoning).
+/// This type used to be declared here, with a documented plan to promote it
+/// once a real cross-crate consumer existed ("the surface is registered
+/// `experimental` precisely so that later export move is sanctioned rather
+/// than a surprise" — that plan, not a change of mind). Decision 4 is that
+/// consumer: `flui_foundation::FrameStamp` now carries a
+/// `gpu_resource_generation` field, checked at the same frame-freshness gate
+/// as `SurfaceGeneration`. `FrameStamp` lives in `flui-foundation` (workspace
+/// layer 1); this crate is layer 4. A layer-1 type cannot name a layer-4
+/// type without inverting the dependency direction `docs/workspace-layers.toml`
+/// enforces, so the definition moved down to `flui_foundation::epoch`,
+/// alongside `SurfaceGeneration` — the same "minted by the engine seam,
+/// declared in foundation" split that type already uses. See
+/// `flui_foundation::epoch::GpuResourceGeneration`'s own doc for the full
+/// naming and mint-model reasoning (why not `ResourceGeneration`, why not the
+/// `epoch_counters!` macro); it is preserved there, not duplicated here.
 ///
-/// **Considered and rejected: a new arm on `flui_foundation`'s
-/// `epoch_counters!` macro** (already `flui-engine`'s dependency), which
-/// would resolve the name collision the same way and keep one family with
-/// one API. Rejected on two grounds: `epoch.rs`'s three existing counters
-/// are all named as domain-neutral protocol concepts (`FrameEpoch`,
-/// `SurfaceGeneration`, `ResourceGeneration`), and each was promoted into
-/// the shared foundation crate specifically because a second crate needed
-/// to compare against it (`SurfaceGeneration` is minted by `flui-engine`'s
-/// raster owner but carried by `flui-layer`'s `SceneSnapshot`/`FrameStamp`);
-/// `GpuResourceGeneration` has no such consumer *in this slice* — but one is
-/// already scheduled rather than merely possible: ADR-0045 decision 4
-/// compares this axis at the same frame gate as `SurfaceGeneration`, and the
-/// only values that cross that boundary are `flui-layer`'s `SceneSnapshot`
-/// and `flui-foundation`'s `FrameStamp`, neither of which can name a
-/// `flui-engine` type. So treat the promotion as **expected and deferred**,
-/// not as unmotivated; the surface is registered `experimental` precisely so
-/// that later export move is sanctioned rather than a surprise. What holds
-/// on its own is the second ground: the macro's `next()` is an owner bumping an
-/// existing value in place; this type is minted fresh from a process-wide
-/// counter with no persistent owner yet (that arrives with a later slice's
-/// `AppRuntime` wiring), a different-enough mint model that forcing it
-/// through `next()` today would need its own wrapper anyway.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct GpuResourceGeneration(u64);
-
-impl GpuResourceGeneration {
-    /// Mints the next generation from the crate-wide monotonic counter.
-    /// Private — the only call site is [`GpuServices::resolve_offscreen`].
-    fn mint() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-
-    /// The raw counter value. Named to match the `.get()` accessor shared by
-    /// `flui_foundation::epoch`'s `FrameEpoch`/`SurfaceGeneration`/
-    /// `ResourceGeneration` family, which a reader compares this type
-    /// against on the same frame-freshness gate (ADR-0045 decision 4).
-    #[must_use]
-    pub fn get(self) -> u64 {
-        self.0
-    }
-}
-
-impl fmt::Display for GpuResourceGeneration {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
+/// The tuple field stays private to that module, so
+/// `crates/flui-engine/tests/compile_fail/gpu_resource_generation_private_field.rs`
+/// keeps failing for the same reason as before (private-field construction),
+/// only now the diagnostic's `note:` points at `flui-foundation`'s source
+/// instead of this crate's — checked, not assumed, by re-running `trybuild`
+/// against this branch and updating the pinned `.stderr`.
+pub use flui_foundation::GpuResourceGeneration;
 
 /// Shared GPU services for exactly one owner thread (ADR-0045 decision 2).
 ///
@@ -341,10 +305,27 @@ mod tests {
         pollster::block_on(GpuServices::resolve_offscreen()).ok()
     }
 
-    /// Pins "`GpuResourceGeneration` is minted only by `GpuServices`
-    /// construction": two independently constructed `GpuServices` values
-    /// never share a generation, and the second construction mints strictly
-    /// after the first.
+    /// Pins that two independently constructed `GpuServices` values never
+    /// share a generation, and that the second construction mints strictly
+    /// after the first — `GpuServices::resolve_offscreen` calls
+    /// `GpuResourceGeneration::mint()` exactly once per construction, and
+    /// this proves that call draws from the type's one process-wide
+    /// monotonic counter rather than, say, a value derived from the
+    /// adapter/device it resolved.
+    ///
+    /// # This is not "minted only by `GpuServices` construction" — that claim went stale
+    ///
+    /// An earlier revision of this doc claimed exactly that. It was true
+    /// when `GpuResourceGeneration::mint` was private to `flui-engine`
+    /// (the only call site was `resolve_offscreen`, right above). ADR-0045
+    /// decision 4 moved the type's definition to
+    /// `flui_foundation::epoch` and made `mint()` a genuinely public
+    /// associated function there — `flui-engine`'s own `raster_owner.rs`
+    /// test suite now calls it directly to fabricate test values, which a
+    /// crate-private constructor could never allow. What THIS test still
+    /// pins is narrower and still true: `GpuServices::resolve_offscreen`'s
+    /// own two calls to `mint()` produce two distinct, ordered values —
+    /// nothing broader about who else may call `mint()`.
     ///
     /// What this does NOT pin: "never crosses an owner thread" itself —
     /// there is no consumer in this slice that sends a
