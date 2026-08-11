@@ -157,16 +157,17 @@ impl std::fmt::Debug for UnixAccessibility {
 }
 
 impl PlatformAccessibility for UnixAccessibility {
-    fn publish(&self, update: &TreeUpdate) {
+    fn publish(&self, update: TreeUpdate) {
         // Retained even while inactive: a screen reader started later asks for
         // an initial tree, and answering it from here shows the real interface
         // immediately instead of an empty window until something next changes.
+        //
+        // Exactly one clone, and it buys that retention. `update_if_active`
+        // takes a factory, so the owned value moves into the adapter only when
+        // something is attached; with nobody listening the closure never runs
+        // and the value is simply dropped.
         *self.shared.latest.lock() = Some(update.clone());
-
-        // `update_if_active` takes a factory, so the second clone happens only
-        // when assistive technology is actually attached. The common case —
-        // nobody listening — costs the store above and nothing more.
-        self.adapter.lock().update_if_active(|| update.clone());
+        self.adapter.lock().update_if_active(move || update);
     }
 
     fn is_active(&self) -> bool {
@@ -220,7 +221,7 @@ mod tests {
     fn publishing_while_inactive_retains_the_tree_for_a_later_activation() {
         let accessibility = UnixAccessibility::new();
 
-        accessibility.publish(&tree_update("Submit"));
+        accessibility.publish(tree_update("Submit"));
 
         let retained = accessibility.shared.latest.lock().clone();
         let retained = retained.expect("the tree is kept for a late activation");
@@ -233,7 +234,7 @@ mod tests {
     #[test]
     fn activation_answers_with_the_retained_tree() {
         let accessibility = UnixAccessibility::new();
-        accessibility.publish(&tree_update("Submit"));
+        accessibility.publish(tree_update("Submit"));
 
         let mut activation = Activation(Arc::clone(&accessibility.shared));
         let initial = activation
@@ -290,7 +291,7 @@ mod tests {
         let published_flag = Arc::clone(&published);
         accessibility.set_activation_listener(Arc::new(move |active| {
             if active {
-                inner.publish(&tree_update("Submit"));
+                inner.publish(tree_update("Submit"));
                 published_flag.store(true, Ordering::SeqCst);
             }
         }));
