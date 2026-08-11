@@ -136,6 +136,12 @@ crossbeam-channel = "0.5"
 # Instant is the same type per target.
 web-time = "1.1"
 
+# ACCESSIBILITY - the cross-platform a11y tree model. Data model only here;
+# the per-OS `accesskit_*` platform adapters are a separate, later concern that
+# belongs in flui-platform, which cannot depend on flui-semantics (layer 2 vs 3).
+# One required dependency of its own (uuid), MIT OR Apache-2.0.
+accesskit = "0.24"
+
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
 

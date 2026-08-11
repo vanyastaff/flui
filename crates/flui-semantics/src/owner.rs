@@ -314,6 +314,26 @@ impl SemanticsOwner {
         &self.tree
     }
 
+    /// The current tree as an AccessKit `TreeUpdate`.
+    ///
+    /// This is the shape both an OS accessibility adapter and a query-by-role
+    /// test harness consume, so publishing and asserting cannot drift apart:
+    /// what a screen reader is told is exactly what a test can inspect.
+    ///
+    /// `focus` names the node the platform should treat as focused; a `None`,
+    /// or an id not present in the tree, falls back to the root, because
+    /// AccessKit requires a valid focus target.
+    ///
+    /// Returns `None` before the first assembly pass, when the tree has no
+    /// root and no applicable update exists.
+    #[must_use]
+    pub fn to_accesskit_tree_update(
+        &self,
+        focus: Option<SemanticsId>,
+    ) -> Option<accesskit::TreeUpdate> {
+        crate::accesskit_translation::tree_to_update(&self.tree, focus)
+    }
+
     /// Returns a mutable reference to the semantics tree.
     #[inline]
     pub fn tree_mut(&mut self) -> &mut SemanticsTree {

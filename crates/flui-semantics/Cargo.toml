@@ -28,6 +28,11 @@ flui-tree = { path = "../flui-tree", version = "0.2.0" }
 # Types - geometry, semantics types
 flui-types = { path = "../flui-types", version = "0.2.0" }
 
+# Accessibility tree model: this crate owns the translation from its own
+# semantics tree into the shape platform adapters and UI-testing harnesses
+# both consume.
+accesskit = { workspace = true }
+
 # Slab storage for O(1) access
 slab = "0.4"
 
