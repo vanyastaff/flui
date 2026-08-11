@@ -64,6 +64,7 @@
 // ============================================================================
 
 pub mod accessibility;
+pub mod accesskit_translation;
 pub mod action;
 pub mod configuration;
 pub mod event;
@@ -86,6 +87,10 @@ pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsA
 // RE-EXPORTS - Accessibility Types
 // ============================================================================
 pub use accessibility::AccessibilityFeatures;
+// ============================================================================
+// RE-EXPORTS - AccessKit Translation
+// ============================================================================
+pub use accesskit_translation::{resolve_role, to_node, to_tree_update, tree_to_update};
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================
