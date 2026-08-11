@@ -77,5 +77,7 @@ mod sliver_grid;
 mod sliver_hit_direction_matrix;
 #[path = "sliver_to_box_adapter.rs"]
 mod sliver_to_box_adapter;
+#[path = "structural_invalidation.rs"]
+mod structural_invalidation;
 #[path = "transform_to.rs"]
 mod transform_to;

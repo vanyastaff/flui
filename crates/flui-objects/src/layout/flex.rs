@@ -178,6 +178,50 @@ impl RenderFlex {
         Self::default()
     }
 
+    /// Updates axis and direction configuration without replacing layout
+    /// caches.
+    pub fn update_directions(
+        &mut self,
+        direction: FlexDirection,
+        text_direction: TextDirection,
+        text_baseline: TextBaseline,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let changed = self.direction != direction
+            || self.text_direction != text_direction
+            || self.text_baseline != text_baseline;
+        self.direction = direction;
+        self.text_direction = text_direction;
+        self.text_baseline = text_baseline;
+        if changed {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    /// Updates alignment, sizing, and spacing without replacing layout caches.
+    pub fn update_layout_configuration(
+        &mut self,
+        main_axis_alignment: MainAxisAlignment,
+        main_axis_size: MainAxisSize,
+        cross_axis_alignment: CrossAxisAlignment,
+        spacing: f32,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let changed = self.main_axis_alignment != main_axis_alignment
+            || self.main_axis_size != main_axis_size
+            || self.cross_axis_alignment != cross_axis_alignment
+            || self.spacing != spacing;
+        self.main_axis_alignment = main_axis_alignment;
+        self.main_axis_size = main_axis_size;
+        self.cross_axis_alignment = cross_axis_alignment;
+        self.spacing = spacing;
+        if changed {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
     /// Creates a horizontal flex (Row).
     pub fn row() -> Self {
         Self {

@@ -1596,7 +1596,8 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             _render_object: &mut Self::RenderObject,
-        ) {
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 

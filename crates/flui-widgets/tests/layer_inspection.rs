@@ -128,32 +128,54 @@ fn the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list() {
     }
 }
 
-/// Composited output is the *last frame's* output, not a cached
-/// last-known-good tree.
+/// Composited output retains the last successfully painted presentation.
 ///
-/// A frame over a tree with nothing dirty repaints nothing and therefore
-/// composites nothing. Reporting a stale tree there would be the more
-/// convenient lie — and would silently answer "yes, this widget composited a
-/// clip" about a frame that never ran. Pinning the honest behavior keeps a
-/// future caller from building on the convenient one.
+/// A frame over a tree with nothing dirty produces no new layer tree. The
+/// committed presentation remains observable, while the per-frame paint
+/// signal distinguishes retention from fresh work.
 #[test]
-fn a_frame_that_repaints_nothing_composites_nothing() {
+fn idle_frame_retains_committed_output_without_reporting_paint() {
     let mut laid = lay_out(
         SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
         tight(200.0, 200.0),
     );
-    laid.pump();
+    let committed_layer_kinds = laid.layer_kinds();
     assert!(
-        !laid.layer_kinds().is_empty(),
-        "the dirty frame must composite something to make this test meaningful"
+        !committed_layer_kinds.is_empty(),
+        "bootstrap must commit output to make this test meaningful"
     );
 
     // `pump_for` advances virtual time without dirtying the tree.
     laid.pump_for(Duration::from_millis(16));
-    assert!(
-        laid.layer_kinds().is_empty(),
-        "a frame that repainted nothing must report no composited layers rather \
-         than the previous frame's; got {:?}",
-        laid.layer_kinds()
+    assert_eq!(
+        laid.layer_kinds(),
+        committed_layer_kinds,
+        "an idle frame must retain the exact committed presentation"
     );
+    assert!(
+        !laid.did_paint_last_frame(),
+        "retained presentation must not be reported as current-frame paint"
+    );
+}
+
+/// A rebuild whose render update reports `NONE` must keep the committed
+/// layer output and not repaint. Lived in `tests/common/mod.rs` until it was
+/// noticed that every integration crate doing `mod common;` compiled and ran
+/// it — four copies of one test.
+#[test]
+fn identical_none_update_retains_committed_pixels_without_repainting() {
+    let mut laid = lay_out(
+        flui_widgets::ColoredBox::new(flui_types::Color::rgb(12, 34, 56)),
+        tight(800.0, 600.0),
+    );
+    let committed_layers = laid.layer_kinds();
+    let painted_frames = laid.painted_frame_count();
+    assert!(laid.did_paint_last_frame());
+    assert!(committed_layers.contains(&"Picture"));
+
+    laid.pump();
+
+    assert_eq!(laid.layer_kinds(), committed_layers);
+    assert!(!laid.did_paint_last_frame());
+    assert_eq!(laid.painted_frame_count(), painted_frames);
 }

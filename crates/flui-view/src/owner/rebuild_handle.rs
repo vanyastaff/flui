@@ -160,7 +160,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_objects::RenderSizedBox;
-    use flui_rendering::protocol::BoxProtocol;
+    use flui_rendering::{
+        pipeline::{PipelineCell, PipelineOwner},
+        protocol::BoxProtocol,
+    };
     use flui_types::geometry::px;
 
     use crate::{
@@ -234,7 +237,8 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             _render_object: &mut Self::RenderObject,
-        ) {
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 
@@ -261,7 +265,11 @@ mod tests {
 
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
-        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        let root = tree.mount_root_with_pipeline_owner(
+            &view,
+            Some(PipelineCell::new(PipelineOwner::new())),
+            &mut owner.element_owner_mut(),
+        );
 
         // `init_state` runs during the first build.
         owner.schedule_build_for(root, 0, RebuildReason::InitialMount);

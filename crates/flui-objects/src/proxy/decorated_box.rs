@@ -64,8 +64,15 @@ impl RenderDecoratedBox {
 
     /// Replaces the decoration. Paint-only state: the caller is
     /// responsible for the repaint mark.
-    pub fn set_decoration(&mut self, decoration: BoxDecoration<Pixels>) {
+    pub fn set_decoration(
+        &mut self,
+        decoration: BoxDecoration<Pixels>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.decoration == decoration {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.decoration = decoration;
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// The decoration's position relative to the child.
@@ -75,8 +82,15 @@ impl RenderDecoratedBox {
 
     /// Sets the decoration's position. Paint-only state: the caller is
     /// responsible for the repaint mark.
-    pub fn set_position(&mut self, position: DecorationPosition) {
+    pub fn set_position(
+        &mut self,
+        position: DecorationPosition,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.position == position {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.position = position;
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     fn paint_rect(size: Size) -> Rect {

@@ -123,32 +123,32 @@ impl RenderBackdropFilter {
         self.enabled
     }
 
-    /// Replaces the image filter; returns `true` if the value changed.
+    /// Replaces the image filter and returns the exact pipeline impact.
     /// Paint-only — Flutter parity: `markNeedsPaint()`, never a relayout.
-    pub fn set_filter(&mut self, filter: ImageFilter) -> bool {
+    pub fn set_filter(&mut self, filter: ImageFilter) -> flui_rendering::RenderUpdateImpact {
         if self.filter == filter {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.filter = filter;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
-    /// Replaces the blend mode; returns `true` if the value changed.
-    pub fn set_blend_mode(&mut self, blend_mode: BlendMode) -> bool {
+    /// Replaces the blend mode and returns the exact pipeline impact.
+    pub fn set_blend_mode(&mut self, blend_mode: BlendMode) -> flui_rendering::RenderUpdateImpact {
         if self.blend_mode == blend_mode {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.blend_mode = blend_mode;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
-    /// Replaces the enabled flag; returns `true` if the value changed.
-    pub fn set_enabled(&mut self, enabled: bool) -> bool {
+    /// Replaces the enabled flag and returns the exact pipeline impact.
+    pub fn set_enabled(&mut self, enabled: bool) -> flui_rendering::RenderUpdateImpact {
         if self.enabled == enabled {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.enabled = enabled;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 }
 
@@ -267,22 +267,40 @@ mod tests {
     #[test]
     fn set_filter_returns_change_flag() {
         let mut node = RenderBackdropFilter::new(ImageFilter::blur(1.0));
-        assert!(node.set_filter(ImageFilter::blur(2.0)));
-        assert!(!node.set_filter(ImageFilter::blur(2.0)));
+        assert_eq!(
+            node.set_filter(ImageFilter::blur(2.0)),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_filter(ImageFilter::blur(2.0)),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 
     #[test]
     fn set_blend_mode_returns_change_flag() {
         let mut node = RenderBackdropFilter::new(blur());
-        assert!(node.set_blend_mode(BlendMode::Screen));
-        assert!(!node.set_blend_mode(BlendMode::Screen));
+        assert_eq!(
+            node.set_blend_mode(BlendMode::Screen),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_blend_mode(BlendMode::Screen),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 
     #[test]
     fn set_enabled_returns_change_flag() {
         let mut node = RenderBackdropFilter::new(blur());
-        assert!(node.set_enabled(false));
-        assert!(!node.set_enabled(false));
+        assert_eq!(
+            node.set_enabled(false),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_enabled(false),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 
     #[test]

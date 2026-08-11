@@ -127,7 +127,13 @@ impl<C> Viewport<C> {
         let mut render_object =
             RenderViewport::with_offset(self.axis_direction, cross_axis_direction, position);
         if let Some((extent, style)) = self.cache_extent {
-            render_object.set_cache_extent(extent, style);
+            // The returned impact is deliberately dropped. This runs before the
+            // render object joins a tree, so there is nothing to invalidate —
+            // and a caller may legitimately pass the render object's own
+            // default (250.0 logical pixels, `Pixel` style), for which
+            // `set_cache_extent` correctly reports `NONE`. Asserting `LAYOUT`
+            // here made that call panic in every debug and test build.
+            let _ = render_object.set_cache_extent(extent, style);
         }
         render_object
     }
@@ -162,13 +168,13 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        // Push the axis through on rebuild (reconciliation reuses the render
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE; // Push the axis through on rebuild (reconciliation reuses the render
         // object), not just the scroll offset — otherwise a vertical↔horizontal
         // change keeps the stale axis from construction.
-        render_object.set_axis_direction(self.axis_direction);
+        impact |= render_object.set_axis_direction(self.axis_direction);
         if let Some((extent, style)) = self.cache_extent {
-            render_object.set_cache_extent(extent, style);
+            impact |= render_object.set_cache_extent(extent, style);
         }
         match &self.offset_source {
             OffsetSource::Pixels(pixels) => {
@@ -187,7 +193,7 @@ where
                 if render_object.offset().is_uniquely_held() {
                     render_object.offset().set_pixels(*pixels);
                 } else {
-                    render_object.set_offset(ScrollPosition::new(*pixels));
+                    impact |= render_object.set_offset(ScrollPosition::new(*pixels));
                 }
             }
             OffsetSource::Position(position) => {
@@ -196,10 +202,11 @@ where
                 // written directly by gestures/`ScrollController`, so
                 // pushing a rebuild-time value would stomp live drag state.
                 if !render_object.offset().ptr_eq(position) {
-                    render_object.set_offset(position.clone());
+                    impact |= render_object.set_offset(position.clone());
                 }
             }
         }
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -315,12 +322,12 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        // Reconciliation reuses the render object across rebuilds, so a
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE; // Reconciliation reuses the render object across rebuilds, so a
         // vertical↔horizontal axis change on the widget must be pushed through
         // (not just the scroll offset) — otherwise layout keeps the stale axis
         // from construction.
-        render_object.set_axis_direction(self.axis_direction);
+        impact |= render_object.set_axis_direction(self.axis_direction);
         match &self.offset_source {
             OffsetSource::Pixels(pixels) => {
                 // See `Viewport::update_render_object`'s matching arm for the
@@ -331,17 +338,18 @@ where
                 if render_object.offset().is_uniquely_held() {
                     render_object.offset().set_pixels(*pixels);
                 } else {
-                    render_object.set_offset(ScrollPosition::new(*pixels));
+                    impact |= render_object.set_offset(ScrollPosition::new(*pixels));
                 }
             }
             OffsetSource::Position(position) => {
                 // Swap in the injected position only on an actual identity
                 // change — see `Viewport::update_render_object`'s matching arm.
                 if !render_object.offset().ptr_eq(position) {
-                    render_object.set_offset(position.clone());
+                    impact |= render_object.set_offset(position.clone());
                 }
             }
         }
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -354,3 +362,19 @@ where
 }
 
 generic_render_view_element!(ShrinkWrappingViewport);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A caller may be explicit about the value the render object already
+    /// defaults to. `set_cache_extent` correctly reports `NONE` for that, and
+    /// `build_render_object` must not treat "no change" as a contract
+    /// violation — an earlier `debug_assert_eq!(.., LAYOUT)` here panicked on
+    /// this exact call in every debug and test build.
+    #[test]
+    fn an_explicit_cache_extent_equal_to_the_default_builds_without_panicking() {
+        let viewport = Viewport::new(()).cache_extent(250.0, CacheExtentStyle::Pixel);
+        let _render_object = viewport.build_render_object();
+    }
+}

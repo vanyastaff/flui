@@ -164,7 +164,8 @@ impl RenderView for LayoutBuilder {
         &self,
         _ctx: &crate::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     /// The child is produced by `build_into_views` from the published
@@ -393,8 +394,8 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             render_object: &mut Self::RenderObject,
-        ) {
-            *render_object = RenderSizedBox::new(Some(px(self.0)), Some(px(self.1)));
+        ) -> flui_rendering::RenderUpdateImpact {
+            render_object.set_size(Some(px(self.0)), Some(px(self.1)))
         }
     }
 
@@ -424,9 +425,11 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             render_object: &mut Self::RenderObject,
-        ) {
-            *render_object =
-                RenderConstrainedBox::new(BoxConstraints::tight(Size::new(px(self.0), px(self.0))));
+        ) -> flui_rendering::RenderUpdateImpact {
+            render_object.set_additional_constraints(BoxConstraints::tight(Size::new(
+                px(self.0),
+                px(self.0),
+            )))
         }
     }
 

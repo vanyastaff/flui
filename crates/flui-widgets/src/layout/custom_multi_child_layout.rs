@@ -48,6 +48,17 @@ impl ParentDataView for LayoutId {
     fn create_parent_data(&self) -> Self::ParentData {
         MultiChildLayoutParentData::zero().with_id(self.id.clone())
     }
+
+    fn apply_parent_data(
+        &self,
+        parent_data: &mut Self::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if parent_data.id.as_deref() == Some(self.id.as_str()) {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        parent_data.id = Some(self.id.clone());
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
 }
 
 impl_parent_data_view!(LayoutId);
@@ -97,8 +108,8 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_delegate(self.delegate.clone());
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_delegate(self.delegate.clone())
     }
 
     fn has_children(&self) -> bool {
@@ -198,6 +209,38 @@ mod tests {
     }
 
     #[test]
+    fn layout_id_update_is_exact_and_preserves_layout_owned_parent_data() {
+        let previous = flui_foundation::RenderId::new(7);
+        let next = flui_foundation::RenderId::new(9);
+        let mut parent_data = MultiChildLayoutParentData::zero().with_id("before".to_owned());
+        parent_data.offset = Offset::new(
+            flui_types::geometry::px(12.0),
+            flui_types::geometry::px(8.0),
+        );
+        parent_data.container.previous_sibling = Some(previous);
+        parent_data.container.next_sibling = Some(next);
+
+        let impact = LayoutId::new("after", SizedBox::shrink()).apply_parent_data(&mut parent_data);
+
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
+        assert_eq!(parent_data.id.as_deref(), Some("after"));
+        assert_eq!(
+            parent_data.offset,
+            Offset::new(
+                flui_types::geometry::px(12.0),
+                flui_types::geometry::px(8.0)
+            )
+        );
+        assert_eq!(parent_data.container.previous_sibling, Some(previous));
+        assert_eq!(parent_data.container.next_sibling, Some(next));
+
+        assert_eq!(
+            LayoutId::new("after", SizedBox::shrink()).apply_parent_data(&mut parent_data),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+    }
+
+    #[test]
     fn create_render_object_installs_the_given_delegate() {
         let render_object = CustomMultiChildLayout::new(noop_delegate(), Vec::<BoxedView>::new())
             .create_render_object(&flui_view::RenderObjectContext::detached());
@@ -215,10 +258,12 @@ mod tests {
         assert!(render_object.delegate().as_any().is::<NoopDelegate>());
 
         let other: Arc<dyn MultiChildLayoutDelegate> = Arc::new(OtherDelegate);
-        CustomMultiChildLayout::new(other, Vec::<BoxedView>::new()).update_render_object(
-            &flui_view::RenderObjectContext::detached(),
-            &mut render_object,
-        );
+        let impact = CustomMultiChildLayout::new(other, Vec::<BoxedView>::new())
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert!(
             render_object.delegate().as_any().is::<OtherDelegate>(),

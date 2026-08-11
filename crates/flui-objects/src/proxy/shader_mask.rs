@@ -114,13 +114,13 @@ impl RenderShaderMask {
         &self.shader
     }
 
-    /// Replaces the static fallback shader; returns `true` if the value changed.
-    pub fn set_shader(&mut self, shader: Shader) -> bool {
+    /// Replaces the static fallback shader and reports paint when changed.
+    pub fn set_shader(&mut self, shader: Shader) -> flui_rendering::RenderUpdateImpact {
         if self.shader == shader {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.shader = shader;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Owner-lane shader target used for bounds-dependent masks.
@@ -129,14 +129,16 @@ impl RenderShaderMask {
         self.shader_target
     }
 
-    /// Replaces the owner-lane shader target; returns `true` if the value
-    /// changed.
-    pub fn set_shader_target(&mut self, target: Option<ShaderMaskTarget>) -> bool {
+    /// Replaces the owner-lane shader target and reports paint if changed.
+    pub fn set_shader_target(
+        &mut self,
+        target: Option<ShaderMaskTarget>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.shader_target == target {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.shader_target = target;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// The current blend mode.
@@ -145,14 +147,14 @@ impl RenderShaderMask {
         self.blend_mode
     }
 
-    /// Replaces the blend mode; returns `true` if the value changed.
+    /// Replaces the blend mode and returns the exact pipeline impact.
     /// Paint-only — Flutter parity: `markNeedsPaint()`, never a relayout.
-    pub fn set_blend_mode(&mut self, blend_mode: BlendMode) -> bool {
+    pub fn set_blend_mode(&mut self, blend_mode: BlendMode) -> flui_rendering::RenderUpdateImpact {
         if self.blend_mode == blend_mode {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.blend_mode = blend_mode;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     fn resolve_shader(&self, bounds: Rect<Pixels>) -> Shader {
@@ -277,6 +279,7 @@ impl RenderBox for RenderShaderMask {
 
 #[cfg(test)]
 mod tests {
+    use flui_interaction::InteractionLane;
     use flui_types::styling::Color;
 
     use super::*;
@@ -300,17 +303,57 @@ mod tests {
     #[test]
     fn set_blend_mode_returns_change_flag() {
         let mut node = RenderShaderMask::new(solid_shader());
-        assert!(node.set_blend_mode(BlendMode::Screen));
-        assert!(!node.set_blend_mode(BlendMode::Screen));
+        assert_eq!(
+            node.set_blend_mode(BlendMode::Screen),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_blend_mode(BlendMode::Screen),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 
     #[test]
     fn set_shader_returns_change_flag() {
         let mut node = RenderShaderMask::new(solid_shader());
 
-        assert!(!node.set_shader(solid_shader()));
-        assert!(node.set_shader(Shader::solid(Color::BLACK)));
-        assert!(!node.set_shader(Shader::solid(Color::BLACK)));
+        assert_eq!(
+            node.set_shader(solid_shader()),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_shader(Shader::solid(Color::BLACK)),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_shader(Shader::solid(Color::BLACK)),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+    }
+
+    #[test]
+    fn set_shader_target_returns_exact_impact() {
+        let lane = InteractionLane::try_new().expect("interaction lane");
+        let handle = lane.dispatch_handle();
+        lane.enter(|| {
+            let target = handle
+                .register_shader_mask(|_bounds| solid_shader())
+                .expect("register shader target");
+            let mut node = RenderShaderMask::new(solid_shader());
+
+            assert_eq!(
+                node.set_shader_target(Some(target)),
+                flui_rendering::RenderUpdateImpact::PAINT
+            );
+            assert_eq!(
+                node.set_shader_target(Some(target)),
+                flui_rendering::RenderUpdateImpact::NONE
+            );
+            assert_eq!(
+                node.set_shader_target(None),
+                flui_rendering::RenderUpdateImpact::PAINT
+            );
+        });
     }
 
     #[test]

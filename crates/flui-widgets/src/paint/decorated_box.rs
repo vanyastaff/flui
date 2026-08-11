@@ -59,9 +59,11 @@ impl RenderView for DecoratedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_decoration(self.decoration.clone());
-        render_object.set_position(self.position);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_decoration(self.decoration.clone());
+        impact |= render_object.set_position(self.position);
+        impact
     }
 
     fn has_children(&self) -> bool {

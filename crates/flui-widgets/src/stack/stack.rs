@@ -83,9 +83,11 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_alignment(self.alignment);
-        render_object.set_fit(self.fit);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_fit(self.fit);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -179,10 +181,12 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_alignment(self.alignment);
-        render_object.set_fit(self.fit);
-        render_object.set_index(self.index);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_fit(self.fit);
+        impact |= render_object.set_index(self.index);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -231,10 +235,11 @@ mod tests {
         let updated: Stack = Stack::new(Vec::new())
             .alignment(Alignment::BOTTOM_RIGHT)
             .fit(StackFit::Expand);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
         assert_eq!(render_object.fit(), StackFit::Expand);
@@ -289,10 +294,11 @@ mod tests {
             .index(Some(3))
             .alignment(Alignment::BOTTOM_RIGHT)
             .fit(StackFit::Expand);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.index(), Some(3));
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);

@@ -220,73 +220,85 @@ impl RenderTable {
         self.baseline_distance
     }
 
-    /// Updates the column count; returns `true` if the value changed.
-    pub fn set_column_count(&mut self, column_count: usize) -> bool {
+    /// Updates the column count and reports layout when changed.
+    pub fn set_column_count(&mut self, column_count: usize) -> flui_rendering::RenderUpdateImpact {
         if self.column_count == column_count {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.column_count = column_count;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Updates the per-column width overrides; returns `true` if changed.
-    pub fn set_column_widths(&mut self, column_widths: HashMap<usize, TableColumnWidth>) -> bool {
+    /// Updates the per-column width overrides and reports layout when changed.
+    pub fn set_column_widths(
+        &mut self,
+        column_widths: HashMap<usize, TableColumnWidth>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.column_widths == column_widths {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.column_widths = column_widths;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Updates the default column width; returns `true` if changed.
-    pub fn set_default_column_width(&mut self, width: TableColumnWidth) -> bool {
+    /// Updates the default column width and reports layout when changed.
+    pub fn set_default_column_width(
+        &mut self,
+        width: TableColumnWidth,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.default_column_width == width {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.default_column_width = width;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Updates the default vertical alignment; returns `true` if changed.
     pub fn set_default_vertical_alignment(
         &mut self,
         alignment: TableCellVerticalAlignment,
-    ) -> bool {
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.default_vertical_alignment == alignment {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.default_vertical_alignment = alignment;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Updates the text baseline; returns `true` if changed.
-    pub fn set_text_baseline(&mut self, baseline: Option<TextBaseline>) -> bool {
+    /// Updates the text baseline and reports layout when changed.
+    pub fn set_text_baseline(
+        &mut self,
+        baseline: Option<TextBaseline>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.text_baseline == baseline {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.text_baseline = baseline;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Updates the table border; returns `true` if changed.
-    pub fn set_border(&mut self, border: Option<TableBorder>) -> bool {
+    /// Updates the table border and reports layout when changed.
+    pub fn set_border(
+        &mut self,
+        border: Option<TableBorder>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.border == border {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.border = border;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Updates the per-row background decorations; returns `true` if changed.
     pub fn set_row_decorations(
         &mut self,
         row_decorations: Vec<Option<BoxDecoration<Pixels>>>,
-    ) -> bool {
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.row_decorations == row_decorations {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.row_decorations = row_decorations;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// The `TableColumnWidth` in effect for column `x` (an explicit override,

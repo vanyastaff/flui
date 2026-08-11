@@ -44,13 +44,21 @@ impl RenderBaseline {
     }
 
     /// Sets the baseline kind. Caller marks layout dirty.
-    pub fn set_baseline(&mut self, baseline: TextBaseline) {
+    pub fn set_baseline(&mut self, baseline: TextBaseline) -> flui_rendering::RenderUpdateImpact {
+        if self.baseline == baseline {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.baseline = baseline;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Sets the baseline offset. Caller marks layout dirty.
-    pub fn set_baseline_offset(&mut self, offset: Pixels) {
+    pub fn set_baseline_offset(&mut self, offset: Pixels) -> flui_rendering::RenderUpdateImpact {
+        if self.baseline_offset == offset {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.baseline_offset = offset;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 }
 

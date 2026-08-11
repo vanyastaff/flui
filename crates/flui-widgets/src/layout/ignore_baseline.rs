@@ -55,9 +55,10 @@ impl RenderView for IgnoreBaseline {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         // The render object carries no configuration — the oracle's
         // `IgnoreBaseline` has no fields either, so there is nothing to push.
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {

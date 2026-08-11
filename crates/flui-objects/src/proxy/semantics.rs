@@ -50,9 +50,16 @@ impl RenderSemanticsAnnotations {
         &self.configuration
     }
 
-    /// Replaces the semantic properties configuration.
-    pub fn set_configuration(&mut self, configuration: SemanticsConfiguration) {
+    /// Replaces the semantic properties configuration and reports semantics when changed.
+    pub fn set_configuration(
+        &mut self,
+        configuration: SemanticsConfiguration,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.configuration == configuration {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.configuration = configuration;
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Returns whether this object introduces a semantics boundary.
@@ -62,12 +69,12 @@ impl RenderSemanticsAnnotations {
     }
 
     /// Sets whether this object introduces a semantics boundary.
-    pub fn set_container(&mut self, container: bool) -> bool {
+    pub fn set_container(&mut self, container: bool) -> flui_rendering::RenderUpdateImpact {
         if self.container == container {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.container = container;
-        true
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Chainable form of [`Self::set_container`].
@@ -84,12 +91,15 @@ impl RenderSemanticsAnnotations {
     }
 
     /// Sets whether descendants must create explicit semantics nodes.
-    pub fn set_explicit_child_nodes(&mut self, explicit_child_nodes: bool) -> bool {
+    pub fn set_explicit_child_nodes(
+        &mut self,
+        explicit_child_nodes: bool,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.explicit_child_nodes == explicit_child_nodes {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.explicit_child_nodes = explicit_child_nodes;
-        true
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Chainable form of [`Self::set_explicit_child_nodes`].
@@ -106,12 +116,15 @@ impl RenderSemanticsAnnotations {
     }
 
     /// Sets whether descendant semantics are ignored.
-    pub fn set_exclude_semantics(&mut self, exclude_semantics: bool) -> bool {
+    pub fn set_exclude_semantics(
+        &mut self,
+        exclude_semantics: bool,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.exclude_semantics == exclude_semantics {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.exclude_semantics = exclude_semantics;
-        true
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Chainable form of [`Self::set_exclude_semantics`].
@@ -128,12 +141,15 @@ impl RenderSemanticsAnnotations {
     }
 
     /// Sets whether user-action semantics are blocked for descendants.
-    pub fn set_block_user_actions(&mut self, block_user_actions: bool) -> bool {
+    pub fn set_block_user_actions(
+        &mut self,
+        block_user_actions: bool,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.block_user_actions == block_user_actions {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.block_user_actions = block_user_actions;
-        true
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Chainable form of [`Self::set_block_user_actions`].
@@ -286,12 +302,12 @@ impl RenderExcludeSemantics {
     }
 
     /// Sets whether descendant semantics are excluded.
-    pub fn set_excluding(&mut self, excluding: bool) -> bool {
+    pub fn set_excluding(&mut self, excluding: bool) -> flui_rendering::RenderUpdateImpact {
         if self.excluding == excluding {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.excluding = excluding;
-        true
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -388,9 +404,65 @@ mod tests {
         assert!(node.excluding());
         assert!(node.excludes_semantics_subtree());
 
-        assert!(node.set_excluding(false));
+        assert_eq!(
+            node.set_excluding(false),
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
         assert!(!node.excluding());
         assert!(!node.excludes_semantics_subtree());
+        assert_eq!(
+            node.set_excluding(false),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+    }
+
+    #[test]
+    fn annotation_setters_report_semantics_once_per_effective_change() {
+        let mut node = RenderSemanticsAnnotations::default();
+        let configuration = SemanticsConfiguration::from_properties(
+            &SemanticsProperties::new().with_label("updated"),
+        );
+        assert_eq!(
+            node.set_configuration(configuration.clone()),
+            flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+        assert_eq!(
+            node.set_configuration(configuration),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+
+        assert_eq!(
+            node.set_container(true),
+            flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+        assert_eq!(
+            node.set_container(true),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            node.set_explicit_child_nodes(true),
+            flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+        assert_eq!(
+            node.set_explicit_child_nodes(true),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            node.set_exclude_semantics(true),
+            flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+        assert_eq!(
+            node.set_exclude_semantics(true),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            node.set_block_user_actions(true),
+            flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+        assert_eq!(
+            node.set_block_user_actions(true),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
     }
 
     #[test]

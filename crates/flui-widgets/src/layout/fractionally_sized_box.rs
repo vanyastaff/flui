@@ -88,10 +88,12 @@ impl RenderView for FractionallySizedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_width_factor(Self::factor(self.width_factor));
-        render_object.set_height_factor(Self::factor(self.height_factor));
-        render_object.set_alignment(self.alignment.unwrap_or(Alignment::CENTER));
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_width_factor(Self::factor(self.width_factor));
+        impact |= render_object.set_height_factor(Self::factor(self.height_factor));
+        impact |= render_object.set_alignment(self.alignment.unwrap_or(Alignment::CENTER));
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -150,10 +152,11 @@ mod tests {
         let updated = FractionallySizedBox::new()
             .width_factor(0.25)
             .height_factor(0.6);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.width_factor(), FractionFactor::new(0.25));
         assert_eq!(render_object.height_factor(), FractionFactor::new(0.6));
@@ -169,10 +172,11 @@ mod tests {
         assert_eq!(render_object.height_factor(), FractionFactor::new(0.5));
 
         let updated = FractionallySizedBox::new(); // no factors set -> None
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.width_factor(), None);
         assert_eq!(render_object.height_factor(), None);
@@ -185,10 +189,11 @@ mod tests {
         assert_eq!(render_object.alignment(), Alignment::CENTER);
 
         let updated = FractionallySizedBox::new().alignment(Alignment::BOTTOM_RIGHT);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
     }
@@ -210,10 +215,11 @@ mod tests {
         assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
 
         let updated = FractionallySizedBox::new(); // no explicit alignment -> None
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.alignment(), Alignment::CENTER);
     }

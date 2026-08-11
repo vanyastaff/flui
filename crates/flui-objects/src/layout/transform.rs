@@ -101,8 +101,30 @@ impl RenderTransform {
     }
 
     /// Sets the transformation matrix.
-    pub fn set_transform(&mut self, transform: Matrix4) {
+    pub fn set_transform(&mut self, transform: Matrix4) -> flui_rendering::RenderUpdateImpact {
+        if self.transform == transform {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.transform = transform;
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    /// Updates the alignment-relative pivot without replacing layout state.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
+        if self.alignment == alignment {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.alignment = alignment;
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    /// Updates the explicit pivot without replacing layout state.
+    pub fn set_origin(&mut self, origin: Option<Offset>) -> flui_rendering::RenderUpdateImpact {
+        if self.origin == origin {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.origin = origin;
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Sets the alignment for the transform origin.
@@ -128,8 +150,12 @@ impl RenderTransform {
     ///
     /// When true, a transform layer is created for hardware acceleration.
     /// When false, the transform is applied directly to the canvas.
-    pub fn set_needs_compositing(&mut self, value: bool) {
+    pub fn set_needs_compositing(&mut self, value: bool) -> flui_rendering::RenderUpdateImpact {
+        if self.needs_compositing == value {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.needs_compositing = value;
+        flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
     }
 
     /// Returns the alignment.
@@ -462,6 +488,21 @@ mod tests {
         let origin = Offset::new(px(50.0), px(50.0));
         let transform = RenderTransform::scale(2.0, 2.0).with_origin(origin);
         assert_eq!(transform.origin(), Some(origin));
+    }
+
+    #[test]
+    fn targeted_setters_preserve_child_layout_state() {
+        let mut transform = RenderTransform::identity();
+        transform.has_child = true;
+        let impact = transform.set_transform(Matrix4::scaling(2.0, 2.0, 1.0))
+            | transform.set_alignment(Alignment::BOTTOM_RIGHT)
+            | transform.set_origin(Some(Offset::new(px(2.0), px(3.0))));
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
+        assert!(transform.has_child);
     }
 
     #[test]

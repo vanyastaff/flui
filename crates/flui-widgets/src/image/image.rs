@@ -332,8 +332,15 @@ impl RenderView for RawImage {
             Some(decoded) => RenderImage::from_image(decoded.clone(), self.fit, self.alignment),
             None => RenderImage::new(Size::ZERO, self.fit, self.alignment),
         };
-        render.set_width(self.width);
-        render.set_height(self.height);
+        let initial_impact = render.set_width(self.width) | render.set_height(self.height);
+        debug_assert_eq!(
+            initial_impact,
+            if self.width.is_some() || self.height.is_some() {
+                flui_rendering::RenderUpdateImpact::LAYOUT
+            } else {
+                flui_rendering::RenderUpdateImpact::NONE
+            },
+        );
         render
     }
 
@@ -341,18 +348,18 @@ impl RenderView for RawImage {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render: &mut RenderImage,
-    ) {
-        // Always push layout/paint config — cheap field writes.
-        render.set_fit(self.fit);
-        render.set_alignment(self.alignment);
-        render.set_width(self.width);
-        render.set_height(self.height);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = render.set_fit(self.fit)
+            | render.set_alignment(self.alignment)
+            | render.set_width(self.width)
+            | render.set_height(self.height);
 
         // `set_image(None)` on a since-cleared image keeps the previous
         // `intrinsic_size` in the render object (so the box retains its
         // size) but clears the painted pixel source — the box shows nothing
         // until the next `Some`.
-        render.set_image(self.image.clone());
+        impact |= render.set_image(self.image.clone());
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -455,7 +462,8 @@ mod tests {
             image: None,
             ..with_image
         };
-        now_absent.update_render_object(&detached_ctx(), &mut render);
+        let impact = now_absent.update_render_object(&detached_ctx(), &mut render);
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::PAINT);
 
         assert!(
             render.image().is_none(),
@@ -482,6 +490,42 @@ mod tests {
 
         assert_eq!(render.width(), Some(px(100.0)));
         assert_eq!(render.height(), Some(px(80.0)));
+    }
+
+    #[test]
+    fn raw_image_update_unions_only_changed_configuration_impacts() {
+        let initial = RawImage {
+            image: None,
+            fit: ImageFit::Contain,
+            alignment: ImageAlignment::Center,
+            width: None,
+            height: None,
+        };
+        let mut render = initial.create_render_object(&detached_ctx());
+        assert_eq!(
+            initial.update_render_object(&detached_ctx(), &mut render),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+
+        let paint_only = RawImage {
+            fit: ImageFit::Cover,
+            alignment: ImageAlignment::TopLeft,
+            ..initial.clone()
+        };
+        assert_eq!(
+            paint_only.update_render_object(&detached_ctx(), &mut render),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
+
+        let layout_and_paint = RawImage {
+            width: Some(px(100.0)),
+            ..initial
+        };
+        assert_eq!(
+            layout_and_paint.update_render_object(&detached_ctx(), &mut render),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+            "LAYOUT already contains the eventual paint implied by changing width",
+        );
     }
 
     #[test]

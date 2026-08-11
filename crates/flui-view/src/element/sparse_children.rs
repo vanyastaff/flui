@@ -348,8 +348,9 @@ mod tests {
         fn update_render_object(
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
-            _render_object: &mut Self::RenderObject,
-        ) {
+            render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            render_object.set_size(Some(px(self.side)), Some(px(self.side)))
         }
     }
 
@@ -382,8 +383,9 @@ mod tests {
         fn update_render_object(
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
-            _render_object: &mut Self::RenderObject,
-        ) {
+            render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            render_object.set_size(Some(px(self.side)), Some(px(self.side)))
         }
     }
 

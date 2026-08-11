@@ -58,6 +58,20 @@ impl RenderSizedBox {
         Self { width, height }
     }
 
+    /// Updates the fixed dimensions.
+    pub fn set_size(
+        &mut self,
+        width: Option<Pixels>,
+        height: Option<Pixels>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.width == width && self.height == height {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.width = width;
+        self.height = height;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
     /// Creates a sized box with fixed dimensions.
     pub fn fixed(width: Pixels, height: Pixels) -> Self {
         Self::new(Some(width), Some(height))

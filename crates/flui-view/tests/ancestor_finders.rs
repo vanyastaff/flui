@@ -118,10 +118,9 @@ impl RenderView for SizedBoxView {
     fn update_render_object(
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
-    ) {
-        // RenderSizedBox doesn't carry mutable dimensions post-creation;
-        // tests don't depend on update_render_object semantics.
+        render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_size(Some(px(self.width)), Some(px(self.height)))
     }
 }
 

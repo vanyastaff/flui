@@ -67,8 +67,9 @@ impl RenderView for FractionalTranslation {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.build_render_object();
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_translation(TranslationFraction::new(self.dx, self.dy))
+            | render_object.set_transform_hit_tests(self.transform_hit_tests)
     }
 
     fn has_children(&self) -> bool {
@@ -83,3 +84,44 @@ impl RenderView for FractionalTranslation {
 }
 
 impl_render_view!(FractionalTranslation);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+
+    #[test]
+    fn geometry_and_hit_test_updates_report_independent_exact_impacts() {
+        let initial = FractionalTranslation::new(0.25, 0.5);
+        let mut render_object =
+            initial.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(
+            initial.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            initial
+                .clone()
+                .transform_hit_tests(false)
+                .update_render_object(
+                    &flui_view::RenderObjectContext::detached(),
+                    &mut render_object,
+                ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            FractionalTranslation::new(0.5, 0.75)
+                .transform_hit_tests(false)
+                .update_render_object(
+                    &flui_view::RenderObjectContext::detached(),
+                    &mut render_object,
+                ),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+    }
+}

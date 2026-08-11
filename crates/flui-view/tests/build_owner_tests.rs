@@ -47,7 +47,8 @@ impl RenderView for TestView {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 }
 
@@ -118,11 +119,12 @@ impl RenderView for InteractionContextView {
         &self,
         ctx: &RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         let target = (*self.target.read()).expect("create stored the target before update");
         ctx.replace_pointer(target, |_| {})
             .expect("update runs with the same BuildOwner interaction capability active");
         self.update_count.fetch_add(1, Ordering::Relaxed);
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn did_unmount_render_object(

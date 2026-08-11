@@ -80,6 +80,9 @@ pub struct RenderSliverList {
     /// the child manager learns the real count from the data source).
     item_count: usize,
 
+    /// Estimate currently assigned to unmeasured children.
+    default_extent_estimate: f32,
+
     // ── virtualization state ─────────────────────────────────────────────────
     /// Protocol-agnostic windowing engine.
     virtualizer: Virtualizer,
@@ -120,6 +123,7 @@ impl RenderSliverList {
         );
         Self {
             item_count,
+            default_extent_estimate,
             virtualizer: Virtualizer::new(item_count, default_extent_estimate),
             logical_to_slot: BTreeMap::new(),
             pending_correction: 0.0,
@@ -129,9 +133,32 @@ impl RenderSliverList {
     }
 
     /// Updates the known item count.  Call when the data source length changes.
-    pub fn set_item_count(&mut self, count: usize) {
+    pub fn set_item_count(&mut self, count: usize) -> flui_rendering::RenderUpdateImpact {
+        if self.item_count == count {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.item_count = count;
         self.virtualizer.set_count(count);
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// Updates the estimate for unmeasured children without discarding
+    /// measurements already committed by layout.
+    pub fn set_default_extent_estimate(
+        &mut self,
+        estimate: f32,
+    ) -> flui_rendering::RenderUpdateImpact {
+        assert!(
+            estimate.is_finite() && estimate > 0.0,
+            "default_extent_estimate must be finite and positive, got {estimate}",
+        );
+        if self.default_extent_estimate == estimate {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.default_extent_estimate = estimate;
+        let changed = self.virtualizer.set_default_estimate(estimate);
+        debug_assert!(changed);
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 }
 
@@ -149,6 +176,7 @@ impl Clone for RenderSliverList {
     fn clone(&self) -> Self {
         Self {
             item_count: self.item_count,
+            default_extent_estimate: self.default_extent_estimate,
             virtualizer: self.virtualizer.clone(),
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
             pending_correction: self.pending_correction,
@@ -299,7 +327,10 @@ mod tests {
     #[test]
     fn set_item_count_updates_field() {
         let mut list = make_list();
-        list.set_item_count(42);
+        assert_eq!(
+            list.set_item_count(42),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
         assert_eq!(list.item_count, 42);
     }
 }

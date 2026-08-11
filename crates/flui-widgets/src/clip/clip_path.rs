@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use flui_objects::RenderClipPath;
+use flui_objects::{PathClipSourceToken, RenderClipPath};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Size;
 use flui_types::painting::{Clip, Path};
@@ -23,6 +23,7 @@ type PathClipper = Rc<dyn Fn(Size) -> Path>;
 #[derive(Clone)]
 pub struct ClipPath {
     clipper: PathClipper,
+    clip_source_token: PathClipSourceToken,
     clip_behavior: Clip,
     child: Child,
 }
@@ -33,6 +34,7 @@ impl ClipPath {
     pub fn new(clipper: impl Fn(Size) -> Path + 'static) -> Self {
         Self {
             clipper: Rc::new(clipper),
+            clip_source_token: PathClipSourceToken::fresh(),
             clip_behavior: Clip::AntiAlias,
             child: Child::empty(),
         }
@@ -56,21 +58,27 @@ impl ClipPath {
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderClipPath,
-    ) {
+        replace_existing: bool,
+    ) -> flui_rendering::RenderUpdateImpact {
         let clipper = Rc::clone(&self.clipper);
         match render_object.path_clip_target() {
-            Some(target) => {
+            Some(target) if replace_existing => {
                 if let Err(error) = ctx.replace_path_clipper(target, move |size| clipper(size)) {
                     tracing::warn!(?error, "ClipPath clipper replacement failed");
                 }
+                render_object.set_path_clip_target(Some(target))
             }
+            Some(_) => flui_rendering::RenderUpdateImpact::NONE,
             None => match ctx.register_path_clipper(move |size| clipper(size)) {
                 Ok(target) => render_object.set_path_clip_target(Some(target)),
-                Err(error) => tracing::debug!(
-                    ?error,
-                    "ClipPath mounted without an active interaction lane; \
-                     custom path clipper will not be resolved"
-                ),
+                Err(error) => {
+                    tracing::debug!(
+                        ?error,
+                        "ClipPath mounted without an active interaction lane; \
+                         custom path clipper will not be resolved"
+                    );
+                    flui_rendering::RenderUpdateImpact::NONE
+                }
             },
         }
     }
@@ -89,8 +97,11 @@ impl RenderView for ClipPath {
     type RenderObject = RenderClipPath;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        let mut render_object = RenderClipPath::new(self.clip_behavior);
-        self.sync_path_clip_target(ctx, &mut render_object);
+        let mut render_object = RenderClipPath::new(self.clip_behavior)
+            .with_path_clip_source_token(self.clip_source_token.clone());
+        // Creation is not a mounted update; the initial target is already
+        // reflected in the new render object's first frame.
+        let _initial_target_impact = self.sync_path_clip_target(ctx, &mut render_object, false);
         render_object
     }
 
@@ -98,9 +109,13 @@ impl RenderView for ClipPath {
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_clip_behavior(self.clip_behavior);
-        self.sync_path_clip_target(ctx, render_object);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
+        let source_impact = render_object.set_path_clip_source_token(&self.clip_source_token);
+        impact |= source_impact;
+        impact |= self.sync_path_clip_target(ctx, render_object, !source_impact.is_none());
+        impact
     }
 
     fn did_unmount_render_object(
@@ -112,7 +127,9 @@ impl RenderView for ClipPath {
             if let Err(error) = ctx.unregister_path_clipper(target) {
                 tracing::debug!(?error, "ClipPath clipper unregistration failed");
             }
-            render_object.set_path_clip_target(None);
+            // Unmount has no owner-side update application; unregistering
+            // removes the target before the render node is disposed.
+            let _unmount_target_impact = render_object.set_path_clip_target(None);
         }
     }
 
@@ -158,19 +175,44 @@ mod tests {
 
     #[test]
     fn update_render_object_applies_a_changed_clip_behavior() {
+        let widget = clip_path();
         let mut render_object =
-            clip_path().create_render_object(&flui_view::RenderObjectContext::detached());
+            widget.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
 
-        clip_path()
+        let impact = widget
+            .clone()
             .clip_behavior(Clip::HardEdge)
             .update_render_object(
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::PAINT);
 
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
         assert!(!render_object.has_custom_clipper());
+    }
+
+    #[test]
+    fn clipper_source_token_distinguishes_cloned_and_separate_updates() {
+        let widget = clip_path();
+        let mut render_object =
+            widget.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(
+            widget.clone().update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            clip_path().update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
     }
 
     #[test]

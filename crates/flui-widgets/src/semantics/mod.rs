@@ -321,17 +321,19 @@ impl RenderView for Semantics {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_configuration(self.configuration.clone());
-        render_object.set_container(self.options.contains(SemanticsOptions::CONTAINER));
-        render_object.set_explicit_child_nodes(
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_configuration(self.configuration.clone());
+        impact |= render_object.set_container(self.options.contains(SemanticsOptions::CONTAINER));
+        impact |= render_object.set_explicit_child_nodes(
             self.options
                 .contains(SemanticsOptions::EXPLICIT_CHILD_NODES),
         );
-        render_object
+        impact |= render_object
             .set_exclude_semantics(self.options.contains(SemanticsOptions::EXCLUDE_DESCENDANTS));
-        render_object
+        impact |= render_object
             .set_block_user_actions(self.options.contains(SemanticsOptions::BLOCK_USER_ACTIONS));
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -382,7 +384,8 @@ impl RenderView for MergeSemantics {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {
@@ -450,8 +453,10 @@ impl RenderView for ExcludeSemantics {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_excluding(self.excluding);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_excluding(self.excluding);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -585,10 +590,11 @@ mod tests {
             .label("updated")
             .container(true)
             .button(true);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::SEMANTICS);
 
         assert!(render_object.container());
         assert!(render_object.configuration().is_button());
@@ -599,6 +605,36 @@ mod tests {
                 .map(AttributedString::as_str),
             Some("updated")
         );
+    }
+
+    #[test]
+    fn semantics_identical_configuration_is_none_and_all_options_union_semantics() {
+        let original = Semantics::new().label("stable");
+        let mut render_object =
+            original.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(
+            original.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+
+        let changed = original
+            .clone()
+            .container(true)
+            .explicit_child_nodes(true)
+            .exclude_semantics(true)
+            .block_user_actions(true);
+        assert_eq!(
+            changed.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+        assert!(render_object.exclude_semantics());
+        assert!(render_object.block_user_actions());
     }
 
     #[test]
@@ -688,12 +724,13 @@ mod tests {
             .create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(render_object.excludes_semantics_subtree());
 
-        ExcludeSemantics::new()
+        let impact = ExcludeSemantics::new()
             .excluding(false)
             .update_render_object(
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::SEMANTICS);
         assert!(!render_object.excludes_semantics_subtree());
     }
 

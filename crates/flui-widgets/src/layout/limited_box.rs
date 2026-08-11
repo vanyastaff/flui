@@ -56,9 +56,9 @@ impl RenderView for LimitedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        *render_object =
-            RenderLimitedBox::new(Self::cap(self.max_width), Self::cap(self.max_height));
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_max_width(Self::cap(self.max_width))
+            | render_object.set_max_height(Self::cap(self.max_height))
     }
 
     fn has_children(&self) -> bool {
@@ -73,3 +73,25 @@ impl RenderView for LimitedBox {
 }
 
 impl_render_view!(LimitedBox);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+
+    #[test]
+    fn update_reports_layout_only_for_changed_caps() {
+        let initial = LimitedBox::new(10.0, 20.0);
+        let mut render = initial.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(
+            initial.update_render_object(&flui_view::RenderObjectContext::detached(), &mut render,),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            LimitedBox::new(30.0, 20.0)
+                .update_render_object(&flui_view::RenderObjectContext::detached(), &mut render,),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+    }
+}

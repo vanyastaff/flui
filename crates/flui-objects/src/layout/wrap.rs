@@ -173,6 +173,36 @@ impl RenderWrap {
         Self::default()
     }
 
+    /// Updates widget-owned layout configuration while preserving the child
+    /// count committed by layout.
+    pub fn update_configuration(
+        &mut self,
+        direction: Axis,
+        alignment: WrapAlignment,
+        spacing: f32,
+        run_alignment: WrapAlignment,
+        run_spacing: f32,
+        cross_axis_alignment: WrapCrossAlignment,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let changed = self.direction != direction
+            || self.alignment != alignment
+            || self.spacing != spacing
+            || self.run_alignment != run_alignment
+            || self.run_spacing != run_spacing
+            || self.cross_axis_alignment != cross_axis_alignment;
+        self.direction = direction;
+        self.alignment = alignment;
+        self.spacing = spacing;
+        self.run_alignment = run_alignment;
+        self.run_spacing = run_spacing;
+        self.cross_axis_alignment = cross_axis_alignment;
+        if changed {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
     /// Builder: sets the main-axis direction.
     #[must_use]
     pub fn with_direction(mut self, direction: Axis) -> Self {

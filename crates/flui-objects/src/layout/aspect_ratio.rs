@@ -168,13 +168,16 @@ impl RenderAspectRatio {
         self.aspect_ratio
     }
 
-    /// Replaces the aspect ratio; returns true if the value changed.
-    pub fn set_aspect_ratio(&mut self, aspect_ratio: AspectRatioFactor) -> bool {
+    /// Replaces the aspect ratio and reports layout when changed.
+    pub fn set_aspect_ratio(
+        &mut self,
+        aspect_ratio: AspectRatioFactor,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.aspect_ratio == aspect_ratio {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.aspect_ratio = aspect_ratio;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Computes the size implied by the aspect ratio for the given
@@ -498,7 +501,13 @@ mod tests {
     #[test]
     fn setter_returns_change_flag() {
         let mut node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
-        assert!(node.set_aspect_ratio(AspectRatioFactor::WIDESCREEN_16_9));
-        assert!(!node.set_aspect_ratio(AspectRatioFactor::WIDESCREEN_16_9));
+        assert_eq!(
+            node.set_aspect_ratio(AspectRatioFactor::WIDESCREEN_16_9),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_aspect_ratio(AspectRatioFactor::WIDESCREEN_16_9),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 }

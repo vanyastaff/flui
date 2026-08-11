@@ -261,6 +261,14 @@ where
         self.behavior.parent_data_config(&self.core)
     }
 
+    fn apply_parent_data_config(
+        &self,
+        parent_data: &mut dyn flui_rendering::parent_data::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.behavior
+            .apply_parent_data_config(&self.core, parent_data)
+    }
+
     // ========================================================================
     // Notification handler protocol
     //
@@ -395,9 +403,7 @@ where
                 // `adopt_child` writes both link directions in one call —
                 // see `RenderTree::adopt_child`.
                 pipeline_owner.with_mut(|owner| {
-                    owner
-                        .render_tree_mut()
-                        .adopt_child(parent_id, *child_render_id);
+                    owner.adopt_render_child(parent_id, *child_render_id);
                 });
             }
         }
@@ -414,6 +420,11 @@ where
             old_slot,
             new_slot
         );
+        if let Some(parent_id) = self.behavior.render_id()
+            && let Some(pipeline_owner) = self.core.pipeline_owner()
+        {
+            pipeline_owner.with_mut(|owner| owner.note_render_children_reordered(parent_id));
+        }
     }
 
     fn remove_render_object_child(&mut self, child: &dyn Any, slot: RenderSlot) {
@@ -430,9 +441,7 @@ where
                 // `drop_child` clears both link directions in one call —
                 // see `RenderTree::drop_child`.
                 pipeline_owner.with_mut(|owner| {
-                    owner
-                        .render_tree_mut()
-                        .drop_child(parent_id, *child_render_id);
+                    owner.drop_render_child(parent_id, *child_render_id);
                 });
             }
         }

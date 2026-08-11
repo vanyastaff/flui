@@ -48,6 +48,18 @@ fn new_seeds_estimates() {
 }
 
 #[test]
+fn changing_default_estimate_updates_only_unmeasured_items() {
+    let mut virtualizer = Virtualizer::new(3, 10.0);
+    virtualizer.set_measured(0, 25.0, (0, 0.0));
+
+    assert!(virtualizer.set_default_estimate(20.0));
+    assert_eq!(virtualizer.offset_of(1), 25.0);
+    assert_eq!(virtualizer.offset_of(2), 45.0);
+    assert_eq!(virtualizer.total_extent().value(), 65.0);
+    assert!(!virtualizer.set_default_estimate(20.0));
+}
+
+#[test]
 fn estimated_to_exact_transition() {
     let mut v = Virtualizer::new(3, 10.0);
     assert_eq!(v.total_extent(), Extent::Estimated(30.0));

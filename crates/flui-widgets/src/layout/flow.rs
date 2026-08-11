@@ -75,13 +75,9 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        // The `DelegateChange` return is discarded today — same
-        // "framework marks paint/layout unconditionally, future-proofing
-        // only" caveat `CustomPaint::update_render_object` already
-        // accepts for `set_painter`'s bool.
-        render_object.set_delegate(self.delegate.clone());
-        render_object.set_clip_behavior(self.clip_behavior);
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_delegate(self.delegate.clone())
+            | render_object.set_clip_behavior(self.clip_behavior)
     }
 
     fn has_children(&self) -> bool {
@@ -171,9 +167,14 @@ mod tests {
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
 
         let updated: Flow = Flow::new(delegate(), Vec::new()).clip_behavior(Clip::None);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
+        );
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
         );
 
         assert_eq!(render_object.clip_behavior(), Clip::None);
@@ -207,9 +208,14 @@ mod tests {
             Clip::AntiAliasWithSaveLayer,
         ] {
             let updated: Flow = Flow::new(delegate(), Vec::new()).clip_behavior(clip);
-            updated.update_render_object(
+            let impact = updated.update_render_object(
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
+            );
+            assert_eq!(
+                impact,
+                flui_rendering::RenderUpdateImpact::PAINT
+                    | flui_rendering::RenderUpdateImpact::SEMANTICS
             );
             assert_eq!(
                 render_object.clip_behavior(),

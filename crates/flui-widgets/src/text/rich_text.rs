@@ -90,8 +90,11 @@ impl RenderView for RichText {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.build_render_object();
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_text(self.text.clone())
+            | render_object.set_text_align(self.align)
+            | render_object.set_text_direction(self.direction)
+            | render_object.set_max_lines(self.max_lines)
     }
 }
 
@@ -157,10 +160,22 @@ mod tests {
         let mut render_object = RichText::new(TextSpan::new("first"))
             .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(plain_text(&render_object), "first");
+        assert_eq!(
+            RichText::new(TextSpan::new("first")).update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
 
-        RichText::new(TextSpan::new("second")).update_render_object(
+        let impact = RichText::new(TextSpan::new("second")).update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
+        );
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
         );
 
         assert_eq!(plain_text(&render_object), "second");

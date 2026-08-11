@@ -47,8 +47,11 @@ impl RenderView for AspectRatio {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_aspect_ratio(AspectRatioFactor::new_unchecked(self.aspect_ratio));
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |=
+            render_object.set_aspect_ratio(AspectRatioFactor::new_unchecked(self.aspect_ratio));
+        impact
     }
 
     fn has_children(&self) -> bool {

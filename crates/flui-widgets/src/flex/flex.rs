@@ -322,8 +322,17 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.style.build(self.direction, self.text_direction);
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.update_directions(
+            self.direction,
+            self.text_direction,
+            self.style.text_baseline,
+        ) | render_object.update_layout_configuration(
+            self.style.main_axis_alignment,
+            self.style.main_axis_size,
+            self.style.cross_axis_alignment,
+            self.style.spacing,
+        )
     }
 
     fn has_children(&self) -> bool {
@@ -407,14 +416,22 @@ mod tests {
         let mut render_object =
             initial_view.create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(format!("{render_object:?}").contains("spacing: 1.0"));
+        assert_eq!(
+            initial_view.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
 
         let updated: Row = Row::new(Vec::new()).spacing(9.0);
         let updated_view =
             as_render_view(FlexDirection::Horizontal, updated.style, updated.children);
-        updated_view.update_render_object(
+        let impact = updated_view.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         let debug = format!("{render_object:?}");
         assert!(

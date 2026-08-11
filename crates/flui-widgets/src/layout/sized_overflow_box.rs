@@ -61,9 +61,11 @@ impl RenderView for SizedOverflowBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_alignment(self.alignment);
-        render_object.set_requested_size(self.requested_size);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_requested_size(self.requested_size);
+        impact
     }
 
     fn has_children(&self) -> bool {

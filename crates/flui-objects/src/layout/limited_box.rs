@@ -106,22 +106,28 @@ impl RenderLimitedBox {
         self.max_height
     }
 
-    /// Sets the maximum width; returns true if the value changed.
-    pub fn set_max_width(&mut self, max_width: Option<Pixels>) -> bool {
+    /// Sets the maximum width and reports layout when changed.
+    pub fn set_max_width(
+        &mut self,
+        max_width: Option<Pixels>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.max_width == max_width {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.max_width = max_width;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Sets the maximum height; returns true if the value changed.
-    pub fn set_max_height(&mut self, max_height: Option<Pixels>) -> bool {
+    /// Sets the maximum height and reports layout when changed.
+    pub fn set_max_height(
+        &mut self,
+        max_height: Option<Pixels>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.max_height == max_height {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.max_height = max_height;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Returns the constraints the child will see after limiting is applied.
@@ -271,12 +277,24 @@ mod tests {
     }
 
     #[test]
-    fn setters_return_change_flag() {
+    fn setters_return_exact_impact() {
         let mut node = RenderLimitedBox::default();
-        assert!(node.set_max_width(Some(px(100.0))));
-        assert!(!node.set_max_width(Some(px(100.0)))); // no-op
-        assert!(node.set_max_width(None));
-        assert!(node.set_max_height(Some(px(50.0))));
+        assert_eq!(
+            node.set_max_width(Some(px(100.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_max_width(Some(px(100.0))),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_max_width(None),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_max_height(Some(px(50.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     }
 
     // ---------- limit_constraints semantics -------------------------------

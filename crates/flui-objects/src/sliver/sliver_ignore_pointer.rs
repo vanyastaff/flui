@@ -13,7 +13,8 @@
 //!
 //! # Rust-native improvements
 //!
-//! * `ignoring` is a typed `bool` boundary; setter returns a `bool`
+//! * `ignoring` is a typed `bool` boundary; its setter returns the exact
+//!   pipeline impact.
 //!   change-flag for pipeline `mark_needs_paint` /
 //!   `mark_needs_layout` short-circuit.
 //! * No `ignoring_semantics` field for now — semantics-tree
@@ -57,13 +58,13 @@ impl RenderSliverIgnorePointer {
         self.ignoring
     }
 
-    /// Updates the `ignoring` flag; returns `true` iff the value changed.
-    pub fn set_ignoring(&mut self, ignoring: bool) -> bool {
+    /// Updates the `ignoring` flag and reports semantics when changed.
+    pub fn set_ignoring(&mut self, ignoring: bool) -> flui_rendering::RenderUpdateImpact {
         if self.ignoring == ignoring {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.ignoring = ignoring;
-        true
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -134,9 +135,18 @@ mod tests {
     #[test]
     fn set_ignoring_returns_change_flag() {
         let mut node = RenderSliverIgnorePointer::new(false);
-        assert!(node.set_ignoring(true));
-        assert!(!node.set_ignoring(true)); // no-op
-        assert!(node.set_ignoring(false));
+        assert_eq!(
+            node.set_ignoring(true),
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
+        assert_eq!(
+            node.set_ignoring(true),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_ignoring(false),
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
     }
 
     #[test]

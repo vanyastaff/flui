@@ -190,8 +190,8 @@ pub struct HeadlessBinding {
     local_post_frame: LocalPostFrameLane,
     /// Owner-affine interaction callback storage, active across every owner entry.
     interaction_lane: InteractionLane,
-    /// The composited [`LayerTree`] the most recent [`pump_frame`](Self::pump_frame)
-    /// produced, retained rather than dropped.
+    /// The most recently committed composited [`LayerTree`], retained across a
+    /// later frame that has no paint work.
     ///
     /// On screen this value is the frame's whole point — the production draw-frame
     /// path hands it to the compositor. Headlessly there is nothing downstream to hand
@@ -200,11 +200,12 @@ pub struct HeadlessBinding {
     /// frame observable in the same terms as the on-screen one; see
     /// [`layer_tree`](Self::layer_tree).
     ///
-    /// `None` before the first frame, and for a gesture-only binding with no
-    /// mounted tree. A frame over a tree with nothing dirty repaints nothing and
-    /// composites nothing, so it also leaves `None` — the field reports what the
-    /// last frame produced, not a cached last-known-good tree.
+    /// `None` before the first painted frame and for a gesture-only binding.
     last_layer_tree: Option<LayerTree>,
+    /// Whether the immediately preceding frame produced a fresh layer tree.
+    last_frame_painted: bool,
+    /// Number of frames that produced a fresh layer tree.
+    painted_frame_count: u64,
     /// The deterministic multi-presentation clock registry (issue #556)
     /// — additive to, and independent of, this binding's own single
     /// [`clock`](Self)/[`vsync`](Self::vsync) pair `pump_frame` drives.
@@ -267,6 +268,8 @@ impl HeadlessBinding {
             local_post_frame,
             interaction_lane,
             last_layer_tree: None,
+            last_frame_painted: false,
+            painted_frame_count: 0,
             presentation_clocks: HashMap::new(),
         })
     }
@@ -375,6 +378,18 @@ impl HeadlessBinding {
         tree: ElementTree,
         pipeline_owner: PipelineCell,
     ) {
+        self.bind_tree_with_committed_layer_tree(build_owner, tree, pipeline_owner, None);
+    }
+
+    /// Attach a bootstrapped tree and retain the layer tree produced by its
+    /// bootstrap frame.
+    pub fn bind_tree_with_committed_layer_tree(
+        &mut self,
+        build_owner: BuildOwner,
+        tree: ElementTree,
+        pipeline_owner: PipelineCell,
+        committed_layer_tree: Option<LayerTree>,
+    ) {
         // Widgets spawn into the driver this binding's frame step
         // polls — the binding-local one, never some OTHER binding's or
         // realm's `UpdateScheduler`. Idempotent: installing it again is a no-op if
@@ -393,6 +408,11 @@ impl HeadlessBinding {
             tree,
             pipeline_owner,
         });
+        self.last_frame_painted = committed_layer_tree.is_some();
+        self.last_layer_tree = committed_layer_tree;
+        if self.last_frame_painted {
+            self.painted_frame_count = self.painted_frame_count.saturating_add(1);
+        }
     }
 
     /// Register `controller` with this binding's [`Vsync`] so each
@@ -491,8 +511,7 @@ impl HeadlessBinding {
         self.gestures.mouse_tracker()
     }
 
-    /// The composited layer tree the most recent [`pump_frame`](Self::pump_frame)
-    /// produced, or `None` if that frame composited nothing.
+    /// The most recently committed composited layer tree.
     ///
     /// This is the headless counterpart of the value `AppBinding::draw_frame`
     /// hands the compositor — the same tree, from the same pipeline step, simply
@@ -501,12 +520,23 @@ impl HeadlessBinding {
     /// *paint*, so a widget that forces a clip, a transform, or an opacity layer
     /// is visible here and nowhere else.
     ///
-    /// A frame over a tree with nothing dirty repaints nothing and therefore
-    /// composites nothing, leaving `None` — this reports the last frame's
-    /// output, not the last non-empty output. Mount, then pump, then read.
+    /// A frame with no paint work preserves the previous committed tree. Use
+    /// [`Self::did_paint_last_frame`] when the distinction matters.
     #[must_use]
     pub fn layer_tree(&self) -> Option<&LayerTree> {
         self.last_layer_tree.as_ref()
+    }
+
+    /// Whether the immediately preceding frame produced a fresh layer tree.
+    #[must_use]
+    pub fn did_paint_last_frame(&self) -> bool {
+        self.last_frame_painted
+    }
+
+    /// Number of frames that have produced a fresh layer tree.
+    #[must_use]
+    pub fn painted_frame_count(&self) -> u64 {
+        self.painted_frame_count
     }
 
     /// The virtual clock this binding advances each frame.
@@ -676,6 +706,8 @@ impl HeadlessBinding {
             local_post_frame,
             interaction_lane,
             last_layer_tree,
+            last_frame_painted,
+            painted_frame_count,
             ..
         } = self;
         interaction_lane.enter(|| {
@@ -730,7 +762,12 @@ impl HeadlessBinding {
                 vsync_time,
                 idle_deadline,
                 || {
-                    *last_layer_tree = Self::run_pipeline(tree);
+                    let painted_layer_tree = Self::run_pipeline(tree);
+                    *last_frame_painted = painted_layer_tree.is_some();
+                    if let Some(layer_tree) = painted_layer_tree {
+                        *last_layer_tree = Some(layer_tree);
+                        *painted_frame_count = painted_frame_count.saturating_add(1);
+                    }
 
                     // 7. Re-hit-test every stationary device against the
                     //    tree layout/paint that just committed above,
@@ -1026,4 +1063,45 @@ mod auto_trait_tests {
     use super::HeadlessBinding;
 
     assert_not_impl_any!(HeadlessBinding: Send, Sync);
+}
+
+#[cfg(test)]
+mod committed_layer_tree_tests {
+    use flui_rendering::layer::LayerTree;
+    use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+    use flui_view::{BuildOwner, ElementTree};
+
+    use super::HeadlessBinding;
+
+    #[test]
+    fn gesture_only_binding_has_no_committed_output() {
+        let binding = HeadlessBinding::new();
+        assert!(binding.layer_tree().is_none());
+        assert!(!binding.did_paint_last_frame());
+        assert_eq!(binding.painted_frame_count(), 0);
+    }
+
+    #[test]
+    fn rebinding_without_a_bootstrap_frame_clears_previous_output() {
+        let mut binding = HeadlessBinding::new();
+        binding.bind_tree_with_committed_layer_tree(
+            BuildOwner::new(),
+            ElementTree::new(),
+            PipelineCell::new(PipelineOwner::new()),
+            Some(LayerTree::new()),
+        );
+        assert!(binding.layer_tree().is_some());
+        assert!(binding.did_paint_last_frame());
+        assert_eq!(binding.painted_frame_count(), 1);
+
+        binding.bind_tree(
+            BuildOwner::new(),
+            ElementTree::new(),
+            PipelineCell::new(PipelineOwner::new()),
+        );
+
+        assert!(binding.layer_tree().is_none());
+        assert!(!binding.did_paint_last_frame());
+        assert_eq!(binding.painted_frame_count(), 1);
+    }
 }

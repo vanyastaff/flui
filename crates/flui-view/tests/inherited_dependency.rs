@@ -123,7 +123,8 @@ impl RenderView for LeafView {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 }
 
@@ -702,7 +703,13 @@ mod did_change_dependencies_on_inherited_update {
             child: DummyChild,
         };
 
-        let provider_id = tree.mount_root(&provider, &mut owner.element_owner_mut());
+        let provider_id = tree.mount_root_with_pipeline_owner(
+            &provider,
+            Some(flui_rendering::pipeline::PipelineCell::new(
+                flui_rendering::pipeline::PipelineOwner::new(),
+            )),
+            &mut owner.element_owner_mut(),
+        );
 
         let dep_id = tree.insert(
             dependent_view,
@@ -1203,7 +1210,13 @@ mod live_inherited_during_build {
         // Mount the provider and drive a full build: build_scope reconciles
         // and builds the whole subtree (ThemeRoot -> Middle -> Consumer ->
         // Leaf), so the consumer's real `build()` runs under a live context.
-        let root_id = tree.mount_root(&root_v1, &mut owner.element_owner_mut());
+        let root_id = tree.mount_root_with_pipeline_owner(
+            &root_v1,
+            Some(flui_rendering::pipeline::PipelineCell::new(
+                flui_rendering::pipeline::PipelineOwner::new(),
+            )),
+            &mut owner.element_owner_mut(),
+        );
         owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
 

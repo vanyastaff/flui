@@ -74,13 +74,13 @@ impl RenderRotatedBox {
         self.quarter_turns
     }
 
-    /// Replaces the quarter-turn count; returns `true` if the value changed.
-    pub fn set_quarter_turns(&mut self, quarter_turns: i32) -> bool {
+    /// Replaces the quarter-turn count and reports layout when changed.
+    pub fn set_quarter_turns(&mut self, quarter_turns: i32) -> flui_rendering::RenderUpdateImpact {
         if self.quarter_turns == quarter_turns {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.quarter_turns = quarter_turns;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Returns `true` when the quarter-turn count is odd (axes are swapped).
@@ -363,8 +363,14 @@ mod tests {
     #[test]
     fn setter_returns_change_flag() {
         let mut node = RenderRotatedBox::new(1);
-        assert!(node.set_quarter_turns(2));
-        assert!(!node.set_quarter_turns(2));
+        assert_eq!(
+            node.set_quarter_turns(2),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_quarter_turns(2),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
         assert_eq!(node.quarter_turns(), 2);
     }
 

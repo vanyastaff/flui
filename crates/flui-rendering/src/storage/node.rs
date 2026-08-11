@@ -392,10 +392,12 @@ impl RenderNode {
         }
     }
 
-    /// Sets the `NEEDS_SEMANTICS` flag on this node's state —
-    /// flag-only, no propagation. Additive
-    /// helper; not used by the queue-scan dedup path (see
-    /// [`Self::mark_paint_flag`] doc for rationale).
+    /// Sets the legacy `NEEDS_SEMANTICS` flag on this node's state.
+    ///
+    /// The current semantics pass is queue-driven and does not clear this
+    /// flag, so canonical scheduling uses
+    /// [`PipelineOwner::mark_needs_semantics`](crate::pipeline::PipelineOwner::mark_needs_semantics)
+    /// instead. This accessor remains only for future flag-based work.
     #[inline]
     pub fn mark_semantics_flag(&self) {
         match self {
@@ -405,9 +407,8 @@ impl RenderNode {
     }
 
     /// Returns true if `NEEDS_SEMANTICS` is set on this node's state.
-    /// Additive accessor for future flag-based
-    /// callers (current `add_node_needing_semantics` uses queue-scan
-    /// dedup, not this flag).
+    /// Legacy accessor for future flag-based callers; current semantics
+    /// scheduling uses queue-scan dedup, not this flag.
     #[inline]
     pub fn needs_semantics(&self) -> bool {
         match self {

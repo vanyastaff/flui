@@ -84,12 +84,18 @@ impl RenderTheater {
         self.skip_count
     }
 
-    /// Returns whether the value changed, so the caller can skip
-    /// `mark_needs_layout`.
-    pub const fn set_skip_count(&mut self, skip_count: usize) -> bool {
+    /// Updates the skip count and reports layout when changed.
+    pub const fn set_skip_count(
+        &mut self,
+        skip_count: usize,
+    ) -> flui_rendering::RenderUpdateImpact {
         let changed = self.skip_count != skip_count;
         self.skip_count = skip_count;
-        changed
+        if changed {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
     }
 
     /// The index of the first onstage child.
@@ -245,8 +251,14 @@ mod tests {
     #[test]
     fn set_skip_count_reports_only_real_changes() {
         let mut theater = RenderTheater::new();
-        assert!(theater.set_skip_count(2));
-        assert!(!theater.set_skip_count(2));
+        assert_eq!(
+            theater.set_skip_count(2),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            theater.set_skip_count(2),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
         assert_eq!(theater.skip_count(), 2);
     }
 }

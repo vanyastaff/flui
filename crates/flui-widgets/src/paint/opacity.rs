@@ -47,8 +47,10 @@ impl RenderView for Opacity {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_opacity(self.opacity);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_opacity(self.opacity);
+        impact
     }
 
     fn has_children(&self) -> bool {

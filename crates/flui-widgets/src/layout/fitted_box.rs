@@ -80,10 +80,10 @@ impl RenderView for FittedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_fit(self.fit);
-        render_object.set_alignment(self.alignment);
-        render_object.set_clip_behavior(self.clip);
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_fit(self.fit)
+            | render_object.set_alignment(self.alignment)
+            | render_object.set_clip_behavior(self.clip)
     }
 
     fn has_children(&self) -> bool {
@@ -140,14 +140,42 @@ mod tests {
             .fit(BoxFit::Fill)
             .alignment(Alignment::BOTTOM_RIGHT)
             .clip(Clip::HardEdge);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
+        );
+        assert_eq!(
+            impact,
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
         );
 
         assert_eq!(render_object.fit(), BoxFit::Fill);
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
+    }
+
+    #[test]
+    fn update_distinguishes_scale_down_layout_from_paint_only_changes() {
+        let original = FittedBox::new();
+        let mut render_object =
+            original.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(
+            original.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            ),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            FittedBox::new()
+                .fit(BoxFit::ScaleDown)
+                .update_render_object(
+                    &flui_view::RenderObjectContext::detached(),
+                    &mut render_object,
+                ),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     }
 
     #[test]

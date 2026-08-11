@@ -70,6 +70,19 @@ impl ParentDataView for Flexible {
     fn create_parent_data(&self) -> Self::ParentData {
         FlexParentData::new(Offset::ZERO, Some(self.flex), self.fit)
     }
+
+    fn apply_parent_data(
+        &self,
+        parent_data: &mut Self::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let flex = Some(self.flex);
+        if parent_data.flex == flex && parent_data.fit == self.fit {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        parent_data.flex = flex;
+        parent_data.fit = self.fit;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
 }
 
 impl_parent_data_view!(Flexible);
@@ -113,6 +126,101 @@ impl ParentDataView for Expanded {
     fn create_parent_data(&self) -> Self::ParentData {
         FlexParentData::new(Offset::ZERO, Some(self.flex), FlexFit::Tight)
     }
+
+    fn apply_parent_data(
+        &self,
+        parent_data: &mut Self::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let flex = Some(self.flex);
+        if parent_data.flex == flex && parent_data.fit == FlexFit::Tight {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        parent_data.flex = flex;
+        parent_data.fit = FlexFit::Tight;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
 }
 
 impl_parent_data_view!(Expanded);
+
+#[cfg(test)]
+mod tests {
+    use flui_foundation::RenderId;
+    use flui_types::geometry::px;
+
+    use super::*;
+    use crate::SizedBox;
+
+    fn seeded_data() -> FlexParentData {
+        let mut data = FlexParentData::new(Offset::new(px(8.0), px(13.0)), Some(1), FlexFit::Loose);
+        data.container.previous_sibling = Some(RenderId::new(7));
+        data.container.next_sibling = Some(RenderId::new(9));
+        data
+    }
+
+    fn assert_layout_fields_preserved(data: &FlexParentData) {
+        assert_eq!(data.offset, Offset::new(px(8.0), px(13.0)));
+        assert_eq!(data.container.previous_sibling, Some(RenderId::new(7)));
+        assert_eq!(data.container.next_sibling, Some(RenderId::new(9)));
+    }
+
+    #[test]
+    fn flexible_parent_data_reports_exact_impact_and_preserves_layout_fields() {
+        let mut data = seeded_data();
+        let unchanged = Flexible::new(SizedBox::shrink());
+        assert_eq!(
+            unchanged.apply_parent_data(&mut data),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+
+        let mut flex_only_data = seeded_data();
+        let flex_only = Flexible::new(SizedBox::shrink()).flex(3);
+        assert_eq!(
+            flex_only.apply_parent_data(&mut flex_only_data),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+        assert_eq!(flex_only_data.flex, Some(3));
+        assert_eq!(flex_only_data.fit, FlexFit::Loose);
+        assert_layout_fields_preserved(&flex_only_data);
+
+        let mut fit_only_data = seeded_data();
+        let fit_only = Flexible::new(SizedBox::shrink()).fit(FlexFit::Tight);
+        assert_eq!(
+            fit_only.apply_parent_data(&mut fit_only_data),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+        assert_eq!(fit_only_data.flex, Some(1));
+        assert_eq!(fit_only_data.fit, FlexFit::Tight);
+        assert_layout_fields_preserved(&fit_only_data);
+
+        let changed = Flexible::new(SizedBox::shrink())
+            .flex(3)
+            .fit(FlexFit::Tight);
+        assert_eq!(
+            changed.apply_parent_data(&mut data),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(data.flex, Some(3));
+        assert_eq!(data.fit, FlexFit::Tight);
+        assert_layout_fields_preserved(&data);
+    }
+
+    #[test]
+    fn expanded_parent_data_reports_exact_impact_and_preserves_layout_fields() {
+        let mut data = seeded_data();
+        data.fit = FlexFit::Tight;
+        let unchanged = Expanded::new(SizedBox::shrink());
+        assert_eq!(
+            unchanged.apply_parent_data(&mut data),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        let changed = Expanded::new(SizedBox::shrink()).flex(4);
+        assert_eq!(
+            changed.apply_parent_data(&mut data),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(data.flex, Some(4));
+        assert_eq!(data.fit, FlexFit::Tight);
+        assert_layout_fields_preserved(&data);
+    }
+}

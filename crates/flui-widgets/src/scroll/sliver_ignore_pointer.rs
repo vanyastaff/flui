@@ -58,8 +58,10 @@ impl RenderView for SliverIgnorePointer {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_ignoring(self.ignoring);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_ignoring(self.ignoring);
+        impact
     }
 
     fn has_children(&self) -> bool {

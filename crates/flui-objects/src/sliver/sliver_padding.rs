@@ -28,7 +28,7 @@
 //!   `SliverLayoutContext`. The `perform_layout` body becomes a thin
 //!   driver over those helpers + the context's `layout_child` /
 //!   `child_parent_data_mut` calls.
-//! * `set_padding` returns a `bool` change-flag for pipeline
+//! * `set_padding` returns the exact pipeline impact.
 //!   `mark_needs_layout` short-circuit.
 //! * Sliver-protocol calculate_paint_offset / calculate_cache_offset are
 //!   inlined as private associated functions (`paint_offset`,
@@ -109,7 +109,7 @@ impl RenderSliverPadding {
         self.padding
     }
 
-    /// Updates the padding; returns `true` iff the value changed.
+    /// Updates the padding and returns the exact pipeline impact.
     ///
     /// # Panics
     ///
@@ -125,16 +125,16 @@ impl RenderSliverPadding {
     /// both: the invariant being protected is a property of what gets stored,
     /// and a guard that can only fire on a value it is too late to reject is
     /// not one worth porting.
-    pub fn set_padding(&mut self, padding: EdgeInsets) -> bool {
+    pub fn set_padding(&mut self, padding: EdgeInsets) -> flui_rendering::RenderUpdateImpact {
         debug_assert!(
             padding.is_non_negative(),
             "RenderSliverPadding insets must be non-negative, got {padding:?}"
         );
         if self.padding == padding {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.padding = padding;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -536,8 +536,14 @@ mod tests {
     #[test]
     fn set_padding_returns_change_flag() {
         let mut p = RenderSliverPadding::all(4.0);
-        assert!(!p.set_padding(EdgeInsets::all(px(4.0)))); // no-op
-        assert!(p.set_padding(EdgeInsets::all(px(5.0))));
+        assert_eq!(
+            p.set_padding(EdgeInsets::all(px(4.0))),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            p.set_padding(EdgeInsets::all(px(5.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
         assert_eq!(p.padding(), EdgeInsets::all(px(5.0)));
     }
 
@@ -546,8 +552,14 @@ mod tests {
         // The invariant is non-*negative*, not positive: zero on every side is
         // the identity padding and must not trip the guard.
         let mut p = RenderSliverPadding::new(EdgeInsets::all(px(0.0)));
-        assert!(p.set_padding(EdgeInsets::all(px(1.0))));
-        assert!(p.set_padding(EdgeInsets::all(px(0.0))));
+        assert_eq!(
+            p.set_padding(EdgeInsets::all(px(1.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            p.set_padding(EdgeInsets::all(px(0.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
     }
 
     // The negative-inset guard is a `debug_assert!`, mirroring the Dart

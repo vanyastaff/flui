@@ -77,17 +77,17 @@ impl RenderLeaderLayer {
         self.link
     }
 
-    /// Replaces the layer link; returns `true` if the value changed.
+    /// Replaces the layer link and returns the exact pipeline impact.
     /// Paint-only — Flutter parity: `markNeedsPaint()`, never a relayout
     /// (oracle `:4486-4496`; FLUI has no embedded-mutable-`LayerLink`
     /// `leaderSize` field to migrate between links, so the swap is a
     /// plain overwrite).
-    pub fn set_link(&mut self, link: LayerLink) -> bool {
+    pub fn set_link(&mut self, link: LayerLink) -> flui_rendering::RenderUpdateImpact {
         if self.link == link {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.link = link;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 }
 
@@ -161,8 +161,14 @@ mod tests {
         let link_a = LayerLink::new();
         let link_b = LayerLink::new();
         let mut node = RenderLeaderLayer::new(link_a);
-        assert!(node.set_link(link_b));
-        assert!(!node.set_link(link_b));
+        assert_eq!(
+            node.set_link(link_b),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_link(link_b),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 
     #[test]

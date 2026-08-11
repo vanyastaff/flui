@@ -276,7 +276,10 @@ fn paint_only_then_layout_invalidations_round_trip() {
 
     // Frame 3: layout invalidation — padding grows, offsets move.
     run.update::<RenderPadding>(pad, |padding| {
-        padding.set_padding(EdgeInsets::all(px(20.0)));
+        assert_eq!(
+            padding.set_padding(EdgeInsets::all(px(20.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     });
     let report = run.pump();
     assert!(report.painted, "layout frame repaints");
@@ -378,7 +381,10 @@ fn repaint_boundary_split_survives_relayout_frames() {
 
     // Move the boundary by growing the padding; re-frame.
     run.update::<RenderPadding>(pad, |padding| {
-        padding.set_padding(EdgeInsets::all(px(30.0)));
+        assert_eq!(
+            padding.set_padding(EdgeInsets::all(px(30.0))),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
     });
     run.pump();
 
@@ -564,7 +570,8 @@ fn deferred_mutations_preserved_across_drain() {
     assert_eq!(run.owner().deferred_mutation_count(), 1);
 }
 
-/// A deferred `Insert` must schedule the new child for layout AND paint.
+/// A deferred `Insert` schedules the child and the full parent-membership
+/// invalidation without an immediate parent paint.
 ///
 /// Regression: the apply path previously inserted the node but never
 /// enqueued it, so it carried `NEEDS_LAYOUT` while being absent from every
@@ -572,7 +579,7 @@ fn deferred_mutations_preserved_across_drain() {
 /// The queue drains after the layout pass, so the child appears in the tree
 /// this frame and settles (lays out + paints) on the next.
 #[test]
-fn deferred_insert_box_schedules_layout_and_paint_for_new_child() {
+fn deferred_insert_box_schedules_exact_membership_work_for_new_child() {
     let mut run = RenderTester::mount(
         box_node(RenderFlex::row())
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("first")),

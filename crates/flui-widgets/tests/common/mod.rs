@@ -183,7 +183,7 @@ fn lay_out_with_pipeline_owner_and_binding(
         owner.set_root_constraints(Some(constraints));
     });
 
-    {
+    let bootstrap_layer_tree = {
         // Mirror the production frame path exactly: `HeadlessBinding::pump_frame`
         // and `AppBinding::draw_frame` both run the ADR-0017 layout<->build
         // fixpoint, not a bare `PipelineOwner::run_frame`. Bootstrapping with
@@ -192,14 +192,19 @@ fn lay_out_with_pipeline_owner_and_binding(
         binding.enter_owner_scope(|| {
             build_owner
                 .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
-                .expect("headless frame should succeed");
-        });
-    }
+                .expect("headless frame should succeed")
+        })
+    };
 
     // Bootstrap done (mounted, rooted, first frame run): hand the three owners to
     // the tree-bound binding, keeping our own clone of the shared `PipelineCell`
     // for geometry reads. `pump`/`tick`/`pump_for` route through the binding.
-    binding.bind_tree(build_owner, tree, pipeline_owner.clone());
+    binding.bind_tree_with_committed_layer_tree(
+        build_owner,
+        tree,
+        pipeline_owner.clone(),
+        bootstrap_layer_tree,
+    );
 
     LaidOut {
         binding,
@@ -879,6 +884,16 @@ impl LaidOut {
     /// express. Same "a frame must have been pumped" precondition.
     pub fn layer_tree(&self) -> Option<&flui_rendering::layer::LayerTree> {
         self.binding.layer_tree()
+    }
+
+    /// Whether the immediately preceding harness frame repainted.
+    pub fn did_paint_last_frame(&self) -> bool {
+        self.binding.did_paint_last_frame()
+    }
+
+    /// Number of harness frames that produced a fresh layer tree.
+    pub fn painted_frame_count(&self) -> u64 {
+        self.binding.painted_frame_count()
     }
 
     /// The kinds of every layer the most recent pumped frame composited, in

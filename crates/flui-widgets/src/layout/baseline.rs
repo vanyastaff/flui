@@ -51,9 +51,11 @@ impl RenderView for Baseline {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_baseline(self.kind);
-        render_object.set_baseline_offset(px(self.distance));
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_baseline(self.kind);
+        impact |= render_object.set_baseline_offset(px(self.distance));
+        impact
     }
 
     fn has_children(&self) -> bool {

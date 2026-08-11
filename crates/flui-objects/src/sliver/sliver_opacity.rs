@@ -16,8 +16,8 @@
 //! * `opacity` is clamped to `[0, 1]` on construction and `set_opacity`;
 //!   the cached `alpha: u8` is recomputed at the boundary so paint-time
 //!   code reads it as `Some(u8)` without re-clamping per frame.
-//! * Setters return `bool` change-flags for pipeline
-//!   `mark_needs_paint` short-circuit.
+//! * The opacity setter reports the exact paint, compositing, and semantics
+//!   impact of the alpha transition.
 //! * `always_needs_compositing` opt-in mirrors Flutter's
 //!   `RenderProxyBox.alwaysNeedsCompositing` toggle and is honoured by
 //!   [`RenderSliverOpacity::needs_compositing`] independent of the
@@ -123,26 +123,37 @@ impl RenderSliverOpacity {
         self.always_needs_compositing
     }
 
-    /// Updates the opacity (clamped to `[0, 1]`); returns `true` iff
-    /// the resulting clamped value differs from the current one.
-    pub fn set_opacity(&mut self, opacity: f32) -> bool {
+    /// Updates the opacity (clamped to `[0, 1]`) and reports its exact pipeline
+    /// impact.
+    pub fn set_opacity(&mut self, opacity: f32) -> flui_rendering::RenderUpdateImpact {
         let clamped = opacity.clamp(0.0, 1.0);
         if (self.opacity - clamped).abs() <= f32::EPSILON {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
+        let needed_compositing = self.needs_compositing();
+        let was_visible = self.alpha != 0;
         self.opacity = clamped;
         self.alpha = Self::opacity_to_alpha(clamped);
-        true
+        let mut impact = flui_rendering::RenderUpdateImpact::PAINT;
+        if needed_compositing != self.needs_compositing() {
+            impact |= flui_rendering::RenderUpdateImpact::COMPOSITING_BITS;
+        }
+        if was_visible != (self.alpha != 0) {
+            impact |= flui_rendering::RenderUpdateImpact::SEMANTICS;
+        }
+        impact
     }
 
-    /// Updates the `always_needs_compositing` flag; returns `true` iff
-    /// the value changed.
-    pub fn set_always_needs_compositing(&mut self, value: bool) -> bool {
+    /// Updates the explicit compositing predicate and reports its phase.
+    pub fn set_always_needs_compositing(
+        &mut self,
+        value: bool,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.always_needs_compositing == value {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.always_needs_compositing = value;
-        true
+        flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
     }
 
     /// Converts opacity (`0.0..=1.0`) to alpha (`0..=255`).
@@ -281,19 +292,37 @@ mod tests {
     }
 
     #[test]
-    fn set_opacity_returns_change_flag() {
+    fn set_opacity_reports_exact_paint_compositing_and_visibility_impacts() {
         let mut o = RenderSliverOpacity::new(1.0);
-        assert!(!o.set_opacity(1.0)); // no-op
-        assert!(o.set_opacity(0.25));
+        assert_eq!(o.set_opacity(1.0), flui_rendering::RenderUpdateImpact::NONE);
+        assert_eq!(
+            o.set_opacity(0.25),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+        );
         // 0.25 * 255 = 63.75 → round → 64.
         assert_eq!(o.alpha(), 64);
+        assert_eq!(
+            o.set_opacity(0.5),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            o.set_opacity(0.0),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
     }
 
     #[test]
     fn set_always_needs_compositing_returns_change_flag() {
         let mut o = RenderSliverOpacity::opaque();
-        assert!(!o.set_always_needs_compositing(false)); // no-op
-        assert!(o.set_always_needs_compositing(true));
+        assert_eq!(
+            o.set_always_needs_compositing(false),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            o.set_always_needs_compositing(true),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+        );
         assert!(o.always_needs_compositing_flag());
         assert!(o.needs_compositing()); // forced on even with alpha=255.
     }
@@ -330,7 +359,10 @@ mod tests {
     #[test]
     fn paint_alpha_returns_some_when_transparent_but_forced() {
         let mut o = RenderSliverOpacity::transparent();
-        o.set_always_needs_compositing(true);
+        assert_eq!(
+            o.set_always_needs_compositing(true),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
         assert_eq!(o.paint_alpha(), Some(0));
         assert!(!o.skip_paint());
     }
@@ -344,7 +376,10 @@ mod tests {
     #[test]
     fn paint_alpha_returns_some_when_forced() {
         let mut o = RenderSliverOpacity::opaque();
-        o.set_always_needs_compositing(true);
+        assert_eq!(
+            o.set_always_needs_compositing(true),
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS,
+        );
         assert_eq!(o.paint_alpha(), Some(255));
     }
 

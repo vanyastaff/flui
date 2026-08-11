@@ -37,7 +37,12 @@ fn harness_advance_layout_follows_animation_controller() {
         ctrl.tick_at(*t);
         let padding = 5.0 + 50.0 * ctrl.value();
         let report = run.advance_layout::<RenderPadding>(pad, |p| {
-            p.set_padding(EdgeInsets::all(px(padding)));
+            let expected_impact = if i == 0 {
+                flui_rendering::RenderUpdateImpact::NONE
+            } else {
+                flui_rendering::RenderUpdateImpact::LAYOUT
+            };
+            assert_eq!(p.set_padding(EdgeInsets::all(px(padding))), expected_impact,);
         });
         assert!(report.painted, "animation frame {i} must paint");
 

@@ -93,14 +93,35 @@ impl RenderParagraph {
     /// - [`Invalidation::Paint`] — only paint attributes changed (color,
     ///   shadow); caller can mark paint-dirty only (cheaper).
     /// - [`Invalidation::None`] — no observable change.
-    pub fn set_text(&mut self, text: impl Into<InlineSpan>) -> Invalidation {
-        self.painter.set_text(Some(text.into()))
+    pub fn set_text(&mut self, text: impl Into<InlineSpan>) -> flui_rendering::RenderUpdateImpact {
+        text_invalidation_impact(self.painter.set_text(Some(text.into())), true)
     }
 
     /// Sets the text alignment. The caller is responsible for marking the node
     /// layout-dirty.
-    pub fn set_text_align(&mut self, align: TextAlign) {
-        self.painter.set_text_align(align);
+    pub fn set_text_align(&mut self, align: TextAlign) -> flui_rendering::RenderUpdateImpact {
+        text_invalidation_impact(self.painter.set_text_align(align), false)
+    }
+
+    /// Updates the resolved text direction.
+    pub fn set_text_direction(
+        &mut self,
+        direction: TextDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.painter.text_direction() == Some(direction) {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.painter.set_text_direction(Some(direction));
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    /// Updates the maximum line count.
+    pub fn set_max_lines(&mut self, max_lines: Option<u32>) -> flui_rendering::RenderUpdateImpact {
+        if self.painter.max_lines() == max_lines {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.painter.set_max_lines(max_lines);
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Read access to the underlying painter (cursor / selection geometry).
@@ -121,6 +142,24 @@ impl RenderParagraph {
             max
         } else {
             f32::INFINITY
+        }
+    }
+}
+
+fn text_invalidation_impact(
+    invalidation: Invalidation,
+    semantics_may_change: bool,
+) -> flui_rendering::RenderUpdateImpact {
+    match invalidation {
+        Invalidation::None => flui_rendering::RenderUpdateImpact::NONE,
+        Invalidation::Paint => flui_rendering::RenderUpdateImpact::PAINT,
+        Invalidation::Layout => {
+            let impact = flui_rendering::RenderUpdateImpact::LAYOUT;
+            if semantics_may_change {
+                impact | flui_rendering::RenderUpdateImpact::SEMANTICS
+            } else {
+                impact
+            }
         }
     }
 }

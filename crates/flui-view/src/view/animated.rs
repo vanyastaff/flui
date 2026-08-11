@@ -174,7 +174,8 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             _render_object: &mut Self::RenderObject,
-        ) {
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 
@@ -327,7 +328,8 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             _render_object: &mut Self::RenderObject,
-        ) {
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 
@@ -418,7 +420,13 @@ mod tests {
 
         let mut tree = crate::ElementTree::new();
         let mut owner = crate::BuildOwner::new();
-        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        let root = tree.mount_root_with_pipeline_owner(
+            &view,
+            Some(flui_rendering::pipeline::PipelineCell::new(
+                flui_rendering::pipeline::PipelineOwner::new(),
+            )),
+            &mut owner.element_owner_mut(),
+        );
 
         // Initial build.
         owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
@@ -462,7 +470,13 @@ mod tests {
 
         let mut tree = crate::ElementTree::new();
         let mut owner = crate::BuildOwner::new();
-        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        let root = tree.mount_root_with_pipeline_owner(
+            &view,
+            Some(flui_rendering::pipeline::PipelineCell::new(
+                flui_rendering::pipeline::PipelineOwner::new(),
+            )),
+            &mut owner.element_owner_mut(),
+        );
 
         owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);

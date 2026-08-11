@@ -96,12 +96,20 @@ impl RenderSliverGrid {
 
     /// Replaces the grid delegate.
     ///
-    /// `should_relayout` is consulted for documentation and diagnostic
-    /// purposes.  In the eager pipeline model the next frame always re-runs
-    /// `perform_layout`, so no explicit "mark needs layout" call is required.
-    pub fn set_grid_delegate(&mut self, new_delegate: Arc<dyn SliverGridDelegate>) {
-        let _relayout_needed = new_delegate.should_relayout(&*self.grid_delegate);
+    /// A concrete delegate type change always requires layout; otherwise the
+    /// new delegate's `should_relayout` decision is authoritative.
+    pub fn set_grid_delegate(
+        &mut self,
+        new_delegate: Arc<dyn SliverGridDelegate>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let type_changed = new_delegate.as_any().type_id() != self.grid_delegate.as_any().type_id();
+        let impact = if type_changed || new_delegate.should_relayout(&*self.grid_delegate) {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        };
         self.grid_delegate = new_delegate;
+        impact
     }
 
     /// Returns the current grid delegate.

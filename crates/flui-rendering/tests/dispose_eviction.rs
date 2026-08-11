@@ -55,8 +55,16 @@ fn removing_one_subtree_keeps_sibling_entries() {
         .insert_child_render_object(parent, Box::new(RenderRepaintBoundary::new()))
         .expect("dropped child");
     owner.set_root_id(Some(parent));
+    owner.set_semantics_enabled(true);
 
     owner.clear_all_dirty_nodes();
+    let parent_node = owner.render_tree().get(parent).expect("parent");
+    parent_node.clear_needs_paint();
+    parent_node.clear_needs_compositing_bits_update();
+    match owner.render_tree_mut().get_mut(parent).expect("parent") {
+        flui_rendering::storage::RenderNode::Box(entry) => entry.state().clear_needs_layout(),
+        flui_rendering::storage::RenderNode::Sliver(entry) => entry.state().clear_needs_layout(),
+    }
     owner
         .render_tree()
         .get(keep)
@@ -83,11 +91,17 @@ fn removing_one_subtree_keeps_sibling_entries() {
 
     let removed = owner.remove_render_object(drop_me);
     assert_eq!(removed, 1);
-    assert_eq!(
-        owner.dirty_node_count(),
-        1,
-        "only the removed subtree's entries are evicted — the sibling's \
-         pending paint survives",
+    assert_eq!(owner.nodes_needing_paint().len(), 1);
+    assert_eq!(owner.nodes_needing_paint()[0].id, keep);
+    assert_eq!(owner.nodes_needing_layout()[0].id, parent);
+    assert_eq!(owner.nodes_needing_compositing_bits_update()[0].id, parent);
+    assert_eq!(owner.nodes_needing_semantics()[0].id, parent);
+    let parent_node = owner.render_tree().get(parent).expect("surviving parent");
+    assert!(parent_node.needs_layout());
+    assert!(parent_node.needs_compositing_bits_update());
+    assert!(
+        !parent_node.needs_paint(),
+        "layout owns the parent's eventual paint; no immediate parent paint mark"
     );
     assert!(owner.render_tree().get(keep).is_some());
 }

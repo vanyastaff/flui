@@ -61,8 +61,10 @@ impl RenderView for ClipRect {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_clip_behavior(self.clip_behavior);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
+        impact
     }
 
     fn has_children(&self) -> bool {

@@ -45,7 +45,7 @@ impl SemanticsTag {
 // ============================================================================
 
 /// Overrides for semantics hints.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SemanticsHintOverrides {
     /// Override for the on-tap hint.
     pub on_tap_hint: Option<SmolStr>,
@@ -114,7 +114,7 @@ impl CustomSemanticsAction {
 // ============================================================================
 
 /// A string with attributes for accessibility.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AttributedString {
     /// The string content.
     pub string: SmolStr,
@@ -249,7 +249,7 @@ pub(crate) const UNBLOCKED_USER_ACTIONS_MASK: u64 = (SemanticsAction::DidGainAcc
 // ============================================================================
 
 /// An attribute on a range of text.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StringAttribute {
     /// Start index (inclusive).
     pub start: usize,
@@ -260,7 +260,7 @@ pub struct StringAttribute {
 }
 
 /// Types of string attributes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StringAttributeType {
     /// Spell out the text character by character.
     SpellOut,

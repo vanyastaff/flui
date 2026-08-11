@@ -73,8 +73,8 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_grid_delegate(Arc::clone(&self.grid_delegate));
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_grid_delegate(Arc::clone(&self.grid_delegate))
     }
 
     fn has_children(&self) -> bool {
@@ -134,10 +134,11 @@ mod tests {
         assert!(format!("{:?}", render_object.grid_delegate()).contains("cross_axis_count: 2"));
 
         let updated: SliverGrid = SliverGrid::new(delegate(5), Vec::new());
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert!(
             format!("{:?}", render_object.grid_delegate()).contains("cross_axis_count: 5"),

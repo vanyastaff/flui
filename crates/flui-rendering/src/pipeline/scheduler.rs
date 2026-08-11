@@ -87,7 +87,8 @@ pub(super) struct DirtyTracker {
     /// True while `run_layout` is iterating `dirty.needs_layout`.
     ///
     /// Also gates mid-compositing mark routing (compositing runs inside the
-    /// layout pipeline; see [`DirtyTracker::add_node_needing_compositing_bits_update`]).
+    /// layout pipeline; compositing roots selected by the canonical ancestor
+    /// walk are routed here while layout is active.
     debug_doing_layout: bool,
 
     /// True while `run_paint` is iterating `dirty.needs_paint`.
@@ -336,36 +337,57 @@ impl DirtyTracker {
         self.notifier.read().fire_need_visual_update();
     }
 
-    /// Adds a node to the compositing bits dirty list.
+    /// Marks compositing bits dirty and schedules the node responsible for the
+    /// update, preserving repaint-boundary transition behavior.
     ///
-    /// Also sets `NEEDS_COMPOSITING_BITS_UPDATE` on the node (via atomic) so
-    /// the `run_compositing` walk's per-entry short-circuit cannot silently
-    /// skip this entry. Routes via `debug_doing_layout` because compositing
-    /// runs as part of the layout pipeline per the typestate transitions —
-    /// this is the cross-product: compositing marks share the layout flag.
-    ///
-    /// Takes `&RenderTree` (shared) because `mark_needs_compositing_bits_update`
-    /// is an atomic operation and does not require exclusive tree access.
-    pub(super) fn add_node_needing_compositing_bits_update(
+    /// This ports Flutter's `RenderObject.markNeedsCompositingBitsUpdate`.
+    /// Established boundaries stop at themselves, introduced or removed
+    /// boundaries walk through non-boundary ancestors, and a boundary parent
+    /// leaves its child as the responsible queued root.
+    pub(super) fn mark_needs_compositing_bits_update(
         &mut self,
         tree: &RenderTree,
         node_id: RenderId,
-        depth: usize,
     ) {
-        // Set the bit first so the run_compositing walk doesn't skip this
-        // entry on the early-return path. No-op if the id is not present.
-        if let Some(node) = tree.get(node_id) {
+        let mut current = node_id;
+        loop {
+            let Some(node) = tree.get(current) else {
+                return;
+            };
+            if node.needs_compositing_bits_update() {
+                return;
+            }
             node.mark_needs_compositing_bits_update();
+
+            let Some(parent_id) = node.links().parent() else {
+                self.schedule_compositing_root(current, node.depth() as usize);
+                return;
+            };
+            let Some(parent) = tree.get(parent_id) else {
+                self.schedule_compositing_root(current, node.depth() as usize);
+                return;
+            };
+            if parent.needs_compositing_bits_update() {
+                return;
+            }
+            if (!node.was_repaint_boundary() || !node.is_repaint_boundary_flag())
+                && !parent.is_repaint_boundary_flag()
+            {
+                current = parent_id;
+                continue;
+            }
+
+            self.schedule_compositing_root(current, node.depth() as usize);
+            return;
         }
+    }
+
+    fn schedule_compositing_root(&mut self, node_id: RenderId, depth: usize) {
         let target = if self.debug_doing_layout {
             &mut self.mid_layout_marks.needs_compositing
         } else {
             &mut self.dirty.needs_compositing
         };
-        // The bit is set BEFORE the push so the run_compositing walk's
-        // per-entry `needs_compositing_bits_update()` short-circuit cannot
-        // silently skip this entry even if `push` returns false (duplicate).
-        // Wake fires only on a genuinely-new entry.
         if target.push(DirtyNode::new(node_id, depth)) {
             self.notifier.read().fire_need_visual_update();
         }
@@ -834,12 +856,24 @@ mod tests {
     #[test]
     fn compositing_mark_fires_visual_update_on_new_entry_and_deduplicates() {
         let wake_count = Arc::new(AtomicUsize::new(0));
-        let (mut tracker, tree) =
-            DirtyTracker::new_test_pair_with_wake_counter(Arc::clone(&wake_count));
+        let mut owner = PipelineOwner::new();
+        owner.set_on_need_visual_update({
+            let wake_count = Arc::clone(&wake_count);
+            move || {
+                wake_count.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let id = insert_zero_size_leaf(&mut owner);
+        owner.clear_all_dirty_nodes();
+        owner
+            .render_tree()
+            .get(id)
+            .expect("inserted node")
+            .clear_needs_compositing_bits_update();
 
         let baseline = wake_count.load(Ordering::Relaxed);
 
-        tracker.add_node_needing_compositing_bits_update(&tree, RenderId::new(10), 0);
+        owner.mark_needs_compositing_bits_update(id);
         assert_eq!(
             wake_count.load(Ordering::Relaxed),
             baseline + 1,
@@ -847,7 +881,7 @@ mod tests {
              fire_need_visual_update (the GIF-frozen-until-you-scroll bug)"
         );
 
-        tracker.add_node_needing_compositing_bits_update(&tree, RenderId::new(10), 0);
+        owner.mark_needs_compositing_bits_update(id);
         assert_eq!(
             wake_count.load(Ordering::Relaxed),
             baseline + 1,
@@ -1215,6 +1249,134 @@ mod tests {
             &[DirtyNode::new(root_id, 0)],
             "the existing ancestor must install the new boundary layer",
         );
+    }
+
+    fn clear_compositing_marks(
+        owner: &mut PipelineOwner<Idle>,
+        ids: impl IntoIterator<Item = RenderId>,
+    ) {
+        owner.clear_all_dirty_nodes();
+        for id in ids {
+            owner
+                .render_tree()
+                .get(id)
+                .expect("compositing test node")
+                .clear_needs_compositing_bits_update();
+        }
+    }
+
+    #[test]
+    fn compositing_mark_established_boundary_queues_itself() {
+        let (mut owner, root, boundary, leaf) = build_repaint_boundary_chain();
+        owner
+            .render_tree()
+            .get(boundary)
+            .expect("boundary")
+            .set_was_repaint_boundary(true);
+        clear_compositing_marks(&mut owner, [root, boundary, leaf]);
+
+        owner.mark_needs_compositing_bits_update(boundary);
+
+        assert_eq!(
+            owner.nodes_needing_compositing_bits_update(),
+            &[DirtyNode::new(boundary, 1)],
+        );
+        assert!(
+            !owner
+                .render_tree()
+                .get(root)
+                .expect("root")
+                .needs_compositing_bits_update()
+        );
+    }
+
+    #[test]
+    fn compositing_mark_new_boundary_walks_through_non_boundary_ancestors() {
+        let (mut owner, root, boundary, leaf) = build_repaint_boundary_chain();
+        clear_compositing_marks(&mut owner, [root, boundary, leaf]);
+
+        owner.mark_needs_compositing_bits_update(boundary);
+
+        assert_eq!(
+            owner.nodes_needing_compositing_bits_update(),
+            &[DirtyNode::new(root, 0)],
+        );
+        assert!(
+            owner
+                .render_tree()
+                .get(root)
+                .expect("root")
+                .needs_compositing_bits_update()
+        );
+    }
+
+    #[test]
+    fn compositing_mark_lost_boundary_walks_upward() {
+        let (mut owner, root, boundary, leaf) = build_repaint_boundary_chain();
+        let boundary_node = owner.render_tree().get(boundary).expect("boundary");
+        boundary_node.set_was_repaint_boundary(true);
+        boundary_node.set_repaint_boundary_flag(false);
+        clear_compositing_marks(&mut owner, [root, boundary, leaf]);
+
+        owner.mark_needs_compositing_bits_update(boundary);
+
+        assert_eq!(
+            owner.nodes_needing_compositing_bits_update(),
+            &[DirtyNode::new(root, 0)],
+        );
+    }
+
+    #[test]
+    fn compositing_mark_child_under_boundary_queues_child_without_dirtying_parent() {
+        let (mut owner, root, boundary, leaf) = build_repaint_boundary_chain();
+        clear_compositing_marks(&mut owner, [root, boundary, leaf]);
+
+        owner.mark_needs_compositing_bits_update(leaf);
+
+        assert_eq!(
+            owner.nodes_needing_compositing_bits_update(),
+            &[DirtyNode::new(leaf, 2)],
+        );
+        assert!(
+            !owner
+                .render_tree()
+                .get(boundary)
+                .expect("boundary")
+                .needs_compositing_bits_update()
+        );
+    }
+
+    #[test]
+    fn compositing_mark_relies_on_already_dirty_parent_queue() {
+        let (mut owner, root, boundary, leaf) = build_repaint_boundary_chain();
+        owner
+            .render_tree()
+            .get(boundary)
+            .expect("boundary")
+            .set_was_repaint_boundary(true);
+        clear_compositing_marks(&mut owner, [root, boundary, leaf]);
+        owner.mark_needs_compositing_bits_update(boundary);
+
+        owner.mark_needs_compositing_bits_update(leaf);
+
+        assert_eq!(
+            owner.nodes_needing_compositing_bits_update(),
+            &[DirtyNode::new(boundary, 1)],
+        );
+        assert!(
+            owner
+                .render_tree()
+                .get(leaf)
+                .expect("leaf")
+                .needs_compositing_bits_update()
+        );
+    }
+
+    #[test]
+    fn compositing_mark_stale_id_is_a_noop() {
+        let mut owner = PipelineOwner::new();
+        owner.mark_needs_compositing_bits_update(RenderId::new(99));
+        assert!(owner.nodes_needing_compositing_bits_update().is_empty());
     }
 
     // =========================================================================

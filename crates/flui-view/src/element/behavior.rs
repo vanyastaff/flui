@@ -279,6 +279,49 @@ where
         None
     }
 
+    /// Framework dispatch for applying typed parent-data configuration.
+    ///
+    /// This exists because the unified element is generic over `B` before
+    /// `ElementKind::Proxy` erases ordinary proxy and parent-data elements
+    /// behind the same trait object. Framework behaviors other than
+    /// `ParentDataBehavior` must keep the conservative `NONE` default. The
+    /// implementation mutates only configuration-owned fields; the caller
+    /// ends its render-node borrow before applying the returned impact to the
+    /// render parent. A typed mismatch in `ParentDataBehavior` is a `BUG:`
+    /// invariant panic.
+    ///
+    /// Custom non-parent-data behaviors normally omit this method. The
+    /// built-in stateless behavior therefore reports `NONE`:
+    ///
+    /// ```
+    /// use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData};
+    /// use flui_tree::Single;
+    /// use flui_view::{BuildContext, ErrorView, IntoView, StatelessView};
+    /// use flui_view::element::{ElementBehavior, ElementCore, StatelessBehavior};
+    ///
+    /// #[derive(Clone)]
+    /// struct OrdinaryView;
+    ///
+    /// impl StatelessView for OrdinaryView {
+    ///     fn build(&self, _context: &dyn BuildContext) -> impl IntoView {
+    ///         ErrorView::new("ordinary child")
+    ///     }
+    /// }
+    ///
+    /// let behavior = StatelessBehavior::new();
+    /// let core = ElementCore::<OrdinaryView, Single>::new(OrdinaryView);
+    /// let mut parent_data = BoxParentData::default();
+    /// let impact = behavior.apply_parent_data_config(&core, &mut parent_data);
+    /// assert_eq!(impact, RenderUpdateImpact::NONE);
+    /// ```
+    fn apply_parent_data_config(
+        &self,
+        _core: &ElementCore<V, A>,
+        _parent_data: &mut dyn flui_rendering::parent_data::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+
     /// Object-safe notification handler hook routed from
     /// [`ElementBase::on_notification`](crate::view::ElementBase::on_notification)
     /// during bubble dispatch.
@@ -478,6 +521,17 @@ where
         core: &ElementCore<V, A>,
     ) -> Option<Box<dyn flui_rendering::parent_data::ParentData>> {
         Some(Box::new(core.view().create_parent_data()))
+    }
+
+    fn apply_parent_data_config(
+        &self,
+        core: &ElementCore<V, A>,
+        parent_data: &mut dyn flui_rendering::parent_data::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let typed = parent_data
+            .downcast_mut::<V::ParentData>()
+            .expect("BUG: ParentDataView must match the existing render-node parent-data type");
+        core.view().apply_parent_data(typed)
     }
 }
 
@@ -778,9 +832,7 @@ where
                 // one call — the two directions can never be written
                 // independently (see `RenderTree::adopt_child`).
                 if let Some(parent_id) = core.parent_render_id() {
-                    pipeline_owner
-                        .render_tree_mut()
-                        .adopt_child(parent_id, render_id);
+                    pipeline_owner.adopt_render_child(parent_id, render_id);
                 }
 
                 render_id
@@ -824,26 +876,26 @@ where
         // render object keeps its `create_render_object()` configuration and a
         // `setState` that changes a render-object widget (padding, size, text,
         // colour, …) would never be reflected after the first frame.
-        if let Some(render_id) = self.render_id
-            && let Some(pipeline_owner) = core.pipeline_owner()
-        {
-            let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
-            pipeline_owner.with_mut(|pipeline_owner| {
-                if let Some(render_object) = pipeline_owner
-                    .render_tree_mut()
-                    .get_mut(render_id)
-                    .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
-                {
-                    core.view().update_render_object(&ctx, render_object);
-                }
-            });
-        }
-
-        super::behavior_commons::mark_render_needs_layout_and_paint(
-            core,
-            self.render_id,
-            "RenderBehavior",
-        );
+        let pipeline_owner = core
+            .pipeline_owner()
+            .expect("BUG: active RenderBehavior must have a PipelineOwner during update");
+        let render_id = self
+            .render_id
+            .expect("BUG: RenderBehavior with a PipelineOwner must own a RenderId during update");
+        let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
+        let impact = pipeline_owner.with_mut(|pipeline_owner| {
+            let node = pipeline_owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .expect("BUG: RenderBehavior's RenderId must resolve to a live node during update");
+            let render_object = node.downcast_render_object_mut::<V::RenderObject>().expect(
+                "BUG: RenderBehavior's live node must match RenderView::RenderObject during update",
+            );
+            core.view().update_render_object(&ctx, render_object)
+        });
+        pipeline_owner.with_mut(|pipeline_owner| {
+            pipeline_owner.apply_render_update_impact(render_id, impact);
+        });
     }
 }
 

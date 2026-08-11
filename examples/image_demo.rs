@@ -45,8 +45,8 @@ impl RenderView for ImageDisplay {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.create_render_object(&flui_view::RenderObjectContext::detached());
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_image(Some((*self.image.data).clone()))
     }
 }
 

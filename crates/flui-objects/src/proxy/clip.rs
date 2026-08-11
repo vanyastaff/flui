@@ -50,7 +50,7 @@
 //! owner-lane [`PathClipTarget`] for path factories; executable clipper
 //! callbacks never live in render storage.
 
-use std::{fmt, marker::PhantomData};
+use std::{fmt, marker::PhantomData, sync::Arc};
 
 use flui_tree::Single;
 use flui_types::{
@@ -61,11 +61,70 @@ use flui_types::{
 };
 
 use flui_rendering::{
+    RenderUpdateImpact,
     context::{BoxHitTestContext, BoxLayoutContext},
     hit_testing::{PathClipTarget, resolve_path_clip_target},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
+
+#[derive(Debug)]
+struct PathClipSourceMarker;
+
+/// Stable identity for one widget-owned custom path clip source.
+///
+/// A source token lets [`RenderClipPath`] distinguish a cloned [`ClipPath`](https://api.flutter.dev/flutter/widgets/ClipPath-class.html)
+/// configuration from a separately constructed one without exposing callback
+/// pointers or an integer identity protocol. Cloning the token preserves source
+/// identity; call [`Self::fresh`] when constructing a new source.
+///
+/// The representation is deliberately private and has no accessor or raw-value
+/// constructor.
+///
+/// ```
+/// use flui_objects::PathClipSourceToken;
+///
+/// let source = PathClipSourceToken::fresh();
+/// assert_eq!(source, source);
+/// assert_ne!(source, PathClipSourceToken::fresh());
+/// ```
+///
+/// ```compile_fail
+/// use flui_objects::PathClipSourceToken;
+///
+/// let _ = PathClipSourceToken(1);
+/// ```
+///
+/// ```compile_fail
+/// use flui_objects::PathClipSourceToken;
+///
+/// let raw = PathClipSourceToken::fresh().get();
+/// # let _ = raw;
+/// ```
+#[derive(Clone)]
+pub struct PathClipSourceToken(Arc<PathClipSourceMarker>);
+
+impl fmt::Debug for PathClipSourceToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PathClipSourceToken(..)")
+    }
+}
+
+impl PartialEq for PathClipSourceToken {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for PathClipSourceToken {}
+
+impl PathClipSourceToken {
+    /// Allocates a new source identity.
+    #[must_use]
+    pub fn fresh() -> Self {
+        Self(Arc::new(PathClipSourceMarker))
+    }
+}
 
 // =============================================================================
 // Oval — newtype for elliptical hit-test semantics
@@ -404,6 +463,8 @@ pub struct RenderClip<S: ClipGeometry> {
     /// Optional owner-local path clip target. Only meaningful for
     /// `RenderClipPath`; other `RenderClip<S>` instantiations ignore it.
     path_clip_target: Option<PathClipTarget>,
+    /// Stable identity of the widget-owned path source currently registered.
+    path_clip_source_token: Option<PathClipSourceToken>,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
     /// Keeps the generic shape parameter part of the render object's type even
@@ -419,6 +480,7 @@ impl<S: ClipGeometry> RenderClip<S> {
             clip_behavior,
             rrect_border_radius: None,
             path_clip_target: None,
+            path_clip_source_token: None,
             has_child: false,
             shape: PhantomData,
         }
@@ -434,13 +496,13 @@ impl<S: ClipGeometry> RenderClip<S> {
         Self::new(Clip::HardEdge)
     }
 
-    /// Replaces the clip behavior; returns true if the value changed.
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> bool {
+    /// Replaces the clip behavior and reports paint when changed.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Returns the current clip behavior.
@@ -488,27 +550,55 @@ impl RenderClip<RRect> {
         self
     }
 
-    /// Replaces the data-only rounded-rect border radius; returns true if it
-    /// changed.
-    pub fn set_border_radius(&mut self, border_radius: Option<BorderRadius>) -> bool {
+    /// Replaces the rounded-rect source and reports paint plus semantics when changed.
+    pub fn set_border_radius(
+        &mut self,
+        border_radius: Option<BorderRadius>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.rrect_border_radius == border_radius {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.rrect_border_radius = border_radius;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 }
 
 impl RenderClip<Path> {
+    /// Builder form of [`Self::set_path_clip_source_token`].
+    #[must_use]
+    pub fn with_path_clip_source_token(mut self, source_token: PathClipSourceToken) -> Self {
+        self.path_clip_source_token = Some(source_token);
+        self
+    }
+
+    /// Replaces the stable path-factory identity.
+    ///
+    /// A different source changes both the painted clip and clipped semantics
+    /// geometry. An identical token is a no-op.
+    pub fn set_path_clip_source_token(
+        &mut self,
+        source_token: &PathClipSourceToken,
+    ) -> RenderUpdateImpact {
+        if self.path_clip_source_token.as_ref() == Some(source_token) {
+            return RenderUpdateImpact::NONE;
+        }
+        self.path_clip_source_token = Some(source_token.clone());
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+    }
+
     /// Returns the owner-local path clip target, if one is installed.
     #[must_use]
     pub const fn path_clip_target(&self) -> Option<PathClipTarget> {
         self.path_clip_target
     }
 
-    /// Sets the owner-local path clip target.
-    pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) {
+    /// Replaces the owner-local path clip target.
+    pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) -> RenderUpdateImpact {
+        if self.path_clip_target == target {
+            return RenderUpdateImpact::NONE;
+        }
         self.path_clip_target = target;
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -519,6 +609,7 @@ impl<S: ClipGeometry> Clone for RenderClip<S> {
             clip_behavior: self.clip_behavior,
             rrect_border_radius: self.rrect_border_radius,
             path_clip_target: self.path_clip_target,
+            path_clip_source_token: self.path_clip_source_token.clone(),
             has_child: self.has_child,
             shape: PhantomData,
         }
@@ -538,6 +629,7 @@ impl<S: ClipGeometry> fmt::Debug for RenderClip<S> {
                 &self.rrect_border_radius.is_some(),
             )
             .field("has_path_clip_target", &self.path_clip_target.is_some())
+            .field("path_clip_source_token", &self.path_clip_source_token)
             .field("has_child", &self.has_child)
             .finish()
     }
@@ -823,7 +915,14 @@ mod tests {
                 .expect("register path clipper");
 
             let mut node = RenderClipPath::anti_alias();
-            node.set_path_clip_target(Some(target));
+            assert_eq!(
+                node.set_path_clip_target(Some(target)),
+                RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+            );
+            assert_eq!(
+                node.set_path_clip_target(Some(target)),
+                RenderUpdateImpact::NONE
+            );
             assert!(node.has_custom_clipper());
 
             let path = node.resolve_clip(Size::new(px(20.0), px(30.0)));
@@ -850,10 +949,41 @@ mod tests {
     }
 
     #[test]
-    fn set_clip_behavior_returns_change_flag() {
+    fn set_clip_behavior_returns_exact_impact() {
         let mut node = RenderClipRect::anti_alias();
-        assert!(node.set_clip_behavior(Clip::HardEdge));
-        assert!(!node.set_clip_behavior(Clip::HardEdge));
+        assert_eq!(
+            node.set_clip_behavior(Clip::HardEdge),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_clip_behavior(Clip::HardEdge),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+    }
+
+    #[test]
+    fn path_clip_source_tokens_clone_identity_and_fresh_values_are_distinct() {
+        let source_token = PathClipSourceToken::fresh();
+        let cloned_source_token = source_token.clone();
+
+        assert_eq!(source_token, cloned_source_token);
+        assert_ne!(source_token, PathClipSourceToken::fresh());
+    }
+
+    #[test]
+    fn render_clip_path_reports_only_source_token_changes() {
+        let source_token = PathClipSourceToken::fresh();
+        let mut node =
+            RenderClipPath::anti_alias().with_path_clip_source_token(source_token.clone());
+
+        assert_eq!(
+            node.set_path_clip_source_token(&source_token),
+            RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_path_clip_source_token(&PathClipSourceToken::fresh()),
+            RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+        );
     }
 
     #[test]
@@ -866,6 +996,21 @@ mod tests {
         let resolved = node.resolve_clip(Size::new(px(100.0), px(50.0)));
         assert_eq!(resolved.top_left.x, px(12.0));
         assert_eq!(resolved.top_right.x, px(12.0));
+    }
+
+    #[test]
+    fn rrect_border_radius_returns_exact_impact_for_change_and_identity() {
+        let radius = BorderRadius::circular(px(12.0));
+        let mut node: RenderClipRRect = RenderClip::anti_alias();
+        assert_eq!(
+            node.set_border_radius(Some(radius)),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
+        assert_eq!(
+            node.set_border_radius(Some(radius)),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
     }
 
     #[test]

@@ -189,9 +189,10 @@ impl RenderView for MouseRegion {
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         self.configure(render_object);
         self.sync_mouse_region_target(ctx, render_object);
+        flui_rendering::RenderUpdateImpact::NONE
     }
 
     fn did_unmount_render_object(
@@ -260,7 +261,7 @@ mod tests {
         let mut render_object =
             MouseRegion::new().create_render_object(&flui_view::RenderObjectContext::detached());
 
-        MouseRegion::new()
+        let impact = MouseRegion::new()
             .cursor(CursorIcon::Text)
             .opaque(false)
             .behavior(HitTestBehavior::DeferToChild)
@@ -268,6 +269,7 @@ mod tests {
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::NONE);
 
         assert_eq!(render_object.cursor(), CursorIcon::Text);
         assert!(!render_object.opaque());

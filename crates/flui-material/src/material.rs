@@ -80,7 +80,7 @@
 //! `flui-widgets::animated`'s existing `ImplicitController` machinery)
 //! without changing this type's shape.
 
-use flui_objects::RenderPhysicalShape;
+use flui_objects::{PathClipConfiguration, RenderPhysicalShape};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Color;
 use flui_types::painting::Clip;
@@ -170,7 +170,7 @@ impl Material {
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderPhysicalShape,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
         let shape = self.shape;
         match render_object.path_clip_target() {
             Some(target) => {
@@ -178,18 +178,29 @@ impl Material {
                     ctx.replace_path_clipper(target, move |size| shape.to_path(size))
                 {
                     tracing::warn!(?error, "Material shape clipper replacement failed");
+                    flui_rendering::RenderUpdateImpact::NONE
+                } else {
+                    render_object.set_path_clip_target(Some(target))
                 }
             }
             None => match ctx.register_path_clipper(move |size| shape.to_path(size)) {
-                Ok(target) => {
-                    render_object.set_path_clip_target(Some(target));
+                Ok(target) => render_object.set_path_clip_target(Some(target)),
+                Err(error) => {
+                    tracing::debug!(
+                        ?error,
+                        "Material mounted without an active interaction lane; \
+                         shape clip will not be resolved"
+                    );
+                    flui_rendering::RenderUpdateImpact::NONE
                 }
-                Err(error) => tracing::debug!(
-                    ?error,
-                    "Material mounted without an active interaction lane; \
-                     shape clip will not be resolved"
-                ),
             },
+        }
+    }
+
+    fn path_clip_configuration(&self) -> PathClipConfiguration {
+        match self.shape {
+            MaterialShape::RoundedRect(radius) => PathClipConfiguration::RoundedRect(radius),
+            MaterialShape::Stadium => PathClipConfiguration::Stadium,
         }
     }
 }
@@ -201,8 +212,11 @@ impl RenderView for Material {
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         let mut render_object = RenderPhysicalShape::new(self.color)
             .with_elevation(self.elevation)
-            .with_clip_behavior(self.clip_behavior);
-        self.sync_path_clip_target(ctx, &mut render_object);
+            .with_clip_behavior(self.clip_behavior)
+            .with_path_clip_configuration(self.path_clip_configuration());
+        // Creation is not a mounted update; the initial target is already
+        // reflected in the new render object's first frame.
+        let _initial_target_impact = self.sync_path_clip_target(ctx, &mut render_object);
         render_object
     }
 
@@ -210,11 +224,17 @@ impl RenderView for Material {
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_color(self.color);
-        render_object.set_elevation(self.elevation);
-        render_object.set_clip_behavior(self.clip_behavior);
-        self.sync_path_clip_target(ctx, render_object);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = render_object.set_color(self.color);
+        impact |= render_object.set_elevation(self.elevation);
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
+        let shape_impact =
+            render_object.set_path_clip_configuration(self.path_clip_configuration());
+        if !shape_impact.is_none() {
+            impact |= self.sync_path_clip_target(ctx, render_object);
+            impact |= shape_impact;
+        }
+        impact
     }
 
     fn did_unmount_render_object(
@@ -226,7 +246,9 @@ impl RenderView for Material {
             if let Err(error) = ctx.unregister_path_clipper(target) {
                 tracing::debug!(?error, "Material shape clipper unregistration failed");
             }
-            render_object.set_path_clip_target(None);
+            // Unmount has no owner-side update application; unregistering
+            // removes the target before the render node is disposed.
+            let _unmount_target_impact = render_object.set_path_clip_target(None);
         }
     }
 
@@ -275,15 +297,43 @@ mod tests {
         let mut render_object = Material::new(Color::BLACK)
             .create_render_object(&flui_view::RenderObjectContext::detached());
 
-        Material::new(Color::WHITE)
+        let impact = Material::new(Color::WHITE)
             .elevation(3.0)
             .update_render_object(
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::PAINT);
 
         assert_eq!(render_object.color(), Color::WHITE);
         assert_eq!(render_object.elevation(), 3.0);
+    }
+
+    #[test]
+    fn update_render_object_compares_shape_independently() {
+        let context = flui_view::RenderObjectContext::detached();
+        let original = Material::new(Color::WHITE).shape(MaterialShape::Stadium);
+        let mut render_object = original.create_render_object(&context);
+
+        assert_eq!(
+            original.update_render_object(&context, &mut render_object),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            original
+                .clone()
+                .clip_behavior(Clip::AntiAlias)
+                .update_render_object(&context, &mut render_object),
+            flui_rendering::RenderUpdateImpact::PAINT,
+        );
+        assert_eq!(
+            Material::new(Color::WHITE)
+                .shape(MaterialShape::rectangle())
+                .clip_behavior(Clip::AntiAlias)
+                .update_render_object(&context, &mut render_object),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+        );
     }
 
     #[test]

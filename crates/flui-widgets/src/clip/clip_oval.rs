@@ -62,8 +62,10 @@ impl RenderView for ClipOval {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_clip_behavior(self.clip_behavior);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -107,12 +109,13 @@ mod tests {
             ClipOval::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
 
-        ClipOval::new()
+        let impact = ClipOval::new()
             .clip_behavior(Clip::HardEdge)
             .update_render_object(
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::PAINT);
 
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
     }
@@ -123,12 +126,13 @@ mod tests {
             .clip_behavior(Clip::HardEdge)
             .create_render_object(&flui_view::RenderObjectContext::detached());
 
-        ClipOval::new()
+        let impact = ClipOval::new()
             .clip_behavior(Clip::HardEdge)
             .update_render_object(
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::NONE);
 
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
     }

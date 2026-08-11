@@ -154,20 +154,22 @@ impl RenderView for Table {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         debug_assert!(
             self.rows
                 .iter()
                 .all(|row| row.cells.len() == self.column_count()),
             "every Table row must have the same number of cells as the first row",
         );
-        render_object.set_column_count(self.column_count());
-        render_object.set_column_widths(self.column_widths.clone());
-        render_object.set_default_column_width(self.default_column_width.clone());
-        render_object.set_default_vertical_alignment(self.default_vertical_alignment);
-        render_object.set_text_baseline(self.text_baseline);
-        render_object.set_border(self.border);
-        render_object.set_row_decorations(self.row_decorations());
+        impact |= render_object.set_column_count(self.column_count());
+        impact |= render_object.set_column_widths(self.column_widths.clone());
+        impact |= render_object.set_default_column_width(self.default_column_width.clone());
+        impact |= render_object.set_default_vertical_alignment(self.default_vertical_alignment);
+        impact |= render_object.set_text_baseline(self.text_baseline);
+        impact |= render_object.set_border(self.border);
+        impact |= render_object.set_row_decorations(self.row_decorations());
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -222,6 +224,18 @@ impl ParentDataView for TableCell {
     fn create_parent_data(&self) -> Self::ParentData {
         TableCellParentData::zero().with_alignment(self.vertical_alignment)
     }
+
+    fn apply_parent_data(
+        &self,
+        parent_data: &mut Self::ParentData,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let alignment = Some(self.vertical_alignment);
+        if parent_data.vertical_alignment == alignment {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        parent_data.vertical_alignment = alignment;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
 }
 
 impl_parent_data_view!(TableCell);
@@ -237,6 +251,34 @@ mod tests {
 
     fn row(cells: usize) -> TableRow {
         TableRow::new((0..cells).map(|_| SizedBox::shrink().boxed()).collect())
+    }
+
+    #[test]
+    fn table_cell_parent_data_reports_exact_impact_and_preserves_layout_fields() {
+        let mut data = TableCellParentData::new(4, 6, TableCellVerticalAlignment::Top);
+        data.offset = flui_types::Offset::new(
+            flui_types::geometry::px(8.0),
+            flui_types::geometry::px(13.0),
+        );
+        let unchanged = TableCell::new(TableCellVerticalAlignment::Top, SizedBox::shrink());
+        assert_eq!(
+            unchanged.apply_parent_data(&mut data),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        let changed = TableCell::new(TableCellVerticalAlignment::Bottom, SizedBox::shrink());
+        assert_eq!(
+            changed.apply_parent_data(&mut data),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(data.x, 4);
+        assert_eq!(data.y, 6);
+        assert_eq!(
+            data.offset,
+            flui_types::Offset::new(
+                flui_types::geometry::px(8.0),
+                flui_types::geometry::px(13.0)
+            )
+        );
     }
 
     #[test]
@@ -288,12 +330,13 @@ mod tests {
             flui_types::geometry::px(2.0),
             flui_types::styling::BorderStyle::Solid,
         ));
-        Table::new(vec![row(1)])
+        let impact = Table::new(vec![row(1)])
             .border(border)
             .update_render_object(
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
             );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
         assert_eq!(render_object.border(), Some(&border));
     }
 

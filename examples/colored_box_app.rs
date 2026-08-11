@@ -37,9 +37,9 @@ impl RenderView for ColoredSquare {
     fn update_render_object(
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
-        render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = RenderColoredBox::red(200.0, 200.0);
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 }
 

@@ -106,6 +106,20 @@ impl RenderCenter {
     pub fn height_factor(&self) -> Option<f32> {
         self.height_factor
     }
+
+    /// Updates widget-owned sizing factors while preserving layout caches.
+    pub fn update_factors(
+        &mut self,
+        width_factor: Option<f32>,
+        height_factor: Option<f32>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.width_factor == width_factor && self.height_factor == height_factor {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.width_factor = width_factor;
+        self.height_factor = height_factor;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
 }
 
 impl flui_foundation::Diagnosticable for RenderCenter {

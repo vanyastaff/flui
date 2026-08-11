@@ -49,9 +49,16 @@ impl RenderView for ColoredBoxView {
         RenderColoredBox::new(self.color, Size::new(px(self.width), px(self.height)))
     }
 
-    fn update_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>, _render_object: &mut Self::RenderObject) {
-        // RenderColoredBox is immutable after creation — on update, the element
-        // will recreate it (hot restart remounts the whole tree anyway).
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_color(self.color);
+        let preferred_size = Size::new(px(self.width), px(self.height));
+        impact |= render_object.set_preferred_size(preferred_size);
+        impact
     }
 }
 

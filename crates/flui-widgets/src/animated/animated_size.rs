@@ -286,15 +286,16 @@ impl RenderView for AnimatedSizeRenderView {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        // Targeted setters only. `render_object` is the SAME persistent
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE; // Targeted setters only. `render_object` is the SAME persistent
         // instance across every rebuild (only `create_render_object` builds a
         // new one) — the controller is not re-passed here, it is the
         // Arc-backed object the render object already holds; `did_update_view`
         // pushes its duration directly.
-        render_object.set_alignment(self.alignment);
-        render_object.set_curve(self.curve.clone());
-        render_object.set_clip_behavior(self.clip_behavior);
+        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_curve(self.curve.clone());
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -344,10 +345,11 @@ mod tests {
             .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.alignment(), Alignment::CENTER);
 
-        render_view(Alignment::TOP_LEFT, Clip::AntiAlias).update_render_object(
+        let impact = render_view(Alignment::TOP_LEFT, Clip::AntiAlias).update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);

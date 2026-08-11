@@ -84,18 +84,12 @@ fn run_compositing_clears_needs_compositing_bits_update_flag() {
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
 
     // Mark dirty for compositing-bits update.
-    owner
-        .render_tree()
-        .get(padding_id)
-        .expect("padding")
-        .mark_needs_compositing_bits_update();
-    let depth = owner.render_tree().depth(padding_id).unwrap_or(0) as usize;
-    owner.add_node_needing_compositing_bits_update(padding_id, depth);
+    owner.mark_needs_compositing_bits_update(padding_id);
 
     // Transition through the typestate Idle → Layout → Compositing
     // to reach the compositing phase. No actual layout work needed
     // for this test — `NEEDS_COMPOSITING_BITS_UPDATE` was set
-    // directly above, so `run_compositing` has all the state it needs
+    // through the canonical mark above, so `run_compositing` has all the state it needs
     // from the typestate transition alone (no `run_layout` call).
     owner.set_root_id(Some(padding_id));
     owner.set_root_constraints(Some(BoxConstraints::new(
@@ -121,17 +115,15 @@ fn run_compositing_clears_needs_compositing_bits_update_flag() {
 /// `update_subtree_compositing_bits` early-return path. The walk
 /// short-circuits at the entry and leaves NEEDS_COMPOSITING alone.
 ///
-/// Since a fix landed, `add_node_needing_compositing_bits_update` sets
-/// the flag on enqueue so an unflagged enqueue is no longer possible. To exercise
-/// the short-circuit path the test now manually clears the flag
+/// The canonical mark sets the flag before queueing, so an unflagged enqueue is
+/// no longer possible. To exercise the short-circuit path the test manually clears the flag
 /// after enqueue (simulating the parent-cleared-me-mid-walk case).
 #[test]
 fn run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
-    let depth = owner.render_tree().depth(padding_id).unwrap_or(0) as usize;
-    owner.add_node_needing_compositing_bits_update(padding_id, depth);
+    owner.mark_needs_compositing_bits_update(padding_id);
     // Clear the flag the enqueue just set, simulating the case where
     // an earlier iteration's walk (e.g., the parent's recursion)
     // already processed this node and cleared its flag.
@@ -172,12 +164,12 @@ fn run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
 }
 
 /// Regression guard: enqueueing via
-/// `add_node_needing_compositing_bits_update` MUST set the
+/// `mark_needs_compositing_bits_update` MUST set the
 /// `NEEDS_COMPOSITING_BITS_UPDATE` flag on the node, so that
 /// `run_compositing`'s per-entry short-circuit can't silently drop
 /// the queued work.
 #[test]
-fn add_node_needing_compositing_bits_update_sets_flag_on_enqueue() {
+fn canonical_compositing_mark_sets_flag_before_enqueue() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -197,8 +189,7 @@ fn add_node_needing_compositing_bits_update_sets_flag_on_enqueue() {
         "precondition: flag cleared before enqueue",
     );
 
-    let depth = owner.render_tree().depth(padding_id).unwrap_or(0) as usize;
-    owner.add_node_needing_compositing_bits_update(padding_id, depth);
+    owner.mark_needs_compositing_bits_update(padding_id);
 
     assert!(
         owner
@@ -206,7 +197,7 @@ fn add_node_needing_compositing_bits_update_sets_flag_on_enqueue() {
             .get(padding_id)
             .unwrap()
             .needs_compositing_bits_update(),
-        "add_node_needing_compositing_bits_update must set the flag \
+        "mark_needs_compositing_bits_update must set the flag \
          (invariant: queue entry ⇒ flag set, so the run_compositing \
          walk never silently drops queued work)",
     );
@@ -236,15 +227,11 @@ fn run_compositing_walks_parent_then_child() {
         .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child insert");
 
-    // Both parent + child dirty for compositing-bits.
+    // Both parent + child dirty for compositing-bits. Marking the parent first
+    // establishes the responsible queue entry; marking the child then relies
+    // on that already-dirty ancestor.
     for id in [padding_id, child_id] {
-        owner
-            .render_tree()
-            .get(id)
-            .expect("node")
-            .mark_needs_compositing_bits_update();
-        let depth = owner.render_tree().depth(id).unwrap_or(0) as usize;
-        owner.add_node_needing_compositing_bits_update(id, depth);
+        owner.mark_needs_compositing_bits_update(id);
     }
 
     owner.set_root_id(Some(padding_id));

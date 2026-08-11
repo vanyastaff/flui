@@ -128,8 +128,8 @@ impl RenderView for AnimatedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_color(self.color);
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_color(self.color)
     }
 }
 

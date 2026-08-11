@@ -25,8 +25,8 @@ use flui_animation::{Animation, AnimationController};
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{RenderColoredBox, RenderOpacity, RenderPadding, RenderTransform};
 use flui_rendering::{
-    constraints::BoxConstraints, hit_testing::HitTestResult, pipeline::PipelineOwner,
-    testing::inspect,
+    RenderUpdateImpact, constraints::BoxConstraints, hit_testing::HitTestResult,
+    pipeline::PipelineOwner, testing::inspect,
 };
 use flui_scheduler::UpdateScheduler;
 use flui_types::{Alignment, EdgeInsets, Matrix4, Offset, Size, geometry::px};
@@ -48,18 +48,21 @@ fn state_offset(owner: &PipelineOwner, id: flui_foundation::RenderId) -> Offset 
 }
 
 fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f32) {
-    let entry = owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("padding node")
-        .as_box_mut()
-        .expect("box entry");
-    entry
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<RenderPadding>()
-        .expect("RenderPadding")
-        .set_padding(EdgeInsets::all(px(value)));
+    let impact = {
+        let entry = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("padding node")
+            .as_box_mut()
+            .expect("box entry");
+        entry
+            .render_object_mut()
+            .as_any_mut()
+            .downcast_mut::<RenderPadding>()
+            .expect("RenderPadding")
+            .set_padding(EdgeInsets::all(px(value)))
+    };
+    owner.apply_render_update_impact(id, impact);
 }
 
 // ============================================================================
@@ -91,7 +94,6 @@ fn animated_padding_tracks_controller_value_across_frames() {
         let value = ctrl.value();
         let padding = 5.0 + 50.0 * value;
         set_padding(&mut owner, pad, padding);
-        owner.mark_needs_layout(pad);
 
         let (next, tree) = frame(owner);
         owner = next;
@@ -164,7 +166,7 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     // alpha 255 (Flutter parity: a fully opaque RenderOpacity pushes no
     // layer) — the child paints directly, with no OpacityLayer to pay for.
     ctrl.tick_at(0.0);
-    {
+    let impact = {
         let entry = owner
             .render_tree_mut()
             .get_mut(fade)
@@ -176,9 +178,9 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
             .as_any_mut()
             .downcast_mut::<RenderOpacity>()
             .expect("RenderOpacity")
-            .set_opacity(1.0 - ctrl.value());
-    }
-    owner.mark_needs_paint(fade);
+            .set_opacity(1.0 - ctrl.value())
+    };
+    owner.apply_render_update_impact(fade, impact);
     let (next, tree) = frame(owner);
     owner = next;
     let tree = tree.expect("fully-opaque frame paints");
@@ -199,14 +201,14 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
                 .expect("fade node")
                 .as_box_mut()
                 .expect("box");
-            entry
+            let impact = entry
                 .render_object_mut()
                 .as_any_mut()
                 .downcast_mut::<RenderOpacity>()
                 .expect("RenderOpacity")
                 .set_opacity(opacity);
+            owner.apply_render_update_impact(fade, impact);
         }
-        owner.mark_needs_paint(fade);
         let (next, tree) = frame(owner);
         owner = next;
         let tree = tree.unwrap_or_else(|| panic!("fade frame {i} must paint"));
@@ -221,7 +223,7 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
 
     // Final frame: opacity 0 — the subtree is skipped entirely.
     ctrl.tick_at(1.0);
-    {
+    let impact = {
         let entry = owner
             .render_tree_mut()
             .get_mut(fade)
@@ -233,9 +235,9 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
             .as_any_mut()
             .downcast_mut::<RenderOpacity>()
             .expect("RenderOpacity")
-            .set_opacity(1.0 - ctrl.value());
-    }
-    owner.mark_needs_paint(fade);
+            .set_opacity(1.0 - ctrl.value())
+    };
+    owner.apply_render_update_impact(fade, impact);
     let (_owner, tree) = frame(owner);
     let tree = tree.expect("the zero-alpha frame still produces a (empty) tree");
     assert!(
@@ -292,21 +294,26 @@ fn animated_transform_hits_follow_current_frame_matrix() {
     // value 1 → scale 2: the SAME point is now inside (inverse → 30,30).
     ctrl.tick_at(1.0);
     let scale = 1.0 + ctrl.value();
-    {
+    let impact = {
         let entry = owner
             .render_tree_mut()
             .get_mut(scaler)
             .expect("scaler")
             .as_box_mut()
             .expect("box");
-        entry
+        let impact = entry
             .render_object_mut()
             .as_any_mut()
             .downcast_mut::<RenderTransform>()
             .expect("RenderTransform")
             .set_transform(Matrix4::scaling(scale, scale, 1.0));
-    }
-    owner.mark_needs_paint(scaler);
+        assert_eq!(
+            impact,
+            RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+        );
+        impact
+    };
+    owner.apply_render_update_impact(scaler, impact);
     let (owner, tree) = frame(owner);
     assert!(tree.is_some(), "transform frame paints");
     assert_eq!(
@@ -350,7 +357,6 @@ fn completed_animation_leaves_the_pipeline_idle() {
     for t in [0.5f64, 1.0] {
         ctrl.tick_at(t);
         set_padding(&mut owner, pad, 5.0 + 20.0 * ctrl.value());
-        owner.mark_needs_layout(pad);
         let (next, tree) = frame(owner);
         owner = next;
         assert!(tree.is_some());
@@ -403,7 +409,6 @@ fn reverse_mid_flight_walks_offsets_back() {
     assert!((mid - 0.6).abs() < 1e-4);
 
     set_padding(&mut owner, pad, 5.0 + 50.0 * mid);
-    owner.mark_needs_layout(pad);
     let (next, _) = frame(owner);
     owner = next;
     assert_eq!(state_offset(&owner, child).dx, px(35.0));
@@ -417,7 +422,6 @@ fn reverse_mid_flight_walks_offsets_back() {
     assert!((back - 0.3).abs() < 1e-3, "value walked back, got {back}");
 
     set_padding(&mut owner, pad, 5.0 + 50.0 * back);
-    owner.mark_needs_layout(pad);
     let (owner, tree) = frame(owner);
     assert!(tree.is_some(), "reverse frame paints");
     assert_eq!(

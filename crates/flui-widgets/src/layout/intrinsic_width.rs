@@ -77,9 +77,11 @@ impl RenderView for IntrinsicWidth {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_step_width(self.step_width);
-        render_object.set_step_height(self.step_height);
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
+        impact |= render_object.set_step_width(self.step_width);
+        impact |= render_object.set_step_height(self.step_height);
+        impact
     }
 
     fn has_children(&self) -> bool {
@@ -174,10 +176,11 @@ mod tests {
         let updated = IntrinsicWidth::new()
             .with_step_width(10.0)
             .with_step_height(15.0);
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.step_width(), Some(10.0));
         assert_eq!(render_object.step_height(), Some(15.0));
@@ -194,10 +197,11 @@ mod tests {
         assert_eq!(render_object.step_height(), Some(15.0));
 
         let updated = IntrinsicWidth::new();
-        updated.update_render_object(
+        let impact = updated.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert_eq!(render_object.step_width(), None);
         assert_eq!(render_object.step_height(), None);

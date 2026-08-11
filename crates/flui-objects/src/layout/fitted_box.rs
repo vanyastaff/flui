@@ -122,6 +122,9 @@ pub struct RenderFittedBox {
     /// must not paint or be hit-tested, which is a property of its measured
     /// size and so is only knowable after layout.
     child_is_empty: bool,
+    /// Last valid `(own_size, child_size)` pair, used to recompute paint data
+    /// when fit or alignment changes without layout.
+    last_layout_sizes: Option<(Size, Size)>,
 }
 
 impl RenderFittedBox {
@@ -138,6 +141,7 @@ impl RenderFittedBox {
             source_offset: Offset::ZERO,
             has_visual_overflow: false,
             child_is_empty: false,
+            last_layout_sizes: None,
         }
     }
 
@@ -239,31 +243,42 @@ impl RenderFittedBox {
         self
     }
 
-    /// Updates the fit; returns true if the value changed.
-    pub fn set_fit(&mut self, fit: BoxFit) -> bool {
+    /// Updates the fit and reports whether layout or paint is required.
+    pub fn set_fit(&mut self, fit: BoxFit) -> flui_rendering::RenderUpdateImpact {
         if self.fit == fit {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
+        let fit_affected_layout = self.fit == BoxFit::ScaleDown || fit == BoxFit::ScaleDown;
         self.fit = fit;
-        true
+        if fit_affected_layout {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            if let Some((size, child_size)) = self.last_layout_sizes {
+                self.update_paint_data(size, child_size);
+            }
+            flui_rendering::RenderUpdateImpact::PAINT
+        }
     }
 
-    /// Updates the alignment; returns true if the value changed.
-    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
+    /// Updates the alignment and reports paint when the value changed.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
         if self.alignment == alignment {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.alignment = alignment;
-        true
+        if let Some((size, child_size)) = self.last_layout_sizes {
+            self.update_paint_data(size, child_size);
+        }
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
-    /// Updates the clip behavior; returns true if the value changed.
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> bool {
+    /// Updates the overflow clip and reports paint plus semantics when changed.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        true
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Maps an alignment scalar in [-1, 1] to a position in [0, free].
@@ -280,6 +295,49 @@ impl RenderFittedBox {
         self.align_offset = Offset::ZERO;
         self.source_offset = Offset::ZERO;
         self.has_visual_overflow = false;
+        self.last_layout_sizes = None;
+    }
+
+    /// Recomputes the fit transform and overflow state from the most recent
+    /// layout sizes. Flutter performs this lazily in `_updatePaintData`; FLUI
+    /// computes it eagerly so paint, hit testing, and coordinate mapping share
+    /// one current cache even when only paint was invalidated.
+    fn update_paint_data(&mut self, size: Size, child_size: Size) {
+        let FittedSizes {
+            source,
+            destination,
+        } = self.fit.apply(child_size, size);
+
+        let source_width = source.width.get();
+        let source_height = source.height.get();
+        self.scale_x = if source_width > 0.0 {
+            destination.width.get() / source_width
+        } else {
+            1.0
+        };
+        self.scale_y = if source_height > 0.0 {
+            destination.height.get() / source_height
+        } else {
+            1.0
+        };
+
+        let free_width = size.width.get() - destination.width.get();
+        let free_height = size.height.get() - destination.height.get();
+        self.align_offset = Offset::new(
+            px(Self::align_axis(self.alignment.x, free_width)),
+            px(Self::align_axis(self.alignment.y, free_height)),
+        );
+
+        let source_free_width = child_size.width.get() - source_width;
+        let source_free_height = child_size.height.get() - source_height;
+        self.source_offset = Offset::new(
+            px(Self::align_axis(self.alignment.x, source_free_width)),
+            px(Self::align_axis(self.alignment.y, source_free_height)),
+        );
+
+        self.has_visual_overflow =
+            source_width < child_size.width.get() || source_height < child_size.height.get();
+        self.last_layout_sizes = Some((size, child_size));
     }
 
     /// The box's own size: honours the parent `constraints` while preserving
@@ -360,63 +418,10 @@ impl RenderBox for RenderFittedBox {
         //     the wet and dry sizes agree.
         let size = self.fitted_size(incoming, child_size);
 
-        // (5) Resolve the fit math via the typed BoxFit helper.
-        let FittedSizes {
-            source,
-            destination,
-        } = self.fit.apply(child_size, size);
-
-        // (6) Scale factors take the child's intrinsic size onto the
-        //     fitted destination region.
-        let src_w = source.width.get();
-        let src_h = source.height.get();
-        self.scale_x = if src_w > 0.0 {
-            destination.width.get() / src_w
-        } else {
-            1.0
-        };
-        self.scale_y = if src_h > 0.0 {
-            destination.height.get() / src_h
-        } else {
-            1.0
-        };
-
-        // (7) Alignment offset of the destination region inside `size`.
-        let free_w = size.width.get() - destination.width.get();
-        let free_h = size.height.get() - destination.height.get();
-        self.align_offset = Offset::new(
-            px(Self::align_axis(self.alignment.x, free_w)),
-            px(Self::align_axis(self.alignment.y, free_h)),
-        );
-
-        // (7b) Alignment offset of the (possibly cropped) source region
-        //      WITHIN the child — Flutter's `sourceRect = alignment.inscribe
-        //      (sizes.source, Offset.zero & childSize)`. Zero whenever `fit`
-        //      never crops (`source == child_size` for `Contain`/`Fill`/
-        //      `ScaleDown`); nonzero for `Cover`/`FitWidth`/`FitHeight`/an
-        //      overflowing `None` under an off-center alignment, where it is
-        //      the crop window's own top-left inside the child.
-        let source_free_w = child_size.width.get() - src_w;
-        let source_free_h = child_size.height.get() - src_h;
-        self.source_offset = Offset::new(
-            px(Self::align_axis(self.alignment.x, source_free_w)),
-            px(Self::align_axis(self.alignment.y, source_free_h)),
-        );
-
-        // (8) Overflow flag — Flutter parity: `RenderFittedBox._updatePaintData`
-        //     sets `_hasVisualOverflow = sourceRect.width < childSize.width ||
-        //     sourceRect.height < childSize.height` (`proxy_box.dart`) — this is
-        //     "was the source cropped", NOT "does the destination exceed the
-        //     box". With `BoxFit::apply` now cropping the source correctly (see
-        //     this file's module doc), `destination` never exceeds `size` for
-        //     any variant, so a `destination > size` check would report `false`
-        //     unconditionally — silently dropping every real crop. Comparing the
-        //     (unscaled) source against the full child size is the two-argument
-        //     form of that same `sourceRect.width < childSize.width` test:
-        //     `sourceRect`'s size IS `source` (`Alignment::inscribe` only
-        //     repositions, never resizes).
-        self.has_visual_overflow =
-            src_w < child_size.width.get() || src_h < child_size.height.get();
+        // (5) Resolve transform and overflow paint data. The retained size
+        // pair also lets paint-only fit/alignment setters refresh this cache
+        // without forcing layout, matching Flutter's `_updatePaintData`.
+        self.update_paint_data(size, child_size);
 
         size
     }
@@ -613,12 +618,59 @@ mod tests {
     }
 
     #[test]
-    fn setters_return_change_flag() {
+    fn setters_report_exact_flutter_impacts() {
         let mut node = RenderFittedBox::default();
-        assert!(node.set_fit(BoxFit::Fill));
-        assert!(!node.set_fit(BoxFit::Fill));
-        assert!(node.set_alignment(Alignment::TOP_LEFT));
-        assert!(node.set_clip_behavior(Clip::AntiAlias));
+        assert_eq!(
+            node.set_fit(BoxFit::Fill),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_fit(BoxFit::Fill),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_fit(BoxFit::ScaleDown),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_fit(BoxFit::Contain),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_alignment(Alignment::TOP_LEFT),
+            flui_rendering::RenderUpdateImpact::PAINT
+        );
+        assert_eq!(
+            node.set_clip_behavior(Clip::AntiAlias),
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        );
+    }
+
+    #[test]
+    fn paint_cache_handles_zero_source_axes_and_vertical_only_overflow() {
+        let mut zero_width = RenderFittedBox::default();
+        zero_width.update_paint_data(
+            Size::new(px(100.0), px(100.0)),
+            Size::new(px(0.0), px(20.0)),
+        );
+        assert_eq!(zero_width.scale_x, 1.0);
+        assert!(zero_width.scale_y.is_finite());
+
+        let mut zero_height = RenderFittedBox::default();
+        zero_height.update_paint_data(
+            Size::new(px(100.0), px(100.0)),
+            Size::new(px(20.0), px(0.0)),
+        );
+        assert_eq!(zero_height.scale_y, 1.0);
+        assert!(zero_height.scale_x.is_finite());
+
+        let mut vertical_overflow = RenderFittedBox::default().with_fit(BoxFit::Cover);
+        vertical_overflow.update_paint_data(
+            Size::new(px(200.0), px(100.0)),
+            Size::new(px(100.0), px(200.0)),
+        );
+        assert!(vertical_overflow.has_visual_overflow());
     }
 
     #[test]

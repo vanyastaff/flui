@@ -63,12 +63,16 @@ impl RenderSliverFixedExtentList {
     /// Panics when `item_extent` is not finite or is less than or equal to
     /// zero.
     #[inline]
-    pub fn set_item_extent(&mut self, item_extent: f32) {
+    pub fn set_item_extent(&mut self, item_extent: f32) -> flui_rendering::RenderUpdateImpact {
         assert!(
             item_extent.is_finite() && item_extent > 0.0,
             "item_extent must be finite and greater than zero"
         );
+        if self.item_extent == item_extent {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
         self.item_extent = item_extent;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 }
 

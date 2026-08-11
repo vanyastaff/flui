@@ -228,8 +228,13 @@ impl RenderView for SliverList {
         &self,
         _ctx: &crate::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_item_count(self.item_count);
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_item_count(self.item_count)
+            | render_object.set_default_extent_estimate(self.item_extent_estimate)
+            // The builder is an opaque owner-local closure. Reconciliation
+            // cannot compare its behavior, so every replacement conservatively
+            // refreshes resident children and relayouts them.
+            | flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Invariant: no dense children — the dense reconciler must not touch
@@ -296,8 +301,8 @@ pub(crate) struct SliverListAdaptorManager {
     ///
     /// The "next `service` call" is guaranteed to land in the SAME frame as
     /// the view update, on two legs that must both stay unconditional:
-    /// `RenderBehavior::on_update` marks the render object needs-layout on
-    /// every view update (not gated on any setter change-flag), and
+    /// this adaptor's render update includes layout because its builder
+    /// delegate conservatively rebuilds resident children, and
     /// `RenderSliverList::perform_layout` emits its retain band on every
     /// layout pass — so the frame's `service_child_requests` pass never takes
     /// its empty early-return after a sliver view update. An early-out added
@@ -696,9 +701,10 @@ impl crate::view::RenderView for SliverGridLazy {
         &self,
         _ctx: &crate::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) {
-        render_object.set_item_count(self.item_count);
-        render_object.set_grid_delegate(std::sync::Arc::clone(&self.grid_delegate));
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_item_count(self.item_count)
+            | render_object.set_grid_delegate(std::sync::Arc::clone(&self.grid_delegate))
+            | flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Invariant: no dense children — the dense reconciler must not touch
@@ -747,8 +753,8 @@ pub(crate) struct SliverGridLazyAdaptorManager {
     ///
     /// The "next `service` call" is guaranteed to land in the SAME frame as
     /// the view update, on two legs that must both stay unconditional:
-    /// `RenderBehavior::on_update` marks the render object needs-layout on
-    /// every view update (not gated on any setter change-flag), and
+    /// this adaptor's render update includes layout because its builder
+    /// delegate conservatively rebuilds resident children, and
     /// `RenderSliverGridLazy::perform_layout` emits its retain band on every
     /// exit path (empty grid, window-past-end, and the normal path) — so the
     /// frame's `service_child_requests` pass never takes its empty
@@ -783,12 +789,13 @@ impl SliverGridLazyAdaptorManager {
                 return false;
             };
 
-            if end_index < render_object.item_count() {
-                render_object.set_item_count(end_index);
-                true
+            let impact = if end_index < render_object.item_count() {
+                render_object.set_item_count(end_index)
             } else {
-                false
-            }
+                flui_rendering::RenderUpdateImpact::NONE
+            };
+            owner.apply_render_update_impact(render_id, impact);
+            !impact.is_none()
         })
     }
 }
@@ -1089,7 +1096,8 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             _: &mut Self::RenderObject,
-        ) {
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 
@@ -1118,7 +1126,8 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
             _: &mut Self::RenderObject,
-        ) {
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 

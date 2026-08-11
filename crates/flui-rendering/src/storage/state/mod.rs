@@ -16,10 +16,10 @@
 //! (`RenderEntry::layout` and the RenderBox/RenderSliver helpers) already
 //! hold a mut state borrow.
 //!
-//! Production dirty marking does **not** live here. It is driven by
-//! [`PipelineOwner::mark_needs_layout`](crate::pipeline::PipelineOwner::mark_needs_layout)
-//! (a Flutter `markNeedsLayout` walk) invoked from
-//! `flui-view::element::behavior_commons::mark_render_needs_layout_and_paint`.
+//! Production dirty marking does **not** live here. Authoritative render-object
+//! setters return `RenderUpdateImpact`; `flui-view` forwards that value to
+//! [`PipelineOwner::apply_render_update_impact`](crate::pipeline::PipelineOwner::apply_render_update_impact),
+//! whose layout branch performs the Flutter-style `markNeedsLayout` walk.
 //! The boundary-aware propagation methods that previously hung off
 //! `RenderState<P>` were removed as unreachable code; the
 //! `RenderDirtyPropagation` trait that was kept around as a "cost-cheap

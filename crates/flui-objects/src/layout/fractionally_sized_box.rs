@@ -180,31 +180,37 @@ impl RenderFractionallySizedBox {
         self.alignment
     }
 
-    /// Sets the width factor; returns true if the value changed.
-    pub fn set_width_factor(&mut self, factor: Option<FractionFactor>) -> bool {
+    /// Sets the width factor and reports layout when changed.
+    pub fn set_width_factor(
+        &mut self,
+        factor: Option<FractionFactor>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.width_factor == factor {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.width_factor = factor;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Sets the height factor; returns true if the value changed.
-    pub fn set_height_factor(&mut self, factor: Option<FractionFactor>) -> bool {
+    /// Sets the height factor and reports layout when changed.
+    pub fn set_height_factor(
+        &mut self,
+        factor: Option<FractionFactor>,
+    ) -> flui_rendering::RenderUpdateImpact {
         if self.height_factor == factor {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.height_factor = factor;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Sets the alignment; returns true if the value changed.
-    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
+    /// Sets the alignment and reports layout when changed.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
         if self.alignment == alignment {
-            return false;
+            return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.alignment = alignment;
-        true
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Computes the tight constraints to pass to the child for these
@@ -576,9 +582,21 @@ mod tests {
     #[test]
     fn setters_return_change_flag() {
         let mut node = RenderFractionallySizedBox::default();
-        assert!(node.set_width_factor(Some(FractionFactor::HALF)));
-        assert!(!node.set_width_factor(Some(FractionFactor::HALF)));
-        assert!(node.set_alignment(Alignment::TOP_LEFT));
-        assert!(!node.set_alignment(Alignment::TOP_LEFT));
+        assert_eq!(
+            node.set_width_factor(Some(FractionFactor::HALF)),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_width_factor(Some(FractionFactor::HALF)),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+        assert_eq!(
+            node.set_alignment(Alignment::TOP_LEFT),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            node.set_alignment(Alignment::TOP_LEFT),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
     }
 }
