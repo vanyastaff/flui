@@ -38,6 +38,182 @@ use wgpu;
 
 use crate::error::{EngineError, EngineResult};
 
+/// Surface-acquisition outcomes normalized away from wgpu's concrete frame
+/// type so the retry policy can be tested without constructing a GPU surface.
+enum SurfaceAcquireOutcome<T> {
+    Success(T),
+    Suboptimal(T),
+    Timeout,
+    Occluded,
+    Outdated,
+    Lost,
+    Validation,
+}
+
+impl From<wgpu::CurrentSurfaceTexture> for SurfaceAcquireOutcome<wgpu::SurfaceTexture> {
+    fn from(outcome: wgpu::CurrentSurfaceTexture) -> Self {
+        match outcome {
+            wgpu::CurrentSurfaceTexture::Success(frame) => Self::Success(frame),
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Self::Suboptimal(frame),
+            wgpu::CurrentSurfaceTexture::Timeout => Self::Timeout,
+            wgpu::CurrentSurfaceTexture::Occluded => Self::Occluded,
+            wgpu::CurrentSurfaceTexture::Outdated => Self::Outdated,
+            wgpu::CurrentSurfaceTexture::Lost => Self::Lost,
+            wgpu::CurrentSurfaceTexture::Validation => Self::Validation,
+        }
+    }
+}
+
+trait SurfaceAcquireBackend {
+    type Frame;
+
+    fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError>;
+
+    fn reconfigure(&mut self) -> Result<(), EngineError>;
+}
+
+fn acquire_surface_texture_with<B>(backend: &mut B) -> Result<Option<B::Frame>, EngineError>
+where
+    B: SurfaceAcquireBackend,
+{
+    let mut may_retry = true;
+    loop {
+        match backend.acquire()? {
+            SurfaceAcquireOutcome::Success(frame) => return Ok(Some(frame)),
+            SurfaceAcquireOutcome::Suboptimal(frame) => {
+                tracing::debug!("Surface suboptimal; will reconfigure on next resize");
+                return Ok(Some(frame));
+            }
+            SurfaceAcquireOutcome::Timeout => return Err(EngineError::Timeout),
+            SurfaceAcquireOutcome::Occluded => {
+                tracing::trace!("Surface occluded; skipping frame");
+                return Ok(None);
+            }
+            SurfaceAcquireOutcome::Outdated | SurfaceAcquireOutcome::Lost if may_retry => {
+                backend.reconfigure()?;
+                may_retry = false;
+            }
+            SurfaceAcquireOutcome::Validation if may_retry => {
+                tracing::warn!("Surface texture validation error; reconfiguring and retrying once");
+                backend.reconfigure()?;
+                may_retry = false;
+            }
+            SurfaceAcquireOutcome::Outdated | SurfaceAcquireOutcome::Lost => {
+                return Err(EngineError::SurfaceLost);
+            }
+            SurfaceAcquireOutcome::Validation => {
+                tracing::error!("Surface texture validation error after reconfigure");
+                return Err(EngineError::SurfaceValidation);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod surface_acquisition_tests {
+    use super::{SurfaceAcquireBackend, SurfaceAcquireOutcome, acquire_surface_texture_with};
+    use crate::error::EngineError;
+
+    struct FakeSurface {
+        outcomes: std::vec::IntoIter<SurfaceAcquireOutcome<u8>>,
+        reconfigure_count: usize,
+    }
+
+    impl FakeSurface {
+        fn new(outcomes: Vec<SurfaceAcquireOutcome<u8>>) -> Self {
+            Self {
+                outcomes: outcomes.into_iter(),
+                reconfigure_count: 0,
+            }
+        }
+    }
+
+    impl SurfaceAcquireBackend for FakeSurface {
+        type Frame = u8;
+
+        fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError> {
+            self.outcomes.next().ok_or(EngineError::SurfaceLost)
+        }
+
+        fn reconfigure(&mut self) -> Result<(), EngineError> {
+            self.reconfigure_count += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn validation_reconfigures_once_and_returns_the_retry_frame() {
+        let mut surface = FakeSurface::new(vec![
+            SurfaceAcquireOutcome::Validation,
+            SurfaceAcquireOutcome::Success(7),
+        ]);
+
+        let result = acquire_surface_texture_with(&mut surface);
+
+        assert!(matches!(result, Ok(Some(7))));
+        assert_eq!(surface.reconfigure_count, 1);
+        assert_eq!(surface.outcomes.len(), 0);
+    }
+
+    #[test]
+    fn suboptimal_retry_is_still_renderable() {
+        let mut surface = FakeSurface::new(vec![
+            SurfaceAcquireOutcome::Validation,
+            SurfaceAcquireOutcome::Suboptimal(9),
+        ]);
+
+        let result = acquire_surface_texture_with(&mut surface);
+
+        assert!(matches!(result, Ok(Some(9))));
+        assert_eq!(surface.reconfigure_count, 1);
+    }
+
+    #[test]
+    fn occluded_and_timeout_survive_the_retry_path() {
+        let mut occluded_surface = FakeSurface::new(vec![
+            SurfaceAcquireOutcome::Validation,
+            SurfaceAcquireOutcome::Occluded,
+        ]);
+        let mut timeout_surface = FakeSurface::new(vec![
+            SurfaceAcquireOutcome::Validation,
+            SurfaceAcquireOutcome::Timeout,
+        ]);
+
+        let occluded = acquire_surface_texture_with(&mut occluded_surface);
+        let timeout = acquire_surface_texture_with(&mut timeout_surface);
+
+        assert!(matches!(occluded, Ok(None)));
+        assert!(matches!(timeout, Err(EngineError::Timeout)));
+        assert_eq!(occluded_surface.reconfigure_count, 1);
+        assert_eq!(timeout_surface.reconfigure_count, 1);
+    }
+
+    #[test]
+    fn repeated_validation_is_reported_only_after_the_retry() {
+        let mut surface = FakeSurface::new(vec![
+            SurfaceAcquireOutcome::Validation,
+            SurfaceAcquireOutcome::Validation,
+        ]);
+
+        let result = acquire_surface_texture_with(&mut surface);
+
+        assert!(matches!(result, Err(EngineError::SurfaceValidation)));
+        assert_eq!(surface.reconfigure_count, 1);
+    }
+
+    #[test]
+    fn outdated_and_lost_still_share_the_single_retry_budget() {
+        for initial in [SurfaceAcquireOutcome::Outdated, SurfaceAcquireOutcome::Lost] {
+            let mut surface = FakeSurface::new(vec![initial, SurfaceAcquireOutcome::Lost]);
+
+            let result = acquire_surface_texture_with(&mut surface);
+
+            assert!(matches!(result, Err(EngineError::SurfaceLost)));
+            assert_eq!(surface.reconfigure_count, 1);
+        }
+    }
+}
+
 /// GPU backend capabilities
 #[derive(Debug, Clone)]
 pub struct GpuCapabilities {
@@ -408,6 +584,19 @@ pub struct Renderer {
 // runtime-conformance-check` too, workspace-wide.
 static_assertions::assert_impl_all!(Renderer: Send);
 static_assertions::assert_not_impl_any!(Renderer: Sync);
+
+impl SurfaceAcquireBackend for Renderer {
+    type Frame = wgpu::SurfaceTexture;
+
+    fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError> {
+        let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
+        Ok(SurfaceAcquireOutcome::from(surface.get_current_texture()))
+    }
+
+    fn reconfigure(&mut self) -> Result<(), EngineError> {
+        Self::reconfigure_surface(self)
+    }
+}
 
 impl Renderer {
     /// Create a new renderer with automatic backend selection
@@ -1304,11 +1493,12 @@ impl Renderer {
         self.config.as_ref().map_or((0, 0), |c| (c.width, c.height))
     }
 
-    /// Reconfigure the surface after loss or outdated error.
+    /// Reconfigure the surface after a lost, outdated, or validation result.
     ///
     /// This is called automatically by `render_scene()` when
-    /// `CurrentSurfaceTexture::Outdated` or `CurrentSurfaceTexture::Lost`
-    /// is encountered, but can also be called manually if needed.
+    /// `CurrentSurfaceTexture::Outdated`, `CurrentSurfaceTexture::Lost`, or
+    /// `CurrentSurfaceTexture::Validation` is encountered, but can also be
+    /// called manually if needed.
     pub fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
         if let (Some(config), Some(surface)) = (&self.config, &self.surface) {
             surface.configure(&self.device, config);
@@ -1489,7 +1679,8 @@ impl Renderer {
     }
 
     /// Acquire the current swapchain texture, handling device-lost and all
-    /// `CurrentSurfaceTexture` variants with a single retry on Outdated/Lost.
+    /// `CurrentSurfaceTexture` variants with one reconfigure-and-retry on
+    /// Outdated, Lost, or Validation.
     ///
     /// Returns `Ok(None)` when the frame should be silently skipped (Occluded).
     fn acquire_surface_texture(&mut self) -> Result<Option<wgpu::SurfaceTexture>, EngineError> {
@@ -1502,45 +1693,9 @@ impl Renderer {
             return Err(EngineError::DeviceLost);
         }
 
-        // wgpu 28+: get_current_texture() returns CurrentSurfaceTexture enum
-        // instead of Result<SurfaceTexture, SurfaceError>.
-        let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
-        match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => Ok(Some(frame)),
-            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                // Suboptimal is still renderable; schedule a reconfigure next frame.
-                tracing::debug!("Surface suboptimal; will reconfigure on next resize");
-                Ok(Some(frame))
-            }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                // Auto-reconfigure and retry once.
-                self.reconfigure_surface()?;
-                let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
-                match surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(frame)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Ok(Some(frame)),
-                    _ => Err(EngineError::SurfaceLost),
-                }
-            }
-            wgpu::CurrentSurfaceTexture::Timeout => Err(EngineError::Timeout),
-            wgpu::CurrentSurfaceTexture::Occluded => {
-                // Window is minimized or fully occluded — skip this frame
-                // entirely rather than producing garbage frames.
-                tracing::trace!("Surface occluded; skipping frame");
-                Ok(None)
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                // Validation error — the surface texture could not be produced
-                // due to a validation failure (surface misconfig: incompatible
-                // format/usage/present mode). This is NOT a recoverable
-                // SurfaceLost: retrying `get_current_texture` without
-                // reconfiguring loops forever. Log and surface a distinct
-                // non-recoverable error so the caller drops the frame and
-                // reconfigures on the next pass.
-                tracing::error!("Surface texture validation error");
-                Err(EngineError::SurfaceValidation)
-            }
-        }
+        // The generic driver gives this concrete wgpu path a CPU-only test seam
+        // while preserving static dispatch and zero allocation in the frame path.
+        acquire_surface_texture_with(self)
     }
 
     /// Warn when the acquired swapchain texture dimensions differ from the
