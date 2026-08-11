@@ -2,6 +2,10 @@
 
 Frame scheduling, task prioritization, and animation coordination for FLUI.
 
+Standalone `rust` blocks in this document are compiled as doctests. Blocks
+marked `rust,ignore` are integration sketches that depend on an external
+render pipeline or event loop.
+
 ## Features
 
 - **Frame Scheduling** - VSync coordination and frame lifecycle management
@@ -114,8 +118,9 @@ if budget.is_over_budget() {
 
 // Get statistics
 let build_stats = budget.build_stats();
-println!("Build took {:.2}ms ({:.1}% of budget)", 
-         build_stats.duration_ms, build_stats.budget_percent);
+// `Percentage`'s Display already renders one decimal and the `%` sign.
+println!("Build took {:.2}ms ({} of budget)",
+         build_stats.duration_ms(), build_stats.budget_percent);
 ```
 
 ### Priority-based Task Queue
@@ -170,7 +175,7 @@ let budget = FrameDuration::try_from_fps(60)  // ~60fps
 assert!(!budget.is_over_budget(elapsed));
 
 // Conversions are explicit
-let as_seconds: Seconds = elapsed.as_seconds();
+let as_seconds: Seconds = elapsed.to_seconds();
 ```
 
 ### Type-Safe IDs
@@ -258,7 +263,7 @@ impl PipelineOwner {
 
 ### In Event Loop
 
-```rust
+```rust,ignore
 use flui_scheduler::{UpdateScheduler, Priority};
 
 let scheduler = UpdateScheduler::new();

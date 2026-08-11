@@ -211,3 +211,9 @@ pub mod prelude {
         duration::{FrameDuration, Milliseconds, Percentage, Seconds},
     };
 }
+
+// Keep standalone prose examples inside the existing workspace doctest gate.
+// Context-dependent fragments in these files are explicitly `rust,ignore`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_examples {}

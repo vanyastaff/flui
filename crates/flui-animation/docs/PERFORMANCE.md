@@ -2,6 +2,10 @@
 
 Performance characteristics of `flui_animation`.
 
+Standalone `rust` blocks are compiled as doctests. Blocks marked
+`rust,ignore` are implementation sketches or benchmark fragments whose
+surrounding harness is intentionally omitted.
+
 ## Measured benchmarks
 
 These are **measured** by the committed Criterion bench
@@ -89,7 +93,7 @@ table (~8.8 ns, lock included) is the number that actually matters here.
 
 Single `Mutex<Inner>` for all state:
 
-```rust
+```rust,ignore
 struct AnimationController {
     inner: Arc<Mutex<AnimationControllerInner>>,
     notifier: Arc<ChangeNotifier>,
@@ -103,7 +107,7 @@ Benefits:
 
 ### Tick Cycle
 
-```rust
+```rust,ignore
 fn tick(&self) {
     let should_notify = {
         let mut inner = self.inner.lock();
@@ -129,7 +133,7 @@ fn tick(&self) {
 
 `Arc::clone` is atomic increment (~5ns):
 
-```rust
+```rust,ignore
 let controller2 = controller.clone();  // Very cheap
 ```
 
@@ -137,14 +141,14 @@ let controller2 = controller.clone();  // Very cheap
 
 One pointer indirection per access:
 
-```rust
+```rust,ignore
 let value = controller.value();
 // Equivalent to: (*controller).value()
 ```
 
 For hot paths, cache the reference:
 
-```rust
+```rust,ignore
 let ctrl = &*controller;
 ctrl.value();
 ctrl.status();
@@ -159,7 +163,7 @@ ctrl.is_animating();
 
 `Arc<dyn Animation<f32>>` adds vtable lookup (~2ns per call):
 
-```rust
+```rust,ignore
 // Virtual dispatch
 let value = animation.value();
 
@@ -171,7 +175,7 @@ let value = controller.value();
 
 For performance-critical paths:
 
-```rust
+```rust,ignore
 // Trait object (virtual dispatch each call)
 pub struct SlowAnimation {
     parent: Arc<dyn Animation<f32>>,
@@ -242,7 +246,7 @@ For many listeners, consider `HashMap<ListenerId, Callback>`.
 
 Reuse callbacks:
 
-```rust
+```rust,ignore
 // Good: single allocation
 let callback = Arc::new(|| println!("changed"));
 controller.add_listener(callback.clone());
@@ -274,7 +278,7 @@ Typical animation overhead: <0.1ms for 10 active animations.
 
 ### 1. Reuse Controllers
 
-```rust
+```rust,ignore
 // Bad: new allocation per animation
 fn animate() {
     let controller = AnimationController::new(...);
@@ -289,7 +293,7 @@ controller.forward()?;
 
 ### 2. Avoid Unnecessary Clones
 
-```rust
+```rust,ignore
 // Bad: clone on every access
 fn render(&self) {
     let ctrl = self.controller.clone();
@@ -304,7 +308,7 @@ fn render(&self) {
 
 ### 3. Use Status Listeners
 
-```rust
+```rust,ignore
 // Bad: poll every frame
 fn on_frame(&self) {
     if self.controller.status() == Completed { ... }
@@ -319,16 +323,23 @@ controller.add_status_listener(|status| {
 ### 4. Batch Animations
 
 ```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::AnimationController;
+# use flui_scheduler::UpdateScheduler;
 // Good: single scheduler drives all
 let scheduler = Arc::new(UpdateScheduler::new());
+let d = Duration::from_millis(300);
 let ctrl1 = AnimationController::new(d, &scheduler);
 let ctrl2 = AnimationController::new(d, &scheduler);
 // Both tick on same frame callback
+# ctrl1.dispose();
+# ctrl2.dispose();
 ```
 
 ### 5. Prefer Built-in Curves
 
-```rust
+```rust,ignore
 // Good: optimized implementations
 Curves::EaseInOut
 
