@@ -5,7 +5,10 @@
 
 use std::{
     path::PathBuf,
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
     thread::{self, ThreadId},
 };
 
@@ -37,6 +40,23 @@ use crate::{
 /// [`ClaimSlot`]/[`PendingWindow`] pair with an identical shape.
 type OpenWindowResult = Result<Arc<dyn PlatformWindow>, OpenWindowError>;
 
+/// Process-wide identity source for mock windows.
+///
+/// A headless test may construct several independent [`HeadlessPlatform`]
+/// values whose windows later meet in one application registry. Scoping the
+/// counter to a platform instance lets those windows alias even though real
+/// backend handles are process-unique.
+static NEXT_HEADLESS_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_headless_window_id() -> WindowId {
+    let raw = NEXT_HEADLESS_WINDOW_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .expect("BUG: exhausted the process-wide headless WindowId space");
+    WindowId(raw)
+}
+
 /// Headless platform for testing
 ///
 /// This platform implementation doesn't create any real windows or graphics
@@ -56,13 +76,6 @@ struct HeadlessState {
     active_window: Option<WindowId>,
     is_running: bool,
     windows: Vec<MockWindow>,
-    /// Monotonic window-id source. `windows.len()` used to double as this
-    /// counter, which was only safe as long as a closed window was never
-    /// removed from `windows` -- issue #555's real close-driven exit-policy
-    /// consultation (`MockWindow::notify_closed`) DOES remove it now, so a
-    /// fresh counter is required: reusing `len()` after a removal would
-    /// mint an id already held by a surviving window.
-    next_window_id: u64,
     appearance: WindowAppearance,
     keyboard_layout: String,
     opened_urls: Vec<String>,
@@ -91,7 +104,6 @@ impl HeadlessPlatform {
             active_window: None,
             is_running: false,
             windows: Vec::new(),
-            next_window_id: 0,
             appearance: WindowAppearance::default(),
             keyboard_layout: "en-US".to_string(),
             opened_urls: Vec::new(),
@@ -313,8 +325,7 @@ fn create_mock_window(
     platform_state: Weak<Mutex<HeadlessState>>,
     options: WindowOptions,
 ) -> Arc<dyn PlatformWindow> {
-    let window_id = WindowId(state.next_window_id);
-    state.next_window_id += 1;
+    let window_id = next_headless_window_id();
     let window = MockWindow::new(window_id, options, platform_state);
 
     state.windows.push(window.clone());
@@ -1052,6 +1063,25 @@ impl Clipboard for MockClipboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separate_headless_platforms_mint_distinct_window_ids() {
+        let first_platform = HeadlessPlatform::new();
+        let second_platform = HeadlessPlatform::new();
+
+        let first = first_platform
+            .open_window(WindowOptions::default())
+            .expect("first mock window opens");
+        let second = second_platform
+            .open_window(WindowOptions::default())
+            .expect("second mock window opens");
+
+        assert_ne!(
+            first.id(),
+            second.id(),
+            "window identity must be process-unique, not scoped to one mock platform instance"
+        );
+    }
 
     /// Drives `OwnerPlatform::open_window` through the exact arm the real
     /// winit owner lane returns for any call outside `on_ready`
