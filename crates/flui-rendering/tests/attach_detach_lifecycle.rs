@@ -999,3 +999,55 @@ fn deferred_box_insert_fires_attach_via_apply_deferred_mutation() {
          attach exactly once"
     );
 }
+
+#[test]
+fn detaching_the_owner_root_vacates_the_root_slot_and_reattaching_restores_it() {
+    let mut owner = PipelineOwner::new();
+    let root = owner.insert(probe(LifecycleLog::default()));
+    let child = owner.insert(probe(LifecycleLog::default()));
+    owner.adopt_render_child(root, child);
+    owner.set_root_id(Some(root));
+
+    // The owner root has no parent edge, so nothing else clears the slot.
+    // Leaving `root_id` on a closed attachment interval would let the paint
+    // and semantics walks — which both start from `root_id` without checking
+    // that interval — enter a detached object.
+    let token = owner
+        .detach_render_subtrees(&[root])
+        .expect("the owner root detaches");
+    assert_eq!(
+        owner.root_id(),
+        None,
+        "detaching the owner root must vacate the root slot"
+    );
+
+    owner
+        .attach_render_subtrees(token)
+        .expect("the owner root reattaches");
+    assert_eq!(
+        owner.root_id(),
+        Some(root),
+        "reattaching the batch that vacated the slot must restore it"
+    );
+    assert_eq!(owner.render_tree().parent(child), Some(root));
+}
+
+#[test]
+fn detaching_a_non_root_subtree_leaves_the_root_slot_alone() {
+    let mut owner = PipelineOwner::new();
+    let root = owner.insert(probe(LifecycleLog::default()));
+    let child = owner.insert(probe(LifecycleLog::default()));
+    owner.adopt_render_child(root, child);
+    owner.set_root_id(Some(root));
+
+    let token = owner
+        .detach_render_subtrees(&[child])
+        .expect("a non-root subtree detaches");
+    assert_eq!(
+        owner.root_id(),
+        Some(root),
+        "an unrelated detach must not disturb the root slot"
+    );
+    owner.attach_render_subtrees(token).expect("reattach");
+    assert_eq!(owner.root_id(), Some(root));
+}

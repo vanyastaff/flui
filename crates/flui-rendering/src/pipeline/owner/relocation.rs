@@ -43,6 +43,16 @@ pub struct DetachedRenderSubtrees {
     owner_seal: Rc<RelocationOwnerSeal>,
     roots: Vec<RenderId>,
     nodes: Vec<DetachedRenderNode>,
+    /// Set when one of `roots` was the owner's `root_id` at detach time.
+    ///
+    /// Detaching the owner root has no parent edge to drop, so `root_id` would
+    /// otherwise keep addressing a node whose attachment interval is closed —
+    /// and the paint and semantics walks both start from `root_id` without
+    /// consulting that interval. Detach clears it and records it here;
+    /// reattach restores it. Releasing the token for finalization
+    /// deliberately does not, since the canonical `remove_render_object` path
+    /// clears `root_id` for a removed root itself.
+    vacated_owner_root: Option<RenderId>,
 }
 
 impl DetachedRenderSubtrees {
@@ -298,10 +308,20 @@ impl PipelineOwner<Idle> {
         self.scheduler.evict(&membership);
         self.layout_poison.evict(&membership);
 
+        // The owner root has no parent edge, so nothing above cleared it.
+        // Leaving `root_id` on a node whose interval just closed would let the
+        // paint and semantics walks — both of which start from `root_id`
+        // without consulting the interval — enter a detached object.
+        let vacated_owner_root = self
+            .root_id
+            .filter(|root_id| root_ids.contains(root_id))
+            .inspect(|_| self.root_id = None);
+
         Ok(DetachedRenderSubtrees {
             owner_seal: Rc::clone(&self.relocation_owner_seal),
             roots: root_ids.to_vec(),
             nodes,
+            vacated_owner_root,
         })
     }
 
@@ -378,6 +398,12 @@ impl PipelineOwner<Idle> {
                 attached,
                 "attach preflight guaranteed the next attachment epoch"
             );
+        }
+
+        // Restore the root slot this batch vacated, before the dirty marks
+        // below — a re-rooted owner must be able to schedule from it.
+        if let Some(owner_root) = token.vacated_owner_root {
+            self.root_id = Some(owner_root);
         }
 
         for &root_id in &token.roots {
