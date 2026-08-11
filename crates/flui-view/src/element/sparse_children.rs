@@ -114,7 +114,19 @@ impl SparseChildren {
         if let Some(&existing) = self.by_logical_index.get(&logical_index) {
             return existing;
         }
-        let child = tree.insert(view, host, logical_index, owner);
+        // Declare `host` as the parent being reconciled for the duration of
+        // this insert. `ElementTree::insert` refuses to relocate an active
+        // GlobalKey onto a parent that is not the one currently reconciling,
+        // and its rejection arm panics — so without this, a keyed item
+        // scrolling from one lazy list into another aborted the process
+        // instead of moving. `service_child_requests` calls `service` (and so
+        // `ensure`) outside any other reconcile, before its own `build_scope`,
+        // so this never nests inside the guard `reconcile_children_by_id`
+        // installs — which `begin_reconcile` asserts against.
+        let child = {
+            let _reconcile_guard = tree.begin_reconcile(host);
+            tree.insert(view, host, logical_index, owner)
+        };
         stamp_logical_index(tree, pipeline, child, logical_index);
         self.by_logical_index.insert(logical_index, child);
 
@@ -725,6 +737,78 @@ mod tests {
     /// The test uses a leaf view so the globally-keyed root has no descendants —
     /// the non-keyed descendant-leak concern for composite subtrees is a separate,
     /// orthogonal investigation.
+    /// A GlobalKey moving between two lazy hosts must relocate the existing
+    /// element, not panic.
+    ///
+    /// TWO preconditions block it, and only the first is fixed:
+    ///
+    /// 1. `ensure` called `ElementTree::insert` with no reconcile guard, so
+    ///    `retake_active_global_key`'s `is_reconciling_parent` check failed.
+    ///    Fixed — `ensure` now declares `host` for the duration of the insert.
+    /// 2. **Still open.** `retake_active_global_key` then verifies the
+    ///    candidate is in `from_parent.child_ids`. A lazy host never populates
+    ///    `child_ids` — resident children live in the `SparseChildren` map —
+    ///    so that reverse-edge check fails, `try_retake_global_key` yields
+    ///    `GlobalKeyRetake::Rejected`, and `insert`'s `Rejected` arm panics.
+    ///
+    /// Closing (2) is a design call, not a patch: either the membership check
+    /// stops treating `child_ids` as authoritative, or the lazy path starts
+    /// maintaining it. The latter has wider consequences — every walk that
+    /// iterates `child_ids` (`collect_render_frontier`, `deactivate_subtree`,
+    /// ancestry recompute) currently skips sparse children too.
+    #[test]
+    #[ignore = "known regression: a lazy host does not maintain child_ids, so \
+                retake_active_global_key's reverse-edge membership check rejects \
+                the relocation and insert's Rejected arm panics — see the test's \
+                own doc comment"]
+    fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
+        let (mut tree, mut build_owner, pipeline, host_a) = host_tree();
+        let host_b = tree.insert(
+            &LeafBox { side: 10.0 },
+            host_a,
+            1,
+            &mut build_owner.element_owner_mut(),
+        );
+
+        let keyed_item = GlobalKeyedLeafBox {
+            side: 4.0,
+            key: GlobalKey::<GlobalKeyedLeafBox>::new(),
+            detach_count: Arc::new(AtomicUsize::new(0)),
+        };
+
+        let mut list_a = SparseChildren::new();
+        let first = list_a.ensure(
+            0,
+            &keyed_item,
+            host_a,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        // The same key surfacing under a different lazy host — a keyed item
+        // scrolled from one list into another.
+        let mut list_b = SparseChildren::new();
+        let moved = list_b.ensure(
+            0,
+            &keyed_item,
+            host_b,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert_eq!(
+            moved, first,
+            "the keyed child must relocate, preserving element identity, not mount a duplicate"
+        );
+        assert_eq!(
+            tree.get(moved).and_then(crate::ElementNode::parent),
+            Some(host_b),
+            "the relocated child must be reparented onto the new host"
+        );
+    }
+
     #[test]
     fn evicted_globally_keyed_child_freed_by_finalize_tree() {
         let (mut tree, mut build_owner, pipeline, host) = host_tree();

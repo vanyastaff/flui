@@ -537,7 +537,7 @@ fn active_retake_outside_reconcile_fails_closed_without_mutation() {
     );
     assert!(direct_children_in_slot_order(&tree.read(), destination).is_empty());
     assert_eq!(
-        owner.read().element_for_global_key(key.key_hash()),
+        owner.read().element_for_global_key(&key),
         Some(keyed_id)
     );
     assert_eq!(key.with_current_state::<i32>(CounterState::count), Some(23));
