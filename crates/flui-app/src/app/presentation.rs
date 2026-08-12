@@ -393,10 +393,13 @@ impl PresentationState {
                     // The action still routes; only its payload is lost.
                     // Traced because a SetValue without its value reaches a
                     // handler as a no-op edit, which is otherwise invisible.
+                    // Two cases share this branch: a payload kind FLUI has no
+                    // argument shape for, and a payload untranslatable for
+                    // THIS request (a cross-node text selection).
                     tracing::trace!(
                         action = ?request.action,
-                        "accessibility action payload has no FLUI argument shape; \
-                         routing the action argument-free"
+                        "accessibility action payload not translatable (unsupported kind, or \
+                         invalid for this target); routing the action argument-free"
                     );
                 }
                 translated
