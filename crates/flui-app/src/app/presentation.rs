@@ -30,7 +30,9 @@ use flui_scheduler::{
     AsyncDriver, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,
     input_to_present_histogram, produce_to_present_histogram,
 };
-use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
+use flui_semantics::{
+    AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_for,
+};
 use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding};
 use web_time::{Duration, Instant};
@@ -69,6 +71,13 @@ pub(crate) struct RealmCapabilities<'a> {
     /// The realm's platform wake capability, cloned into this
     /// presentation's pipeline as its `on_need_visual_update` callback.
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
+    /// A cross-thread sender into the realm's command inbox, already
+    /// stamped with this presentation's id. Handed to the platform
+    /// accessibility bridge's action listener, so an assistive-technology
+    /// request marshals onto the owner thread as a
+    /// [`SemanticsActionRequest`] and resolves at the next Idle drain —
+    /// never on the adapter's own thread.
+    pub(crate) command_sender: super::ui_realm::UiCommandSender,
 }
 
 /// A realm-backed test window carrying an optional platform text-input
@@ -82,9 +91,23 @@ pub(crate) fn test_platform_window(
     Arc::new(TestPresentationWindow::new(platform_text_input))
 }
 
+/// A realm-backed test window whose accessibility capability is the given
+/// recording fake — for tests exercising the platform-accessibility wire
+/// ([`PresentationState::wire_platform_accessibility`]) end-to-end while
+/// keeping a typed handle on the fake to drive activation and actions.
+#[cfg(test)]
+pub(crate) fn test_platform_window_with_accessibility(
+    accessibility: Arc<flui_platform::FakeAccessibility>,
+) -> Arc<dyn PlatformWindow> {
+    let mut window = TestPresentationWindow::new(None);
+    window.accessibility = Some(accessibility);
+    Arc::new(window)
+}
+
 #[cfg(test)]
 struct TestPresentationWindow {
     text_input: Option<Arc<dyn PlatformTextInput>>,
+    accessibility: Option<Arc<flui_platform::FakeAccessibility>>,
     cursor: parking_lot::Mutex<CursorIcon>,
 }
 
@@ -93,6 +116,7 @@ impl TestPresentationWindow {
     fn new(text_input: Option<Arc<dyn PlatformTextInput>>) -> Self {
         Self {
             text_input,
+            accessibility: None,
             cursor: parking_lot::Mutex::new(CursorIcon::Default),
         }
     }
@@ -128,6 +152,12 @@ impl PlatformWindow for TestPresentationWindow {
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.text_input.clone()
+    }
+
+    fn accessibility(&self) -> Option<Arc<dyn flui_platform::traits::PlatformAccessibility>> {
+        self.accessibility
+            .clone()
+            .map(|fake| fake as Arc<dyn flui_platform::traits::PlatformAccessibility>)
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
@@ -274,6 +304,98 @@ pub(crate) struct PresentationState {
 }
 
 impl PresentationState {
+    /// Wire this window's platform accessibility bridge, when one exists,
+    /// into all three directions of the semantics seam:
+    ///
+    /// - **Out** — every `SemanticsOwner` this pipeline creates publishes
+    ///   its translated tree to the platform. The callback holds the bridge
+    ///   `Weak`, so a flush racing window teardown degrades to a drop,
+    ///   never a call into a dead adapter.
+    /// - **Activation** — assistive technology attaching or detaching
+    ///   toggles this presentation's [`SemanticsHost`] flag and wakes the
+    ///   loop; the frame pump's reconcile (`UiRealm::draw_frame_entered`)
+    ///   then drives `PipelineOwner::set_semantics_enabled`, so tree
+    ///   assembly starts and stops on the OWNER thread — the listener runs
+    ///   on the adapter's own thread and touches only `Send + Sync` state.
+    /// - **In** — action requests marshal through the realm inbox as
+    ///   [`SemanticsActionRequest`]s stamped for this exact presentation
+    ///   and resolve at the next Idle drain. Requests FLUI cannot route (a
+    ///   zero node id, an action with no counterpart, a full inbox) are
+    ///   traced drops, mirroring how Flutter tolerates screen readers
+    ///   acting on a stale snapshot. Typed action payloads
+    ///   (`accesskit::ActionData` — a value to set, a scroll target) are
+    ///   not yet translated: requests resolve argument-free, so a handler
+    ///   that requires arguments sees `None` until that slice lands.
+    ///
+    /// A window without the capability (`accessibility()` → `None`) wires
+    /// nothing: the pipeline keeps its documented publish-nowhere
+    /// placeholder.
+    fn wire_platform_accessibility(
+        window: &Arc<dyn PlatformWindow>,
+        pipeline: &PipelineCell,
+        semantics: &SemanticsHost,
+        wake: &Arc<dyn Fn() + Send + Sync>,
+        command_sender: super::ui_realm::UiCommandSender,
+    ) {
+        let Some(bridge) = window.accessibility() else {
+            return;
+        };
+
+        let publish_bridge = Arc::downgrade(&bridge);
+        pipeline.with_mut(|owner| {
+            owner.set_semantics_update_callback(Arc::new(
+                move |update: &flui_semantics::TreeUpdate| {
+                    if let Some(bridge) = publish_bridge.upgrade() {
+                        bridge.publish(update.clone());
+                    }
+                },
+            ));
+        });
+
+        let enabled_flag = semantics.platform_semantics_enabled_handle();
+        let wake = Arc::clone(wake);
+        let awaken_window = Arc::downgrade(window);
+        bridge.set_activation_listener(Arc::new(move |active| {
+            enabled_flag.store(active, Ordering::Relaxed);
+            // The flag alone changes nothing until a frame runs: wake the
+            // loop and poke this window so the reconcile actually happens.
+            wake();
+            if let Some(window) = awaken_window.upgrade() {
+                window.request_redraw();
+            }
+        }));
+        // Assistive technology may have attached before this window existed
+        // — the transition the listener waits for has already happened.
+        if bridge.is_active() {
+            semantics.set_platform_semantics_enabled(true);
+        }
+
+        bridge.set_action_listener(Arc::new(move |request| {
+            let Some(node_id) = AccessibilityNodeId::from_u64(request.target_node.0) else {
+                tracing::warn!(
+                    "dropping accessibility action addressed to the zero node id (out of \
+                     contract: no published tree ever exports it)"
+                );
+                return;
+            };
+            let Some(action) = semantics_action_for(request.action) else {
+                tracing::trace!(
+                    action = ?request.action,
+                    "dropping accessibility action FLUI has no counterpart for"
+                );
+                return;
+            };
+            if let Err(error) =
+                command_sender.send_semantics_action(SemanticsActionRequest::new(node_id, action))
+            {
+                tracing::warn!(
+                    ?error,
+                    "dropping accessibility action: the realm inbox is full or gone"
+                );
+            }
+        }));
+    }
+
     /// Assemble the gesture arena, wiring its mouse-tracker cursor callback
     /// to `window` (shared by every constructor below — production and
     /// test alike — since the callback shape never varies with capability
@@ -366,7 +488,7 @@ impl PresentationState {
         // IT dirties — never a sibling's — or a redraw request stamped for
         // this presentation would silently wake (or fail to wake) the wrong
         // native window. See `redraw_request_from_a_does_not_wake_bs_window`.
-        let visual_wake = capabilities.wake;
+        let visual_wake = Arc::clone(&capabilities.wake);
         let redraw_window = Arc::downgrade(&window);
         pipeline.with_mut(|owner| {
             owner.set_on_need_visual_update(move || {
@@ -383,6 +505,14 @@ impl PresentationState {
         renderer.add_semantics_enabled_listener(Arc::new(move |enabled| {
             semantics_flag.store(enabled, Ordering::Relaxed);
         }));
+
+        Self::wire_platform_accessibility(
+            &window,
+            &pipeline,
+            &semantics,
+            &capabilities.wake,
+            capabilities.command_sender,
+        );
 
         let state = Self {
             id,
@@ -714,6 +844,27 @@ impl PresentationState {
     /// would not change any segment's observable outcome, only make this
     /// predicate diverge from the exact condition the pipeline itself uses
     /// to decide "nothing to flush".
+    /// Reconcile platform-driven semantics enablement onto this
+    /// presentation's pipeline — the owner-thread half of the activation
+    /// seam.
+    ///
+    /// The platform's activation listener may only flip the
+    /// [`SemanticsHost`] flag and wake the loop (it runs on the adapter's
+    /// thread); this is where the flag becomes pipeline state. Called at
+    /// each segment start in `UiRealm::draw_frame_entered`, BEFORE dirty
+    /// sampling, because enabling seeds the root as needing semantics —
+    /// exactly the pending work the segment should then observe. A no-op
+    /// whenever flag and pipeline already agree, which is every frame but
+    /// the two transitions.
+    pub(crate) fn reconcile_semantics_enablement(&self) {
+        let wanted = self.semantics.semantics_enabled();
+        self.pipeline.with_mut(|owner| {
+            if owner.semantics_enabled() != wanted {
+                owner.set_semantics_enabled(wanted);
+            }
+        });
+    }
+
     #[must_use]
     pub(crate) fn has_pending_work(&self) -> bool {
         self.widgets.has_pending_builds()
@@ -968,6 +1119,27 @@ impl PresentationState {
         // announce-after-close decision this pins.
         self.semantics.clear_announce_callback();
         self.semantics.clear_event_callback();
+        // Withdraw from the platform accessibility bridge: detach both
+        // listeners so an activation flip or action request arriving after
+        // close is dropped at the platform seam (an action that slips
+        // through anyway is still dropped at the drain's forest-membership
+        // check — two independent gates, same verdict), and stop assembly
+        // so the owner's disposed notifier fires while the pipeline is
+        // still alive. Guarded on `is_free()` because `close()` also runs
+        // from `Drop`, where a panicking unwind may hold the checkout.
+        if let Some(window) = self.window.upgrade()
+            && let Some(bridge) = window.accessibility()
+        {
+            bridge.set_activation_listener(Arc::new(|_| {}));
+            bridge.set_action_listener(Arc::new(|_| {}));
+        }
+        if self.pipeline.is_free() {
+            self.pipeline.with_mut(|owner| {
+                if owner.semantics_enabled() {
+                    owner.set_semantics_enabled(false);
+                }
+            });
+        }
         if let Some(window) = self.window.upgrade()
             && let Err(error) = window.set_cursor(CursorIcon::Default)
             && !matches!(error, CursorError::Unsupported)

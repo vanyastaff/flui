@@ -1550,19 +1550,24 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// `insert()`'s "new nodes need layout and paint" seeding) — without
     /// it, nothing would ever push the first `run_semantics` assembly pass.
     ///
-    /// No OS accessibility bridge exists yet (ADR-0014): a lazily-created
-    /// owner is constructed with a no-op platform callback. The assembled
-    /// tree is inspected via [`Self::semantics_owner`], the render harness,
-    /// or `debug_dump_semantics_tree` until a real bridge lands.
+    /// A lazily-created owner publishes through the callback installed via
+    /// [`Self::set_semantics_update_callback`] — the composition root's wire
+    /// to the platform accessibility bridge (ADR-0014). With none installed
+    /// the owner falls back to the documented no-op placeholder: it still
+    /// assembles a tree (inspectable via [`Self::semantics_owner`], the
+    /// render harness, or `debug_dump_semantics_tree`) but publishes
+    /// nowhere.
     pub fn set_semantics_enabled(&mut self, enabled: bool) {
         let was_enabled = self
             .semantics_enabled
             .swap(enabled, std::sync::atomic::Ordering::Relaxed);
         if enabled && !was_enabled {
             if self.semantics_owner.is_none() {
-                self.semantics_owner = Some(flui_semantics::SemanticsOwner::new(
-                    no_op_semantics_update_callback(),
-                ));
+                let callback = self
+                    .semantics_update_callback
+                    .clone()
+                    .unwrap_or_else(no_op_semantics_update_callback);
+                self.semantics_owner = Some(flui_semantics::SemanticsOwner::new(callback));
             }
             self.notifier.read().fire_semantics_owner_created();
             if let Some(root_id) = self.root_id {
@@ -1574,6 +1579,28 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
             self.notifier.read().fire_semantics_owner_disposed();
         }
+    }
+
+    /// Installs the platform-publish callback for this pipeline's semantics
+    /// owner.
+    ///
+    /// The composition root calls this once it holds a platform
+    /// accessibility bridge, so that every [`SemanticsOwner`]
+    /// [`Self::set_semantics_enabled`] lazily creates — now or on any later
+    /// re-enable — publishes to the platform instead of the no-op
+    /// placeholder. An owner already alive when the callback arrives is
+    /// swapped live: its next flush publishes the full rooted tree, so no
+    /// state is lost to the ordering.
+    ///
+    /// [`SemanticsOwner`]: flui_semantics::SemanticsOwner
+    pub fn set_semantics_update_callback(
+        &mut self,
+        callback: flui_semantics::SemanticsUpdateCallback,
+    ) {
+        if let Some(owner) = self.semantics_owner.as_mut() {
+            owner.set_callback(callback.clone());
+        }
+        self.semantics_update_callback = Some(callback);
     }
 
     /// Returns the semantics owner, if semantics is currently enabled.
@@ -1684,16 +1711,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 }
 
-/// A no-op semantics-update callback for a freshly lazily-created
-/// [`SemanticsOwner`](flui_semantics::SemanticsOwner).
+/// The fallback semantics-update callback for a lazily-created
+/// [`SemanticsOwner`](flui_semantics::SemanticsOwner) whose pipeline was
+/// never handed a platform bridge.
 ///
-/// FLUI has no OS accessibility bridge yet (ADR-0014) — there is
-/// nowhere for a real platform callback to forward
-/// [`flui_semantics::SemanticsNodeUpdate`] batches to. Swallowing updates
-/// here is an explicit, documented placeholder (not a silent gap): the
-/// assembled tree is inspected via [`PipelineOwner::semantics_owner`], the
-/// render harness, or `debug_dump_semantics_tree` until a real bridge
-/// lands.
+/// A composition root with a real accessibility adapter installs its own
+/// callback via [`PipelineOwner::set_semantics_update_callback`] before (or
+/// after — the swap is live) enabling semantics. Without one — the render
+/// harness, `flui-testing`, a headless embedder — swallowing updates here is
+/// an explicit, documented placeholder (not a silent gap): the assembled
+/// tree is still inspectable via [`PipelineOwner::semantics_owner`], the
+/// harness, or `debug_dump_semantics_tree`.
 ///
 /// The callback receives an already-translated `accesskit::TreeUpdate`, so a
 /// real bridge forwards it to the platform capability without touching

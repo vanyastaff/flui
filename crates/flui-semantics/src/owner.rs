@@ -287,6 +287,18 @@ impl SemanticsOwner {
         }
     }
 
+    /// Replaces the platform callback on a live owner.
+    ///
+    /// For the composition root that learns its platform bridge *after* this
+    /// owner was created — an owner lazily constructed by the pipeline on
+    /// enablement, wired to the real adapter once one exists. Updates flushed
+    /// from here on reach the new callback; nothing already published is
+    /// re-sent (the next [`Self::flush`] carries the full rooted tree
+    /// anyway, since translation is snapshot-shaped, not delta-shaped).
+    pub fn set_callback(&mut self, callback: SemanticsUpdateCallback) {
+        self.callback = Some(callback);
+    }
+
     // ========== Enabled State ==========
 
     /// Returns whether semantics is enabled.

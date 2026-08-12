@@ -1656,6 +1656,7 @@ dependencies = [
 name = "flui-app"
 version = "0.2.0"
 dependencies = [
+ "accesskit",
  "android-activity",
  "anyhow",
  "crossbeam-channel",
