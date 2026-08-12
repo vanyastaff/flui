@@ -280,6 +280,10 @@ struct PersistentHeaderCore {
     last_overlaps_content: bool,
     min_extent: f32,
     max_extent: f32,
+    /// Build-during-layout mailbox (ADR-0017), when an element is driving a
+    /// delegate. `None` for a header with a static child — including every
+    /// render-harness test, which is why publishing is not unconditional.
+    shrink_cell: Option<std::sync::Arc<crate::layout::HeaderShrinkCell>>,
 }
 
 impl PersistentHeaderCore {
@@ -296,6 +300,7 @@ impl PersistentHeaderCore {
             last_overlaps_content: false,
             min_extent,
             max_extent,
+            shrink_cell: None,
         }
     }
 
@@ -358,6 +363,17 @@ impl PersistentHeaderCore {
     /// Returns the child's post-layout main-axis extent (`0.0` if there is no
     /// child, matching the oracle's `childExtent` getter for a `null` child).
     #[allow(clippy::too_many_arguments)]
+    /// Attaches the build-during-layout mailbox this header publishes into.
+    ///
+    /// Set once by the element that owns the delegate, at mount. A header with
+    /// a static child never calls this and publishes nothing.
+    fn set_shrink_cell(&mut self, cell: std::sync::Arc<crate::layout::HeaderShrinkCell>) {
+        self.shrink_cell = Some(cell);
+        // The delegate has never been built against this header, so the next
+        // layout must publish regardless of how the offsets compare.
+        self.needs_update_child = true;
+    }
+
     fn layout_child(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
@@ -371,6 +387,25 @@ impl PersistentHeaderCore {
             || self.last_shrink_offset != shrink_offset
             || self.last_overlaps_content != overlaps_content
         {
+            // Publish before the direct callback: the cell is what an
+            // element-driven delegate rebuilds from, and it is serviced
+            // *between* layout passes (ADR-0017) rather than here — the layout
+            // walk holds the render tree, so building now would self-deadlock.
+            if let Some(cell) = &self.shrink_cell {
+                let shrink = crate::layout::HeaderShrink {
+                    shrink_offset,
+                    overlaps_content,
+                };
+                // `needs_update_child` is a force-dirty signal the payload
+                // cannot express: an extent change demands a rebuild even
+                // though the header has not moved, so an equality-gated
+                // publish would silently drop it.
+                if self.needs_update_child {
+                    cell.publish_forced(shrink);
+                } else {
+                    cell.publish(shrink);
+                }
+            }
             update_child(shrink_offset, overlaps_content);
             self.last_shrink_offset = shrink_offset;
             self.last_overlaps_content = overlaps_content;
@@ -501,6 +536,13 @@ impl RenderSliverScrollingPersistentHeader {
     /// Replaces the minimum extent and reports layout when changed.
     pub fn set_min_extent(&mut self, min_extent: f32) -> flui_rendering::RenderUpdateImpact {
         layout_impact(self.core.set_min_extent(min_extent))
+    }
+
+    /// Attaches the build-during-layout mailbox this header publishes into
+    /// (ADR-0017). Set by the element that drives a delegate; a header with a
+    /// static child leaves it unset and publishes nothing.
+    pub fn set_shrink_cell(&mut self, cell: std::sync::Arc<crate::layout::HeaderShrinkCell>) {
+        self.core.set_shrink_cell(cell);
     }
 
     /// Replaces the maximum extent and returns the exact pipeline impact.
@@ -649,6 +691,13 @@ impl RenderSliverPinnedPersistentHeader {
     /// Replaces the minimum extent and returns the exact pipeline impact.
     pub fn set_min_extent(&mut self, min_extent: f32) -> flui_rendering::RenderUpdateImpact {
         layout_impact(self.core.set_min_extent(min_extent))
+    }
+
+    /// Attaches the build-during-layout mailbox this header publishes into
+    /// (ADR-0017). Set by the element that drives a delegate; a header with a
+    /// static child leaves it unset and publishes nothing.
+    pub fn set_shrink_cell(&mut self, cell: std::sync::Arc<crate::layout::HeaderShrinkCell>) {
+        self.core.set_shrink_cell(cell);
     }
 
     /// Replaces the maximum extent and returns the exact pipeline impact.
@@ -1012,6 +1061,13 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// Replaces the minimum extent and returns the exact pipeline impact.
     pub fn set_min_extent(&mut self, min_extent: f32) -> flui_rendering::RenderUpdateImpact {
         layout_impact(self.core.set_min_extent(min_extent))
+    }
+
+    /// Attaches the build-during-layout mailbox this header publishes into
+    /// (ADR-0017). Set by the element that drives a delegate; a header with a
+    /// static child leaves it unset and publishes nothing.
+    pub fn set_shrink_cell(&mut self, cell: std::sync::Arc<crate::layout::HeaderShrinkCell>) {
+        self.core.set_shrink_cell(cell);
     }
 
     /// Replaces the maximum extent and returns the exact pipeline impact.

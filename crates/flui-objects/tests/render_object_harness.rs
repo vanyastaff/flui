@@ -12025,3 +12025,125 @@ fn harness_subtree_anchor_is_not_a_repaint_boundary() {
     );
     assert_descendant_properties(&run.diagnostics(), "RenderSubtreeAnchor", &["render_id"]);
 }
+
+/// **The publish contract.** A pinned header must hand its element the shrink
+/// state it was laid out with, on every layout that changes it — that is what a
+/// delegate rebuilds against, and until this seam carried a real cell every
+/// `perform_layout` fed the hook a no-op closure and the child never rebuilt.
+///
+/// Asserted through a real viewport scroll rather than by calling `layout_child`
+/// directly: the value under test is the one the *pipeline* produces, and a
+/// hand-called probe would pass even if the render object stopped being laid
+/// out at all.
+#[test]
+fn harness_sliver_persistent_header_publishes_shrink_state_as_it_scrolls() {
+    use flui_objects::HeaderShrinkCell;
+    use std::sync::Arc;
+
+    let cell = Arc::new(HeaderShrinkCell::new());
+    let mut header = RenderSliverPinnedPersistentHeader::new(40.0, 120.0);
+    header.set_shrink_cell(Arc::clone(&cell));
+
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    let first = cell.shrink().expect("the first layout must publish");
+    assert_eq!(
+        first.shrink_offset, 0.0,
+        "unscrolled, the header has not shrunk"
+    );
+
+    let vp_id = run.id("viewport");
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(30.0);
+    });
+    run.relayout();
+
+    let scrolled = cell.shrink().expect("still published");
+    assert_eq!(
+        scrolled.shrink_offset, 30.0,
+        "the header must report how far it has scrolled away, or a delegate \
+         would keep rendering the fully-expanded header forever"
+    );
+    assert!(
+        cell.needs_build(),
+        "a changed shrink offset must schedule the delegate rebuild"
+    );
+
+    // Past max_extent the offset clamps: a delegate is never asked to render a
+    // shrink beyond full collapse.
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(500.0);
+    });
+    run.relayout();
+
+    assert_eq!(
+        cell.shrink().expect("still published").shrink_offset,
+        120.0,
+        "shrink_offset clamps at max_extent",
+    );
+}
+
+/// **The forced-rebuild contract.** Changing `min_extent`/`max_extent` must
+/// schedule a delegate rebuild even when the header has not moved.
+///
+/// The cell's edge-trigger compares the published pair, and an extent change
+/// leaves that pair identical — so routing it through the equality-gated path
+/// silently drops the rebuild the extent change demands. Caught in review; the
+/// symptom would be a header that keeps rendering at its old size after its
+/// delegate reports new extents.
+#[test]
+fn harness_sliver_persistent_header_extent_change_forces_a_delegate_rebuild() {
+    use flui_objects::HeaderShrinkCell;
+    use std::sync::Arc;
+
+    let cell = Arc::new(HeaderShrinkCell::new());
+    let mut header = RenderSliverPinnedPersistentHeader::new(40.0, 120.0);
+    header.set_shrink_cell(Arc::clone(&cell));
+
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    // Settle: the element has built against the first published state.
+    cell.commit();
+    assert!(!cell.needs_build());
+
+    let before = cell.shrink().expect("published");
+
+    // Change an extent without scrolling.
+    let header_id = run.id("header");
+    run.update::<RenderSliverPinnedPersistentHeader>(header_id, |h| {
+        let _ = h.set_min_extent(60.0);
+    });
+    run.relayout();
+
+    assert_eq!(
+        cell.shrink().expect("still published").shrink_offset,
+        before.shrink_offset,
+        "the fixture is only meaningful while the shrink offset is unchanged",
+    );
+    assert!(
+        cell.needs_build(),
+        "an extent change must schedule the rebuild even though the header \
+         has not moved — the published pair is identical, so only the \
+         force-dirty path can carry it",
+    );
+}
