@@ -92,6 +92,7 @@ pub mod radio;
 pub mod scaffold;
 pub mod scaffold_messenger;
 pub mod shape;
+pub mod sliver_app_bar;
 pub mod snack_bar;
 mod state_color;
 pub mod switch;
@@ -133,6 +134,7 @@ pub use scaffold_messenger::{
     SnackBarClosedReason, SnackBarController,
 };
 pub use shape::MaterialShape;
+pub use sliver_app_bar::SliverAppBar;
 pub use snack_bar::{SnackBar, SnackBarAction, SnackBarActionState};
 pub use switch::{Switch, SwitchState};
 pub use tab_bar_view::{TabBarView, TabBarViewState};
