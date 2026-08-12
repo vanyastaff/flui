@@ -7,7 +7,8 @@
 //!
 //! ## 🎯 Performance Profiler (feature: profiling)
 //! - Frame timing and jank detection
-//! - Build/layout/paint phase profiling, fed manually by the caller
+//! - Build/layout/paint phase profiling — fed manually by the caller, or
+//!   from the framework's own frame spans via `FrameTimingLayer`
 //! - Performance timeline with markers
 //!
 //! ## ⏱️ Timeline View (feature: timeline)
@@ -81,7 +82,9 @@
 //! # Feature Flags
 //!
 //! - `default`: no features enabled; opt in via `profiling`, `timeline`, or `hot-reload`
-//! - `profiling`: Performance profiling tools (no external dependencies)
+//! - `profiling`: Performance profiling tools (pulls in `tracing` +
+//!   `tracing-subscriber`, which is how the profiler is fed — the framework
+//!   cannot call this crate, so `FrameTimingLayer` subscribes to its spans)
 //! - `timeline`: Timeline view for events
 //! - `hot-reload`: File watching (reports changes; nothing more)
 //! - `inspector`: Counting/logging tree observer over the ADR-0040 seam
@@ -95,6 +98,10 @@
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
 mod common;
+/// Feeds the profiler from the framework's own frame spans — the only seam
+/// layering permits, since nothing in the framework may depend on this crate.
+#[cfg(feature = "profiling")]
+pub mod frame_timing_layer;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
 #[cfg(feature = "inspector")]
@@ -107,6 +114,8 @@ pub mod timeline;
 // Re-exports
 pub use common::*;
 #[cfg(feature = "profiling")]
+pub use frame_timing_layer::FrameTimingLayer;
+#[cfg(feature = "profiling")]
 pub use profiler::Profiler;
 
 /// DevTools version
@@ -118,6 +127,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// use flui_devtools::prelude::*;
 /// ```
 pub mod prelude {
+    #[cfg(feature = "profiling")]
+    pub use crate::frame_timing_layer::FrameTimingLayer;
     #[cfg(feature = "hot-reload")]
     pub use crate::hot_reload::HotReloader;
     #[cfg(feature = "inspector")]

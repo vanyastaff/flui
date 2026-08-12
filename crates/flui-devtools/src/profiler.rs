@@ -134,6 +134,11 @@ impl FrameStats {
     }
 
     /// Get phase by type
+    ///
+    /// Each phase appears at most once per frame: a phase that ran in several
+    /// segments (an initial build plus layout-builder rebuilds, say) is
+    /// recorded as one entry holding the summed duration and the first
+    /// segment's start offset.
     pub fn phase(&self, phase: FramePhase) -> Option<&PhaseInfo> {
         self.phases.iter().find(|p| p.phase == phase)
     }
@@ -252,6 +257,15 @@ impl ProfilerInner {
     }
 
     fn end_phase(&mut self, phase: FramePhase, duration: Duration) {
+        // A phase can run more than once per frame — a layout-builder rebuild
+        // is still Build work. Segments merge into one total per phase because
+        // `FrameStats::phase` returns the first match: separate entries would
+        // silently hide every segment after the first.
+        if let Some(recorded) = self.current_phases.iter_mut().find(|p| p.phase == phase) {
+            recorded.duration += duration;
+            return;
+        }
+
         let start_offset = if let Some(frame_start) = self.frame_start {
             frame_start.elapsed().saturating_sub(duration)
         } else {
@@ -571,6 +585,39 @@ mod tests {
         // Should be frames 5-9
         assert_eq!(history[0].frame_number, 5);
         assert_eq!(history[4].frame_number, 9);
+    }
+
+    /// A phase that runs twice in one frame reports one summed entry. With
+    /// separate entries, `phase()`'s `find` would return only the first
+    /// segment and every later one would be silently unreported.
+    #[test]
+    fn repeated_phase_segments_merge_into_one_total() {
+        let profiler = Profiler::new();
+
+        profiler.begin_frame();
+        {
+            let _guard = profiler.profile_phase(FramePhase::Build);
+            thread::sleep(Duration::from_millis(3));
+        }
+        {
+            let _guard = profiler.profile_phase(FramePhase::Build);
+            thread::sleep(Duration::from_millis(3));
+        }
+        profiler.end_frame();
+
+        let stats = profiler.frame_stats().unwrap();
+        let build_entries = stats
+            .phases
+            .iter()
+            .filter(|p| p.phase == FramePhase::Build)
+            .count();
+        assert_eq!(build_entries, 1, "segments of one phase merge");
+        let build = stats.phase(FramePhase::Build).unwrap();
+        assert!(
+            build.duration_ms() >= 6.0,
+            "the merged entry holds the sum of both segments, got {:.2}ms",
+            build.duration_ms(),
+        );
     }
 
     #[test]
