@@ -1778,6 +1778,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+ "tracing-subscriber",
  "web-time",
  "windows-sys 0.61.2",
 ]

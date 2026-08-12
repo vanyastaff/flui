@@ -95,6 +95,10 @@
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
 mod common;
+/// Feeds the profiler from the framework's own frame spans — the only seam
+/// layering permits, since nothing in the framework may depend on this crate.
+#[cfg(feature = "profiling")]
+pub mod frame_timing_layer;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
 #[cfg(feature = "inspector")]
@@ -107,6 +111,8 @@ pub mod timeline;
 // Re-exports
 pub use common::*;
 #[cfg(feature = "profiling")]
+pub use frame_timing_layer::FrameTimingLayer;
+#[cfg(feature = "profiling")]
 pub use profiler::Profiler;
 
 /// DevTools version
@@ -118,6 +124,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// use flui_devtools::prelude::*;
 /// ```
 pub mod prelude {
+    #[cfg(feature = "profiling")]
+    pub use crate::frame_timing_layer::FrameTimingLayer;
     #[cfg(feature = "hot-reload")]
     pub use crate::hot_reload::HotReloader;
     #[cfg(feature = "inspector")]
