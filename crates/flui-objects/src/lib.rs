@@ -50,8 +50,8 @@ pub use layout::{
     WrapCrossAlignment,
 };
 pub use layout::{
-    AspectRatioFactor, FractionFactor, LayoutConstraintsCell, RenderAlign, RenderAnimatedSize,
-    RenderAspectRatio, RenderBaseline, RenderCenter, RenderConstrainedBox,
+    AspectRatioFactor, BuildDuringLayoutCell, FractionFactor, LayoutConstraintsCell, RenderAlign,
+    RenderAnimatedSize, RenderAspectRatio, RenderBaseline, RenderCenter, RenderConstrainedBox,
     RenderConstrainedOverflowBox, RenderConstraintsTransformBox, RenderCustomMultiChildLayoutBox,
     RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex, RenderFlow,
     RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,

@@ -39,6 +39,10 @@ use std::{
 };
 
 use flui_foundation::{ElementId, RenderId};
+use flui_objects::BuildDuringLayoutCell;
+// Only the test-utils registration helper names the concrete cell; the registry
+// itself is payload-blind.
+#[cfg(any(test, feature = "test-utils"))]
 use flui_objects::LayoutConstraintsCell;
 use flui_rendering::pipeline::PipelineCell;
 use parking_lot::Mutex;
@@ -66,7 +70,12 @@ pub(crate) struct LayoutBuilderEntry {
     /// Element rebuilt when the cell reports `needs_build`.
     pub(crate) element: ElementId,
     /// Shared with the render object registered under the same `RenderId`.
-    pub(crate) cell: Arc<LayoutConstraintsCell>,
+    ///
+    /// Type-erased so the registry can service any build-during-layout node,
+    /// not only `LayoutBuilder`. Servicing needs `needs_build`/`has_published`/
+    /// `commit` and never the payload — reading that is the owning element's
+    /// job, and only it knows the concrete cell type.
+    pub(crate) cell: Arc<dyn BuildDuringLayoutCell>, // PORT-CHECK-OK-DYN: the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
 }
 
 /// Registry of live build-during-layout nodes, keyed by render id.
@@ -125,7 +134,7 @@ impl LayoutBuilderRegistry {
 impl BuildOwner {
     fn unchanged_layout_builder_registrations(
         &self,
-        scheduled: &HashMap<ElementId, (RenderId, Arc<LayoutConstraintsCell>)>,
+        scheduled: &HashMap<ElementId, (RenderId, Arc<dyn BuildDuringLayoutCell>)>, // PORT-CHECK-OK-DYN: the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
     ) -> HashSet<ElementId> {
         self.layout_builder_registry.with_entries(|registry| {
             scheduled
@@ -208,9 +217,9 @@ impl BuildOwner {
         // Prune stale entries and collect the ones that need a build, in one
         // pass over the registry. Both the registry lock and the pipeline
         // borrow are released before `build_scope` runs.
-        let mut scheduled: HashMap<ElementId, (RenderId, Arc<LayoutConstraintsCell>)> =
+        let mut scheduled: HashMap<ElementId, (RenderId, Arc<dyn BuildDuringLayoutCell>)> = // PORT-CHECK-OK-DYN: the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
             HashMap::new();
-        let mut live_entries: HashMap<ElementId, (RenderId, Arc<LayoutConstraintsCell>)> =
+        let mut live_entries: HashMap<ElementId, (RenderId, Arc<dyn BuildDuringLayoutCell>)> = // PORT-CHECK-OK-DYN: the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
             HashMap::new();
         let mut live_scopes = HashSet::new();
         pipeline.with(|pipeline_owner| {
@@ -277,7 +286,7 @@ impl BuildOwner {
             .filter(|scope| {
                 live_entries
                     .get(scope)
-                    .is_some_and(|(_, cell)| cell.constraints().is_some())
+                    .is_some_and(|(_, cell)| cell.has_published())
             })
             .collect();
         ready_scopes.extend(
@@ -441,7 +450,7 @@ impl BuildOwner {
             render_id,
             LayoutBuilderEntry {
                 element,
-                cell: Arc::clone(&cell),
+                cell: Arc::clone(&cell) as Arc<dyn BuildDuringLayoutCell>, // PORT-CHECK-OK-DYN: coercion into the registry's erased cell handle, justified at its declaration
             },
         );
         cell
@@ -652,7 +661,7 @@ mod tests {
         owner.element_owner_mut().register_layout_builder(
             render_id,
             ElementId::new(3),
-            Arc::clone(&cell),
+            Arc::clone(&cell) as Arc<dyn BuildDuringLayoutCell>, // PORT-CHECK-OK-DYN: coercion into the registry's erased cell handle, justified at its declaration
         );
         assert_eq!(owner.layout_builder_count(), 1);
     }
@@ -663,7 +672,13 @@ mod tests {
         let render_id = RenderId::new(7_001);
         let element = ElementId::new(7_001);
         let original = owner.register_layout_builder_for_test(render_id, element);
-        let scheduled = HashMap::from([(element, (render_id, Arc::clone(&original)))]);
+        let scheduled = HashMap::from([(
+            element,
+            (
+                render_id,
+                Arc::clone(&original) as Arc<dyn BuildDuringLayoutCell>, // PORT-CHECK-OK-DYN: coercion into the registry's erased cell handle, justified at its declaration
+            ),
+        )]);
         assert!(
             owner
                 .unchanged_layout_builder_registrations(&scheduled)

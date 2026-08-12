@@ -49,6 +49,41 @@ struct CellState {
     needs_build: bool,
 }
 
+/// The registry-facing half of a build-during-layout mailbox.
+///
+/// The servicing loop (`BuildOwner::service_layout_builders`) needs to know
+/// only three things about a cell: whether its owner must rebuild, whether it
+/// has ever been laid out, and when to mark the published value as built. It
+/// never reads the payload — the element does that, and the element is the one
+/// place that knows the concrete cell type.
+///
+/// Keeping the payload off this trait is what lets a second kind of
+/// build-during-layout node share the registry. `LayoutBuilder` publishes
+/// `BoxConstraints`; a sliver persistent header would publish its shrink offset
+/// and overlap flag. Both need identical servicing and nothing else in common.
+pub trait BuildDuringLayoutCell: std::fmt::Debug + Send + Sync + std::any::Any {
+    /// Whether the owning element must rebuild before the next layout pass.
+    fn needs_build(&self) -> bool;
+
+    /// Whether anything has been published yet.
+    ///
+    /// `false` before the node's first layout. A scope with nothing published
+    /// has no value to build against, so servicing skips it rather than
+    /// building against a placeholder.
+    fn has_published(&self) -> bool;
+
+    /// Marks the published value as built, clearing `needs_build`.
+    fn commit(&self);
+
+    /// Recover the concrete cell, for a caller that knows which kind it is.
+    ///
+    /// The registry is deliberately payload-blind, but the *owner* of a cell
+    /// knows its type and sometimes needs the payload back out of an erased
+    /// handle — a test driving a publish without a real layout pass, or an
+    /// inspector reporting what a node was last laid out with.
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
 /// Shared constraints mailbox between a render object and its element.
 ///
 /// Cloneable only behind an `Arc` — the render object and the
@@ -106,6 +141,24 @@ impl LayoutConstraintsCell {
         let mut state = self.inner.lock();
         state.last_built = state.published;
         state.needs_build = false;
+    }
+}
+
+impl BuildDuringLayoutCell for LayoutConstraintsCell {
+    fn needs_build(&self) -> bool {
+        Self::needs_build(self)
+    }
+
+    fn has_published(&self) -> bool {
+        Self::constraints(self).is_some()
+    }
+
+    fn commit(&self) {
+        Self::commit(self);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
