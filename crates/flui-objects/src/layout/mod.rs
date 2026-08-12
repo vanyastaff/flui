@@ -50,7 +50,7 @@ pub use fractionally_sized_box::*;
 pub use intrinsic_height::*;
 pub use intrinsic_width::*;
 pub use layout_builder::RenderLayoutBuilder;
-pub use layout_constraints_cell::LayoutConstraintsCell;
+pub use layout_constraints_cell::{BuildDuringLayoutCell, LayoutConstraintsCell};
 pub use limited_box::*;
 pub use list_body::*;
 pub use overflow_box::*;

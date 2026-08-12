@@ -43,7 +43,7 @@ use flui_foundation::{ElementId, RenderId};
 use flui_interaction::FocusManager;
 use parking_lot::Mutex;
 
-use flui_objects::LayoutConstraintsCell;
+use flui_objects::BuildDuringLayoutCell;
 
 use super::RebuildReason;
 use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
@@ -495,7 +495,7 @@ impl ElementOwner<'_> {
         &mut self,
         render_id: RenderId,
         element: ElementId,
-        cell: Arc<LayoutConstraintsCell>,
+        cell: Arc<dyn BuildDuringLayoutCell>, // PORT-CHECK-OK-DYN: the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
     ) {
         self.layout_builder_registry
             .insert(render_id, LayoutBuilderEntry { element, cell });

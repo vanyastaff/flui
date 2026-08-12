@@ -2560,6 +2560,10 @@ mod tests {
                 .expect("live LayoutBuilder registration");
             (*render_id, Arc::clone(&entry.cell))
         });
+        let cell = cell
+            .as_any()
+            .downcast_ref::<flui_objects::LayoutConstraintsCell>()
+            .expect("a LayoutBuilder registration holds a LayoutConstraintsCell");
         cell.publish(flui_rendering::constraints::BoxConstraints::tight_for(
             Some(flui_types::geometry::px(100.0)),
             Some(flui_types::geometry::px(100.0)),
