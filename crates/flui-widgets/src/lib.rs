@@ -202,13 +202,14 @@ pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary}
 pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
-    PageController, PageScrollPhysics, PageView, PageViewState, RefreshController,
-    RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics,
-    Scrollable, Scrollbar, SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView,
-    SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-    SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-    SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-    SliverPersistentHeader, SliverPersistentHeaderDelegate, SliverToBoxAdapter, Viewport,
+    OverScrollHeaderStretchConfiguration, PageController, PageScrollPhysics, PageView,
+    PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController,
+    ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar, SharedScrollPhysics,
+    ShrinkWrappingViewport, SingleChildScrollView, SliverChildBuilderDelegate, SliverFillRemaining,
+    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+    SliverOpacity, SliverPadding, SliverPersistentHeader, SliverPersistentHeaderDelegate,
+    SliverToBoxAdapter, StretchTriggerSignal, Viewport,
 };
 pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
