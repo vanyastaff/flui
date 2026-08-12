@@ -1,5 +1,5 @@
 //! Functional tests for [`SliverPersistentHeader`] — the widget half of the
-//! persistent-header build-during-layout seam (issue #689).
+//! persistent-header build-during-layout seam.
 //!
 //! What these pin, deliberately at the widget level (the four render objects
 //! already carry harness tests in `flui-objects`):
@@ -170,7 +170,7 @@ fn shrink_offset_is_clamped_to_max_extent() {
 
 /// All four variants mount and build through the seam. A variant whose
 /// element failed to register its cell would produce zero builds — silently
-/// static content, the exact pre-#689 state.
+/// static content, exactly the gap this widget existed to close.
 #[test]
 fn every_variant_builds_through_the_seam() {
     for (pinned, floating) in [(false, false), (true, false), (false, true), (true, true)] {
@@ -192,6 +192,56 @@ fn every_variant_builds_through_the_seam() {
              child through the seam exactly once on the first frame"
         );
     }
+}
+
+/// A delegate swap that SHRINKS `max_extent` while scrolled beyond it. The
+/// retained published pair (120) exceeds the new delegate's maximum (60),
+/// so a naive swap-time rebuild would hand the new delegate an out-of-range
+/// value — but an extent-changing swap routes through the layout seam: the
+/// extent setters mark the child update, layout republishes the freshly
+/// clamped pair, and the ONE rebuild the delegate sees carries it. Probed,
+/// not assumed: exactly one post-swap build, value 60, never 120.
+#[test]
+fn a_swap_that_shrinks_max_extent_never_hands_the_delegate_an_out_of_range_pair() {
+    let builds = Rc::new(RefCell::new(Vec::new()));
+    let header = |max_extent: f32, builds: &Rc<RefCell<Vec<(f32, bool)>>>| {
+        SliverPersistentHeader::new(RecordingDelegate {
+            min_extent: 30.0,
+            max_extent,
+            builds: Rc::clone(builds),
+        })
+        .pinned(true)
+    };
+
+    let mut laid = lay_out(
+        scroll_view_at(250.0, header(120.0, &builds)),
+        tight(300.0, 300.0),
+    );
+    let swap_point = builds.borrow().len();
+    assert_eq!(
+        builds.borrow().last().map(|(shrink, _)| *shrink),
+        Some(120.0),
+        "premise: scrolled far past the original maximum"
+    );
+
+    laid.pump_widget(scroll_view_at(250.0, header(60.0, &builds)));
+
+    let seen = builds.borrow().clone();
+    assert_eq!(
+        seen[swap_point..].len(),
+        1,
+        "an extent-changing swap rebuilds exactly once — a second entry \
+         means a swap-time rebuild ran with the stale retained pair; saw {seen:?}"
+    );
+    assert!(
+        seen[swap_point..].iter().all(|(shrink, _)| *shrink <= 60.0),
+        "no call after the swap may exceed the NEW delegate's max_extent —          the swap-triggered rebuild must clamp the retained pair; saw {seen:?}"
+    );
+    assert_eq!(
+        seen.last().map(|(shrink, _)| *shrink),
+        Some(60.0),
+        "the pair that sticks is the freshly published one, clamped by          layout itself; saw {seen:?}"
+    );
 }
 
 /// A delegate that delegates `should_rebuild` to a flag, counting builds.
