@@ -490,7 +490,10 @@ impl ElementOwner<'_> {
     /// registry.
     ///
     /// `cell` must be the same `Arc` the render object registered under
-    /// `render_id` publishes its constraints into.
+    /// `render_id` publishes into. The registry is payload-blind — a
+    /// `LayoutBuilder` publishes box constraints, a sliver persistent header
+    /// its shrink state — so what matters here is only that both halves hold
+    /// the same mailbox.
     pub(crate) fn register_layout_builder(
         &mut self,
         render_id: RenderId,
