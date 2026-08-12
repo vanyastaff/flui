@@ -24,6 +24,17 @@
 //! a neighbouring frame — a headless test or a one-off layout pass is not a
 //! frame, and attributing its cost to one would be a fabricated measurement.
 //!
+//! # One frame at a time, by span identity
+//!
+//! The layer owns at most one frame at a time, keyed by the frame span's `Id`.
+//! Phase spans count only when they are *descendants* of that owning span, and
+//! only its own close ends the frame. So when two `UiRealm`s render
+//! concurrently under one shared subscriber, the second realm's frame — and
+//! every phase inside it — is **dropped whole** rather than mixed into the
+//! first realm's measurements: a missing frame is honest, a blended one is a
+//! fabrication. To profile several realms at once, install one
+//! `FrameTimingLayer` + [`Profiler`] pair per realm.
+//!
 //! # Timing comes from the span, not the callback
 //!
 //! Duration is measured by a [`PhaseGuard`](crate::profiler::PhaseGuard) parked
@@ -89,13 +100,23 @@ struct ActivePhase(PhaseGuard);
 #[derive(Clone)]
 pub struct FrameTimingLayer {
     profiler: Arc<Profiler>,
+    /// The frame span currently being measured, if any.
+    ///
+    /// Shared across clones (`Arc`) so a cloned layer still sees the same
+    /// single-frame ownership. `Some` from the owning span's creation until
+    /// its close; a frame span created while this is `Some` belongs to a
+    /// concurrently rendering realm and is ignored entirely.
+    active_frame: Arc<parking_lot::Mutex<Option<Id>>>,
 }
 
 impl FrameTimingLayer {
     /// Wraps a profiler this layer will feed.
     #[must_use]
     pub fn new(profiler: Arc<Profiler>) -> Self {
-        Self { profiler }
+        Self {
+            profiler,
+            active_frame: Arc::new(parking_lot::Mutex::new(None)),
+        }
     }
 }
 
@@ -109,13 +130,21 @@ impl<S> Layer<S> for FrameTimingLayer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
-    fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
         if attrs.metadata().name() != FRAME_SPAN {
             return;
         }
         // Frame boundaries open here rather than on enter: a frame span is
         // entered once, and opening on creation keeps `begin_frame` ahead of
         // any phase span the same frame may create.
+        let mut active_frame = self.active_frame.lock();
+        if active_frame.is_some() {
+            // A second realm's frame under the same subscriber. Dropping it
+            // whole is honest; letting its `begin_frame` reset the running
+            // frame would blend two realms' timings into one measurement.
+            return;
+        }
+        *active_frame = Some(id.clone());
         self.profiler.begin_frame();
     }
 
@@ -124,6 +153,15 @@ where
         let Some(phase) = phase_for(span.name()) else {
             return;
         };
+
+        // Only phases inside the owning frame span count. A phase from a
+        // concurrently rendering realm — or outside any frame — must not be
+        // attributed to the frame being measured.
+        let owning_frame = self.active_frame.lock().clone();
+        let Some(frame_id) = owning_frame else { return };
+        if !span.scope().any(|ancestor| ancestor.id() == frame_id) {
+            return;
+        }
 
         let mut extensions = span.extensions_mut();
         if extensions.get_mut::<ActivePhase>().is_some() {
@@ -145,7 +183,14 @@ where
         }
 
         if name == FRAME_SPAN {
-            self.profiler.end_frame();
+            // Only the owning span's close ends the frame; the lock is held
+            // across `end_frame` so a frame beginning on another thread
+            // cannot slot in between the release and the recording.
+            let mut active_frame = self.active_frame.lock();
+            if active_frame.as_ref() == Some(&id) {
+                self.profiler.end_frame();
+                *active_frame = None;
+            }
         }
     }
 }
@@ -181,6 +226,9 @@ mod tests {
             {
                 let _paint = tracing::debug_span!("paint").entered();
             }
+            {
+                let _compositing = tracing::debug_span!("compositing").entered();
+            }
         });
 
         let stats = profiler
@@ -199,6 +247,10 @@ mod tests {
         assert!(
             phases.contains(&FramePhase::Paint),
             "paint span must land as a Paint phase; saw {phases:?}",
+        );
+        assert!(
+            phases.contains(&FramePhase::Custom("Compositing")),
+            "compositing span must land as a Compositing phase; saw {phases:?}",
         );
     }
 
@@ -232,6 +284,69 @@ mod tests {
         assert!(
             profiler.frame_stats().is_none(),
             "no frame span opened, so there is no frame to attribute work to",
+        );
+    }
+
+    /// A second realm's frame under the same subscriber is dropped whole —
+    /// its `begin_frame` must not reset the running frame, its phases must
+    /// not be attributed to it, and its close must not end it. `parent: None`
+    /// makes the second frame a structural sibling, exactly what a
+    /// concurrently rendering realm's span looks like to a shared layer.
+    #[test]
+    fn a_concurrent_frame_is_dropped_rather_than_blended() {
+        let profiler = profile(|| {
+            let own_frame = tracing::debug_span!("render_frame_entered");
+            let _own = own_frame.enter();
+            {
+                // The other realm's whole frame, opened mid-way through ours.
+                let other_frame = tracing::debug_span!(parent: None, "render_frame_entered");
+                let _other = other_frame.enter();
+                let _other_layout = tracing::debug_span!("layout").entered();
+            } // ...and closed while ours is still running.
+            let _own_build = tracing::debug_span!("build").entered();
+        });
+
+        assert_eq!(
+            profiler.frame_history().len(),
+            1,
+            "only the owning frame records; the concurrent one is dropped",
+        );
+        let stats = profiler.frame_stats().expect("the owning frame closed");
+        let phases: Vec<_> = stats.phases.iter().map(|info| info.phase).collect();
+        assert_eq!(
+            phases,
+            vec![FramePhase::Build],
+            "the other realm's layout must not leak into this frame",
+        );
+    }
+
+    /// Build work split across several spans in one frame (the global build
+    /// plus a layout-builder rebuild) reports as ONE Build entry, because
+    /// `FrameStats::phase` returns the first match and separate entries
+    /// would hide everything after it.
+    #[test]
+    fn repeated_build_spans_report_one_build_phase() {
+        let profiler = profile(|| {
+            let _frame = tracing::debug_span!("render_frame_entered").entered();
+            {
+                let _build = tracing::debug_span!("build", dirty_elements = 2).entered();
+            }
+            {
+                let _layout = tracing::debug_span!("layout").entered();
+                let _rebuild = tracing::debug_span!("build", during_layout = true).entered();
+            }
+        });
+
+        let stats = profiler.frame_stats().expect("a frame was recorded");
+        let build_entries = stats
+            .phases
+            .iter()
+            .filter(|info| info.phase == FramePhase::Build)
+            .count();
+        assert_eq!(
+            build_entries, 1,
+            "both build spans merge into one Build total; saw {:?}",
+            stats.phases,
         );
     }
 

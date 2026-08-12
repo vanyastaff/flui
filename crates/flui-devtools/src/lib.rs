@@ -7,7 +7,8 @@
 //!
 //! ## 🎯 Performance Profiler (feature: profiling)
 //! - Frame timing and jank detection
-//! - Build/layout/paint phase profiling, fed manually by the caller
+//! - Build/layout/paint phase profiling — fed manually by the caller, or
+//!   from the framework's own frame spans via `FrameTimingLayer`
 //! - Performance timeline with markers
 //!
 //! ## ⏱️ Timeline View (feature: timeline)
@@ -81,7 +82,9 @@
 //! # Feature Flags
 //!
 //! - `default`: no features enabled; opt in via `profiling`, `timeline`, or `hot-reload`
-//! - `profiling`: Performance profiling tools (no external dependencies)
+//! - `profiling`: Performance profiling tools (pulls in `tracing` +
+//!   `tracing-subscriber`, which is how the profiler is fed — the framework
+//!   cannot call this crate, so `FrameTimingLayer` subscribes to its spans)
 //! - `timeline`: Timeline view for events
 //! - `hot-reload`: File watching (reports changes; nothing more)
 //! - `inspector`: Counting/logging tree observer over the ADR-0040 seam
