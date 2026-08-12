@@ -29,6 +29,7 @@ mod sliver_list;
 mod sliver_offstage;
 mod sliver_opacity;
 mod sliver_padding;
+mod sliver_persistent_header;
 mod sliver_to_box_adapter;
 mod viewport;
 
@@ -55,5 +56,9 @@ pub use sliver_list::{SliverChildBuilderDelegate, SliverList};
 pub use sliver_offstage::SliverOffstage;
 pub use sliver_opacity::SliverOpacity;
 pub use sliver_padding::SliverPadding;
+pub use sliver_persistent_header::SliverPersistentHeader;
+// The trait a header's content author implements; lives beside the element
+// half in flui-view, surfaced here so `use flui_widgets::...` is sufficient.
+pub use flui_view::element::SliverPersistentHeaderDelegate;
 pub use sliver_to_box_adapter::SliverToBoxAdapter;
 pub use viewport::{ShrinkWrappingViewport, Viewport};

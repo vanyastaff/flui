@@ -104,6 +104,8 @@ mod shrink_wrapping_viewport;
 mod slide_transition;
 #[path = "sliver_opacity.rs"]
 mod sliver_opacity;
+#[path = "sliver_persistent_header.rs"]
+mod sliver_persistent_header;
 #[path = "spacer.rs"]
 mod spacer;
 #[path = "stack_positioned.rs"]

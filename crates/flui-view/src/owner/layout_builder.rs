@@ -393,6 +393,15 @@ impl BuildOwner {
             drive_fixpoint(|| {
                 // Layout checked out…
                 pipeline.with_mut(|pipeline_owner| {
+                    // Channel-delivered dirty marks (a scroll position's
+                    // change notification, a background producer) must land
+                    // BEFORE this pass, exactly as `run_frame` drains before
+                    // its first phase. Without this, a mark sitting in the
+                    // channel is laid out only by the final `run_frame` —
+                    // after servicing has finished — so anything the layout
+                    // publishes (a header's shrink change) is serviced one
+                    // frame late, breaking the seam's same-frame promise.
+                    pipeline_owner.drain_pending_dirty();
                     let mut layout = std::mem::take(pipeline_owner).into_layout();
                     let result = layout.run_layout();
                     // Restore on the error path too: the owner always comes back.
