@@ -162,6 +162,17 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// sole writer of its tree contents.
     semantics_owner: Option<SemanticsOwner>,
 
+    /// The platform-publish callback for semantics owners this pipeline
+    /// creates.
+    ///
+    /// Set by the composition root once it holds a platform accessibility
+    /// bridge ([`Self::set_semantics_update_callback`]); consumed at every
+    /// lazy [`SemanticsOwner`] creation in [`Self::set_semantics_enabled`],
+    /// and swapped onto a live owner immediately. `None` keeps the
+    /// documented placeholder behaviour: an owner that assembles a tree and
+    /// publishes nowhere (ADR-0014's pre-bridge state).
+    semantics_update_callback: Option<flui_semantics::SemanticsUpdateCallback>,
+
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
@@ -307,6 +318,7 @@ where
         root_constraints: from.root_constraints,
         semantics_enabled: from.semantics_enabled,
         semantics_owner: from.semantics_owner,
+        semantics_update_callback: from.semantics_update_callback,
         last_layer_tree: from.last_layer_tree,
         last_link_registry: from.last_link_registry,
         last_follower_offsets: from.last_follower_offsets,
@@ -608,6 +620,83 @@ mod tests {
 
         owner.set_semantics_enabled(false);
         assert!(!owner.semantics_enabled());
+    }
+
+    /// The composition root's publish seam: a callback installed on the
+    /// pipeline reaches the owner `set_semantics_enabled` lazily creates,
+    /// and `run_semantics`' flush publishes the translated tree through it.
+    /// Without the plumbing the owner falls back to the no-op placeholder
+    /// and this captures nothing.
+    #[test]
+    fn semantics_update_callback_feeds_the_lazily_created_owner() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+
+        let mut owner = PipelineOwner::new();
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                    .push(update.clone());
+            },
+        ));
+        owner.set_root_render_object(Box::new(SemanticLeaf::labeled("Submit")));
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner
+            .run_semantics()
+            .expect("semantics build should succeed");
+
+        let published = captured
+            .lock()
+            .expect("BUG: capture mutex is uncontended in this single-threaded test");
+        assert_eq!(published.len(), 1, "one flush publishes one TreeUpdate");
+        assert!(
+            published[0]
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Submit")),
+            "the published tree carries the assembled node"
+        );
+    }
+
+    /// The reverse ordering: semantics was enabled (owner already alive,
+    /// publishing nowhere) BEFORE the composition root learned its platform
+    /// bridge. The install must swap the live owner's callback, and the
+    /// next flush publishes the full rooted tree — no state lost to the
+    /// ordering.
+    #[test]
+    fn a_callback_installed_after_enable_swaps_onto_the_live_owner() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+
+        let mut owner = PipelineOwner::new();
+        owner.set_root_render_object(Box::new(SemanticLeaf::labeled("Submit")));
+        owner.set_semantics_enabled(true);
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                    .push(update.clone());
+            },
+        ));
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner
+            .run_semantics()
+            .expect("semantics build should succeed");
+
+        assert_eq!(
+            captured
+                .lock()
+                .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                .len(),
+            1,
+            "the live owner's next flush publishes through the swapped-in callback"
+        );
     }
 
     #[test]

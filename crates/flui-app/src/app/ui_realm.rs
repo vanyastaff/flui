@@ -323,13 +323,6 @@ impl UiCommandSender {
     ///
     /// [`CommandSendError::ChannelFull`] under backpressure,
     /// [`CommandSendError::OwnerGone`] once the runtime is dropped.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "vended to the platform accessibility adapter in the AccessKit slice"
-        )
-    )]
     pub(crate) fn send_semantics_action(
         &self,
         request: SemanticsActionRequest,
@@ -794,6 +787,13 @@ impl UiRealm {
                 interaction_dispatch_handle: interaction_lane.dispatch_handle(),
                 scheduler: &scheduler,
                 wake: Arc::clone(&wake),
+                command_sender: UiCommandSender {
+                    tx: tx.clone(),
+                    capacity,
+                    redraw_pending: Arc::clone(&redraw_pending),
+                    presentation_id,
+                    wake: Arc::clone(&wake),
+                },
             },
         );
 
@@ -1003,6 +1003,13 @@ impl UiRealm {
         let (_, presentation_id) = super::runtime::next_identity();
         let pipeline = PipelineCell::new(PipelineOwner::new());
         pipeline.with_mut(|owner| owner.set_device_pixel_ratio(window.scale_factor() as f32));
+        // The prototype is stamped for the PRIMARY presentation; this
+        // presentation's accessibility actions must address ITSELF, or the
+        // drain would resolve them against a sibling's semantics tree.
+        let command_sender = UiCommandSender {
+            presentation_id,
+            ..self.sender_prototype.clone()
+        };
         PresentationState::new(
             presentation_id,
             pipeline,
@@ -1014,6 +1021,7 @@ impl UiRealm {
                 interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
                 scheduler: &self.scheduler,
                 wake: Arc::clone(&self.wake),
+                command_sender,
             },
         )
     }
@@ -2116,6 +2124,12 @@ impl UiRealm {
         let mut last_outcome = FramePaintOutcome::Idle;
         let mut producer = self.presentations.primary().id();
         for presentation in self.presentations.iter() {
+            // Platform-driven semantics enablement lands here, BEFORE dirty
+            // sampling: the activation listener could only flip the host
+            // flag and wake the loop (it runs on the adapter's thread), and
+            // enabling seeds the root as needing semantics — exactly the
+            // pending work the sampling below should then observe.
+            presentation.reconcile_semantics_enablement();
             // Segment start: clear this presentation's wake bit BEFORE
             // sampling dirty, so a mark arriving WHILE this segment runs
             // sets the bit again and lands next pump instead of being lost.
@@ -3471,6 +3485,204 @@ mod tests {
         let report = realm.drain_commands();
         assert_eq!(report.invoked, 0);
         assert_eq!(report.dropped_stale, 1);
+    }
+
+    /// The full inbound platform wire (issue #684): an action request
+    /// arriving on the platform adapter's thread — Click, addressed by the
+    /// stable exported node id — crosses the AccessKit→FLUI translation,
+    /// marshals through the realm inbox, and invokes the node's Tap handler
+    /// at the owner's Idle drain. Driven through the window's OWN
+    /// `FakeAccessibility` and the listener `wire_platform_accessibility`
+    /// registered on it — never a hand-rolled sender, which would pass with
+    /// the production wire unplugged.
+    #[test]
+    fn platform_action_request_routes_through_the_wire_to_the_handler() {
+        let fake = Arc::new(flui_platform::FakeAccessibility::new());
+        let window =
+            crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+        let realm = UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false)))
+            .expect("realm");
+
+        let render_id = RenderId::new(7);
+        let target = AccessibilityNodeId::from(render_id);
+        let invoked = Arc::new(AtomicUsize::new(0));
+        let invoked_in_handler = Arc::clone(&invoked);
+        let mut node = SemanticsNode::new().with_source_render_id(render_id);
+        node.config_mut().add_action(
+            SemanticsAction::Tap,
+            Arc::new(move |action, _arguments| {
+                assert_eq!(action, SemanticsAction::Tap, "Click must arrive as Tap");
+                invoked_in_handler.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        let mut semantics_owner = SemanticsOwner::new(Arc::new(|_| {}));
+        let root = semantics_owner.insert(node);
+        semantics_owner.set_root(Some(root));
+        realm
+            .pipeline_for_test()
+            .with_mut(|owner| owner.set_semantics_owner(Some(semantics_owner)));
+
+        // An adapter only delivers actions while an AT session is active.
+        fake.set_active(true);
+        fake.request_action(accesskit::ActionRequest {
+            action: accesskit::Action::Click,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(target.as_u64()),
+            data: None,
+        });
+
+        assert_eq!(
+            invoked.load(Ordering::SeqCst),
+            0,
+            "platform input must wait for the owner's Idle commit point"
+        );
+        let report = realm.drain_commands();
+        assert_eq!(report.invoked, 1);
+        assert_eq!(report.dropped_stale, 0);
+        assert_eq!(invoked.load(Ordering::SeqCst), 1);
+    }
+
+    /// Requests the listener cannot route never reach the inbox at all: an
+    /// action FLUI has no counterpart for, and the zero node id no
+    /// published tree ever exports. Both are traced drops at the platform
+    /// seam — a screen reader acting on a stale snapshot is tolerated,
+    /// never a panic (issue #684's graceful-drop acceptance).
+    #[test]
+    fn unroutable_platform_action_requests_are_dropped_at_the_listener() {
+        let fake = Arc::new(flui_platform::FakeAccessibility::new());
+        let window =
+            crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+        let realm = UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false)))
+            .expect("realm");
+
+        let render_id = RenderId::new(7);
+        let target = AccessibilityNodeId::from(render_id);
+        let invoked = Arc::new(AtomicUsize::new(0));
+        let invoked_in_handler = Arc::clone(&invoked);
+        let mut node = SemanticsNode::new().with_source_render_id(render_id);
+        node.config_mut().add_action(
+            SemanticsAction::Tap,
+            Arc::new(move |_action, _arguments| {
+                invoked_in_handler.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        let mut semantics_owner = SemanticsOwner::new(Arc::new(|_| {}));
+        let root = semantics_owner.insert(node);
+        semantics_owner.set_root(Some(root));
+        realm
+            .pipeline_for_test()
+            .with_mut(|owner| owner.set_semantics_owner(Some(semantics_owner)));
+
+        fake.set_active(true);
+        // An action with no FLUI counterpart, addressed to a live node.
+        fake.request_action(accesskit::ActionRequest {
+            action: accesskit::Action::Expand,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(target.as_u64()),
+            data: None,
+        });
+        // A routable action addressed to the out-of-contract zero id.
+        fake.request_action(accesskit::ActionRequest {
+            action: accesskit::Action::Click,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(0),
+            data: None,
+        });
+
+        let report = realm.drain_commands();
+        assert_eq!(
+            (report.invoked, report.dropped_stale),
+            (0, 0),
+            "neither request may even reach the inbox"
+        );
+        assert_eq!(invoked.load(Ordering::SeqCst), 0);
+    }
+
+    /// The activation seam end-to-end (issue #684): assistive technology
+    /// attaching may only flip the presentation's host flag (the listener
+    /// runs on the adapter's thread) — the next frame's reconcile is what
+    /// turns that into pipeline state, creating the semantics owner; and
+    /// detaching disposes it the same way.
+    #[test]
+    fn at_activation_drives_semantics_assembly_through_the_frame_reconcile() {
+        let fake = Arc::new(flui_platform::FakeAccessibility::new());
+        let window =
+            crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+        let realm = UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false)))
+            .expect("realm");
+        let pipeline = realm.pipeline_for_test();
+        let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+
+        assert!(
+            !pipeline.with(flui_rendering::PipelineOwner::semantics_enabled),
+            "assembly is off until assistive technology attaches"
+        );
+
+        fake.set_active(true);
+        assert!(
+            !pipeline.with(flui_rendering::PipelineOwner::semantics_enabled),
+            "the listener alone must not mutate pipeline state — that is owner-thread work"
+        );
+        realm.enter(|_| {
+            let _ = realm.draw_frame_entered(constraints);
+        });
+        assert!(
+            pipeline.with(flui_rendering::PipelineOwner::semantics_enabled),
+            "the frame reconcile turns the activation flag into pipeline state"
+        );
+        assert!(
+            pipeline.with(|owner| owner.semantics_owner().is_some()),
+            "enabling creates the semantics owner"
+        );
+
+        fake.set_active(false);
+        realm.enter(|_| {
+            let _ = realm.draw_frame_entered(constraints);
+        });
+        assert!(
+            !pipeline.with(flui_rendering::PipelineOwner::semantics_enabled),
+            "detaching stops assembly on the next frame"
+        );
+        assert!(
+            pipeline.with(|owner| owner.semantics_owner().is_none()),
+            "deactivation disposes the owner"
+        );
+    }
+
+    /// Teardown withdraws from the platform bridge: after the presentation
+    /// closes, an activation flip delivered by the (longer-lived) adapter
+    /// must not reach the dead presentation's enablement flag — `close()`
+    /// replaced the listener with a no-op. If the withdrawal is removed,
+    /// the original listener (still held by the fake) stores `true` into
+    /// the flag this test kept a handle on, and the assertion fails.
+    #[test]
+    fn closing_the_presentation_withdraws_from_the_platform_bridge() {
+        let fake = Arc::new(flui_platform::FakeAccessibility::new());
+        let window =
+            crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+        // Hold the window strong across the drop: `close()`'s withdrawal
+        // reaches the bridge through a `Weak` window upgrade, exactly as a
+        // production runner (which owns the window) would still succeed.
+        let realm = UiRealm::new(
+            noop_wake(),
+            Arc::clone(&window),
+            1.0,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("realm");
+        let flag = realm
+            .presentations
+            .primary()
+            .semantics_host()
+            .platform_semantics_enabled_handle();
+
+        drop(realm);
+
+        fake.set_active(true);
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "a closed presentation's enablement flag must never flip again"
+        );
     }
 
     /// Distinct from `stale_semantics_action_is_gracefully_dropped` above:

@@ -157,16 +157,11 @@ impl SemanticsHost {
 
     /// Sets whether the platform has requested semantics.
     ///
-    /// This is typically called by the platform embedder when accessibility
-    /// services are activated or deactivated for this presentation's window.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- the platform-embedder \
-                      toggle this exists for is future wiring"
-        )
-    )]
+    /// Called when accessibility services are activated or deactivated for
+    /// this presentation's window: `PresentationState::
+    /// wire_platform_accessibility` uses it to seed the already-attached
+    /// case at construction (the activation listener writes the underlying
+    /// flag handle directly for every later transition).
     pub(crate) fn set_platform_semantics_enabled(&self, enabled: bool) {
         // Relaxed: the flag carries no payload -- see `semantics_enabled`.
         self.platform_semantics_enabled

@@ -26,6 +26,22 @@ impl AccessibilityNodeId {
     pub const fn as_u64(self) -> u64 {
         self.0.get()
     }
+
+    /// Re-enters the identity space from a raw platform value.
+    ///
+    /// The inbound half of [`Self::as_u64`]: an assistive-technology action
+    /// request carries back the same packed value the published tree
+    /// exported. `None` for zero, which no exported identity ever is — a
+    /// platform handing one back is out of contract, and the caller should
+    /// drop the request rather than panic.
+    #[inline]
+    #[must_use]
+    pub const fn from_u64(value: u64) -> Option<Self> {
+        match NonZeroU64::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
 }
 
 impl From<RenderId> for AccessibilityNodeId {

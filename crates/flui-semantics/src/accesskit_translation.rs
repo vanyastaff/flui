@@ -236,6 +236,46 @@ fn apply_actions(node: &mut Node, actions: u64) {
     }
 }
 
+/// Translate an inbound AccessKit action back into the FLUI action space.
+///
+/// The inverse of `apply_actions`'s table — keep the two adjacent and in
+/// agreement, because an action advertised outbound but unroutable inbound is
+/// a control assistive technology can see and press but that does nothing.
+///
+/// `None` for actions FLUI has no counterpart for (never emitted outbound, so
+/// nothing advertised them); the caller drops the request with a trace.
+///
+/// Two deliberate asymmetries against the outbound table:
+///
+/// - `Focus` maps to [`SemanticsAction::Focus`] only. Outbound, a node
+///   registering only the legacy `DidGainAccessibilityFocus` *notification*
+///   also advertises `Focus`, but Flutter's engine likewise dispatches the
+///   platform's focus request as the `focus` action itself — the legacy
+///   handler is a notification hook, not the action's implementation.
+/// - `Blur` maps to `DidLoseAccessibilityFocus`, which IS the notification,
+///   because that is the only vocabulary FLUI (and Flutter) has for it.
+#[must_use]
+pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction> {
+    match action {
+        accesskit::Action::Click => Some(SemanticsAction::Tap),
+        accesskit::Action::ShowContextMenu => Some(SemanticsAction::LongPress),
+        accesskit::Action::ScrollLeft => Some(SemanticsAction::ScrollLeft),
+        accesskit::Action::ScrollRight => Some(SemanticsAction::ScrollRight),
+        accesskit::Action::ScrollUp => Some(SemanticsAction::ScrollUp),
+        accesskit::Action::ScrollDown => Some(SemanticsAction::ScrollDown),
+        accesskit::Action::Increment => Some(SemanticsAction::Increase),
+        accesskit::Action::Decrement => Some(SemanticsAction::Decrease),
+        accesskit::Action::ScrollIntoView => Some(SemanticsAction::ShowOnScreen),
+        accesskit::Action::SetTextSelection => Some(SemanticsAction::SetSelection),
+        accesskit::Action::SetValue => Some(SemanticsAction::SetText),
+        accesskit::Action::SetScrollOffset => Some(SemanticsAction::ScrollToOffset),
+        accesskit::Action::Focus => Some(SemanticsAction::Focus),
+        accesskit::Action::Blur => Some(SemanticsAction::DidLoseAccessibilityFocus),
+        accesskit::Action::CustomAction => Some(SemanticsAction::CustomAction),
+        _ => None,
+    }
+}
+
 /// Translate one FLUI semantics node into an AccessKit node.
 ///
 /// `children` are the caller's already-resolved AccessKit ids. They are NOT
@@ -445,6 +485,48 @@ mod tests {
 
         assert_eq!(node.role(), Role::Button);
         assert_eq!(node.label(), Some("Save"));
+    }
+
+    /// The two action tables' agreement, checked as a composition: every
+    /// AccessKit action in [`semantics_action_for`]'s domain, when granted
+    /// to a node as the FLUI action it maps to, must be advertised outbound
+    /// again by [`apply_actions`]. A drifted pair makes a control assistive
+    /// technology can see and press but that does nothing. (The reverse
+    /// drift — advertised outbound but not yet routable — is a review
+    /// obligation stated on both tables' docs; nothing here enumerates
+    /// AccessKit's action space to catch it mechanically.)
+    #[test]
+    fn every_inbound_routable_action_is_advertised_outbound_again() {
+        const INBOUND_DOMAIN: &[accesskit::Action] = &[
+            accesskit::Action::Click,
+            accesskit::Action::ShowContextMenu,
+            accesskit::Action::ScrollLeft,
+            accesskit::Action::ScrollRight,
+            accesskit::Action::ScrollUp,
+            accesskit::Action::ScrollDown,
+            accesskit::Action::Increment,
+            accesskit::Action::Decrement,
+            accesskit::Action::ScrollIntoView,
+            accesskit::Action::SetTextSelection,
+            accesskit::Action::SetValue,
+            accesskit::Action::SetScrollOffset,
+            accesskit::Action::Focus,
+            accesskit::Action::Blur,
+            accesskit::Action::CustomAction,
+        ];
+        for &inbound in INBOUND_DOMAIN {
+            let routed = semantics_action_for(inbound)
+                .expect("every action in the declared inbound domain is routable");
+            let data = SemanticsNodeData {
+                actions: routed as u64,
+                ..Default::default()
+            };
+            assert!(
+                translate(&data).supports_action(inbound),
+                "{inbound:?} routes inbound to {routed:?}, whose outbound translation no \
+                 longer advertises {inbound:?} — the two tables have drifted",
+            );
+        }
     }
 
     /// The mirror case: a structural role has no flag and lives only in the
