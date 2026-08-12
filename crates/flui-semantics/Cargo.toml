@@ -56,3 +56,12 @@ thiserror.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+# Cost of a semantics-enabled frame as a function of tree size — the number the
+# pipeline's scalability work has to beat.
+[[bench]]
+name = "publish_cost"
+harness = false
