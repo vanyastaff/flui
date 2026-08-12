@@ -2090,6 +2090,7 @@ name = "flui-semantics"
 version = "0.2.0"
 dependencies = [
  "accesskit",
+ "criterion",
  "flui-foundation",
  "flui-tree",
  "flui-types",
