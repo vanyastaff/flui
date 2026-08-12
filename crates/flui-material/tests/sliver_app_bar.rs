@@ -111,26 +111,58 @@ fn an_unpinned_bar_uses_the_scrolling_variant() {
     );
 }
 
-/// `flexible_space` fills the bar's box behind the toolbar.
+/// `flexible_space` fills the bar's expanded box AND paints inside the
+/// bar's own Material surface — behind the toolbar, above the background.
+/// The wrong-but-plausible composition (stacking the flexible content as a
+/// SIBLING under the whole AppBar) hides it beneath the opaque surface and
+/// leaves the Material sized to the toolbar strip instead of the box.
 #[test]
-fn flexible_space_fills_the_expanded_box() {
+fn flexible_space_fills_the_expanded_box_inside_the_material_surface() {
     let bar = SliverAppBar::new()
         .title(Text::new("FLUI"))
         .expanded_height(180.0)
         .pinned(true)
-        .flexible_space(SizedBox::expand());
+        .flexible_space(flui_widgets::ColoredBox::new(flui_types::Color::rgb(
+            10, 20, 30,
+        )));
 
     let laid = lay_out(scroll_view_at(0.0, bar), tight(400.0, 600.0));
 
-    let header = laid
-        .find_by_render_type("RenderSliverPinnedPersistentHeader")
-        .expect("header in tree");
-    // The delegate's child is the Stack; its first child is the fill.
-    let stack = laid.only_child(header);
-    let fill = laid.child(stack, 0);
+    let fill = laid
+        .find_by_render_type("RenderDecoratedBox")
+        .expect("the flexible space's render object is in the tree");
     assert_eq!(
         laid.size(fill).height.get(),
         180.0,
         "the flexible space must fill the bar's current extent"
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("the bar's Material surface is in the tree");
+    assert_eq!(
+        laid.size(material).height.get(),
+        180.0,
+        "the Material surface must cover the whole expanded box, not just          the toolbar strip"
+    );
+
+    // Structural pin of the paint order: the flexible space is a DESCENDANT
+    // of the Material, so the opaque background is behind it by
+    // construction. A sibling composition (the bug) fails this.
+    fn subtree_contains(
+        laid: &common::LaidOut,
+        root: flui_foundation::RenderId,
+        needle: flui_foundation::RenderId,
+    ) -> bool {
+        if root == needle {
+            return true;
+        }
+        laid.children(root)
+            .into_iter()
+            .any(|child| subtree_contains(laid, child, needle))
+    }
+    assert!(
+        subtree_contains(&laid, material, fill),
+        "the flexible space must paint INSIDE the bar's Material surface"
     );
 }

@@ -161,8 +161,8 @@ use flui_types::{Alignment, Pixels, Size};
 use flui_view::prelude::*;
 use flui_widgets::{
     Align, Center, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded,
-    Flexible, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle, PreferredSizeView, Row,
-    SafeArea, SizedBox,
+    Flexible, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle, Positioned,
+    PreferredSizeView, Row, SafeArea, SizedBox, Stack,
 };
 
 use crate::back_button::BackButton;
@@ -209,6 +209,11 @@ pub struct AppBar {
     foreground_color: Option<Color>,
     elevation: Option<f32>,
     bottom: Option<BoxedView>,
+    /// A widget painted behind the toolbar and above this bar's own
+    /// [`Material`] — Flutter's `AppBar.flexibleSpace` slot. Inert at the
+    /// bar's own preferred size; it earns its name inside a `SliverAppBar`,
+    /// where the bar's box expands and collapses around it.
+    flexible_space: Option<BoxedView>,
     /// `bottom`'s [`preferred_size`](PreferredSizeView::preferred_size)
     /// height, snapshotted at [`Self::bottom`]-builder time — see that
     /// method's doc comment and [`PreferredSizeView`]'s own "Named
@@ -233,6 +238,7 @@ impl AppBar {
             foreground_color: None,
             elevation: None,
             bottom: None,
+            flexible_space: None,
             bottom_preferred_height: 0.0,
         }
     }
@@ -312,6 +318,15 @@ impl AppBar {
     pub fn bottom(mut self, bottom: impl PreferredSizeView) -> Self {
         self.bottom_preferred_height = bottom.preferred_size().height.get();
         self.bottom = Some(bottom.boxed());
+        self
+    }
+
+    /// Sets the widget painted behind the toolbar, above this bar's own
+    /// [`Material`] — Flutter's `AppBar.flexibleSpace`. Mostly useful
+    /// through `SliverAppBar`, where the bar's box expands around it.
+    #[must_use]
+    pub fn flexible_space(mut self, flexible_space: impl IntoView) -> Self {
+        self.flexible_space = Some(flexible_space.into_view().boxed());
         self
     }
 }
@@ -572,9 +587,21 @@ impl StatelessView for AppBar {
         // module docs' "consumes the top inset itself" section.
         let safe_toolbar = SafeArea::new().bottom(false).child(toolbar_and_bottom);
 
+        // The flexible space paints ABOVE this bar's own Material and BELOW
+        // the toolbar — `app_bar.dart`'s trailing Stack when
+        // `widget.flexibleSpace != null`. Outside that slot order the bar's
+        // opaque surface either hides the flexible content or fails to back
+        // it.
+        let surface_content: BoxedView = match &self.flexible_space {
+            Some(flexible_space) => {
+                Stack::new((Positioned::fill(flexible_space.clone()), safe_toolbar)).boxed()
+            }
+            None => safe_toolbar.boxed(),
+        };
+
         Material::new(background_color)
             .elevation(elevation)
-            .child(safe_toolbar)
+            .child(surface_content)
     }
 }
 

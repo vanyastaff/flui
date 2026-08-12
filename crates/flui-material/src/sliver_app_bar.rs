@@ -35,9 +35,7 @@ use flui_types::Color;
 use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 use flui_widgets::layout::PreferredSizeView;
-use flui_widgets::{
-    MediaQuery, Positioned, SizedBox, SliverPersistentHeader, SliverPersistentHeaderDelegate, Stack,
-};
+use flui_widgets::{MediaQuery, SizedBox, SliverPersistentHeader, SliverPersistentHeaderDelegate};
 
 use crate::AppBar;
 
@@ -72,7 +70,6 @@ pub struct SliverAppBar {
     has_bottom: bool,
     expanded_height: Option<f32>,
     collapsed_height: Option<f32>,
-    flexible_space: Option<BoxedView>,
     pinned: bool,
     floating: bool,
 }
@@ -89,7 +86,6 @@ impl SliverAppBar {
             has_bottom: false,
             expanded_height: None,
             collapsed_height: None,
-            flexible_space: None,
             pinned: false,
             floating: false,
         }
@@ -163,7 +159,10 @@ impl SliverAppBar {
         self
     }
 
-    /// The height this app bar expands to when fully scrolled to the top.
+    /// The height this app bar expands to when fully scrolled to the top,
+    /// EXCLUDING the top safe-area inset — the ambient inset is added on
+    /// top when the extents are computed, so a caller must not fold it in
+    /// (that would double-count it).
     ///
     /// `None` (the default) means the bar is its toolbar (plus `bottom`) and
     /// never expands.
@@ -173,19 +172,22 @@ impl SliverAppBar {
         self
     }
 
-    /// Overrides the height the bar collapses to. Defaults to the toolbar
-    /// height (plus `bottom` and the top inset).
+    /// Overrides the height the bar collapses to, EXCLUDING the top
+    /// safe-area inset and `bottom` — both are added on top when the
+    /// extents are computed. Defaults to the toolbar height.
     #[must_use]
     pub fn collapsed_height(mut self, collapsed_height: f32) -> Self {
         self.collapsed_height = Some(collapsed_height);
         self
     }
 
-    /// A widget painted behind the toolbar, filling the bar's current
-    /// extent — the canvas a cover image or gradient collapses with.
+    /// A widget painted behind the toolbar — above the bar's own
+    /// [`Material`](crate::Material) surface, below its content, filling
+    /// the bar's current extent: the canvas a cover image or gradient
+    /// collapses with. Forwards to [`AppBar::flexible_space`].
     #[must_use]
     pub fn flexible_space(mut self, flexible_space: impl IntoView) -> Self {
-        self.flexible_space = Some(flexible_space.into_view().boxed());
+        self.app_bar = self.app_bar.flexible_space(flexible_space);
         self
     }
 
@@ -263,7 +265,6 @@ fn extents(inputs: &ExtentInputs) -> (f32, f32) {
 /// context-free, so Flutter snapshots `topPadding` the same way).
 struct SliverAppBarDelegate {
     app_bar: AppBar,
-    flexible_space: Option<BoxedView>,
     min_extent: f32,
     max_extent: f32,
 }
@@ -275,18 +276,15 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
         _shrink_offset: f32,
         _overlaps_content: bool,
     ) -> BoxedView {
-        // Expand to the header's current box: the bar's surface covers the
+        // Expand to the header's current box: the bar's Material covers the
         // whole expanded area (Flutter's SliverAppBar paints its background
-        // across it), the flexible space fills behind, and the toolbar lays
-        // out at the top within the AppBar's own composition.
-        let toolbar: BoxedView = self.app_bar.clone().into_view().boxed();
-        let layered: BoxedView = match &self.flexible_space {
-            Some(flexible_space) => Stack::new((Positioned::fill(flexible_space.clone()), toolbar))
-                .into_view()
-                .boxed(),
-            None => toolbar,
-        };
-        SizedBox::expand().child(layered).into_view().boxed()
+        // across it), with the flexible space and toolbar layered INSIDE
+        // that surface by the AppBar itself — the slot order that keeps the
+        // opaque background behind the flexible content, never over it.
+        SizedBox::expand()
+            .child(self.app_bar.clone())
+            .into_view()
+            .boxed()
     }
 
     fn min_extent(&self) -> f32 {
@@ -316,7 +314,6 @@ impl StatelessView for SliverAppBar {
 
         SliverPersistentHeader::new(SliverAppBarDelegate {
             app_bar: self.app_bar.clone(),
-            flexible_space: self.flexible_space.clone(),
             min_extent,
             max_extent,
         })
