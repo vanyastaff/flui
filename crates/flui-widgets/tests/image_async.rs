@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 use common::{lay_out, loose, size};
 use flui_assets::AssetRegistry;
 use flui_types::painting::Image as PixelImage;
+use flui_widgets::Padding;
 use flui_widgets::{AssetImage, Image, ImageProvider, ImageProviderError};
 
 /// Bounded budget for a real background file-read + decode to land as an
@@ -481,12 +482,6 @@ fn async_image_provider_swap_between_two_already_cached_providers_shows_immediat
 /// before asserting a layer. Un-ignore once a root-render-object identity
 /// change across a swap reliably lays the new node out.
 #[test]
-#[ignore = "reproducible failure (cause not isolated -- general \
-            reconciliation vs the root-swap re-root path): replacing the \
-            pipeline-root render object across a StatelessView child \
-            type-change (wrapped combinator -> bare leaf) leaves the new \
-            node unlaid-out -- panics rather than fails; see \
-            docs/ROADMAP.md Cross.H"]
 fn async_image_provider_swap_from_a_cold_stream_to_an_already_cached_provider_lays_out() {
     let path_a = fixture("tiny-swap2-a.png");
     let path_b = fixture("tiny-swap2-b.png");
@@ -546,4 +541,56 @@ fn async_image_with_forced_width_reserves_that_width_during_the_placeholder_fram
     pump_until(&mut laid, |laid| {
         laid.size(laid.current_root()) == size(40.0, 24.0)
     });
+}
+
+/// The same replacement one level down, where the type-changing view is **not**
+/// the pipeline root.
+///
+/// This is the discriminator that isolated the failure the sibling test above
+/// used to reproduce. That failure had two candidate causes which the
+/// root-level reproducer could not separate: a general reconciliation gap (a
+/// replaced child's fresh render object never marked needs-layout), or a
+/// root-swap gap (`HeadlessBinding::swap_root_view` not re-establishing the
+/// pipeline's `root_id` when the root render object's identity changes).
+///
+/// Keeping both is deliberate: the root-level test alone cannot tell a real fix
+/// from the scenario quietly ceasing to replace the root render object, and
+/// this nested one alone would miss a re-root regression.
+#[test]
+fn async_image_provider_swap_lays_out_when_the_replacement_is_not_the_root() {
+    let path_a = fixture("tiny-nested-a.png");
+    let path_b = fixture("tiny-nested-b.png");
+    let reg = registry();
+
+    // Pre-warm ONLY path B, so swapping to it takes the synchronous
+    // cache-probe path and yields a bare leaf where a wrapped combinator was.
+    {
+        let mut warm_up = lay_out(
+            Padding::all(2.0).child(Image::asset(Arc::clone(&reg), path_b.clone())),
+            loose(1000.0),
+        );
+        pump_until(&mut warm_up, |laid| {
+            laid.size(laid.current_root()) == size(9.0, 7.0)
+        });
+    }
+
+    let mut laid = lay_out(
+        Padding::all(2.0).child(Image::asset(Arc::clone(&reg), path_a)),
+        loose(1000.0),
+    );
+    pump_until(&mut laid, |laid| {
+        laid.size(laid.current_root()) == size(9.0, 7.0)
+    });
+
+    laid.pump_widget(Padding::all(2.0).child(Image::asset(reg, path_b)));
+
+    // 5x3 image + 2px padding on every side. A child left without committed
+    // geometry cannot produce this, because the padding parent sizes itself
+    // from the child it just laid out.
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(9.0, 7.0),
+        "a replaced render object below the root must be laid out in the same \
+         frame as the swap that created it",
+    );
 }
