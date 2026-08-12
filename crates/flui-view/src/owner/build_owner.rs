@@ -1004,8 +1004,7 @@ impl BuildOwner {
         // profiler subscribes to: `flui-devtools` is layer 9 and nothing in
         // the framework may consume it, so tracing is the only seam by which
         // frame timings can reach it.
-        let _span =
-            tracing::debug_span!("build", dirty_elements = self.dirty_elements.len(),).entered();
+        let _span = tracing::debug_span!("build", dirty_elements = self.dirty_count(),).entered();
 
         let has_partitioned_work = self
             .build_scope_queues

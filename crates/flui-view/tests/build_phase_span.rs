@@ -16,28 +16,46 @@ use flui_view::{BuildOwner, tree::ElementTree};
 use tracing::{Dispatch, span::Attributes};
 use tracing_subscriber::{Registry, layer::Context, layer::Layer, layer::SubscriberExt};
 
-/// Records the name of every span opened while it is installed.
-#[derive(Clone, Default)]
-struct SpanNameCollector {
-    names: Arc<Mutex<Vec<String>>>,
+/// One opened span: its name and the fields it declares.
+///
+/// Fields are recorded because a profiler reads them. A collector that kept
+/// only names would keep passing after `dirty_elements` was renamed away, and
+/// the profiler would silently start reporting nothing for it.
+#[derive(Clone, Debug, PartialEq)]
+struct OpenedSpan {
+    name: String,
+    fields: Vec<String>,
 }
 
-impl<S: tracing::Subscriber> Layer<S> for SpanNameCollector {
+#[derive(Clone, Default)]
+struct SpanCollector {
+    spans: Arc<Mutex<Vec<OpenedSpan>>>,
+}
+
+impl<S: tracing::Subscriber> Layer<S> for SpanCollector {
     fn on_new_span(&self, attrs: &Attributes<'_>, _id: &tracing::Id, _ctx: Context<'_, S>) {
-        self.names
+        let metadata = attrs.metadata();
+        self.spans
             .lock()
             .expect("collector mutex is uncontended in a single-threaded test")
-            .push(attrs.metadata().name().to_string());
+            .push(OpenedSpan {
+                name: metadata.name().to_string(),
+                fields: metadata
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().to_string())
+                    .collect(),
+            });
     }
 }
 
-/// Runs `body` with a span collector installed, returning every span name seen.
-fn spans_during(body: impl FnOnce()) -> Vec<String> {
-    let collector = SpanNameCollector::default();
+/// Runs `body` with a span collector installed, returning every span opened.
+fn spans_during(body: impl FnOnce()) -> Vec<OpenedSpan> {
+    let collector = SpanCollector::default();
     let subscriber = Registry::default().with(collector.clone());
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
     collector
-        .names
+        .spans
         .lock()
         .expect("collector mutex is uncontended")
         .clone()
@@ -51,10 +69,20 @@ fn build_scope_emits_a_build_span() {
         owner.build_scope(&mut tree);
     });
 
+    let build = names
+        .iter()
+        .find(|span| span.name == "build")
+        .unwrap_or_else(|| {
+            panic!(
+                "build_scope must open a `build` span so a tracing-subscribed \
+                 profiler can time the phase; saw {names:?}"
+            )
+        });
     assert!(
-        names.iter().any(|name| name == "build"),
-        "build_scope must open a `build` span so a tracing-subscribed profiler \
-         can time the phase; saw {names:?}",
+        build.fields.iter().any(|field| field == "dirty_elements"),
+        "the span must carry `dirty_elements` — a profiler reads it, so \
+         renaming it away is a silent regression; saw {:?}",
+        build.fields,
     );
 }
 
@@ -71,7 +99,7 @@ fn the_span_opens_even_when_nothing_is_dirty() {
         owner.build_scope(&mut tree);
     });
 
-    let build_spans = names.iter().filter(|name| *name == "build").count();
+    let build_spans = names.iter().filter(|span| span.name == "build").count();
     assert_eq!(
         build_spans, 2,
         "one span per build_scope call, dirty or not; saw {names:?}",

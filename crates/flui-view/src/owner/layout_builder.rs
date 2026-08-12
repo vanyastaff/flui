@@ -183,6 +183,14 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
     ) -> bool {
+        // Layout-time rebuilds run their builds through
+        // `drain_prepared_build_target` directly, never through `build_scope`,
+        // so they would otherwise fall outside every `build` span and a
+        // profiler would under-report exactly the frames that did the most
+        // build work. `during_layout` distinguishes the two; the ranges are
+        // disjoint (this runs between layout passes), so summing is correct.
+        let _span = tracing::debug_span!("build", during_layout = true).entered();
+
         debug_assert!(
             pipeline.is_free(),
             "BUG: service_layout_builders ran while the pipeline was checked out — \
