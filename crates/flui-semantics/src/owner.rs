@@ -291,11 +291,20 @@ impl SemanticsOwner {
     ///
     /// For the composition root that learns its platform bridge *after* this
     /// owner was created — an owner lazily constructed by the pipeline on
-    /// enablement, wired to the real adapter once one exists. Updates flushed
-    /// from here on reach the new callback; nothing already published is
-    /// re-sent (the next [`Self::flush`] carries the full rooted tree
-    /// anyway, since translation is snapshot-shaped, not delta-shaped).
+    /// enablement, wired to the real adapter once one exists.
+    ///
+    /// A live owner may already be **clean**: [`Self::flush`] gates on dirty
+    /// nodes, so without help the new callback would first hear from us only
+    /// on the next tree change — a late-wired adapter would present nothing
+    /// until the user did something. So a rooted current tree is published
+    /// through the new callback immediately; translation is snapshot-shaped,
+    /// so this says exactly what a flush would say.
     pub fn set_callback(&mut self, callback: SemanticsUpdateCallback) {
+        if self.enabled
+            && let Some(update) = crate::tree_to_update(&self.tree, None)
+        {
+            callback(&update);
+        }
         self.callback = Some(callback);
     }
 
@@ -630,6 +639,43 @@ mod tests {
         let owner = SemanticsOwner::new(callback);
         assert!(owner.is_enabled());
         assert!(owner.tree().is_empty());
+    }
+
+    /// A callback swapped onto a live, already-clean owner immediately
+    /// receives the current rooted tree. `flush` gates on dirty nodes, so
+    /// without this a late-wired platform adapter would present nothing
+    /// until the user's next interaction happened to dirty the tree.
+    #[test]
+    fn a_swapped_in_callback_immediately_receives_the_current_rooted_tree() {
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
+        owner.set_root(Some(root));
+
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&received);
+        owner.set_callback(Arc::new(move |update: &crate::TreeUpdate| {
+            sink.lock().push(update.nodes.len());
+        }));
+
+        assert_eq!(
+            received.lock().as_slice(),
+            &[1],
+            "the swap itself must publish the full rooted tree once"
+        );
+    }
+
+    /// The swap publishes nothing while the tree is unrooted — there is
+    /// nothing an adapter could apply, and the first real flush will carry
+    /// the rooted tree anyway.
+    #[test]
+    fn a_swapped_in_callback_on_an_unrooted_tree_hears_nothing() {
+        let mut owner = SemanticsOwner::new_without_callback();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sink = Arc::clone(&calls);
+        owner.set_callback(Arc::new(move |_update: &crate::TreeUpdate| {
+            sink.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

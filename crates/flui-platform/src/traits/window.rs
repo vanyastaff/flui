@@ -428,6 +428,12 @@ pub struct WinitWindow {
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
     callbacks: crate::shared::WindowCallbacks,
+    /// This window's AT-SPI announcement, created with the window so a
+    /// screen reader that attaches at any later point finds it on the bus.
+    /// Construction succeeds (and stays inert) with no session bus at all —
+    /// see [`UnixAccessibility::new`](crate::platforms::linux::UnixAccessibility::new).
+    #[cfg(all(target_os = "linux", feature = "a11y"))]
+    accessibility: Arc<crate::platforms::linux::UnixAccessibility>,
 }
 
 /// [`PlatformTextInput`] for a winit window.
@@ -481,6 +487,8 @@ impl WinitWindow {
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(true),
             callbacks: crate::shared::WindowCallbacks::new(),
+            #[cfg(all(target_os = "linux", feature = "a11y"))]
+            accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
         }
     }
 
@@ -648,6 +656,16 @@ impl PlatformWindow for WinitWindow {
         Some(Arc::new(WinitTextInput {
             window: Arc::clone(&self.window),
         }))
+    }
+
+    /// The window's own AT-SPI bridge — the capability the composition
+    /// root's accessibility wire discovers. Without this override the trait
+    /// default (`None`) makes every real Linux window silently
+    /// screen-reader-invisible while the headless fake works, which is
+    /// exactly backwards.
+    #[cfg(all(target_os = "linux", feature = "a11y"))]
+    fn accessibility(&self) -> Option<Arc<dyn super::accessibility::PlatformAccessibility>> {
+        Some(Arc::clone(&self.accessibility) as _)
     }
 
     fn as_any(&self) -> &dyn Any {
