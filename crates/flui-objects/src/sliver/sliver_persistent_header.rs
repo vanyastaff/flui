@@ -392,10 +392,19 @@ impl PersistentHeaderCore {
             // *between* layout passes (ADR-0017) rather than here — the layout
             // walk holds the render tree, so building now would self-deadlock.
             if let Some(cell) = &self.shrink_cell {
-                cell.publish(crate::layout::HeaderShrink {
+                let shrink = crate::layout::HeaderShrink {
                     shrink_offset,
                     overlaps_content,
-                });
+                };
+                // `needs_update_child` is a force-dirty signal the payload
+                // cannot express: an extent change demands a rebuild even
+                // though the header has not moved, so an equality-gated
+                // publish would silently drop it.
+                if self.needs_update_child {
+                    cell.publish_forced(shrink);
+                } else {
+                    cell.publish(shrink);
+                }
             }
             update_child(shrink_offset, overlaps_content);
             self.last_shrink_offset = shrink_offset;

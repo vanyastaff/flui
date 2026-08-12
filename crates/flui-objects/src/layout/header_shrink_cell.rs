@@ -77,6 +77,20 @@ impl HeaderShrinkCell {
         state.published = Some(shrink);
     }
 
+    /// Records shrink state and schedules a rebuild **regardless** of whether
+    /// the value changed.
+    ///
+    /// The header's own gate has a second trigger the payload cannot express:
+    /// changing `min_extent`/`max_extent` forces a rebuild even when the
+    /// header has not moved. Routing that through [`publish`](Self::publish)
+    /// would compare an unchanged pair, leave `needs_build` false, and drop
+    /// the very rebuild the extent change demanded.
+    pub fn publish_forced(&self, shrink: HeaderShrink) {
+        let mut state = self.inner.lock();
+        state.published = Some(shrink);
+        state.needs_build = true;
+    }
+
     /// The most recently published shrink state, or `None` before first layout.
     #[must_use]
     pub fn shrink(&self) -> Option<HeaderShrink> {

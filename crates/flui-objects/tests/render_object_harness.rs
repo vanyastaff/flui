@@ -12092,3 +12092,58 @@ fn harness_sliver_persistent_header_publishes_shrink_state_as_it_scrolls() {
         "shrink_offset clamps at max_extent",
     );
 }
+
+/// **The forced-rebuild contract.** Changing `min_extent`/`max_extent` must
+/// schedule a delegate rebuild even when the header has not moved.
+///
+/// The cell's edge-trigger compares the published pair, and an extent change
+/// leaves that pair identical — so routing it through the equality-gated path
+/// silently drops the rebuild the extent change demands. Caught in review; the
+/// symptom would be a header that keeps rendering at its old size after its
+/// delegate reports new extents.
+#[test]
+fn harness_sliver_persistent_header_extent_change_forces_a_delegate_rebuild() {
+    use flui_objects::HeaderShrinkCell;
+    use std::sync::Arc;
+
+    let cell = Arc::new(HeaderShrinkCell::new());
+    let mut header = RenderSliverPinnedPersistentHeader::new(40.0, 120.0);
+    header.set_shrink_cell(Arc::clone(&cell));
+
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    // Settle: the element has built against the first published state.
+    cell.commit();
+    assert!(!cell.needs_build());
+
+    let before = cell.shrink().expect("published");
+
+    // Change an extent without scrolling.
+    let header_id = run.id("header");
+    run.update::<RenderSliverPinnedPersistentHeader>(header_id, |h| {
+        let _ = h.set_min_extent(60.0);
+    });
+    run.relayout();
+
+    assert_eq!(
+        cell.shrink().expect("still published").shrink_offset,
+        before.shrink_offset,
+        "the fixture is only meaningful while the shrink offset is unchanged",
+    );
+    assert!(
+        cell.needs_build(),
+        "an extent change must schedule the rebuild even though the header \
+         has not moved — the published pair is identical, so only the \
+         force-dirty path can carry it",
+    );
+}
