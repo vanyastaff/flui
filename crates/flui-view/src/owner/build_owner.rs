@@ -999,6 +999,14 @@ impl BuildOwner {
     ///
     /// * `tree` - The element tree to rebuild
     pub fn build_scope(&mut self, tree: &mut ElementTree) {
+        // The build phase's span, matching the `layout`/`paint`/`compositing`
+        // spans the pipeline already emits. Together the four are what a
+        // profiler subscribes to: `flui-devtools` is layer 9 and nothing in
+        // the framework may consume it, so tracing is the only seam by which
+        // frame timings can reach it.
+        let _span =
+            tracing::debug_span!("build", dirty_elements = self.dirty_elements.len(),).entered();
+
         let has_partitioned_work = self
             .build_scope_queues
             .as_ref()

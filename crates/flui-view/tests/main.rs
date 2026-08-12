@@ -19,6 +19,8 @@ mod boxed_view_conditional_return;
 mod build_context_tests;
 #[path = "build_owner_tests.rs"]
 mod build_owner_tests;
+#[path = "build_phase_span.rs"]
+mod build_phase_span;
 #[path = "derive_bon_stack.rs"]
 mod derive_bon_stack;
 #[path = "derive_smoke.rs"]
