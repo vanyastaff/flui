@@ -1,6 +1,25 @@
-//! Semantics update protocol for platform communication.
+//! Batched semantics-update payloads.
 //!
-//! This module provides types for batched semantics updates to the platform.
+//! # These payloads are NOT the platform format — their ids are arena positions
+//!
+//! Every identity in this module (`SemanticsNodeData::id`, its `children`,
+//! `SemanticsTreeUpdate::removed_node_ids`) is a 0-based arena position in a
+//! tree the pipeline rebuilds every pass. Inserting or removing a sibling
+//! shifts later positions, and a recycled slot hands a retired control's
+//! number to an unrelated one — so publishing these values to an OS
+//! accessibility adapter drops screen-reader focus on unrelated changes, and
+//! an action request addressed back with one of them lands in the wrong
+//! number space entirely (`SemanticsOwner::resolve_action` matches the stable
+//! [`AccessibilityNodeId`](crate::AccessibilityNodeId) space, so every such
+//! action fails as `NodeNotFound`). That is the exact bug the AccessKit
+//! translation shipped once and was caught in review.
+//!
+//! What actually crosses to a platform adapter is [`accesskit::TreeUpdate`],
+//! produced by [`tree_to_update`](crate::tree_to_update), which takes node
+//! identity from [`SemanticsNode::accessibility_id`](crate::SemanticsNode::accessibility_id)
+//! — never from these payloads. Use this module for in-process batching and
+//! diagnostics; if a consumer ever needs stable identity here, that change is
+//! tracked in issue #680 and is deliberately not made speculatively.
 
 use flui_foundation::SemanticsId;
 use flui_types::{Matrix4, Rect, geometry::Pixels};
@@ -14,13 +33,16 @@ use crate::role::SemanticsRole;
 // SemanticsNodeData
 // ============================================================================
 
-/// Serialized data for a semantics node, suitable for sending to the platform.
+/// Serialized data for one semantics node.
 ///
-/// This is the format used when communicating with the platform's accessibility
-/// API.
+/// **Not the platform format**: `id` and `children` are 0-based arena
+/// positions, valid only within the pass that produced them — see the module
+/// doc for why publishing them to an accessibility adapter is a bug and what
+/// the real platform payload is.
 #[derive(Debug, Clone)]
 pub struct SemanticsNodeData {
-    /// Node identifier.
+    /// The node's 0-based arena position — NOT its stable
+    /// [`AccessibilityNodeId`](crate::AccessibilityNodeId); see the module doc.
     pub id: u64,
     /// Flags bitmask.
     pub flags: u64,
@@ -44,7 +66,8 @@ pub struct SemanticsNodeData {
     pub rect: Rect<Pixels>,
     /// Transform matrix.
     pub transform: Matrix4,
-    /// Child node IDs.
+    /// Children as 0-based arena positions — same space and caveat as
+    /// [`Self::id`].
     pub children: SmallVec<[u64; 4]>,
     /// Platform view ID.
     pub platform_view_id: Option<i32>,
@@ -107,11 +130,11 @@ impl Default for SemanticsNodeData {
 // SemanticsTreeUpdate
 // ============================================================================
 
-/// A batched update to the semantics tree to be sent to the platform.
+/// A batched semantics-tree update: added/updated nodes plus removed ids.
 ///
-/// This contains all the information needed to update the platform's
-/// accessibility tree in a single batch, including added/updated nodes
-/// and removed node IDs.
+/// **Not the platform format** — every id here is a 0-based arena position
+/// (see the module doc). In particular, a removal notice keyed on an arena
+/// position would tell an adapter to drop an id it was never given.
 ///
 /// See also [`SemanticsNodeUpdate`](crate::owner::SemanticsNodeUpdate) for
 /// individual node updates.
@@ -120,7 +143,8 @@ pub struct SemanticsTreeUpdate {
     /// Nodes that have been added or updated.
     pub nodes: Vec<SemanticsNodeData>,
 
-    /// IDs of nodes that have been removed.
+    /// 0-based arena positions of nodes that have been removed — the same
+    /// in-process space as [`SemanticsNodeData::id`], with the same caveat.
     pub removed_node_ids: SmallVec<[u64; 8]>,
 }
 
@@ -173,7 +197,8 @@ impl SemanticsTreeUpdateBuilder {
 
     /// Adds a removed node ID.
     pub fn add_removed_node(&mut self, id: SemanticsId) {
-        // Convert to 0-based index for platform API
+        // 0-based arena position — same in-process space as the rest
+        // of this payload, NOT a platform-facing identity (module doc).
         self.removed_node_ids.push((id.get() - 1) as u64);
     }
 
