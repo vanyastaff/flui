@@ -10,6 +10,8 @@
 //! `FLUI_HEADLESS` env var) live in their own [[test]] target instead —
 //! process isolation beats opt-in locking. See headless.
 
+#[path = "accessibility_capability.rs"]
+mod accessibility_capability;
 #[path = "contract.rs"]
 mod contract;
 #[path = "display_enumeration.rs"]

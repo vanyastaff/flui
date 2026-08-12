@@ -4,6 +4,7 @@
 //! embedders. The traits are designed for maximum code reuse while allowing
 //! platform-specific customization.
 
+mod accessibility;
 mod capabilities;
 mod display;
 mod embedder;
@@ -19,6 +20,9 @@ mod platform;
 mod text_input;
 mod window;
 
+pub use accessibility::{
+    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+};
 pub use capabilities::{
     DesktopCapabilities, MobileCapabilities, PlatformCapabilities, WebCapabilities,
 };

@@ -136,13 +136,13 @@ declarations = [
     "pub use platforms::IOSPlatform;",
     "pub use platforms::LinuxPlatform;",
     "pub use platforms::MacOSPlatform;",
-    "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform};",
+    "pub use platforms::{ FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform, };",
     "pub use platforms::WebPlatform;",
     "pub use platforms::WindowsPlatform;",
     "pub use platforms::WinitPlatform;",
     "pub use shared::{PlatformHandlers, WindowCallbacks};",
     "pub use task::{Priority, Task, TaskLabel};",
-    "pub use traits::{ Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, };",
+    "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, };",
     "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WindowOpen, };",
     "pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {",
     "pub fn headless_platform() -> Box<dyn Platform> {",
@@ -2421,7 +2421,7 @@ path = "flui_platform backend types (WinitPlatform, WindowsPlatform, MacOSPlatfo
 crate = "flui-platform"
 kind = "type"
 declared_in = "crates/flui-platform/src/lib.rs"
-contains = "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform}"
+contains = "FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform,"
 classification = "transitional"
 thread_affinity = "construct and run on the thread that owns (or will own) the event loop; MacOSPlatform carries unsafe impl Send/Sync by AppKit convention"
 owner = "per-OS event-loop backends"
