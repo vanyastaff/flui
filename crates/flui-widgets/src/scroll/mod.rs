@@ -60,5 +60,8 @@ pub use sliver_persistent_header::SliverPersistentHeader;
 // The trait a header's content author implements; lives beside the element
 // half in flui-view, surfaced here so `use flui_widgets::...` is sufficient.
 pub use flui_view::element::SliverPersistentHeaderDelegate;
+// What a delegate's `stretch_configuration` returns — surfaced with the
+// trait for the same reason.
+pub use flui_objects::{OverScrollHeaderStretchConfiguration, StretchTriggerSignal};
 pub use sliver_to_box_adapter::SliverToBoxAdapter;
 pub use viewport::{ShrinkWrappingViewport, Viewport};

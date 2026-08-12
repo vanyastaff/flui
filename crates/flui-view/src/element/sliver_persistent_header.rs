@@ -56,7 +56,7 @@
 use std::{marker::PhantomData, rc::Rc, sync::Arc};
 
 use flui_objects::{
-    HeaderShrinkCell, RenderSliverFloatingPersistentHeader,
+    HeaderShrinkCell, OverScrollHeaderStretchConfiguration, RenderSliverFloatingPersistentHeader,
     RenderSliverFloatingPinnedPersistentHeader, RenderSliverPinnedPersistentHeader,
     RenderSliverScrollingPersistentHeader,
 };
@@ -117,6 +117,20 @@ pub trait SliverPersistentHeaderDelegate {
     /// The extent the header expands to.
     fn max_extent(&self) -> f32;
 
+    /// The over-scroll stretch behavior for this header, if any.
+    ///
+    /// `Some` makes the header stretch beyond [`max_extent`](Self::max_extent)
+    /// when the scroll view over-scrolls at the start, and reports trigger
+    /// crossings through the configuration's `StretchTriggerSignal`. Read on
+    /// every widget update (same path as the extents), so swapping a delegate
+    /// can turn stretching on or off — subject to the same
+    /// [`should_rebuild`](Self::should_rebuild) obligation.
+    ///
+    /// Flutter parity: `SliverPersistentHeaderDelegate.stretchConfiguration`.
+    fn stretch_configuration(&self) -> Option<OverScrollHeaderStretchConfiguration> {
+        None
+    }
+
     /// Whether replacing `old` with `self` is observable. See the trait doc
     /// for the obligation this carries.
     fn should_rebuild(
@@ -162,6 +176,12 @@ pub trait PersistentHeaderRenderObject:
         min_extent: f32,
         max_extent: f32,
     ) -> flui_rendering::RenderUpdateImpact;
+
+    /// Refresh the over-scroll stretch behavior from a rebuilt delegate.
+    fn update_stretch(
+        &mut self,
+        stretch: Option<OverScrollHeaderStretchConfiguration>,
+    ) -> flui_rendering::RenderUpdateImpact;
 }
 
 impl PersistentHeaderRenderObject for RenderSliverScrollingPersistentHeader {
@@ -180,6 +200,13 @@ impl PersistentHeaderRenderObject for RenderSliverScrollingPersistentHeader {
     ) -> flui_rendering::RenderUpdateImpact {
         self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
     }
+
+    fn update_stretch(
+        &mut self,
+        stretch: Option<OverScrollHeaderStretchConfiguration>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.set_stretch_configuration(stretch)
+    }
 }
 
 impl PersistentHeaderRenderObject for RenderSliverPinnedPersistentHeader {
@@ -197,6 +224,13 @@ impl PersistentHeaderRenderObject for RenderSliverPinnedPersistentHeader {
         max_extent: f32,
     ) -> flui_rendering::RenderUpdateImpact {
         self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
+    }
+
+    fn update_stretch(
+        &mut self,
+        stretch: Option<OverScrollHeaderStretchConfiguration>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.set_stretch_configuration(stretch)
     }
 }
 
@@ -218,6 +252,13 @@ impl PersistentHeaderRenderObject for RenderSliverFloatingPersistentHeader {
     ) -> flui_rendering::RenderUpdateImpact {
         self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
     }
+
+    fn update_stretch(
+        &mut self,
+        stretch: Option<OverScrollHeaderStretchConfiguration>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.set_stretch_configuration(stretch)
+    }
 }
 
 impl PersistentHeaderRenderObject for RenderSliverFloatingPinnedPersistentHeader {
@@ -235,6 +276,13 @@ impl PersistentHeaderRenderObject for RenderSliverFloatingPinnedPersistentHeader
         max_extent: f32,
     ) -> flui_rendering::RenderUpdateImpact {
         self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
+    }
+
+    fn update_stretch(
+        &mut self,
+        stretch: Option<OverScrollHeaderStretchConfiguration>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.set_stretch_configuration(stretch)
     }
 }
 
@@ -300,7 +348,11 @@ impl<R: PersistentHeaderRenderObject> RenderView for PersistentHeaderView<R> {
     type RenderObject = R;
 
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        R::create(self.delegate.min_extent(), self.delegate.max_extent())
+        let mut render_object = R::create(self.delegate.min_extent(), self.delegate.max_extent());
+        // Impact is irrelevant on a freshly created object — it has never
+        // been laid out, so there is nothing to invalidate yet.
+        let _ = render_object.update_stretch(self.delegate.stretch_configuration());
+        render_object
     }
 
     /// Refresh the extents; the child is rebuilt by `build_into_views`, and
@@ -312,6 +364,7 @@ impl<R: PersistentHeaderRenderObject> RenderView for PersistentHeaderView<R> {
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         render_object.update_extents(self.delegate.min_extent(), self.delegate.max_extent())
+            | render_object.update_stretch(self.delegate.stretch_configuration())
     }
 
     /// The child is produced by `build_into_views` from the published shrink

@@ -244,6 +244,66 @@ fn a_swap_that_shrinks_max_extent_never_hands_the_delegate_an_out_of_range_pair(
     );
 }
 
+/// A delegate carrying an over-scroll stretch configuration.
+struct StretchingDelegate {
+    signal: flui_objects::StretchTriggerSignal,
+}
+
+impl SliverPersistentHeaderDelegate for StretchingDelegate {
+    fn build(
+        &self,
+        _ctx: &dyn flui_view::BuildContext,
+        _shrink_offset: f32,
+        _overlaps_content: bool,
+    ) -> BoxedView {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }
+
+    fn min_extent(&self) -> f32 {
+        40.0
+    }
+
+    fn max_extent(&self) -> f32 {
+        120.0
+    }
+
+    fn stretch_configuration(&self) -> Option<flui_objects::OverScrollHeaderStretchConfiguration> {
+        Some(flui_objects::OverScrollHeaderStretchConfiguration::new(
+            20.0,
+            Some(self.signal.clone()),
+        ))
+    }
+}
+
+/// The delegate's stretch configuration reaches the render object and fires
+/// its trigger when the scroll view over-scrolls past the trigger offset —
+/// the whole point of plumbing the configuration through the delegate.
+#[test]
+fn the_delegates_stretch_configuration_fires_its_trigger_on_over_scroll() {
+    let signal = flui_objects::StretchTriggerSignal::new();
+    let header = SliverPersistentHeader::new(StretchingDelegate {
+        signal: signal.clone(),
+    });
+
+    let mut laid = lay_out(scroll_view_at(0.0, header), tight(300.0, 300.0));
+    assert_eq!(signal.count(), 0, "premise: no over-scroll yet");
+
+    // Over-scroll past the 20px trigger.
+    laid.pump_widget(scroll_view_at(
+        -40.0,
+        SliverPersistentHeader::new(StretchingDelegate {
+            signal: signal.clone(),
+        }),
+    ));
+
+    let crossings = signal.count();
+    assert!(
+        crossings >= 1,
+        "over-scrolling past the trigger offset must fire the delegate's \
+         stretch trigger signal; count = {crossings}"
+    );
+}
+
 /// A delegate that delegates `should_rebuild` to a flag, counting builds.
 struct GatedDelegate {
     rebuild: bool,
