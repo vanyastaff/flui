@@ -296,10 +296,11 @@ fn the_delegates_stretch_configuration_fires_its_trigger_on_over_scroll() {
         }),
     ));
 
+    let crossings = signal.count();
     assert!(
-        signal.count() >= 1,
-        "over-scrolling past the trigger offset must fire the delegate's          stretch trigger signal; count = {}",
-        signal.count()
+        crossings >= 1,
+        "over-scrolling past the trigger offset must fire the delegate's \
+         stretch trigger signal; count = {crossings}"
     );
 }
 

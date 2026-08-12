@@ -27,13 +27,15 @@ use flui_view::{BuildContext, IntoView, ViewExt};
 /// mutating it — exactly Flutter's shape, where each combination is its own
 /// internal widget.
 ///
-/// # Deferred, deliberately
+/// # Stretch is on the delegate; snap is deferred, deliberately
 ///
-/// Snap (`FloatingHeaderSnapConfiguration`) and over-scroll stretch
-/// (`OverScrollHeaderStretchConfiguration`) are implemented at the render
-/// layer but not yet reachable from this widget: both need an
-/// `AnimationController` / vsync plumbed through the element, which is its
-/// own slice. Until then floating headers scroll freely and never snap.
+/// Over-scroll stretch is configured per delegate —
+/// [`SliverPersistentHeaderDelegate::stretch_configuration`] — matching
+/// Flutter's placement, so this widget carries no stretch knob of its own.
+/// Snap (`FloatingHeaderSnapConfiguration`) remains unreachable: starting a
+/// snap needs a scroll-end trigger from the enclosing scrollable, which is
+/// the `SliverAppBar` integration seam. Until that lands, floating headers
+/// scroll freely and never snap.
 ///
 /// Flutter parity: `widgets/sliver_persistent_header.dart`
 /// `SliverPersistentHeader`.
