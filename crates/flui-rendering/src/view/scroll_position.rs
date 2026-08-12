@@ -243,6 +243,23 @@ struct Inner {
     /// (`Arc::ptr_eq` removal, not a `ListenerId`).
     offset_listeners: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
     flush: Mutex<FlushState>,
+    /// Scroll-activity state — whether a user drag or ballistic fling is
+    /// underway, and which way the user last scrolled. Kept apart from
+    /// `state` (which is pixel geometry) and notified through its own
+    /// sink: activity subscribers (a floating header's snap trigger) must
+    /// not be woken by every pixel change, and pixel subscribers must not
+    /// be woken by drag start/stop.
+    activity: Mutex<ActivityState>,
+    /// Notified on every [`ActivityState`] transition — Flutter's
+    /// `isScrollingNotifier` + `UserScrollNotification`, fused into one
+    /// sink because every known consumer (snap) wants both.
+    activity_notifier: ChangeNotifier,
+}
+
+#[derive(Default)]
+struct ActivityState {
+    is_scrolling: bool,
+    user_scroll_direction: super::ScrollDirection,
 }
 
 impl Inner {
@@ -379,6 +396,8 @@ impl ScrollPosition {
                 notifier: ChangeNotifier::new(),
                 offset_listeners: Mutex::new(Vec::new()),
                 flush: Mutex::new(FlushState::new()),
+                activity: Mutex::new(ActivityState::default()),
+                activity_notifier: ChangeNotifier::new(),
             }),
         }
     }
@@ -556,6 +575,74 @@ impl ScrollPosition {
     /// `set_pixels` path, which never schedules one.
     pub fn notify(&self) {
         self.inner.notify();
+    }
+
+    // ========== Scroll activity (Flutter: isScrollingNotifier) ==========
+
+    /// Whether a user drag or ballistic fling is currently underway.
+    #[must_use]
+    pub fn is_scrolling(&self) -> bool {
+        self.inner.activity.lock().is_scrolling
+    }
+
+    /// Records that scrolling started or stopped. Activity listeners fire on
+    /// the TRANSITION only — a same-value write is silent, so a caller may
+    /// set unconditionally at each gesture edge without spamming subscribers.
+    ///
+    /// Stopping also resets [`Self::user_scroll_direction`] to `Idle`,
+    /// mirroring Flutter's `ScrollPosition.didEndScroll`.
+    pub fn set_is_scrolling(&self, is_scrolling: bool) {
+        let changed = {
+            let mut activity = self.inner.activity.lock();
+            let changed = activity.is_scrolling != is_scrolling;
+            activity.is_scrolling = is_scrolling;
+            if changed && !is_scrolling {
+                activity.user_scroll_direction = super::ScrollDirection::Idle;
+            }
+            changed
+        };
+        // Lock released before listeners run — a subscriber reading the
+        // activity back must not deadlock.
+        if changed {
+            self.inner.activity_notifier.notify_listeners();
+        }
+    }
+
+    /// The direction of the user's current scroll, `Idle` when none is
+    /// underway.
+    #[must_use]
+    pub fn user_scroll_direction(&self) -> super::ScrollDirection {
+        self.inner.activity.lock().user_scroll_direction
+    }
+
+    /// Records the user's scroll direction. Listeners fire on change only.
+    pub fn set_user_scroll_direction(&self, direction: super::ScrollDirection) {
+        let changed = {
+            let mut activity = self.inner.activity.lock();
+            let changed = activity.user_scroll_direction != direction;
+            activity.user_scroll_direction = direction;
+            changed
+        };
+        if changed {
+            self.inner.activity_notifier.notify_listeners();
+        }
+    }
+
+    /// Subscribe to activity transitions (scrolling started/stopped, user
+    /// direction changed). The pixel [`Listenable`] is deliberately a
+    /// different sink — see the `activity` field's own doc.
+    pub fn add_activity_listener(
+        &self,
+        listener: flui_foundation::ListenerCallback,
+    ) -> flui_foundation::ListenerId {
+        use flui_foundation::Listenable as _;
+        self.inner.activity_notifier.add_listener(listener)
+    }
+
+    /// Remove an activity subscription.
+    pub fn remove_activity_listener(&self, id: flui_foundation::ListenerId) {
+        use flui_foundation::Listenable as _;
+        self.inner.activity_notifier.remove_listener(id);
     }
 
     /// Notifies exactly once, synchronously — consuming any coalesced-flush
@@ -826,6 +913,53 @@ impl ViewportOffset for ScrollPosition {
 
 #[cfg(test)]
 mod tests {
+
+    /// Activity listeners fire on TRANSITIONS only: a same-value write is
+    /// silent, so gesture code may set unconditionally at each edge without
+    /// spamming a snap trigger with no-op wakeups.
+    #[test]
+    fn activity_listeners_fire_on_transitions_only() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let position = ScrollPosition::zero();
+        let fired = std::sync::Arc::new(AtomicUsize::new(0));
+        let sink = std::sync::Arc::clone(&fired);
+        position.add_activity_listener(std::sync::Arc::new(move || {
+            sink.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        position.set_is_scrolling(true);
+        position.set_is_scrolling(true); // same value: silent
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+
+        position.set_user_scroll_direction(super::super::ScrollDirection::Reverse);
+        position.set_user_scroll_direction(super::super::ScrollDirection::Reverse);
+        assert_eq!(fired.load(Ordering::SeqCst), 2);
+
+        position.set_is_scrolling(false);
+        assert_eq!(fired.load(Ordering::SeqCst), 3);
+    }
+
+    /// Ending a scroll resets the user direction to Idle — Flutter's
+    /// `didEndScroll` contract. A stale Forward left behind would make the
+    /// NEXT snap decision from a direction the user is no longer moving in.
+    #[test]
+    fn stopping_resets_the_user_direction_to_idle() {
+        let position = ScrollPosition::zero();
+        position.set_is_scrolling(true);
+        position.set_user_scroll_direction(super::super::ScrollDirection::Forward);
+        assert_eq!(
+            position.user_scroll_direction(),
+            super::super::ScrollDirection::Forward
+        );
+
+        position.set_is_scrolling(false);
+        assert!(!position.is_scrolling());
+        assert_eq!(
+            position.user_scroll_direction(),
+            super::super::ScrollDirection::Idle,
+            "ending the scroll must not leave a stale direction behind"
+        );
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_scheduler::UpdateScheduler;

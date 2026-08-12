@@ -17,6 +17,7 @@ use crate::common::{LaidOut, lay_out, offset, size, tight};
 use flui_animation::{Curves, Vsync};
 use flui_interaction::events::{PointerEvent, PointerEventExt as _};
 use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::view::ScrollDirection;
 use flui_types::Color;
 use flui_types::geometry::px;
 use flui_view::prelude::StatelessView;
@@ -2400,5 +2401,100 @@ fn hit_through_a_visible_sliver_offstage_reaches_its_child_at_the_correct_positi
             .expect("on_pointer_down must have fired through the visible SliverOffstage"),
         local_point,
         "sliver->sliver override arm (RenderSliverOffstage): tap must localize to the child's own box",
+    );
+}
+
+// ============================================================================
+// Scrollable — scroll-activity signal (Flutter: isScrollingNotifier)
+// ============================================================================
+
+/// The scroll-activity signal across a full gesture: idle before, live
+/// from the grab with the user's direction recorded, live through the
+/// ballistic run past the release, and idle again — direction reset — once
+/// the run settles. The signal a floating header's snap trigger keys on.
+#[test]
+fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+    let position = controller.position();
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    assert!(!position.is_scrolling(), "idle before any gesture");
+    assert_eq!(position.user_scroll_direction(), ScrollDirection::Idle);
+
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: on_pan_start
+    assert!(
+        position.is_scrolling(),
+        "the grab begins the scroll activity"
+    );
+    scoped.dispatch_pointer_move(150.0, 150.0); // on_pan_update
+    assert_eq!(
+        position.user_scroll_direction(),
+        ScrollDirection::Reverse,
+        "an upward finger drag increases the offset — Reverse"
+    );
+    scoped.dispatch_pointer_up(150.0, 150.0);
+
+    // Whether the release produced a ballistic run (fast release) or not,
+    // the signal must return to idle once everything settles; the bounded
+    // pump keeps a stuck-true regression a loud failure, not a hang.
+    let mut frames = 0;
+    while position.is_scrolling() && frames < 2_000 {
+        scoped.pump_for(Duration::from_millis(16));
+        frames += 1;
+    }
+    assert!(
+        !position.is_scrolling(),
+        "the activity must end after the release settles (still scrolling \
+         after {frames} frames)"
+    );
+    assert_eq!(
+        position.user_scroll_direction(),
+        ScrollDirection::Idle,
+        "ending the scroll resets the direction"
+    );
+}
+
+/// A fling keeps the activity alive through the ballistic run and ends it
+/// when the simulation settles — the status-listener half of the signal.
+/// Without it, `is_scrolling` would stick true forever after any fling.
+#[test]
+fn a_fling_keeps_scrolling_until_the_ballistic_run_settles() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+    let position = controller.position();
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0);
+    scoped.dispatch_pointer_move(150.0, 150.0);
+    scoped.dispatch_pointer_up(150.0, 150.0);
+
+    assert!(
+        position.is_scrolling(),
+        "the ballistic run keeps the activity alive past the release"
+    );
+
+    // Drive frames until the friction simulation settles (bounded so a
+    // never-settling regression fails loudly instead of hanging).
+    let mut frames = 0;
+    while position.is_scrolling() && frames < 2_000 {
+        scoped.pump_for(Duration::from_millis(16));
+        frames += 1;
+    }
+    assert!(
+        !position.is_scrolling(),
+        "the fling's completion must end the activity (still scrolling after {frames} frames)"
     );
 }
