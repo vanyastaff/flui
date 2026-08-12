@@ -279,7 +279,10 @@ impl SemanticsNode {
 
     // ========== Data Export ==========
 
-    /// Converts this node to SemanticsNodeData for platform consumption.
+    /// Converts this node to [`SemanticsNodeData`] — an in-process batching
+    /// payload whose `id`/`children` are 0-based arena positions, NOT the
+    /// stable platform identity (see `update.rs`'s module doc; the platform
+    /// payload is built by `tree_to_update` from `accessibility_id`).
     pub fn to_node_data(&self, id: SemanticsId) -> SemanticsNodeData {
         SemanticsNodeData {
             id: (id.get() - 1) as u64,
