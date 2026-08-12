@@ -276,6 +276,49 @@ pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction
     }
 }
 
+/// Translate an inbound AccessKit action payload into the FLUI argument space.
+///
+/// The payload companion to [`semantics_action_for`] — keep the two adjacent,
+/// because a payload that silently fails to cross this seam turns a
+/// screen-reader edit into a no-op with no diagnostic.
+///
+/// `target` is the node the enclosing request addresses: a text selection
+/// whose positions live on a *different* node (AccessKit expresses
+/// cross-run selections; FLUI's `SetSelection` is offsets within one node)
+/// is unroutable and returns `None`, as does any payload kind FLUI has no
+/// argument shape for (`NumericValue`, `ScrollUnit`, `ScrollHint`,
+/// `ScrollToPoint`). The caller routes the action WITHOUT arguments and
+/// traces the drop — the action itself is still meaningful argument-free
+/// for some handlers, and swallowing the whole request would turn a lossy
+/// payload into a dead control.
+#[must_use]
+pub fn semantics_action_args_for(
+    data: &accesskit::ActionData,
+    target: NodeId,
+) -> Option<crate::ActionArgs> {
+    match data {
+        accesskit::ActionData::Value(text) => Some(crate::ActionArgs::SetText {
+            text: text.to_string(),
+        }),
+        accesskit::ActionData::CustomAction(action_id) => Some(crate::ActionArgs::CustomAction {
+            action_id: *action_id,
+        }),
+        accesskit::ActionData::SetScrollOffset(point) => Some(crate::ActionArgs::ScrollToOffset {
+            x: point.x,
+            y: point.y,
+        }),
+        accesskit::ActionData::SetTextSelection(selection) => {
+            if selection.anchor.node != target || selection.focus.node != target {
+                return None;
+            }
+            let base = i32::try_from(selection.anchor.character_index).ok()?;
+            let extent = i32::try_from(selection.focus.character_index).ok()?;
+            Some(crate::ActionArgs::SetSelection { base, extent })
+        }
+        _ => None,
+    }
+}
+
 /// Translate one FLUI semantics node into an AccessKit node.
 ///
 /// `children` are the caller's already-resolved AccessKit ids. They are NOT
@@ -485,6 +528,75 @@ mod tests {
 
         assert_eq!(node.role(), Role::Button);
         assert_eq!(node.label(), Some("Save"));
+    }
+
+    /// Every payload kind with an FLUI argument shape crosses the seam with
+    /// its data intact; every kind without one returns `None` (the caller
+    /// routes argument-free). A payload silently mistranslated here turns a
+    /// screen-reader edit into the wrong edit, which is worse than a drop.
+    #[test]
+    fn action_payloads_translate_or_decline_honestly() {
+        let target = NodeId(7);
+
+        assert_eq!(
+            semantics_action_args_for(&accesskit::ActionData::Value("hello".into()), target),
+            Some(crate::ActionArgs::SetText {
+                text: "hello".to_string()
+            }),
+        );
+        assert_eq!(
+            semantics_action_args_for(&accesskit::ActionData::CustomAction(42), target),
+            Some(crate::ActionArgs::CustomAction { action_id: 42 }),
+        );
+        assert_eq!(
+            semantics_action_args_for(
+                &accesskit::ActionData::SetScrollOffset(accesskit::Point { x: 3.0, y: -4.5 }),
+                target,
+            ),
+            Some(crate::ActionArgs::ScrollToOffset { x: 3.0, y: -4.5 }),
+        );
+        assert_eq!(
+            semantics_action_args_for(
+                &accesskit::ActionData::SetTextSelection(accesskit::TextSelection {
+                    anchor: accesskit::TextPosition {
+                        node: target,
+                        character_index: 2,
+                    },
+                    focus: accesskit::TextPosition {
+                        node: target,
+                        character_index: 9,
+                    },
+                }),
+                target,
+            ),
+            Some(crate::ActionArgs::SetSelection { base: 2, extent: 9 }),
+        );
+
+        // Kinds FLUI has no argument shape for decline rather than guess.
+        assert_eq!(
+            semantics_action_args_for(&accesskit::ActionData::NumericValue(0.5), target),
+            None,
+        );
+    }
+
+    /// A selection whose positions live on a different node than the request
+    /// targets cannot be expressed as FLUI's within-one-node offsets —
+    /// mapping it anyway would apply another run's indices to this node's
+    /// text.
+    #[test]
+    fn a_cross_node_text_selection_declines() {
+        let target = NodeId(7);
+        let selection = accesskit::ActionData::SetTextSelection(accesskit::TextSelection {
+            anchor: accesskit::TextPosition {
+                node: NodeId(8),
+                character_index: 0,
+            },
+            focus: accesskit::TextPosition {
+                node: target,
+                character_index: 3,
+            },
+        });
+        assert_eq!(semantics_action_args_for(&selection, target), None);
     }
 
     /// The two action tables' agreement, checked as a composition: every

@@ -31,7 +31,8 @@ use flui_scheduler::{
     input_to_present_histogram, produce_to_present_histogram,
 };
 use flui_semantics::{
-    AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_for,
+    AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_args_for,
+    semantics_action_for,
 };
 use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding};
@@ -323,9 +324,10 @@ impl PresentationState {
     ///   zero node id, an action with no counterpart, a full inbox) are
     ///   traced drops, mirroring how Flutter tolerates screen readers
     ///   acting on a stale snapshot. Typed action payloads
-    ///   (`accesskit::ActionData` — a value to set, a scroll target) are
-    ///   not yet translated: requests resolve argument-free, so a handler
-    ///   that requires arguments sees `None` until that slice lands.
+    ///   (`accesskit::ActionData`) translate via
+    ///   [`semantics_action_args_for`]; a payload kind FLUI cannot express
+    ///   routes the action argument-free with a trace rather than killing
+    ///   the whole request.
     ///
     /// A window without the capability (`accessibility()` → `None`) wires
     /// nothing: the pipeline keeps its documented publish-nowhere
@@ -385,9 +387,26 @@ impl PresentationState {
                 );
                 return;
             };
-            if let Err(error) =
-                command_sender.send_semantics_action(SemanticsActionRequest::new(node_id, action))
-            {
+            let arguments = request.data.as_ref().and_then(|data| {
+                let translated = semantics_action_args_for(data, request.target_node);
+                if translated.is_none() {
+                    // The action still routes; only its payload is lost.
+                    // Traced because a SetValue without its value reaches a
+                    // handler as a no-op edit, which is otherwise invisible.
+                    // Two cases share this branch: a payload kind FLUI has no
+                    // argument shape for, and a payload untranslatable for
+                    // THIS request (a cross-node text selection).
+                    tracing::trace!(
+                        action = ?request.action,
+                        "accessibility action payload not translatable (unsupported kind, or \
+                         invalid for this target); routing the action argument-free"
+                    );
+                }
+                translated
+            });
+            let mut semantics_request = SemanticsActionRequest::new(node_id, action);
+            semantics_request.arguments = arguments;
+            if let Err(error) = command_sender.send_semantics_action(semantics_request) {
                 tracing::warn!(
                     ?error,
                     "dropping accessibility action: the realm inbox is full or gone"

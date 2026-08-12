@@ -3542,6 +3542,55 @@ mod tests {
         assert_eq!(invoked.load(Ordering::SeqCst), 1);
     }
 
+    /// A typed payload crosses the whole wire: a SetValue request carrying
+    /// its text arrives at the node's SetText handler WITH that text. A
+    /// payload lost anywhere along the seam turns a screen-reader edit into
+    /// an argument-free no-op, which no other test would notice.
+    #[test]
+    fn platform_action_payload_reaches_the_handler_with_its_arguments() {
+        let fake = Arc::new(flui_platform::FakeAccessibility::new());
+        let window =
+            crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+        let realm = UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false)))
+            .expect("realm");
+
+        let render_id = RenderId::new(7);
+        let target = AccessibilityNodeId::from(render_id);
+        let received = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&received);
+        let mut node = SemanticsNode::new().with_source_render_id(render_id);
+        node.config_mut().add_action(
+            SemanticsAction::SetText,
+            Arc::new(move |_action, arguments| {
+                sink.lock().push(arguments);
+            }),
+        );
+        let mut semantics_owner = SemanticsOwner::new(Arc::new(|_| {}));
+        let root = semantics_owner.insert(node);
+        semantics_owner.set_root(Some(root));
+        realm
+            .pipeline_for_test()
+            .with_mut(|owner| owner.set_semantics_owner(Some(semantics_owner)));
+
+        fake.set_active(true);
+        fake.request_action(accesskit::ActionRequest {
+            action: accesskit::Action::SetValue,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(target.as_u64()),
+            data: Some(accesskit::ActionData::Value("hello".into())),
+        });
+
+        let report = realm.drain_commands();
+        assert_eq!(report.invoked, 1);
+        assert_eq!(
+            received.lock().as_slice(),
+            &[Some(flui_semantics::ActionArgs::SetText {
+                text: "hello".to_string()
+            })],
+            "the handler must receive the platform's payload, translated"
+        );
+    }
+
     /// Requests the listener cannot route never reach the inbox at all: an
     /// action FLUI has no counterpart for, and the zero node id no
     /// published tree ever exports. Both are traced drops at the platform
