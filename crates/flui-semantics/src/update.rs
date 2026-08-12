@@ -18,8 +18,10 @@
 //! produced by [`tree_to_update`](crate::tree_to_update), which takes node
 //! identity from [`SemanticsNode::accessibility_id`](crate::SemanticsNode::accessibility_id)
 //! — never from these payloads. Use this module for in-process batching and
-//! diagnostics; if a consumer ever needs stable identity here, that change is
-//! tracked in issue #680 and is deliberately not made speculatively.
+//! diagnostics. If a consumer ever needs stable identity here, add
+//! `accessibility_id` to the payload *with* that consumer — the field is
+//! deliberately not added speculatively, because an identity nothing reads
+//! cannot be verified against anything.
 
 use flui_foundation::SemanticsId;
 use flui_types::{Matrix4, Rect, geometry::Pixels};
