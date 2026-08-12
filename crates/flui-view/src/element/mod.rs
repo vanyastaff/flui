@@ -17,6 +17,7 @@ mod notification;
 mod render_object_element;
 mod root;
 pub(crate) mod sliver_adaptor;
+pub(crate) mod sliver_persistent_header;
 pub(crate) mod sparse_children;
 pub(crate) mod stream_builder;
 
@@ -67,6 +68,11 @@ pub use notification::{
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 pub use root::{RootElement, RootElementImpl};
 pub use sliver_adaptor::{SliverGridLazy, SliverList};
+pub use sliver_persistent_header::{
+    FloatingPersistentHeaderView, FloatingPinnedPersistentHeaderView, PersistentHeaderView,
+    PinnedPersistentHeaderView, ScrollingPersistentHeaderView, SharedHeaderDelegate,
+    SliverPersistentHeaderDelegate,
+};
 pub use stream_builder::{BoxedResultStream, StreamBuilder, StreamBuilderState, StreamFactory};
 pub use unified::Element;
 

@@ -208,7 +208,7 @@ pub use scroll::{
     SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
     SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
     SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-    SliverToBoxAdapter, Viewport,
+    SliverPersistentHeader, SliverPersistentHeaderDelegate, SliverToBoxAdapter, Viewport,
 };
 pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
