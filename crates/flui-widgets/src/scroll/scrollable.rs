@@ -373,9 +373,6 @@ impl ScrollableState {
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.remove_listener(id);
         }
-        if let Some(id) = self.fling_status_listener_id.take() {
-            self.fling_controller.remove_status_listener(id);
-        }
         let fling_ref = self.fling_controller.clone();
         let scroll_ref = self.scroll_controller.clone();
         let listener_id = self.fling_controller.add_listener(Arc::new(move || {
@@ -604,6 +601,17 @@ impl ViewState<Scrollable> for ScrollableState {
         // stay in sync if a parent rebuild hands us a new configuration —
         // both re-installs below always read `self.scroll_controller` as
         // just updated here.
+        // A swapped-out position is no longer scrolled by this scrollable:
+        // end its activity NOW, or a swap mid-drag/mid-fling leaves the old
+        // position's `is_scrolling` stuck true forever (its status listener
+        // is about to be moved onto the new controller's position).
+        if !self
+            .scroll_controller
+            .position()
+            .ptr_eq(&new_view.controller.position())
+        {
+            self.scroll_controller.position().set_is_scrolling(false);
+        }
         self.scroll_controller = new_view.controller.clone();
 
         // Re-install the fling value listener on the (possibly new)
@@ -629,6 +637,12 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn dispose(&mut self) {
+        // An unmount mid-drag or mid-ballistic-run must not leave the shared
+        // position claiming a scroll is underway — end the activity FIRST,
+        // while this state still knows which position it was driving (the
+        // status listener below is about to be detached and could never
+        // deliver the settle).
+        self.scroll_controller.position().set_is_scrolling(false);
         // Remove the value listener before disposing the controller so the
         // listener closure cannot fire after the state is gone.
         if let Some(id) = self.fling_listener_id.take() {

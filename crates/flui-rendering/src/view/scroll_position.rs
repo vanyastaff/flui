@@ -616,9 +616,17 @@ impl ScrollPosition {
     }
 
     /// Records the user's scroll direction. Listeners fire on change only.
+    ///
+    /// A non-`Idle` direction is only recordable while
+    /// [`Self::is_scrolling`] — outside an active scroll the write is
+    /// ignored, keeping the documented invariant ("`Idle` when none is
+    /// underway") true by construction instead of by caller discipline.
     pub fn set_user_scroll_direction(&self, direction: super::ScrollDirection) {
         let changed = {
             let mut activity = self.inner.activity.lock();
+            if !activity.is_scrolling && direction != super::ScrollDirection::Idle {
+                return;
+            }
             let changed = activity.user_scroll_direction != direction;
             activity.user_scroll_direction = direction;
             changed
@@ -888,11 +896,12 @@ impl ViewportOffset for ScrollPosition {
     }
 
     fn user_scroll_direction(&self) -> ScrollDirection {
-        // Direction tracking is out of scope for this type (see module docs
-        // of the feature this shipped with); `Idle` is the same default
-        // `ScrollableViewportOffset` starts from and never updates without a
-        // setter either.
-        ScrollDirection::Idle
+        // The activity state IS the tracked direction — the render layer
+        // (`RenderViewport::layout_child_sequence` reading this through
+        // `dyn ViewportOffset`) must see the same answer the widget layer
+        // sees, or direction-dependent sliver behavior (a floating header's
+        // reveal) runs on a permanently-Idle constraint.
+        Self::user_scroll_direction(self)
     }
 
     fn allow_implicit_scrolling(&self) -> bool {
@@ -937,6 +946,38 @@ mod tests {
 
         position.set_is_scrolling(false);
         assert_eq!(fired.load(Ordering::SeqCst), 3);
+    }
+
+    /// The render layer reads direction through `dyn ViewportOffset`
+    /// (`RenderViewport::layout_child_sequence`) — it must see the SAME
+    /// tracked value the widget layer sees, not a hardwired `Idle` that
+    /// leaves direction-dependent sliver behavior permanently inert.
+    #[test]
+    fn the_viewport_offset_view_reports_the_tracked_direction() {
+        let position = ScrollPosition::zero();
+        position.set_is_scrolling(true);
+        position.set_user_scroll_direction(super::super::ScrollDirection::Reverse);
+
+        let through_trait: &dyn super::super::ViewportOffset = &position; // PORT-CHECK-OK-DYN: the test's whole point is the TRAIT-OBJECT view — RenderViewport holds exactly this erasure, and the bug being pinned was visible only through it
+        assert_eq!(
+            through_trait.user_scroll_direction(),
+            super::super::ScrollDirection::Reverse,
+            "the trait view must not shadow the tracked direction"
+        );
+    }
+
+    /// A non-Idle direction while nothing is scrolling would violate the
+    /// documented invariant — the write is ignored, so the invariant holds
+    /// by construction rather than by caller discipline.
+    #[test]
+    fn a_direction_written_outside_a_scroll_is_ignored() {
+        let position = ScrollPosition::zero();
+        position.set_user_scroll_direction(super::super::ScrollDirection::Forward);
+        assert_eq!(
+            position.user_scroll_direction(),
+            super::super::ScrollDirection::Idle,
+            "no scroll is underway, so the direction must stay Idle"
+        );
     }
 
     /// Ending a scroll resets the user direction to Idle — Flutter's
