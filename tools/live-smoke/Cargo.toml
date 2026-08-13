@@ -23,6 +23,9 @@ description = "Live-smoke E2E harness: drives a real windowed FLUI binary with r
 name = "flui-live-smoke"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0"
 x11rb = { version = "0.13", features = ["xtest"] }
