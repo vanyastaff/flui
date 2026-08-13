@@ -597,10 +597,19 @@ impl RenderSliverScrollingPersistentHeader {
         let max_extent = self.core.max_extent;
         let raw_paint_extent = max_extent - constraints.scroll_offset;
         let cache_extent = self.calculate_cache_offset(constraints, 0.0, max_extent);
+        let paint_extent = raw_paint_extent.clamp(0.0, constraints.remaining_paint_extent);
         let geometry = SliverGeometry {
             scroll_extent: max_extent,
             paint_origin: constraints.overlap.min(0.0),
-            paint_extent: raw_paint_extent.clamp(0.0, constraints.remaining_paint_extent),
+            paint_extent,
+            // The oracle passes neither `layoutExtent` nor `visible`
+            // (`:374-381`), so `SliverGeometry`'s constructor defaults
+            // apply: layout = paint, visible = paint > 0
+            // (`sliver.dart:662-665`). A Rust struct literal has no such
+            // defaults — spell them out or the next sliver lays out at 0
+            // and the header reports itself invisible.
+            layout_extent: paint_extent,
+            visible: paint_extent > 0.0,
             max_paint_extent: max_extent + stretch_offset,
             cache_extent,
             has_visual_overflow: true,
@@ -619,6 +628,9 @@ impl Diagnosticable for RenderSliverScrollingPersistentHeader {
     fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
         builder.add("min_extent", self.core.min_extent);
         builder.add("max_extent", self.core.max_extent);
+        if let Some(stretch) = &self.core.stretch_configuration {
+            builder.add("stretch_trigger_offset", stretch.stretch_trigger_offset);
+        }
     }
 }
 
@@ -744,6 +756,9 @@ impl Diagnosticable for RenderSliverPinnedPersistentHeader {
     fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
         builder.add("min_extent", self.core.min_extent);
         builder.add("max_extent", self.core.max_extent);
+        if let Some(stretch) = &self.core.stretch_configuration {
+            builder.add("stretch_trigger_offset", stretch.stretch_trigger_offset);
+        }
     }
 }
 
@@ -774,10 +789,15 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
             (max_extent - constraints.scroll_offset).clamp(0.0, effective_remaining_paint_extent);
         let stretch_offset = self.core.stretch_offset_for_geometry(&constraints);
 
+        let paint_extent = child_extent.min(effective_remaining_paint_extent);
         let geometry = SliverGeometry {
             scroll_extent: max_extent,
             paint_origin: constraints.overlap,
-            paint_extent: child_extent.min(effective_remaining_paint_extent),
+            paint_extent,
+            // `visible` is not given by the oracle (`:435-444`) → the
+            // constructor default `paintExtent > 0` (`sliver.dart:665`):
+            // a pinned header stays visible while it holds at the edge.
+            visible: paint_extent > 0.0,
             layout_extent,
             max_paint_extent: max_extent + stretch_offset,
             max_scroll_obstruction_extent: min_extent,
@@ -906,6 +926,9 @@ impl FloatingHeaderMode for FloatingMode {
             scroll_extent: max_extent,
             paint_origin: constraints.overlap.min(0.0),
             paint_extent,
+            // `visible` is not given by the oracle (`:588-595`) → the
+            // constructor default `paintExtent > 0` (`sliver.dart:665`).
+            visible: paint_extent > 0.0,
             layout_extent,
             max_paint_extent: max_extent + stretch_offset,
             // `cacheExtent` was not given explicitly by the oracle here, so it
@@ -954,6 +977,9 @@ impl FloatingHeaderMode for FloatingPinnedMode {
             scroll_extent: max_extent,
             paint_origin: constraints.overlap.min(0.0),
             paint_extent: clamped_paint_extent,
+            // `visible` is not given by the oracle (`:825-833`) → the
+            // constructor default `paintExtent > 0` (`sliver.dart:665`).
+            visible: clamped_paint_extent > 0.0,
             layout_extent,
             max_paint_extent: max_extent + stretch_offset,
             max_scroll_obstruction_extent: min_extent,
@@ -1271,6 +1297,9 @@ impl<M: FloatingHeaderMode> Diagnosticable for RenderSliverFloatingHeaderBase<M>
     fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
         builder.add("min_extent", self.core.min_extent);
         builder.add("max_extent", self.core.max_extent);
+        if let Some(stretch) = &self.core.stretch_configuration {
+            builder.add("stretch_trigger_offset", stretch.stretch_trigger_offset);
+        }
         if let Some(offset) = self.effective_scroll_offset {
             builder.add("effective_scroll_offset", offset);
         }

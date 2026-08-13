@@ -31,6 +31,7 @@ mod grid_view_test;
 mod icon_test;
 mod safe_area_test;
 mod sliver_grid_test;
+mod sliver_persistent_header_test;
 mod spacer_test;
 mod visibility_test;
 
