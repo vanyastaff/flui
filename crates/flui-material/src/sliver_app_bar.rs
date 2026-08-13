@@ -267,6 +267,38 @@ fn extents(inputs: &ExtentInputs) -> (f32, f32) {
     (collapsed, expanded.max(collapsed))
 }
 
+/// The toolbar's visible-fraction opacity — `app_bar.dart:1360-1374`
+/// verbatim: pinned bars keep the toolbar opaque, except the
+/// pinned+floating+bottom shape (whose collapsed extent omits the toolbar,
+/// so it fades out as it scrolls away); everything else fades by the
+/// toolbar's visible fraction.
+struct ToolbarOpacityInputs {
+    shrink_offset: f32,
+    min_extent: f32,
+    max_extent: f32,
+    toolbar_height: f32,
+    bottom_height: f32,
+    has_bottom: bool,
+    pinned: bool,
+    floating: bool,
+    top_padding: f32,
+}
+
+fn toolbar_opacity_for(inputs: &ToolbarOpacityInputs) -> f32 {
+    let visible_main_height = inputs.max_extent - inputs.shrink_offset - inputs.top_padding;
+    let extra_toolbar_height =
+        (inputs.min_extent - inputs.bottom_height - inputs.top_padding - inputs.toolbar_height)
+            .max(0.0);
+    let visible_toolbar_height = visible_main_height - inputs.bottom_height - extra_toolbar_height;
+    let is_pinned_with_opacity_fade =
+        inputs.pinned && inputs.floating && inputs.has_bottom && extra_toolbar_height == 0.0;
+    if !inputs.pinned || is_pinned_with_opacity_fade {
+        (visible_toolbar_height / inputs.toolbar_height).clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 /// The [`SliverPersistentHeaderDelegate`] a [`SliverAppBar`] resolves to.
 ///
 /// Extents are resolved numbers by the time this exists — the top inset is
@@ -277,24 +309,53 @@ struct SliverAppBarDelegate {
     min_extent: f32,
     max_extent: f32,
     snap: bool,
+    pinned: bool,
+    floating: bool,
+    has_bottom: bool,
+    bottom_height: f32,
+    toolbar_height: f32,
+    top_padding: f32,
 }
 
 impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
     fn build(
         &self,
         _ctx: &dyn BuildContext,
-        _shrink_offset: f32,
+        shrink_offset: f32,
         _overlaps_content: bool,
     ) -> BoxedView {
+        // The collapse state, republished on every seam rebuild so a
+        // FlexibleSpaceBar inside the flexible-space slot re-interpolates —
+        // Flutter's FlexibleSpaceBar.createSettings, fed from the same
+        // shrink offset this build was called with.
+        let current_extent = (self.max_extent - shrink_offset).max(self.min_extent);
+        let toolbar_opacity = toolbar_opacity_for(&ToolbarOpacityInputs {
+            shrink_offset,
+            min_extent: self.min_extent,
+            max_extent: self.max_extent,
+            toolbar_height: self.toolbar_height,
+            bottom_height: self.bottom_height,
+            has_bottom: self.has_bottom,
+            pinned: self.pinned,
+            floating: self.floating,
+            top_padding: self.top_padding,
+        });
         // Expand to the header's current box: the bar's Material covers the
         // whole expanded area (Flutter's SliverAppBar paints its background
         // across it), with the flexible space and toolbar layered INSIDE
         // that surface by the AppBar itself — the slot order that keeps the
         // opaque background behind the flexible content, never over it.
-        SizedBox::expand()
-            .child(self.app_bar.clone())
-            .into_view()
-            .boxed()
+        crate::FlexibleSpaceBarSettings::new(
+            crate::FlexibleSpaceBarData {
+                min_extent: self.min_extent,
+                max_extent: self.max_extent,
+                current_extent,
+                toolbar_opacity,
+            },
+            SizedBox::expand().child(self.app_bar.clone()),
+        )
+        .into_view()
+        .boxed()
     }
 
     fn min_extent(&self) -> f32 {
@@ -339,6 +400,12 @@ impl StatelessView for SliverAppBar {
             min_extent,
             max_extent,
             snap: self.snap,
+            pinned: self.pinned,
+            floating: self.floating,
+            has_bottom: self.has_bottom,
+            bottom_height: self.bottom_height,
+            toolbar_height: self.toolbar_height,
+            top_padding,
         })
         .pinned(self.pinned)
         .floating(self.floating)
@@ -418,6 +485,62 @@ mod tests {
                 top_padding: 0.0
             }),
             (104.0, 200.0)
+        );
+    }
+
+    /// The oracle's toolbar-opacity branches (`app_bar.dart:1360-1374`):
+    /// an ordinary pinned bar never fades its toolbar; an unpinned bar
+    /// fades by the toolbar's visible fraction; the pinned+floating+bottom
+    /// shape fades even though pinned, because its collapsed extent omits
+    /// the toolbar.
+    #[test]
+    fn toolbar_opacity_follows_the_oracle_branches() {
+        // Ordinary pinned (56..200), scrolled deep: opaque regardless.
+        assert_eq!(
+            toolbar_opacity_for(&ToolbarOpacityInputs {
+                shrink_offset: 144.0,
+                min_extent: 56.0,
+                max_extent: 200.0,
+                toolbar_height: 56.0,
+                bottom_height: 0.0,
+                has_bottom: false,
+                pinned: true,
+                floating: false,
+                top_padding: 0.0,
+            }),
+            1.0
+        );
+        // Unpinned, half the toolbar visible: opacity = 28/56 = 0.5.
+        assert_eq!(
+            toolbar_opacity_for(&ToolbarOpacityInputs {
+                shrink_offset: 172.0,
+                min_extent: 56.0,
+                max_extent: 200.0,
+                toolbar_height: 56.0,
+                bottom_height: 0.0,
+                has_bottom: false,
+                pinned: false,
+                floating: false,
+                top_padding: 0.0,
+            }),
+            0.5
+        );
+        // Pinned + floating + bottom (collapsed omits the toolbar):
+        // fully scrolled past the toolbar, the toolbar has faded out even
+        // though the bar is pinned.
+        assert_eq!(
+            toolbar_opacity_for(&ToolbarOpacityInputs {
+                shrink_offset: 200.0,
+                min_extent: 48.0,
+                max_extent: 248.0,
+                toolbar_height: 56.0,
+                bottom_height: 48.0,
+                has_bottom: true,
+                pinned: true,
+                floating: true,
+                top_padding: 0.0,
+            }),
+            0.0
         );
     }
 
