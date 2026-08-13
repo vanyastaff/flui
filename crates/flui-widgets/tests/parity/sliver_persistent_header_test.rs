@@ -23,7 +23,7 @@
 //! | :105 | pinned updates showOnScreenConfiguration | DEFERRED: `show_on_screen` is omitted at the render layer by documented design (`sliver_persistent_header.rs` module doc) — there is no configuration to update |
 //! | :140 | floating — scroll offset doesn't change | PORTED |
 //! | :173 | floating — normal behavior | PORTED |
-//! | :301 | floating — no floating during a position animation | DEFERRED: keys on `ScrollPosition.isScrollingNotifier` suppressing the float during `animateTo`; FLUI's `animate_to` is a documented synchronous-jump fallback (`ScrollPosition::animate_to`), so the mid-animation state the oracle asserts does not exist yet |
+//! | :301 | floating — no floating during a position animation | PORTED (`ScrollController::animate_to` drives a real curve run through the fling controller; the run raises the scroll-activity signal but records no USER direction, which is exactly what keeps the float suppressed) |
 //! | :346 | floating — behavior when dragging | DEFERRED: same technique as :173 but driven by drag gestures over a position-mode viewport; portable once the parity harness grows the `Scrollable` + `viewport_builder` gesture fixture (tests/sliver_persistent_header.rs has the widget-level equivalent) |
 //! | :400 | floating — overscroll gap below header | PORTED |
 //! | :437 | pinned | PORTED |
@@ -80,6 +80,10 @@ use flui_widgets::{
 };
 
 use crate::common::{LaidOut, lay_out, tight};
+use flui_animation::{Curves, Vsync};
+use flui_widgets::VsyncScope;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// `TestDelegate`: min = max = 200, fixed 200-high child.
 struct FixedDelegate {
@@ -340,6 +344,99 @@ fn floating_header_normal_behavior() {
     // Fully past: the floating header scrolls away entirely.
     controller.jump_to(1400.0);
     laid.pump();
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key3, (0.0, 0.0), Some(true));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// :301 — floating: no floating behavior when animating
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// [`mount`] plus a [`VsyncScope`], so `ScrollController::animate_to`'s
+/// curve run (driven by the scrollable's fling controller) ticks
+/// deterministically under `pump_for`.
+fn mount_animated(controller: &ScrollController, slivers: Vec<BoxedView>) -> LaidOut {
+    let position = controller.position();
+    let vsync = Vsync::new();
+    let mut laid = lay_out(
+        VsyncScope::new(
+            vsync.clone(),
+            Scrollable::new()
+                .controller(controller.clone())
+                .viewport_builder(Rc::new(move |_| {
+                    Viewport::new(slivers.clone())
+                        .position(position.clone())
+                        .boxed()
+                })),
+        ),
+        tight(800.0, 600.0),
+    );
+    laid.adopt_vsync(vsync);
+    laid
+}
+
+/// Drive frames until the position's scroll activity ends — the oracle's
+/// `pumpAndSettle(Duration(milliseconds: 1000))`: second-long virtual
+/// steps, bounded so a never-settling run fails loudly instead of hanging.
+fn settle_animation(laid: &mut LaidOut, controller: &ScrollController) {
+    // Always pump at least once (the oracle's `pumpAndSettle` does too):
+    // the queued command is serviced by the FIRST rebuild after
+    // `animate_to`'s notify, so the activity signal only rises after it.
+    let mut pumps = 0;
+    loop {
+        laid.pump_for(Duration::from_secs(1));
+        pumps += 1;
+        if !controller.position().is_scrolling() || pumps >= 120 {
+            break;
+        }
+    }
+    assert!(
+        !controller.position().is_scrolling(),
+        "the driven run must settle (still animating after {pumps} 1s pumps)"
+    );
+}
+
+/// Oracle: a floating header must NOT float back into view when the
+/// position is moved START-WARD by `animateTo` — a driven run is not a
+/// user scroll, and floating keys on the USER direction only. Both
+/// animations use the oracle's own 1-minute linear runs, settled to
+/// completion before asserting.
+#[test]
+fn floating_header_does_not_float_during_a_position_animation() {
+    let controller = ScrollController::new();
+    let mut laid = mount_animated(
+        &controller,
+        vec![
+            big_sliver(1000.0),
+            SliverPersistentHeader::new(fixed_delegate())
+                .floating(true)
+                .into_view()
+                .boxed(),
+            big_sliver(1000.0),
+        ],
+    );
+    let (key1, key2, key3) = (
+        viewport_child(&laid, 0),
+        viewport_child(&laid, 1),
+        viewport_child(&laid, 2),
+    );
+
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key2, (0.0, 1000.0), Some(false));
+    verify_paint_position(&laid, key3, (0.0, 1200.0), Some(false));
+
+    // bigHeight + maxExtent * 2 = 1400: fully past the header.
+    controller.animate_to(1400.0, Duration::from_mins(1), Arc::new(Curves::Linear));
+    settle_animation(&mut laid, &controller);
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key3, (0.0, 0.0), Some(true));
+
+    // bigHeight + maxExtent * 1.9 = 1380: 20px START-WARD — a drag in this
+    // direction would float the header; a driven run must not.
+    controller.animate_to(1380.0, Duration::from_mins(1), Arc::new(Curves::Linear));
+    settle_animation(&mut laid, &controller);
     verify_paint_position(&laid, key1, (0.0, 0.0), Some(false));
     verify_paint_position(&laid, key2, (0.0, 0.0), Some(false));
     verify_paint_position(&laid, key3, (0.0, 0.0), Some(true));
