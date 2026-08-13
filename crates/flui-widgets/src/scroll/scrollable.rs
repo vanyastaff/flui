@@ -52,10 +52,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
+use flui_animation::{Animation, AnimationController, AnimationStatus, Vsync, VsyncRegistration};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::view::ScrollPosition;
+use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, BuildContextExt, Child, IntoView, ViewExt, ViewState};
@@ -276,6 +276,10 @@ pub struct ScrollableState {
     /// controller swap moves it onto the new controller), removed in
     /// `dispose`.
     fling_listener_id: Option<ListenerId>,
+    /// Status-listener ID on `fling_controller` that marks the shared
+    /// `ScrollPosition` idle when the ballistic run settles or is stopped.
+    /// Same install/remove lifecycle as `fling_listener_id`.
+    fling_status_listener_id: Option<ListenerId>,
     /// Vsync handle kept for `unregister` in `dispose`.
     vsync: Option<Vsync>,
     /// Registration handle returned by `vsync.register(fling_controller)`.
@@ -312,6 +316,7 @@ impl StatefulView for Scrollable {
             scroll_controller: self.controller.clone(),
             fling_controller,
             fling_listener_id: None,
+            fling_status_listener_id: None,
             vsync: None,
             vsync_registration: None,
         }
@@ -375,6 +380,29 @@ impl ScrollableState {
         }));
         self.fling_listener_id = Some(listener_id);
     }
+
+    /// Installs the status listener that ends the position's scroll
+    /// activity when the ballistic run settles (`Completed`) or is stopped
+    /// by a grab or teardown (`Dismissed`). The activity signal is what a
+    /// floating header's snap trigger listens to — without this half, a
+    /// fling would leave `is_scrolling` stuck true forever.
+    fn install_fling_status_listener(&mut self) {
+        if let Some(id) = self.fling_status_listener_id.take() {
+            self.fling_controller.remove_status_listener(id);
+        }
+        let position = self.scroll_controller.position();
+        let listener_id = self
+            .fling_controller
+            .add_status_listener(Arc::new(move |status| {
+                if matches!(
+                    status,
+                    AnimationStatus::Completed | AnimationStatus::Dismissed
+                ) {
+                    position.set_is_scrolling(false);
+                }
+            }));
+        self.fling_status_listener_id = Some(listener_id);
+    }
 }
 
 impl ViewState<Scrollable> for ScrollableState {
@@ -382,6 +410,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.install_flush_handle(ctx);
         self.install_stop_hook();
         self.install_fling_listener();
+        self.install_fling_status_listener();
 
         // Register with the ambient VsyncScope so the binding ticks the fling
         // controller on each virtual frame — the same pattern used by
@@ -458,6 +487,9 @@ impl ViewState<Scrollable> for ScrollableState {
             // Flutter parity: Scrollable uses HitTestBehavior::Opaque so the
             // gesture area fires regardless of whether the child content is
             // itself hittable (e.g. an empty SizedBox).
+            let position_start = ctrl_update.position();
+            let position_update = ctrl_update.position();
+            let position_end = ctrl_update.position();
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(move |_details| {
@@ -465,6 +497,11 @@ impl ViewState<Scrollable> for ScrollableState {
                     // finger's contact position (Flutter parity — ScrollPosition
                     // calls `activity.cancel()` on `handleDragStart`).
                     let _ = fling_stop.stop();
+                    // AFTER the stop: stopping fires the status listener,
+                    // which marks the position idle — the grab that begins a
+                    // new drag must win that ordering, or a fling-into-drag
+                    // hand-off would flicker the activity signal off.
+                    position_start.set_is_scrolling(true);
                 })
                 .on_pan_update(move |details| {
                     // Flutter convention: a downward/rightward finger drag
@@ -488,6 +525,14 @@ impl ViewState<Scrollable> for ScrollableState {
                     } else {
                         raw_delta
                     };
+                    // The user's direction, for activity subscribers (a
+                    // floating header's snap decision): a positive signed
+                    // delta moves the offset toward the start — Forward.
+                    if signed_delta > 0.0 {
+                        position_update.set_user_scroll_direction(ScrollDirection::Forward);
+                    } else if signed_delta < 0.0 {
+                        position_update.set_user_scroll_direction(ScrollDirection::Reverse);
+                    }
                     let proposed = ctrl_update.pixels() - signed_delta;
                     let metrics = ScrollMetrics::from(&ctrl_update.position());
                     let clamped = phys_update.apply_boundary_conditions(&metrics, proposed);
@@ -537,7 +582,14 @@ impl ViewState<Scrollable> for ScrollableState {
                         // `Box<dyn Simulation>` implements `Simulation` via the
                         // blanket impl in `flui-animation`, so it can be passed
                         // directly as `S: Simulation + 'static`.
+                        // Scrolling continues through the ballistic run; the
+                        // fling controller's status listener marks the
+                        // position idle when it settles.
                         let _ = fling_start.animate_with(sim);
+                    } else {
+                        // No ballistic run: the release IS the end of
+                        // scrolling.
+                        position_end.set_is_scrolling(false);
                     }
                 })
                 .child(scroll_view)
@@ -549,6 +601,17 @@ impl ViewState<Scrollable> for ScrollableState {
         // stay in sync if a parent rebuild hands us a new configuration —
         // both re-installs below always read `self.scroll_controller` as
         // just updated here.
+        // A swapped-out position is no longer scrolled by this scrollable:
+        // end its activity NOW, or a swap mid-drag/mid-fling leaves the old
+        // position's `is_scrolling` stuck true forever (its status listener
+        // is about to be moved onto the new controller's position).
+        if !self
+            .scroll_controller
+            .position()
+            .ptr_eq(&new_view.controller.position())
+        {
+            self.scroll_controller.position().set_is_scrolling(false);
+        }
         self.scroll_controller = new_view.controller.clone();
 
         // Re-install the fling value listener on the (possibly new)
@@ -561,6 +624,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // would ever copy it into the new controller's own `ScrollPosition`
         // — its pixels would never move.
         self.install_fling_listener();
+        self.install_fling_status_listener();
 
         // Re-install the stop hook on the (possibly new) controller —
         // `install_stop_hook` is idempotent (see its doc), so this is cheap
@@ -573,10 +637,19 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn dispose(&mut self) {
+        // An unmount mid-drag or mid-ballistic-run must not leave the shared
+        // position claiming a scroll is underway — end the activity FIRST,
+        // while this state still knows which position it was driving (the
+        // status listener below is about to be detached and could never
+        // deliver the settle).
+        self.scroll_controller.position().set_is_scrolling(false);
         // Remove the value listener before disposing the controller so the
         // listener closure cannot fire after the state is gone.
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.remove_listener(id);
+        }
+        if let Some(id) = self.fling_status_listener_id.take() {
+            self.fling_controller.remove_status_listener(id);
         }
         // Release the vsync registration so the binding does not hold a
         // reference to the disposed controller.
