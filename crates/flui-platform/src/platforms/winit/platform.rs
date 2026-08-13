@@ -242,6 +242,13 @@ struct WinitPlatformState {
 
     /// Current keyboard modifiers
     current_modifiers: KeyboardModifiers,
+
+    /// Mouse buttons currently held, tracked from `MouseInput` transitions —
+    /// winit's `CursorMoved` carries no button state of its own, and a move
+    /// with an empty button set is a HOVER to the gesture layer, so without
+    /// this the pan recognizer never receives drag updates (live
+    /// drag-scrolling did nothing).
+    pressed_buttons: ui_events::pointer::PointerButtons,
 }
 
 impl WinitPlatformState {
@@ -270,6 +277,7 @@ impl WinitPlatformState {
             },
             cursor_positions: HashMap::new(),
             current_modifiers: KeyboardModifiers::empty(),
+            pressed_buttons: ui_events::pointer::PointerButtons::default(),
         }
     }
 
@@ -943,32 +951,48 @@ impl ApplicationHandler for WinitApp {
                 );
             }
             WinitWindowEvent::CursorMoved { position, .. } => {
-                let modifiers = self.platform.with_state(|state| {
+                let (modifiers, held_buttons) = self.platform.with_state(|state| {
                     state.cursor_positions.insert(platform_id, position);
-                    state.current_modifiers
+                    (state.current_modifiers, state.pressed_buttons)
                 });
 
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
-                    let input = winit_events::cursor_moved_event(position, scale, modifiers);
+                    let input =
+                        winit_events::cursor_moved_event(position, scale, modifiers, held_buttons);
                     win.callbacks().dispatch_input(input);
                 }
             }
             WinitWindowEvent::MouseInput { state, button, .. } => {
-                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
+                let (modifiers, cursor_pos, held_buttons) = self.platform.with_state(|s| {
+                    // Track the transition first: the emitted event's
+                    // `buttons` is the set held AFTER it (press included,
+                    // release excluded), per the W3C contract.
+                    let pointer_button = winit_events::convert_mouse_button(button);
+                    if state == winit::event::ElementState::Pressed {
+                        s.pressed_buttons.insert(pointer_button);
+                    } else {
+                        s.pressed_buttons.remove(pointer_button);
+                    }
                     (
                         s.current_modifiers,
                         s.cursor_positions
                             .get(&platform_id)
                             .copied()
                             .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                        s.pressed_buttons,
                     )
                 });
 
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
                     let input = winit_events::mouse_button_event(
-                        button, state, cursor_pos, scale, modifiers,
+                        button,
+                        state,
+                        cursor_pos,
+                        scale,
+                        modifiers,
+                        held_buttons,
                     );
                     win.callbacks().dispatch_input(input);
                 }
