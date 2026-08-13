@@ -330,6 +330,10 @@ jobs:
       - name: live-smoke (real window, real input, real teardown)
         if: runner.os == 'Linux'
         run: |
+          # The hosted runner has no GPU: mesa-vulkan-drivers provides the
+          # lavapipe software Vulkan adapter the demo's wgpu init needs
+          # (without it the app panics before a window ever exists).
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
           cargo build -p flui --features material --example sliver_demo --locked
           cargo build -p flui-live-smoke --locked
           xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo

@@ -25,6 +25,11 @@ pub(crate) fn run() -> Result<()> {
         .nth(1)
         .context("usage: flui-live-smoke <path-to-app-binary>")?;
 
+    let log_path =
+        std::env::temp_dir().join(format!("flui-live-smoke-app-{}.log", std::process::id()));
+    let log_file = std::fs::File::create(&log_path)
+        .with_context(|| format!("creating {}", log_path.display()))?;
+
     let mut app = Command::new(&app_path)
         // The app must open its window on the SAME X display this harness
         // drives. A leaked WAYLAND_DISPLAY would win backend selection and
@@ -32,16 +37,27 @@ pub(crate) fn run() -> Result<()> {
         // harness's (usually Xvfb) X server.
         .env_remove("WAYLAND_DISPLAY")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(log_file)
         .spawn()
         .with_context(|| format!("spawning {app_path}"))?;
 
-    // Ensure the child never outlives a failed run.
+    // Ensure the child never outlives a failed run — and never fail
+    // silently: the app's own stderr is the first thing a diagnosis needs
+    // (a CI runner without a Vulkan adapter panics before any window
+    // exists, and a nulled stderr turned that into a bare "no window").
     let result = run_checks(&mut app);
     if result.is_err() {
         let _ = app.kill();
         let _ = app.wait();
+        if let Ok(log) = std::fs::read_to_string(&log_path) {
+            let tail: Vec<&str> = log.lines().rev().take(40).collect();
+            eprintln!("live-smoke: app stderr (last {} lines):", tail.len());
+            for line in tail.iter().rev() {
+                eprintln!("  {line}");
+            }
+        }
     }
+    let _ = std::fs::remove_file(&log_path);
     result
 }
 
