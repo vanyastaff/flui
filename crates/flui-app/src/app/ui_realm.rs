@@ -1480,6 +1480,15 @@ impl UiRealm {
     fn request_redraw_for(&self, presentation: &PresentationState) {
         self.needs_redraw.store(true, Ordering::Relaxed);
         presentation.mark_redraw_pending();
+        // The flags alone are inert while the event loop is parked: nothing
+        // converts them into a frame until SOMETHING pokes the platform.
+        // An input-driven redraw request (a drag's scroll write) was
+        // exactly that case — the loop went straight back to waiting after
+        // the pointer event, the flags sat unread, and a live drag froze
+        // the screen while the position advanced invisibly. The wake sets
+        // `needs_redraw` (idempotent with the store above) AND requests a
+        // platform redraw, which winit coalesces per frame.
+        (self.wake)();
     }
 
     /// [`Self::request_redraw_for`]'s pipeline-dirtying counterpart,
@@ -4042,6 +4051,36 @@ mod tests {
     /// `RealmServices` (a fresh `UpdateScheduler` strong root) instead of reaching
     /// a process-global one, so two realms on one thread no longer alias
     /// anything to guard against.
+    /// An input-driven redraw request must WAKE the platform loop, not just
+    /// set flags: the loop parks between events, and flags nobody pokes it
+    /// about are inert — a live drag froze the screen for exactly this
+    /// reason (125 pointer moves produced 2 frames; the pointer-routing
+    /// path requested a redraw every time, flag-only). The wake is what
+    /// converts the request into a `RedrawRequested` and therefore a frame.
+    #[test]
+    fn a_redraw_request_fires_the_platform_wake() {
+        let wake_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let wake_count_in_closure = Arc::clone(&wake_count);
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            wake_count_in_closure.fetch_add(1, Ordering::Relaxed);
+        });
+        let realm = UiRealm::new(
+            wake,
+            crate::app::presentation::test_platform_window(None),
+            1.0,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("test realm construction");
+
+        realm.request_redraw();
+
+        assert!(
+            wake_count.load(Ordering::Relaxed) >= 1,
+            "request_redraw must fire the platform wake — flag-only requests \
+             leave a parked event loop asleep and the screen frozen"
+        );
+    }
+
     #[test]
     fn two_realms_coexist_same_thread() {
         use std::cell::Cell;

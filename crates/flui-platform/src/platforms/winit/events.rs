@@ -38,11 +38,19 @@ fn primary_mouse_info() -> PointerInfo {
 }
 
 /// Build a `PointerState` from position and scale factor.
+///
+/// `buttons` is the set of buttons HELD at this instant — the W3C
+/// `PointerEvent.buttons` field, and what the gesture layer uses to tell a
+/// drag-move from a hover (`flui-interaction`'s own move constructors stamp
+/// the held set the same way). A move that always reports an empty set is
+/// classified as a hover, so an active pan never receives updates and
+/// drag-scrolling in a live window silently does nothing.
 fn pointer_state(
     position: winit::dpi::PhysicalPosition<f64>,
     scale_factor: f64,
     pressure: f32,
     modifiers: KeyboardModifiers,
+    buttons: PointerButtons,
 ) -> PointerState {
     let logical_x = position.x / scale_factor;
     let logical_y = position.y / scale_factor;
@@ -50,7 +58,7 @@ fn pointer_state(
     PointerState {
         time: event_timestamp_ms(),
         position: PhysicalPosition::new(logical_x, logical_y),
-        buttons: PointerButtons::default(),
+        buttons,
         modifiers,
         count: 1,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
@@ -62,7 +70,7 @@ fn pointer_state(
 }
 
 /// Convert winit MouseButton to W3C PointerButton
-fn convert_mouse_button(button: MouseButton) -> PointerButton {
+pub(crate) fn convert_mouse_button(button: MouseButton) -> PointerButton {
     match button {
         // `Other` carries a vendor-specific button id ui-events has no slot
         // for; treat it as the primary button like an unrecognized click.
@@ -96,12 +104,22 @@ pub fn convert_modifiers(modifiers: winit::event::Modifiers) -> KeyboardModifier
 }
 
 /// Convert winit CursorMoved to W3C PointerEvent::Move
+///
+/// `held_buttons` comes from the platform's tracked button state (winit's
+/// `CursorMoved` carries no button information of its own): with a button
+/// held this is a drag-move, without one a hover.
 pub fn cursor_moved_event(
     position: winit::dpi::PhysicalPosition<f64>,
     scale_factor: f64,
     modifiers: KeyboardModifiers,
+    held_buttons: PointerButtons,
 ) -> PlatformInput {
-    let state = pointer_state(position, scale_factor, 0.0, modifiers);
+    let pressure = if held_buttons == PointerButtons::default() {
+        0.0
+    } else {
+        0.5
+    };
+    let state = pointer_state(position, scale_factor, pressure, modifiers, held_buttons);
 
     let event = PointerEvent::Move(PointerUpdate {
         pointer: primary_mouse_info(),
@@ -114,17 +132,20 @@ pub fn cursor_moved_event(
 }
 
 /// Convert winit MouseInput to W3C PointerEvent::Down/Up
+/// `held_buttons` is the set held AFTER this transition (press included /
+/// release excluded), per the W3C `buttons` contract for down/up events.
 pub fn mouse_button_event(
     button: MouseButton,
     state: ElementState,
     position: winit::dpi::PhysicalPosition<f64>,
     scale_factor: f64,
     modifiers: KeyboardModifiers,
+    held_buttons: PointerButtons,
 ) -> PlatformInput {
     let is_down = state == ElementState::Pressed;
     let pointer_button = convert_mouse_button(button);
     let pressure = if is_down { 0.5 } else { 0.0 };
-    let pointer_state = pointer_state(position, scale_factor, pressure, modifiers);
+    let pointer_state = pointer_state(position, scale_factor, pressure, modifiers, held_buttons);
 
     let event = if is_down {
         PointerEvent::Down(PointerButtonEvent {
@@ -157,7 +178,13 @@ pub fn mouse_wheel_event(
         }
     };
 
-    let state = pointer_state(position, scale_factor, 0.0, modifiers);
+    let state = pointer_state(
+        position,
+        scale_factor,
+        0.0,
+        modifiers,
+        PointerButtons::default(),
+    );
 
     let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
         pointer: primary_mouse_info(),
@@ -387,6 +414,77 @@ pub fn keyboard_event(
     };
 
     PlatformInput::Keyboard(keyboard_event)
+}
+
+#[cfg(test)]
+mod pointer_translation_tests {
+    use super::*;
+    use ui_events::pointer::PointerEvent;
+
+    /// A cursor move with a button held is a DRAG move: the emitted
+    /// `PointerState.buttons` carries the held set (what the gesture layer
+    /// uses to route the move to an active pan instead of the hover path)
+    /// and a non-zero pressure, mirroring `flui-interaction`'s own move
+    /// constructors. An empty set stays a hover.
+    #[test]
+    fn cursor_move_with_held_button_is_a_drag_not_a_hover() {
+        let held = PointerButtons::from(PointerButton::Primary);
+        let input = cursor_moved_event(
+            winit::dpi::PhysicalPosition::new(100.0, 100.0),
+            1.0,
+            KeyboardModifiers::empty(),
+            held,
+        );
+        let PlatformInput::Pointer(PointerEvent::Move(update)) = input else {
+            panic!("cursor move must translate to PointerEvent::Move");
+        };
+        assert_eq!(update.current.buttons, held);
+        assert!(update.current.pressure > 0.0);
+
+        let hover = cursor_moved_event(
+            winit::dpi::PhysicalPosition::new(100.0, 100.0),
+            1.0,
+            KeyboardModifiers::empty(),
+            PointerButtons::default(),
+        );
+        let PlatformInput::Pointer(PointerEvent::Move(update)) = hover else {
+            panic!("cursor move must translate to PointerEvent::Move");
+        };
+        assert_eq!(update.current.buttons, PointerButtons::default());
+        assert_eq!(update.current.pressure, 0.0);
+    }
+
+    /// Down/up events carry the post-transition held set — press included,
+    /// release excluded (the W3C `buttons` contract).
+    #[test]
+    fn button_events_carry_the_post_transition_held_set() {
+        let after_press = PointerButtons::from(PointerButton::Primary);
+        let down = mouse_button_event(
+            MouseButton::Left,
+            ElementState::Pressed,
+            winit::dpi::PhysicalPosition::new(0.0, 0.0),
+            1.0,
+            KeyboardModifiers::empty(),
+            after_press,
+        );
+        let PlatformInput::Pointer(PointerEvent::Down(event)) = down else {
+            panic!("press must translate to PointerEvent::Down");
+        };
+        assert_eq!(event.state.buttons, after_press);
+
+        let up = mouse_button_event(
+            MouseButton::Left,
+            ElementState::Released,
+            winit::dpi::PhysicalPosition::new(0.0, 0.0),
+            1.0,
+            KeyboardModifiers::empty(),
+            PointerButtons::default(),
+        );
+        let PlatformInput::Pointer(PointerEvent::Up(event)) = up else {
+            panic!("release must translate to PointerEvent::Up");
+        };
+        assert_eq!(event.state.buttons, PointerButtons::default());
+    }
 }
 
 #[cfg(test)]
