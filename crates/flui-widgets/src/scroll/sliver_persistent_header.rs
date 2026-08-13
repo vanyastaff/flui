@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use flui_animation::{AnimationController, Vsync, VsyncRegistration};
 use flui_foundation::ListenerId;
-use flui_objects::SnapCommand;
+use flui_objects::{SnapAction, SnapCommand};
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::BuildContextExt as _;
 use flui_view::element::{
@@ -168,10 +168,13 @@ struct SnapTriggerSlot {
     /// scroll resets the position's own direction to `Idle` before
     /// listeners run.
     last_direction: Option<ScrollDirection>,
+    /// Whether the previous notification observed an active scroll — what
+    /// turns a level (`is_scrolling`) into the two edges (started/ended).
+    was_scrolling: bool,
     /// Monotone stamp for [`SnapCommand`]s issued by this host.
     epoch: u64,
     /// The command the next build will carry, `None` until the first
-    /// scroll ends.
+    /// scroll edge.
     pending: Option<SnapCommand>,
 }
 
@@ -208,6 +211,32 @@ impl StatefulView for FloatingHeaderHost {
     }
 }
 
+impl FloatingHeaderHostState {
+    /// (Re)subscribe the activity listener to `position`, detaching from any
+    /// previous one first — the swap path a controller replacement takes.
+    fn subscribe_to(&mut self, position: Option<ScrollPosition>, ctx: &dyn BuildContext) {
+        if let (Some(old_position), Some(id)) =
+            (self.position.take(), self.activity_listener.take())
+        {
+            old_position.remove_activity_listener(id);
+        }
+        let Some(position) = position else {
+            return;
+        };
+        let rebuild: RebuildHandle = ctx.rebuild_handle();
+        let listener = OwnerThreadSnapListener {
+            slot: Arc::clone(&self.slot),
+            position: position.clone(),
+            rebuild,
+        };
+        let id = position.add_activity_listener(std::sync::Arc::new(move || {
+            listener.on_activity();
+        }));
+        self.position = Some(position);
+        self.activity_listener = Some(id);
+    }
+}
+
 impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         // Everything below is lifecycle-only capability acquisition
@@ -225,24 +254,26 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
         self.snap_controller = Some(controller);
 
         // The trigger: subscribe to the enclosing scrollable's activity.
-        // No scope (a header outside any Scrollable, or in a purely
-        // programmatic scroll view) simply means no snap trigger — the
-        // header still floats; it just never settles by animation.
-        if let Some(position) = ctx.get::<ScrollPositionScope, _>(|scope| scope.position().clone())
-        {
-            let rebuild: RebuildHandle = ctx.rebuild_handle();
-            let slot = Arc::clone(&self.slot);
-            let listener_position = position.clone();
-            let listener = OwnerThreadSnapListener {
-                slot,
-                position: listener_position,
-                rebuild,
-            };
-            let id = position.add_activity_listener(std::sync::Arc::new(move || {
-                listener.on_activity();
-            }));
-            self.position = Some(position);
-            self.activity_listener = Some(id);
+        // `depend_on` (not `get`): a controller swap on the enclosing
+        // Scrollable republishes the scope, and this dependency is what
+        // routes that into `did_change_dependencies` so the listener can
+        // follow the position. No scope (a header outside any Scrollable,
+        // or in a purely programmatic scroll view) simply means no snap
+        // trigger — the header still floats; it just never settles by
+        // animation.
+        let position = ctx.depend_on::<ScrollPositionScope, _>(|scope| scope.position().clone());
+        self.subscribe_to(position, ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        let position = ctx.depend_on::<ScrollPositionScope, _>(|scope| scope.position().clone());
+        let unchanged = match (&self.position, &position) {
+            (Some(current), Some(new)) => current.ptr_eq(new),
+            (None, None) => true,
+            _ => false,
+        };
+        if !unchanged {
+            self.subscribe_to(position, ctx);
         }
     }
 
@@ -287,10 +318,26 @@ impl OwnerThreadSnapListener {
         let is_scrolling = self.position.is_scrolling();
         let direction = self.position.user_scroll_direction();
         let mut slot = self.slot.lock();
+        let was_scrolling = std::mem::replace(&mut slot.was_scrolling, is_scrolling);
         if is_scrolling {
             if direction != ScrollDirection::Idle {
                 slot.last_direction = Some(direction);
             }
+            if was_scrolling {
+                // Mid-scroll direction change: nothing edge-shaped to do.
+                return;
+            }
+            // A NEW scroll began: an in-flight snap must yield to the
+            // finger immediately (Flutter's maybeStopSnapAnimation on the
+            // isScrollingNotifier's true edge).
+            slot.epoch += 1;
+            slot.pending = Some(SnapCommand {
+                epoch: slot.epoch,
+                action: SnapAction::Stop,
+            });
+            drop(slot);
+            self.rebuild
+                .schedule(flui_view::RebuildReason::AnimationTick);
             return;
         }
         // Scrolling just ended: the position's own direction is already
@@ -303,7 +350,7 @@ impl OwnerThreadSnapListener {
         slot.epoch += 1;
         slot.pending = Some(SnapCommand {
             epoch: slot.epoch,
-            direction,
+            action: SnapAction::Settle(direction),
         });
         drop(slot);
         self.rebuild

@@ -178,7 +178,7 @@ impl fmt::Debug for StretchTriggerSignal {
     }
 }
 
-/// A widget-layer instruction for a floating header to consider snapping,
+/// A widget-layer instruction for a floating header's snap machinery,
 /// stamped with a monotone epoch so redelivery through view updates is
 /// idempotent — see
 /// `apply_snap_command` on the floating header render objects.
@@ -187,9 +187,21 @@ pub struct SnapCommand {
     /// Strictly increasing per issuing widget; an epoch not newer than the
     /// last applied one is refused.
     pub epoch: u64,
-    /// The direction of the user scroll that just ended — decides whether
-    /// the header settles open (`Forward`) or closed (`Reverse`).
-    pub direction: ScrollDirection,
+    /// What the snap machinery should do.
+    pub action: SnapAction,
+}
+
+/// The two things a scroll edge asks of a floating header's snap machinery —
+/// mirroring the two calls Flutter's `_isScrollingListener` makes
+/// (`widgets/sliver_persistent_header.dart:202-244`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapAction {
+    /// A user scroll ended moving in `ScrollDirection`: settle the reveal
+    /// to the nearest edge (fully open for `Forward`).
+    Settle(ScrollDirection),
+    /// A new user scroll began: an in-flight snap must yield to the finger
+    /// immediately.
+    Stop,
 }
 
 /// Specifies how a stretched header reports overscroll trigger crossings.
@@ -1122,8 +1134,18 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
             return;
         }
         self.last_snap_epoch = command.epoch;
-        self.update_scroll_start_direction(command.direction);
-        self.maybe_start_snap_animation(command.direction);
+        match command.action {
+            SnapAction::Settle(direction) => {
+                self.update_scroll_start_direction(direction);
+                self.maybe_start_snap_animation(direction);
+            }
+            SnapAction::Stop => {
+                // The direction parameter mirrors the oracle's signature but
+                // is unused by the stop path — Idle is the honest value for
+                // "a new gesture, direction not yet known".
+                self.maybe_stop_snap_animation(ScrollDirection::Idle);
+            }
+        }
     }
 
     /// Injects (or withdraws) the controller that drives snap and

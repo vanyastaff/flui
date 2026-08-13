@@ -93,6 +93,6 @@ pub use sliver::{
     RenderSliverFloatingPinnedPersistentHeader, RenderSliverGrid, RenderSliverGridLazy,
     RenderSliverIgnorePointer, RenderSliverList, RenderSliverListLazy, RenderSliverOffstage,
     RenderSliverOpacity, RenderSliverPadding, RenderSliverPinnedPersistentHeader,
-    RenderSliverScrollingPersistentHeader, RenderSliverToBoxAdapter, RenderViewport, SnapCommand,
-    StretchTriggerSignal,
+    RenderSliverScrollingPersistentHeader, RenderSliverToBoxAdapter, RenderViewport, SnapAction,
+    SnapCommand, StretchTriggerSignal,
 };

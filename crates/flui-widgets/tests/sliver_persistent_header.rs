@@ -488,3 +488,71 @@ fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends() {
         controller.pixels()
     );
 }
+/// A new drag beginning mid-snap must STOP the snap immediately — the
+/// finger owns the header now. Without the stop, the settle animation
+/// keeps driving the reveal underneath the user's drag and the header
+/// fights the gesture all the way to fully open.
+#[test]
+fn a_new_drag_stops_an_in_flight_snap() {
+    use std::time::Duration;
+
+    use flui_animation::Vsync;
+    use flui_widgets::{ScrollController, Scrollable, Viewport, VsyncScope};
+
+    let builds = Rc::new(RefCell::new(Vec::new()));
+    let builds_for_delegate = Rc::clone(&builds);
+    let controller = ScrollController::new();
+    let vsync = Vsync::new();
+
+    let scrollable = Scrollable::new()
+        .controller(controller.clone())
+        .viewport_builder(Rc::new(move |position| {
+            Viewport::new((
+                SliverPersistentHeader::new(SnappingDelegate {
+                    builds: Rc::clone(&builds_for_delegate),
+                })
+                .floating(true),
+                trailing_content(),
+            ))
+            .position(position)
+            .boxed()
+        }));
+
+    let mut laid = lay_out(
+        VsyncScope::new(vsync.clone(), scrollable),
+        tight(300.0, 300.0),
+    );
+    laid.adopt_vsync(vsync);
+
+    controller.jump_to(200.0);
+    laid.pump();
+
+    // End a start-ward drag: the snap toward fully-open begins.
+    laid.dispatch_pointer_down(150.0, 100.0);
+    laid.dispatch_pointer_move(150.0, 170.0);
+    laid.dispatch_pointer_move(150.0, 175.0);
+    laid.dispatch_pointer_up(150.0, 175.0);
+    // One frame: the snap is in flight but far from settled (64ms config).
+    laid.pump_for(Duration::from_millis(16));
+    let mid_snap = builds.borrow().last().map(|(shrink, _)| *shrink);
+    assert!(
+        mid_snap.is_some_and(|shrink| shrink > 0.0),
+        "premise: the snap is mid-flight, not settled; saw {mid_snap:?}"
+    );
+
+    // A NEW drag begins and HOLDS — the snap must yield to the finger.
+    laid.dispatch_pointer_down(150.0, 100.0);
+    laid.dispatch_pointer_move(150.0, 130.0); // crosses slop: pan_start
+    for _ in 0..12 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        builds
+            .borrow()
+            .last()
+            .is_some_and(|(shrink, _)| *shrink > 0.0),
+        "the stopped snap must not keep animating the header open under \
+         the user's finger; builds: {:?}",
+        builds.borrow()
+    );
+}

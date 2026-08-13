@@ -307,12 +307,11 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
 
     fn snap_configuration(&self) -> Option<flui_widgets::FloatingHeaderSnapConfiguration> {
         // The oracle's own defaults (`FloatingHeaderSnapConfiguration`,
-        // `rendering/sliver_persistent_header.dart:488-491`): Curves.ease —
-        // cubic(0.25, 0.1, 0.25, 1.0) — over 300ms. FLUI's `Curves` table
-        // has no plain `Ease` constant, so the cubic is spelled out.
+        // `rendering/sliver_persistent_header.dart:488-491`): Curves.ease
+        // over 300ms.
         self.snap.then(|| {
             flui_widgets::FloatingHeaderSnapConfiguration::new(
-                flui_animation::ArcCurve::new(flui_animation::Cubic::new(0.25, 0.1, 0.25, 1.0)),
+                flui_animation::ArcCurve::new(flui_animation::Curves::Ease),
                 std::time::Duration::from_millis(300),
             )
         })
