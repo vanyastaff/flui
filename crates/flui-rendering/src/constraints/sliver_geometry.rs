@@ -361,13 +361,6 @@ impl SliverGeometry {
             }
         }
 
-        if self.layout_extent > self.paint_extent {
-            return Some("layout_extent exceeds paint_extent");
-        }
-        if self.paint_extent - self.max_paint_extent > PRECISION_ERROR_TOLERANCE {
-            return Some("paint_extent exceeds max_paint_extent");
-        }
-
         if let Some(correction) = self.scroll_offset_correction {
             if !correction.is_finite() {
                 return Some("scroll_offset_correction is not finite");
@@ -377,6 +370,29 @@ impl SliverGeometry {
             }
         }
 
+        None
+    }
+
+    /// The geometry's CONTENT contract, checked separately from
+    /// [`validation_error`](Self::validation_error): a violation here means
+    /// a widget broke its sizing contract (e.g. a persistent header's child
+    /// sized below the header's extent), not that the pipeline cannot
+    /// consume the numbers.
+    ///
+    /// Flutter draws the same line: these two rules are DEBUG-ONLY asserts
+    /// (`sliver.dart:881-894`, `debugAssertIsValid`) — a release build
+    /// commits and consumes the geometry as-is, placing the successor at
+    /// `layout_extent` past the shorter paint. Rejecting them from the
+    /// commit instead leaves the node's previous geometry committed
+    /// forever — every retry re-violates, and the viewport freezes
+    /// silently. The commit path warns on these instead.
+    pub fn content_contract_violation(&self) -> Option<&'static str> {
+        if self.layout_extent > self.paint_extent {
+            return Some("layout_extent exceeds paint_extent");
+        }
+        if self.paint_extent - self.max_paint_extent > PRECISION_ERROR_TOLERANCE {
+            return Some("paint_extent exceeds max_paint_extent");
+        }
         None
     }
 
@@ -567,8 +583,9 @@ mod tests {
             max_paint_extent: 1.0 - flui_foundation::EPSILON_F32 * 2.0,
             ..SliverGeometry::ZERO
         };
+        assert_eq!(geometry.validation_error(), None);
         assert_eq!(
-            geometry.validation_error(),
+            geometry.content_contract_violation(),
             Some("paint_extent exceeds max_paint_extent")
         );
     }

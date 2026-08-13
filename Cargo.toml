@@ -550,6 +550,11 @@ required-features = ["cupertino"]
 # Renders any demo tree offscreen to a PNG; it `#[path]`-includes both catalog
 # demos, so it needs both.
 [[example]]
+name = "sliver_demo"
+path = "examples/sliver_demo.rs"
+required-features = ["material"]
+
+[[example]]
 name = "screenshot"
 path = "examples/screenshot.rs"
 required-features = ["material", "cupertino"]

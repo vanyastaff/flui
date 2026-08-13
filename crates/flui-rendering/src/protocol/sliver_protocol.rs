@@ -132,6 +132,19 @@ impl Protocol for SliverProtocol {
                 reason,
             ));
         }
+        if let Some(reason) = geometry.content_contract_violation() {
+            // A content bug, not a pipeline hazard: commit and consume the
+            // geometry the way a Flutter RELEASE build does (the matching
+            // Flutter checks are debug-only asserts, `sliver.dart:881-894`).
+            // Rejecting it instead leaves the previous committed geometry
+            // in place on every retry — a silent, permanent viewport
+            // freeze.
+            tracing::warn!(
+                render_object,
+                reason,
+                "sliver geometry violates its content contract; committed as-is"
+            );
+        }
         Ok(())
     }
 

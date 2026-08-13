@@ -36,6 +36,9 @@ mod animated_box_app;
 #[path = "colored_box_app.rs"]
 mod colored_box_app;
 #[allow(dead_code, unused_imports)]
+#[path = "sliver_demo.rs"]
+mod sliver_demo_app;
+#[allow(dead_code, unused_imports)]
 #[path = "text_app.rs"]
 mod text_app;
 #[allow(dead_code, unused_imports)]
@@ -72,10 +75,18 @@ fn main() {
         "colored-box" => render_view_to_layers(colored_box_app::App, width, height),
         "text" => render_view_to_layers(text_app::App, width, height),
         "telemetry-overlay" => telemetry_overlay_layers(),
+        // The collapsing-sliver scene at three scroll depths — a visual
+        // check on the SliverAppBar / FlexibleSpaceBar / pinned-header
+        // pipeline (expanded, mid-collapse with the background fading and
+        // parallaxing, and fully collapsed to the pinned toolbar).
+        "sliver" => render_view_to_layers(sliver_demo_app::tree(0.0), width, height),
+        "sliver-mid" => render_view_to_layers(sliver_demo_app::tree(90.0), width, height),
+        "sliver-collapsed" => render_view_to_layers(sliver_demo_app::tree(500.0), width, height),
         other => {
             eprintln!(
                 "unknown demo {other:?}; expected: material | cupertino | vertical-slice | \
-                 gallery | animated-box | colored-box | text | telemetry-overlay"
+                 gallery | animated-box | colored-box | text | telemetry-overlay | \
+                 sliver | sliver-mid | sliver-collapsed"
             );
             std::process::exit(2);
         }
@@ -157,18 +168,15 @@ fn render_view_to_layers<V: IntoView + 'static>(
         ))));
     });
 
-    // `PipelineOwner::run_frame` runs layout → compositing → paint and returns
-    // the composited `LayerTree` (same extraction as `RendererBinding::
-    // draw_frame`): take the owner out of the lock by value, run the frame,
-    // restore it. Driving the render frame directly on the freshly-built tree
-    // keeps its paint dirty — a prior widgets-layer frame would have consumed it.
+    // The layout↔build fixpoint frame — the SAME helper `HeadlessBinding`'s
+    // pump and the live `draw_frame` use. A bare `PipelineOwner::run_frame`
+    // never services build-during-layout content (a `SliverAppBar`'s
+    // delegate child, any persistent-header body), so a hand-rolled frame
+    // here captured collapsing app bars as empty space.
     let layer_tree = binding.enter_owner_scope(|| {
-        pipeline_owner.with_mut(|guard| {
-            let owner = std::mem::take(guard);
-            let (owner, result) = owner.run_frame();
-            *guard = owner;
-            result.expect("the render frame must succeed")
-        })
+        build_owner
+            .run_frame_with_layout_builders(&mut element_tree, &pipeline_owner)
+            .expect("the render frame must succeed")
     });
 
     layer_tree.expect("the render frame must produce a LayerTree")

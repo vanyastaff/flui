@@ -41,7 +41,28 @@ fn sliver_constraints() -> SliverConstraints {
     }
 }
 
-fn invalid_layout_exceeds_paint_geometry() -> SliverGeometry {
+/// Violates a PIPELINE-SAFETY rule (negative paint extent) — the class
+/// `validate_layout_output` still rejects. The softer content-contract
+/// rules (layout > paint, paint > max_paint) commit with a warning instead
+/// — see `sliver_content_contract_violation_commits_and_stays_clean`.
+fn invalid_negative_paint_geometry() -> SliverGeometry {
+    SliverGeometry {
+        scroll_extent: 100.0,
+        paint_extent: -10.0,
+        layout_extent: 0.0,
+        max_paint_extent: 100.0,
+        hit_test_extent: 0.0,
+        cache_extent: 0.0,
+        visible: true,
+        ..SliverGeometry::ZERO
+    }
+}
+
+/// The content contract (Flutter's DEBUG-ONLY asserts, `sliver.dart:881-894`):
+/// a violating geometry still COMMITS — a release Flutter build consumes it
+/// as-is, and rejecting it instead freezes the viewport permanently (every
+/// retry re-violates, so the stale committed geometry never refreshes).
+fn layout_exceeds_paint_geometry() -> SliverGeometry {
     SliverGeometry {
         scroll_extent: 100.0,
         paint_extent: 10.0,
@@ -133,9 +154,10 @@ fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
     let mut owner = PipelineOwner::new();
     let sliver_id = owner
         .render_tree_mut()
-        .insert_sliver(Box::new(BadGeometrySliver::new(
-            invalid_layout_exceeds_paint_geometry(),
-        )) as BoxedSliverObject);
+        .insert_sliver(
+            Box::new(BadGeometrySliver::new(invalid_negative_paint_geometry()))
+                as BoxedSliverObject,
+        );
 
     let entry = owner
         .render_tree_mut()
@@ -146,7 +168,7 @@ fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
         .layout_leaf_only(sliver_constraints())
         .expect_err("invalid sliver geometry must fail layout");
 
-    assert_invalid_geometry(err, "layout_extent exceeds paint_extent");
+    assert_invalid_geometry(err, "paint_extent is negative");
     assert!(
         entry.state().geometry().is_none(),
         "invalid geometry must not be committed to RenderState"
@@ -158,15 +180,48 @@ fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
 }
 
 #[test]
+fn sliver_content_contract_violation_commits_and_stays_clean() {
+    let mut owner = PipelineOwner::new();
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver(
+            Box::new(BadGeometrySliver::new(layout_exceeds_paint_geometry())) as BoxedSliverObject,
+        );
+
+    let entry = owner
+        .render_tree_mut()
+        .get_mut(sliver_id)
+        .and_then(|node| node.as_sliver_mut())
+        .expect("sliver entry");
+    let committed = entry
+        .layout_leaf_only(sliver_constraints())
+        .expect("a content-contract violation must not fail layout");
+
+    assert_eq!(
+        committed,
+        layout_exceeds_paint_geometry(),
+        "the violating geometry is consumed as-is (Flutter release behavior)"
+    );
+    assert_eq!(
+        entry.state().geometry(),
+        Some(layout_exceeds_paint_geometry()),
+        "the violating geometry must be committed; leaving the previous commit in place freezes the node forever"
+    );
+    assert!(
+        !entry.needs_layout(),
+        "a committed layout is a completed layout"
+    );
+}
+
+#[test]
 fn sliver_descendant_invalid_geometry_returns_zero_and_poisons() {
     let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
     let parent_obj: BoxedRenderObject = Box::new(BoxWithSliverChild::new(
         sliver_constraints(),
         Arc::clone(&captured),
     ));
-    let sliver_obj: BoxedSliverObject = Box::new(BadGeometrySliver::new(
-        invalid_layout_exceeds_paint_geometry(),
-    ));
+    let sliver_obj: BoxedSliverObject =
+        Box::new(BadGeometrySliver::new(invalid_negative_paint_geometry()));
 
     let mut pipeline = PipelineOwner::new().into_layout();
     let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);

@@ -373,6 +373,136 @@ fn a_delegate_swap_rebuilds_only_when_should_rebuild_says_so() {
 }
 
 // ============================================================================
+// The child-driven paint boundary must not freeze layout (issue #708)
+// ============================================================================
+
+/// A delegate whose child can size BELOW the header's layout extent: a
+/// bare `ConstrainedBox` (min 100 / max 200) with no child. On the frames
+/// where the child measures under the header's `layout_extent`, the pinned
+/// header emits `layout_extent > paint_extent` — a geometry that violates
+/// its CONTENT contract (Flutter's debug-only assert,
+/// `sliver.dart:881-885`) while remaining perfectly consumable.
+struct MinSizingDelegate;
+
+impl SliverPersistentHeaderDelegate for MinSizingDelegate {
+    fn build(
+        &self,
+        _ctx: &dyn flui_view::BuildContext,
+        _shrink_offset: f32,
+        _overlaps_content: bool,
+    ) -> BoxedView {
+        flui_widgets::ConstrainedBox::new(flui_rendering::constraints::BoxConstraints {
+            min_width: flui_types::geometry::px(0.0),
+            max_width: flui_types::geometry::px(f32::INFINITY),
+            min_height: flui_types::geometry::px(100.0),
+            max_height: flui_types::geometry::px(200.0),
+        })
+        .into_view()
+        .boxed()
+    }
+
+    fn min_extent(&self) -> f32 {
+        100.0
+    }
+
+    fn max_extent(&self) -> f32 {
+        200.0
+    }
+}
+
+/// Issue #708: before the fix, `validate_layout_output` REJECTED that
+/// content-contract-violating geometry — the commit was skipped, the
+/// parent saw a `SliverGeometry::ZERO` stand-in, and since every retry
+/// re-violated, the header's committed geometry stayed frozen at its last
+/// pre-boundary value for the rest of the app's life. The scene must be
+/// driven by real animation frames (a root-dirtying `pump` masks the
+/// freeze) and must cross the boundary where the child's measure first
+/// falls below the header's layout extent.
+#[test]
+fn a_min_sizing_child_survives_the_child_driven_paint_boundary() {
+    use flui_widgets::{ScrollController, Scrollable, Viewport};
+
+    let controller = ScrollController::new();
+    let position_for_viewport = controller.position();
+    let big = |height: f32| -> BoxedView {
+        SliverToBoxAdapter::new()
+            .child(SizedBox::new(800.0, height))
+            .into_view()
+            .boxed()
+    };
+    let slivers: Vec<BoxedView> = vec![
+        big(550.0),
+        SliverPersistentHeader::new(MinSizingDelegate)
+            .pinned(true)
+            .into_view()
+            .boxed(),
+        SliverPersistentHeader::new(MinSizingDelegate)
+            .pinned(true)
+            .into_view()
+            .boxed(),
+        big(550.0),
+        big(550.0),
+    ];
+    let scrollable = Scrollable::new()
+        .controller(controller.clone())
+        .viewport_builder(Rc::new(move |_| {
+            Viewport::new(slivers.clone())
+                .position(position_for_viewport.clone())
+                .boxed()
+        }));
+    let vsync = flui_animation::Vsync::new();
+    let mut laid = lay_out(
+        flui_widgets::VsyncScope::new(vsync.clone(), scrollable),
+        tight(800.0, 600.0),
+    );
+    laid.adopt_vsync(vsync);
+
+    // The FIRST header in scroll order — `find_all_by_render_type` returns
+    // render-tree order, not paint order, so pick by committed offset.
+    let header = *laid
+        .find_all_by_render_type("RenderSliverPinnedPersistentHeader")
+        .iter()
+        .min_by(|a, b| {
+            laid.offset(**a)
+                .dy
+                .get()
+                .total_cmp(&laid.offset(**b).dy.get())
+        })
+        .expect("two pinned headers are mounted");
+    // Premise: below the boundary the header's paint is capped by the
+    // remaining room (600 − 550 = 50), not the child.
+    assert_eq!(laid.sliver_geometry(header).paint_extent, 50.0);
+
+    // March across the boundary (remaining exceeds the child's 100 once
+    // pixels pass 50) the way a scroll animation does: the fling
+    // controller's vsync tick writes pixels DURING the frame.
+    controller.animate_to(
+        550.0,
+        std::time::Duration::from_mins(1),
+        std::sync::Arc::new(flui_animation::Curves::Linear),
+    );
+    for _ in 0..64 {
+        laid.pump_for(std::time::Duration::from_secs(1));
+        if !controller.position().is_scrolling() {
+            break;
+        }
+    }
+    laid.tick();
+
+    // pixels = 120 ⇒ remaining = 170 ⇒ the committed paint extent is the
+    // CHILD's 100 — and, critically, layout must still be tracking at all.
+    assert_eq!(
+        laid.sliver_geometry(header).paint_extent,
+        100.0,
+        "the committed geometry must track across the child-driven boundary; a stale pre-boundary value means the viewport froze"
+    );
+    assert!(
+        laid.sliver_geometry(header).visible,
+        "a 100px-painted pinned header is visible"
+    );
+}
+
+// ============================================================================
 // Snap: the full seam — gesture end → activity signal → epoch command →
 // render snap animation
 // ============================================================================
