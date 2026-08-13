@@ -735,9 +735,9 @@ impl SliverPersistentHeaderDelegate for ToolbarDelegate {
 /// (−50) — the header must FLOAT back in by exactly that much even though
 /// the list is nowhere near its start — then the rest of the way (−250).
 /// A wheel tick is a USER scroll: its direction pulse is what
-/// `allow_floating_expansion` keys on. Deltas here are the
-/// platform-shaped (winit) convention — negative = content down — the
-/// mirror of the oracle's positive-down `scroll` offsets.
+/// `allow_floating_expansion` keys on. Deltas are the normalized
+/// cross-backend convention — positive = content down — so the literals
+/// below are the oracle's own `scroll` offsets, sign for sign.
 #[test]
 fn a_pointer_scroll_floats_the_header_back_in() {
     let controller = ScrollController::new();
@@ -764,19 +764,19 @@ fn a_pointer_scroll_floats_the_header_back_in() {
     assert_eq!(laid.sliver_geometry(header).paint_extent, 56.0);
 
     // Wheel the header (and the list start) away.
-    laid.dispatch_scroll(400.0, 300.0, 0.0, -300.0);
+    laid.dispatch_scroll(400.0, 300.0, 0.0, 300.0);
     laid.pump();
     assert_eq!(laid.sliver_geometry(header).paint_extent, 0.0);
     assert!(!laid.sliver_geometry(header).visible);
 
     // A small wheel-up: the header floats back in by the tick's extent.
-    laid.dispatch_scroll(400.0, 300.0, 0.0, 50.0);
+    laid.dispatch_scroll(400.0, 300.0, 0.0, -50.0);
     laid.pump();
     assert_eq!(laid.sliver_geometry(header).paint_extent, 50.0);
     assert!(laid.sliver_geometry(header).visible);
 
     // The rest of the way in.
-    laid.dispatch_scroll(400.0, 300.0, 0.0, 250.0);
+    laid.dispatch_scroll(400.0, 300.0, 0.0, -250.0);
     laid.pump();
     assert_eq!(laid.sliver_geometry(header).paint_extent, 56.0);
     assert!(laid.sliver_geometry(header).visible);

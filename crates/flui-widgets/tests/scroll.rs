@@ -2541,10 +2541,10 @@ fn a_wheel_tick_scrolls_without_a_drag() {
         .child(SizedBox::new(300.0, 5000.0));
     let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
 
-    // Wheel-down: the platform layer delivers a NEGATIVE pixel delta
-    // (winit's line convention, converted to pixels); content scrolls
-    // down, so the offset increases.
-    scoped.dispatch_scroll(150.0, 150.0, 0.0, -53.0);
+    // Wheel-down: a POSITIVE normalized delta (the oracle's
+    // `scrollDelta` convention); content scrolls down, the offset
+    // increases.
+    scoped.dispatch_scroll(150.0, 150.0, 0.0, 53.0);
     assert_eq!(
         controller.pixels(),
         53.0,
@@ -2569,7 +2569,7 @@ fn a_wheel_tick_scrolls_without_a_drag() {
     assert_eq!(position.user_scroll_direction(), ScrollDirection::Idle);
 
     // Wheel-up past the start clamps hard: no overscroll from a wheel.
-    scoped.dispatch_scroll(150.0, 150.0, 0.0, 200.0);
+    scoped.dispatch_scroll(150.0, 150.0, 0.0, -200.0);
     assert_eq!(
         controller.pixels(),
         0.0,
@@ -2579,10 +2579,59 @@ fn a_wheel_tick_scrolls_without_a_drag() {
     scoped.pump_for(Duration::from_millis(16));
 
     // At the boundary, a further wheel-up is a no-op and must not pulse.
-    scoped.dispatch_scroll(150.0, 150.0, 0.0, 10.0);
+    scoped.dispatch_scroll(150.0, 150.0, 0.0, -10.0);
     assert!(
         !position.is_scrolling(),
         "a wheel tick that cannot move the position must not raise activity"
+    );
+}
+
+/// A wheel tick during a driven animation WINS: the tick stops the run
+/// before writing (the oracle's `pointerScroll` starts from `goIdle()`)
+/// — otherwise the animation's value listener overwrites the wheel
+/// write on its very next tick and the wheel appears dead mid-fling.
+#[test]
+fn a_wheel_tick_interrupts_a_driven_animation() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    // Start well away from the extents so the wheel write below cannot
+    // clamp: this test pins the interrupt, not the boundary.
+    controller.jump_to(1_000.0);
+    scoped.pump_for(Duration::from_millis(16));
+    controller.animate_to(4_000.0, Duration::from_secs(10), Arc::new(Curves::Linear));
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    let mid_animation = controller.pixels();
+    assert!(
+        mid_animation > 1_000.0 && mid_animation < 4_000.0,
+        "premise: the run is in flight past the start (got {mid_animation})"
+    );
+
+    // Wheel-up against the animation's direction.
+    scoped.dispatch_scroll(150.0, 150.0, 0.0, -53.0);
+    let after_wheel = controller.pixels();
+    assert_eq!(
+        after_wheel,
+        mid_animation - 53.0,
+        "the wheel write lands relative to where the run was stopped"
+    );
+
+    // Frames later the position must NOT have resumed the animation.
+    for _ in 0..5 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        controller.pixels(),
+        after_wheel,
+        "the interrupted animation must not keep driving the position"
     );
 }
 

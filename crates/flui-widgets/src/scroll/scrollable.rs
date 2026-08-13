@@ -628,6 +628,7 @@ impl ViewState<Scrollable> for ScrollableState {
             // end the pulse after the frame that consumes it.
             let ctrl_wheel = scroll_controller.clone();
             let post_frame_wheel = post_frame.clone();
+            let fling_wheel = fling_controller.clone();
             Listener::new()
                 .on_pointer_signal(move |event| {
                     let PointerEvent::Scroll(scroll) = event else {
@@ -638,11 +639,12 @@ impl ViewState<Scrollable> for ScrollableState {
                         Axis::Vertical => data.delta.dy.get(),
                         Axis::Horizontal => data.delta.dx.get(),
                     };
-                    // A wheel-down tick arrives as a NEGATIVE line delta
-                    // (winit's convention); the oracle's `scrollDelta` is
-                    // positive for content scrolling down — negate, then
-                    // apply the same reversed-axis flip the drag arms use.
-                    let mut delta = -axis_delta;
+                    // Platform deltas arrive already normalized to the
+                    // oracle's `scrollDelta` convention — positive = content
+                    // scrolls down (each backend converts its native axes
+                    // and units at its own boundary). Only the reversed-axis
+                    // flip the drag arms use applies here.
+                    let mut delta = axis_delta;
                     if axis_direction.is_reversed() {
                         delta = -delta;
                     }
@@ -655,13 +657,19 @@ impl ViewState<Scrollable> for ScrollableState {
                     if target == ctrl_wheel.pixels() {
                         return;
                     }
+                    // A wheel tick interrupts whatever animation is driving
+                    // the position — otherwise the fling controller's value
+                    // listener overwrites the wheel write on its next tick
+                    // (the oracle's `pointerScroll` starts from `goIdle()`,
+                    // the same cancel the drag-grab and `jump_to` paths do).
+                    let _ = fling_wheel.stop();
                     // `pointerScroll`'s pulse: direction is only recordable
                     // while an activity is live, so raise first.
                     position.set_is_scrolling(true);
-                    position.set_user_scroll_direction(if delta < 0.0 {
-                        ScrollDirection::Forward
-                    } else {
+                    position.set_user_scroll_direction(if delta > 0.0 {
                         ScrollDirection::Reverse
+                    } else {
+                        ScrollDirection::Forward
                     });
                     position.set_pixels(target);
                     match &post_frame_wheel {
