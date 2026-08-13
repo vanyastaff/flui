@@ -1,0 +1,36 @@
+# Live-smoke E2E harness: drives a REAL windowed FLUI binary with REAL X11
+# input and asserts on captured pixels and the process's exit code. Exists
+# because the synthetic-event test harness covers everything DOWNSTREAM of
+# event synthesis and nothing upstream of it: the platform translation layer,
+# the event-loop wake chain, and live teardown all shipped broken while every
+# gesture test was green (drag-moves classified as hovers; a parked loop that
+# 125 pointer events woke for 2 frames; a post-quit crash).
+#
+# Zero workspace dependencies by design — it observes a FLUI app strictly from
+# the outside, like a user does. `x11rb` is the same X11 stack winit itself
+# uses; XTEST fake input + GetImage captures + a WM_DELETE close need no
+# window manager and no external tools beyond an X server (CI: `xvfb-run`).
+[package]
+name = "flui-live-smoke"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Live-smoke E2E harness: drives a real windowed FLUI binary with real X11 input"
+
+[[bin]]
+name = "flui-live-smoke"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0"
+
+# X11-only by scope (the harness drives an X server); target-gated so a
+# Windows/macOS workspace build — should either rejoin CI's test matrix —
+# never compiles rustix/x11 code it cannot use.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["xtest"] }
