@@ -38,6 +38,10 @@ pub(crate) fn run() -> Result<()> {
         // put the window on the developer's real compositor instead of the
         // harness's (usually Xvfb) X server.
         .env_remove("WAYLAND_DISPLAY")
+        // Diagnosable-by-default: when a check fails on a CI runner the
+        // captured stderr is the only witness, and the default filter
+        // logs next to nothing.
+        .env("RUST_LOG", "info,flui_widgets=debug,flui_platform=debug")
         .stdout(Stdio::null())
         .stderr(log_file)
         .spawn()
@@ -52,7 +56,7 @@ pub(crate) fn run() -> Result<()> {
         let _ = app.kill();
         let _ = app.wait();
         if let Ok(log) = std::fs::read_to_string(&log_path) {
-            let tail: Vec<&str> = log.lines().rev().take(40).collect();
+            let tail: Vec<&str> = log.lines().rev().take(200).collect();
             eprintln!("live-smoke: app stderr (last {} lines):", tail.len());
             for line in tail.iter().rev() {
                 eprintln!("  {line}");
@@ -129,7 +133,23 @@ fn run_checks(app: &mut Child) -> Result<()> {
     eprintln!("live-smoke: drag scrolls OK (pixels changed)");
 
     // Wheel scrolling: three wheel-up ticks (X11 button 4) with the cursor
-    // over the list must move the content back toward the start.
+    // over the list must move the content back toward the start. Let any
+    // post-release fling settle first, so the poll below can only be
+    // satisfied by the wheel itself — and log the settling for CI triage.
+    let mut settle_probe = capture(&conn, window, &geometry)?;
+    let settle_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let next = capture(&conn, window, &geometry)?;
+        if next == settle_probe {
+            break;
+        }
+        settle_probe = next;
+        if Instant::now() > settle_deadline {
+            eprintln!("live-smoke: note — screen still animating 15s after release");
+            break;
+        }
+    }
     let wheel_before = capture(&conn, window, &geometry)?;
     for _ in 0..3 {
         conn.xtest_fake_input(BUTTON_PRESS, WHEEL_UP, 0, root, 0, 0, 0)?;
