@@ -28,4 +28,9 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0"
+
+# X11-only by scope (the harness drives an X server); target-gated so a
+# Windows/macOS workspace build — should either rejoin CI's test matrix —
+# never compiles rustix/x11 code it cannot use.
+[target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["xtest"] }
