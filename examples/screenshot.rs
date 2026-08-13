@@ -36,6 +36,9 @@ mod animated_box_app;
 #[path = "colored_box_app.rs"]
 mod colored_box_app;
 #[allow(dead_code, unused_imports)]
+#[path = "sliver_demo.rs"]
+mod sliver_demo_app;
+#[allow(dead_code, unused_imports)]
 #[path = "text_app.rs"]
 mod text_app;
 #[allow(dead_code, unused_imports)]
@@ -76,9 +79,9 @@ fn main() {
         // check on the SliverAppBar / FlexibleSpaceBar / pinned-header
         // pipeline (expanded, mid-collapse with the background fading and
         // parallaxing, and fully collapsed to the pinned toolbar).
-        "sliver" => render_view_to_layers(sliver_demo(0.0), width, height),
-        "sliver-mid" => render_view_to_layers(sliver_demo(90.0), width, height),
-        "sliver-collapsed" => render_view_to_layers(sliver_demo(500.0), width, height),
+        "sliver" => render_view_to_layers(sliver_demo_app::tree(0.0), width, height),
+        "sliver-mid" => render_view_to_layers(sliver_demo_app::tree(90.0), width, height),
+        "sliver-collapsed" => render_view_to_layers(sliver_demo_app::tree(500.0), width, height),
         other => {
             eprintln!(
                 "unknown demo {other:?}; expected: material | cupertino | vertical-slice | \
@@ -104,54 +107,6 @@ fn main() {
     .expect("encode the captured pixels as PNG");
 
     println!("wrote {out_path} ({demo}, {width}x{height})");
-}
-
-/// A Material collapsing-header scene: pinned `SliverAppBar` with a
-/// `FlexibleSpaceBar` (title + gradient-ish colored background) over a list
-/// of labeled rows, mounted pre-scrolled to `offset`.
-fn sliver_demo(offset: f32) -> impl IntoView {
-    use flui::material::{FlexibleSpaceBar, SliverAppBar, Theme, ThemeData};
-    use flui::widgets::{
-        ColoredBox, CustomScrollView, MediaQuery, MediaQueryData, Padding, SizedBox,
-        SliverToBoxAdapter, Text,
-    };
-    use flui_types::{Color, EdgeInsets};
-    use flui_view::view::ViewExt;
-
-    // The title lives in the flexible space only (the usual collapsing-bar
-    // shape): it rides the collapse, scaling from 1.5x at the bottom edge
-    // to toolbar size.
-    let bar = SliverAppBar::new()
-        .expanded_height(220.0)
-        .pinned(true)
-        .flexible_space(
-            FlexibleSpaceBar::new()
-                .title(Text::new("FLUI Slivers"))
-                .background(ColoredBox::new(Color::rgb(21, 101, 192))),
-        );
-
-    let mut slivers: Vec<flui_view::BoxedView> = vec![bar.into_view().boxed()];
-    for i in 0..14 {
-        let shade = if i % 2 == 0 { 245 } else { 232 };
-        slivers.push(
-            SliverToBoxAdapter::new()
-                .child(ColoredBox::new(Color::rgb(shade, shade, shade)).child(
-                    SizedBox::new(0.0, 56.0).child(Padding::new(EdgeInsets::all(px(16.0))).child(
-                        Text::new(format!("Row {i} — scrolled under a pinned SliverAppBar")),
-                    )),
-                ))
-                .into_view()
-                .boxed(),
-        );
-    }
-
-    Theme::new(
-        ThemeData::light(),
-        MediaQuery::new(
-            MediaQueryData::default(),
-            CustomScrollView::new(slivers).offset(offset),
-        ),
-    )
 }
 
 fn telemetry_overlay_layers() -> LayerTree {

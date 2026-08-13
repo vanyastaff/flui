@@ -383,8 +383,8 @@ impl SliverGeometry {
     /// (`sliver.dart:881-894`, `debugAssertIsValid`) — a release build
     /// commits and consumes the geometry as-is, placing the successor at
     /// `layout_extent` past the shorter paint. Rejecting them from the
-    /// commit (the pre-#708 behavior) left the node's previous geometry
-    /// committed forever: every retry re-violated, and the viewport froze
+    /// commit instead leaves the node's previous geometry committed
+    /// forever — every retry re-violates, and the viewport freezes
     /// silently. The commit path warns on these instead.
     pub fn content_contract_violation(&self) -> Option<&'static str> {
         if self.layout_extent > self.paint_extent {

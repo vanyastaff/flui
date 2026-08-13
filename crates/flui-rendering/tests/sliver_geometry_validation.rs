@@ -60,9 +60,8 @@ fn invalid_negative_paint_geometry() -> SliverGeometry {
 
 /// The content contract (Flutter's DEBUG-ONLY asserts, `sliver.dart:881-894`):
 /// a violating geometry still COMMITS — a release Flutter build consumes it
-/// as-is, and rejecting it instead froze the viewport permanently (issue
-/// #708: every retry re-violated, so the stale committed geometry never
-/// refreshed).
+/// as-is, and rejecting it instead freezes the viewport permanently (every
+/// retry re-violates, so the stale committed geometry never refreshes).
 fn layout_exceeds_paint_geometry() -> SliverGeometry {
     SliverGeometry {
         scroll_extent: 100.0,
@@ -206,7 +205,7 @@ fn sliver_content_contract_violation_commits_and_stays_clean() {
     assert_eq!(
         entry.state().geometry(),
         Some(layout_exceeds_paint_geometry()),
-        "the violating geometry must be COMMITTED — leaving the previous          commit in place freezes the node forever (issue #708)"
+        "the violating geometry must be committed; leaving the previous commit in place freezes the node forever"
     );
     assert!(
         !entry.needs_layout(),

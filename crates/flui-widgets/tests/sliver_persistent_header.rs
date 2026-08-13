@@ -373,7 +373,7 @@ fn a_delegate_swap_rebuilds_only_when_should_rebuild_says_so() {
 }
 
 // ============================================================================
-// #708 regression: the child-driven paint boundary must not freeze layout
+// The child-driven paint boundary must not freeze layout (issue #708)
 // ============================================================================
 
 /// A delegate whose child can size BELOW the header's layout extent: a
@@ -494,7 +494,7 @@ fn a_min_sizing_child_survives_the_child_driven_paint_boundary() {
     assert_eq!(
         laid.sliver_geometry(header).paint_extent,
         100.0,
-        "the committed geometry must track across the child-driven boundary          (a stale pre-boundary value means the viewport froze — issue #708)"
+        "the committed geometry must track across the child-driven boundary; a stale pre-boundary value means the viewport froze"
     );
     assert!(
         laid.sliver_geometry(header).visible,

@@ -136,9 +136,9 @@ impl Protocol for SliverProtocol {
             // A content bug, not a pipeline hazard: commit and consume the
             // geometry the way a Flutter RELEASE build does (the matching
             // Flutter checks are debug-only asserts, `sliver.dart:881-894`).
-            // Rejecting it instead left the previous committed geometry in
-            // place on every retry — a silent, permanent viewport freeze
-            // (issue #708).
+            // Rejecting it instead leaves the previous committed geometry
+            // in place on every retry — a silent, permanent viewport
+            // freeze.
             tracing::warn!(
                 render_object,
                 reason,
