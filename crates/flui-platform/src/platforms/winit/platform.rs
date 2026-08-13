@@ -243,12 +243,29 @@ struct WinitPlatformState {
     /// Current keyboard modifiers
     current_modifiers: KeyboardModifiers,
 
-    /// Mouse buttons currently held, tracked from `MouseInput` transitions —
-    /// winit's `CursorMoved` carries no button state of its own, and a move
-    /// with an empty button set is a HOVER to the gesture layer, so without
-    /// this the pan recognizer never receives drag updates (live
-    /// drag-scrolling did nothing).
-    pressed_buttons: ui_events::pointer::PointerButtons,
+    /// Mouse buttons currently held, tracked as RAW winit buttons from
+    /// `MouseInput` transitions — winit's `CursorMoved` carries no button
+    /// state of its own, and a move with an empty button set is a HOVER to
+    /// the gesture layer, so without this the pan recognizer never receives
+    /// drag updates (live drag-scrolling did nothing).
+    ///
+    /// Raw, not normalized: `convert_mouse_button` maps every
+    /// `MouseButton::Other(_)` onto `Primary`, so a normalized set would
+    /// let releasing an aliased button clear `Primary` while the physical
+    /// left button is still down. The normalized set is DERIVED per event
+    /// by [`held_pointer_buttons`].
+    pressed_buttons: std::collections::HashSet<winit::event::MouseButton>,
+}
+
+/// The normalized W3C button set for the currently held raw buttons.
+fn held_pointer_buttons(
+    pressed: &std::collections::HashSet<winit::event::MouseButton>,
+) -> ui_events::pointer::PointerButtons {
+    let mut buttons = ui_events::pointer::PointerButtons::default();
+    for raw in pressed {
+        buttons.insert(winit_events::convert_mouse_button(*raw));
+    }
+    buttons
 }
 
 impl WinitPlatformState {
@@ -277,7 +294,7 @@ impl WinitPlatformState {
             },
             cursor_positions: HashMap::new(),
             current_modifiers: KeyboardModifiers::empty(),
-            pressed_buttons: ui_events::pointer::PointerButtons::default(),
+            pressed_buttons: std::collections::HashSet::new(),
         }
     }
 
@@ -928,8 +945,15 @@ impl ApplicationHandler for WinitApp {
                 self.platform.with_state(|state| {
                     if focused {
                         state.active_window = Some(platform_id);
-                    } else if state.active_window == Some(platform_id) {
-                        state.active_window = None;
+                    } else {
+                        if state.active_window == Some(platform_id) {
+                            state.active_window = None;
+                        }
+                        // A release delivered while unfocused never reaches
+                        // `MouseInput`, so a set left as-is would replay the
+                        // stale hold on refocus and misclassify the next
+                        // cursor move as a drag.
+                        state.pressed_buttons.clear();
                     }
                 });
 
@@ -953,7 +977,10 @@ impl ApplicationHandler for WinitApp {
             WinitWindowEvent::CursorMoved { position, .. } => {
                 let (modifiers, held_buttons) = self.platform.with_state(|state| {
                     state.cursor_positions.insert(platform_id, position);
-                    (state.current_modifiers, state.pressed_buttons)
+                    (
+                        state.current_modifiers,
+                        held_pointer_buttons(&state.pressed_buttons),
+                    )
                 });
 
                 if let Some(ref win) = window {
@@ -965,14 +992,15 @@ impl ApplicationHandler for WinitApp {
             }
             WinitWindowEvent::MouseInput { state, button, .. } => {
                 let (modifiers, cursor_pos, held_buttons) = self.platform.with_state(|s| {
-                    // Track the transition first: the emitted event's
+                    // Track the RAW transition first: the emitted event's
                     // `buttons` is the set held AFTER it (press included,
-                    // release excluded), per the W3C contract.
-                    let pointer_button = winit_events::convert_mouse_button(button);
+                    // release excluded), per the W3C contract. Raw tracking
+                    // keeps aliased buttons (`Other(_)` normalizes onto
+                    // `Primary`) from clearing each other's bits.
                     if state == winit::event::ElementState::Pressed {
-                        s.pressed_buttons.insert(pointer_button);
+                        s.pressed_buttons.insert(button);
                     } else {
-                        s.pressed_buttons.remove(pointer_button);
+                        s.pressed_buttons.remove(&button);
                     }
                     (
                         s.current_modifiers,
@@ -980,7 +1008,7 @@ impl ApplicationHandler for WinitApp {
                             .get(&platform_id)
                             .copied()
                             .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
-                        s.pressed_buttons,
+                        held_pointer_buttons(&s.pressed_buttons),
                     )
                 });
 
