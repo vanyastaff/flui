@@ -23,14 +23,12 @@
 //! 1. **launch** — the app opens an X window within the timeout.
 //! 2. **drag scrolls** — an XTEST press-move-release drag changes the
 //!    window's pixels (the list scrolls, the bar collapses).
-//! 3. **clean close** — a `WM_DELETE_WINDOW` client message (a real window
+//! 3. **wheel scrolls** — three XTEST wheel ticks move the content (the
+//!    whole pointer-scroll wire: platform translation → hit-tested signal
+//!    → the scrollable's immediate scroll).
+//! 4. **clean close** — a `WM_DELETE_WINDOW` client message (a real window
 //!    close, no window manager required) makes the process exit `0` within
 //!    the timeout: no hang, no post-teardown crash.
-//!
-//! Wheel scrolling is deliberately NOT asserted yet: pointer-scroll events
-//! are emitted by the platform but consumed by nothing downstream, so a
-//! wheel assertion would either pin the broken behavior or fail the suite
-//! on a known, tracked gap. Add the check when wheel dispatch lands.
 
 #[cfg(target_os = "linux")]
 mod harness;

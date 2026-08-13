@@ -1165,6 +1165,15 @@ impl LaidOut {
         self.dispatch_pointer_event(&event);
     }
 
+    /// A mouse-wheel / trackpad pointer-scroll at `(x, y)` with a PIXEL
+    /// delta of `(dx, dy)` — the shape the platform layer produces after
+    /// its own line-to-pixel conversion. Routed by hit test like every
+    /// other contactless pointer event.
+    pub fn dispatch_scroll(&self, x: f32, y: f32, dx: f32, dy: f32) {
+        let event = flui_interaction::events::make_scroll_event(offset(x, y), offset(dx, dy));
+        self.dispatch_pointer_event(&event);
+    }
+
     /// Cancel the in-flight contact on its cached Down route.
     pub fn dispatch_pointer_cancel(&self) {
         let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);

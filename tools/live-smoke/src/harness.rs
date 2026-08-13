@@ -19,6 +19,8 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 const MOTION_NOTIFY: u8 = 6;
 const BUTTON_PRESS: u8 = 4;
 const BUTTON_RELEASE: u8 = 5;
+/// X11 core button number for a wheel-up tick.
+const WHEEL_UP: u8 = 4;
 
 pub(crate) fn run() -> Result<()> {
     let app_path = std::env::args()
@@ -128,6 +130,25 @@ fn run_checks(app: &mut Child) -> Result<()> {
         );
     }
     eprintln!("live-smoke: drag scrolls OK (pixels changed)");
+
+    // Wheel scrolling: three wheel-up ticks (X11 button 4) with the cursor
+    // over the list must move the content back toward the start.
+    let wheel_before = capture(&conn, window, &geometry)?;
+    for _ in 0..3 {
+        conn.xtest_fake_input(BUTTON_PRESS, WHEEL_UP, 0, root, 0, 0, 0)?;
+        conn.xtest_fake_input(BUTTON_RELEASE, WHEEL_UP, 0, root, 0, 0, 0)?;
+        conn.sync()?;
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    let wheel_after = capture(&conn, window, &geometry)?;
+    if wheel_before == wheel_after {
+        bail!(
+            "wheel check FAILED: pixels identical across three wheel ticks — \
+             pointer-scroll dispatch is not reaching the scrollable"
+        );
+    }
+    eprintln!("live-smoke: wheel scrolls OK (pixels changed)");
 
     // Check 3: a real window close exits cleanly.
     send_wm_delete(&conn, window)?;

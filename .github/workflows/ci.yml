@@ -324,9 +324,8 @@ jobs:
       # opens; the screen tracks a held drag mid-gesture (a parked-loop
       # regression freezes exactly this); the drag scrolled; a WM_DELETE
       # close exits 0 within a timeout (catches teardown hangs and
-      # post-quit crashes). X11 only — the Wayland teardown path is NOT
-      # covered here; wheel scrolling is deliberately not asserted until
-      # pointer-scroll dispatch exists.
+      # post-quit crashes); wheel ticks scroll. X11 only — the Wayland
+      # teardown path is NOT covered here.
       - name: live-smoke (real window, real input, real teardown)
         if: runner.os == 'Linux'
         run: |

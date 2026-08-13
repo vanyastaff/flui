@@ -31,7 +31,7 @@
 //! | :552 | pinned with slow scroll | PORTED (nine settled `animateTo` steps, all offsets/visibility/child-box rects literal) |
 //! | :673 | pinned with less overlap | PORTED |
 //! | :720 | overscroll gap is below header | PORTED (the :883 scrolling variant is the same assertion set; both ported as one) |
-//! | :759 | pointer scrolled floating | DEFERRED: needs mouse-wheel pointer-scroll dispatch, which the harness does not synthesize yet |
+//! | :759 | pointer scrolled floating | PORTED (wheel dispatch exists now; geometry asserts carry the case — the oracle's `find.text` presence probes are residency checks, and FLUI's eager `SliverFixedExtentList` keeps every item mounted, which makes text presence vacuous here — the established `find_text` ruling from the SliverFixedExtentList port) |
 //! | :812 | scrolling | PORTED |
 //! | :851 | scrolling off screen | PORTED |
 //! | :883 | scrolling — overscroll gap below header | PORTED (see :720) |
@@ -81,7 +81,8 @@ use flui_view::IntoView;
 use flui_view::view::ViewExt;
 use flui_widgets::{
     ConstrainedBox, OverScrollHeaderStretchConfiguration, ScrollController, Scrollable, SizedBox,
-    SliverPersistentHeader, SliverPersistentHeaderDelegate, SliverToBoxAdapter, Viewport,
+    SliverFixedExtentList, SliverPersistentHeader, SliverPersistentHeaderDelegate,
+    SliverToBoxAdapter, Viewport,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -702,6 +703,83 @@ fn pinned_headers_with_less_overlap_at_full_scroll() {
     verify_paint_position(&laid, key3, (0.0, 100.0), Some(true));
     verify_paint_position(&laid, key4, (0.0, 0.0), Some(false));
     verify_paint_position(&laid, key5, (0.0, 0.0), Some(true));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// :759 — pointer scrolled floating
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `TestDelegate3`: min = max = 56 (a toolbar-height floating header).
+struct ToolbarDelegate;
+
+impl SliverPersistentHeaderDelegate for ToolbarDelegate {
+    fn build(
+        &self,
+        _ctx: &dyn flui_view::BuildContext,
+        _shrink_offset: f32,
+        _overlaps_content: bool,
+    ) -> BoxedView {
+        SizedBox::new(800.0, 56.0).into_view().boxed()
+    }
+
+    fn min_extent(&self) -> f32 {
+        56.0
+    }
+
+    fn max_extent(&self) -> f32 {
+        56.0
+    }
+}
+
+/// Oracle: wheel the floating header away (+300), wheel back a little
+/// (−50) — the header must FLOAT back in by exactly that much even though
+/// the list is nowhere near its start — then the rest of the way (−250).
+/// A wheel tick is a USER scroll: its direction pulse is what
+/// `allow_floating_expansion` keys on. Deltas here are the
+/// platform-shaped (winit) convention — negative = content down — the
+/// mirror of the oracle's positive-down `scroll` offsets.
+#[test]
+fn a_pointer_scroll_floats_the_header_back_in() {
+    let controller = ScrollController::new();
+    let mut laid = mount_animated(
+        &controller,
+        vec![
+            SliverPersistentHeader::new(ToolbarDelegate)
+                .floating(true)
+                .into_view()
+                .boxed(),
+            SliverFixedExtentList::new(
+                50.0,
+                (0..30)
+                    .map(|_| SizedBox::new(800.0, 50.0).into_view().boxed())
+                    .collect::<Vec<BoxedView>>(),
+            )
+            .into_view()
+            .boxed(),
+        ],
+    );
+    let header = viewport_child(&laid, 0);
+
+    assert!(laid.sliver_geometry(header).visible);
+    assert_eq!(laid.sliver_geometry(header).paint_extent, 56.0);
+
+    // Wheel the header (and the list start) away.
+    laid.dispatch_scroll(400.0, 300.0, 0.0, -300.0);
+    laid.pump();
+    assert_eq!(laid.sliver_geometry(header).paint_extent, 0.0);
+    assert!(!laid.sliver_geometry(header).visible);
+
+    // A small wheel-up: the header floats back in by the tick's extent.
+    laid.dispatch_scroll(400.0, 300.0, 0.0, 50.0);
+    laid.pump();
+    assert_eq!(laid.sliver_geometry(header).paint_extent, 50.0);
+    assert!(laid.sliver_geometry(header).visible);
+
+    // The rest of the way in.
+    laid.dispatch_scroll(400.0, 300.0, 0.0, 250.0);
+    laid.pump();
+    assert_eq!(laid.sliver_geometry(header).paint_extent, 56.0);
+    assert!(laid.sliver_geometry(header).visible);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
