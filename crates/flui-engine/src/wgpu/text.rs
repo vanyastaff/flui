@@ -750,15 +750,12 @@ impl TextRenderer {
     // Frame render
     // ------------------------------------------------------------------
 
-    /// Renders all batched text to the GPU.
-    ///
-    /// Call once per frame after all `add_text`/`add_rich_text` calls.
-    #[must_use = "errors must be propagated or handled"]
     /// Render exactly the batch entries in `range` at the CURRENT point of
     /// the encoder — the per-segment half of ordered text. Uses a pooled
     /// glyphon renderer per call (see [`Self::segment_renderers`]); never
     /// clears the batch or advances frame bookkeeping — that is
     /// [`Self::finish_pass`]'s job, once, at the end of the submit.
+    #[must_use = "errors must be propagated or handled"]
     pub(crate) fn render_range(
         &mut self,
         device: &wgpu::Device,

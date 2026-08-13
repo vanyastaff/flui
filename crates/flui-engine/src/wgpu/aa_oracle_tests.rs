@@ -2859,6 +2859,72 @@ mod gpu_tests {
         );
     }
 
+    /// Geometry recorded AFTER text in the same segment must still cover
+    /// that text: a segment's geometry flushes as one unit before its glyph
+    /// range, so without a seal at the text boundary a `text(); rect()`
+    /// sequence keeps the original z-order flaw even after per-segment
+    /// ordering (the SSAA route only passed because it happens to split
+    /// the segment).
+    #[test]
+    fn later_rect_covers_earlier_text_in_the_same_segment() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        {
+            use crate::traits::CommandRenderer;
+            let mut backend = super::super::backend::Backend::new(&mut painter);
+            let blue_style = flui_types::typography::TextStyle {
+                color: Some(Color::rgb(0, 0, 255)),
+                ..flui_types::typography::TextStyle::default()
+            };
+            backend.render_text(
+                "Covered",
+                flui_types::Offset::new(Pixels(4.0), Pixels(30.0)),
+                &blue_style,
+                &Paint::fill(Color::rgb(0, 0, 255)),
+                &flui_types::Matrix4::IDENTITY,
+            );
+            // A plain instanced rect — the route that does NOT split the
+            // segment on its own.
+            backend.render_rect(
+                full,
+                &Paint::fill(Color::rgb(0, 255, 0)),
+                &flui_types::Matrix4::IDENTITY,
+            );
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Text Boundary Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let blue_pixels = pixels
+            .iter()
+            .filter(|p| p[2] > 200 && p[0] < 50 && p[1] < 50)
+            .count();
+        assert_eq!(
+            blue_pixels, 0,
+            "text followed by covering geometry in one segment must be \
+             buried; {blue_pixels} blue glyph pixels visible"
+        );
+    }
+
     // ── A4: Angular edges are anti-aliased (partial alpha) ───────────────────
 
     /// A4: The two angular edges of a ~90° arc must show partial alpha (anti-

@@ -36,6 +36,7 @@ impl super::WgpuPainter {
         rect: flui_types::Rect<flui_types::geometry::Pixels>,
         paint: &flui_painting::Paint,
     ) {
+        self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
 
@@ -58,6 +59,7 @@ impl super::WgpuPainter {
     /// boundary in the fragment shader, so no tessellation is needed for
     /// simple rounded rects.
     pub fn rrect(&mut self, rrect: flui_types::geometry::RRect, paint: &flui_painting::Paint) {
+        self.seal_text_tail();
         let opacity = self.compositor.current_opacity();
         self.batcher.rrect(
             &mut self.current_segment,
@@ -82,6 +84,7 @@ impl super::WgpuPainter {
         radius: f32,
         paint: &flui_painting::Paint,
     ) {
+        self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::circle: center={:?}, radius={}, paint={:?}",
@@ -113,6 +116,7 @@ impl super::WgpuPainter {
         rect: flui_types::Rect<flui_types::geometry::Pixels>,
         paint: &flui_painting::Paint,
     ) {
+        self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
 
@@ -143,6 +147,7 @@ impl super::WgpuPainter {
         use_center: bool,
         paint: &flui_painting::Paint,
     ) {
+        self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::draw_arc: rect={:?}, start={}, sweep={}, use_center={}, paint={:?}",
@@ -179,6 +184,7 @@ impl super::WgpuPainter {
         inner: flui_types::geometry::RRect,
         paint: &flui_painting::Paint,
     ) {
+        self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::draw_drrect: outer={:?}, inner={:?}, paint={:?}",
@@ -209,6 +215,7 @@ impl super::WgpuPainter {
         p2: flui_types::Point<flui_types::geometry::Pixels>,
         paint: &flui_painting::Paint,
     ) {
+        self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::line: p1={:?}, p2={:?}, paint={:?}",
@@ -263,12 +270,32 @@ impl super::WgpuPainter {
     /// Stamp a freshly-recorded text batch entry onto the CURRENT segment's
     /// glyph range, so replay draws it at this segment's z-position instead
     /// of in a global final pass. Entries are recorded strictly in segment
-    /// order, so the range only ever extends forward.
+    /// order, so the range only ever extends forward. Claims nothing when
+    /// the recording was a no-op (an empty rich-text run pushes no entry —
+    /// a phantom claim would point at a LATER entry and render it twice).
     fn claim_text_entry(&mut self, entry_index: usize) {
+        if self.text_renderer.text_count() == entry_index {
+            return;
+        }
         if self.current_segment.text_start == self.current_segment.text_end {
             self.current_segment.text_start = entry_index;
         }
         self.current_segment.text_end = entry_index + 1;
+    }
+
+    /// Seal the current segment if it already carries text: a segment's
+    /// geometry flushes as ONE unit before its glyph range, so geometry
+    /// recorded after text in the same segment would paint UNDER that text
+    /// — the original z-order flaw, back through a side door. Called at the
+    /// head of every geometry-recording method; consecutive text draws keep
+    /// accumulating in one segment.
+    fn seal_text_tail(&mut self) {
+        if self.current_segment.text_start != self.current_segment.text_end {
+            super::super::batches::DrawBatcher::finish_current_segment(
+                &mut self.current_segment,
+                &mut self.draw_order,
+            );
+        }
     }
 
     /// Renders a sequence of styled runs as rich text.
@@ -320,6 +347,7 @@ impl super::WgpuPainter {
         texture_id: flui_types::painting::TextureId,
         dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
     ) {
+        self.seal_text_tail();
         super::super::batches::DrawBatcher::texture(
             &mut self.current_segment,
             &self.state,
@@ -343,6 +371,7 @@ impl super::WgpuPainter {
         path: &flui_types::painting::path::Path,
         paint: &flui_painting::Paint,
     ) {
+        self.seal_text_tail();
         self.batcher.draw_path(
             &mut self.current_segment,
             &mut self.draw_order,
@@ -363,6 +392,7 @@ impl super::WgpuPainter {
         dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
         blend_mode: flui_painting::BlendMode,
     ) {
+        self.seal_text_tail();
         super::super::batches::DrawBatcher::draw_image(
             &mut self.current_segment,
             &mut self.draw_order,
@@ -386,6 +416,7 @@ impl super::WgpuPainter {
         repeat: flui_painting::display_list::ImageRepeat,
         blend_mode: flui_painting::BlendMode,
     ) {
+        self.seal_text_tail();
         super::super::batches::DrawBatcher::draw_image_repeat(
             &mut self.current_segment,
             &mut self.draw_order,
@@ -410,6 +441,7 @@ impl super::WgpuPainter {
         dst: flui_types::Rect<flui_types::geometry::Pixels>,
         blend_mode: flui_painting::BlendMode,
     ) {
+        self.seal_text_tail();
         super::super::batches::DrawBatcher::draw_image_nine_slice(
             &mut self.current_segment,
             &mut self.draw_order,
@@ -435,6 +467,7 @@ impl super::WgpuPainter {
         filter: flui_painting::display_list::ColorFilter,
         blend_mode: flui_painting::BlendMode,
     ) {
+        self.seal_text_tail();
         super::super::batches::DrawBatcher::draw_image_filtered(
             &mut self.current_segment,
             &mut self.draw_order,
@@ -461,6 +494,7 @@ impl super::WgpuPainter {
         color: flui_types::styling::Color,
         elevation: f32,
     ) {
+        self.seal_text_tail();
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::draw_shadow: elevation={}, color={:?}",
@@ -500,6 +534,7 @@ impl super::WgpuPainter {
         indices: &[u16],
         paint: &flui_painting::Paint,
     ) {
+        self.seal_text_tail();
         super::super::batches::DrawBatcher::draw_vertices(
             &mut self.current_segment,
             &mut self.draw_order,
@@ -525,6 +560,7 @@ impl super::WgpuPainter {
         colors: Option<&[flui_types::styling::Color]>,
         blend_mode: flui_painting::BlendMode,
     ) {
+        self.seal_text_tail();
         // Convert Matrix4 transforms to pixel-space origins here, at the
         // painter boundary, so the batcher stays Matrix4-free (C4 rule).
         // Each transform is column-major; m[12] = x translation, m[13] = y.
@@ -568,6 +604,7 @@ impl super::WgpuPainter {
         filter_quality: flui_types::painting::FilterQuality,
         opacity: f32,
     ) {
+        self.seal_text_tail();
         // Read dimensions only when a `src` sub-rect was supplied, so the
         // batcher can normalize pixel coordinates to UV in [0,1].  The
         // TextureView stays in the registry until replay time.

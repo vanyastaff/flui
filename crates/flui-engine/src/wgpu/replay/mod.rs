@@ -573,7 +573,6 @@ impl GpuReplay {
             }
         }
 
-        // Text is always the global final phase — rendered on top of all geometry.
         // The gaps: text recorded outside any top-level segment (today:
         // text inside recursive items — opacity layers and their kin —
         // whose own flushes do not yet range-render). Claimed ranges are
