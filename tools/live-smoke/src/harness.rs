@@ -102,33 +102,30 @@ fn run_checks(app: &mut Child) -> Result<()> {
     // First half of the drag, still held: the screen must ALREADY have
     // moved by the second capture — a screen that only updates after the
     // release means input stopped producing frames (the parked-loop bug:
-    // 125 pointer events, 2 frames).
+    // 125 pointer events, 2 frames). Deadline-polled, not fixed-sleep: a
+    // software raster on a 2-core CI runner can take hundreds of
+    // milliseconds per frame, and a fixed gap can straddle ZERO presents.
     let reached = drag_to(drag_from_y, 10)?;
     std::thread::sleep(Duration::from_millis(300));
     let mid_first = capture(&conn, window, &geometry)?;
     let _ = drag_to(reached, 10)?;
-    std::thread::sleep(Duration::from_millis(300));
-    let mid_second = capture(&conn, window, &geometry)?;
-    if mid_first == mid_second {
-        bail!(
+    wait_for_pixel_change(&conn, window, &geometry, &mid_first).map_err(|_| {
+        anyhow::anyhow!(
             "mid-drag check FAILED: pixels frozen between two held-drag \
              segments 150px apart — input is not producing frames"
-        );
-    }
+        )
+    })?;
     eprintln!("live-smoke: mid-drag tracking OK (screen follows the pointer)");
 
     conn.xtest_fake_input(BUTTON_RELEASE, 1, 0, root, 0, 0, 0)?;
     conn.sync()?;
-    std::thread::sleep(Duration::from_secs(2));
 
-    let after = capture(&conn, window, &geometry)?;
-    if before == after {
-        bail!(
-            "drag check FAILED: {} identical bytes before and after a 300px \
-             drag — pointer moves are not reaching the scrollable at all",
-            before.len(),
-        );
-    }
+    wait_for_pixel_change(&conn, window, &geometry, &before).map_err(|_| {
+        anyhow::anyhow!(
+            "drag check FAILED: pixels identical before and after a 300px \
+             drag — pointer moves are not reaching the scrollable at all"
+        )
+    })?;
     eprintln!("live-smoke: drag scrolls OK (pixels changed)");
 
     // Wheel scrolling: three wheel-up ticks (X11 button 4) with the cursor
@@ -140,14 +137,12 @@ fn run_checks(app: &mut Child) -> Result<()> {
         conn.sync()?;
         std::thread::sleep(Duration::from_millis(100));
     }
-    std::thread::sleep(Duration::from_millis(500));
-    let wheel_after = capture(&conn, window, &geometry)?;
-    if wheel_before == wheel_after {
-        bail!(
+    wait_for_pixel_change(&conn, window, &geometry, &wheel_before).map_err(|_| {
+        anyhow::anyhow!(
             "wheel check FAILED: pixels identical across three wheel ticks — \
              pointer-scroll dispatch is not reaching the scrollable"
-        );
-    }
+        )
+    })?;
     eprintln!("live-smoke: wheel scrolls OK (pixels changed)");
 
     // Check 3: a real window close exits cleanly.
@@ -210,6 +205,28 @@ fn wait_for_window(conn: &RustConnection, root: Window, app: &mut Child) -> Resu
 fn fake_motion(conn: &RustConnection, root: Window, x: i16, y: i16) -> Result<()> {
     conn.xtest_fake_input(MOTION_NOTIFY, 0, 0, root, x, y, 0)?;
     Ok(())
+}
+
+/// Poll until the window's pixels differ from `baseline` — the deadline
+/// absorbs arbitrarily slow software rasters without weakening the oracle
+/// (an unchanged screen still fails, just after the full deadline).
+fn wait_for_pixel_change(
+    conn: &RustConnection,
+    window: Window,
+    geometry: &x11rb::protocol::xproto::GetGeometryReply,
+    baseline: &[u8],
+) -> Result<Vec<u8>> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let current = capture(conn, window, geometry)?;
+        if current != baseline {
+            return Ok(current);
+        }
+        if Instant::now() > deadline {
+            bail!("no pixel change within the deadline");
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// The window's current pixels, straight from the server.
