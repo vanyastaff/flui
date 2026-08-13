@@ -1026,6 +1026,7 @@ impl ApplicationHandler for WinitApp {
                 }
             }
             WinitWindowEvent::MouseWheel { delta, .. } => {
+                tracing::debug!(?delta, "MouseWheel");
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {
                     (
                         s.current_modifiers,

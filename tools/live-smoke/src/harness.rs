@@ -43,7 +43,7 @@ pub(crate) fn run() -> Result<()> {
         // logs next to nothing.
         .env(
             "RUST_LOG",
-            "info,flui_widgets::scroll=trace,flui_platform=debug",
+            "warn,flui_widgets::scroll=trace,flui_platform=debug",
         )
         // BOTH streams: the app's subscriber writes to stdout — a
         // null'd stdout was why CI failures reported "stderr (last 0
