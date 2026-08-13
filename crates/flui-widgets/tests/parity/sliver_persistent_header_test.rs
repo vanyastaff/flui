@@ -429,12 +429,14 @@ fn settle_animation(laid: &mut LaidOut, controller: &ScrollController) {
         !controller.position().is_scrolling(),
         "the driven run must settle (still animating after {pumps} 1s pumps)"
     );
-    // One trailing pump: the tick that completes the run writes the final
+    // One trailing frame: the tick that completes the run writes the final
     // pixel value and ends the activity in the same frame, so the layout
     // that consumes that value is still pending — the oracle's
     // `pumpAndSettle` keeps pumping until NO frames are scheduled, which
-    // includes it.
-    laid.pump();
+    // includes it. `tick` (a frame with no root dirtying), not `pump` (a
+    // `setState`-style rebuild), so the settle adds no extra build pass
+    // the oracle would not have run.
+    laid.tick();
 }
 
 /// Oracle: a floating header must NOT float back into view when the
