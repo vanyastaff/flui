@@ -23,6 +23,10 @@
 //!   background's `top` (`:220`, `CollapseMode.parallax`, the default).
 //! - **title scale** = `lerp(expanded_title_scale, 1, t)` about the title's
 //!   own corner (`:330-335`).
+//! - **toolbar opacity** fades the title (`:316-321`). Named divergence:
+//!   Flutter rewrites the title style's COLOR alpha; FLUI wraps the title
+//!   layer in an `Opacity`, which is visually equivalent for the title
+//!   layer and directly assertable in tests.
 //!
 //! # Deferred, deliberately
 //!
@@ -36,7 +40,10 @@ use flui_view::prelude::StatelessView;
 use flui_view::{
     BoxedView, BuildContext, InheritedView, IntoView, View, ViewExt, impl_inherited_view,
 };
-use flui_widgets::{Align, Opacity, Padding, Positioned, SizedBox, Stack, Transform};
+use flui_widgets::{
+    Align, DefaultTextStyle, Directionality, Opacity, Padding, Positioned, SizedBox, Stack,
+    Transform,
+};
 
 /// The collapse state a [`FlexibleSpaceBar`] interpolates over — provided by
 /// the enclosing `SliverAppBar` delegate on every build-during-layout
@@ -208,11 +215,12 @@ impl StatelessView for FlexibleSpaceBar {
         let mut layers: Vec<BoxedView> = Vec::new();
 
         if let Some(background) = &self.background {
-            let fade_start = (1.0 - crate::app_bar::DEFAULT_TOOLBAR_HEIGHT / delta_extent).max(0.0);
             // Equal extents cannot collapse; the content stays visible.
             let opacity = if delta_extent <= 0.0 {
                 1.0
             } else {
+                let fade_start =
+                    (1.0 - crate::app_bar::DEFAULT_TOOLBAR_HEIGHT / delta_extent).max(0.0);
                 1.0 - interval_transform(fade_start, t)
             };
             // CollapseMode::parallax (the default): the background drifts
@@ -233,24 +241,49 @@ impl StatelessView for FlexibleSpaceBar {
 
         if let Some(title) = &self.title {
             let scale = self.expanded_title_scale + (1.0 - self.expanded_title_scale) * t;
+            // Start/end resolve through the ambient Directionality — a
+            // leading-aligned title sits at the RIGHT edge under RTL, and
+            // its 72px leading inset moves with it.
+            let rtl = Directionality::maybe_of(ctx)
+                .is_some_and(|direction| direction == flui_types::typography::TextDirection::Rtl);
             let alignment = if self.center_title {
                 Alignment::BOTTOM_CENTER
+            } else if rtl {
+                Alignment::BOTTOM_RIGHT
             } else {
                 Alignment::BOTTOM_LEFT
             };
-            // Flutter's default title padding: bottom 16, and a 72px start
+            // Flutter's default title padding: bottom 16, and a 72px START
             // inset when leading-aligned (past the leading slot).
-            let padding = if self.center_title {
-                EdgeInsets::new(px_f(0.0), px_f(0.0), px_f(0.0), px_f(16.0))
-            } else {
-                EdgeInsets::new(px_f(0.0), px_f(72.0), px_f(0.0), px_f(16.0))
+            let start_inset = if self.center_title { 0.0 } else { 72.0 };
+            let padding = EdgeInsets {
+                top: px_f(0.0),
+                right: px_f(if rtl { start_inset } else { 0.0 }),
+                bottom: px_f(16.0),
+                left: px_f(if rtl { 0.0 } else { start_inset }),
+            };
+            // The Material title style, faded by the delegate's toolbar
+            // opacity (see the module doc's named divergence).
+            let styled_title: BoxedView = match crate::Theme::maybe_of(ctx) {
+                Some(theme) => {
+                    let style = theme
+                        .text_theme
+                        .title_large
+                        .clone()
+                        .unwrap_or_default()
+                        .with_color(theme.color_scheme.on_surface);
+                    DefaultTextStyle::new(style, title.clone()).boxed()
+                }
+                None => title.clone(),
             };
             layers.push(
-                Padding::new(padding)
+                Opacity::new(data.toolbar_opacity)
                     .child(
-                        Transform::scale(scale, scale)
-                            .alignment(alignment)
-                            .child(Align::new(alignment).child(title.clone())),
+                        Padding::new(padding).child(
+                            Transform::scale(scale, scale)
+                                .alignment(alignment)
+                                .child(Align::new(alignment).child(styled_title)),
+                        ),
                     )
                     .boxed(),
             );

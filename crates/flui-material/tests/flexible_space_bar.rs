@@ -44,9 +44,8 @@ fn bar_at(offset: f32) -> Theme {
     )
 }
 
-/// Expanded (`t = 0`): the background is fully opaque — `RenderOpacity`'s
-/// diagnostics hide the property at its 1.0 default, which is itself the
-/// assertion — and sits at the bar's top (no parallax yet).
+/// Expanded (`t = 0`): the background is fully opaque and sits at the
+/// bar's top (no parallax yet).
 #[test]
 fn expanded_background_is_opaque_and_unshifted() {
     let laid = lay_out(bar_at(0.0), tight(400.0, 600.0));
