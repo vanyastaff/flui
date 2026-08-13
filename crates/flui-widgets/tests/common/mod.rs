@@ -339,7 +339,6 @@ impl LaidOut {
             .expect("render node should have box geometry after layout")
     }
 
-    /// The committed sliver geometry of a render node.
     /// The string value of a mounted render node's named diagnostics
     /// property — mirrors the flui-material harness helper of the same
     /// name, so parity ports can assert configuration reached the render
@@ -353,6 +352,7 @@ impl LaidOut {
         })
     }
 
+    /// The committed sliver geometry of a render node.
     pub fn sliver_geometry(&self, id: RenderId) -> SliverGeometry {
         self.pipeline_owner
             .with(|owner| inspect::sliver_geometry(owner, id))
