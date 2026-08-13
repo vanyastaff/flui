@@ -315,6 +315,25 @@ jobs:
           FLUI_HEADLESS: "1"
         run: xvfb-run -a cargo nextest run -p flui-platform --all-features --locked --no-fail-fast
 
+      # Live E2E smoke: a REAL windowed demo binary driven by REAL X11 input
+      # (XTEST fake pointer), asserting on captured pixels and the process's
+      # exit code. This is the only place the band ABOVE synthetic event
+      # dispatch is executed at all: the winit translation layer, the
+      # event-loop wake chain, and window-close teardown each shipped broken
+      # while every synthetic gesture test stayed green. Checks: the window
+      # opens; the screen tracks a held drag mid-gesture (a parked-loop
+      # regression freezes exactly this); the drag scrolled; a WM_DELETE
+      # close exits 0 within a timeout (catches teardown hangs and
+      # post-quit crashes). X11 only — the Wayland teardown path is NOT
+      # covered here; wheel scrolling is deliberately not asserted until
+      # pointer-scroll dispatch exists.
+      - name: live-smoke (real window, real input, real teardown)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p flui --features material --example sliver_demo --locked
+          cargo build -p flui-live-smoke --locked
+          xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo
+
       # flui-assets and flui-widgets both default to `default = []`, so the
       # workspace-default run above never compiles their `images`/`network`
       # decode-and-cache paths or the Image widget's own file-decode test —

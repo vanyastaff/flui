@@ -54,6 +54,7 @@ members = [
 
     # === Tools ===
     "tools/web-server", # Built-in web dev server (wasm-pack + HTTP serve)
+    "tools/live-smoke", # Live E2E harness: real window, real X11 input, real teardown
 
     # === Animation Layer ===
     "crates/flui-animation", # Animation system (ACTIVE)

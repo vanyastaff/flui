@@ -139,6 +139,13 @@ test *args:
     cargo test --workspace {{args}}
 
 [group("test")]
+[doc("Live E2E smoke: a REAL windowed demo driven by REAL X11 input (XTEST) — launch, mid-drag tracking, scroll, clean WM_DELETE close. Needs xvfb-run (apt install xvfb). Covers the band synthetic tests can't: platform translation, the wake chain, teardown")]
+live-smoke:
+    cargo build --package flui --features material --example sliver_demo
+    cargo build --package flui-live-smoke
+    xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo
+
+[group("test")]
 [doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
