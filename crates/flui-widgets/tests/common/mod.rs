@@ -339,6 +339,19 @@ impl LaidOut {
             .expect("render node should have box geometry after layout")
     }
 
+    /// The string value of a mounted render node's named diagnostics
+    /// property — mirrors the flui-material harness helper of the same
+    /// name, so parity ports can assert configuration reached the render
+    /// object without downcasting.
+    pub fn render_property(&self, id: RenderId, property_name: &str) -> Option<String> {
+        self.pipeline_owner.with(|owner| {
+            let diagnostics = owner.debug_node_diagnostics(id)?;
+            diagnostics
+                .find_property(property_name)
+                .map(|property| property.value().to_string())
+        })
+    }
+
     /// The committed sliver geometry of a render node.
     pub fn sliver_geometry(&self, id: RenderId) -> SliverGeometry {
         self.pipeline_owner

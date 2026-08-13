@@ -469,11 +469,27 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             corrected_offset.min(0.0)
         };
 
+        // Oracle (`rendering/viewport.dart:1831-1846`): the forward sequence
+        // starts at the ZERO-SCROLL LINE, not the viewport's leading edge —
+        // `centerOffset` clamped into the viewport (and unclamped once fully
+        // past it), with the paint budget shrunk by the same amount. The two
+        // differ from the previous constants (`0.0` / `main_axis_extent`)
+        // exactly when `center_offset > 0`: an overscrolled-at-the-start
+        // viewport, where every sliver shifts down by the overscroll and the
+        // gap opens below a persistent header's negative `paint_origin`.
+        let forward_layout_offset = if center_offset >= main_axis_extent {
+            center_offset
+        } else {
+            center_offset.clamp(0.0, main_axis_extent)
+        };
+        let forward_remaining_paint_extent =
+            (main_axis_extent - center_offset).clamp(0.0, main_axis_extent);
+
         let sequence_base = LayoutChildSequenceParams {
             scroll_offset: corrected_offset.max(0.0),
             overlap: forward_overlap,
-            layout_offset: 0.0,
-            remaining_paint_extent: main_axis_extent,
+            layout_offset: forward_layout_offset,
+            remaining_paint_extent: forward_remaining_paint_extent,
             main_axis_extent,
             cross_axis_extent,
             size,
@@ -492,8 +508,9 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         }
 
         if has_reverse_group {
-            // W3.2 limitation: reverse pass reuses the forward-pass cache window.
-            // Flutter recomputes cache parameters from forward results (Wave 3.3).
+            // Known gap: the reverse pass reuses the forward pass's cache
+            // window; Flutter derives the reverse pass's own cache parameters
+            // from the forward results (`rendering/viewport.dart:1812-1825`).
             let reverse_params = LayoutChildSequenceParams {
                 growth_direction: GrowthDirection::Reverse,
                 // Oracle: the reverse sequence always lays out with `overlap: 0.0`
@@ -501,6 +518,15 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
                 // `forward_overlap` above — stated explicitly so this invariant
                 // survives future changes to the `has_reverse_group` branch.
                 overlap: 0.0,
+                // Same known gap as the cache note above: the reverse pass
+                // keeps the leading-edge origin and full paint budget it has
+                // always used, rather than inheriting the forward pass's
+                // center-line values — Flutter derives the reverse pass's own
+                // window (`rendering/viewport.dart:1812-1825`). Pinned here so
+                // the forward-sequence fix cannot change reverse behavior as a
+                // side effect.
+                layout_offset: 0.0,
+                remaining_paint_extent: main_axis_extent,
                 child_start: center,
                 child_end: child_count,
                 ..sequence_base
