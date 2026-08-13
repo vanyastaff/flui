@@ -2461,6 +2461,68 @@ fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
     );
 }
 
+/// A driven `animate_to` IS a scroll activity — Flutter parity:
+/// `animateTo` begins a `DrivenScrollActivity`, so `isScrollingNotifier`
+/// holds true for the run's whole duration (`scroll_position.dart`,
+/// `beginActivity`) — while `userScrollDirection` stays `Idle` throughout,
+/// because a driven run is not a USER scroll. Both halves matter to a
+/// floating header: the activity keeps its snap trigger honest, and the
+/// idle direction is what keeps the header from float-revealing during a
+/// programmatic backward animation.
+#[test]
+fn a_driven_animate_to_is_a_scroll_activity_but_not_a_user_scroll() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+    let position = controller.position();
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    assert!(!position.is_scrolling(), "idle before the call");
+    controller.animate_to(1000.0, Duration::from_millis(100), Arc::new(Curves::Linear));
+
+    // Pump 1 services the queued command and starts the run — the activity
+    // must be live from that point.
+    scoped.pump_for(Duration::from_millis(16));
+    assert!(
+        position.is_scrolling(),
+        "a driven animation is a scroll activity from the frame that starts it"
+    );
+    assert_eq!(
+        position.user_scroll_direction(),
+        ScrollDirection::Idle,
+        "a driven run is not a USER scroll — the direction stays idle"
+    );
+
+    // Mid-run the signal holds.
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    assert!(
+        position.is_scrolling(),
+        "the activity holds through the run"
+    );
+
+    // Bounded settle: completion must end the activity through the same
+    // status-listener half a ballistic fling uses.
+    let mut frames = 0;
+    while position.is_scrolling() && frames < 2_000 {
+        scoped.pump_for(Duration::from_millis(16));
+        frames += 1;
+    }
+    assert!(
+        !position.is_scrolling(),
+        "the run's completion must end the activity (still scrolling after {frames} frames)"
+    );
+    assert_eq!(
+        controller.pixels(),
+        1000.0,
+        "and the run itself still lands on the target"
+    );
+}
+
 /// A fling keeps the activity alive through the ballistic run and ends it
 /// when the simulation settles — the status-listener half of the signal.
 /// Without it, `is_scrolling` would stick true forever after any fling.

@@ -491,6 +491,14 @@ impl ScrollController {
                 // would visibly jump instead of starting from where the
                 // position actually sits.
                 fling.set_value(self.pixels());
+                // Flutter parity: `animateTo` runs inside a driven scroll
+                // activity, so `isScrollingNotifier` holds true for the run
+                // (`scroll_position.dart`, `beginActivity`) — while the USER
+                // direction stays idle, because nobody's finger is down. The
+                // fling controller's status listener (installed by
+                // `ScrollableState`) ends the activity when the run settles,
+                // exactly as it does for a ballistic fling.
+                self.position().set_is_scrolling(true);
                 let _ = fling.animate_to_curved(target_pixels, Some(duration), curve);
             }
             PendingScrollCommand::Cancel => {

@@ -1159,11 +1159,18 @@ impl AnimationController {
             return;
         }
 
-        // Non-repeating completion.
+        // Non-repeating completion. Flutter parity: `_tick` reports the
+        // settled status BY DIRECTION — completed after a forward run,
+        // dismissed after a reverse one — with no at-a-bound requirement
+        // (`animation_controller.dart:940-944`). Keeping the running status
+        // for a mid-range stop (the previous behavior) starved every status
+        // listener of the run's end: on an unbounded controller (a
+        // scrollable's pixel-space fling controller) a driven `animate_to`
+        // NEVER lands on a bound, so its completion was silent.
         if let Some(ticker) = &mut inner.ticker {
             ticker.stop();
         }
-        let status = inner.settled_status_keep_direction();
+        let status = inner.settled_status_directed();
         inner.status = status;
         let callbacks = inner.take_status_change();
         drop(inner);

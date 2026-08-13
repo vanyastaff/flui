@@ -488,6 +488,76 @@ fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends() {
         controller.pixels()
     );
 }
+/// A driven `animate_to` ending must NOT trigger a snap — Flutter parity:
+/// snapping keys on USER scrolls only, and a driven run never records a
+/// user direction, so the listener's idle edge finds nothing captured.
+/// Now that a driven run raises the scroll-activity signal (it IS a
+/// scroll activity), this is the case that keeps the signal's new
+/// coverage from leaking into the snap trigger: the run's start-and-end
+/// edges fire with no direction, and the header must stay collapsed.
+#[test]
+fn a_driven_animate_to_ending_does_not_snap() {
+    use std::time::Duration;
+
+    use flui_animation::{Curves, Vsync};
+    use flui_widgets::{ScrollController, Scrollable, Viewport, VsyncScope};
+
+    let builds = Rc::new(RefCell::new(Vec::new()));
+    let builds_for_delegate = Rc::clone(&builds);
+    let controller = ScrollController::new();
+    let vsync = Vsync::new();
+
+    let scrollable = Scrollable::new()
+        .controller(controller.clone())
+        .viewport_builder(Rc::new(move |position| {
+            Viewport::new((
+                SliverPersistentHeader::new(SnappingDelegate {
+                    builds: Rc::clone(&builds_for_delegate),
+                })
+                .floating(true),
+                trailing_content(),
+            ))
+            .position(position)
+            .boxed()
+        }));
+
+    let mut laid = lay_out(
+        VsyncScope::new(vsync.clone(), scrollable),
+        tight(300.0, 300.0),
+    );
+    laid.adopt_vsync(vsync);
+
+    // Scroll deep: the floating header scrolls away entirely.
+    controller.jump_to(200.0);
+    laid.pump();
+    assert_eq!(
+        builds.borrow().last().map(|(shrink, _)| *shrink),
+        Some(120.0),
+        "premise: the header is fully collapsed after the deep scroll"
+    );
+
+    // A programmatic START-WARD animation — the same direction of travel
+    // that, coming from a finger, would seed the snap trigger.
+    controller.animate_to(
+        180.0,
+        Duration::from_millis(64),
+        std::sync::Arc::new(Curves::Linear),
+    );
+    // Drive well past the run's end AND past any snap animation that a
+    // regression would have started (the snap config in this fixture is
+    // 64ms too).
+    for _ in 0..12 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(controller.pixels(), 180.0, "premise: the run completed");
+    assert_eq!(
+        builds.borrow().last().map(|(shrink, _)| *shrink),
+        Some(120.0),
+        "a driven run's end is not a user gesture — no snap may start;          builds: {:?}",
+        builds.borrow()
+    );
+}
+
 /// A new drag beginning mid-snap must STOP the snap immediately — the
 /// finger owns the header now. Without the stop, the settle animation
 /// keeps driving the reveal underneath the user's drag and the header
