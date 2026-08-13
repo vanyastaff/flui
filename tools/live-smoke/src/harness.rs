@@ -19,6 +19,8 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 const MOTION_NOTIFY: u8 = 6;
 const BUTTON_PRESS: u8 = 4;
 const BUTTON_RELEASE: u8 = 5;
+/// X11 core button number for a wheel-up tick.
+const WHEEL_UP: u8 = 4;
 
 pub(crate) fn run() -> Result<()> {
     let app_path = std::env::args()
@@ -36,6 +38,10 @@ pub(crate) fn run() -> Result<()> {
         // put the window on the developer's real compositor instead of the
         // harness's (usually Xvfb) X server.
         .env_remove("WAYLAND_DISPLAY")
+        // Diagnosable-by-default: when a check fails on a CI runner the
+        // captured stderr is the only witness, and the default filter
+        // logs next to nothing.
+        .env("RUST_LOG", "info,flui_widgets=debug,flui_platform=debug")
         .stdout(Stdio::null())
         .stderr(log_file)
         .spawn()
@@ -50,7 +56,7 @@ pub(crate) fn run() -> Result<()> {
         let _ = app.kill();
         let _ = app.wait();
         if let Ok(log) = std::fs::read_to_string(&log_path) {
-            let tail: Vec<&str> = log.lines().rev().take(40).collect();
+            let tail: Vec<&str> = log.lines().rev().take(200).collect();
             eprintln!("live-smoke: app stderr (last {} lines):", tail.len());
             for line in tail.iter().rev() {
                 eprintln!("  {line}");
@@ -100,34 +106,64 @@ fn run_checks(app: &mut Child) -> Result<()> {
     // First half of the drag, still held: the screen must ALREADY have
     // moved by the second capture — a screen that only updates after the
     // release means input stopped producing frames (the parked-loop bug:
-    // 125 pointer events, 2 frames).
+    // 125 pointer events, 2 frames). Deadline-polled, not fixed-sleep: a
+    // software raster on a 2-core CI runner can take hundreds of
+    // milliseconds per frame, and a fixed gap can straddle ZERO presents.
     let reached = drag_to(drag_from_y, 10)?;
     std::thread::sleep(Duration::from_millis(300));
     let mid_first = capture(&conn, window, &geometry)?;
     let _ = drag_to(reached, 10)?;
-    std::thread::sleep(Duration::from_millis(300));
-    let mid_second = capture(&conn, window, &geometry)?;
-    if mid_first == mid_second {
-        bail!(
+    wait_for_pixel_change(&conn, window, &geometry, &mid_first).map_err(|_| {
+        anyhow::anyhow!(
             "mid-drag check FAILED: pixels frozen between two held-drag \
              segments 150px apart — input is not producing frames"
-        );
-    }
+        )
+    })?;
     eprintln!("live-smoke: mid-drag tracking OK (screen follows the pointer)");
 
     conn.xtest_fake_input(BUTTON_RELEASE, 1, 0, root, 0, 0, 0)?;
     conn.sync()?;
-    std::thread::sleep(Duration::from_secs(2));
 
-    let after = capture(&conn, window, &geometry)?;
-    if before == after {
-        bail!(
-            "drag check FAILED: {} identical bytes before and after a 300px \
-             drag — pointer moves are not reaching the scrollable at all",
-            before.len(),
-        );
-    }
+    wait_for_pixel_change(&conn, window, &geometry, &before).map_err(|_| {
+        anyhow::anyhow!(
+            "drag check FAILED: pixels identical before and after a 300px \
+             drag — pointer moves are not reaching the scrollable at all"
+        )
+    })?;
     eprintln!("live-smoke: drag scrolls OK (pixels changed)");
+
+    // Wheel scrolling: three wheel-up ticks (X11 button 4) with the cursor
+    // over the list must move the content back toward the start. Let any
+    // post-release fling settle first, so the poll below can only be
+    // satisfied by the wheel itself — and log the settling for CI triage.
+    let mut settle_probe = capture(&conn, window, &geometry)?;
+    let settle_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let next = capture(&conn, window, &geometry)?;
+        if next == settle_probe {
+            break;
+        }
+        settle_probe = next;
+        if Instant::now() > settle_deadline {
+            eprintln!("live-smoke: note — screen still animating 15s after release");
+            break;
+        }
+    }
+    let wheel_before = capture(&conn, window, &geometry)?;
+    for _ in 0..3 {
+        conn.xtest_fake_input(BUTTON_PRESS, WHEEL_UP, 0, root, 0, 0, 0)?;
+        conn.xtest_fake_input(BUTTON_RELEASE, WHEEL_UP, 0, root, 0, 0, 0)?;
+        conn.sync()?;
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    wait_for_pixel_change(&conn, window, &geometry, &wheel_before).map_err(|_| {
+        anyhow::anyhow!(
+            "wheel check FAILED: pixels identical across three wheel ticks — \
+             pointer-scroll dispatch is not reaching the scrollable"
+        )
+    })?;
+    eprintln!("live-smoke: wheel scrolls OK (pixels changed)");
 
     // Check 3: a real window close exits cleanly.
     send_wm_delete(&conn, window)?;
@@ -189,6 +225,28 @@ fn wait_for_window(conn: &RustConnection, root: Window, app: &mut Child) -> Resu
 fn fake_motion(conn: &RustConnection, root: Window, x: i16, y: i16) -> Result<()> {
     conn.xtest_fake_input(MOTION_NOTIFY, 0, 0, root, x, y, 0)?;
     Ok(())
+}
+
+/// Poll until the window's pixels differ from `baseline` — the deadline
+/// absorbs arbitrarily slow software rasters without weakening the oracle
+/// (an unchanged screen still fails, just after the full deadline).
+fn wait_for_pixel_change(
+    conn: &RustConnection,
+    window: Window,
+    geometry: &x11rb::protocol::xproto::GetGeometryReply,
+    baseline: &[u8],
+) -> Result<Vec<u8>> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let current = capture(conn, window, geometry)?;
+        if current != baseline {
+            return Ok(current);
+        }
+        if Instant::now() > deadline {
+            bail!("no pixel change within the deadline");
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// The window's current pixels, straight from the server.

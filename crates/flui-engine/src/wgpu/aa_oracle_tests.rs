@@ -2732,6 +2732,121 @@ mod gpu_tests {
         );
     }
 
+    // ── Draw order across raster routes ──────────────────────────────────────
+
+    /// A later SSAA-routed path fill must composite OVER earlier main-pass
+    /// content: draw order is z-order regardless of which raster route a
+    /// command takes. This is exactly a Material surface — a large filled
+    /// rect PATH from `RenderPhysicalShape` — painted after list rows
+    /// (instanced-SDF rects): if the SSAA tile composites at the wrong
+    /// position in the pass sequence, the surface vanishes under content it
+    /// was painted over, and a collapsed pinned `SliverAppBar` renders as a
+    /// transparent strip with the rows showing through.
+    #[test]
+    fn later_ssaa_path_fill_covers_earlier_rect() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        {
+            // Through the SAME `Backend` adapter the layer-tree walk uses —
+            // draws arrive as `render_*(…, transform)` with per-command
+            // matrices, exactly the collapsed-app-bar stream: translated
+            // row rects + glyphs first, then the surface path at identity.
+            use crate::traits::CommandRenderer;
+            let mut backend = super::super::backend::Backend::new(&mut painter);
+            // The real stream runs inside the viewport's clip.
+            backend.clip_rect(
+                full,
+                flui_types::painting::ClipOp::Intersect,
+                flui_types::painting::Clip::HardEdge,
+                &flui_types::Matrix4::IDENTITY,
+            );
+            // The failing frame's exact tail: the row rect and the surface
+            // path share IDENTITY transforms and the SAME rectangle.
+            backend.render_rect(
+                full,
+                &Paint::fill(Color::rgb(255, 0, 0)),
+                &flui_types::Matrix4::IDENTITY,
+            );
+            // Color rides the STYLE: `render_text` derives its paint from
+            // `style.color` and ignores the paint parameter.
+            let blue_style = flui_types::typography::TextStyle {
+                color: Some(Color::rgb(0, 0, 255)),
+                ..flui_types::typography::TextStyle::default()
+            };
+            backend.render_text(
+                "Row",
+                flui_types::Offset::new(Pixels(4.0), Pixels(30.0)),
+                &blue_style,
+                &Paint::fill(Color::rgb(0, 0, 255)),
+                &flui_types::Matrix4::IDENTITY,
+            );
+            let path = flui_types::painting::path::Path::rectangle(full);
+            backend.render_path(
+                &path,
+                &Paint::fill(Color::rgb(0, 255, 0)),
+                &flui_types::Matrix4::IDENTITY,
+            );
+            backend.render_text(
+                "Title",
+                flui_types::Offset::new(Pixels(4.0), Pixels(50.0)),
+                &flui_types::typography::TextStyle::default(),
+                &Paint::fill(Color::rgb(255, 255, 0)),
+                &flui_types::Matrix4::IDENTITY,
+            );
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Path Order Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let center =
+            (SURFACE_HEIGHT as usize / 2) * SURFACE_WIDTH as usize + SURFACE_WIDTH as usize / 2;
+        let [r, g, b, a] = pixels[center];
+        assert!(
+            g > 200 && r < 50 && a > 200,
+            "the LATER path fill must cover the EARLIER rect at the center; \
+             got rgba=({r}, {g}, {b}, {a}) — green buried under red means the \
+             SSAA composite ran out of draw order"
+        );
+        // The EARLIER text must be covered too: glyph batches must not
+        // composite after the path that was painted over them. The earlier
+        // "Row" glyphs are pure blue; any blue pixel left anywhere means
+        // text jumped the draw order — the collapsed-app-bar symptom where
+        // a covered row's LABEL floats over the toolbar surface.
+        let blue_pixels = pixels
+            .iter()
+            .filter(|p| p[2] > 200 && p[0] < 50 && p[1] < 50)
+            .count();
+        // CANARY of the KNOWN z-order flaw (issue #718): all glyphs render
+        // in one final pass, so the earlier blue text incorrectly floats
+        // over the later opaque path fill. When per-segment glyph ordering
+        // lands this assertion flips to `blue_pixels == 0` — the day this
+        // canary breaks is the day to do that.
+        assert!(
+            blue_pixels > 0,
+            "text now respects draw order — flip this canary to assert \
+             blue_pixels == 0 and close the tracking issue"
+        );
+    }
+
     // ── A4: Angular edges are anti-aliased (partial alpha) ───────────────────
 
     /// A4: The two angular edges of a ~90° arc must show partial alpha (anti-

@@ -1165,6 +1165,17 @@ impl LaidOut {
         self.dispatch_pointer_event(&event);
     }
 
+    /// A mouse-wheel / trackpad pointer-scroll at `(x, y)` with a PIXEL
+    /// delta of `(dx, dy)` in the normalized cross-backend convention:
+    /// positive `dy` = content scrolls down (the oracle's `scrollDelta`).
+    /// Real backends emit line deltas that `ScrollEventData` converts at
+    /// 53 px/line; this helper takes pixels directly so tests state exact
+    /// offsets. Routed by hit test like every other contactless event.
+    pub fn dispatch_scroll(&self, x: f32, y: f32, dx: f32, dy: f32) {
+        let event = flui_interaction::events::make_scroll_event(offset(x, y), offset(dx, dy));
+        self.dispatch_pointer_event(&event);
+    }
+
     /// Cancel the in-flight contact on its cached Down route.
     pub fn dispatch_pointer_cancel(&self) {
         let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);

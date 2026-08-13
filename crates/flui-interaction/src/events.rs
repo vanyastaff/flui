@@ -494,8 +494,12 @@ impl ScrollEventData {
                 Offset::new(PixelDelta(pos.x as f32), PixelDelta(pos.y as f32))
             }
             ScrollDelta::LineDelta(x, y) => {
-                // Approximate: 1 line ≈ 20 pixels
-                Offset::new(PixelDelta(*x * 20.0), PixelDelta(*y * 20.0))
+                // One wheel line = 53 physical pixels — the exact factor
+                // Flutter's Linux embedder applies to GTK scroll units
+                // (`kScrollOffsetMultiplier`, `fl_scrolling_manager.cc`), so
+                // wheel speed and `InteractiveViewer`'s scroll-to-scale
+                // math match Flutter-on-Linux tick for tick.
+                Offset::new(PixelDelta(*x * 53.0), PixelDelta(*y * 53.0))
             }
             ScrollDelta::PageDelta(x, y) => {
                 // Approximate: 1 page ≈ 400 pixels

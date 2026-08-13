@@ -63,7 +63,9 @@ use flui_view::{BoxedView, BuildContext, BuildContextExt, Child, IntoView, ViewE
 use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{AnimatedBuilder, GestureDetector, SingleChildScrollView};
+use crate::{AnimatedBuilder, GestureDetector, Listener, SingleChildScrollView};
+use flui_interaction::events::{PointerEvent, ScrollEventData};
+use flui_scheduler::PostFrameHandle;
 
 use super::scroll_position_scope::ScrollPositionScope;
 
@@ -282,6 +284,14 @@ pub struct ScrollableState {
     /// `ScrollPosition` idle when the ballistic run settles or is stopped.
     /// Same install/remove lifecycle as `fling_listener_id`.
     fling_status_listener_id: Option<ListenerId>,
+    /// Post-frame capability for the wheel-scroll activity pulse — acquired
+    /// in `init_state`/`did_change_dependencies` (never from `build`), per
+    /// the frame-capability scope rule. A wheel tick raises the scroll
+    /// activity synchronously and this ends it AFTER the frame that
+    /// consumed the pixel write, so the viewport's layout still observes
+    /// the user direction (the oracle's `pointerScroll` reaches the same
+    /// state through `goBallistic(0)` settling a frame later).
+    post_frame: Option<PostFrameHandle>,
     /// Vsync handle kept for `unregister` in `dispose`.
     vsync: Option<Vsync>,
     /// Registration handle returned by `vsync.register(fling_controller)`.
@@ -319,6 +329,7 @@ impl StatefulView for Scrollable {
             fling_controller,
             fling_listener_id: None,
             fling_status_listener_id: None,
+            post_frame: None,
             vsync: None,
             vsync_registration: None,
         }
@@ -409,6 +420,7 @@ impl ScrollableState {
 
 impl ViewState<Scrollable> for ScrollableState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.post_frame = ctx.post_frame_handle();
         self.install_flush_handle(ctx);
         self.install_stop_hook();
         self.install_fling_listener();
@@ -428,6 +440,7 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        self.post_frame = ctx.post_frame_handle();
         self.install_flush_handle(ctx);
     }
 
@@ -447,6 +460,7 @@ impl ViewState<Scrollable> for ScrollableState {
         let child = view.child.clone();
         let viewport_builder = view.viewport_builder.clone();
         let fling_controller = self.fling_controller.clone();
+        let post_frame = self.post_frame.clone();
 
         AnimatedBuilder::new(scroll_controller.as_listenable(), move || {
             // Service any `animate_to`/`jump_to`-queued command BEFORE
@@ -500,7 +514,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let position_start = ctrl_update.position();
             let position_update = ctrl_update.position();
             let position_end = ctrl_update.position();
-            GestureDetector::new()
+            let gestures = GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(move |_details| {
                     // Grab: halt any in-flight fling so the list stops at the
@@ -602,7 +616,79 @@ impl ViewState<Scrollable> for ScrollableState {
                         position_end.set_is_scrolling(false);
                     }
                 })
-                .child(scroll_view)
+                .child(scroll_view);
+
+            // Wheel / trackpad pointer-scroll: an immediate scroll with no
+            // drag semantics — no slop, no arena hold-and-release. Mirrors
+            // the oracle end to end: `Listener.onPointerSignal` →
+            // `position.pointerScroll(delta)` (`widgets/scrollable.dart`,
+            // `scroll_position_with_single_context.dart`) — clamp HARD to
+            // the extents (a wheel never overscrolls), pulse the scroll
+            // activity with the USER direction around the pixel write, and
+            // end the pulse after the frame that consumes it.
+            let ctrl_wheel = scroll_controller.clone();
+            let post_frame_wheel = post_frame.clone();
+            let fling_wheel = fling_controller.clone();
+            Listener::new()
+                .on_pointer_signal(move |event| {
+                    let PointerEvent::Scroll(scroll) = event else {
+                        return;
+                    };
+                    let data = ScrollEventData::from(scroll);
+                    let axis_delta = match scroll_direction {
+                        Axis::Vertical => data.delta.dy.get(),
+                        Axis::Horizontal => data.delta.dx.get(),
+                    };
+                    // Platform deltas arrive already normalized to the
+                    // oracle's `scrollDelta` convention — positive = content
+                    // scrolls down (each backend converts its native axes
+                    // and units at its own boundary). Only the reversed-axis
+                    // flip the drag arms use applies here.
+                    let mut delta = axis_delta;
+                    if axis_direction.is_reversed() {
+                        delta = -delta;
+                    }
+                    if delta == 0.0 {
+                        return;
+                    }
+                    let position = ctrl_wheel.position();
+                    let target = (ctrl_wheel.pixels() + delta)
+                        .clamp(position.min_scroll_extent(), position.max_scroll_extent());
+                    if target == ctrl_wheel.pixels() {
+                        return;
+                    }
+                    // A wheel tick interrupts whatever animation is driving
+                    // the position — otherwise the fling controller's value
+                    // listener overwrites the wheel write on its next tick
+                    // (the oracle's `pointerScroll` starts from `goIdle()`,
+                    // the same cancel the drag-grab and `jump_to` paths do).
+                    let _ = fling_wheel.stop();
+                    // `pointerScroll`'s pulse: direction is only recordable
+                    // while an activity is live, so raise first.
+                    position.set_is_scrolling(true);
+                    position.set_user_scroll_direction(if delta > 0.0 {
+                        ScrollDirection::Reverse
+                    } else {
+                        ScrollDirection::Forward
+                    });
+                    position.set_pixels(target);
+                    match &post_frame_wheel {
+                        Some(post_frame) => {
+                            let pulse_end = position.clone();
+                            post_frame.schedule(move |_timing| {
+                                pulse_end.set_is_scrolling(false);
+                            });
+                        }
+                        // No post-frame capability (a bare harness without
+                        // the binding wiring): end the pulse synchronously
+                        // rather than leaving the activity stuck live. The
+                        // layout that consumes the pixels then sees an Idle
+                        // direction — degraded, not wrong: it matches a
+                        // plain programmatic jump.
+                        None => position.set_is_scrolling(false),
+                    }
+                })
+                .child(gestures)
         })
     }
 

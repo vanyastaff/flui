@@ -171,11 +171,20 @@ pub fn mouse_wheel_event(
     scale_factor: f64,
     modifiers: KeyboardModifiers,
 ) -> PlatformInput {
+    // Normalized at THIS boundary so every backend hands consumers the
+    // same convention — the oracle's `scrollDelta`: positive = content
+    // scrolls down (the web backend's DOM `deltaY` already arrives that
+    // way). winit's wheel axes are the inverse (positive = away from the
+    // user), and its `PixelDelta` is PHYSICAL pixels while pointer
+    // positions (and the scroll positions consuming this) are logical —
+    // flip the sign and divide by the scale factor here, never in a
+    // platform-neutral widget.
     let scroll_delta = match delta {
-        MouseScrollDelta::LineDelta(x, y) => ScrollDelta::LineDelta(x, y),
-        MouseScrollDelta::PixelDelta(pos) => {
-            ScrollDelta::PixelDelta(PhysicalPosition::new(pos.x, pos.y))
-        }
+        MouseScrollDelta::LineDelta(x, y) => ScrollDelta::LineDelta(-x, -y),
+        MouseScrollDelta::PixelDelta(pos) => ScrollDelta::PixelDelta(PhysicalPosition::new(
+            -pos.x / scale_factor,
+            -pos.y / scale_factor,
+        )),
     };
 
     let state = pointer_state(
@@ -452,6 +461,45 @@ mod pointer_translation_tests {
         };
         assert_eq!(update.current.buttons, PointerButtons::default());
         assert_eq!(update.current.pressure, 0.0);
+    }
+
+    /// Wheel deltas are normalized at this boundary to the cross-backend
+    /// convention — positive = content scrolls down — with `PixelDelta`
+    /// converted from winit's physical pixels to logical: a 2x-DPI
+    /// trackpad tick must not scroll twice as far.
+    #[test]
+    fn wheel_deltas_are_normalized_and_logical() {
+        let line = mouse_wheel_event(
+            MouseScrollDelta::LineDelta(0.0, -1.0),
+            winit::dpi::PhysicalPosition::new(0.0, 0.0),
+            2.0,
+            KeyboardModifiers::empty(),
+        );
+        let PlatformInput::Pointer(PointerEvent::Scroll(event)) = line else {
+            panic!("wheel must translate to PointerEvent::Scroll");
+        };
+        // winit's wheel-down is a NEGATIVE line-y; normalized it is
+        // POSITIVE (content down). Lines are unit-less: no DPI scaling.
+        assert!(matches!(event.delta, ScrollDelta::LineDelta(x, y) if x == 0.0 && y == 1.0));
+
+        let pixel = mouse_wheel_event(
+            MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, -100.0)),
+            winit::dpi::PhysicalPosition::new(0.0, 0.0),
+            2.0,
+            KeyboardModifiers::empty(),
+        );
+        let PlatformInput::Pointer(PointerEvent::Scroll(event)) = pixel else {
+            panic!("wheel must translate to PointerEvent::Scroll");
+        };
+        let ScrollDelta::PixelDelta(delta) = event.delta else {
+            panic!("pixel deltas must stay pixel deltas");
+        };
+        assert_eq!(
+            (delta.x, delta.y),
+            (0.0, 50.0),
+            "sign flipped to content-down-positive AND physical 100 at 2x \
+             DPI becomes logical 50"
+        );
     }
 
     /// Down/up events carry the post-transition held set — press included,
