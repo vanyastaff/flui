@@ -59,7 +59,7 @@ use flui_animation::AnimationController;
 use flui_objects::{
     FloatingHeaderSnapConfiguration, HeaderShrinkCell, OverScrollHeaderStretchConfiguration,
     RenderSliverFloatingPersistentHeader, RenderSliverFloatingPinnedPersistentHeader,
-    RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader,
+    RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader, SnapCommand,
 };
 use flui_rendering::protocol::SliverProtocol;
 
@@ -207,6 +207,15 @@ pub trait PersistentHeaderRenderObject:
         controller: Option<AnimationController>,
         configuration: Option<FloatingHeaderSnapConfiguration>,
     );
+
+    /// Deliver the widget layer's current snap command, if any. Floating
+    /// variants apply it epoch-idempotently
+    /// ([`RenderSliverFloatingHeaderBase::apply_snap_command`]); the others
+    /// ignore it, same rationale as [`Self::install_snap`].
+    ///
+    /// [`RenderSliverFloatingHeaderBase::apply_snap_command`]:
+    /// flui_objects::RenderSliverFloatingPersistentHeader::apply_snap_command
+    fn deliver_snap(&mut self, command: Option<SnapCommand>);
 }
 
 impl PersistentHeaderRenderObject for RenderSliverScrollingPersistentHeader {
@@ -241,6 +250,10 @@ impl PersistentHeaderRenderObject for RenderSliverScrollingPersistentHeader {
         // Not floating: nothing to settle. Flutter's non-floating headers
         // likewise ignore snapConfiguration.
     }
+
+    fn deliver_snap(&mut self, _command: Option<SnapCommand>) {
+        // Not floating: see install_snap.
+    }
 }
 
 impl PersistentHeaderRenderObject for RenderSliverPinnedPersistentHeader {
@@ -274,6 +287,10 @@ impl PersistentHeaderRenderObject for RenderSliverPinnedPersistentHeader {
     ) {
         // Not floating: nothing to settle. Flutter's non-floating headers
         // likewise ignore snapConfiguration.
+    }
+
+    fn deliver_snap(&mut self, _command: Option<SnapCommand>) {
+        // Not floating: see install_snap.
     }
 }
 
@@ -311,6 +328,12 @@ impl PersistentHeaderRenderObject for RenderSliverFloatingPersistentHeader {
         self.set_snap_controller(controller);
         self.set_snap_configuration(configuration);
     }
+
+    fn deliver_snap(&mut self, command: Option<SnapCommand>) {
+        if let Some(command) = command {
+            self.apply_snap_command(command);
+        }
+    }
 }
 
 impl PersistentHeaderRenderObject for RenderSliverFloatingPinnedPersistentHeader {
@@ -345,6 +368,12 @@ impl PersistentHeaderRenderObject for RenderSliverFloatingPinnedPersistentHeader
         self.set_snap_controller(controller);
         self.set_snap_configuration(configuration);
     }
+
+    fn deliver_snap(&mut self, command: Option<SnapCommand>) {
+        if let Some(command) = command {
+            self.apply_snap_command(command);
+        }
+    }
 }
 
 // ============================================================================
@@ -366,6 +395,9 @@ pub struct PersistentHeaderView<R> {
     /// `None` for non-floating variants and for floating headers whose
     /// delegate declares no snap.
     snap_controller: Option<AnimationController>,
+    /// The widget layer's current snap command, redelivered on every update
+    /// and applied epoch-idempotently by the floating render objects.
+    snap_command: Option<SnapCommand>,
     _variant: PhantomData<fn() -> R>,
 }
 
@@ -387,6 +419,7 @@ impl<R> PersistentHeaderView<R> {
         Self {
             delegate,
             snap_controller: None,
+            snap_command: None,
             _variant: PhantomData,
         }
     }
@@ -397,6 +430,13 @@ impl<R> PersistentHeaderView<R> {
         self.snap_controller = controller;
         self
     }
+
+    /// Attach the widget layer's current snap command. See the field doc.
+    #[must_use]
+    pub fn with_snap_command(mut self, command: Option<SnapCommand>) -> Self {
+        self.snap_command = command;
+        self
+    }
 }
 
 impl<R> Clone for PersistentHeaderView<R> {
@@ -404,6 +444,7 @@ impl<R> Clone for PersistentHeaderView<R> {
         Self {
             delegate: Rc::clone(&self.delegate),
             snap_controller: self.snap_controller.clone(),
+            snap_command: self.snap_command,
             _variant: PhantomData,
         }
     }
@@ -446,6 +487,7 @@ impl<R: PersistentHeaderRenderObject> RenderView for PersistentHeaderView<R> {
             self.snap_controller.clone(),
             self.delegate.snap_configuration(),
         );
+        render_object.deliver_snap(self.snap_command);
         render_object.update_extents(self.delegate.min_extent(), self.delegate.max_extent())
             | render_object.update_stretch(self.delegate.stretch_configuration())
     }
@@ -475,6 +517,11 @@ impl<R: PersistentHeaderRenderObject> View for PersistentHeaderView<R> {
     /// obliges it to answer `true` if content *or extents* could differ, so
     /// skipping on `false` also safely skips the extent refresh.
     fn should_skip_rebuild(&self, previous: &Self) -> bool {
+        // A fresh snap command must reach `update_render_object` even when
+        // the delegate is unchanged — skipping here would drop it.
+        if self.snap_command != previous.snap_command {
+            return false;
+        }
         Rc::ptr_eq(&self.delegate, &previous.delegate)
             || !self.delegate.should_rebuild(previous.delegate.as_ref())
     }

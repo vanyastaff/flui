@@ -17,6 +17,7 @@ mod page_view;
 mod refresh_indicator;
 mod scroll_controller;
 mod scroll_physics;
+mod scroll_position_scope;
 mod scrollable;
 mod scrollbar;
 mod single_child_scroll_view;
@@ -42,6 +43,7 @@ pub use scroll_controller::ScrollController;
 pub use scroll_physics::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,
 };
+pub use scroll_position_scope::ScrollPositionScope;
 pub use scrollable::Scrollable;
 pub use scrollbar::Scrollbar;
 pub use single_child_scroll_view::SingleChildScrollView;

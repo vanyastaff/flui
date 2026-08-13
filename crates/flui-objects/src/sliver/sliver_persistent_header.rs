@@ -178,6 +178,20 @@ impl fmt::Debug for StretchTriggerSignal {
     }
 }
 
+/// A widget-layer instruction for a floating header to consider snapping,
+/// stamped with a monotone epoch so redelivery through view updates is
+/// idempotent — see
+/// [`RenderSliverFloatingHeaderBase::apply_snap_command`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapCommand {
+    /// Strictly increasing per issuing widget; an epoch not newer than the
+    /// last applied one is refused.
+    pub epoch: u64,
+    /// The direction of the user scroll that just ended — decides whether
+    /// the header settles open (`Forward`) or closed (`Reverse`).
+    pub direction: ScrollDirection,
+}
+
 /// Specifies how a stretched header reports overscroll trigger crossings.
 ///
 /// Flutter parity: `OverScrollHeaderStretchConfiguration` (`:33-46`). The
@@ -1001,6 +1015,9 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     /// [`Self::update_scroll_start_direction`], never internally driven in
     /// this pass (see module docs).
     last_started_scroll_direction: Option<ScrollDirection>,
+    /// The last [`SnapCommand::epoch`] applied — see
+    /// [`Self::apply_snap_command`]'s idempotency contract.
+    last_snap_epoch: u64,
     /// Cached return value of `update_geometry`, mirroring `_childPosition`.
     child_position: Option<f32>,
     /// Value-change subscription on `controller`, torn down in `detach`.
@@ -1023,6 +1040,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
             last_actual_scroll_offset: None,
             effective_scroll_offset: None,
             last_started_scroll_direction: None,
+            last_snap_epoch: 0,
             child_position: None,
             listener_id: None,
             _mode: PhantomData,
@@ -1087,6 +1105,25 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// plain-assignment `snapConfiguration` field) — no dirty-marking.
     pub fn set_snap_configuration(&mut self, snap: Option<FloatingHeaderSnapConfiguration>) {
         self.snap_configuration = snap;
+    }
+
+    /// Applies a widget-layer snap command exactly once per epoch.
+    ///
+    /// The command rides the VIEW through the canonical
+    /// `update_render_object` path (so no caller ever mutates this render
+    /// object outside the frame's own update step), and updates re-deliver
+    /// whatever command the view currently carries — the epoch is what
+    /// makes redelivery idempotent. A command with an epoch not NEWER than
+    /// the last applied one is refused, never re-run: an update pass
+    /// rebuilding the view for an unrelated reason must not restart a snap
+    /// the user has since interrupted.
+    pub fn apply_snap_command(&mut self, command: SnapCommand) {
+        if command.epoch <= self.last_snap_epoch {
+            return;
+        }
+        self.last_snap_epoch = command.epoch;
+        self.update_scroll_start_direction(command.direction);
+        self.maybe_start_snap_animation(command.direction);
     }
 
     /// Injects (or withdraws) the controller that drives snap and

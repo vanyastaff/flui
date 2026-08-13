@@ -30,7 +30,7 @@ pub use sliver_padding::*;
 pub use sliver_persistent_header::{
     FloatingHeaderSnapConfiguration, OverScrollHeaderStretchConfiguration,
     RenderSliverFloatingPersistentHeader, RenderSliverFloatingPinnedPersistentHeader,
-    RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader,
+    RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader, SnapCommand,
     StretchTriggerSignal,
 };
 pub use sliver_to_box_adapter::*;
