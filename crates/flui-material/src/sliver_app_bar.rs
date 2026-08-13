@@ -283,18 +283,30 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
     fn build(
         &self,
         _ctx: &dyn BuildContext,
-        _shrink_offset: f32,
+        shrink_offset: f32,
         _overlaps_content: bool,
     ) -> BoxedView {
+        // The collapse state, republished on every seam rebuild so a
+        // FlexibleSpaceBar inside the flexible-space slot re-interpolates —
+        // Flutter's FlexibleSpaceBar.createSettings, fed from the same
+        // shrink offset this build was called with.
+        let current_extent = (self.max_extent - shrink_offset).max(self.min_extent);
         // Expand to the header's current box: the bar's Material covers the
         // whole expanded area (Flutter's SliverAppBar paints its background
         // across it), with the flexible space and toolbar layered INSIDE
         // that surface by the AppBar itself — the slot order that keeps the
         // opaque background behind the flexible content, never over it.
-        SizedBox::expand()
-            .child(self.app_bar.clone())
-            .into_view()
-            .boxed()
+        crate::FlexibleSpaceBarSettings::new(
+            crate::FlexibleSpaceBarData {
+                min_extent: self.min_extent,
+                max_extent: self.max_extent,
+                current_extent,
+                toolbar_opacity: 1.0,
+            },
+            SizedBox::expand().child(self.app_bar.clone()),
+        )
+        .into_view()
+        .boxed()
     }
 
     fn min_extent(&self) -> f32 {
