@@ -24,12 +24,12 @@
 //! | :140 | floating — scroll offset doesn't change | PORTED |
 //! | :173 | floating — normal behavior | PORTED |
 //! | :301 | floating — no floating during a position animation | PORTED (`ScrollController::animate_to` drives a real curve run through the fling controller; the run raises the scroll-activity signal but records no USER direction, which is exactly what keeps the float suppressed) |
-//! | :346 | floating — behavior when dragging | DEFERRED: same technique as :173 but driven by drag gestures over a position-mode viewport; portable once the parity harness grows the `Scrollable` + `viewport_builder` gesture fixture (tests/sliver_persistent_header.rs has the widget-level equivalent) |
+//! | :346 | floating — behavior when dragging | PORTED (no gestures needed after all: the oracle forces `updateUserScrollDirection(forward)` around an `animateTo` — FLUI's `set_user_scroll_direction`, called once the run's activity is live) |
 //! | :400 | floating — overscroll gap below header | PORTED |
 //! | :437 | pinned | PORTED |
 //! | :484 | toStringDeep of throwing maxExtent | NOT PORTABLE: FLUI delegate extents are infallible `f32` getters — the throwing-getter diagnostic path has no analogue |
-//! | :552 | pinned with slow scroll | DEFERRED: a 12-step offset sweep of the same paint-position technique as :437; adds step count, not coverage class — tracked with :346's fixture growth |
-//! | :673 | pinned with less overlap | DEFERRED: same technique/fixture family as :552 |
+//! | :552 | pinned with slow scroll | PORTED (nine settled `animateTo` steps, all offsets/visibility/child-box rects literal) |
+//! | :673 | pinned with less overlap | PORTED |
 //! | :720 | overscroll gap is below header | PORTED (the :883 scrolling variant is the same assertion set; both ported as one) |
 //! | :759 | pointer scrolled floating | DEFERRED: needs mouse-wheel pointer-scroll dispatch, which the harness does not synthesize yet |
 //! | :812 | scrolling | PORTED |
@@ -54,7 +54,11 @@
 //!
 //! - `TestDelegate` (min = max = 200, child labelled 200-high box) →
 //!   [`fixed_delegate`].
-//! - `TestDelegate2` (min 100, max 200) → [`shrinking_delegate`].
+//! - `TestDelegate2` (min 100, max 200) → [`ShrinkingDelegate`]. Its child
+//!   mirrors the oracle's childless `Container(constraints:
+//!   BoxConstraints(minHeight: 100, maxHeight: 200))`, which EXPANDS to the
+//!   enforced max — the box-rect cases read that child's committed rect, so
+//!   a fixed-height stand-in would distort them.
 //! - `BigSliver(height)` (a plain fixed-extent sliver) →
 //!   `SliverToBoxAdapter` over a `SizedBox` of that height.
 //! - `verifyPaintPosition(key, offset, visible)` → the harness's sliver
@@ -71,11 +75,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_foundation::RenderId;
+use flui_rendering::view::ScrollDirection;
 use flui_view::BoxedView;
 use flui_view::IntoView;
 use flui_view::view::ViewExt;
 use flui_widgets::{
-    OverScrollHeaderStretchConfiguration, ScrollController, Scrollable, SizedBox,
+    ConstrainedBox, OverScrollHeaderStretchConfiguration, ScrollController, Scrollable, SizedBox,
     SliverPersistentHeader, SliverPersistentHeaderDelegate, SliverToBoxAdapter, Viewport,
 };
 
@@ -124,7 +129,11 @@ impl SliverPersistentHeaderDelegate for FixedDelegate {
     }
 }
 
-/// `TestDelegate2`: min 100, max 200.
+/// `TestDelegate2`: min 100, max 200 — and, faithfully, a child that
+/// FLEXES with the header (`Container(constraints: BoxConstraints(
+/// minHeight: minExtent, maxHeight: maxExtent))`), because the
+/// `verifyActualBoxPosition` cases assert the CHILD box's committed rect,
+/// which a fixed-height child would distort.
 struct ShrinkingDelegate;
 
 impl SliverPersistentHeaderDelegate for ShrinkingDelegate {
@@ -134,7 +143,15 @@ impl SliverPersistentHeaderDelegate for ShrinkingDelegate {
         _shrink_offset: f32,
         _overlaps_content: bool,
     ) -> BoxedView {
-        SizedBox::new(800.0, 200.0).into_view().boxed()
+        ConstrainedBox::new(flui_rendering::constraints::BoxConstraints {
+            min_width: flui_types::geometry::px(0.0),
+            max_width: flui_types::geometry::px(f32::INFINITY),
+            min_height: flui_types::geometry::px(100.0),
+            max_height: flui_types::geometry::px(200.0),
+        })
+        .child(SizedBox::expand())
+        .into_view()
+        .boxed()
     }
 
     fn min_extent(&self) -> f32 {
@@ -187,6 +204,23 @@ fn verify_paint_position(laid: &LaidOut, id: RenderId, ideal: (f32, f32), visibl
             "sliver visibility diverges from the oracle"
         );
     }
+}
+
+/// `verifyActualBoxPosition` — the committed absolute rect (root-local
+/// offset + size) of a header's child BOX, against the oracle's literal.
+fn verify_actual_box_position(laid: &LaidOut, box_id: RenderId, ideal: (f32, f32, f32, f32)) {
+    let offset = laid.absolute_offset(box_id);
+    let size = laid.size(box_id);
+    assert_eq!(
+        (
+            offset.dx.get(),
+            offset.dy.get(),
+            size.width.get(),
+            size.height.get()
+        ),
+        ideal,
+        "the header child box's committed rect diverges from the oracle"
+    );
 }
 
 /// The N-th sliver child of the viewport, in paint order.
@@ -395,6 +429,12 @@ fn settle_animation(laid: &mut LaidOut, controller: &ScrollController) {
         !controller.position().is_scrolling(),
         "the driven run must settle (still animating after {pumps} 1s pumps)"
     );
+    // One trailing pump: the tick that completes the run writes the final
+    // pixel value and ends the activity in the same frame, so the layout
+    // that consumes that value is still pending — the oracle's
+    // `pumpAndSettle` keeps pumping until NO frames are scheduled, which
+    // includes it.
+    laid.pump();
 }
 
 /// Oracle: a floating header must NOT float back into view when the
@@ -440,6 +480,226 @@ fn floating_header_does_not_float_during_a_position_animation() {
     verify_paint_position(&laid, key1, (0.0, 0.0), Some(false));
     verify_paint_position(&laid, key2, (0.0, 0.0), Some(false));
     verify_paint_position(&laid, key3, (0.0, 0.0), Some(true));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// :346 — floating: floating behavior when dragging down
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Oracle: same scene as the no-float case, but with the USER direction
+/// forced start-ward before the second (backward) run settles — the
+/// oracle's `position.updateUserScrollDirection(ScrollDirection.forward)`,
+/// FLUI's `set_user_scroll_direction`. Now the header MUST float back into
+/// view part-way: its child box commits at the oracle's literal rect
+/// `(0, −maxExtent·0.4, 800, maxExtent·0.5)` = `(0, −80, 800, 100)`.
+#[test]
+fn floating_header_floats_when_the_user_direction_is_startward() {
+    let controller = ScrollController::new();
+    let mut laid = mount_animated(
+        &controller,
+        vec![
+            big_sliver(1000.0),
+            SliverPersistentHeader::new(ShrinkingDelegate)
+                .floating(true)
+                .into_view()
+                .boxed(),
+            big_sliver(1000.0),
+        ],
+    );
+    let (key1, key2, key3) = (
+        viewport_child(&laid, 0),
+        viewport_child(&laid, 1),
+        viewport_child(&laid, 2),
+    );
+
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key2, (0.0, 1000.0), Some(false));
+    verify_paint_position(&laid, key3, (0.0, 1200.0), Some(false));
+
+    controller.animate_to(1400.0, Duration::from_mins(1), Arc::new(Curves::Linear));
+    settle_animation(&mut laid, &controller);
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key3, (0.0, 0.0), Some(true));
+
+    controller.animate_to(1380.0, Duration::from_mins(1), Arc::new(Curves::Linear));
+    // One pump first: FLUI services the queued command (and so begins the
+    // scroll activity) on the first rebuild, and `set_user_scroll_direction`
+    // deliberately ignores writes outside an active scroll — where the
+    // oracle's `animateTo` begins its activity synchronously, so its
+    // `updateUserScrollDirection` call lands mid-activity already.
+    laid.pump_for(Duration::from_secs(1));
+    controller
+        .position()
+        .set_user_scroll_direction(ScrollDirection::Forward);
+    settle_animation(&mut laid, &controller);
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_actual_box_position(&laid, laid.only_child(key2), (0.0, -80.0, 800.0, 100.0));
+    verify_paint_position(&laid, key3, (0.0, 0.0), Some(true));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// :552 — pinned with slow scroll
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Oracle: two pinned min-100/max-200 headers stacked between 550-high
+/// slivers, stepped through nine settled `animateTo` offsets; every paint
+/// offset, visibility, and the second header's child-box rects are the
+/// oracle's own literals. (The oracle's per-step `pumpAndSettle` always
+/// runs each 1-minute animation to completion — the "slow scroll" is the
+/// 50px step size, not a mid-animation state.)
+#[test]
+fn pinned_headers_through_a_slow_stepped_scroll() {
+    let controller = ScrollController::new();
+    let mut laid = mount_animated(
+        &controller,
+        vec![
+            big_sliver(550.0),
+            SliverPersistentHeader::new(ShrinkingDelegate)
+                .pinned(true)
+                .into_view()
+                .boxed(),
+            SliverPersistentHeader::new(ShrinkingDelegate)
+                .pinned(true)
+                .into_view()
+                .boxed(),
+            big_sliver(550.0),
+            big_sliver(550.0),
+        ],
+    );
+    let (key1, key2, key3, key4, key5) = (
+        viewport_child(&laid, 0),
+        viewport_child(&laid, 1),
+        viewport_child(&laid, 2),
+        viewport_child(&laid, 3),
+        viewport_child(&laid, 4),
+    );
+
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key2, (0.0, 550.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 750.0), Some(false));
+    verify_paint_position(&laid, key4, (0.0, 950.0), Some(false));
+    verify_paint_position(&laid, key5, (0.0, 1500.0), Some(false));
+
+    let step = |laid: &mut LaidOut, target: f32| {
+        controller.animate_to(target, Duration::from_mins(1), Arc::new(Curves::Linear));
+        settle_animation(laid, &controller);
+    };
+
+    step(&mut laid, 550.0);
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 200.0), Some(true));
+    verify_paint_position(&laid, key4, (0.0, 400.0), Some(true));
+    verify_paint_position(&laid, key5, (0.0, 950.0), Some(false));
+
+    step(&mut laid, 600.0);
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 150.0), Some(true));
+    verify_paint_position(&laid, key4, (0.0, 350.0), Some(true));
+    verify_paint_position(&laid, key5, (0.0, 900.0), Some(false));
+
+    step(&mut laid, 650.0);
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 100.0), Some(true));
+    verify_actual_box_position(&laid, laid.only_child(key3), (0.0, 100.0, 800.0, 200.0));
+    verify_paint_position(&laid, key4, (0.0, 300.0), Some(true));
+    verify_paint_position(&laid, key5, (0.0, 850.0), Some(false));
+
+    step(&mut laid, 700.0);
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 100.0), Some(true));
+    verify_actual_box_position(&laid, laid.only_child(key3), (0.0, 100.0, 800.0, 200.0));
+    verify_paint_position(&laid, key4, (0.0, 250.0), Some(true));
+    verify_paint_position(&laid, key5, (0.0, 800.0), Some(false));
+
+    step(&mut laid, 750.0);
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 100.0), Some(true));
+    verify_actual_box_position(&laid, laid.only_child(key3), (0.0, 100.0, 800.0, 200.0));
+    verify_paint_position(&laid, key4, (0.0, 200.0), Some(true));
+    verify_paint_position(&laid, key5, (0.0, 750.0), Some(false));
+
+    step(&mut laid, 800.0);
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 100.0), Some(true));
+    verify_paint_position(&laid, key4, (0.0, 150.0), Some(true));
+    verify_paint_position(&laid, key5, (0.0, 700.0), Some(false));
+
+    step(&mut laid, 850.0);
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 100.0), Some(true));
+    verify_paint_position(&laid, key4, (0.0, 100.0), Some(true));
+    verify_paint_position(&laid, key5, (0.0, 650.0), Some(false));
+
+    step(&mut laid, 900.0);
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 100.0), Some(true));
+    verify_paint_position(&laid, key4, (0.0, 50.0), Some(true));
+    verify_paint_position(&laid, key5, (0.0, 600.0), Some(false));
+
+    step(&mut laid, 950.0);
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 100.0), Some(true));
+    verify_actual_box_position(&laid, laid.only_child(key3), (0.0, 100.0, 800.0, 100.0));
+    verify_paint_position(&laid, key4, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key5, (0.0, 550.0), Some(true));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// :673 — pinned with less overlap
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Oracle: 650-high slivers leave the viewport LESS than fully obstructed
+/// by the two pinned headers at full scroll; max extent is exactly 1750,
+/// the clamped jump lands there, and the trailing sliver becomes visible
+/// at the fold.
+#[test]
+fn pinned_headers_with_less_overlap_at_full_scroll() {
+    let controller = ScrollController::new();
+    let mut laid = mount_animated(
+        &controller,
+        vec![
+            big_sliver(650.0),
+            SliverPersistentHeader::new(ShrinkingDelegate)
+                .pinned(true)
+                .into_view()
+                .boxed(),
+            SliverPersistentHeader::new(ShrinkingDelegate)
+                .pinned(true)
+                .into_view()
+                .boxed(),
+            big_sliver(650.0),
+            big_sliver(650.0),
+        ],
+    );
+    let (key1, key2, key3, key4, key5) = (
+        viewport_child(&laid, 0),
+        viewport_child(&laid, 1),
+        viewport_child(&laid, 2),
+        viewport_child(&laid, 3),
+        viewport_child(&laid, 4),
+    );
+
+    let position = controller.position();
+    // 650·3 + 200·2 − 600 (the viewport height).
+    assert_eq!(controller.pixels(), 0.0);
+    assert_eq!(position.min_scroll_extent(), 0.0);
+    assert_eq!(position.max_scroll_extent(), 1750.0);
+
+    controller.animate_to(10_000.0, Duration::from_mins(1), Arc::new(Curves::Linear));
+    settle_animation(&mut laid, &controller);
+    assert_eq!(controller.pixels(), 1750.0, "clamped to the max extent");
+    assert_eq!(position.min_scroll_extent(), 0.0);
+    assert_eq!(position.max_scroll_extent(), 1750.0);
+
+    verify_paint_position(&laid, key1, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key2, (0.0, 0.0), Some(true));
+    verify_paint_position(&laid, key3, (0.0, 100.0), Some(true));
+    verify_paint_position(&laid, key4, (0.0, 0.0), Some(false));
+    verify_paint_position(&laid, key5, (0.0, 0.0), Some(true));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
