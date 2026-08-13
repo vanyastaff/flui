@@ -1,6 +1,6 @@
 //! The Linux/X11 implementation — see the crate doc in `main.rs`.
 
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -41,8 +41,14 @@ pub(crate) fn run() -> Result<()> {
         // Diagnosable-by-default: when a check fails on a CI runner the
         // captured stderr is the only witness, and the default filter
         // logs next to nothing.
-        .env("RUST_LOG", "info,flui_widgets=debug,flui_platform=debug")
-        .stdout(Stdio::null())
+        .env(
+            "RUST_LOG",
+            "info,flui_widgets::scroll=trace,flui_platform=debug",
+        )
+        // BOTH streams: the app's subscriber writes to stdout — a
+        // null'd stdout was why CI failures reported "stderr (last 0
+        // lines)" with nothing to diagnose from.
+        .stdout(log_file.try_clone().context("cloning the app log handle")?)
         .stderr(log_file)
         .spawn()
         .with_context(|| format!("spawning {app_path}"))?;
