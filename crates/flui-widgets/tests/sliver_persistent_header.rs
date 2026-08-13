@@ -371,3 +371,120 @@ fn a_delegate_swap_rebuilds_only_when_should_rebuild_says_so() {
         "should_rebuild == true must rebuild the child"
     );
 }
+
+// ============================================================================
+// Snap: the full seam — gesture end → activity signal → epoch command →
+// render snap animation
+// ============================================================================
+
+/// A snapping delegate: records builds and declares a fast snap so the test
+/// pumps few frames.
+struct SnappingDelegate {
+    builds: Rc<RefCell<Vec<(f32, bool)>>>,
+}
+
+impl SliverPersistentHeaderDelegate for SnappingDelegate {
+    fn build(
+        &self,
+        _ctx: &dyn flui_view::BuildContext,
+        shrink_offset: f32,
+        overlaps_content: bool,
+    ) -> BoxedView {
+        self.builds
+            .borrow_mut()
+            .push((shrink_offset, overlaps_content));
+        SizedBox::new(300.0, 10.0).into_view().boxed()
+    }
+
+    fn min_extent(&self) -> f32 {
+        40.0
+    }
+
+    fn max_extent(&self) -> f32 {
+        120.0
+    }
+
+    fn snap_configuration(&self) -> Option<flui_widgets::FloatingHeaderSnapConfiguration> {
+        Some(flui_widgets::FloatingHeaderSnapConfiguration::new(
+            flui_animation::ArcCurve::new(flui_animation::Curves::Linear),
+            std::time::Duration::from_millis(64),
+        ))
+    }
+}
+
+/// The whole snap seam, end to end: scroll the header away, then end a
+/// start-ward drag — the activity signal's end transition must stamp a snap
+/// command, and the floating header must animate to FULLY revealed
+/// (`shrink_offset == 0`) even though the scroll offset itself stays deep.
+/// Snapping is reveal animation, not scroll-to-top.
+#[test]
+fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends() {
+    use std::time::Duration;
+
+    use flui_animation::Vsync;
+    use flui_widgets::{ScrollController, Scrollable, Viewport, VsyncScope};
+
+    let builds = Rc::new(RefCell::new(Vec::new()));
+    let builds_for_delegate = Rc::clone(&builds);
+    let controller = ScrollController::new();
+    let vsync = Vsync::new();
+
+    let scrollable = Scrollable::new()
+        .controller(controller.clone())
+        .viewport_builder(Rc::new(move |position| {
+            Viewport::new((
+                SliverPersistentHeader::new(SnappingDelegate {
+                    builds: Rc::clone(&builds_for_delegate),
+                })
+                .floating(true),
+                trailing_content(),
+            ))
+            .position(position)
+            .boxed()
+        }));
+
+    let mut laid = lay_out(
+        VsyncScope::new(vsync.clone(), scrollable),
+        tight(300.0, 300.0),
+    );
+    laid.adopt_vsync(vsync);
+
+    // Scroll deep: the floating header scrolls away entirely.
+    controller.jump_to(200.0);
+    laid.pump();
+    assert_eq!(
+        builds.borrow().last().map(|(shrink, _)| *shrink),
+        Some(120.0),
+        "premise: the header is fully collapsed after the deep scroll"
+    );
+
+    // A small START-WARD drag (finger moving down = revealing earlier
+    // content = Forward), released without fling velocity: the release is
+    // what must trigger the snap.
+    laid.dispatch_pointer_down(150.0, 100.0);
+    laid.dispatch_pointer_move(150.0, 170.0); // 70px down: slop + pan_start
+    laid.dispatch_pointer_move(150.0, 175.0); // small further drag
+    laid.dispatch_pointer_up(150.0, 175.0);
+
+    // Drive frames: whatever the release produced (immediate end or a brief
+    // ballistic run), the snap animation must then expand the header to
+    // fully revealed. Bounded so a never-snapping regression fails loudly.
+    let mut frames = 0;
+    while builds.borrow().last().map(|(shrink, _)| *shrink) != Some(0.0) && frames < 2_000 {
+        laid.pump_for(Duration::from_millis(16));
+        frames += 1;
+    }
+    assert_eq!(
+        builds.borrow().last().map(|(shrink, _)| *shrink),
+        Some(0.0),
+        "the snap must animate the header to fully revealed (still not after \
+         {frames} frames); builds: {:?}",
+        builds.borrow()
+    );
+    assert!(
+        controller.pixels() > 100.0,
+        "snap is reveal animation, not scroll-to-top — the offset must stay \
+         deep; got {}",
+        controller.pixels()
+    );
+}

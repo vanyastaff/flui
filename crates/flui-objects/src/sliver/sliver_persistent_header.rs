@@ -181,7 +181,7 @@ impl fmt::Debug for StretchTriggerSignal {
 /// A widget-layer instruction for a floating header to consider snapping,
 /// stamped with a monotone epoch so redelivery through view updates is
 /// idempotent — see
-/// [`RenderSliverFloatingHeaderBase::apply_snap_command`].
+/// `apply_snap_command` on the floating header render objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SnapCommand {
     /// Strictly increasing per issuing widget; an epoch not newer than the

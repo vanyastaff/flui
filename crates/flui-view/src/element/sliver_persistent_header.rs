@@ -209,12 +209,9 @@ pub trait PersistentHeaderRenderObject:
     );
 
     /// Deliver the widget layer's current snap command, if any. Floating
-    /// variants apply it epoch-idempotently
-    /// ([`RenderSliverFloatingHeaderBase::apply_snap_command`]); the others
-    /// ignore it, same rationale as [`Self::install_snap`].
-    ///
-    /// [`RenderSliverFloatingHeaderBase::apply_snap_command`]:
-    /// flui_objects::RenderSliverFloatingPersistentHeader::apply_snap_command
+    /// variants apply it epoch-idempotently (`apply_snap_command` on the
+    /// floating render objects); the others ignore it, same rationale as
+    /// [`Self::install_snap`].
     fn deliver_snap(&mut self, command: Option<SnapCommand>);
 }
 

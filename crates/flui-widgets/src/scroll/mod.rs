@@ -64,6 +64,8 @@ pub use sliver_persistent_header::SliverPersistentHeader;
 pub use flui_view::element::SliverPersistentHeaderDelegate;
 // What a delegate's `stretch_configuration` returns — surfaced with the
 // trait for the same reason.
-pub use flui_objects::{OverScrollHeaderStretchConfiguration, StretchTriggerSignal};
+pub use flui_objects::{
+    FloatingHeaderSnapConfiguration, OverScrollHeaderStretchConfiguration, StretchTriggerSignal,
+};
 pub use sliver_to_box_adapter::SliverToBoxAdapter;
 pub use viewport::{ShrinkWrappingViewport, Viewport};
