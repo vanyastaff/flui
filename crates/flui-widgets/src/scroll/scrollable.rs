@@ -65,6 +65,8 @@ use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{AnimatedBuilder, GestureDetector, SingleChildScrollView};
 
+use super::scroll_position_scope::ScrollPositionScope;
+
 /// A caller-supplied composition of the scrollable content, receiving the
 /// [`Scrollable`]'s shared [`ScrollPosition`] and returning the view to
 /// scroll. See [`Scrollable::viewport_builder`].
@@ -472,8 +474,16 @@ impl ViewState<Scrollable> for ScrollableState {
             // `ScrollPosition`'s docs and `Viewport::position`.
             let scroll_view: BoxedView = if let Some(build_viewport) = &viewport_builder {
                 // Custom composition: the closure owns injecting the shared
-                // position into whatever it builds.
-                build_viewport(scroll_controller.position())
+                // position into whatever it builds. The scope re-publishes
+                // that same position to the built subtree, so content INSIDE
+                // the scrolled slivers (a floating header's snap trigger, a
+                // scrollbar) can subscribe to the position the gestures
+                // actually drive.
+                ScrollPositionScope::new(
+                    scroll_controller.position(),
+                    build_viewport(scroll_controller.position()),
+                )
+                .boxed()
             } else {
                 let mut scsv = SingleChildScrollView::new()
                     .scroll_direction(scroll_direction)

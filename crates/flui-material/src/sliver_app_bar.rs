@@ -18,10 +18,6 @@
 //!
 //! # Deferred, deliberately
 //!
-//! - **Snap** — starting a snap animation needs a scroll-end trigger from
-//!   the enclosing scrollable, which does not exist yet; see the
-//!   persistent-header widget's own note. A `snap` flag here today would do
-//!   nothing.
 //! - **Stretch and `FlexibleSpaceBar`** — over-scroll stretch is reachable
 //!   through a custom [`SliverPersistentHeaderDelegate`]'s
 //!   `stretch_configuration`; surfacing it here without a
@@ -63,6 +59,7 @@ use crate::AppBar;
 #[derive(Clone, StatelessView)]
 pub struct SliverAppBar {
     app_bar: AppBar,
+    snap: bool,
     /// Mirrors of the inner app bar's height inputs, kept here because the
     /// extent arithmetic needs them and [`AppBar`] does not expose getters.
     toolbar_height: f32,
@@ -81,6 +78,7 @@ impl SliverAppBar {
     pub fn new() -> Self {
         Self {
             app_bar: AppBar::new(),
+            snap: false,
             toolbar_height: crate::app_bar::DEFAULT_TOOLBAR_HEIGHT,
             bottom_height: 0.0,
             has_bottom: false,
@@ -205,6 +203,17 @@ impl SliverAppBar {
         self.floating = floating;
         self
     }
+
+    /// Snap a [`floating`](Self::floating) bar fully open when a scroll
+    /// gesture toward the start ends, instead of leaving it partially
+    /// revealed. Ignored unless `floating` is also set, matching Flutter's
+    /// contract. The animation uses the oracle's defaults (`Curves.ease`,
+    /// 300ms — `rendering/sliver_persistent_header.dart:488-491`).
+    #[must_use]
+    pub fn snap(mut self, snap: bool) -> Self {
+        self.snap = snap;
+        self
+    }
 }
 
 impl Default for SliverAppBar {
@@ -267,6 +276,7 @@ struct SliverAppBarDelegate {
     app_bar: AppBar,
     min_extent: f32,
     max_extent: f32,
+    snap: bool,
 }
 
 impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
@@ -294,6 +304,18 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
     fn max_extent(&self) -> f32 {
         self.max_extent
     }
+
+    fn snap_configuration(&self) -> Option<flui_widgets::FloatingHeaderSnapConfiguration> {
+        // The oracle's own defaults (`FloatingHeaderSnapConfiguration`,
+        // `rendering/sliver_persistent_header.dart:488-491`): Curves.ease
+        // over 300ms.
+        self.snap.then(|| {
+            flui_widgets::FloatingHeaderSnapConfiguration::new(
+                flui_animation::ArcCurve::new(flui_animation::Curves::Ease),
+                std::time::Duration::from_millis(300),
+            )
+        })
+    }
 }
 
 impl StatelessView for SliverAppBar {
@@ -316,6 +338,7 @@ impl StatelessView for SliverAppBar {
             app_bar: self.app_bar.clone(),
             min_extent,
             max_extent,
+            snap: self.snap,
         })
         .pinned(self.pinned)
         .floating(self.floating)

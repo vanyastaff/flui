@@ -17,6 +17,7 @@ mod page_view;
 mod refresh_indicator;
 mod scroll_controller;
 mod scroll_physics;
+mod scroll_position_scope;
 mod scrollable;
 mod scrollbar;
 mod single_child_scroll_view;
@@ -42,6 +43,7 @@ pub use scroll_controller::ScrollController;
 pub use scroll_physics::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,
 };
+pub use scroll_position_scope::ScrollPositionScope;
 pub use scrollable::Scrollable;
 pub use scrollbar::Scrollbar;
 pub use single_child_scroll_view::SingleChildScrollView;
@@ -62,6 +64,8 @@ pub use sliver_persistent_header::SliverPersistentHeader;
 pub use flui_view::element::SliverPersistentHeaderDelegate;
 // What a delegate's `stretch_configuration` returns — surfaced with the
 // trait for the same reason.
-pub use flui_objects::{OverScrollHeaderStretchConfiguration, StretchTriggerSignal};
+pub use flui_objects::{
+    FloatingHeaderSnapConfiguration, OverScrollHeaderStretchConfiguration, StretchTriggerSignal,
+};
 pub use sliver_to_box_adapter::SliverToBoxAdapter;
 pub use viewport::{ShrinkWrappingViewport, Viewport};

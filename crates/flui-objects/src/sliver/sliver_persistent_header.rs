@@ -178,6 +178,32 @@ impl fmt::Debug for StretchTriggerSignal {
     }
 }
 
+/// A widget-layer instruction for a floating header's snap machinery,
+/// stamped with a monotone epoch so redelivery through view updates is
+/// idempotent — see
+/// `apply_snap_command` on the floating header render objects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapCommand {
+    /// Strictly increasing per issuing widget; an epoch not newer than the
+    /// last applied one is refused.
+    pub epoch: u64,
+    /// What the snap machinery should do.
+    pub action: SnapAction,
+}
+
+/// The two things a scroll edge asks of a floating header's snap machinery —
+/// mirroring the two calls Flutter's `_isScrollingListener` makes
+/// (`widgets/sliver_persistent_header.dart:202-244`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapAction {
+    /// A user scroll ended moving in `ScrollDirection`: settle the reveal
+    /// to the nearest edge (fully open for `Forward`).
+    Settle(ScrollDirection),
+    /// A new user scroll began: an in-flight snap must yield to the finger
+    /// immediately.
+    Stop,
+}
+
 /// Specifies how a stretched header reports overscroll trigger crossings.
 ///
 /// Flutter parity: `OverScrollHeaderStretchConfiguration` (`:33-46`). The
@@ -1001,6 +1027,9 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     /// [`Self::update_scroll_start_direction`], never internally driven in
     /// this pass (see module docs).
     last_started_scroll_direction: Option<ScrollDirection>,
+    /// The last [`SnapCommand::epoch`] applied — see
+    /// [`Self::apply_snap_command`]'s idempotency contract.
+    last_snap_epoch: u64,
     /// Cached return value of `update_geometry`, mirroring `_childPosition`.
     child_position: Option<f32>,
     /// Value-change subscription on `controller`, torn down in `detach`.
@@ -1023,6 +1052,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
             last_actual_scroll_offset: None,
             effective_scroll_offset: None,
             last_started_scroll_direction: None,
+            last_snap_epoch: 0,
             child_position: None,
             listener_id: None,
             _mode: PhantomData,
@@ -1087,6 +1117,49 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// plain-assignment `snapConfiguration` field) — no dirty-marking.
     pub fn set_snap_configuration(&mut self, snap: Option<FloatingHeaderSnapConfiguration>) {
         self.snap_configuration = snap;
+    }
+
+    /// Applies a widget-layer snap command exactly once per epoch.
+    ///
+    /// The command rides the VIEW through the canonical
+    /// `update_render_object` path (so no caller ever mutates this render
+    /// object outside the frame's own update step), and updates re-deliver
+    /// whatever command the view currently carries — the epoch is what
+    /// makes redelivery idempotent. A command with an epoch not NEWER than
+    /// the last applied one is refused, never re-run: an update pass
+    /// rebuilding the view for an unrelated reason must not restart a snap
+    /// the user has since interrupted.
+    pub fn apply_snap_command(&mut self, command: SnapCommand) {
+        if command.epoch <= self.last_snap_epoch {
+            return;
+        }
+        self.last_snap_epoch = command.epoch;
+        match command.action {
+            SnapAction::Settle(direction) => {
+                self.update_scroll_start_direction(direction);
+                self.maybe_start_snap_animation(direction);
+            }
+            SnapAction::Stop => {
+                // The direction parameter mirrors the oracle's signature but
+                // is unused by the stop path — Idle is the honest value for
+                // "a new gesture, direction not yet known".
+                self.maybe_stop_snap_animation(ScrollDirection::Idle);
+            }
+        }
+    }
+
+    /// Injects (or withdraws) the controller that drives snap and
+    /// programmatic-expand animations.
+    ///
+    /// Constructor-time injection covers a header built where a vsync is in
+    /// hand; this setter covers the element-driven path, where the render
+    /// object is created first and the element registers a controller with
+    /// its ambient vsync afterwards. `None` returns
+    /// [`Self::maybe_start_snap_animation`] to its documented inert state;
+    /// any in-flight animation keeps its own already-cloned controller and
+    /// settles normally.
+    pub fn set_snap_controller(&mut self, controller: Option<AnimationController>) {
+        self.controller = controller;
     }
 
     /// The scroll offset currently driving the header's shrink/reveal state

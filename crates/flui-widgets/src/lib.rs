@@ -211,6 +211,7 @@ pub use scroll::{
     SliverOpacity, SliverPadding, SliverPersistentHeader, SliverPersistentHeaderDelegate,
     SliverToBoxAdapter, StretchTriggerSignal, Viewport,
 };
+pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{
