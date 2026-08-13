@@ -489,6 +489,14 @@ pub(crate) struct DrawSegment {
     pub(crate) indices: Vec<u32>,
     /// Recorded tessellated batches for this segment
     pub(crate) tess_batches: Vec<TessellatedBatch>,
+    /// The half-open range of `TextRenderer` batch entries recorded while
+    /// this segment was current. Replay draws exactly this glyph subrange
+    /// at the segment's draw-order position, so text participates in
+    /// z-order instead of compositing in one global final pass (which let
+    /// a covered row's label float over a later-painted toolbar surface).
+    pub(crate) text_start: usize,
+    /// See [`Self::text_start`]. `text_start == text_end` means no text.
+    pub(crate) text_end: usize,
     /// Current pipeline key (for batching draws with same pipeline)
     pub(crate) current_pipeline_key: Option<PipelineKey>,
     /// Scissor regions for rect instanced batch
@@ -548,6 +556,8 @@ impl DrawSegment {
             sweep_grad_scissors: Vec::new(),
             cached_images: Vec::new(),
             external_images: Vec::new(),
+            text_start: 0,
+            text_end: 0,
         }
     }
 
@@ -569,7 +579,8 @@ impl DrawSegment {
 
     /// Returns `true` if this segment has no drawing commands.
     pub(crate) fn is_empty(&self) -> bool {
-        self.rect_batch.is_empty()
+        self.text_start == self.text_end
+            && self.rect_batch.is_empty()
             && self.circle_batch.is_empty()
             && self.arc_batch.is_empty()
             && self.shadow_batch.is_empty()
@@ -612,6 +623,8 @@ impl Default for DrawSegment {
             sweep_grad_scissors: Vec::new(),
             cached_images: Vec::new(),
             external_images: Vec::new(),
+            text_start: 0,
+            text_end: 0,
         }
     }
 }

@@ -565,7 +565,8 @@ impl WgpuPainter {
         let items: Vec<DrawItem> = self.draw_order.drain(..).collect();
 
         // Dispatch all items + text via GpuReplay::submit.
-        // text_renderer.render is the final phase inside submit.
+        // Segment text renders in draw order inside submit; finish_pass
+        // closes the text cycle there.
         self.replay.submit(
             items,
             self.size,

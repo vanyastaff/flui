@@ -2796,10 +2796,14 @@ mod gpu_tests {
                 &Paint::fill(Color::rgb(0, 255, 0)),
                 &flui_types::Matrix4::IDENTITY,
             );
+            let yellow_style = flui_types::typography::TextStyle {
+                color: Some(Color::rgb(255, 255, 0)),
+                ..flui_types::typography::TextStyle::default()
+            };
             backend.render_text(
                 "Title",
                 flui_types::Offset::new(Pixels(4.0), Pixels(50.0)),
-                &flui_types::typography::TextStyle::default(),
+                &yellow_style,
                 &Paint::fill(Color::rgb(255, 255, 0)),
                 &flui_types::Matrix4::IDENTITY,
             );
@@ -2835,15 +2839,23 @@ mod gpu_tests {
             .iter()
             .filter(|p| p[2] > 200 && p[0] < 50 && p[1] < 50)
             .count();
-        // CANARY of the KNOWN z-order flaw (issue #718): all glyphs render
-        // in one final pass, so the earlier blue text incorrectly floats
-        // over the later opaque path fill. When per-segment glyph ordering
-        // lands this assertion flips to `blue_pixels == 0` — the day this
-        // canary breaks is the day to do that.
+        // Ordered text: the earlier blue glyphs must be covered by the
+        // later opaque path fill — text draws at its segment's z-position,
+        // not in a global final pass.
+        assert_eq!(
+            blue_pixels, 0,
+            "the earlier text must be covered by the later path fill; \
+             {blue_pixels} blue glyph pixels visible — glyph batches \
+             composited out of draw order"
+        );
+        // And the LATER text still draws over the path.
+        let yellow_pixels = pixels
+            .iter()
+            .filter(|p| p[0] > 200 && p[1] > 200 && p[2] < 50)
+            .count();
         assert!(
-            blue_pixels > 0,
-            "text now respects draw order — flip this canary to assert \
-             blue_pixels == 0 and close the tracking issue"
+            yellow_pixels > 0,
+            "the later title text must render over the path fill"
         );
     }
 

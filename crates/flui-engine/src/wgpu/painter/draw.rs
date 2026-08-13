@@ -254,8 +254,21 @@ impl super::WgpuPainter {
             "WgpuPainter::text"
         );
         let transformed_position = self.state.apply_transform(position);
+        let entry_index = self.text_renderer.text_count();
         self.text_renderer
             .add_text(text, transformed_position, font_size, paint.color);
+        self.claim_text_entry(entry_index);
+    }
+
+    /// Stamp a freshly-recorded text batch entry onto the CURRENT segment's
+    /// glyph range, so replay draws it at this segment's z-position instead
+    /// of in a global final pass. Entries are recorded strictly in segment
+    /// order, so the range only ever extends forward.
+    fn claim_text_entry(&mut self, entry_index: usize) {
+        if self.current_segment.text_start == self.current_segment.text_end {
+            self.current_segment.text_start = entry_index;
+        }
+        self.current_segment.text_end = entry_index + 1;
     }
 
     /// Renders a sequence of styled runs as rich text.
@@ -282,6 +295,7 @@ impl super::WgpuPainter {
             "WgpuPainter::rich_text"
         );
         let transformed_position = self.state.apply_transform(position);
+        let entry_index = self.text_renderer.text_count();
         self.text_renderer.add_rich_text(
             runs,
             transformed_position,
@@ -289,6 +303,7 @@ impl super::WgpuPainter {
             base_color,
             wrap_width,
         );
+        self.claim_text_entry(entry_index);
     }
 
     /// Draw a registered external texture into `dst_rect`.
