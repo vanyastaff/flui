@@ -1089,6 +1089,20 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         self.snap_configuration = snap;
     }
 
+    /// Injects (or withdraws) the controller that drives snap and
+    /// programmatic-expand animations.
+    ///
+    /// Constructor-time injection covers a header built where a vsync is in
+    /// hand; this setter covers the element-driven path, where the render
+    /// object is created first and the element registers a controller with
+    /// its ambient vsync afterwards. `None` returns
+    /// [`Self::maybe_start_snap_animation`] to its documented inert state;
+    /// any in-flight animation keeps its own already-cloned controller and
+    /// settles normally.
+    pub fn set_snap_controller(&mut self, controller: Option<AnimationController>) {
+        self.controller = controller;
+    }
+
     /// The scroll offset currently driving the header's shrink/reveal state
     /// (post-clamp, as tracked by the re-reveal state machine). `None` before
     /// the first layout.

@@ -23,6 +23,10 @@ flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # Owner-routed interaction targets/dispatch handles (ADR-0027).
 flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
 # Concrete render-object catalog (moved out of flui-rendering per ADR-0008).
+# Snap/expand controller plumb-through for the floating persistent headers:
+# the WIDGET layer owns the controller lifecycle (vsync lives there); this
+# crate only carries the already-built controller into the render object.
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
 flui-objects = { path = "../flui-objects", version = "0.2.0" }
 # The frame-driven async task driver. A `ViewState` reaches its
 # binding's driver through `BuildContext::async_driver()`; the type lives here.
