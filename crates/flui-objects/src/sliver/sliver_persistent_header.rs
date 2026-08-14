@@ -598,23 +598,18 @@ impl RenderSliverScrollingPersistentHeader {
         let raw_paint_extent = max_extent - constraints.scroll_offset;
         let cache_extent = self.calculate_cache_offset(constraints, 0.0, max_extent);
         let paint_extent = raw_paint_extent.clamp(0.0, constraints.remaining_paint_extent);
-        let geometry = SliverGeometry {
-            scroll_extent: max_extent,
-            paint_origin: constraints.overlap.min(0.0),
-            paint_extent,
-            // The oracle passes neither `layoutExtent` nor `visible`
-            // (`:374-381`), so `SliverGeometry`'s constructor defaults
-            // apply: layout = paint, visible = paint > 0
-            // (`sliver.dart:662-665`). A Rust struct literal has no such
-            // defaults — spell them out or the next sliver lays out at 0
-            // and the header reports itself invisible.
-            layout_extent: paint_extent,
-            visible: paint_extent > 0.0,
-            max_paint_extent: max_extent + stretch_offset,
-            cache_extent,
-            has_visual_overflow: true,
-            ..SliverGeometry::ZERO
-        };
+        // The oracle (`sliver_persistent_header.dart:374-381`) passes only
+        // scrollExtent/paintOrigin/paintExtent/maxPaintExtent/cacheExtent, so
+        // every other field takes `SliverGeometry`'s constructor default
+        // (`sliver.dart:662-665`). Going through `new` + `with_*` rather than
+        // a `..ZERO` struct literal is what makes those defaults apply: the
+        // struct-update form substitutes zero/false for whatever it omits,
+        // which is how `layout_extent`, `visible` and `hit_test_extent` were
+        // each silently dropped here in turn.
+        let geometry = SliverGeometry::new(max_extent, paint_extent, constraints.overlap.min(0.0))
+            .with_max_paint_extent(max_extent + stretch_offset)
+            .with_cache_extent(cache_extent)
+            .with_visual_overflow();
         let child_position = if stretch_offset > 0.0 {
             0.0
         } else {
@@ -790,25 +785,25 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
         let stretch_offset = self.core.stretch_offset_for_geometry(&constraints);
 
         let paint_extent = child_extent.min(effective_remaining_paint_extent);
-        let geometry = SliverGeometry {
-            scroll_extent: max_extent,
-            paint_origin: constraints.overlap,
-            paint_extent,
-            // `visible` is not given by the oracle (`:435-444`) → the
-            // constructor default `paintExtent > 0` (`sliver.dart:665`):
-            // a pinned header stays visible while it holds at the edge.
-            visible: paint_extent > 0.0,
-            layout_extent,
-            max_paint_extent: max_extent + stretch_offset,
-            max_scroll_obstruction_extent: min_extent,
-            cache_extent: if layout_extent > 0.0 {
+        // `paint_origin` is `constraints.overlap` UNMODIFIED here — unlike the
+        // scrolling/floating variants, which clamp it with `.min(0.0)`. That
+        // is the pinned contract (oracle `:435-444`), not a transcription slip.
+        //
+        // `layout_extent` is deliberately narrower than `paint_extent`: a
+        // pinned header keeps painting at the edge after it has stopped
+        // consuming layout space. Everything the oracle omits takes the
+        // constructor default via `new` (`sliver.dart:662-665`) rather than
+        // `..ZERO`'s zero/false.
+        let geometry = SliverGeometry::new(max_extent, paint_extent, constraints.overlap)
+            .with_layout_extent(layout_extent)
+            .with_max_paint_extent(max_extent + stretch_offset)
+            .with_max_scroll_obstruction(min_extent)
+            .with_cache_extent(if layout_extent > 0.0 {
                 -constraints.cache_origin + layout_extent
             } else {
                 layout_extent
-            },
-            has_visual_overflow: true,
-            ..SliverGeometry::ZERO
-        };
+            })
+            .with_visual_overflow();
 
         position_persistent_header_child(ctx, &constraints, &geometry, 0.0, child_extent);
         geometry
@@ -922,23 +917,16 @@ impl FloatingHeaderMode for FloatingMode {
         let raw_layout_extent = max_extent - constraints.scroll_offset;
         let paint_extent = raw_paint_extent.clamp(0.0, constraints.remaining_paint_extent);
         let layout_extent = raw_layout_extent.clamp(0.0, constraints.remaining_paint_extent);
-        let geometry = SliverGeometry {
-            scroll_extent: max_extent,
-            paint_origin: constraints.overlap.min(0.0),
-            paint_extent,
-            // `visible` is not given by the oracle (`:588-595`) → the
-            // constructor default `paintExtent > 0` (`sliver.dart:665`).
-            visible: paint_extent > 0.0,
-            layout_extent,
-            max_paint_extent: max_extent + stretch_offset,
-            // `cacheExtent` was not given explicitly by the oracle here, so it
-            // falls back to `layoutExtent` per `SliverGeometry`'s own
-            // constructor default chain (`cacheExtent ?? layoutExtent ??
-            // paintExtent`, `sliver.dart:660-664`).
-            cache_extent: layout_extent,
-            has_visual_overflow: true,
-            ..SliverGeometry::ZERO
-        };
+        // The oracle (`:588-595`) omits `visible` and `hitTestExtent`, so both
+        // take `new`'s constructor defaults (`sliver.dart:662-665`).
+        // `cacheExtent` is also omitted there and falls back to `layoutExtent`
+        // per the same chain, which is narrower than `new`'s `paint_extent`
+        // default here — hence the explicit setter.
+        let geometry = SliverGeometry::new(max_extent, paint_extent, constraints.overlap.min(0.0))
+            .with_layout_extent(layout_extent)
+            .with_max_paint_extent(max_extent + stretch_offset)
+            .with_cache_extent(layout_extent)
+            .with_visual_overflow();
         // Uses the RAW (pre-clamp) `paint_extent` local, matching the
         // oracle's `paintExtent - childExtent` — not `geometry.paintExtent`.
         let child_position = if stretch_offset > 0.0 {
@@ -973,20 +961,19 @@ impl FloatingHeaderMode for FloatingPinnedMode {
         let layout_extent =
             (max_extent - constraints.scroll_offset).clamp(0.0, clamped_paint_extent);
         let stretch_offset = core.stretch_offset_for_geometry(constraints);
-        let geometry = SliverGeometry {
-            scroll_extent: max_extent,
-            paint_origin: constraints.overlap.min(0.0),
-            paint_extent: clamped_paint_extent,
-            // `visible` is not given by the oracle (`:825-833`) → the
-            // constructor default `paintExtent > 0` (`sliver.dart:665`).
-            visible: clamped_paint_extent > 0.0,
-            layout_extent,
-            max_paint_extent: max_extent + stretch_offset,
-            max_scroll_obstruction_extent: min_extent,
-            cache_extent: layout_extent,
-            has_visual_overflow: true,
-            ..SliverGeometry::ZERO
-        };
+        // As above: `visible` and `hitTestExtent` are omitted by the oracle
+        // (`:825-833`) and take `new`'s defaults; `cacheExtent` follows
+        // `layoutExtent`.
+        let geometry = SliverGeometry::new(
+            max_extent,
+            clamped_paint_extent,
+            constraints.overlap.min(0.0),
+        )
+        .with_layout_extent(layout_extent)
+        .with_max_paint_extent(max_extent + stretch_offset)
+        .with_max_scroll_obstruction(min_extent)
+        .with_cache_extent(layout_extent)
+        .with_visual_overflow();
         (geometry, 0.0)
     }
 }
