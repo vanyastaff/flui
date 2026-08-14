@@ -440,6 +440,20 @@ impl LongPressGestureRecognizer {
         // synchronously dispose or start another sequence on this recognizer.
         self.stop_deadline_polling();
 
+        // Winning the arena is part of firing, not a caller obligation.
+        // Whichever path notices the elapsed deadline — the frame poll, a move
+        // drifting inside the slop radius, or an embedder's `check_timer` tick
+        // — a fired long press must reject its competitors, or a tap on the
+        // same region also fires on release (long-pressing a list row opens the
+        // context menu AND navigates into it).
+        //
+        // Safe to resolve here: the `gesture_state` lock was released with the
+        // snapshot above, and the arena defers member notifications out of its
+        // own lock, so a callback re-entering recognizer API cannot deadlock.
+        // Ordered before the callbacks so application code observes an already
+        // resolved arena, matching `did_exceed_deadline`.
+        self.state.accept_tracked();
+
         if let Some(callback) = self.callbacks.borrow().on_long_press.clone() {
             callback();
         }
@@ -458,6 +472,14 @@ impl LongPressGestureRecognizer {
     ///
     /// This should be called periodically by the event loop. Returns
     /// `true` when the deadline fired this tick.
+    ///
+    /// # Arena resolution
+    ///
+    /// Firing also WINS the arena for this sequence, rejecting competing
+    /// members. That is not an optional extra a caller may skip: a long press
+    /// that fires without resolving leaves a competing tap live, so the tap
+    /// also fires on release. Callers that drive this tick therefore do not
+    /// need to — and must not separately — resolve the arena themselves.
     pub fn check_timer(&self) -> bool {
         let position = self
             .gesture_state
@@ -627,16 +649,12 @@ impl GestureArenaMember for LongPressGestureRecognizer {
         // pointer event arrives to drive it). `check_timer` is idempotent, so
         // polling every frame fires at most once.
         //
-        // When the deadline fires, ALSO win the arena — mirroring
-        // `did_exceed_deadline`. Without this, a held long-press in a
-        // multi-recognizer detector fires its callback but never rejects the
-        // competing tap, so the tap would still fire on release. `check_timer`
-        // returns having already dropped the gesture_state lock, so resolving
-        // here is re-entrancy-safe (the arena defers member notifications out
-        // of its own lock).
-        if self.check_timer() {
-            self.state.accept_tracked();
-        }
+        // Winning the arena on fire now lives in `try_fire_timer`, so every
+        // path that can notice the elapsed deadline resolves it — this one,
+        // `handle_move`, and the public `check_timer`. It used to be here
+        // alone, which left the move-driven path firing without rejecting its
+        // competitors.
+        self.check_timer();
     }
 
     fn has_pending_deadline(&self) -> bool {
@@ -1111,6 +1129,68 @@ mod tests {
         assert!(
             *rejected.lock(),
             "poll_deadline must win the arena and reject the competing member",
+        );
+    }
+
+    /// The same contract on the move-driven path.
+    ///
+    /// A long press whose deadline elapses while the finger is drifting inside
+    /// the slop radius fires from `handle_move`, not from the frame poll. That
+    /// path fired the callback without resolving the arena, so a competing tap
+    /// stayed live and ALSO fired on release: long-pressing a list row opened
+    /// the context menu and navigated into the row.
+    ///
+    /// If reverted (drop the `accept_tracked` from `try_fire_timer`): the
+    /// callback still fires but the competitor is never rejected.
+    #[test]
+    fn a_move_driven_long_press_wins_the_arena_when_it_fires() {
+        struct Competitor {
+            rejected: Arc<Mutex<bool>>,
+        }
+        impl crate::sealed::arena_member::Sealed for Competitor {}
+        impl crate::arena::GestureArenaMember for Competitor {
+            fn accept_gesture(&self, _: PointerId) {}
+            fn reject_gesture(&self, _: PointerId) {
+                *self.rejected.lock() = true;
+            }
+        }
+
+        let clock = flui_foundation::ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena.clone(),
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(100)),
+        );
+        let pointer = PointerId::new(3).expect("nonzero pointer id");
+        let start = Offset::new(Pixels(10.0), Pixels(10.0));
+        recognizer.add_pointer(pointer, start);
+
+        let rejected = Arc::new(Mutex::new(false));
+        arena.add(
+            pointer,
+            Arc::new(Competitor {
+                rejected: rejected.clone(),
+            }),
+        );
+        arena.close(pointer);
+
+        let fired = Arc::new(Mutex::new(false));
+        let fired_flag = Arc::clone(&fired);
+        let recognizer = recognizer.with_on_long_press(move || *fired_flag.lock() = true);
+
+        // Hold past the deadline, then drift a hair — inside the slop radius,
+        // so this is still the same press, and the move is what notices the
+        // elapsed deadline.
+        clock.advance(Duration::from_millis(150));
+        let drift = Offset::new(Pixels(11.0), Pixels(11.0));
+        let mv = crate::events::make_move_event(drift, PointerType::Touch);
+        recognizer.handle_event(&mv);
+
+        assert!(*fired.lock(), "precondition: the move fired the long press");
+        assert!(
+            *rejected.lock(),
+            "a move-driven long press must win the arena too, or a competing \
+             tap also fires on release",
         );
     }
 
