@@ -27,13 +27,16 @@ Platform abstraction layer. Provides a unified `Platform` trait with concrete im
   `on_ready` callback (a real ordering requirement of the winit event-loop
   model — calling it earlier panics on every backend, not just headless).
   `xvfb-run` covers the remainder: a handful of winit-internals unit tests in
-  `src/platforms/winit/platform.rs` construct `WinitPlatform::new()` directly,
-  bypassing the `FLUI_HEADLESS` check, and need a real (if virtual) X11
-  connection for `arboard`'s clipboard init. Without both devices, running on
-  a box with no display fails fast on the clipboard connection; running on a
-  box with a real desktop session instead fails on the `open_window`
-  ordering panics — neither failure mode means the crate is broken, both are
-  fixed by running it the way CI does.
+  `src/platforms/winit/platform.rs` construct `WinitPlatform::new()` (and some
+  a real `EventLoop`) directly, bypassing the `FLUI_HEADLESS` check, and need
+  a real (if virtual) X11 connection — for the event loop itself, and for
+  `arboard`'s clipboard init to be non-inert (a failed clipboard init now
+  degrades to an inert clipboard with a warning rather than aborting: the old
+  panicking `ArboardClipboard::default()` fallback took down any app on a
+  Wayland-only session, where arboard has no X11 socket to reach). Running on
+  a box with a real desktop session instead fails on the `open_window`
+  ordering panics — that failure mode does not mean the crate is broken; it
+  is fixed by running the suite the way CI does.
 - **Windows, macOS, and Android backends still have zero executing tests
   anywhere** — `STATUS_HEAP_CORRUPTION` (ROADMAP-TRACKER item H9) is a
   Windows-only crash that can't reproduce on the Linux CI runners above;

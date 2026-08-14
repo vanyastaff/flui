@@ -2510,11 +2510,17 @@ fn teardown_platform_realm() {
     // process's life. `Drop for AppRuntime` is the last-resort third clear
     // if this explicit path is ever skipped (a panic mid-teardown, for
     // instance) — see that impl's doc.
-    APP_RUNTIME.with(|slot| {
+    let released = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
         state.clear_platform_clipboard();
-        state.clear_redraw_window();
+        state.clear_redraw_window()
     });
+    // Ordinarily `None` already: the window-close path released this pin
+    // (`release_redraw_window_for`) while the event loop was still alive,
+    // which is the order the platform teardown contract wants. Dropped here
+    // outside the TLS borrow for the paths that never closed a window (an
+    // OS-level quit with the window still open).
+    drop(released);
 }
 
 #[cfg(all(
@@ -9023,9 +9029,23 @@ where
         // The tail `teardown_platform_realm()` call still runs once
         // `Platform::run` actually returns, for the clipboard/redraw-window
         // cleanup no per-window close performs.
+        let closing_window_id = window.id();
         window.on_close(Box::new(move || {
             tracing::info!("Window closed");
             close_this_window(realm_dispatch);
+            // Release the redraw-poke slot's pin on this window NOW, while
+            // the platform event loop is still alive — this slot was the
+            // one `Arc` that survived `Platform::run`, deferring the
+            // window's native teardown (and, before the platform's own
+            // callback clear existed, the GPU surface teardown chained
+            // behind it) to after the loop was gone: the Wayland post-quit
+            // SIGSEGV of issue #713. Keyed by id, not unconditional, so
+            // closing a `SharedRealm` sibling never unpins the primary.
+            // Dropped outside the TLS borrow: the winit window's own drop
+            // may re-enter platform code.
+            let released =
+                APP_RUNTIME.with(|slot| slot.borrow().release_redraw_window_for(closing_window_id));
+            drop(released);
         }));
 
         // Window should-close -> allow by default
@@ -10663,7 +10683,8 @@ mod tests {
         );
         // Clean up so this test's window does not linger for whatever test
         // runs next on this pool thread.
-        APP_RUNTIME.with(|slot| slot.borrow().clear_redraw_window());
+        let released = APP_RUNTIME.with(|slot| slot.borrow().clear_redraw_window());
+        drop(released);
     }
 
     // ========================================================================

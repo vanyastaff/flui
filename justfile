@@ -146,6 +146,13 @@ live-smoke:
     xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo
 
 [group("test")]
+[doc("Wayland live-smoke: close-path teardown ordering under a headless weston compositor — the demo self-closes (FLUI_SELF_CLOSE_AFTER_MS drives the real CloseRequested arm) and must exit 0, five cycles. Catches the post-quit wl_proxy use-after-free class (issue #713) the X11 smoke can never see. SKIPs with a message when weston is absent (apt install weston)")]
+live-smoke-wayland:
+    cargo build --package flui --features material --example sliver_demo
+    cargo build --package flui-live-smoke
+    target/debug/flui-live-smoke target/debug/examples/sliver_demo wayland
+
+[group("test")]
 [doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast

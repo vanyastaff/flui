@@ -89,7 +89,6 @@ crates/flui-platform/src/platforms/web/display.rs 2
 crates/flui-platform/src/platforms/web/events.rs 1
 crates/flui-platform/src/platforms/web/platform.rs 1
 crates/flui-platform/src/platforms/web/window.rs 1
-crates/flui-platform/src/platforms/winit/clipboard.rs 1
 crates/flui-platform/src/task.rs 1
 crates/flui-rendering/src/pipeline/owner/paint.rs 2
 crates/flui-rendering/src/pipeline/scheduler.rs 2

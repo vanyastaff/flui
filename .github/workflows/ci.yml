@@ -324,8 +324,8 @@ jobs:
       # opens; the screen tracks a held drag mid-gesture (a parked-loop
       # regression freezes exactly this); the drag scrolled; a WM_DELETE
       # close exits 0 within a timeout (catches teardown hangs and
-      # post-quit crashes); wheel ticks scroll. X11 only — the Wayland
-      # teardown path is NOT covered here.
+      # post-quit crashes); wheel ticks scroll. X11 input/pixels only — the
+      # Wayland-specific teardown ordering is the next step's job.
       - name: live-smoke (real window, real input, real teardown)
         if: runner.os == 'Linux'
         run: |
@@ -336,6 +336,24 @@ jobs:
           cargo build -p flui --features material --example sliver_demo --locked
           cargo build -p flui-live-smoke --locked
           xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo
+
+      # Wayland variant of the live smoke: the ONLY executing coverage of
+      # the Wayland close-path teardown ordering, which segfaulted post-quit
+      # (a wgpu swapchain destroyed after its wl_surface — issue #713) while
+      # the X11 close check above stayed green, because Xlib tolerates the
+      # same out-of-order teardown that is a use-after-free on Wayland's
+      # client-side proxies. Runs the demo under a headless weston
+      # compositor; the app closes itself via the platform's harness
+      # self-close hook (FLUI_SELF_CLOSE_AFTER_MS — the exact CloseRequested
+      # arm a compositor close takes), five cycles, each must exit 0.
+      # Weston is installed explicitly so the harness's weston-absent SKIP
+      # path can never silently fire here. Reuses the demo/harness binaries
+      # built by the X11 step above.
+      - name: live-smoke-wayland (teardown ordering under headless weston)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends weston
+          target/debug/flui-live-smoke target/debug/examples/sliver_demo wayland
 
       # flui-assets and flui-widgets both default to `default = []`, so the
       # workspace-default run above never compiles their `images`/`network`
