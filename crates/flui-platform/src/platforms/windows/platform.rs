@@ -1,14 +1,19 @@
 //! Windows platform implementation
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
 
 use anyhow::{Context, Result};
-use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
+use flui_types::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use windows::{
     Win32::{
-        Foundation::{ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{
+            ERROR_CANCELLED, ERROR_SUCCESS, GetLastError, HWND, LPARAM, LRESULT, RECT,
+            SetLastError, WPARAM,
+        },
         Graphics::Gdi::{BeginPaint, EndPaint, HBRUSH, PAINTSTRUCT},
         System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
         UI::{
@@ -34,7 +39,7 @@ use windows::{
 use super::{
     display::enumerate_displays,
     util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
-    window::WindowsWindow,
+    window::{WindowCommand, WindowState, WindowsWindow},
 };
 use crate::{
     config::WindowConfiguration,
@@ -56,38 +61,20 @@ static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 /// Context data stored per window for event dispatch
 pub(super) struct WindowContext {
     /// Window ID for event dispatch
-    pub window_id: WindowId,
+    pub(super) window_id: WindowId,
     /// Reference to platform handlers (global)
-    pub handlers: Arc<Mutex<PlatformHandlers>>, // PORT-CHECK-OK-SP6: WindowsPlatform handlers Arc<Mutex<>>; mirrors PlatformHandlers callback storage; pre-existing SP-6
+    pub(super) handlers: Arc<Mutex<PlatformHandlers>>, // PORT-CHECK-OK-SP6: WindowsPlatform handlers Arc<Mutex<>>; mirrors PlatformHandlers callback storage; pre-existing SP-6
     /// Per-window callbacks for event delivery
-    pub callbacks: Arc<WindowCallbacks>,
-    /// Scale factor for coordinate conversion.
-    ///
-    /// `Cell`, not a plain `f32`: `window_proc` only ever holds a shared
-    /// `&WindowContext` (see its `# Safety` section), and `WM_DPICHANGED` is
-    /// the one message that updates this field — `Cell::set` lets it do so
-    /// through that shared reference instead of forging a second, aliasing
-    /// `&mut WindowContext` from the raw `GWLP_USERDATA` pointer while the
-    /// shared one is still live.
-    pub scale_factor: std::cell::Cell<f32>,
-    /// Current window mode (replaces display_state + saved bounds)
-    pub mode: std::cell::Cell<WindowMode>,
-    /// Last known size (before minimization) for restore detection
-    pub last_size: std::cell::Cell<Size<DevicePixels>>,
+    pub(super) callbacks: Arc<WindowCallbacks>,
+    /// State shared with `WindowsWindow`; locks are released before callbacks.
+    pub(super) state: Arc<Mutex<WindowState>>,
     /// Window configuration (hotkeys, debouncing, etc.)
-    pub config: WindowConfiguration,
-    /// Is mouse hovering over this window? (T034)
-    pub is_hovered: std::cell::Cell<bool>,
-    /// Current keyboard modifiers (T035)
-    pub modifiers: std::cell::Cell<keyboard_types::Modifiers>,
-    /// Cursor selected by this exact window's presentation.
-    pub cursor: std::cell::Cell<CursorIcon>,
-    /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
-    ///
-    /// Stored here instead of in `WindowMode` to keep the cross-platform enum
-    /// free of platform-specific fields.
-    pub restore_style: std::cell::Cell<u32>,
+    pub(super) config: WindowConfiguration,
+    /// Non-owning access to the platform registry for owner-thread teardown.
+    pub(super) windows: Weak<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
 }
+
+static_assertions::assert_impl_all!(WindowContext: Send, Sync);
 
 impl WindowContext {
     /// Dispatch a window event safely without holding locks
@@ -108,6 +95,136 @@ impl WindowContext {
             self.handlers.lock().window_event = Some(handler);
         }
     }
+}
+
+/// Installs the raw strong reference owned by an HWND's userdata slot.
+pub(super) fn install_window_context(hwnd: HWND, context: Arc<WindowContext>) -> Result<()> {
+    // Win32 initializes a fresh HWND's userdata to zero, and this runs
+    // on its owner thread before the window is published. Preflighting before
+    // `Arc::into_raw` means an unexpected occupied slot is never overwritten
+    // or later mistaken for FLUI's Arc. After the conversion, a successful
+    // write transfers that one strong reference to the slot; its address is
+    // obtained with `expose_provenance` because Win32 stores only an integer.
+    // A failed write reconstructs and drops the original pointer directly.
+    // SAFETY: these inseparable calls inspect only `hwnd`'s pointer-sized
+    // userdata value. `SetLastError` disambiguates a successful zero read.
+    let (existing, preflight_error) = unsafe {
+        SetLastError(ERROR_SUCCESS);
+        let existing = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        (existing, GetLastError())
+    };
+    if existing != 0 {
+        anyhow::bail!("refusing to overwrite occupied Win32 userdata slot");
+    }
+    if preflight_error != ERROR_SUCCESS {
+        anyhow::bail!(
+            "failed to inspect Win32 userdata slot: error={}",
+            preflight_error.0
+        );
+    }
+
+    let context_ptr = Arc::into_raw(context);
+    let context_address = context_ptr.expose_provenance().cast_signed();
+    // SAFETY: `context_address` is the exposed address of the raw Arc strong
+    // reference above. These calls atomically install that integer value and
+    // immediately capture the thread-local error needed to interpret zero.
+    let (previous, install_error) = unsafe {
+        SetLastError(ERROR_SUCCESS);
+        let previous = SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_address);
+        (previous, GetLastError())
+    };
+    if previous != 0 {
+        // A nonzero previous value means the write succeeded despite the
+        // owner-serialized empty preflight. The slot now owns our Arc;
+        // the caller's error cleanup destroys the HWND and consumes it.
+        anyhow::bail!("Win32 userdata slot changed after empty preflight: previous={previous}");
+    }
+    if install_error != ERROR_SUCCESS {
+        // SAFETY: the failed slot write did not consume the raw strong
+        // reference produced immediately above.
+        drop(unsafe { Arc::from_raw(context_ptr) });
+        anyhow::bail!(
+            "failed to install Win32 window context: error={}",
+            install_error.0
+        );
+    }
+    Ok(())
+}
+
+/// Pins the context for one WNDPROC invocation.
+///
+/// # Safety
+///
+/// The caller must be executing serialized WNDPROC dispatch on `hwnd`'s owner
+/// thread. Every nonzero userdata value must be the exposed address of the raw
+/// `Arc<WindowContext>` strong reference installed by `install_window_context`,
+/// and no other thread may clear or replace the slot during this call.
+unsafe fn acquire_window_context(hwnd: HWND) -> Option<Arc<WindowContext>> {
+    // Only this module reads or clears this slot, and Win32 serializes
+    // WNDPROC dispatch for an HWND on its owner thread. A non-null pointer is
+    // the raw strong reference installed by `install_window_context`; it
+    // remains owned by the slot while the increment is performed. The address
+    // is reconstituted with `with_exposed_provenance` before any Arc operation.
+    // The new strong reference pins the allocation across reentrant callbacks,
+    // including a nested `WM_DESTROY` that clears the slot.
+    // SAFETY: the caller's contract guarantees owner-thread serialization;
+    // this reads the pointer-sized userdata value without dereferencing it.
+    let context_address = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+    if context_address == 0 {
+        return None;
+    }
+    let context_ptr =
+        std::ptr::with_exposed_provenance::<WindowContext>(context_address.cast_unsigned());
+    // SAFETY: the nonzero address is the slot-owned raw Arc strong reference.
+    // The increment happens while that reference is still slot-owned, and
+    // `from_raw` consumes exactly the newly added invocation-local reference.
+    unsafe {
+        Arc::increment_strong_count(context_ptr);
+        Some(Arc::from_raw(context_ptr))
+    }
+}
+
+/// Clears userdata and consumes the strong reference formerly owned by it.
+///
+/// # Safety
+///
+/// The caller must be executing serialized WNDPROC dispatch on `hwnd`'s owner
+/// thread, and must be the sole code allowed to clear the slot. Every nonzero
+/// value must be the exposed address installed by `install_window_context` and
+/// must not have been previously consumed with `Arc::from_raw`.
+unsafe fn take_window_context(hwnd: HWND) -> Result<Option<Arc<WindowContext>>> {
+    // Owner-thread WNDPROC dispatch is the sole clearer of this slot.
+    // A nonzero return is exactly the raw strong reference installed by
+    // `install_window_context`; `with_exposed_provenance` reconstitutes the
+    // pointer before `Arc::from_raw` consumes it once. On a failed zero return
+    // the slot may still own the reference, so it is left untouched and
+    // reported rather than guessed-at or double-consumed.
+    // SAFETY: the caller's contract grants sole owner-thread clearing access.
+    // These inseparable calls clear the pointer-sized value and immediately
+    // capture the thread-local error needed to interpret a zero return.
+    let (context_address, error) = unsafe {
+        SetLastError(ERROR_SUCCESS);
+        let context_address = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        (context_address, GetLastError())
+    };
+    if context_address != 0 {
+        let context_ptr =
+            std::ptr::with_exposed_provenance::<WindowContext>(context_address.cast_unsigned());
+        // SAFETY: by contract this is the unique raw strong reference just
+        // removed from the slot, reconstructed with exposed provenance.
+        return Ok(Some(unsafe { Arc::from_raw(context_ptr) }));
+    }
+    if error == ERROR_SUCCESS {
+        Ok(None)
+    } else {
+        anyhow::bail!("failed to clear Win32 window context: error={}", error.0)
+    }
+}
+
+fn default_window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // SAFETY: this forwards the exact HWND and message parameters supplied by
+    // Win32 to the registered WNDPROC; no Rust reference is derived from them.
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 /// Windows platform state
@@ -356,9 +473,9 @@ impl WindowsPlatform {
     /// registered as this exact function in `register_window_class`. Win32
     /// guarantees `hwnd`/`msg`/`wparam`/`lparam` are well-formed for the
     /// message being delivered, and always dispatches on the thread that
-    /// owns the window's message queue — the `GWLP_USERDATA` read below does
-    /// not race `WM_DESTROY`'s clear+free precisely because both run here,
-    /// serialized by that same-thread dispatch guarantee.
+    /// owns the window's message queue. `acquire_window_context` turns the
+    /// slot-owned raw Arc reference into an invocation-local strong reference
+    /// before any callback can reentrantly destroy the HWND.
     ///
     /// Known gap (not fixed by this comment, not UB — flagged for the
     /// audit): none of the callback dispatches below (`ctx.callbacks.*`,
@@ -375,25 +492,20 @@ impl WindowsPlatform {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        // SAFETY: see the `# Safety` section above for the `GWLP_USERDATA`
-        // contract this read relies on. The rest of this single `unsafe`
-        // block covers every Win32 call in the `match` below: `GetWindowLongPtrW`/
-        // `SetWindowLongPtrW` take `hwnd` and plain integers, no pointers;
-        // `TrackMouseEvent` (`WM_MOUSEMOVE`) and `BeginPaint`/`EndPaint`
-        // (`WM_PAINT`, its own SAFETY note below) take `&raw` pointers to
-        // stack-local, correctly-sized structs; `DestroyWindow` calls are
-        // individually commented where they appear; `Box::from_raw(ctx_ptr)`
-        // (`WM_DESTROY`) has its own SAFETY note where it appears;
-        // `DefWindowProcW` forwards unhandled messages verbatim with no
-        // pointer arguments of its own.
-        unsafe {
-            // Get window context from GWLP_USERDATA
-            let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowContext;
-            let ctx = if ctx_ptr.is_null() {
-                None
-            } else {
-                Some(&*ctx_ptr)
-            };
+        // Ordinary scope only: unsafe authority is granted separately at each
+        // FFI/raw-Arc operation below, never to the dispatch state machine.
+        {
+            // SAFETY: WNDPROC runs on the HWND owner thread. The slot-owned Arc is
+            // live until the only clearing path, WM_DESTROY, so the helper can pin
+            // an invocation-local reference before any callback runs.
+            let ctx = unsafe { acquire_window_context(hwnd) };
+
+            if let Some(command) = WindowCommand::from_message(msg) {
+                if let Some(ctx) = ctx.as_deref() {
+                    WindowsWindow::execute_window_command(hwnd, ctx, command);
+                }
+                return LRESULT(0);
+            }
 
             match msg {
                 WM_CREATE => {
@@ -404,7 +516,7 @@ impl WindowsPlatform {
                 WM_CLOSE => {
                     tracing::debug!("WM_CLOSE for HWND {:?}", hwnd);
 
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         // Ask per-window callback if close should proceed
                         let should_close = ctx.callbacks.dispatch_should_close();
 
@@ -413,17 +525,22 @@ impl WindowsPlatform {
                             ctx.dispatch_event(WindowEvent::CloseRequested {
                                 window_id: ctx.window_id,
                             });
-                            if let Err(error) = DestroyWindow(hwnd) {
+                            // SAFETY: WNDPROC runs on this HWND's owner thread.
+                            if let Err(error) = unsafe { DestroyWindow(hwnd) } {
                                 tracing::warn!(?hwnd, ?error, "DestroyWindow failed on WM_CLOSE");
                             }
                         }
                         // If !should_close, the close is vetoed
-                    } else if let Err(error) = DestroyWindow(hwnd) {
-                        tracing::warn!(
-                            ?hwnd,
-                            ?error,
-                            "DestroyWindow failed on WM_CLOSE (no WindowContext)"
-                        );
+                    } else {
+                        // SAFETY: WNDPROC runs on this HWND's owner thread even
+                        // before or after a context is installed.
+                        if let Err(error) = unsafe { DestroyWindow(hwnd) } {
+                            tracing::warn!(
+                                ?hwnd,
+                                ?error,
+                                "DestroyWindow failed on WM_CLOSE (no WindowContext)"
+                            );
+                        }
                     }
 
                     LRESULT(0)
@@ -432,31 +549,37 @@ impl WindowsPlatform {
                 WM_DESTROY => {
                     tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
 
-                    if let Some(ctx) = ctx {
-                        // Fire per-window on_close callback (FnOnce)
-                        ctx.callbacks.dispatch_close();
+                    if let Some(ctx) = ctx.as_deref() {
+                        let should_dispatch_close = {
+                            let mut state = ctx.state.lock();
+                            let was_destroyed = state.is_destroyed;
+                            state.is_destroyed = true;
+                            state.visible = false;
+                            state.focused = false;
+                            state.is_hovered = false;
+                            !was_destroyed
+                        };
 
-                        // Dispatch Closed event to global handlers
-                        ctx.dispatch_event(WindowEvent::Closed(ctx.window_id));
+                        if should_dispatch_close {
+                            // Fire per-window on_close callback (FnOnce)
+                            ctx.callbacks.dispatch_close();
 
-                        // Clean up context - IMPORTANT: Clear pointer BEFORE dropping to avoid
-                        // dangling pointer
-                        //
-                        // SAFETY: `ctx_ptr` is the same pointer `WindowsWindow::new`
-                        // produced via `Box::into_raw` and stored in this HWND's
-                        // `GWLP_USERDATA` — `ctx` (the shared reference used just
-                        // above) is derived from that same allocation, and its
-                        // last use is the `dispatch_event` call above, so no
-                        // reference into the box outlives this reclaim. The slot
-                        // is zeroed with `SetWindowLongPtrW` *before* `Box::from_raw`
-                        // runs, so if `dispatch_close`/`dispatch_event` above had
-                        // re-entrantly queried `GWLP_USERDATA` (they don't), they
-                        // would see null rather than a pointer about to be freed.
-                        // `window_proc` never runs concurrently with itself for
-                        // the same `hwnd` (Win32 serializes message dispatch per
-                        // queue), so this is the only path that can free `ctx_ptr`.
-                        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                        drop(Box::from_raw(ctx_ptr));
+                            // Dispatch Closed event to global handlers
+                            ctx.dispatch_event(WindowEvent::Closed(ctx.window_id));
+
+                            if let Some(windows) = ctx.windows.upgrade() {
+                                windows.lock().remove(&(hwnd.0 as isize));
+                            }
+                        }
+                    }
+
+                    // SAFETY: this owner-thread WNDPROC is the only userdata
+                    // clearer. The invocation-local `ctx: Arc<_>` above stays
+                    // alive until this function returns, so consuming the
+                    // slot-owned strong reference cannot invalidate callback
+                    // stack frames, including after reentrant destruction.
+                    if let Err(error) = unsafe { take_window_context(hwnd) } {
+                        tracing::warn!(?hwnd, ?error, "failed to release HWND userdata context");
                     }
 
                     LRESULT(0)
@@ -478,10 +601,12 @@ impl WindowsPlatform {
                     // `BeginPaint`/`EndPaint` exactly once, satisfying
                     // Win32's required pairing.
                     let mut ps = PAINTSTRUCT::default();
-                    let hdc = BeginPaint(hwnd, &raw mut ps);
+                    let hdc = unsafe { BeginPaint(hwnd, &raw mut ps) };
                     if !hdc.is_invalid() {
                         // Skip rendering for minimized windows to save CPU/GPU resources
-                        let should_skip = WindowsWindow::should_skip_render(hwnd);
+                        let should_skip = ctx
+                            .as_deref()
+                            .is_some_and(WindowsWindow::should_skip_render);
                         if should_skip {
                             tracing::trace!("Skipping render for minimized window");
                         } else {
@@ -493,7 +618,7 @@ impl WindowsPlatform {
                             // the window is being live-resized. The background comes from the
                             // wgpu clear pass + the scene, not from a GDI fill (the old
                             // FillRect was overwritten by the present in the same frame).
-                            if let Some(ctx) = ctx {
+                            if let Some(ctx) = ctx.as_deref() {
                                 // Fire per-window on_request_frame callback
                                 ctx.callbacks.dispatch_request_frame();
 
@@ -503,7 +628,7 @@ impl WindowsPlatform {
                                 });
                             }
                         }
-                        let _ = EndPaint(hwnd, &raw const ps);
+                        let _ = unsafe { EndPaint(hwnd, &raw const ps) };
                     }
                     LRESULT(0)
                 }
@@ -515,10 +640,13 @@ impl WindowsPlatform {
                     let height = get_y_lparam(lparam).max(1);
                     let size_type = wparam.0 as u32;
 
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         use flui_types::geometry::DevicePixels;
                         let size = Size::new(DevicePixels(width), DevicePixels(height));
-                        let prev_mode = ctx.mode.get();
+                        let (prev_mode, last_size, scale_factor) = {
+                            let state = ctx.state.lock();
+                            (state.mode, state.last_size, state.scale_factor)
+                        };
 
                         // Handle state transition and dispatch appropriate event
                         let (new_mode, event) = match size_type {
@@ -528,14 +656,10 @@ impl WindowsPlatform {
                                 let candidate = WindowMode::Minimized {
                                     previous: Bounds {
                                         origin: Point::new(DevicePixels(0), DevicePixels(0)),
-                                        size: ctx.last_size.get(),
+                                        size: last_size,
                                     },
                                 };
                                 if prev_mode.can_transition_to(&candidate) {
-                                    // Save current size before minimizing
-                                    if !prev_mode.is_minimized() {
-                                        ctx.last_size.set(size);
-                                    }
                                     (
                                         candidate,
                                         Some(WindowEvent::Minimized {
@@ -556,11 +680,10 @@ impl WindowsPlatform {
                                 let candidate = WindowMode::Maximized {
                                     previous: Bounds {
                                         origin: Point::new(DevicePixels(0), DevicePixels(0)),
-                                        size: ctx.last_size.get(),
+                                        size: last_size,
                                     },
                                 };
                                 if prev_mode.can_transition_to(&candidate) {
-                                    ctx.last_size.set(size);
                                     (
                                         candidate,
                                         Some(WindowEvent::Maximized {
@@ -584,7 +707,6 @@ impl WindowsPlatform {
                                 // NOT gate this event: a normal-state resize is always a valid
                                 // `Resized`. Gating on it dropped the event (and the last_size
                                 // update) on every live-resize drag step.
-                                ctx.last_size.set(size);
                                 let event = if prev_mode.is_minimized() || prev_mode.is_maximized()
                                 {
                                     tracing::info!("📐 Window Restored: {}x{}", width, height);
@@ -604,9 +726,6 @@ impl WindowsPlatform {
                             _ => {
                                 // Regular resize while in current state
                                 tracing::info!("📐 Window Resized: {}x{}", width, height);
-                                if prev_mode.is_normal() {
-                                    ctx.last_size.set(size);
-                                }
                                 (
                                     prev_mode,
                                     Some(WindowEvent::Resized {
@@ -617,23 +736,41 @@ impl WindowsPlatform {
                             }
                         };
 
-                        // Update state
-                        ctx.mode.set(new_mode);
+                        // Update cached state under one short lock, then release it before
+                        // any callback can synchronously re-enter WNDPROC.
+                        {
+                            let mut state = ctx.state.lock();
+                            state.mode = new_mode;
+                            if size_type != SIZE_MINIMIZED || !prev_mode.is_minimized() {
+                                state.last_size = size;
+                            }
+                            if size_type != SIZE_MINIMIZED {
+                                state.bounds.size = Size::new(
+                                    flui_types::geometry::px(super::util::device_to_logical(
+                                        width,
+                                        scale_factor,
+                                    )),
+                                    flui_types::geometry::px(super::util::device_to_logical(
+                                        height,
+                                        scale_factor,
+                                    )),
+                                );
+                            }
+                        }
 
                         // Fire per-window on_resize callback (for all size changes except minimize)
                         if size_type != SIZE_MINIMIZED {
                             let logical_size = Size::new(
                                 flui_types::geometry::px(super::util::device_to_logical(
                                     width,
-                                    ctx.scale_factor.get(),
+                                    scale_factor,
                                 )),
                                 flui_types::geometry::px(super::util::device_to_logical(
                                     height,
-                                    ctx.scale_factor.get(),
+                                    scale_factor,
                                 )),
                             );
-                            ctx.callbacks
-                                .dispatch_resize(logical_size, ctx.scale_factor.get());
+                            ctx.callbacks.dispatch_resize(logical_size, scale_factor);
                         }
 
                         // Dispatch event to global handlers if any
@@ -669,16 +806,22 @@ impl WindowsPlatform {
                     let y = get_y_lparam(lparam);
                     tracing::debug!("Window Moved: ({}, {})", x, y);
 
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
+                        let scale_factor = {
+                            let mut state = ctx.state.lock();
+                            state.bounds.origin = Point::new(
+                                flui_types::geometry::px(x as f32 / state.scale_factor),
+                                flui_types::geometry::px(y as f32 / state.scale_factor),
+                            );
+                            state.scale_factor
+                        };
                         // Fire per-window on_moved callback
                         ctx.callbacks.dispatch_moved();
 
                         // Dispatch Moved event to global handlers
                         use flui_types::geometry::{Point, px};
-                        let position = Point::new(
-                            px(x as f32 / ctx.scale_factor.get()),
-                            px(y as f32 / ctx.scale_factor.get()),
-                        );
+                        let position =
+                            Point::new(px(x as f32 / scale_factor), px(y as f32 / scale_factor));
                         ctx.dispatch_event(WindowEvent::Moved {
                             window_id: ctx.window_id,
                             position,
@@ -695,18 +838,12 @@ impl WindowsPlatform {
                     tracing::info!("🔍 DPI Changed: {} (scale: {:.2}x)", new_dpi, new_scale);
 
                     // Dispatch ScaleFactorChanged event
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
+                        ctx.state.lock().scale_factor = new_scale;
                         ctx.dispatch_event(WindowEvent::ScaleFactorChanged {
                             window_id: ctx.window_id,
                             scale_factor: new_scale as f64,
                         });
-
-                        // Update context scale factor through the shared
-                        // reference already held above — see the field doc
-                        // on `WindowContext::scale_factor` for why this must
-                        // not go through a second `&mut` reborrow of
-                        // `ctx_ptr`.
-                        ctx.scale_factor.set(new_scale);
 
                         // Suggested rect for new DPI
                         //
@@ -716,18 +853,22 @@ impl WindowsPlatform {
                         // null-check guards a caller that violates that
                         // documented contract, and `rect` is copied out
                         // (`RECT: Copy`) rather than referenced further.
-                        let suggested_rect = lparam.0 as *const RECT;
+                        let suggested_rect =
+                            std::ptr::with_exposed_provenance::<RECT>(lparam.0.cast_unsigned());
                         if !suggested_rect.is_null() {
-                            let rect = *suggested_rect;
-                            if let Err(error) = SetWindowPos(
-                                hwnd,
-                                None,
-                                rect.left,
-                                rect.top,
-                                rect.right - rect.left,
-                                rect.bottom - rect.top,
-                                SWP_NOZORDER | SWP_NOACTIVATE,
-                            ) {
+                            let rect = unsafe { *suggested_rect };
+                            let reposition_result = unsafe {
+                                SetWindowPos(
+                                    hwnd,
+                                    None,
+                                    rect.left,
+                                    rect.top,
+                                    rect.right - rect.left,
+                                    rect.bottom - rect.top,
+                                    SWP_NOZORDER | SWP_NOACTIVATE,
+                                )
+                            };
+                            if let Err(error) = reposition_result {
                                 tracing::warn!(
                                     ?hwnd,
                                     ?error,
@@ -741,7 +882,7 @@ impl WindowsPlatform {
                 }
 
                 WM_MOUSEMOVE => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         // Request WM_MOUSELEAVE notification for hover tracking
                         let mut tme = TRACKMOUSEEVENT {
                             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -749,26 +890,33 @@ impl WindowsPlatform {
                             hwndTrack: hwnd,
                             dwHoverTime: 0,
                         };
-                        let _ = TrackMouseEvent(&raw mut tme);
+                        // SAFETY: `tme` is initialized with its exact size and
+                        // the current live HWND; Win32 does not retain it.
+                        let _ = unsafe { TrackMouseEvent(&raw mut tme) };
 
-                        // Track hover state (T034)
-                        ctx.is_hovered.set(true);
+                        // Track hover state so WM_MOUSELEAVE can fire an exit exactly once.
+                        let scale_factor = {
+                            let mut state = ctx.state.lock();
+                            state.is_hovered = true;
+                            state.scale_factor
+                        };
 
                         // Dispatch hover enter (will be cleared on WM_MOUSELEAVE)
                         ctx.callbacks.dispatch_hover_status_change(true);
 
                         use super::events::mouse_move_event;
-                        let event = mouse_move_event(lparam, ctx.scale_factor.get());
+                        let event = mouse_move_event(lparam, scale_factor);
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
                 }
 
                 WM_SETCURSOR => {
-                    if let Some(ctx) = ctx
+                    if let Some(ctx) = ctx.as_deref()
                         && (lparam.0 as u32 & 0xffff) == HTCLIENT
                     {
-                        match WindowsWindow::apply_native_cursor(ctx.cursor.get()) {
+                        let cursor = ctx.state.lock().cursor;
+                        match WindowsWindow::apply_native_cursor(cursor) {
                             Ok(()) => return LRESULT(1),
                             Err(error) => {
                                 tracing::warn!(
@@ -779,11 +927,11 @@ impl WindowsPlatform {
                             }
                         }
                     }
-                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                    default_window_proc(hwnd, msg, wparam, lparam)
                 }
 
                 WM_LBUTTONDOWN => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         use ui_events::pointer::PointerButton;
 
                         use super::events::mouse_button_event;
@@ -791,7 +939,7 @@ impl WindowsPlatform {
                             PointerButton::Primary,
                             true,
                             lparam,
-                            ctx.scale_factor.get(),
+                            ctx.state.lock().scale_factor,
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -799,7 +947,7 @@ impl WindowsPlatform {
                 }
 
                 WM_RBUTTONDOWN => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         use ui_events::pointer::PointerButton;
 
                         use super::events::mouse_button_event;
@@ -807,7 +955,7 @@ impl WindowsPlatform {
                             PointerButton::Secondary,
                             true,
                             lparam,
-                            ctx.scale_factor.get(),
+                            ctx.state.lock().scale_factor,
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -815,7 +963,7 @@ impl WindowsPlatform {
                 }
 
                 WM_MBUTTONDOWN => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         use ui_events::pointer::PointerButton;
 
                         use super::events::mouse_button_event;
@@ -823,7 +971,7 @@ impl WindowsPlatform {
                             PointerButton::Auxiliary,
                             true,
                             lparam,
-                            ctx.scale_factor.get(),
+                            ctx.state.lock().scale_factor,
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -831,7 +979,7 @@ impl WindowsPlatform {
                 }
 
                 WM_LBUTTONUP => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         use ui_events::pointer::PointerButton;
 
                         use super::events::mouse_button_event;
@@ -839,7 +987,7 @@ impl WindowsPlatform {
                             PointerButton::Primary,
                             false,
                             lparam,
-                            ctx.scale_factor.get(),
+                            ctx.state.lock().scale_factor,
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -847,7 +995,7 @@ impl WindowsPlatform {
                 }
 
                 WM_RBUTTONUP => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         use ui_events::pointer::PointerButton;
 
                         use super::events::mouse_button_event;
@@ -855,7 +1003,7 @@ impl WindowsPlatform {
                             PointerButton::Secondary,
                             false,
                             lparam,
-                            ctx.scale_factor.get(),
+                            ctx.state.lock().scale_factor,
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -863,7 +1011,7 @@ impl WindowsPlatform {
                 }
 
                 WM_MBUTTONUP => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         use ui_events::pointer::PointerButton;
 
                         use super::events::mouse_button_event;
@@ -871,7 +1019,7 @@ impl WindowsPlatform {
                             PointerButton::Auxiliary,
                             false,
                             lparam,
-                            ctx.scale_factor.get(),
+                            ctx.state.lock().scale_factor,
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -879,9 +1027,10 @@ impl WindowsPlatform {
                 }
 
                 WM_MOUSEWHEEL => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         use super::events::mouse_wheel_event;
-                        let event = mouse_wheel_event(wparam, lparam, ctx.scale_factor.get());
+                        let event =
+                            mouse_wheel_event(wparam, lparam, ctx.state.lock().scale_factor);
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
@@ -892,7 +1041,7 @@ impl WindowsPlatform {
                     let is_repeat = (lparam.0 & (1 << 30)) != 0;
 
                     // Check if fullscreen hotkey is pressed (configurable, default F11)
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         if let Some(hotkey) = ctx.config.fullscreen_hotkey
                             && vk == hotkey
                             && !is_repeat
@@ -901,11 +1050,12 @@ impl WindowsPlatform {
                                 "Fullscreen hotkey (VK={:#04x}) pressed - toggling fullscreen",
                                 hotkey
                             );
-                            WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
+                            let enter_fullscreen = !ctx.state.lock().mode.is_fullscreen();
+                            WindowsWindow::set_fullscreen_for_context(hwnd, ctx, enter_fullscreen);
                         }
 
-                        // Track modifiers (T035)
-                        ctx.modifiers.set(current_modifiers());
+                        // Mirror the modifier state the next key/pointer event will carry.
+                        ctx.state.lock().modifiers = current_modifiers();
 
                         // Dispatch keyboard event via per-window callback
                         use super::events::key_down_event;
@@ -917,9 +1067,9 @@ impl WindowsPlatform {
                 }
 
                 WM_KEYUP | WM_SYSKEYUP => {
-                    if let Some(ctx) = ctx {
-                        // Track modifiers (T035)
-                        ctx.modifiers.set(current_modifiers());
+                    if let Some(ctx) = ctx.as_deref() {
+                        // Mirror the modifier state the next key/pointer event will carry.
+                        ctx.state.lock().modifiers = current_modifiers();
 
                         use super::events::key_up_event;
                         let event = key_up_event(wparam, lparam);
@@ -937,7 +1087,8 @@ impl WindowsPlatform {
                 WM_SETFOCUS => {
                     tracing::debug!("Window Focused");
 
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
+                        ctx.state.lock().focused = true;
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(true);
 
@@ -954,7 +1105,8 @@ impl WindowsPlatform {
                 WM_KILLFOCUS => {
                     tracing::debug!("Window Unfocused");
 
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
+                        ctx.state.lock().focused = false;
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(false);
 
@@ -968,28 +1120,28 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
-                // T025: Mouse hover tracking — WM_MOUSELEAVE (0x02A3)
+                // Mouse hover tracking — WM_MOUSELEAVE (0x02A3)
                 0x02A3 => {
-                    if let Some(ctx) = ctx {
-                        // Track hover state (T034)
-                        ctx.is_hovered.set(false);
+                    if let Some(ctx) = ctx.as_deref() {
+                        // Track hover state so WM_MOUSELEAVE can fire an exit exactly once.
+                        ctx.state.lock().is_hovered = false;
 
                         ctx.callbacks.dispatch_hover_status_change(false);
                     }
                     LRESULT(0)
                 }
 
-                // T026: System theme/appearance change
+                // System theme/appearance change
                 WM_SETTINGCHANGE => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         ctx.callbacks.dispatch_appearance_changed();
                     }
-                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                    default_window_proc(hwnd, msg, wparam, lparam)
                 }
 
-                // T046: Keyboard layout change
+                // Keyboard layout change
                 WM_INPUTLANGCHANGE => {
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = ctx.as_deref() {
                         // Dispatch keyboard layout change via take/restore pattern
                         let handler = ctx.handlers.lock().keyboard_layout_changed.take();
                         if let Some(mut handler) = handler {
@@ -997,10 +1149,10 @@ impl WindowsPlatform {
                             ctx.handlers.lock().keyboard_layout_changed = Some(handler);
                         }
                     }
-                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                    default_window_proc(hwnd, msg, wparam, lparam)
                 }
 
-                _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+                _ => default_window_proc(hwnd, msg, wparam, lparam),
             }
         }
     }
@@ -1160,7 +1312,7 @@ impl Platform for WindowsPlatform {
         self.handlers.lock().keyboard_layout_changed = Some(callback);
     }
 
-    // ==================== App Activation (US3 T038) ====================
+    // ==================== App Activation ====================
 
     fn activate(&self, _ignoring_other_apps: bool) {
         // SAFETY: `GetForegroundWindow`/`SetForegroundWindow` take no
@@ -1180,7 +1332,7 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    // ==================== Appearance (US3 T040) ====================
+    // ==================== Appearance ====================
 
     fn window_appearance(&self) -> WindowAppearance {
         // Read system theme from registry: AppsUseLightTheme
@@ -1241,7 +1393,7 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    // ==================== File Operations (US3 T041) ====================
+    // ==================== File Operations ====================
 
     fn open_url(&self, url: &str) {
         use windows::Win32::UI::Shell::ShellExecuteW;
@@ -1304,7 +1456,7 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    // ==================== File Dialogs (US3 T042-T043) ====================
+    // ==================== File Dialogs ====================
 
     fn prompt_for_paths(
         &self,
@@ -1466,7 +1618,7 @@ impl Platform for WindowsPlatform {
         })
     }
 
-    // ==================== Keyboard (US3 T045) ====================
+    // ==================== Keyboard ====================
 
     fn keyboard_layout(&self) -> String {
         use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayoutNameW;
@@ -1557,7 +1709,7 @@ impl Drop for WindowsPlatform {
 
 // ==================== Helper Functions ====================
 
-/// Read current keyboard modifier state from Win32 (T035)
+/// Read current keyboard modifier state from Win32.
 fn current_modifiers() -> keyboard_types::Modifiers {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,

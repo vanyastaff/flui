@@ -1,6 +1,10 @@
 //! Windows window implementation
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    thread::{self, ThreadId},
+};
 
 use anyhow::{Context, Result};
 use cursor_icon::CursorIcon;
@@ -12,7 +16,7 @@ use raw_window_handle::{
 };
 use windows::{
     Win32::{
-        Foundation::{FALSE, HWND, POINT, RECT, TRUE},
+        Foundation::{FALSE, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
         Graphics::Gdi::{
             HRGN, InvalidateRect, MONITOR_DEFAULTTOPRIMARY, MonitorFromWindow, ScreenToClient,
             UpdateWindow,
@@ -22,15 +26,14 @@ use windows::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_STYLE,
-                GWLP_USERDATA, GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-                GetWindowPlacement, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM,
-                IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT,
-                IsZoomed, LoadCursorW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+                GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
+                IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
+                IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, LoadCursorW,
+                PostMessageW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
                 SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-                SetWindowTextW, ShowWindow, WINDOWPLACEMENT, WS_EX_APPWINDOW, WS_MAXIMIZEBOX,
-                WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
-                WS_VISIBLE,
+                SetWindowTextW, ShowWindow, WS_EX_APPWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+                WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
             },
         },
     },
@@ -55,48 +58,83 @@ pub struct WindowsWindow {
     /// Window state
     state: Arc<Mutex<WindowState>>,
 
-    /// Per-window callbacks for event delivery
-    callbacks: Arc<WindowCallbacks>,
-
-    /// Reference to platform's window map (for cleanup)
-    windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+    /// Context shared with the WNDPROC invocation pin.
+    context: Arc<super::platform::WindowContext>,
 }
 
-// SAFETY, per field: `state` and `callbacks` are `Arc<Mutex<..>>`/`Arc<..>`
-// with their own synchronization; `windows_map` is likewise an
-// `Arc<Mutex<..>>`. The only non-`Sync` member is `hwnd: HWND`, a bare
+// SAFETY, per field: `state` is synchronized and `context` is compile-time
+// asserted `Send + Sync`. The only non-`Sync` member is `hwnd: HWND`, a bare
 // address — sending or sharing the address itself aliases nothing, so `Send`
 // and `Sync` are sound for the struct.
 //
 // NOT claimed — an HWND is thread-AFFINE, not "thread-safe by design": its
 // message queue belongs to the thread that created it, and Win32 requires
-// several of the calls below (`DestroyWindow`, `SetWindowLongPtrW` on
-// `GWLP_USERDATA`, anything touching the `WindowContext` stashed there) to
-// run on that owning thread to stay race-free against `window_proc`'s
-// `WM_DESTROY` handler freeing the same context. These impls only make it
-// legal to move/share the `Arc<WindowsWindow>` across threads; they do not
-// themselves discharge that thread-affinity obligation — see the per-call
-// SAFETY comments below and the same gap already documented on
-// `WindowsPlatform`'s `Send`/`Sync` impls in `platform.rs`.
+// several mutations below to run on that owning thread. The public fullscreen,
+// cursor, and close paths either execute on the recorded owner or post a
+// private command to its WNDPROC; synchronized queries never dereference the
+// raw userdata slot.
 unsafe impl Send for WindowsWindow {}
 unsafe impl Sync for WindowsWindow {}
 
 /// Mutable window state
-struct WindowState {
+pub(super) struct WindowState {
     /// Current window bounds (logical pixels)
-    bounds: Bounds<Pixels>,
+    pub(super) bounds: Bounds<Pixels>,
 
     /// Current scale factor (DPI / 96)
-    scale_factor: f32,
+    pub(super) scale_factor: f32,
 
     /// Is window visible?
-    visible: bool,
+    pub(super) visible: bool,
 
     /// Is window focused?
-    focused: bool,
+    pub(super) focused: bool,
 
     /// Window title
-    title: String,
+    pub(super) title: String,
+
+    pub(super) mode: WindowMode,
+    pub(super) last_size: Size<DevicePixels>,
+    pub(super) is_hovered: bool,
+    pub(super) modifiers: keyboard_types::Modifiers,
+    pub(super) cursor: CursorIcon,
+    pub(super) restore_style: u32,
+    pub(super) is_destroyed: bool,
+    owner_thread: ThreadId,
+}
+
+const WM_FLUI_ENTER_FULLSCREEN: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
+const WM_FLUI_EXIT_FULLSCREEN: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 2;
+const WM_FLUI_APPLY_CURSOR: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 3;
+const WM_FLUI_CLOSE: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WindowCommand {
+    EnterFullscreen,
+    ExitFullscreen,
+    ApplyCursor,
+    Close,
+}
+
+impl WindowCommand {
+    pub(super) const fn from_message(message: u32) -> Option<Self> {
+        match message {
+            WM_FLUI_ENTER_FULLSCREEN => Some(Self::EnterFullscreen),
+            WM_FLUI_EXIT_FULLSCREEN => Some(Self::ExitFullscreen),
+            WM_FLUI_APPLY_CURSOR => Some(Self::ApplyCursor),
+            WM_FLUI_CLOSE => Some(Self::Close),
+            _ => None,
+        }
+    }
+
+    const fn message(self) -> u32 {
+        match self {
+            Self::EnterFullscreen => WM_FLUI_ENTER_FULLSCREEN,
+            Self::ExitFullscreen => WM_FLUI_EXIT_FULLSCREEN,
+            Self::ApplyCursor => WM_FLUI_APPLY_CURSOR,
+            Self::Close => WM_FLUI_CLOSE,
+        }
+    }
 }
 
 impl std::fmt::Debug for WindowsWindow {
@@ -117,28 +155,17 @@ impl WindowsWindow {
         handlers: Arc<Mutex<PlatformHandlers>>,
         config: crate::config::WindowConfiguration,
     ) -> Result<Arc<Self>> {
-        // SAFETY: `GetModuleHandleW(None)` queries the current process image
-        // and takes no pointer arguments — always sound. `GetDpiForSystem`
-        // reads global state, no preconditions. `CreateWindowExW` requires
-        // `WINDOW_CLASS_NAME` to already be registered, which
-        // `WindowsPlatform::with_config` guarantees before any `open_window`
-        // call can reach here; `&title` is a live `HSTRING` owned by this
-        // frame. `hwnd.is_invalid()` is checked immediately after, so every
-        // Win32 call below it only runs against a handle the OS just
-        // returned as valid. `SetClassLongPtrW` and `apply_windows_features`
-        // operate on that same freshly created, still-valid `hwnd`.
-        // `Box::into_raw(context)` intentionally leaks the allocation into
-        // the `GWLP_USERDATA` slot — ownership transfers to the window and is
-        // reclaimed by `WindowsPlatform::window_proc`'s `WM_DESTROY` arm
-        // (`platform.rs`, `Box::from_raw`); a window destroyed by any path
-        // that skips `WM_DESTROY` (process-exit teardown) leaks the
-        // allocation rather than double-frees or dangles it. `ShowWindow`/
-        // `UpdateWindow` again only need a valid `hwnd`, which holds here.
-        unsafe {
-            let hinstance = GetModuleHandleW(None).context("Failed to get module handle")?;
+        // Ordinary scope only: construction stays one expression while each
+        // Win32 operation receives its own narrow unsafe justification.
+        {
+            // SAFETY: `GetModuleHandleW(None)` queries the current process image
+            // and takes no pointer arguments.
+            let hinstance =
+                unsafe { GetModuleHandleW(None) }.context("Failed to get module handle")?;
 
-            // Get DPI for initial size calculation
-            let dpi = GetDpiForSystem();
+            // SAFETY: `GetDpiForSystem` takes no arguments and returns process DPI
+            // state by value.
+            let dpi = unsafe { GetDpiForSystem() };
             let scale_factor = dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
 
             // Convert logical size to device pixels
@@ -160,20 +187,24 @@ impl WindowsWindow {
 
             // Create the window
             let title = HSTRING::from(&options.title);
-            let hwnd = CreateWindowExW(
-                ex_style,
-                WINDOW_CLASS_NAME,
-                &title,
-                style,
-                x,
-                y,
-                width,
-                height,
-                None, // parent
-                None, // menu
-                Some(hinstance.into()),
-                None, // lpParam
-            )
+            // SAFETY: the class is registered before `open_window`; `title` is a
+            // live HSTRING for the call and no pointer argument is retained.
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    ex_style,
+                    WINDOW_CLASS_NAME,
+                    &title,
+                    style,
+                    x,
+                    y,
+                    width,
+                    height,
+                    None,
+                    None,
+                    Some(hinstance.into()),
+                    None,
+                )
+            }
             .context("Failed to create window")?;
 
             if hwnd.is_invalid() {
@@ -181,7 +212,9 @@ impl WindowsWindow {
             }
 
             // Remove background brush to allow Mica backdrop
-            SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
+            // SAFETY: `hwnd` was just created successfully; this writes a plain
+            // zero brush-handle value to the registered class slot.
+            unsafe { SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0) };
 
             // Apply Windows 11 features automatically
             Self::apply_windows_features(hwnd);
@@ -209,39 +242,51 @@ impl WindowsWindow {
                 visible: false,
                 focused: false,
                 title: options.title.clone(),
+                mode: WindowMode::Normal,
+                // `width`/`height` are ALREADY device pixels — they were
+                // converted from `options.size` above. Converting again here
+                // squared the scale factor, so a 2x display recorded a
+                // `last_size` four times the logical size, which restore and
+                // minimize sizing then read back.
+                last_size: Size::new(DevicePixels(width), DevicePixels(height)),
+                is_hovered: false,
+                modifiers: keyboard_types::Modifiers::empty(),
+                cursor: CursorIcon::default(),
+                restore_style: 0,
+                is_destroyed: false,
+                owner_thread: thread::current().id(),
             }));
 
-            let window = Arc::new(Self {
-                hwnd,
-                state,
-                callbacks: Arc::clone(&callbacks),
-                windows_map,
-            });
-
             // Create and store WindowContext for event dispatch
-            use flui_types::geometry::{DevicePixels, Size};
-
             use super::platform::WindowContext;
 
             let window_id = WindowId(hwnd.0 as u64);
-            let device_width = logical_to_device(width as f32, scale_factor);
-            let device_height = logical_to_device(height as f32, scale_factor);
-            let initial_size = Size::new(DevicePixels(device_width), DevicePixels(device_height));
-            let context = Box::new(WindowContext {
+            let context = Arc::new(WindowContext {
                 window_id,
                 handlers: handlers.clone(),
                 callbacks,
-                scale_factor: std::cell::Cell::new(scale_factor),
-                mode: std::cell::Cell::new(WindowMode::Normal),
-                last_size: std::cell::Cell::new(initial_size),
+                state: Arc::clone(&state),
                 config,
-                is_hovered: std::cell::Cell::new(false),
-                modifiers: std::cell::Cell::new(keyboard_types::Modifiers::empty()),
-                cursor: std::cell::Cell::new(CursorIcon::default()),
-                restore_style: std::cell::Cell::new(0),
+                windows: Arc::downgrade(&windows_map),
             });
-            let context_ptr = Box::into_raw(context);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
+            let window = Arc::new(Self {
+                hwnd,
+                state,
+                context: Arc::clone(&context),
+            });
+            if let Err(error) = super::platform::install_window_context(hwnd, context) {
+                window.state.lock().is_destroyed = true;
+                // SAFETY: creation succeeded on this owner thread; error
+                // cleanup destroys the unpublished HWND here.
+                if let Err(destroy_error) = unsafe { DestroyWindow(hwnd) } {
+                    tracing::warn!(
+                        ?hwnd,
+                        ?destroy_error,
+                        "DestroyWindow failed after userdata installation failure"
+                    );
+                }
+                return Err(error);
+            }
 
             // Show window if requested
             if options.visible {
@@ -252,8 +297,10 @@ impl WindowsWindow {
                 // warn on every visible window creation. Nothing meaningful
                 // to check here; UpdateWindow below does return a genuine
                 // success/failure BOOL.
-                let _ = ShowWindow(hwnd, SW_SHOW);
-                if let Err(error) = UpdateWindow(hwnd).ok() {
+                // SAFETY: `hwnd` is live and owner-affine here. ShowWindow's
+                // result is prior visibility; UpdateWindow reports failure.
+                let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
+                if let Err(error) = unsafe { UpdateWindow(hwnd) }.ok() {
                     tracing::warn!(?hwnd, ?error, "UpdateWindow failed in WindowsWindow::new");
                 }
                 window.state.lock().visible = true;
@@ -352,8 +399,7 @@ impl WindowsWindow {
         self.state.lock().scale_factor
     }
 
-    /// Toggle fullscreen mode for a window by HWND (static method for use from
-    /// window_proc)
+    /// Applies a fullscreen request on the HWND owner thread.
     ///
     /// This method implements borderless fullscreen by:
     /// 1. **Entering fullscreen**: Saves current window style and bounds,
@@ -370,42 +416,26 @@ impl WindowsWindow {
     /// - Dispatches `WindowEvent::Fullscreen` and `WindowEvent::ExitFullscreen`
     ///   events
     ///
-    /// # Thread Safety
-    /// This method is unsafe because it accesses raw window context via
-    /// GWLP_USERDATA. It should only be called from the window's message
-    /// loop thread or with proper synchronization.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Toggle fullscreen on F11 key press (from WM_KEYDOWN handler)
-    /// WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
-    /// ```
-    pub fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
+    pub(super) fn set_fullscreen_for_context(
+        hwnd: HWND,
+        context: &super::platform::WindowContext,
+        fullscreen: bool,
+    ) {
         use windows::Win32::{
             Graphics::Gdi::{
                 GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
             },
             UI::WindowsAndMessaging::{
-                GWL_STYLE, GWLP_USERDATA, GetWindowLongPtrW, GetWindowRect, HWND_TOP,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos,
-                WS_POPUP, WS_VISIBLE,
+                GWL_STYLE, GetWindowLongPtrW, GetWindowRect, HWND_TOP, SWP_FRAMECHANGED,
+                SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WS_POPUP,
+                WS_VISIBLE,
             },
         };
 
-        // SAFETY: `ctx_ptr` is whatever `isize` is currently stored in
-        // `hwnd`'s `GWLP_USERDATA` slot. A non-null value was written by
-        // `WindowsWindow::new` (`Box::into_raw`) and is only cleared+freed by
-        // `WindowsPlatform::window_proc`'s `WM_DESTROY` arm, on this window's
-        // owning thread. The null check covers a window not yet initialized
-        // or already destroyed by the time this call reads the slot.
-        //
-        // Known gap (not fixed by this comment): this function is reachable
-        // both from `window_proc` (always on the owning thread, per the
-        // `# Thread Safety` doc above) and from `WindowsWindow::toggle_fullscreen`
-        // on `&self`, which carries no thread-affinity check — a caller on a
-        // different thread than the one servicing this HWND's message queue
-        // races the `WM_DESTROY` free with no synchronization discharging
-        // that race. `GetWindowRect`/`GetWindowLongPtrW`/`SetWindowLongPtrW`/
+        // SAFETY: the caller is either the HWND's WNDPROC or a public method
+        // after checking the owner thread recorded at creation. `context` is
+        // already Arc-pinned by that caller, so no userdata lookup or raw
+        // dereference occurs here. `GetWindowRect`/`GetWindowLongPtrW`/`SetWindowLongPtrW`/
         // `SetWindowPos`/`MonitorFromWindow`/`GetMonitorInfoW` below all take
         // `hwnd` or a `&raw mut` to a stack-local out-parameter whose size
         // matches what each call expects, and are otherwise ordinary Win32
@@ -413,16 +443,13 @@ impl WindowsWindow {
         // window, which the OS itself would report via a failed return
         // rather than UB if it did not.
         unsafe {
-            // Get WindowContext from GWLP_USERDATA
-            let ctx_ptr =
-                GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
-            if ctx_ptr.is_null() {
-                tracing::warn!("Cannot toggle fullscreen: no WindowContext");
+            let (current_mode, restore_style, is_destroyed) = {
+                let state = context.state.lock();
+                (state.mode, state.restore_style, state.is_destroyed)
+            };
+            if is_destroyed || current_mode.is_fullscreen() == fullscreen {
                 return;
             }
-            let ctx = &*ctx_ptr;
-
-            let current_mode = ctx.mode.get();
 
             if let WindowMode::Fullscreen { restore_bounds } = current_mode {
                 // Exit fullscreen - restore previous style and bounds
@@ -436,7 +463,6 @@ impl WindowsWindow {
                 }
 
                 // Restore window style from WindowContext
-                let restore_style = ctx.restore_style.get();
                 SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
 
                 // Restore window position and size
@@ -457,11 +483,11 @@ impl WindowsWindow {
                 }
 
                 // Update state
-                ctx.mode.set(WindowMode::Normal);
+                context.state.lock().mode = WindowMode::Normal;
 
                 // Dispatch ExitFullscreen event
-                ctx.dispatch_event(crate::traits::WindowEvent::ExitFullscreen {
-                    window_id: ctx.window_id,
+                context.dispatch_event(crate::traits::WindowEvent::ExitFullscreen {
+                    window_id: context.window_id,
                     size: restore_bounds.size,
                 });
             } else {
@@ -480,7 +506,7 @@ impl WindowsWindow {
 
                 // Save current style to WindowContext
                 let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-                ctx.restore_style.set(current_style);
+                context.state.lock().restore_style = current_style;
 
                 // Save current bounds
                 let restore_bounds = Bounds {
@@ -535,15 +561,15 @@ impl WindowsWindow {
                 }
 
                 // Update state
-                ctx.mode.set(candidate);
+                context.state.lock().mode = candidate;
 
                 // Dispatch Fullscreen event
                 let size = Size::new(
                     flui_types::geometry::DevicePixels(monitor_rect.right - monitor_rect.left),
                     flui_types::geometry::DevicePixels(monitor_rect.bottom - monitor_rect.top),
                 );
-                ctx.dispatch_event(crate::traits::WindowEvent::Fullscreen {
-                    window_id: ctx.window_id,
+                context.dispatch_event(crate::traits::WindowEvent::Fullscreen {
+                    window_id: context.window_id,
                     size,
                 });
             }
@@ -552,25 +578,12 @@ impl WindowsWindow {
 
     /// Toggle fullscreen mode for this window
     pub fn toggle_fullscreen(&self) {
-        Self::toggle_fullscreen_for_hwnd(self.hwnd);
+        self.set_fullscreen(!self.is_fullscreen());
     }
 
     /// Check if the window is currently in fullscreen mode
     pub fn is_fullscreen(&self) -> bool {
-        // SAFETY: same `GWLP_USERDATA` contract as
-        // `toggle_fullscreen_for_hwnd` above — non-null implies `new`
-        // populated it and `WM_DESTROY` (owning thread only) hasn't cleared
-        // it yet; the same cross-thread race is a known, undischarged gap
-        // when this is called off that thread.
-        unsafe {
-            let ctx_ptr =
-                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
-            if ctx_ptr.is_null() {
-                return false;
-            }
-            let ctx = &*ctx_ptr;
-            ctx.mode.get().is_fullscreen()
-        }
+        self.state.lock().mode.is_fullscreen()
     }
 
     /// Set fullscreen mode
@@ -578,32 +591,89 @@ impl WindowsWindow {
     /// # Arguments
     /// * `fullscreen` - true to enter fullscreen, false to exit fullscreen
     pub fn set_fullscreen(&self, fullscreen: bool) {
-        let is_fullscreen = self.is_fullscreen();
-
-        // Only toggle if state needs to change
-        if fullscreen != is_fullscreen {
-            Self::toggle_fullscreen_for_hwnd(self.hwnd);
-        }
+        let command = if fullscreen {
+            WindowCommand::EnterFullscreen
+        } else {
+            WindowCommand::ExitFullscreen
+        };
+        self.execute_or_post(command);
     }
 
     /// Check if rendering should be skipped for this window
     ///
     /// Returns true if the window is minimized, as rendering minimized windows
     /// wastes CPU/GPU resources without any visible output.
-    pub fn should_skip_render(hwnd: HWND) -> bool {
-        // SAFETY: same `GWLP_USERDATA` contract as `toggle_fullscreen_for_hwnd`
-        // above. Every current call site (`platform.rs`'s `WM_PAINT` arm)
-        // runs on the owning thread, so the race noted there does not apply
-        // here today — but the function itself does not enforce that, since
-        // it takes a bare `HWND` from any caller.
-        unsafe {
-            let ctx_ptr =
-                GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
-            if ctx_ptr.is_null() {
-                return false;
+    pub(super) fn should_skip_render(context: &super::platform::WindowContext) -> bool {
+        context.state.lock().mode.is_minimized()
+    }
+
+    fn execute_or_post(&self, command: WindowCommand) {
+        let (is_owner, is_destroyed) = {
+            let state = self.state.lock();
+            (
+                state.owner_thread == thread::current().id(),
+                state.is_destroyed,
+            )
+        };
+        if is_destroyed {
+            return;
+        }
+        if is_owner {
+            Self::execute_window_command(self.hwnd, &self.context, command);
+        } else if let Err(error) = self.post_command(command) {
+            tracing::warn!(
+                hwnd = ?self.hwnd,
+                ?command,
+                ?error,
+                "PostMessageW failed for owner-thread window command"
+            );
+        }
+    }
+
+    fn post_command(&self, command: WindowCommand) -> windows::core::Result<()> {
+        // SAFETY: these private messages carry no pointer payload. The HWND
+        // owner thread decodes the closed `WindowCommand` vocabulary in its
+        // WNDPROC and uses the invocation-local Arc pin acquired there.
+        unsafe { PostMessageW(Some(self.hwnd), command.message(), WPARAM(0), LPARAM(0)) }
+    }
+
+    pub(super) fn execute_window_command(
+        hwnd: HWND,
+        context: &super::platform::WindowContext,
+        command: WindowCommand,
+    ) {
+        match command {
+            WindowCommand::EnterFullscreen => {
+                Self::set_fullscreen_for_context(hwnd, context, true);
             }
-            let ctx = &*ctx_ptr;
-            ctx.mode.get().is_minimized()
+            WindowCommand::ExitFullscreen => {
+                Self::set_fullscreen_for_context(hwnd, context, false);
+            }
+            WindowCommand::ApplyCursor => {
+                let cursor = {
+                    let state = context.state.lock();
+                    if state.is_destroyed || !state.is_hovered {
+                        return;
+                    }
+                    state.cursor
+                };
+                if let Err(error) = Self::apply_native_cursor(cursor) {
+                    tracing::warn!(?hwnd, ?error, "failed to apply owner-thread cursor command");
+                }
+            }
+            WindowCommand::Close => {
+                if context.state.lock().is_destroyed {
+                    return;
+                }
+                // SAFETY: this function is only invoked directly on the
+                // recorded owner thread or from the HWND's WNDPROC. Win32
+                // synchronously dispatches `WM_DESTROY` before returning.
+                unsafe {
+                    if let Err(error) = DestroyWindow(hwnd) {
+                        tracing::warn!(?hwnd, ?error, "DestroyWindow failed for close command");
+                    }
+                }
+            }
         }
     }
 
@@ -691,26 +761,31 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        // SAFETY: same `GWLP_USERDATA` contract as `toggle_fullscreen_for_hwnd`
-        // above; `.as_ref()` turns the possibly-null raw pointer into
-        // `Option<&WindowContext>` without dereferencing a null pointer, and
-        // the cross-thread `WM_DESTROY` race documented there applies
-        // equally here.
-        unsafe {
-            let ctx_ptr =
-                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
-            let context = ctx_ptr
-                .as_ref()
-                .ok_or_else(|| CursorError::Backend("the native window is closed".to_string()))?;
-            context.cursor.set(cursor);
-            if context.is_hovered.get() {
+        let (is_owner, should_apply) = {
+            let mut state = self.state.lock();
+            if state.is_destroyed {
+                return Err(CursorError::Backend(
+                    "the native window is closed".to_string(),
+                ));
+            }
+            state.cursor = cursor;
+            (
+                state.owner_thread == thread::current().id(),
+                state.is_hovered,
+            )
+        };
+        if should_apply {
+            if is_owner {
                 Self::apply_native_cursor(cursor)?;
+            } else {
+                self.post_command(WindowCommand::ApplyCursor)
+                    .map_err(|error| CursorError::Backend(error.to_string()))?;
             }
         }
         Ok(())
     }
 
-    // ==================== Query Methods (US2) ====================
+    // ==================== Query Methods ====================
 
     fn bounds(&self) -> Bounds<Pixels> {
         self.state.lock().bounds
@@ -737,17 +812,8 @@ impl PlatformWindow for WindowsWindow {
 
     fn window_bounds(&self) -> WindowBounds {
         let bounds = self.bounds();
-        // SAFETY: same `GWLP_USERDATA` contract as `toggle_fullscreen_for_hwnd`
-        // above, including the same undischarged cross-thread race.
-        unsafe {
-            let ctx_ptr =
-                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
-            if !ctx_ptr.is_null() {
-                let ctx = &*ctx_ptr;
-                if ctx.mode.get().is_fullscreen() {
-                    return WindowBounds::Fullscreen(bounds);
-                }
-            }
+        if self.state.lock().mode.is_fullscreen() {
+            return WindowBounds::Fullscreen(bounds);
         }
         if PlatformWindow::is_maximized(self) {
             WindowBounds::Maximized(bounds)
@@ -757,10 +823,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn is_maximized(&self) -> bool {
-        // SAFETY: `IsZoomed` takes `self.hwnd` by value and returns a
-        // `BOOL` — no pointer arguments, no invariant beyond an ordinary
-        // FFI call.
-        unsafe { IsZoomed(self.hwnd).as_bool() }
+        self.state.lock().mode.is_maximized()
     }
 
     fn is_fullscreen(&self) -> bool {
@@ -769,25 +832,22 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn is_active(&self) -> bool {
+        if self.state.lock().is_destroyed {
+            return false;
+        }
         // SAFETY: `GetForegroundWindow` takes no arguments; comparing its
         // result to `self.hwnd` is a plain integer/handle comparison.
         unsafe { GetForegroundWindow() == self.hwnd }
     }
 
     fn is_hovered(&self) -> bool {
-        // SAFETY: same `GWLP_USERDATA` contract as `toggle_fullscreen_for_hwnd`
-        // above, including the same undischarged cross-thread race.
-        unsafe {
-            let ctx_ptr =
-                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
-            if ctx_ptr.is_null() {
-                return false;
-            }
-            (*ctx_ptr).is_hovered.get()
-        }
+        self.state.lock().is_hovered
     }
 
     fn mouse_position(&self) -> Point<Pixels> {
+        if self.state.lock().is_destroyed {
+            return Point::default();
+        }
         // SAFETY: `cursor_pos` is a stack-local `POINT`; `&raw mut
         // cursor_pos` gives both `GetCursorPos` and `ScreenToClient` a
         // valid, correctly-sized out-parameter. The `is_ok()`/`as_bool()`
@@ -810,30 +870,18 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn modifiers(&self) -> keyboard_types::Modifiers {
-        // SAFETY: same `GWLP_USERDATA` contract as `toggle_fullscreen_for_hwnd`
-        // above, including the same undischarged cross-thread race.
-        unsafe {
-            let ctx_ptr =
-                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
-            if ctx_ptr.is_null() {
-                return keyboard_types::Modifiers::empty();
-            }
-            (*ctx_ptr).modifiers.get()
-        }
+        self.state.lock().modifiers
     }
 
     fn appearance(&self) -> WindowAppearance {
-        // SAFETY: the `GWLP_USERDATA` read shares the contract documented on
-        // `toggle_fullscreen_for_hwnd` above. `DwmGetWindowAttribute` below
+        if self.state.lock().is_destroyed {
+            return WindowAppearance::default();
+        }
+        // SAFETY: `DwmGetWindowAttribute` below
         // writes through `&raw mut dark_mode` cast to `c_void`, sized via
         // `size_of::<i32>()` to match the stack-local `i32` it points at;
         // `dark_mode` is only read after checking `result.is_ok()`.
         unsafe {
-            let ctx_ptr =
-                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
-            if ctx_ptr.is_null() {
-                return WindowAppearance::default();
-            }
             // Check DWM dark mode attribute
             use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmGetWindowAttribute};
             let mut dark_mode: i32 = 0;
@@ -852,6 +900,9 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        if self.state.lock().is_destroyed {
+            return None;
+        }
         // SAFETY: `MonitorFromWindow` takes `self.hwnd` by value and a flag;
         // `MONITOR_DEFAULTTOPRIMARY` guarantees a non-null `HMONITOR` even
         // for an invalid `hwnd`, so the `is_invalid()` check below is
@@ -876,7 +927,7 @@ impl PlatformWindow for WindowsWindow {
         self.state.lock().title.clone()
     }
 
-    // ==================== Control Methods (US2) ====================
+    // ==================== Control Methods ====================
 
     fn set_title(&self, title: &str) {
         // SAFETY: `title_str` is a live, locally-owned `HSTRING` for the
@@ -959,16 +1010,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn close(&self) {
-        // SAFETY: `DestroyWindow` takes `self.hwnd` by value; `WM_DESTROY`
-        // (handled in `platform.rs`) reclaims the `GWLP_USERDATA` allocation
-        // synchronously within this same call before it returns, on this
-        // thread — Win32 dispatches `WM_DESTROY` to the window procedure
-        // before `DestroyWindow` returns.
-        unsafe {
-            if let Err(error) = DestroyWindow(self.hwnd) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow (PlatformWindow::close) failed");
-            }
-        }
+        self.execute_or_post(WindowCommand::Close);
     }
 
     fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
@@ -1006,43 +1048,43 @@ impl PlatformWindow for WindowsWindow {
     // ==================== Per-Window Callbacks ====================
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
-        *self.callbacks.on_input.lock() = Some(callback);
+        *self.context.callbacks.on_input.lock() = Some(callback);
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_request_frame.lock() = Some(callback);
+        *self.context.callbacks.on_request_frame.lock() = Some(callback);
     }
 
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
-        *self.callbacks.on_resize.lock() = Some(callback);
+        *self.context.callbacks.on_resize.lock() = Some(callback);
     }
 
     fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_moved.lock() = Some(callback);
+        *self.context.callbacks.on_moved.lock() = Some(callback);
     }
 
     fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        *self.callbacks.on_close.lock() = Some(callback);
+        *self.context.callbacks.on_close.lock() = Some(callback);
     }
 
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        *self.callbacks.on_should_close.lock() = Some(callback);
+        *self.context.callbacks.on_should_close.lock() = Some(callback);
     }
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_active_status_change.lock() = Some(callback);
+        *self.context.callbacks.on_active_status_change.lock() = Some(callback);
     }
 
     fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_visibility_status_change.lock() = Some(callback);
+        *self.context.callbacks.on_visibility_status_change.lock() = Some(callback);
     }
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_hover_status_change.lock() = Some(callback);
+        *self.context.callbacks.on_hover_status_change.lock() = Some(callback);
     }
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_appearance_changed.lock() = Some(callback);
+        *self.context.callbacks.on_appearance_changed.lock() = Some(callback);
     }
 
     fn window_handle(
@@ -1095,9 +1137,9 @@ impl HasWindowHandle for WindowsWindow {
         // `WindowHandle` borrowed from it, is still held and used elsewhere
         // (e.g. by wgpu to (re)create a surface). This is the same
         // undischarged-HWND-lifetime class as the documented cross-thread
-        // `GWLP_USERDATA` race on this type's `Send`/`Sync` impls above —
-        // a real gap this comment does not close, not a validity claim
-        // this code has actually established.
+        // userdata lifetime is independently pinned by WNDPROC now, but the
+        // raw native handle's validity still is not tied to `&self`; this
+        // remains a real gap, not a validity claim this code established.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
     }
 }
@@ -1117,17 +1159,6 @@ impl HasDisplayHandle for WindowsWindow {
         Ok(unsafe {
             raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Windows(handle))
         })
-    }
-}
-
-impl Clone for WindowsWindow {
-    fn clone(&self) -> Self {
-        Self {
-            hwnd: self.hwnd,
-            state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
-            windows_map: Arc::clone(&self.windows_map),
-        }
     }
 }
 
@@ -1218,16 +1249,11 @@ impl WindowTrait for WindowsWindow {
     }
 
     fn state(&self) -> CrossWindowState {
-        let placement = self.get_window_placement();
-
-        if placement.showCmd == SW_MINIMIZE.0 as u32 {
-            CrossWindowState::Minimized
-        } else if placement.showCmd == SW_MAXIMIZE.0 as u32 {
-            CrossWindowState::Maximized
-        } else if self.is_fullscreen() {
-            CrossWindowState::Fullscreen
-        } else {
-            CrossWindowState::Normal
+        match self.state.lock().mode {
+            WindowMode::Minimized { .. } => CrossWindowState::Minimized,
+            WindowMode::Maximized { .. } => CrossWindowState::Maximized,
+            WindowMode::Fullscreen { .. } => CrossWindowState::Fullscreen,
+            WindowMode::Normal => CrossWindowState::Normal,
         }
     }
 
@@ -1398,12 +1424,7 @@ impl WindowTrait for WindowsWindow {
     }
 
     fn close(&mut self) {
-        // SAFETY: see `PlatformWindow::close` above — same call shape.
-        unsafe {
-            if let Err(error) = DestroyWindow(self.hwnd) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow failed");
-            }
-        }
+        self.execute_or_post(WindowCommand::Close);
     }
 
     fn request_redraw(&mut self) {
@@ -1443,28 +1464,6 @@ impl WindowTrait for WindowsWindow {
 }
 
 impl WindowsWindow {
-    /// Helper to get window placement
-    fn get_window_placement(&self) -> WINDOWPLACEMENT {
-        // SAFETY: `placement` is a stack-local `WINDOWPLACEMENT` with
-        // `length` pre-filled to its own `size_of` as the API requires;
-        // `&raw mut placement` gives `GetWindowPlacement` a valid,
-        // correctly-sized out-parameter regardless of whether the call
-        // succeeds, so returning `placement` on `Err` is safe (it holds the
-        // `Default` values this function seeded, not uninitialized memory) —
-        // callers just get a placement that will not match SW_MINIMIZE or
-        // SW_MAXIMIZE, i.e. a normal-state placement.
-        unsafe {
-            let mut placement = WINDOWPLACEMENT {
-                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                ..Default::default()
-            };
-            if let Err(error) = GetWindowPlacement(self.hwnd, &raw mut placement) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "GetWindowPlacement failed");
-            }
-            placement
-        }
-    }
-
     /// Set DWM window attribute
     ///
     /// # Safety
@@ -1820,26 +1819,26 @@ impl WindowsWindowExtTrait for WindowsWindow {
 
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
-        // Only destroy if this is the last reference
-        if Arc::strong_count(&self.state) == 1 {
-            tracing::debug!("Destroying window HWND {:?}", self.hwnd);
+        let (is_owner, is_destroyed) = {
+            let state = self.state.lock();
+            (
+                state.owner_thread == thread::current().id(),
+                state.is_destroyed,
+            )
+        };
+        if is_destroyed || self.hwnd.is_invalid() {
+            return;
+        }
 
-            // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
-            // `is_invalid()` guard skips the call for a handle that was
-            // never successfully created, and `WM_DESTROY` (handled in
-            // `platform.rs`) reclaims the `GWLP_USERDATA` allocation
-            // synchronously within this call.
-            unsafe {
-                if !self.hwnd.is_invalid()
-                    && let Err(error) = DestroyWindow(self.hwnd)
-                {
-                    tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow failed in Drop");
-                }
-            }
-
-            // Remove from windows map
-            let hwnd_key = self.hwnd.0 as isize;
-            self.windows_map.lock().remove(&hwnd_key);
+        tracing::debug!("Closing live window from WindowsWindow::drop");
+        if is_owner {
+            Self::execute_window_command(self.hwnd, &self.context, WindowCommand::Close);
+        } else if let Err(error) = self.post_command(WindowCommand::Close) {
+            tracing::warn!(
+                hwnd = ?self.hwnd,
+                ?error,
+                "PostMessageW failed while closing window from foreign-thread Drop"
+            );
         }
     }
 }
