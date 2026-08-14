@@ -2796,10 +2796,14 @@ mod gpu_tests {
                 &Paint::fill(Color::rgb(0, 255, 0)),
                 &flui_types::Matrix4::IDENTITY,
             );
+            let yellow_style = flui_types::typography::TextStyle {
+                color: Some(Color::rgb(255, 255, 0)),
+                ..flui_types::typography::TextStyle::default()
+            };
             backend.render_text(
                 "Title",
                 flui_types::Offset::new(Pixels(4.0), Pixels(50.0)),
-                &flui_types::typography::TextStyle::default(),
+                &yellow_style,
                 &Paint::fill(Color::rgb(255, 255, 0)),
                 &flui_types::Matrix4::IDENTITY,
             );
@@ -2835,15 +2839,89 @@ mod gpu_tests {
             .iter()
             .filter(|p| p[2] > 200 && p[0] < 50 && p[1] < 50)
             .count();
-        // CANARY of the KNOWN z-order flaw (issue #718): all glyphs render
-        // in one final pass, so the earlier blue text incorrectly floats
-        // over the later opaque path fill. When per-segment glyph ordering
-        // lands this assertion flips to `blue_pixels == 0` — the day this
-        // canary breaks is the day to do that.
+        // Ordered text: the earlier blue glyphs must be covered by the
+        // later opaque path fill — text draws at its segment's z-position,
+        // not in a global final pass.
+        assert_eq!(
+            blue_pixels, 0,
+            "the earlier text must be covered by the later path fill; \
+             {blue_pixels} blue glyph pixels visible — glyph batches \
+             composited out of draw order"
+        );
+        // And the LATER text still draws over the path.
+        let yellow_pixels = pixels
+            .iter()
+            .filter(|p| p[0] > 200 && p[1] > 200 && p[2] < 50)
+            .count();
         assert!(
-            blue_pixels > 0,
-            "text now respects draw order — flip this canary to assert \
-             blue_pixels == 0 and close the tracking issue"
+            yellow_pixels > 0,
+            "the later title text must render over the path fill"
+        );
+    }
+
+    /// Geometry recorded AFTER text in the same segment must still cover
+    /// that text: a segment's geometry flushes as one unit before its glyph
+    /// range, so without a seal at the text boundary a `text(); rect()`
+    /// sequence keeps the original z-order flaw even after per-segment
+    /// ordering (the SSAA route only passed because it happens to split
+    /// the segment).
+    #[test]
+    fn later_rect_covers_earlier_text_in_the_same_segment() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        {
+            use crate::traits::CommandRenderer;
+            let mut backend = super::super::backend::Backend::new(&mut painter);
+            let blue_style = flui_types::typography::TextStyle {
+                color: Some(Color::rgb(0, 0, 255)),
+                ..flui_types::typography::TextStyle::default()
+            };
+            backend.render_text(
+                "Covered",
+                flui_types::Offset::new(Pixels(4.0), Pixels(30.0)),
+                &blue_style,
+                &Paint::fill(Color::rgb(0, 0, 255)),
+                &flui_types::Matrix4::IDENTITY,
+            );
+            // A plain instanced rect — the route that does NOT split the
+            // segment on its own.
+            backend.render_rect(
+                full,
+                &Paint::fill(Color::rgb(0, 255, 0)),
+                &flui_types::Matrix4::IDENTITY,
+            );
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Text Boundary Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let blue_pixels = pixels
+            .iter()
+            .filter(|p| p[2] > 200 && p[0] < 50 && p[1] < 50)
+            .count();
+        assert_eq!(
+            blue_pixels, 0,
+            "text followed by covering geometry in one segment must be \
+             buried; {blue_pixels} blue glyph pixels visible"
         );
     }
 

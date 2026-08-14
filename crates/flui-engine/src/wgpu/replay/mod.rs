@@ -237,8 +237,10 @@ impl GpuReplay {
     /// - `DrawItem::OffscreenTexture` → premultiplied texture composite
     /// - `DrawItem::OpacityLayer`     → `flush_opacity_layer` (recursive)
     ///
-    /// After all geometry, `text_renderer.render` is called **last** — text is
-    /// always on top (global final phase).
+    /// Text renders IN draw order: each segment's glyph range draws at the
+    /// segment's z-position, and only text recorded outside top-level
+    /// segments (opacity-layer recursion) still composites in the trailing
+    /// gap passes.
     ///
     /// ## R2 — `texture_batch` drain invariant
     ///
@@ -262,6 +264,7 @@ impl GpuReplay {
     ) -> EngineResult<()> {
         // R1: arm order (Segment / OffscreenTexture / OpacityLayer /
         // AdvancedShape) is load-bearing for z-ordering — do not reorder.
+        let mut claimed_text: Vec<std::ops::Range<usize>> = Vec::new();
         for item in items {
             match item {
                 DrawItem::Segment(mut seg) => {
@@ -275,6 +278,21 @@ impl GpuReplay {
                         encoder,
                         target.view,
                     );
+                    // Ordered text: this segment's glyphs draw HERE, at its
+                    // z-position, not in a global final pass — the pass that
+                    // let a covered row's label float over a later-painted
+                    // toolbar surface.
+                    text_renderer.render_range(
+                        device,
+                        queue,
+                        target.view,
+                        encoder,
+                        viewport_size,
+                        seg.text_start..seg.text_end,
+                    )?;
+                    if seg.text_start < seg.text_end {
+                        claimed_text.push(seg.text_start..seg.text_end);
+                    }
                 }
                 DrawItem::OffscreenTexture(p) => {
                     let instance = super::instancing::TextureInstance::new(
@@ -555,8 +573,34 @@ impl GpuReplay {
             }
         }
 
-        // Text is always the global final phase — rendered on top of all geometry.
-        text_renderer.render(device, queue, target.view, encoder, viewport_size)?;
+        // The gaps: text recorded outside any top-level segment (today:
+        // text inside recursive items — opacity layers and their kin —
+        // whose own flushes do not yet range-render). Claimed ranges are
+        // monotone (record order), so everything BETWEEN them, plus the
+        // tail, is exactly the unclaimed text; it keeps the old
+        // over-everything behavior — ordering it within the recursion is
+        // the follow-up named on the tracking issue.
+        let mut cursor = 0usize;
+        for claimed in &claimed_text {
+            text_renderer.render_range(
+                device,
+                queue,
+                target.view,
+                encoder,
+                viewport_size,
+                cursor..claimed.start,
+            )?;
+            cursor = claimed.end;
+        }
+        text_renderer.render_range(
+            device,
+            queue,
+            target.view,
+            encoder,
+            viewport_size,
+            cursor..usize::MAX,
+        )?;
+        text_renderer.finish_pass();
 
         Ok(())
     }

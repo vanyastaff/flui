@@ -353,8 +353,9 @@ enum BatchEntry {
 /// // Add plain text during frame
 /// text_renderer.add_text("Hello, World!", Point::new(10.0, 10.0), 16.0, Color::BLACK);
 ///
-/// // Render all text at end of frame
-/// text_renderer.render(&device, &queue, &view, &mut encoder, (800, 600))?;
+/// // Render a batch range at its draw-order position, then finish the pass
+/// text_renderer.render_range(&device, &queue, &view, &mut encoder, (800, 600), 0..usize::MAX)?;
+/// text_renderer.finish_pass();
 /// ```
 pub struct TextRenderer {
     /// The framework's single shared font system (ADR-0016), injected by the
@@ -377,14 +378,24 @@ pub struct TextRenderer {
     /// Text atlas (texture atlas for glyphs)
     text_atlas: TextAtlas,
 
-    /// Glyphon renderer
-    renderer: GlyphonRenderer,
-
     /// Viewport (manages resolution and transforms)
     viewport: Viewport,
 
     /// Ordered batch of text buffers for the current frame.
     batch: Vec<BatchEntry>,
+
+    /// Pooled per-segment glyphon renderers, in draw-slot order.
+    ///
+    /// Each glyphon renderer owns one vertex buffer that `prepare`
+    /// OVERWRITES, and wgpu render passes read buffer state at submit time
+    /// — so one renderer cannot prepare-and-draw more than once per
+    /// submitted encoder. Ordered text therefore needs one renderer per
+    /// text-bearing segment; the pool is grown on demand and reused across
+    /// frames (the shared atlas is untouched by pooling).
+    segment_renderers: Vec<GlyphonRenderer>,
+    /// Next pool slot to hand out this render cycle; reset by
+    /// [`Self::finish_pass`].
+    next_segment_slot: usize,
 
     /// Cache of plain-text buffers (text + font_size → Buffer)
     plain_cache: HashMap<TextCacheKey, CachedBuffer>,
@@ -507,22 +518,17 @@ impl TextRenderer {
         font_system.with_mut(Self::ensure_fonts_available);
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
-        let mut text_atlas = TextAtlas::new(device, queue, &cache, format);
-        let renderer = GlyphonRenderer::new(
-            &mut text_atlas,
-            device,
-            wgpu::MultisampleState::default(),
-            None,
-        );
+        let text_atlas = TextAtlas::new(device, queue, &cache, format);
         let viewport = Viewport::new(device, &cache);
 
         Self {
             font_system,
             swash_cache,
             text_atlas,
-            renderer,
             viewport,
             batch: Vec::new(),
+            segment_renderers: Vec::new(),
+            next_segment_slot: 0,
             plain_cache: HashMap::new(),
             rich_cache: HashMap::new(),
             current_frame: 0,
@@ -744,39 +750,25 @@ impl TextRenderer {
     // Frame render
     // ------------------------------------------------------------------
 
-    /// Renders all batched text to the GPU.
-    ///
-    /// Call once per frame after all `add_text`/`add_rich_text` calls.
+    /// Render exactly the batch entries in `range` at the CURRENT point of
+    /// the encoder — the per-segment half of ordered text. Uses a pooled
+    /// glyphon renderer per call (see [`Self::segment_renderers`]); never
+    /// clears the batch or advances frame bookkeeping — that is
+    /// [`Self::finish_pass`]'s job, once, at the end of the submit.
     #[must_use = "errors must be propagated or handled"]
-    pub fn render(
+    pub(crate) fn render_range(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
         size: (u32, u32),
+        range: std::ops::Range<usize>,
     ) -> crate::error::EngineResult<()> {
-        self.current_frame += 1;
-
-        if self.batch.is_empty() {
+        let end = range.end.min(self.batch.len());
+        if range.start >= end {
             return Ok(());
         }
-
-        let total = self.batch.len();
-        let hit_rate = if self.cache_hits + self.cache_misses > 0 {
-            #[allow(clippy::cast_precision_loss)] // u64 → f64 for a display ratio
-            let r = (self.cache_hits as f64 / (self.cache_hits + self.cache_misses) as f64) * 100.0;
-            r
-        } else {
-            0.0
-        };
-        tracing::trace!(
-            buffers = total,
-            width = size.0,
-            height = size.1,
-            cache_hit_rate = format_args!("{hit_rate:.1}%"),
-            "TextRenderer::render"
-        );
 
         self.viewport.update(
             queue,
@@ -785,43 +777,35 @@ impl TextRenderer {
                 height: size.1,
             },
         );
-
-        // i32 viewport bounds used by every TextArea.
-        // Viewport width/height are u32; wgpu's maximum surface dimension is
-        // 8192 (well under i32::MAX = 2 147 483 647), so wrapping is impossible.
         #[allow(clippy::cast_possible_wrap)]
-        let right = size.0 as i32;
-        #[allow(clippy::cast_possible_wrap)]
-        let bottom = size.1 as i32;
         let full_bounds = TextBounds {
             left: 0,
             top: 0,
-            right,
-            bottom,
+            right: size.0 as i32,
+            bottom: size.1 as i32,
         };
-
-        // Build TextArea values by field-splitting `self` so that the
-        // immutable borrows into the two caches are disjoint from the
-        // mutable borrows `prepare` needs.  All five fields accessed here
-        // (`batch`, `plain_cache`, `rich_cache`, `renderer`, `font_system`,
-        // `text_atlas`, `viewport`, `swash_cache`) are distinct struct
-        // fields; Rust's borrow checker accepts simultaneous borrows of
-        // disjoint fields when they are named directly (not through `self`).
         let text_areas: Vec<TextArea<'_>> = build_text_areas(
-            &self.batch,
+            &self.batch[range.start..end],
             &self.plain_cache,
             &self.rich_cache,
             full_bounds,
         );
 
-        // Clone the shared handle first so the `with_mut` lock guard is the
-        // only borrow of `font_system` in play; the closure then freely takes
-        // disjoint `&mut` borrows of the renderer / atlas / swash cache
-        // (edition-2024 closures capture individual fields, not all of `self`).
+        if self.next_segment_slot >= self.segment_renderers.len() {
+            self.segment_renderers.push(GlyphonRenderer::new(
+                &mut self.text_atlas,
+                device,
+                wgpu::MultisampleState::default(),
+                None,
+            ));
+        }
+        let slot = self.next_segment_slot;
+        self.next_segment_slot += 1;
+
         let font_system = self.font_system.clone();
         font_system
             .with_mut(|font_system| {
-                self.renderer.prepare(
+                self.segment_renderers[slot].prepare(
                     device,
                     queue,
                     font_system,
@@ -834,7 +818,7 @@ impl TextRenderer {
             .map_err(crate::error::EngineError::text_prepare)?;
 
         let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Text Render Pass"),
+            label: Some("Segment Text Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
@@ -849,18 +833,23 @@ impl TextRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-
-        self.renderer
+        self.segment_renderers[slot]
             .render(&self.text_atlas, &self.viewport, &mut text_pass)
             .map_err(crate::error::EngineError::text_render)?;
+        Ok(())
+    }
 
+    /// End-of-submit bookkeeping for ordered text: clear the consumed
+    /// batch, reset the pool cursor, and advance the frame counter that
+    /// drives cache pruning. Must run exactly once per `WgpuPainter::render`
+    /// cycle, after every `render_range`/`render` of that cycle.
+    pub(crate) fn finish_pass(&mut self) {
+        self.current_frame += 1;
         self.batch.clear();
-
+        self.next_segment_slot = 0;
         if self.current_frame.is_multiple_of(60) {
             self.prune_cache();
         }
-
-        Ok(())
     }
 
     /// Reclaim glyph-atlas slots whose glyphs were not used this frame.
@@ -875,9 +864,9 @@ impl TextRenderer {
     /// trim only clears the CPU-side in-use set; it does not touch the atlas
     /// texture the in-flight frame samples, so it is safe (and required) to call
     /// **once per frame, after the frame's text has been prepared, rendered, and
-    /// submitted** — never between [`render`](Self::render) calls within a frame
-    /// (the engine renders text once per `painter.render`, and `painter.render`
-    /// runs multiple times per frame for backdrop-filter flushes).  The single
+    /// submitted** — never between [`render_range`](Self::render_range) calls
+    /// within a frame (`painter.render` runs multiple times per frame for
+    /// backdrop-filter flushes, each rendering its segments' text).  The single
     /// correct caller is `WgpuPainter::end_frame_maintenance`, the same
     /// once-per-frame seam that drives texture-cache maintenance.
     pub(crate) fn atlas_trim(&mut self) {
@@ -1460,8 +1449,9 @@ mod gpu_tests {
             label: Some("Text Test Frame"),
         });
         clear(view, &mut encoder);
-        tr.render(device, queue, view, &mut encoder, (W, H))
+        tr.render_range(device, queue, view, &mut encoder, (W, H), 0..usize::MAX)
             .expect("text render must succeed");
+        tr.finish_pass();
         queue.submit(std::iter::once(encoder.finish()));
     }
 

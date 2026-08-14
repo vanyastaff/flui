@@ -654,6 +654,12 @@ impl ViewState<Scrollable> for ScrollableState {
                     let position = ctrl_wheel.position();
                     let target = (ctrl_wheel.pixels() + delta)
                         .clamp(position.min_scroll_extent(), position.max_scroll_extent());
+                    tracing::trace!(
+                        delta,
+                        target,
+                        pixels = ctrl_wheel.pixels(),
+                        "pointer-scroll tick"
+                    );
                     if target == ctrl_wheel.pixels() {
                         return;
                     }

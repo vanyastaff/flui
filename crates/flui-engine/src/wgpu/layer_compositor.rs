@@ -302,7 +302,7 @@ impl LayerCompositor {
         self.current_opacity = saved.saved_opacity;
 
         let has_offscreen_content =
-            !offscreen_final_segment.is_empty() || !offscreen_items.is_empty();
+            !offscreen_final_segment.is_geometry_empty() || !offscreen_items.is_empty();
 
         if !has_offscreen_content {
             return RestoreOutcome::Empty {
