@@ -3,6 +3,8 @@
 
 use std::rc::Rc;
 
+use flui_interaction::events::ScrollEventData;
+use flui_interaction::routing::{EventPropagation, ScrollTarget};
 use flui_interaction::{PointerPanZoomEvent, PointerTarget, from_w3c_event};
 use flui_objects::RenderListener;
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
@@ -15,6 +17,10 @@ type PointerCallback = Rc<dyn Fn(&PointerEvent)>;
 
 /// A trackpad pan/zoom callback routed from a [`PointerEvent::Gesture`] update.
 type PointerPanZoomCallback = Rc<dyn Fn(&PointerPanZoomEvent)>;
+
+/// An arbitrated scroll-signal handler: returns
+/// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
+type ScrollClaimCallback = Rc<dyn Fn(&ScrollEventData) -> EventPropagation>;
 
 /// Calls callbacks in response to raw pointer events on its child.
 ///
@@ -32,6 +38,7 @@ pub struct Listener {
     on_pointer_hover: Option<PointerCallback>,
     on_pointer_cancel: Option<PointerCallback>,
     on_pointer_signal: Option<PointerCallback>,
+    on_scroll_claim: Option<ScrollClaimCallback>,
     on_pointer_pan_zoom_update: Option<PointerPanZoomCallback>,
     behavior: HitTestBehavior,
     child: Child,
@@ -46,6 +53,7 @@ impl Default for Listener {
             on_pointer_hover: None,
             on_pointer_cancel: None,
             on_pointer_signal: None,
+            on_scroll_claim: None,
             on_pointer_pan_zoom_update: None,
             // Flutter's `Listener` default.
             behavior: HitTestBehavior::DeferToChild,
@@ -63,6 +71,7 @@ impl std::fmt::Debug for Listener {
             .field("on_pointer_hover", &self.on_pointer_hover.is_some())
             .field("on_pointer_cancel", &self.on_pointer_cancel.is_some())
             .field("on_pointer_signal", &self.on_pointer_signal.is_some())
+            .field("on_scroll_claim", &self.on_scroll_claim.is_some())
             .field(
                 "on_pointer_pan_zoom_update",
                 &self.on_pointer_pan_zoom_update.is_some(),
@@ -129,9 +138,37 @@ impl Listener {
     /// Called when a pointer signal occurs over the listener.
     ///
     /// FLUI currently models pointer signals as [`PointerEvent::Scroll`].
+    ///
+    /// This channel *observes*: every listener on the hit path sees the
+    /// signal (Flutter parity — `Listener.onPointerSignal` fires for the whole
+    /// path). A widget that should *act* on the tick only when it is the
+    /// leaf-most interested party registers with
+    /// [`on_scroll_claim`](Self::on_scroll_claim) instead.
     #[must_use]
     pub fn on_pointer_signal(mut self, callback: impl Fn(&PointerEvent) + 'static) -> Self {
         self.on_pointer_signal = Some(Rc::new(callback));
+        self
+    }
+
+    /// Register this listener in the arbitrated scroll-signal walk — the FLUI
+    /// port of Flutter's `PointerSignalResolver` pair to
+    /// `Listener.onPointerSignal`.
+    ///
+    /// After the whole hit path has observed a scroll signal, the leaf-first
+    /// claim walk invokes each registered handler until one returns
+    /// [`EventPropagation::Stop`]; later (outer) handlers then never act.
+    /// Return `Stop` only when this widget will actually consume the tick
+    /// (a scrollable that can still move, a viewer that will zoom) and
+    /// [`EventPropagation::Continue`] otherwise, so an inner scrollable at its
+    /// extent hands the wheel to the outer one — the oracle's
+    /// `_receivedPointerSignal` registers only when the target offset differs
+    /// from the current pixels (`widgets/scrollable.dart`).
+    #[must_use]
+    pub fn on_scroll_claim(
+        mut self,
+        callback: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+    ) -> Self {
+        self.on_scroll_claim = Some(Rc::new(callback));
         self
     }
 
@@ -229,6 +266,48 @@ impl Listener {
             }
         }
     }
+
+    /// Register the scroll-claim handler in the active owner lane, returning
+    /// its data-only identity for render storage — `None` when no claim
+    /// callback is configured or no owner lane is active.
+    fn register_scroll_claim(&self, ctx: &RenderObjectContext<'_>) -> Option<ScrollTarget> {
+        let claim = self.on_scroll_claim.clone()?;
+        match ctx.register_scroll(move |event| claim(event)) {
+            Ok(target) => Some(target),
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "Listener mounted without an active interaction lane; \
+                     scroll signals will not be arbitrated"
+                );
+                None
+            }
+        }
+    }
+
+    /// Reconcile the render object's scroll-claim registration with this
+    /// widget configuration: register, replace, or unregister so the lane
+    /// mirrors whether `on_scroll_claim` is set.
+    fn sync_scroll_claim(&self, ctx: &RenderObjectContext<'_>, render_object: &mut RenderListener) {
+        match (render_object.claimed_scroll_target(), &self.on_scroll_claim) {
+            (Some(target), Some(claim)) => {
+                let claim = claim.clone();
+                if let Err(error) = ctx.replace_scroll(target, move |event| claim(event)) {
+                    tracing::warn!(?error, "Listener scroll-claim replacement failed");
+                }
+            }
+            (Some(target), None) => {
+                if let Err(error) = ctx.unregister_scroll(target) {
+                    tracing::debug!(?error, "Listener scroll-claim unregistration failed");
+                }
+                render_object.set_scroll_target(None);
+            }
+            (None, Some(_)) => {
+                render_object.set_scroll_target(self.register_scroll_claim(ctx));
+            }
+            (None, None) => {}
+        }
+    }
 }
 
 impl RenderView for Listener {
@@ -236,7 +315,9 @@ impl RenderView for Listener {
     type RenderObject = RenderListener;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderListener::new(self.register(ctx), self.behavior)
+        let mut render_object = RenderListener::new(self.register(ctx), self.behavior);
+        render_object.set_scroll_target(self.register_scroll_claim(ctx));
+        render_object
     }
 
     fn update_render_object(
@@ -254,6 +335,7 @@ impl RenderView for Listener {
             }
             None => render_object.set_target(self.register(ctx)),
         }
+        self.sync_scroll_claim(ctx, render_object);
         render_object.set_behavior(self.behavior);
         flui_rendering::RenderUpdateImpact::NONE
     }
@@ -270,6 +352,12 @@ impl RenderView for Listener {
                 tracing::debug!(?error, "Listener target unregistration failed");
             }
             render_object.set_target(None);
+        }
+        if let Some(target) = render_object.claimed_scroll_target() {
+            if let Err(error) = ctx.unregister_scroll(target) {
+                tracing::debug!(?error, "Listener scroll-claim unregistration failed");
+            }
+            render_object.set_scroll_target(None);
         }
     }
 

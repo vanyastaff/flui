@@ -91,7 +91,7 @@ pub use flui_interaction::events::{CursorIcon, InputEvent, PointerEvent, Pointer
 pub use flui_interaction::routing::{
     DeviceId, EventPropagation, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
     MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation, PathClipTarget, PointerTarget,
-    ShaderMaskTarget, resolve_path_clip_target, resolve_shader_mask_target,
+    ScrollTarget, ShaderMaskTarget, resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use result::HitTestResult;
 pub use transform::MatrixTransformPart;
