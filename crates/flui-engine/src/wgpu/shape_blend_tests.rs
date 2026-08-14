@@ -681,8 +681,18 @@ mod gpu_tests {
             0.0,
         );
 
-        // 2. A rect between them. Rect replays before Gradient, so this WOULD
-        //    seal if gradients participated in the kind seal.
+        // 2. A circle then a rect. Circle -> Rect is a genuine BACKWARD kind
+        //    transition, so `begin_phase` would seal here — and the segment it
+        //    would seal is the one holding the first gradient's stop table.
+        //    Gradients skipping `begin_phase` themselves does not prevent this;
+        //    only the explicit gradient guard in `begin_phase` does. A version
+        //    of this test with just a rect between the gradients never reaches
+        //    a backward transition and passes either way.
+        painter.circle(
+            flui_types::Point::new(Pixels(6.0), Pixels(52.0)),
+            4.0,
+            &Paint::fill(Color::rgba(0, 0, 0, 255)),
+        );
         painter.rect(
             Rect::from_xywh(Pixels(0.0), Pixels(40.0), Pixels(8.0), Pixels(8.0)),
             &Paint::fill(Color::rgba(0, 0, 0, 255)),

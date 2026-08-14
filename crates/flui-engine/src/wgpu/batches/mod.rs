@@ -140,7 +140,10 @@ impl DrawBatcher {
     /// `phase`, sealing the segment first if the fixed replay order would put
     /// it BEFORE something already recorded.
     ///
-    /// Call this immediately before every push into a `DrawSegment` batch.
+    /// Call this immediately before every push into a `DrawSegment` batch —
+    /// with one deliberate exception: the gradient recorders do NOT call it.
+    /// See `DrawBatcher::gradient_rect` for why, and do not "fix" that by
+    /// following this sentence literally.
     /// Together the calls make `flush_segment`'s fixed phase order equal record
     /// order within each segment, which is what gives the painter's algorithm
     /// back across primitive kinds — a circle followed by an overlapping rect
@@ -155,7 +158,19 @@ impl DrawBatcher {
         draw_order: &mut Vec<DrawItem>,
         phase: Phase,
     ) {
-        if segment.would_reorder(phase) {
+        // Never split gradient-bearing content. Gradients skip this seal
+        // entirely (see `DrawBatcher::gradient_rect`), but skipping it is not
+        // enough on its own: a backward transition between two OTHER kinds —
+        // gradient, circle, rect — would still finalize a segment that carries
+        // gradient stops, and every segment's table is uploaded to the same
+        // buffer at offset 0, so the earlier gradient would sample the later
+        // table. Holding the segment together keeps such content at exactly
+        // today's ordering rather than making it newly wrong.
+        //
+        // This gives up kind-ordering for the rest of a segment once a
+        // gradient is in it. That is the conservative half of the trade and it
+        // disappears once stop tables are per-segment.
+        if segment.would_reorder(phase) && segment.current_gradient_stops.is_empty() {
             Self::finish_current_segment(segment, draw_order);
         }
         segment.last_phase = Some(phase);
@@ -581,6 +596,74 @@ mod unit_tests {
                 segment.vertices.len(),
             );
         }
+    }
+
+    /// No kind seal may finalize a segment that carries gradient stops.
+    ///
+    /// Gradients skip `begin_phase`, but that alone does not protect them: a
+    /// backward transition between two OTHER kinds still seals the segment they
+    /// live in. Every segment's stop table is uploaded to the same
+    /// `gradient_stops_buffer` at offset 0 and all passes are recorded into one
+    /// `CommandEncoder` before submission, so the last write wins — two
+    /// gradient-bearing segments in a frame cannot both be correct.
+    ///
+    /// Sequence: gradient, then circle, then rect. The circle -> rect step is
+    /// the backward transition; without the guard it seals a segment holding
+    /// the gradient's stops.
+    ///
+    /// If reverted (drop `&& segment.current_gradient_stops.is_empty()` from
+    /// `begin_phase`): one sealed segment carries stops and this fails.
+    #[test]
+    fn a_kind_seal_never_splits_gradient_bearing_content() {
+        use super::super::command_ir::Phase;
+        use super::super::effects::GradientStop;
+        use flui_types::geometry::Pixels;
+
+        let state = GpuStateStack::new();
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let stops = [
+            GradientStop {
+                color: [1.0, 0.0, 0.0, 1.0],
+                position: 0.0,
+                padding: [0.0; 3],
+            },
+            GradientStop {
+                color: [1.0, 0.0, 0.0, 1.0],
+                position: 1.0,
+                padding: [0.0; 3],
+            },
+        ];
+
+        DrawBatcher::gradient_rect(
+            &mut segment,
+            &state,
+            Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(10.0), Pixels(10.0)),
+            glam::Vec2::new(0.0, 0.0),
+            glam::Vec2::new(10.0, 0.0),
+            &stops,
+            0.0,
+        );
+        assert!(
+            !segment.current_gradient_stops.is_empty(),
+            "precondition: the segment carries gradient stops"
+        );
+
+        DrawBatcher::begin_phase(&mut segment, &mut draw_order, Phase::Circle);
+        DrawBatcher::begin_phase(&mut segment, &mut draw_order, Phase::Rect);
+
+        let sealed_with_stops = draw_order
+            .iter()
+            .filter(
+                |it| matches!(it, DrawItem::Segment(seg) if !seg.current_gradient_stops.is_empty()),
+            )
+            .count();
+        assert_eq!(
+            sealed_with_stops, 0,
+            "a kind seal finalized a gradient-bearing segment; its stop table and the \
+             next one both upload to the same buffer, so the earlier gradient renders \
+             with the later colours"
+        );
     }
 
     /// Build the four vertices for an axis-aligned rectangle in device pixels.

@@ -534,9 +534,9 @@ pub(crate) struct DrawSegment {
     /// The replay phase of the most recent primitive recorded into this
     /// segment, or `None` while it is still geometry-empty.
     ///
-    /// Read only by [`Self::would_reorder`]. Not part of the replayed IR —
-    /// `flush_segment` never looks at it — so it does not affect the
-    /// deterministic-replay snapshot's meaning, only its `Debug` output.
+    /// Record-time only: `flush_segment` never reads it, so it changes no
+    /// replayed output. It IS carried by `Clone` and therefore visible to
+    /// anything that inspects a whole `DrawSegment` (test helpers, `Debug`).
     pub(crate) last_phase: Option<Phase>,
 }
 

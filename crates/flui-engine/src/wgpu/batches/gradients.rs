@@ -62,8 +62,13 @@ impl DrawBatcher {
         // gradients keep exactly today's ordering — wrong relative to earlier
         // primitives, but not newly wrong. Making them orderable means giving
         // each segment its own slice of the stop buffer (a dynamic offset, or
-        // one buffer per segment); `a_gradient_after_a_kind_seal_reads_its_own_
-        // stop_table` in `shape_blend_tests` is the acceptance test for that.
+        // one buffer per segment). Until then `begin_phase` additionally
+        // refuses to seal a segment that already carries stops, because
+        // skipping the seal HERE does not stop a backward transition between
+        // two other kinds from splitting this segment anyway.
+        // `a_kind_seal_never_splits_gradient_bearing_content` (batches/mod.rs)
+        // and `two_gradients_separated_by_a_rect_keep_their_own_colours`
+        // (shape_blend_tests) are the guards.
 
         let stop_count = stops.len().min(8);
         let current_len = segment.current_gradient_stops.len();
@@ -151,8 +156,13 @@ impl DrawBatcher {
         // gradients keep exactly today's ordering — wrong relative to earlier
         // primitives, but not newly wrong. Making them orderable means giving
         // each segment its own slice of the stop buffer (a dynamic offset, or
-        // one buffer per segment); `a_gradient_after_a_kind_seal_reads_its_own_
-        // stop_table` in `shape_blend_tests` is the acceptance test for that.
+        // one buffer per segment). Until then `begin_phase` additionally
+        // refuses to seal a segment that already carries stops, because
+        // skipping the seal HERE does not stop a backward transition between
+        // two other kinds from splitting this segment anyway.
+        // `a_kind_seal_never_splits_gradient_bearing_content` (batches/mod.rs)
+        // and `two_gradients_separated_by_a_rect_keep_their_own_colours`
+        // (shape_blend_tests) are the guards.
 
         let stop_count = stops.len().min(8);
         let current_len = segment.current_gradient_stops.len();
@@ -240,8 +250,13 @@ impl DrawBatcher {
         // gradients keep exactly today's ordering — wrong relative to earlier
         // primitives, but not newly wrong. Making them orderable means giving
         // each segment its own slice of the stop buffer (a dynamic offset, or
-        // one buffer per segment); `a_gradient_after_a_kind_seal_reads_its_own_
-        // stop_table` in `shape_blend_tests` is the acceptance test for that.
+        // one buffer per segment). Until then `begin_phase` additionally
+        // refuses to seal a segment that already carries stops, because
+        // skipping the seal HERE does not stop a backward transition between
+        // two other kinds from splitting this segment anyway.
+        // `a_kind_seal_never_splits_gradient_bearing_content` (batches/mod.rs)
+        // and `two_gradients_separated_by_a_rect_keep_their_own_colours`
+        // (shape_blend_tests) are the guards.
 
         let stop_count = stops.len().min(8);
         let current_len = segment.current_gradient_stops.len();
