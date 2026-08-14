@@ -8,9 +8,14 @@ use crate::traits::Clipboard;
 
 /// Arboard-based clipboard implementation
 ///
-/// Thread-safe wrapper around arboard::Clipboard.
+/// Thread-safe wrapper around arboard::Clipboard. The inner slot is `None`
+/// for the inert fallback: on a pure-Wayland session (no X11 socket at
+/// all, e.g. weston headless — and no compositor support for the
+/// wlr-data-control protocol arboard's optional Wayland path needs),
+/// clipboard init has no backend to reach, and a platform must come up
+/// with a non-functional clipboard rather than not come up at all.
 pub struct ArboardClipboard {
-    clipboard: Mutex<arboard::Clipboard>,
+    clipboard: Mutex<Option<arboard::Clipboard>>,
 }
 
 impl std::fmt::Debug for ArboardClipboard {
@@ -26,20 +31,37 @@ impl ArboardClipboard {
     pub fn new() -> Result<Self, arboard::Error> {
         let clipboard = arboard::Clipboard::new()?;
         Ok(Self {
-            clipboard: Mutex::new(clipboard),
+            clipboard: Mutex::new(Some(clipboard)),
         })
+    }
+
+    /// An inert clipboard for sessions where no clipboard backend is
+    /// reachable: every read answers `None`, every write is dropped with a
+    /// warning. The platform's construction fallback — it used to call
+    /// [`Self::new`] again and `expect` it, which panicked the whole app at
+    /// startup with the exact failure the fallback existed to absorb
+    /// (observed on a Wayland-only session, where arboard has no X11 socket
+    /// to reach).
+    pub fn inert() -> Self {
+        Self {
+            clipboard: Mutex::new(None),
+        }
     }
 }
 
 impl Default for ArboardClipboard {
     fn default() -> Self {
-        Self::new().expect("Failed to initialize clipboard")
+        Self::inert()
     }
 }
 
 impl Clipboard for ArboardClipboard {
     fn read_text(&self) -> Option<String> {
         let mut clipboard = self.clipboard.lock();
+        let Some(clipboard) = clipboard.as_mut() else {
+            tracing::debug!("clipboard read on an inert (backend-less) clipboard");
+            return None;
+        };
 
         match clipboard.get_text() {
             Ok(text) => {
@@ -55,6 +77,13 @@ impl Clipboard for ArboardClipboard {
 
     fn write_text(&self, text: String) {
         let mut clipboard = self.clipboard.lock();
+        let Some(clipboard) = clipboard.as_mut() else {
+            tracing::warn!(
+                len = text.len(),
+                "clipboard write dropped: no clipboard backend was reachable at platform init"
+            );
+            return;
+        };
 
         match clipboard.set_text(&text) {
             Ok(()) => {

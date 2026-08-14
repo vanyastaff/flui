@@ -514,6 +514,25 @@ impl WinitWindow {
 }
 
 #[cfg(feature = "winit-backend")]
+impl Drop for WinitWindow {
+    fn drop(&mut self) {
+        // Teardown-order invariant: a registered callback may own this
+        // window's GPU renderer, whose `wgpu::Surface` was created from
+        // this window's raw handles — that surface must be destroyed while
+        // the native window objects behind those handles are still alive
+        // (on Wayland, destroying the swapchain after the `wl_surface` is a
+        // use-after-free on the surface's `wl_proxy`; observed as the
+        // post-quit SIGSEGV of issue #713). `Drop::drop` runs before any
+        // field is dropped, so clearing the callbacks here guarantees the
+        // renderer dies before `self.window` regardless of field order.
+        // The winit `CloseRequested` arm also clears eagerly at close (the
+        // primary, in-loop path); this is the last-resort guarantee for a
+        // window whose final `Arc` unwinds anywhere else.
+        self.callbacks.clear();
+    }
+}
+
+#[cfg(feature = "winit-backend")]
 impl PlatformWindow for WinitWindow {
     fn id(&self) -> WindowId {
         self.id

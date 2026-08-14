@@ -35,17 +35,13 @@ const BUTTON_RELEASE: u8 = 5;
 /// nothing else — the check only asserts that pixels changed.
 const WHEEL_DOWN: u8 = 5;
 
-pub(crate) fn run() -> Result<()> {
-    let app_path = std::env::args()
-        .nth(1)
-        .context("usage: flui-live-smoke <path-to-app-binary>")?;
-
+pub(crate) fn run(app_path: &str) -> Result<()> {
     let log_path =
         std::env::temp_dir().join(format!("flui-live-smoke-app-{}.log", std::process::id()));
     let log_file = std::fs::File::create(&log_path)
         .with_context(|| format!("creating {}", log_path.display()))?;
 
-    let mut app = Command::new(&app_path)
+    let mut app = Command::new(app_path)
         // The app must open its window on the SAME X display this harness
         // drives. A leaked WAYLAND_DISPLAY would win backend selection and
         // put the window on the developer's real compositor instead of the

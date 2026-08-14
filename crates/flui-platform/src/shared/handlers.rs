@@ -406,6 +406,36 @@ impl WindowCallbacks {
         }
     }
 
+    /// Takes and drops every registered callback.
+    ///
+    /// Registered callbacks are the platform's only owning references to
+    /// presentation-scoped embedder state — in `flui-app`'s wiring the
+    /// frame callback owns the window's GPU renderer, whose `wgpu::Surface`
+    /// was created from this window's raw handles and must therefore be
+    /// destroyed while the native window is still alive (wgpu's
+    /// `SurfaceTargetUnsafe::RawHandle` validity contract). Backends call
+    /// this at window close, and `WinitWindow`'s `Drop` calls it as a
+    /// last-resort ordering guarantee, so that destruction order is pinned
+    /// deterministically instead of left to struct field order. Payloads
+    /// are collected first and dropped only after every slot's lock has
+    /// been released, since a callback's destructor may re-enter platform
+    /// code.
+    pub fn clear(&self) {
+        let dropped = (
+            self.on_input.lock().take(),
+            self.on_request_frame.lock().take(),
+            self.on_resize.lock().take(),
+            self.on_moved.lock().take(),
+            self.on_close.lock().take(),
+            self.on_should_close.lock().take(),
+            self.on_active_status_change.lock().take(),
+            self.on_visibility_status_change.lock().take(),
+            self.on_hover_status_change.lock().take(),
+            self.on_appearance_changed.lock().take(),
+        );
+        drop(dropped);
+    }
+
     fn drain_events(
         &self,
         mut drain: DispatchDrain<'_, WindowCallbackEvent>,

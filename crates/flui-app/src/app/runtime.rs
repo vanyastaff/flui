@@ -1216,6 +1216,14 @@ impl AppRuntime {
 
     /// Remove the installed redraw-poke window at teardown, so a torn-down
     /// realm's window is not kept artificially alive by this slot.
+    ///
+    /// Returns the removed window instead of dropping it under the lock:
+    /// the caller drops it only after every TLS borrow has been released
+    /// (destructors may re-enter platform/framework code), and — for the
+    /// post-loop `teardown_platform_realm` caller — with the knowledge that
+    /// the platform event loop is already gone, which is why the primary
+    /// release path is [`Self::release_redraw_window_for`] at window close,
+    /// while the loop is still alive.
     #[cfg_attr(
         target_arch = "wasm32",
         expect(
@@ -1225,8 +1233,38 @@ impl AppRuntime {
                       resident for the page's lifetime)"
         )
     )]
-    pub(super) fn clear_redraw_window(&self) {
-        self.redraw_window.lock().take();
+    #[must_use = "drop the returned window only after releasing TLS borrows"]
+    pub(super) fn clear_redraw_window(&self) -> Option<Arc<dyn PlatformWindow>> {
+        self.redraw_window.lock().take()
+    }
+
+    /// Remove the installed redraw-poke window if (and only if) it is the
+    /// window identified by `id` — the window-close release path.
+    ///
+    /// Teardown-order invariant (issue #713): every `Arc` of a platform
+    /// window must unwind while the platform event loop is still alive —
+    /// this slot was the one reference that survived `Platform::run` and
+    /// forced the window's native teardown to run after the loop (and, on
+    /// Wayland, after the connection state it marshals on) was gone. Called
+    /// from the window's own `on_close`, so a `SharedRealm` sibling closing
+    /// some *other* window leaves the slot untouched. Returns the removed
+    /// window for the caller to drop outside any TLS borrow.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    #[must_use = "drop the returned window only after releasing TLS borrows"]
+    pub(super) fn release_redraw_window_for(
+        &self,
+        id: flui_platform::traits::WindowId,
+    ) -> Option<Arc<dyn PlatformWindow>> {
+        let mut slot = self.redraw_window.lock();
+        if slot.as_ref().is_some_and(|window| window.id() == id) {
+            slot.take()
+        } else {
+            None
+        }
     }
 
     // ========================================================================
