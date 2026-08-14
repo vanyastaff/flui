@@ -4,8 +4,8 @@
 //! third-party client can use to inject input into or close another
 //! client's toplevel (`xdg_toplevel.close` is compositor→client only, and
 //! weston implements neither `wlr-foreign-toplevel-management` nor a
-//! scripting interface), so this mode cannot drive drags or captures the
-//! way `harness.rs` does with XTEST. What it CAN pin — and what shipped
+//! scripting interface), so this mode cannot drive drags or capture pixels
+//! the way `harness.rs` does with XTEST. What it CAN pin — and what shipped
 //! broken while the X11 close check stayed green — is the close-path
 //! teardown ordering: the app closes its own window through the platform's
 //! harness self-close hook (`FLUI_SELF_CLOSE_AFTER_MS`, which synthesizes

@@ -271,11 +271,15 @@ fn held_pointer_buttons(
 
 impl WinitPlatformState {
     fn new() -> Self {
-        // Initialize clipboard (may fail in headless environments)
+        // Initialize clipboard (may fail in headless environments).
+        // `inert()` explicitly, not `default()`: init just failed, and
+        // `default()` would retry the same doomed backend init before
+        // falling back — the fallback for a KNOWN-failed init is the inert
+        // clipboard directly.
         let clipboard = ArboardClipboard::new().map_or_else(
             |err| {
-                tracing::warn!(?err, "Failed to initialize clipboard, using fallback");
-                Arc::new(ArboardClipboard::default())
+                tracing::warn!(?err, "Failed to initialize clipboard, using inert fallback");
+                Arc::new(ArboardClipboard::inert())
             },
             Arc::new,
         );
@@ -1446,7 +1450,10 @@ impl WinitApp {
     /// should-close veto, per-window close callbacks, global handler, map
     /// removal, exit policy — runs exactly as a compositor-delivered close
     /// would. One-shot: the deadline is cleared on fire. If no window exists
-    /// yet at the deadline, it stays armed until one does.
+    /// yet at the deadline, it stays armed until one does — re-paced a
+    /// short interval forward on each check, never left in the past, so the
+    /// loop keeps waiting instead of busy-waking on an expired
+    /// `ControlFlow::WaitUntil`.
     fn fire_self_close_if_due(&mut self, event_loop: &ActiveEventLoop) {
         let due = self
             .self_close_deadline
@@ -1458,6 +1465,16 @@ impl WinitApp {
             .platform
             .with_state(|state| state.window_id_map.keys().next().copied());
         let Some(winit_id) = winit_id else {
+            // Due with no window tracked yet: re-pace instead of leaving the
+            // past deadline armed. `about_to_wait` folds this deadline into
+            // `ControlFlow::WaitUntil`, and an instant already behind
+            // `Instant::now()` would re-fire winit's `ResumeTimeReached`
+            // every iteration — a busy wake loop until a window appears.
+            // FLUI's own bootstrap opens its window inside `on_ready`,
+            // before the first `about_to_wait`, so this arm exists for an
+            // embedder that opens its first window later (e.g. through the
+            // deferred owner lane), which `Platform::run` permits.
+            self.self_close_deadline = Some(Instant::now() + Duration::from_millis(50));
             return;
         };
         self.self_close_deadline = None;
