@@ -489,6 +489,16 @@ impl GestureBinding {
         &self.pointer_router
     }
 
+    /// The pointer left the hosting window: fire `on_exit` for every
+    /// hovered region and reset the cursor. The platform's window-leave
+    /// signal (winit `CursorLeft`) routes here; without it a widget hovered
+    /// at the moment the cursor crosses the window edge stays hovered
+    /// forever. Must run inside the owner lane scope, like every other
+    /// dispatch on this binding.
+    pub fn handle_pointer_left_window(&self) {
+        self.mouse_tracker.dispatch_window_left();
+    }
+
     /// Mouse tracking state owned by the same presentation as gesture routes.
     #[inline]
     #[must_use]

@@ -229,6 +229,67 @@ impl MouseTracker {
             .any(|state| state.pointer_type == PointerType::Mouse);
     }
 
+    /// Fires exit callbacks for every region every device currently hovers,
+    /// clears that hover state, and resets the cursor — the cursor has left
+    /// the window, so nothing is hovered any more.
+    ///
+    /// Flutter parity: `MouseTracker.updateWithEvent` reaches the same end
+    /// state through a `PointerRemovedEvent`/empty-hit-test update when the
+    /// platform reports the pointer leaving the view; FLUI's winit wire has
+    /// no synthetic remove event, so the window-leave signal calls this
+    /// directly. Without it, a widget hovered at the moment the cursor
+    /// crosses the window edge keeps its hover visuals forever and
+    /// `MouseRegion::on_exit` never fires.
+    ///
+    /// Device registrations survive (the pointer will come back); only the
+    /// hover/cursor state is swept. Calling with nothing hovered is a no-op.
+    /// Per-callback panics are isolated exactly like a motion update's: the
+    /// first is resumed after every callback ran.
+    pub fn dispatch_window_left(&self) {
+        let sweeps: Vec<DeviceWork> = {
+            let mut inner = self.inner.borrow_mut();
+            let inner = &mut *inner;
+            inner
+                .devices
+                .iter_mut()
+                .filter_map(|(&device_id, state)| {
+                    if state.active_order.is_empty() && state.current_cursor == CursorIcon::Default
+                    {
+                        return None;
+                    }
+                    let exit_callbacks: SmallVec<[MouseExitCallback; 4]> = state
+                        .active_order
+                        .iter()
+                        .filter_map(|id| {
+                            inner
+                                .annotations
+                                .get(id)
+                                .and_then(|ann| ann.cell.snapshot().on_exit)
+                        })
+                        .collect();
+                    let cursor_callback = (state.current_cursor != CursorIcon::Default)
+                        .then(|| inner.cursor_change_callback.clone())
+                        .flatten();
+                    let position = state.last_position;
+                    state.active_regions.clear();
+                    state.active_order.clear();
+                    state.current_cursor = CursorIcon::Default;
+                    Some(DeviceWork {
+                        device_id,
+                        position,
+                        enter_callbacks: SmallVec::new(),
+                        exit_callbacks,
+                        cursor_callback,
+                        new_cursor: CursorIcon::Default,
+                    })
+                })
+                .collect()
+        };
+        for work in sweeps {
+            work.invoke();
+        }
+    }
+
     /// Updates tracking state from one freshly hit-tested pointer move.
     pub fn update_with_motion(
         &self,
@@ -995,6 +1056,75 @@ mod tests {
             later_exit.get(),
             1,
             "a later mouse callback must still run before the first panic resumes"
+        );
+    }
+    /// The window-leave sweep fires `on_exit` for every hovered region,
+    /// resets the cursor, and is idempotent — the pin for the fix where a
+    /// cursor crossing the window edge left widgets hovered forever.
+    #[test]
+    fn window_left_sweep_fires_exits_resets_cursor_and_is_idempotent() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let tracker = MouseTracker::new();
+        let exits = Rc::new(Cell::new(0));
+        let cursor_resets = Rc::new(Cell::new(0));
+
+        let cursor_probe = Rc::clone(&cursor_resets);
+        tracker.set_cursor_change_callback(Rc::new(move |_device, cursor| {
+            if cursor == CursorIcon::Default {
+                cursor_probe.set(cursor_probe.get() + 1);
+            }
+        }));
+
+        let target = lane.enter(|| {
+            let exit_count = Rc::clone(&exits);
+            handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_enter: None,
+                    on_exit: Some(Rc::new(move |_device, _position| {
+                        exit_count.set(exit_count.get() + 1);
+                    })),
+                    on_hover: None,
+                })
+                .expect("register mouse region")
+        });
+
+        let region_id = RenderId::new(1);
+        let inside_event =
+            make_move_event(Offset::new(Pixels(10.0), Pixels(10.0)), PointerType::Mouse);
+        let mut inside = HitTestResult::new();
+        inside.add(
+            HitTestEntry::new(region_id)
+                .cursor(CursorIcon::Pointer)
+                .mouse_annotation(MouseTrackerAnnotation::new(region_id, target)),
+        );
+
+        add_primary_mouse(&tracker);
+        lane.enter(|| {
+            tracker.update_with_motion(&inside_event, PointerMotionKind::Hover, &inside);
+        });
+        assert_eq!(exits.get(), 0, "hovering fires no exit");
+
+        lane.enter(|| tracker.dispatch_window_left());
+        assert_eq!(
+            exits.get(),
+            1,
+            "leaving the window exits the hovered region"
+        );
+        assert_eq!(
+            cursor_resets.get(),
+            1,
+            "the non-default cursor resets when the pointer leaves"
+        );
+        assert_eq!(tracker.device_cursor(0), CursorIcon::Default);
+
+        // Idempotent: nothing hovered any more, so nothing fires again.
+        lane.enter(|| tracker.dispatch_window_left());
+        assert_eq!(exits.get(), 1);
+        assert_eq!(cursor_resets.get(), 1);
+        assert!(
+            tracker.mouse_is_connected(),
+            "the device registration survives"
         );
     }
 }
