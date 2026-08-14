@@ -21,7 +21,7 @@ use flui_types::{Offset, Size};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::{HitTestBehavior, PointerTarget},
+    hit_testing::{HitTestBehavior, PointerTarget, ScrollTarget},
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
@@ -48,6 +48,7 @@ use flui_rendering::{context::BoxDryBaselineCtx, context::BoxDryLayoutCtx};
 #[derive(Clone)]
 pub struct RenderListener {
     target: Option<PointerTarget>,
+    scroll_target: Option<ScrollTarget>,
     behavior: HitTestBehavior,
     has_child: bool,
 }
@@ -58,6 +59,7 @@ impl RenderListener {
     pub fn new(target: Option<PointerTarget>, behavior: HitTestBehavior) -> Self {
         Self {
             target,
+            scroll_target: None,
             behavior,
             has_child: false,
         }
@@ -74,6 +76,20 @@ impl RenderListener {
         self.target = target;
     }
 
+    /// The arbitrated scroll-signal target advertised on this listener's hit
+    /// entries — `None` for a listener that only observes pointer signals
+    /// without competing for them (see `RenderObject::scroll_target` for the
+    /// observe-vs-claim contract).
+    #[must_use]
+    pub const fn claimed_scroll_target(&self) -> Option<ScrollTarget> {
+        self.scroll_target
+    }
+
+    /// Replaces the arbitrated scroll-signal target identity.
+    pub fn set_scroll_target(&mut self, target: Option<ScrollTarget>) {
+        self.scroll_target = target;
+    }
+
     /// Replaces the hit-test behavior.
     pub fn set_behavior(&mut self, behavior: HitTestBehavior) {
         self.behavior = behavior;
@@ -84,6 +100,7 @@ impl std::fmt::Debug for RenderListener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderListener")
             .field("has_target", &self.target.is_some())
+            .field("has_scroll_target", &self.scroll_target.is_some())
             .field("behavior", &self.behavior)
             .field("has_child", &self.has_child)
             .finish_non_exhaustive()
@@ -93,6 +110,11 @@ impl std::fmt::Debug for RenderListener {
 impl flui_foundation::Diagnosticable for RenderListener {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
         builder.add_flag("has_target", self.target.is_some(), "has_target");
+        builder.add_flag(
+            "has_scroll_target",
+            self.scroll_target.is_some(),
+            "has_scroll_target",
+        );
         builder.add_enum("behavior", self.behavior);
         builder.add_flag("has_child", self.has_child, "has_child");
     }
@@ -161,5 +183,9 @@ impl RenderBox for RenderListener {
 
     fn pointer_target(&self) -> Option<PointerTarget> {
         self.target
+    }
+
+    fn scroll_target(&self) -> Option<ScrollTarget> {
+        self.scroll_target
     }
 }

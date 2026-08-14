@@ -2672,3 +2672,242 @@ fn a_fling_keeps_scrolling_until_the_ballistic_run_settles() {
         "the fling's completion must end the activity (still scrolling after {frames} frames)"
     );
 }
+
+// ============================================================================
+// Scrollable — arbitrated pointer-signal (wheel) routing
+// ============================================================================
+
+/// Two vertically nested scrollables under one wheel tick: the outer's
+/// 300×300 viewport holds a 300×200 inner scrollable at the top of its
+/// content, and the tick lands over the inner.
+///
+/// Layout used by the three arbitration tests below:
+/// outer content = Column[SizedBox(300×200){inner Scrollable}, 300×4800
+/// filler], inner content = 300×1000, so the inner can travel 0..=800 and
+/// the outer 0..=4700.
+fn nested_scrollables(outer: &ScrollController, inner: &ScrollController, vsync: Vsync) -> LaidOut {
+    outer.update_dimensions(300.0, 0.0, 4700.0);
+    inner.update_dimensions(200.0, 0.0, 800.0);
+
+    let inner_scrollable = Scrollable::new()
+        .controller(inner.clone())
+        .child(SizedBox::new(300.0, 1000.0));
+    let outer_scrollable =
+        Scrollable::new()
+            .controller(outer.clone())
+            .child(flui_widgets::Column::new(vec![
+                SizedBox::new(300.0, 200.0)
+                    .child(inner_scrollable)
+                    .into_view()
+                    .boxed(),
+                SizedBox::new(300.0, 4800.0).into_view().boxed(),
+            ]));
+
+    let wrapped = VsyncScope::new(vsync.clone(), outer_scrollable);
+    let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
+    scoped.adopt_vsync(vsync);
+    scoped
+}
+
+/// One wheel tick over nested scrollables moves ONLY the innermost one that
+/// can move — the oracle's `PointerSignalResolver` contract: every scrollable
+/// on the hit path registers interest, the first (leaf-most) registrant wins,
+/// and the rest never act (`gestures/pointer_signal_resolver.dart`,
+/// `widgets/scrollable.dart` `_receivedPointerSignal`). Without arbitration
+/// the same tick advances BOTH controllers (issue #717's double-scroll).
+#[test]
+fn a_wheel_tick_over_nested_scrollables_moves_only_the_inner() {
+    let outer = ScrollController::new();
+    let inner = ScrollController::new();
+    let scoped = nested_scrollables(&outer, &inner, Vsync::new());
+
+    // Over the inner scrollable (its region is 0..200 in root coordinates).
+    scoped.dispatch_scroll(150.0, 100.0, 0.0, 53.0);
+
+    assert_eq!(
+        inner.pixels(),
+        53.0,
+        "the inner scrollable claims the tick and scrolls"
+    );
+    assert_eq!(
+        outer.pixels(),
+        0.0,
+        "the outer scrollable must NOT also scroll — the inner claimed the tick"
+    );
+}
+
+/// When the inner scrollable sits at the extent the tick pushes toward, it
+/// declines the claim and the OUTER scrollable takes the tick — the oracle
+/// registers interest "only ... if it would actually result in a scroll"
+/// (`widgets/scrollable.dart:962`), which is what makes a wheel keep working
+/// once an inner list bottoms out.
+#[test]
+fn a_wheel_tick_hands_off_to_the_outer_when_the_inner_is_at_its_extent() {
+    let outer = ScrollController::new();
+    let inner = ScrollController::new();
+    let mut scoped = nested_scrollables(&outer, &inner, Vsync::new());
+
+    inner.jump_to(800.0);
+    scoped.pump_for(Duration::from_millis(16));
+    assert_eq!(inner.pixels(), 800.0, "precondition: inner at max extent");
+
+    scoped.dispatch_scroll(150.0, 100.0, 0.0, 53.0);
+
+    assert_eq!(
+        inner.pixels(),
+        800.0,
+        "an inner scrollable at its extent cannot consume a further tick"
+    );
+    assert_eq!(
+        outer.pixels(),
+        53.0,
+        "the outer scrollable takes the tick the inner declined"
+    );
+}
+
+/// A claimed tick is still OBSERVED by every `on_pointer_signal` listener on
+/// the path — Flutter dispatches the signal to the whole hit path first and
+/// resolves the single actor afterwards (`GestureBinding.dispatchEvent` then
+/// `pointerSignalResolver.resolve`), so observation and arbitration are two
+/// channels, not one.
+#[test]
+fn a_claimed_wheel_tick_is_still_observed_by_the_whole_path() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+    let observed = Rc::new(Cell::new(0u32));
+
+    let observed_in_listener = Rc::clone(&observed);
+    let widget = Listener::new()
+        .on_pointer_signal(move |_event| {
+            observed_in_listener.set(observed_in_listener.get() + 1);
+        })
+        .child(
+            Scrollable::new()
+                .controller(controller.clone())
+                .child(SizedBox::new(300.0, 5000.0)),
+        );
+
+    let vsync = Vsync::new();
+    let wrapped = VsyncScope::new(vsync.clone(), widget);
+    let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
+    scoped.adopt_vsync(vsync);
+
+    scoped.dispatch_scroll(150.0, 150.0, 0.0, 53.0);
+
+    assert_eq!(
+        controller.pixels(),
+        53.0,
+        "the scrollable still consumes the tick"
+    );
+    assert_eq!(
+        observed.get(),
+        1,
+        "an enclosing plain listener still observes the signal the scrollable claimed"
+    );
+}
+
+/// An `InteractiveViewer` nested in a scrollable claims the wheel tick it
+/// zooms with, so one tick does not BOTH zoom and scroll — a documented
+/// divergence from Flutter, whose `InteractiveViewer` acts on
+/// `onPointerSignal` without registering in the `PointerSignalResolver` and
+/// therefore double-acts (the resolver's own class documentation names this
+/// exact scrollable-plus-custom-widget conflict as its reason to exist).
+#[test]
+fn a_wheel_tick_over_an_interactive_viewer_zooms_without_scrolling_the_outer() {
+    use flui_types::Matrix4;
+    use flui_widgets::{InteractiveViewer, TransformationController};
+
+    let outer = ScrollController::new();
+    outer.update_dimensions(300.0, 0.0, 4700.0);
+    let transformation = TransformationController::new();
+
+    // An infinite boundary margin so a zoom-out from identity is a REAL
+    // transform change; with the default zero margin the boundary clamp
+    // collapses it to a no-op and the viewer (correctly) declines the claim
+    // — the second half of this test pins that fall-through.
+    let viewer = InteractiveViewer::new()
+        .controller(transformation.clone())
+        .boundary_margin(flui_types::EdgeInsets::all(px(f32::INFINITY)))
+        .child(SizedBox::new(300.0, 200.0));
+    let widget = Scrollable::new()
+        .controller(outer.clone())
+        .child(flui_widgets::Column::new(vec![
+            SizedBox::new(300.0, 200.0)
+                .child(viewer)
+                .into_view()
+                .boxed(),
+            SizedBox::new(300.0, 4800.0).into_view().boxed(),
+        ]));
+
+    let vsync = Vsync::new();
+    let wrapped = VsyncScope::new(vsync.clone(), widget);
+    let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
+    scoped.adopt_vsync(vsync);
+
+    // Wheel-DOWN (positive dy) over the viewer zooms out (clamped at the
+    // default min scale, still a transform change). Chosen over wheel-up
+    // deliberately: the outer scrollable sits at 0 and a wheel-up tick could
+    // not have moved it anyway, so only the DOWN direction makes the
+    // no-outer-scroll assertion below load-bearing (red-verified against a
+    // sabotaged claim walk that never stops).
+    scoped.dispatch_scroll(150.0, 100.0, 0.0, 53.0);
+
+    assert_ne!(
+        transformation.value().m,
+        Matrix4::identity().m,
+        "the viewer consumes the tick as a zoom"
+    );
+    assert_eq!(
+        outer.pixels(),
+        0.0,
+        "the outer scrollable must not also scroll the tick the viewer claimed"
+    );
+}
+
+/// The complement: when the viewer's zoom clamps to a NO-OP (zoom-out at
+/// identity under the default zero boundary margin), the viewer declines the
+/// claim and the tick falls through to the enclosing scrollable — the wheel
+/// never goes dead over a viewer that cannot zoom any further. This is the
+/// same net behavior Flutter reaches by the opposite route (its viewer acts
+/// unarbitrated and no-ops, while the scrollable wins the resolver).
+#[test]
+fn a_no_op_zoom_falls_through_to_the_outer_scrollable() {
+    use flui_types::Matrix4;
+    use flui_widgets::{InteractiveViewer, TransformationController};
+
+    let outer = ScrollController::new();
+    outer.update_dimensions(300.0, 0.0, 4700.0);
+    let transformation = TransformationController::new();
+
+    // Default (zero) boundary margin: zoom-out below identity is clamped.
+    let viewer = InteractiveViewer::new()
+        .controller(transformation.clone())
+        .child(SizedBox::new(300.0, 200.0));
+    let widget = Scrollable::new()
+        .controller(outer.clone())
+        .child(flui_widgets::Column::new(vec![
+            SizedBox::new(300.0, 200.0)
+                .child(viewer)
+                .into_view()
+                .boxed(),
+            SizedBox::new(300.0, 4800.0).into_view().boxed(),
+        ]));
+
+    let vsync = Vsync::new();
+    let wrapped = VsyncScope::new(vsync.clone(), widget);
+    let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
+    scoped.adopt_vsync(vsync);
+
+    scoped.dispatch_scroll(150.0, 100.0, 0.0, 53.0);
+
+    assert_eq!(
+        transformation.value().m,
+        Matrix4::identity().m,
+        "the clamped zoom-out is a no-op on the transform"
+    );
+    assert_eq!(
+        outer.pixels(),
+        53.0,
+        "the tick the viewer could not use must scroll the outer scrollable"
+    );
+}

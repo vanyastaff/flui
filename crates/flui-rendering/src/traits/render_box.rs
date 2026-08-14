@@ -461,6 +461,18 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The data-only arbitrated scroll-signal target this box contributes to
+    /// its hit entry.
+    ///
+    /// Default `None`; override (e.g. `RenderListener`) to compete for
+    /// wheel/trackpad scroll ticks. The blanket `RenderObject<BoxProtocol>`
+    /// impl forwards to this — concrete types override here, not on
+    /// `RenderObject`. See [`RenderObject::scroll_target`] for the two-channel
+    /// (observe vs claim) delivery contract.
+    fn scroll_target(&self) -> Option<crate::hit_testing::ScrollTarget> {
+        None
+    }
+
     /// The mouse cursor this box contributes to its hit entry.
     fn mouse_cursor(&self) -> CursorIcon {
         CursorIcon::Default
@@ -771,6 +783,10 @@ where
 
     fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
         <T as RenderBox>::pointer_target(self)
+    }
+
+    fn scroll_target(&self) -> Option<crate::hit_testing::ScrollTarget> {
+        <T as RenderBox>::scroll_target(self)
     }
 
     fn mouse_cursor(&self) -> CursorIcon {

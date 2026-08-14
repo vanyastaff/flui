@@ -64,9 +64,10 @@ use std::rc::Rc;
 
 use flui_geometry::{Matrix4, px};
 use flui_interaction::events::ScrollEventData;
+use flui_interaction::routing::EventPropagation;
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
 use flui_objects::SubtreeAnchor;
-use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
+use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_types::geometry::Pixels;
 use flui_types::gestures::Velocity;
@@ -550,23 +551,28 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 }
             };
 
-            // -- Wheel scale (Listener::on_pointer_signal) -----------------
+            // -- Wheel scale (Listener::on_scroll_claim) -------------------
+            //
+            // Documented divergence: Flutter's `InteractiveViewer` acts on
+            // `onPointerSignal` directly WITHOUT registering in its
+            // `PointerSignalResolver`, so a viewer nested in a scrollable
+            // both zooms and scrolls on one wheel tick (the resolver's own
+            // class doc names this exact conflict as what it exists to
+            // prevent). FLUI routes the viewer through the arbitrated claim
+            // walk instead: when the tick will actually zoom, the viewer
+            // claims it and the outer scrollable stays still.
             let controller_wheel = controller.clone();
             let anchor_wheel = anchor.clone();
             let pipeline_cell_wheel = pipeline_cell.clone();
             let on_start_wheel = on_start.clone();
             let on_update_wheel = on_update.clone();
             let on_end_wheel = on_end.clone();
-            let pointer_signal = move |event: &PointerEvent| {
-                let PointerEvent::Scroll(scroll) = event else {
-                    return;
-                };
-                let data = ScrollEventData::from(scroll);
+            let scroll_claim = move |data: &ScrollEventData| {
                 if data.delta.dy.get() == 0.0 {
                     // Ignore horizontal-only wheel scroll, matching the
                     // oracle (`_receivedPointerSignal` returns early on
                     // `scrollDelta.dy == 0.0`).
-                    return;
+                    return EventPropagation::Continue;
                 }
 
                 if let Some(callback) = &on_start_wheel {
@@ -578,6 +584,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
 
                 let scale_change = (-data.delta.dy.get() / scale_factor).exp();
 
+                let value_before_zoom = controller_wheel.value();
                 if scale_enabled
                     && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
                         pipeline_cell_wheel.as_ref(),
@@ -621,6 +628,18 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         velocity: Velocity::ZERO,
                     });
                 }
+                // Claim only when the viewer actually zoomed — the same
+                // shape as the scrollable's can-move predicate. Scaling
+                // disabled, or a zoom the boundary/min/max clamp collapsed
+                // to a no-op (e.g. zoom-out at identity with a zero
+                // boundary margin), leaves the tick to an enclosing
+                // scrollable; the interaction callbacks above still observed
+                // it (Flutter fires them even then).
+                if controller_wheel.value().m == value_before_zoom.m {
+                    EventPropagation::Continue
+                } else {
+                    EventPropagation::Stop
+                }
             };
 
             let mut transform = Transform::new(matrix);
@@ -646,7 +665,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 .child(clipped);
 
             Listener::new()
-                .on_pointer_signal(pointer_signal)
+                .on_scroll_claim(scroll_claim)
                 .child(recognized)
         })
     }

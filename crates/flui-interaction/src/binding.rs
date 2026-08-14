@@ -91,6 +91,7 @@ use ui_events::pointer::{PointerEvent, PointerType};
 
 use crate::{
     arena::{DetachedArenaBatch, GestureArena},
+    events::ScrollEventData,
     ids::PointerId,
     processing::{PointerEventResampler, SamplingClock},
     routing::{
@@ -1063,20 +1064,36 @@ impl GestureBinding {
                 }
             }
             PointerEvent::Scroll(scroll) => {
+                // Two channels, ported from Flutter's dispatch-then-resolve
+                // (`GestureBinding.dispatchEvent` delivers the signal to the
+                // whole hit path, THEN `pointerSignalResolver.resolve` lets
+                // exactly one registrant act): first every listener on the
+                // path observes the raw event, then the leaf-first claim walk
+                // over the path's scroll targets stops at the first handler
+                // that consumes the tick.
+                let position = Offset::new(
+                    px_f32(scroll.state.position.x),
+                    px_f32(scroll.state.position.y),
+                );
+                // The arbitration walk always uses a FRESH hit test at the
+                // event position (a signal has no down-capture; Flutter
+                // hit-tests each signal where it happens), even when an
+                // active contact pinned a cached route for observation.
+                let fresh_result = hit_test_fn(position);
                 if self.hit_tests.contains_key(&pointer_id) {
                     if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
                         panic.resume();
                     }
-                } else {
-                    let position = Offset::new(
-                        px_f32(scroll.state.position.x),
-                        px_f32(scroll.state.position.y),
-                    );
-                    let result = hit_test_fn(position);
-                    if let Some(panic) = self.dispatch_ephemeral(event, &result) {
-                        panic.resume();
-                    }
+                } else if let Some(panic) = self.dispatch_ephemeral(event, &fresh_result) {
+                    panic.resume();
                 }
+                let scroll_data = ScrollEventData::from(scroll);
+                let claimed = fresh_result.dispatch_scroll(&scroll_data);
+                tracing::trace!(
+                    claimed,
+                    scroll_targets = fresh_result.entries_with_scroll_targets().count(),
+                    "pointer-signal arbitration"
+                );
             }
         }
     }

@@ -594,6 +594,29 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         None
     }
 
+    /// The data-only arbitrated scroll-signal target this render object
+    /// contributes to its hit entry.
+    ///
+    /// Pointer-signal (wheel/trackpad-scroll) delivery has TWO channels, ported
+    /// from Flutter's `Listener.onPointerSignal` + `PointerSignalResolver`
+    /// pair: every pointer target on the path *observes* the raw event, but
+    /// only the first (leaf-most) scroll target whose handler returns
+    /// `EventPropagation::Stop` *acts* on it
+    /// (`HitTestResult::dispatch_scroll`). A scrollable claims a tick only
+    /// when it can actually move (`widgets/scrollable.dart`
+    /// `_receivedPointerSignal`: register only if the target offset differs
+    /// from the current pixels), so nested scrollables hand the wheel from the
+    /// inner to the outer at an extent instead of both scrolling.
+    ///
+    /// Default `None` — only a render object that arbitrates scroll signals
+    /// (e.g. `RenderListener` configured with a claiming handler) overrides
+    /// it. Like [`pointer_target`](Self::pointer_target), the identity is
+    /// data-only; the executable handler lives in the owner-local interaction
+    /// lane.
+    fn scroll_target(&self) -> Option<crate::hit_testing::ScrollTarget> {
+        None
+    }
+
     /// The mouse cursor this render object contributes to its hit entry.
     ///
     /// Default `CursorIcon::Default`; `RenderMouseRegion` overrides this so

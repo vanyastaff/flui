@@ -64,7 +64,8 @@ use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{AnimatedBuilder, GestureDetector, Listener, SingleChildScrollView};
-use flui_interaction::events::{PointerEvent, ScrollEventData};
+use flui_interaction::events::ScrollEventData;
+use flui_interaction::routing::EventPropagation;
 use flui_scheduler::PostFrameHandle;
 
 use super::scroll_position_scope::ScrollPositionScope;
@@ -621,20 +622,24 @@ impl ViewState<Scrollable> for ScrollableState {
             // Wheel / trackpad pointer-scroll: an immediate scroll with no
             // drag semantics — no slop, no arena hold-and-release. Mirrors
             // the oracle end to end: `Listener.onPointerSignal` →
-            // `position.pointerScroll(delta)` (`widgets/scrollable.dart`,
+            // `PointerSignalResolver.register` → `position.pointerScroll`
+            // (`widgets/scrollable.dart`,
             // `scroll_position_with_single_context.dart`) — clamp HARD to
             // the extents (a wheel never overscrolls), pulse the scroll
             // activity with the USER direction around the pixel write, and
             // end the pulse after the frame that consumes it.
+            //
+            // The claim channel makes nested scrollables arbitrate instead
+            // of both scrolling: `Continue` when the tick cannot move this
+            // position (zero delta, or already clamped at the extent) is the
+            // oracle's "only express interest in the event if it would
+            // actually result in a scroll" — the outer scrollable then takes
+            // the tick.
             let ctrl_wheel = scroll_controller.clone();
             let post_frame_wheel = post_frame.clone();
             let fling_wheel = fling_controller.clone();
             Listener::new()
-                .on_pointer_signal(move |event| {
-                    let PointerEvent::Scroll(scroll) = event else {
-                        return;
-                    };
-                    let data = ScrollEventData::from(scroll);
+                .on_scroll_claim(move |data: &ScrollEventData| {
                     let axis_delta = match scroll_direction {
                         Axis::Vertical => data.delta.dy.get(),
                         Axis::Horizontal => data.delta.dx.get(),
@@ -649,7 +654,7 @@ impl ViewState<Scrollable> for ScrollableState {
                         delta = -delta;
                     }
                     if delta == 0.0 {
-                        return;
+                        return EventPropagation::Continue;
                     }
                     let position = ctrl_wheel.position();
                     let target = (ctrl_wheel.pixels() + delta)
@@ -661,7 +666,7 @@ impl ViewState<Scrollable> for ScrollableState {
                         "pointer-scroll tick"
                     );
                     if target == ctrl_wheel.pixels() {
-                        return;
+                        return EventPropagation::Continue;
                     }
                     // A wheel tick interrupts whatever animation is driving
                     // the position — otherwise the fling controller's value
@@ -693,6 +698,7 @@ impl ViewState<Scrollable> for ScrollableState {
                         // plain programmatic jump.
                         None => position.set_is_scrolling(false),
                     }
+                    EventPropagation::Stop
                 })
                 .child(gestures)
         })

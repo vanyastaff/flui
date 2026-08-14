@@ -103,6 +103,59 @@ impl<'a> RenderObjectContext<'a> {
         Ok(self.dispatch_handle()?.unregister_pointer(target)?)
     }
 
+    /// Register an arbitrated scroll-signal handler in the active owner lane.
+    ///
+    /// Unlike an ordinary pointer handler (which only observes), a scroll
+    /// handler *competes* for the tick: leaf-first dispatch stops at the first
+    /// handler returning `EventPropagation::Stop` — the FLUI port of Flutter's
+    /// `PointerSignalResolver` arbitration. The returned target is data-only
+    /// and may be stored in a render object.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error when no owner lane is active,
+    /// the element was mounted detached, or the owner is gone.
+    pub fn register_scroll(
+        &self,
+        handler: impl Fn(
+            &flui_interaction::events::ScrollEventData,
+        ) -> flui_interaction::routing::EventPropagation
+        + 'static,
+    ) -> Result<flui_interaction::routing::ScrollTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_scroll(handler)?)
+    }
+
+    /// Replace an existing scroll target's handler without changing its
+    /// data-plane identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn replace_scroll(
+        &self,
+        target: flui_interaction::routing::ScrollTarget,
+        handler: impl Fn(
+            &flui_interaction::events::ScrollEventData,
+        ) -> flui_interaction::routing::EventPropagation
+        + 'static,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.replace_scroll(target, handler)?)
+    }
+
+    /// Remove a scroll target from future arbitration.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target already removed from the active owner lane.
+    pub fn unregister_scroll(
+        &self,
+        target: flui_interaction::routing::ScrollTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.unregister_scroll(target)?)
+    }
+
     /// Register mouse-region callbacks in the active owner lane.
     ///
     /// The returned target is data-only and may be stored in a render object;
