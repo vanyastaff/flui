@@ -47,7 +47,7 @@ use flui_painting::BlendMode;
 use flui_types::{Rect, geometry::Pixels};
 
 use super::{
-    command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, SsaaPathOp, TessellatedBatch},
+    command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, Phase, SsaaPathOp, TessellatedBatch},
     path_cache::PathCache,
     pipeline::PipelineKey,
     state_stack::GpuStateStack,
@@ -136,6 +136,31 @@ impl DrawBatcher {
         // default from `take`.
     }
 
+    /// Declare that the next primitive recorded into `segment` belongs to
+    /// `phase`, sealing the segment first if the fixed replay order would put
+    /// it BEFORE something already recorded.
+    ///
+    /// Call this immediately before every push into a `DrawSegment` batch.
+    /// Together the calls make `flush_segment`'s fixed phase order equal record
+    /// order within each segment, which is what gives the painter's algorithm
+    /// back across primitive kinds — a circle followed by an overlapping rect
+    /// previously drew the rect first and let the circle paint over it.
+    ///
+    /// A forward transition (rect then circle) never seals, so correctly
+    /// ordered content costs nothing: it stays in one segment and one pass.
+    /// Only genuinely interleaved content splits, and that is exactly the
+    /// content whose output was wrong before.
+    pub(super) fn begin_phase(
+        segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
+        phase: Phase,
+    ) {
+        if segment.would_reorder(phase) {
+            Self::finish_current_segment(segment, draw_order);
+        }
+        segment.last_phase = Some(phase);
+    }
+
     /// Append tessellated vertices/indices to `segment` under the given pipeline
     /// key, starting a new `TessellatedBatch` on a key or scissor change.
     ///
@@ -221,6 +246,12 @@ impl DrawBatcher {
         }
 
         // ── Normal path (SrcOver + Porter-Duff) ──────────────────────────────
+
+        // Seal BEFORE reading the buffer lengths: `base_index`/`index_start`
+        // are offsets into THIS segment's vertex/index buffers, so sealing
+        // after reading them would rebase the appended geometry onto a fresh,
+        // empty segment while the offsets still describe the sealed one.
+        Self::begin_phase(segment, draw_order, Phase::Tess);
 
         let base_index = segment.vertices.len() as u32;
         let index_start = segment.indices.len() as u32;
@@ -463,6 +494,94 @@ mod unit_tests {
     ];
 
     // ── Helper: build the minimal geometry for a quad ─────────────────────────
+
+    /// Every `TessellatedBatch` in a segment indexes within that same segment's
+    /// vertex and index buffers.
+    ///
+    /// `add_tessellated_with_key` rebases indices by
+    /// `base_index = segment.vertices.len()` and records
+    /// `index_start = segment.indices.len()`. Both describe THIS segment, so
+    /// the kind seal has to fire before they are read. Read them first and the
+    /// geometry is appended to a fresh segment while the offsets still describe
+    /// the sealed one — the batch then points past the end of its own buffers.
+    ///
+    /// Sequence: tessellated geometry, then an image (a forward transition, so
+    /// no seal — the segment now holds BOTH), then more tessellated geometry,
+    /// which IS a backward transition and seals. Both preconditions matter: a
+    /// seal with empty buffers leaves `base_index == 0` and hides the bug,
+    /// which is why the obvious GPU readback versions of this test pass either
+    /// way.
+    ///
+    /// If reverted (move `begin_phase` below the two `let` bindings in
+    /// `add_tessellated_with_key`): the final segment reports
+    /// `index_start` beyond its own `indices.len()`.
+    #[test]
+    fn tessellated_batches_index_within_their_own_segment() {
+        use super::super::command_ir::Phase;
+
+        let state = GpuStateStack::new();
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let key = PipelineKey::alpha_blend();
+        let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+
+        // 1. Tessellated geometry — fills the segment's vertex/index buffers.
+        DrawBatcher::add_tessellated_with_key(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            rect_vertices(0.0, 0.0, 10.0, 10.0),
+            &indices,
+            key,
+        );
+        assert!(
+            !segment.vertices.is_empty(),
+            "precondition: the segment carries tessellated vertices"
+        );
+
+        // 2. An image. CachedImage replays after Tess, so this is a forward
+        //    transition and must NOT seal — the segment keeps its vertices.
+        DrawBatcher::begin_phase(&mut segment, &mut draw_order, Phase::CachedImage);
+        assert!(
+            draw_order.is_empty(),
+            "a forward kind transition must not seal the segment"
+        );
+
+        // 3. More tessellated geometry — a backward transition, so this seals
+        //    with non-empty buffers.
+        DrawBatcher::add_tessellated_with_key(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            rect_vertices(20.0, 20.0, 30.0, 30.0),
+            &indices,
+            key,
+        );
+        assert_eq!(
+            draw_order.len(),
+            1,
+            "a backward kind transition must seal exactly once"
+        );
+
+        for (i, batch) in segment.tess_batches.iter().enumerate() {
+            let end = batch.index_start + batch.index_count;
+            assert!(
+                end as usize <= segment.indices.len(),
+                "tess_batches[{i}] spans {}..{end} but its segment holds only {} indices — \
+                 the batch was recorded against a different segment's buffers",
+                batch.index_start,
+                segment.indices.len(),
+            );
+        }
+        for (i, index) in segment.indices.iter().enumerate() {
+            assert!(
+                (*index as usize) < segment.vertices.len(),
+                "indices[{i}] = {index} but its segment holds only {} vertices — \
+                 base_index was taken from a different segment",
+                segment.vertices.len(),
+            );
+        }
+    }
 
     /// Build the four vertices for an axis-aligned rectangle in device pixels.
     ///

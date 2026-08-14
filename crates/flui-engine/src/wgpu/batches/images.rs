@@ -77,7 +77,7 @@ use flui_types::{
 
 use super::{
     super::{
-        command_ir::{AdvancedShapeOp, DrawItem, DrawSegment},
+        command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, Phase},
         state_stack::GpuStateStack,
         texture_cache::TextureCache,
     },
@@ -107,6 +107,7 @@ impl DrawBatcher {
     /// upstream — advanced blend is unreachable here by construction.
     pub(in super::super) fn texture(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_id: flui_types::painting::TextureId,
         dst_rect: Rect<Pixels>,
@@ -133,6 +134,7 @@ impl DrawBatcher {
         // Store the ID in the IR. Resolution happens at replay time in
         // flush_segment_external_images, which calls
         // ExternalTextureRegistry::get(id) immediately before the GPU draw.
+        Self::begin_phase(segment, draw_order, Phase::ExternalImage);
         segment
             .external_images
             .push((texture_id, instance, state.current_scissor()));
@@ -260,6 +262,7 @@ impl DrawBatcher {
                 // Keep cached image draws in segment order for correct layer compositing.
                 // Capture the active scissor so flush_segment_cached_images can clip
                 // images that live inside a clip_rect region.
+                Self::begin_phase(segment, draw_order, Phase::CachedImage);
                 segment
                     .cached_images
                     .push((texture_id, instance, state.current_scissor()));
@@ -1319,6 +1322,7 @@ impl DrawBatcher {
                     let instance = state.apply_active_clip(
                         super::super::instancing::TextureInstance::with_uv(dst_rect, src_uv, tint),
                     );
+                    Self::begin_phase(segment, draw_order, Phase::CachedImage);
                     segment.cached_images.push((
                         cache_id.clone(),
                         instance,
@@ -1361,6 +1365,7 @@ impl DrawBatcher {
     )]
     pub(in super::super) fn draw_texture(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         src_uv_registry: Option<(u32, u32)>,
         texture_id: flui_types::painting::TextureId,
@@ -1419,6 +1424,7 @@ impl DrawBatcher {
 
         // Push the ID into the IR. Resolution to a `wgpu::TextureView` happens
         // at replay time in flush_segment_external_images.
+        Self::begin_phase(segment, draw_order, Phase::ExternalImage);
         segment
             .external_images
             .push((texture_id, instance, state.current_scissor()));

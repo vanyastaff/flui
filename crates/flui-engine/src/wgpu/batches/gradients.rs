@@ -49,6 +49,22 @@ impl DrawBatcher {
         use super::super::instancing::LinearGradientInstance;
 
         // Append gradient stops to global buffer (max 8 per gradient).
+        // NOT sealed by kind. Gradients are deliberately excluded from
+        // `DrawBatcher::begin_phase`'s draw-order seal, because two segments in
+        // one frame cannot both carry gradient stops today: every segment's
+        // table is uploaded to the SAME `gradient_stops_buffer` at offset 0
+        // (`PipelineSet::refresh_gradient_bind_group`), and since all passes
+        // are recorded into one `CommandEncoder` before submission, the last
+        // `write_buffer` wins and every gradient pass in the frame samples that
+        // one table.
+        //
+        // Sealing here would turn a rare latent bug into a common one, so
+        // gradients keep exactly today's ordering — wrong relative to earlier
+        // primitives, but not newly wrong. Making them orderable means giving
+        // each segment its own slice of the stop buffer (a dynamic offset, or
+        // one buffer per segment); `a_gradient_after_a_kind_seal_reads_its_own_
+        // stop_table` in `shape_blend_tests` is the acceptance test for that.
+
         let stop_count = stops.len().min(8);
         let current_len = segment.current_gradient_stops.len();
         if current_len + stop_count > effects_pipeline::MAX_GRADIENT_STOPS {
@@ -121,6 +137,22 @@ impl DrawBatcher {
         corner_radius: f32,
     ) {
         use super::super::instancing::RadialGradientInstance;
+
+        // NOT sealed by kind. Gradients are deliberately excluded from
+        // `DrawBatcher::begin_phase`'s draw-order seal, because two segments in
+        // one frame cannot both carry gradient stops today: every segment's
+        // table is uploaded to the SAME `gradient_stops_buffer` at offset 0
+        // (`PipelineSet::refresh_gradient_bind_group`), and since all passes
+        // are recorded into one `CommandEncoder` before submission, the last
+        // `write_buffer` wins and every gradient pass in the frame samples that
+        // one table.
+        //
+        // Sealing here would turn a rare latent bug into a common one, so
+        // gradients keep exactly today's ordering — wrong relative to earlier
+        // primitives, but not newly wrong. Making them orderable means giving
+        // each segment its own slice of the stop buffer (a dynamic offset, or
+        // one buffer per segment); `a_gradient_after_a_kind_seal_reads_its_own_
+        // stop_table` in `shape_blend_tests` is the acceptance test for that.
 
         let stop_count = stops.len().min(8);
         let current_len = segment.current_gradient_stops.len();
@@ -195,6 +227,22 @@ impl DrawBatcher {
     ) {
         use super::super::instancing::SweepGradientInstance;
 
+        // NOT sealed by kind. Gradients are deliberately excluded from
+        // `DrawBatcher::begin_phase`'s draw-order seal, because two segments in
+        // one frame cannot both carry gradient stops today: every segment's
+        // table is uploaded to the SAME `gradient_stops_buffer` at offset 0
+        // (`PipelineSet::refresh_gradient_bind_group`), and since all passes
+        // are recorded into one `CommandEncoder` before submission, the last
+        // `write_buffer` wins and every gradient pass in the frame samples that
+        // one table.
+        //
+        // Sealing here would turn a rare latent bug into a common one, so
+        // gradients keep exactly today's ordering — wrong relative to earlier
+        // primitives, but not newly wrong. Making them orderable means giving
+        // each segment its own slice of the stop buffer (a dynamic offset, or
+        // one buffer per segment); `a_gradient_after_a_kind_seal_reads_its_own_
+        // stop_table` in `shape_blend_tests` is the acceptance test for that.
+
         let stop_count = stops.len().min(8);
         let current_len = segment.current_gradient_stops.len();
         if current_len + stop_count > effects_pipeline::MAX_GRADIENT_STOPS {
@@ -249,6 +297,7 @@ impl DrawBatcher {
     /// * `params`         — shadow offset, blur sigma, and color
     pub(in super::super) fn shadow_rect(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<super::super::command_ir::DrawItem>,
         rect_pos: [f32; 2],
         rect_size: [f32; 2],
         corner_radius: f32,
@@ -257,6 +306,7 @@ impl DrawBatcher {
         use super::super::instancing::ShadowInstance;
 
         let instance = ShadowInstance::new(rect_pos, rect_size, corner_radius, params);
+        Self::begin_phase(segment, draw_order, super::super::command_ir::Phase::Shadow);
         let _ = segment.shadow_batch.add(instance);
     }
 

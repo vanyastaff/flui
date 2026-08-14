@@ -350,6 +350,7 @@ impl super::WgpuPainter {
         self.seal_text_tail();
         super::super::batches::DrawBatcher::texture(
             &mut self.current_segment,
+            &mut self.draw_order,
             &self.state,
             texture_id,
             dst_rect,
@@ -616,6 +617,7 @@ impl super::WgpuPainter {
         });
         super::super::batches::DrawBatcher::draw_texture(
             &mut self.current_segment,
+            &mut self.draw_order,
             &self.state,
             src_dimensions,
             texture_id,

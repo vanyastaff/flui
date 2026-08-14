@@ -530,6 +530,57 @@ pub(crate) struct DrawSegment {
     ///
     /// The third element is the scissor rect active at draw time.
     pub(crate) external_images: Vec<(ExternalTextureId, TextureInstance, ScissorRect)>,
+
+    /// The replay phase of the most recent primitive recorded into this
+    /// segment, or `None` while it is still geometry-empty.
+    ///
+    /// Read only by [`Self::would_reorder`]. Not part of the replayed IR —
+    /// `flush_segment` never looks at it — so it does not affect the
+    /// deterministic-replay snapshot's meaning, only its `Debug` output.
+    pub(crate) last_phase: Option<Phase>,
+}
+
+/// Where a primitive lands in `flush_segment`'s replay order.
+///
+/// `flush_segment` drains a `DrawSegment` in a FIXED sequence — instanced
+/// (shadows, then rects, then circles, then arcs), gradients, tessellated
+/// geometry, cached images, external images — so a segment's contents replay
+/// in *kind* order, not in the order they were recorded. The discriminants
+/// below ARE that sequence, which is what lets [`DrawSegment::would_reorder`]
+/// detect a recording that the fixed order would invert.
+///
+/// Keep these in lockstep with `replay/flush.rs::flush_segment` and its
+/// instanced sub-order; the variants are ordered, not arbitrary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Phase {
+    /// `shadow_batch` — drawn first inside the instanced pass.
+    Shadow,
+    /// `rect_batch`.
+    Rect,
+    /// `circle_batch`.
+    Circle,
+    /// `arc_batch` — last inside the instanced pass.
+    Arc,
+    /// The three gradient batches, which share one pass.
+    ///
+    /// Deliberately never constructed: gradients are excluded from the
+    /// draw-order seal because every segment's stop table is uploaded to one
+    /// shared buffer at offset 0, so two gradient-bearing segments in a frame
+    /// would both sample the last one written. The variant stays so this enum
+    /// remains a faithful mirror of `flush_segment`'s replay order, and so the
+    /// ordinals either side of it are the real ones. See
+    /// `DrawBatcher::gradient_rect`.
+    #[expect(
+        dead_code,
+        reason = "ordinal placeholder; constructing it requires per-segment gradient stop tables first"
+    )]
+    Gradient,
+    /// `vertices`/`indices`/`tess_batches`.
+    Tess,
+    /// `cached_images`.
+    CachedImage,
+    /// `external_images` — drawn last.
+    ExternalImage,
 }
 
 impl DrawSegment {
@@ -558,7 +609,24 @@ impl DrawSegment {
             external_images: Vec::new(),
             text_start: 0,
             text_end: 0,
+            last_phase: None,
         }
+    }
+
+    /// Whether recording `next` now would replay BEFORE something already in
+    /// this segment.
+    ///
+    /// `flush_segment` drains by kind, so a segment holding a circle that then
+    /// receives a rect would draw the rect first and let the circle — recorded
+    /// EARLIER — paint over it. Sealing on this predicate makes the fixed
+    /// phase order equal record order within every segment, which is the whole
+    /// mechanism: no new IR, no ordered op list, just a boundary in the right
+    /// place.
+    ///
+    /// Returns `false` for a forward transition (rect then circle), so
+    /// correctly-ordered content is never split and pays nothing.
+    pub(crate) fn would_reorder(&self, next: Phase) -> bool {
+        self.last_phase.is_some_and(|prev| next < prev)
     }
 
     /// Record an instance addition for a given scissor region tracker.
@@ -635,6 +703,7 @@ impl Default for DrawSegment {
             external_images: Vec::new(),
             text_start: 0,
             text_end: 0,
+            last_phase: None,
         }
     }
 }
