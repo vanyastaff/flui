@@ -19,8 +19,21 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 const MOTION_NOTIFY: u8 = 6;
 const BUTTON_PRESS: u8 = 4;
 const BUTTON_RELEASE: u8 = 5;
-/// X11 core button number for a wheel-up tick.
-const WHEEL_UP: u8 = 4;
+/// X11 core button number for a wheel-down tick — chosen over wheel-up so
+/// the check's premise is position-independent: content is taller than the
+/// viewport, so scrolling DOWN always has room, while an up-tick at an
+/// already-settled-to-start position clamps to a correct no-op and fails
+/// the check for the wrong reason (exactly what CI runs hit: handler traces
+/// showed `delta=-53 target=0 pixels=0` — delivery fine, premise wrong).
+///
+/// Note: each XTEST press+release pair yields TWO `MouseWheel` events under
+/// winit 0.30's X11 backend — `xinput2_button_input` runs for both
+/// `XI_ButtonPress` and `XI_ButtonRelease` and its wheel arm ignores the
+/// press/release state. Real hardware wheels are unaffected (they arrive as
+/// XInput2 axis motion; the emulated button events carry `XIPointerEmulated`
+/// and are suppressed), so this doubles the synthetic scroll distance and
+/// nothing else — the check only asserts that pixels changed.
+const WHEEL_DOWN: u8 = 5;
 
 pub(crate) fn run() -> Result<()> {
     let app_path = std::env::args()
@@ -138,8 +151,8 @@ fn run_checks(app: &mut Child) -> Result<()> {
     })?;
     eprintln!("live-smoke: drag scrolls OK (pixels changed)");
 
-    // Wheel scrolling: three wheel-up ticks (X11 button 4) with the cursor
-    // over the list must move the content back toward the start. Let any
+    // Wheel scrolling: three wheel-down ticks (X11 button 5) with the
+    // cursor over the list must move the content further down. Let any
     // post-release fling settle first, so the poll below can only be
     // satisfied by the wheel itself — and log the settling for CI triage.
     let mut settle_probe = capture(&conn, window, &geometry)?;
@@ -158,8 +171,8 @@ fn run_checks(app: &mut Child) -> Result<()> {
     }
     let wheel_before = capture(&conn, window, &geometry)?;
     for _ in 0..3 {
-        conn.xtest_fake_input(BUTTON_PRESS, WHEEL_UP, 0, root, 0, 0, 0)?;
-        conn.xtest_fake_input(BUTTON_RELEASE, WHEEL_UP, 0, root, 0, 0, 0)?;
+        conn.xtest_fake_input(BUTTON_PRESS, WHEEL_DOWN, 0, root, 0, 0, 0)?;
+        conn.xtest_fake_input(BUTTON_RELEASE, WHEEL_DOWN, 0, root, 0, 0, 0)?;
         conn.sync()?;
         std::thread::sleep(Duration::from_millis(100));
     }
