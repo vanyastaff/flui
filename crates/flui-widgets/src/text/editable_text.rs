@@ -10,7 +10,7 @@ use std::{
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
-use flui_interaction::events::{Key, KeyState, NamedKey};
+use flui_interaction::events::{Key, KeyState, Modifiers, NamedKey};
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
@@ -864,6 +864,23 @@ fn bounds_from_rect(rect: Rect) -> Bounds<Pixels> {
 /// only while `focus_node` still allows focus — kept in sync with
 /// `EditableText::enabled` by `did_update_view` — so input is ignored on a
 /// field disabled after it was focused.
+/// Whether these modifiers make a key a *command* rather than *text*.
+///
+/// Meta (Cmd) always is. Control is, except in combination with Alt: Win32
+/// reports AltGr as Control+Alt, and since no FLUI backend sets
+/// `Modifiers::ALT_GRAPH`, that combination is the only signal an AltGr layout
+/// gives us — treating it as a command would make `@`, `€` and the rest
+/// untypeable on most non-US keyboards.
+///
+/// The cost of that carve-out, stated rather than discovered: a genuine
+/// Ctrl+Alt+X shortcut is delivered as text. Browsers and Flutter make the
+/// same trade for the same reason.
+#[inline]
+fn is_command_chord(modifiers: Modifiers) -> bool {
+    modifiers.contains(Modifiers::META)
+        || (modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT))
+}
+
 fn build_key_handler(
     controller: TextEditingController,
     focus_node: Rc<FocusNode>,
@@ -873,6 +890,24 @@ fn build_key_handler(
             return KeyEventResult::Ignored;
         }
         if event.state != KeyState::Down {
+            return KeyEventResult::Ignored;
+        }
+        // A key carrying a command modifier is a command, not text. Leave it
+        // unconsumed so `FocusManager::dispatch_key_event`'s leaf->root walk
+        // reaches the enclosing `Shortcuts`/`CallbackShortcuts`; consuming it
+        // here is what makes Ctrl+S type "s" and every app shortcut dead while
+        // a field is focused.
+        //
+        // Above the match, not inside the `Character` arm: the named-key arms
+        // consume their chords too, so Ctrl+Backspace would delete a single
+        // character rather than a word AND hide itself from whoever implements
+        // delete-word.
+        //
+        // Ctrl+Alt is deliberately NOT a command: Win32 encodes AltGr as
+        // Control+Alt (`get_modifiers` sets both from VK_CONTROL/VK_MENU) and
+        // no backend sets `Modifiers::ALT_GRAPH`, so keying on Control alone
+        // would swallow the composed character on every AltGr layout.
+        if is_command_chord(event.modifiers) {
             return KeyEventResult::Ignored;
         }
         match &event.key {
@@ -1170,6 +1205,116 @@ mod tests {
             controller.text(),
             "",
             "a disabled node's key handler must not mutate the controller"
+        );
+    }
+
+    /// A key carrying a command modifier is a command, not text.
+    ///
+    /// The field must neither insert it nor consume it: returning `Handled`
+    /// stops `FocusManager::dispatch_key_event`'s leaf->root walk at the
+    /// field, so the enclosing `Shortcuts` never sees the chord. Together that
+    /// makes Ctrl+S type "s" into the document instead of saving it, and every
+    /// application shortcut dead while any field is focused.
+    ///
+    /// Flutter reaches the same place from the other side: `EditableText`
+    /// installs no `onKeyEvent` at all — characters arrive through
+    /// `TextInputClient.updateEditingValue`, and chords are routed by
+    /// `default_text_editing_shortcuts.dart`.
+    ///
+    /// If reverted (drop the `is_command_chord` guard): every assertion below
+    /// that expects `Ignored`/empty text fails.
+    #[test]
+    fn a_command_chord_is_neither_inserted_nor_consumed() {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let chord = |code, key: &str, modifiers| {
+            let controller = TextEditingController::new();
+            let focus_node = FocusNode::with_debug_label("test");
+            let handler = build_key_handler(controller.clone(), Rc::clone(&focus_node));
+            let event = KeyEventBuilder::new(code)
+                .with_key(Key::Character(key.to_string()))
+                .with_state(KeyState::Down)
+                .with_modifiers(modifiers)
+                .build();
+            (handler(&event), controller.text())
+        };
+
+        for (code, key, modifiers, label) in [
+            (
+                Code::KeyS,
+                "s",
+                Modifiers::CONTROL,
+                "Ctrl+S must save, not type",
+            ),
+            (
+                Code::KeyZ,
+                "z",
+                Modifiers::CONTROL,
+                "Ctrl+Z must undo, not type",
+            ),
+            (
+                Code::KeyC,
+                "c",
+                Modifiers::META,
+                "Cmd+C must copy, not type",
+            ),
+        ] {
+            let (result, text) = chord(code, key, modifiers);
+            assert_eq!(result, KeyEventResult::Ignored, "{label}: must bubble");
+            assert_eq!(text, "", "{label}: must not reach the buffer");
+        }
+
+        // AltGr is Control+Alt on Win32 (`get_modifiers` sets both from
+        // VK_CONTROL/VK_MENU) and no backend sets `ALT_GRAPH`, so a
+        // Ctrl-keyed predicate alone would break every AltGr layout: the
+        // character it produces is text, not a command.
+        let (result, text) = chord(Code::Digit2, "@", Modifiers::CONTROL | Modifiers::ALT);
+        assert_eq!(
+            result,
+            KeyEventResult::Handled,
+            "AltGr composes text and must still be inserted"
+        );
+        assert_eq!(
+            text, "@",
+            "AltGr's composed character must reach the buffer"
+        );
+
+        // An unmodified character is unchanged.
+        let (result, text) = chord(Code::KeyA, "a", Modifiers::empty());
+        assert_eq!(result, KeyEventResult::Handled);
+        assert_eq!(text, "a");
+    }
+
+    /// The guard sits above the whole match, not inside the `Character` arm:
+    /// the named-key arms consume their chords too, so Ctrl+Backspace would
+    /// delete a single character (instead of a word) and hide itself from any
+    /// ancestor that implements delete-word.
+    #[test]
+    fn a_command_chord_on_a_named_key_also_bubbles() {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("test");
+        let handler = build_key_handler(controller.clone(), Rc::clone(&focus_node));
+
+        let event = KeyEventBuilder::new(Code::Backspace)
+            .with_key(Key::Named(NamedKey::Backspace))
+            .with_state(KeyState::Down)
+            .with_modifiers(Modifiers::CONTROL)
+            .build();
+
+        assert_eq!(
+            handler(&event),
+            KeyEventResult::Ignored,
+            "Ctrl+Backspace is a delete-word command this field does not implement; \
+             consuming it hides it from whoever does"
+        );
+        assert_eq!(
+            controller.text(),
+            "hello world",
+            "and it must not fall through to the plain single-character backspace"
         );
     }
 
