@@ -125,9 +125,18 @@ impl SliverGeometry {
     /// Creates geometry with basic extents.
     ///
     /// Applies Flutter's constructor default chain
-    /// (`.flutter/packages/flutter/lib/src/rendering/sliver.dart:662-665`):
+    /// (`.flutter/packages/flutter/lib/src/rendering/sliver.dart:662-665`) as
+    /// it resolves for a call that passes only these three arguments:
     /// `layout_extent`, `hit_test_extent` and `cache_extent` all default to
-    /// `paint_extent`, and `visible` to `paint_extent > 0.0`. Prefer this plus
+    /// `paint_extent`, and `visible` to `paint_extent > 0.0`.
+    ///
+    /// Note the chain is resolved ONCE, here — these are plain field values,
+    /// not lazy rules. Flutter's `cacheExtent ?? layoutExtent ?? paintExtent`
+    /// means a caller that narrows `layout_extent` also narrows `cache_extent`;
+    /// with a builder the two are independent, so
+    /// [`with_layout_extent`](Self::with_layout_extent) does NOT drag
+    /// `cache_extent` down with it. Narrow both when that is what you mean —
+    /// every persistent-header variant does. Prefer this plus
     /// the `with_*` setters over a struct literal with `..ZERO` — the
     /// struct-update form silently substitutes zero/false for every field it
     /// omits, which is a *different* contract and has produced three separate

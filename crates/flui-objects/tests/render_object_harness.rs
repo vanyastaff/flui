@@ -10970,62 +10970,66 @@ fn harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_
 /// framework relies on here: `hitTestExtent ??= paintExtent`
 /// (`.flutter/packages/flutter/lib/src/rendering/sliver.dart:663`).
 ///
-/// If reverted (the four geometry literals go back to `..SliverGeometry::ZERO`
+/// All four variants, because all four committed the same
+/// `..SliverGeometry::ZERO` literal — covering only two would let the other two
+/// regress silently.
+///
+/// If reverted (the geometry literals go back to `..SliverGeometry::ZERO`
 /// without naming `hit_test_extent`): `SliverGeometry::ZERO` supplies `0.0`
 /// and every assertion below reads `0.0`, with the hit path empty.
 #[test]
 fn harness_sliver_persistent_header_variants_are_hit_testable_across_their_paint_extent() {
-    // Pinned — the `SliverAppBar` shape, and the one a user taps most.
-    let run = RenderTester::mount(viewport_multi_with_scroll(
-        0.0,
-        [
-            sliver_node(RenderSliverPinnedPersistentHeader::new(40.0, 120.0))
-                .label("header")
-                .child(box_node(RenderColoredBox::red(300.0, 120.0)).label("child")),
-            filler_sliver(),
-        ],
-    ))
-    .with_size(Size::new(px(300.0), px(400.0)))
-    .run_layout();
+    /// Mount `header` under a viewport, then assert it is hit-testable across
+    /// everything it paints and that a tap reaches its box child.
+    fn assert_hit_testable<H>(header: H, label: &str)
+    where
+        H: flui_rendering::RenderObject<flui_rendering::SliverProtocol> + 'static,
+    {
+        let run = RenderTester::mount(viewport_multi_with_scroll(
+            0.0,
+            [
+                sliver_node(header)
+                    .label("header")
+                    .child(box_node(RenderColoredBox::red(300.0, 120.0)).label("child")),
+                filler_sliver(),
+            ],
+        ))
+        .with_size(Size::new(px(300.0), px(400.0)))
+        .run_layout();
 
-    let header_id = run.id("header");
-    let geometry = run.sliver_geometry(header_id);
-    assert!(
-        geometry.paint_extent > 0.0,
-        "precondition: the header paints something"
+        let geometry = run.sliver_geometry(run.id("header"));
+        assert!(
+            geometry.paint_extent > 0.0,
+            "{label}: precondition — the header paints something"
+        );
+        assert_eq!(
+            geometry.hit_test_extent, geometry.paint_extent,
+            "{label}: must be hit-testable across everything it paints",
+        );
+
+        let child_id = run.id("child");
+        let hit = run.hit(150.0, geometry.paint_extent / 2.0);
+        assert!(
+            hit.contains(&child_id),
+            "{label}: a tap inside the painted band must reach the header's child; got {hit:?}",
+        );
+    }
+
+    assert_hit_testable(
+        RenderSliverPinnedPersistentHeader::new(40.0, 120.0),
+        "pinned",
     );
-    assert_eq!(
-        geometry.hit_test_extent, geometry.paint_extent,
-        "a pinned header must be hit-testable across everything it paints",
+    assert_hit_testable(
+        RenderSliverScrollingPersistentHeader::new(40.0, 120.0),
+        "scrolling",
     );
-
-    // The consequence the extent exists for: a tap inside the painted band
-    // reaches the header's own box child.
-    let child_id = run.id("child");
-    let hit = run.hit(150.0, geometry.paint_extent / 2.0);
-    assert!(
-        hit.contains(&child_id),
-        "a tap inside the pinned header's painted band must reach its child; \
-         got {hit:?}",
+    assert_hit_testable(
+        RenderSliverFloatingPersistentHeader::new(40.0, 120.0, None),
+        "floating",
     );
-
-    // Scrolling — the same contract, different variant.
-    let scrolling = RenderTester::mount(viewport_multi_with_scroll(
-        0.0,
-        [
-            sliver_node(RenderSliverScrollingPersistentHeader::new(40.0, 120.0))
-                .label("header")
-                .child(box_node(RenderColoredBox::red(300.0, 120.0)).label("child")),
-            filler_sliver(),
-        ],
-    ))
-    .with_size(Size::new(px(300.0), px(400.0)))
-    .run_layout();
-
-    let scrolling_geometry = scrolling.sliver_geometry(scrolling.id("header"));
-    assert_eq!(
-        scrolling_geometry.hit_test_extent, scrolling_geometry.paint_extent,
-        "a scrolling header must be hit-testable across everything it paints",
+    assert_hit_testable(
+        RenderSliverFloatingPinnedPersistentHeader::new(40.0, 120.0, None),
+        "floating-pinned",
     );
 }
 
