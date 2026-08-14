@@ -858,12 +858,6 @@ fn bounds_from_rect(rect: Rect) -> Bounds<Pixels> {
     )
 }
 
-/// Build the key-event handler closure for `controller`.
-///
-/// Only `KeyState::Down` events (which cover key-repeat) are acted upon, and
-/// only while `focus_node` still allows focus — kept in sync with
-/// `EditableText::enabled` by `did_update_view` — so input is ignored on a
-/// field disabled after it was focused.
 /// Whether these modifiers make a key a *command* rather than *text*.
 ///
 /// Meta (Cmd) always is. Control is, except in combination with Alt: Win32
@@ -881,6 +875,12 @@ fn is_command_chord(modifiers: Modifiers) -> bool {
         || (modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT))
 }
 
+/// Build the key-event handler closure for `controller`.
+///
+/// Only `KeyState::Down` events (which cover key-repeat) are acted upon, and
+/// only while `focus_node` still allows focus — kept in sync with
+/// `EditableText::enabled` by `did_update_view` — so input is ignored on a
+/// field disabled after it was focused.
 fn build_key_handler(
     controller: TextEditingController,
     focus_node: Rc<FocusNode>,
@@ -892,25 +892,20 @@ fn build_key_handler(
         if event.state != KeyState::Down {
             return KeyEventResult::Ignored;
         }
-        // A key carrying a command modifier is a command, not text. Leave it
-        // unconsumed so `FocusManager::dispatch_key_event`'s leaf->root walk
-        // reaches the enclosing `Shortcuts`/`CallbackShortcuts`; consuming it
-        // here is what makes Ctrl+S type "s" and every app shortcut dead while
-        // a field is focused.
-        //
-        // Above the match, not inside the `Character` arm: the named-key arms
-        // consume their chords too, so Ctrl+Backspace would delete a single
-        // character rather than a word AND hide itself from whoever implements
-        // delete-word.
-        //
-        // Ctrl+Alt is deliberately NOT a command: Win32 encodes AltGr as
-        // Control+Alt (`get_modifiers` sets both from VK_CONTROL/VK_MENU) and
-        // no backend sets `Modifiers::ALT_GRAPH`, so keying on Control alone
-        // would swallow the composed character on every AltGr layout.
-        if is_command_chord(event.modifiers) {
-            return KeyEventResult::Ignored;
-        }
         match &event.key {
+            // A command chord is not text. Leave it unconsumed so
+            // `FocusManager::dispatch_key_event`'s leaf->root walk reaches the
+            // enclosing `Shortcuts`/`CallbackShortcuts` — consuming it here is
+            // what makes Ctrl+S type "s" and every app shortcut dead while a
+            // field is focused.
+            //
+            // Scoped to character insertion ON PURPOSE. The named-key arms
+            // below have no ancestor to fall through to: `DefaultFocusTraversal`
+            // binds only Tab/Shift+Tab and FLUI has no default-text-shortcuts
+            // layer, so guarding them would not route Ctrl+Home somewhere
+            // better — it would make it a no-op. Widen this the day such a
+            // layer exists, together with it.
+            Key::Character(_) if is_command_chord(event.modifiers) => KeyEventResult::Ignored,
             Key::Character(character_string) => {
                 // Suppression contract (`ImeEvent`'s doc): suppress
                 // `Key::Character` insertion ONLY while a composition is
@@ -1286,18 +1281,26 @@ mod tests {
         assert_eq!(text, "a");
     }
 
-    /// The guard sits above the whole match, not inside the `Character` arm:
-    /// the named-key arms consume their chords too, so Ctrl+Backspace would
-    /// delete a single character (instead of a word) and hide itself from any
-    /// ancestor that implements delete-word.
+    /// Ctrl+Backspace keeps deleting a character, deliberately.
+    ///
+    /// This is the case that most tempts a blanket guard: Ctrl+Backspace
+    /// *should* delete a word, and consuming it here hides it from whoever
+    /// implements delete-word. But nobody does — there is no
+    /// default-text-shortcuts layer, and `DefaultFocusTraversal` binds only
+    /// Tab/Shift+Tab — so refusing it would delete nothing at all, which is
+    /// strictly worse than deleting one character.
+    ///
+    /// Kept as a test rather than a comment so that whoever adds that layer
+    /// sees this decision fail and revisits it.
     #[test]
-    fn a_command_chord_on_a_named_key_also_bubbles() {
+    fn a_command_chord_on_backspace_still_deletes_until_a_shortcuts_layer_exists() {
         use flui_interaction::events::Code;
         use flui_interaction::testing::input::KeyEventBuilder;
 
-        let controller = TextEditingController::with_text("hello world");
+        let controller = TextEditingController::with_text("hello");
         let focus_node = FocusNode::with_debug_label("test");
         let handler = build_key_handler(controller.clone(), Rc::clone(&focus_node));
+        controller.move_caret_end();
 
         let event = KeyEventBuilder::new(Code::Backspace)
             .with_key(Key::Named(NamedKey::Backspace))
@@ -1305,16 +1308,12 @@ mod tests {
             .with_modifiers(Modifiers::CONTROL)
             .build();
 
-        assert_eq!(
-            handler(&event),
-            KeyEventResult::Ignored,
-            "Ctrl+Backspace is a delete-word command this field does not implement; \
-             consuming it hides it from whoever does"
-        );
+        assert_eq!(handler(&event), KeyEventResult::Handled);
         assert_eq!(
             controller.text(),
-            "hello world",
-            "and it must not fall through to the plain single-character backspace"
+            "hell",
+            "with no delete-word handler anywhere above the field, dropping this \
+             chord would delete nothing at all"
         );
     }
 
