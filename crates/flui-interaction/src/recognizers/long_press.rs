@@ -629,6 +629,17 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for LongPressGestureRec
             .or_else(|| self.initial_position())
             .unwrap_or_else(|| Offset::new(Pixels(0.0), Pixels(0.0)));
         self.try_fire_timer(position);
+        // Kept deliberately, even though `try_fire_timer` now also resolves on
+        // fire. This hook is the ARENA's deadline, and in the reference the
+        // arena's deadline is the authority — `didExceedDeadline` resolves
+        // unconditionally before firing ("Exceeding the deadline puts the
+        // gesture in the accepted state",
+        // .flutter/packages/flutter/lib/src/gestures/long_press.dart), with no
+        // re-check of elapsed time. Dropping this call would make acceptance
+        // conditional on `try_fire_timer`'s own clock comparison and diverge
+        // from that. The two agree in production — `deadline()` returns the
+        // same `long_press_timeout` `try_fire_timer` measures against — so the
+        // second resolve lands on an already-resolved arena and is a no-op.
         self.state.accept_tracked();
     }
 
