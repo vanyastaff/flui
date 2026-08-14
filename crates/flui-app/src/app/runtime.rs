@@ -1657,9 +1657,18 @@ mod wake_and_clipboard_tests {
 
     /// `AppRuntime::frame_wake_callback()` must be usable as the install-time
     /// `Send + Sync` handle wired onto a scheduler's `on_frame_scheduled`
-    /// hook (what `install_platform_realm` now does against the just-installed
-    /// realm's own `UpdateScheduler` — see that function's doc), never a callback
-    /// that re-resolves this thread-local `AppRuntime` when the hook fires.
+    /// hook (what `UiRealm::construct` does against the realm's own
+    /// `UpdateScheduler`, using the same `wake` its presentation and command
+    /// sender carry), never a callback that re-resolves this thread-local
+    /// `AppRuntime` when the hook fires.
+    ///
+    /// This test owns only the *handle* half of that contract: that the
+    /// callback survives being fired from a foreign thread. It deliberately
+    /// wires its own stand-in scheduler, so it says nothing about whether
+    /// production installs the hook at all — `UiRealm`'s
+    /// `a_scheduler_frame_request_reaches_the_realms_platform_wake` and its
+    /// cross-thread sibling own that half, through a realm built by the real
+    /// constructor.
     ///
     /// Proof shape: wire the handle onto a scheduler built right here (a
     /// stand-in for a realm's own), spawn a task on it, capture its `Waker`,
@@ -1681,8 +1690,8 @@ mod wake_and_clipboard_tests {
         let runtime = AppRuntime::new();
         assert!(!runtime.needs_redraw(), "precondition: no redraw pending");
 
-        // Stand-in for a realm's own scheduler; `install_platform_realm`
-        // wires this exact handle onto `realm.scheduler()` at install time.
+        // Stand-in for a realm's own scheduler. In production `UiRealm::
+        // construct` performs this same wiring with the realm's `wake`.
         let scheduler = flui_scheduler::UpdateScheduler::new();
         scheduler.set_on_frame_scheduled(Some(runtime.frame_wake_callback()));
 
