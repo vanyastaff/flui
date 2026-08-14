@@ -199,16 +199,41 @@ fn make_pointer_info(pe: &web_sys::PointerEvent) -> ui_events::pointer::PointerI
     }
 }
 
+/// Translate the DOM `MouseEvent.buttons` bitmask into `PointerButtons`.
+///
+/// This is the W3C field itself, so no derivation is needed: the browser
+/// already reports the set held *after* the event. Reporting an empty set for
+/// an in-contact move would make the framework classify a drag as a hover, so
+/// no gesture recognizer would ever see it.
+///
+/// Bit values are fixed by the UI Events spec: 1 primary, 2 secondary,
+/// 4 auxiliary; bits 8/16 (back/forward) have no `PointerButton` here.
+fn buttons_from_mask(mask: u16) -> ui_events::pointer::PointerButtons {
+    use ui_events::pointer::{PointerButton, PointerButtons};
+
+    let mut buttons = PointerButtons::default();
+    if mask & 0x01 != 0 {
+        buttons.insert(PointerButton::Primary);
+    }
+    if mask & 0x02 != 0 {
+        buttons.insert(PointerButton::Secondary);
+    }
+    if mask & 0x04 != 0 {
+        buttons.insert(PointerButton::Auxiliary);
+    }
+    buttons
+}
+
 fn make_pointer_state(pe: &web_sys::PointerEvent) -> ui_events::pointer::PointerState {
     use dpi::{PhysicalPosition, PhysicalSize};
-    use ui_events::pointer::{PointerButtons, PointerOrientation, PointerState};
+    use ui_events::pointer::{PointerOrientation, PointerState};
 
     let modifiers = extract_modifiers_from_mouse(pe);
 
     PointerState {
         time: 0, // Browser doesn't expose nanosecond timestamps easily
         position: PhysicalPosition::new(pe.offset_x() as f64, pe.offset_y() as f64),
-        buttons: PointerButtons::default(),
+        buttons: buttons_from_mask(pe.buttons()),
         modifiers,
         count: 0,
         contact_geometry: PhysicalSize::new(pe.width().max(1) as f64, pe.height().max(1) as f64),
@@ -294,7 +319,7 @@ fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
         state: PointerState {
             time: 0,
             position: PhysicalPosition::new(we.offset_x() as f64, we.offset_y() as f64),
-            buttons: Default::default(),
+            buttons: buttons_from_mask(we.buttons()),
             modifiers,
             count: 0,
             contact_geometry: dpi::PhysicalSize::new(1.0, 1.0),
