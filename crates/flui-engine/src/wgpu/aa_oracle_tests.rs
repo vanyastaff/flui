@@ -2925,6 +2925,205 @@ mod gpu_tests {
         );
     }
 
+    /// Text drawn INSIDE an opacity layer, followed by covering geometry
+    /// inside the SAME layer, must be buried by that geometry — the layer's
+    /// own segments carry glyph ranges stamped at record time, and the
+    /// recursive offscreen replay must range-render them at their
+    /// z-position inside the layer, not leave them to the trailing gap
+    /// passes (which draw over everything on the main target, at full
+    /// opacity, ignoring the layer's own opacity).
+    ///
+    /// Born red: before the recursion range-rendered text, the pinned form
+    /// of this test observed the covered label floating above the later
+    /// fill (blue glyph pixels > 0).
+    #[test]
+    fn later_rect_covers_earlier_text_inside_an_opacity_layer() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        // Alpha 250/255 ≈ 0.98 ≠ 1.0 forces the offscreen Composite path
+        // (the Reintegrate fast-path would splice the content back into the
+        // top-level draw order and never exercise the recursion).
+        painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 250)));
+        painter.text(
+            "Covered",
+            flui_types::Point::new(Pixels(4.0), Pixels(30.0)),
+            20.0,
+            &Paint::fill(Color::rgb(0, 0, 255)),
+        );
+        painter.rect(full, &Paint::fill(Color::rgb(0, 255, 0)));
+        painter.restore_layer();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Layer Text Order Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        // Count pure-blue glyph pixels over the whole region — center-pixel
+        // sampling misses this class.
+        let blue_pixels = pixels
+            .iter()
+            .filter(|p| p[2] > 200 && p[0] < 50 && p[1] < 50)
+            .count();
+        assert_eq!(
+            blue_pixels, 0,
+            "text followed by covering geometry inside the same opacity \
+             layer must be buried by that geometry; {blue_pixels} blue \
+             glyph pixels visible — the layer's glyphs composited out of \
+             draw order (trailing gap pass instead of in-layer range render)"
+        );
+        // The layer's fill must still composite (sanity that the layer path ran).
+        let center =
+            (SURFACE_HEIGHT as usize / 2) * SURFACE_WIDTH as usize + SURFACE_WIDTH as usize / 2;
+        let [r, g, _b, a] = pixels[center];
+        assert!(
+            g > 200 && r < 50 && a > 200,
+            "the layer's green fill must composite onto the surface; got center rgba=({r}, {g}, _, {a})"
+        );
+    }
+
+    /// Text that is the ONLY content of an opacity layer must still belong
+    /// to the layer: composited with the layer (subject to its opacity) and
+    /// buried by top-level geometry drawn AFTER the layer — not dropped as
+    /// an "empty" layer whose glyphs then float over everything.
+    ///
+    /// Born red: before the compositor counted text as layer content (and
+    /// before the recursion range-rendered it), the pinned form of this
+    /// test observed the text-only layer's glyphs floating above the later
+    /// top-level fill.
+    #[test]
+    fn opacity_layer_text_stays_under_later_top_level_geometry() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 250)));
+        painter.text(
+            "Ghost",
+            flui_types::Point::new(Pixels(4.0), Pixels(30.0)),
+            20.0,
+            &Paint::fill(Color::rgb(0, 0, 255)),
+        );
+        painter.restore_layer();
+        // Top-level opaque fill AFTER the layer — must bury the layer's text.
+        painter.rect(full, &Paint::fill(Color::rgb(0, 255, 0)));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Text-Only Layer Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let blue_pixels = pixels
+            .iter()
+            .filter(|p| p[2] > 200 && p[0] < 50 && p[1] < 50)
+            .count();
+        assert_eq!(
+            blue_pixels, 0,
+            "a text-only opacity layer's glyphs must be buried by top-level \
+             geometry drawn after the layer; {blue_pixels} blue glyph pixels \
+             visible — the layer resolved to Empty and its text fell through \
+             to the trailing gap passes"
+        );
+    }
+
+    /// Complement guard: text ordering ACROSS the opacity boundary must not
+    /// regress. Top-level text recorded BEFORE the layer is buried by the
+    /// layer's fill; top-level text recorded AFTER the layer draws over it.
+    #[test]
+    fn text_ordering_across_an_opacity_layer_boundary() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        // Top-level text BEFORE the layer — pure blue.
+        painter.text(
+            "Under",
+            flui_types::Point::new(Pixels(4.0), Pixels(30.0)),
+            20.0,
+            &Paint::fill(Color::rgb(0, 0, 255)),
+        );
+        // Composite-path layer whose fill covers the whole surface.
+        painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 250)));
+        painter.rect(full, &Paint::fill(Color::rgb(0, 255, 0)));
+        painter.restore_layer();
+        // Top-level text AFTER the layer — yellow, must stay visible.
+        painter.text(
+            "Over",
+            flui_types::Point::new(Pixels(4.0), Pixels(60.0)),
+            20.0,
+            &Paint::fill(Color::rgb(255, 255, 0)),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Boundary Text Order Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let blue_pixels = pixels
+            .iter()
+            .filter(|p| p[2] > 200 && p[0] < 50 && p[1] < 50)
+            .count();
+        assert_eq!(
+            blue_pixels, 0,
+            "top-level text recorded before the layer must be buried by the \
+             layer's fill; {blue_pixels} blue glyph pixels visible"
+        );
+        let yellow_pixels = pixels
+            .iter()
+            .filter(|p| p[0] > 200 && p[1] > 200 && p[2] < 50)
+            .count();
+        assert!(
+            yellow_pixels > 0,
+            "top-level text recorded after the layer must draw over its fill"
+        );
+    }
+
     // ── A4: Angular edges are anti-aliased (partial alpha) ───────────────────
 
     /// A4: The two angular edges of a ~90° arc must show partial alpha (anti-

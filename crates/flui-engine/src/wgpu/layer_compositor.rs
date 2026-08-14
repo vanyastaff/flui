@@ -301,8 +301,15 @@ impl LayerCompositor {
         self.opacity_stack = saved.saved_opacity_stack;
         self.current_opacity = saved.saved_opacity;
 
+        // Text counts as content (`is_empty`, not `is_geometry_empty`): the
+        // recursive replay range-renders a layer's glyph ranges into its
+        // offscreen, so a text-only layer must reach the Composite/Reintegrate
+        // paths to have its text composited WITH the layer (subject to its
+        // opacity/tint) — routing it to Empty would drop the draw records and
+        // leave the glyphs to the submit's trailing gap passes, floating over
+        // everything at full opacity.
         let has_offscreen_content =
-            !offscreen_final_segment.is_geometry_empty() || !offscreen_items.is_empty();
+            !offscreen_final_segment.is_empty() || !offscreen_items.is_empty();
 
         if !has_offscreen_content {
             return RestoreOutcome::Empty {
@@ -487,6 +494,37 @@ mod tests {
         );
         let outcome = compositor.pop_layer(DrawSegment::new(), Vec::new(), rect_bounds_100());
         assert!(matches!(outcome, RestoreOutcome::Empty { .. }));
+    }
+
+    /// A layer whose only content is TEXT (glyph range stamped, no geometry)
+    /// must not resolve to `Empty`: recursive replay range-renders the
+    /// layer's text into its offscreen, so the text IS the layer's content
+    /// and must be composited with the layer's opacity. Routing it to
+    /// `Empty` drops the draw records and leaves the glyphs to the trailing
+    /// gap passes, floating over everything at full opacity.
+    #[test]
+    fn pop_layer_composites_a_text_only_layer() {
+        let mut compositor = LayerCompositor::new();
+        compositor.push_layer(
+            Vec::new(),
+            DrawSegment::new(),
+            0.5, // not 1.0 → must composite (not reintegrate)
+            [1.0, 1.0, 1.0],
+            BlendMode::SrcOver,
+            None,
+            LayerFilterChain::new(),
+        );
+        // Text-only segment: a stamped glyph range, zero geometry.
+        let mut text_only = DrawSegment::new();
+        text_only.text_start = 0;
+        text_only.text_end = 1;
+        assert!(text_only.is_geometry_empty() && !text_only.is_empty());
+
+        let outcome = compositor.pop_layer(text_only, Vec::new(), rect_bounds_100());
+        assert!(
+            matches!(outcome, RestoreOutcome::Composite { .. }),
+            "a text-only layer must reach the Composite path, not Empty"
+        );
     }
 
     #[test]

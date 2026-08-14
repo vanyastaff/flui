@@ -584,10 +584,11 @@ impl DrawSegment {
     }
 
     /// Whether this segment records no geometry — text-only segments count
-    /// as geometry-empty. The layer compositor keys offscreen-composite
-    /// work on THIS: until recursive replay range-renders text, a
-    /// text-only saved layer would otherwise pay a full offscreen pass for
-    /// glyphs that actually draw in the submit's trailing gap passes.
+    /// as geometry-empty. Callers deciding whether a segment carries ANY
+    /// replayable content (the layer compositor's empty-layer check, draw
+    /// order finalization) must use [`Self::is_empty`] instead: recursive
+    /// replay range-renders a layer's text into its offscreen, so text alone
+    /// is real layer content.
     pub(crate) fn is_geometry_empty(&self) -> bool {
         self.rect_batch.is_empty()
             && self.circle_batch.is_empty()

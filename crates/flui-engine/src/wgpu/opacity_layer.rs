@@ -32,6 +32,8 @@
 
 use std::sync::Arc;
 
+use crate::error::EngineResult;
+
 use super::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
     blur::apply_blur,
@@ -46,6 +48,7 @@ use super::{
     render_target::RenderTarget,
     replay::GpuReplay,
     resources::GpuResources,
+    text::TextRenderer,
     texture_pool::PooledTexture,
 };
 
@@ -435,6 +438,17 @@ impl GpuReplay {
     /// actually-drawn pixels contribute to the composite.  All inner render
     /// passes (inside `flush_segment`, `flush_texture_batch*`) use
     /// `LoadOp::Load`, preserving prior offscreen content.
+    ///
+    /// ## Ordered text inside the layer
+    ///
+    /// The layer's segments carry `text_start..text_end` glyph ranges stamped
+    /// at record time exactly like top-level segments (the record path is
+    /// shared).  Each segment's range is range-rendered into the offscreen
+    /// right after that segment's geometry flush, so text inside the layer
+    /// participates in the layer's own z-order AND is composited with the
+    /// layer (subject to its opacity/tint/blend) instead of being drawn over
+    /// everything by the submit's trailing gap passes.  Every range rendered
+    /// here is pushed onto `claimed_text` so the gap passes skip it.
     pub(in crate::wgpu) fn render_layer_to_offscreen(
         &mut self,
         layer: &mut PendingOpacityLayer,
@@ -444,8 +458,10 @@ impl GpuReplay {
         queue: &Arc<wgpu::Queue>,
         pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
+        text_renderer: &mut TextRenderer,
+        claimed_text: &mut Vec<std::ops::Range<usize>>,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> PooledTexture {
+    ) -> EngineResult<PooledTexture> {
         let (vp_w, vp_h) = viewport_size;
 
         // Acquire a pooled offscreen texture for the layer's content.
@@ -498,6 +514,21 @@ impl GpuReplay {
                         encoder,
                         offscreen_view,
                     );
+                    // Ordered text: this segment's glyphs draw into the layer
+                    // offscreen HERE, at the segment's z-position within the
+                    // layer, and the range is claimed so the submit's trailing
+                    // gap passes don't draw it a second time over everything.
+                    text_renderer.render_range(
+                        device,
+                        queue,
+                        offscreen_view,
+                        encoder,
+                        viewport_size,
+                        seg.text_start..seg.text_end,
+                    )?;
+                    if seg.text_start < seg.text_end {
+                        claimed_text.push(seg.text_start..seg.text_end);
+                    }
                 }
                 DrawItem::OffscreenTexture(p) => {
                     // A nested OffscreenTexture (shader-mask / backdrop-blur
@@ -534,9 +565,11 @@ impl GpuReplay {
                         queue,
                         pipelines,
                         resources,
+                        text_renderer,
+                        claimed_text,
                         encoder,
                         offscreen_target,
-                    );
+                    )?;
                 }
                 DrawItem::AdvancedShape(mut op) => {
                     // An advanced shape nested inside a layer: the backdrop is the
@@ -748,9 +781,22 @@ impl GpuReplay {
                 encoder,
                 offscreen_view,
             );
+            // Ordered text for the final segment, same discipline as the
+            // Segment arm above (render_range no-ops on an empty range).
+            text_renderer.render_range(
+                device,
+                queue,
+                offscreen_view,
+                encoder,
+                viewport_size,
+                layer.final_segment.text_start..layer.final_segment.text_end,
+            )?;
+            if layer.final_segment.text_start < layer.final_segment.text_end {
+                claimed_text.push(layer.final_segment.text_start..layer.final_segment.text_end);
+            }
         }
 
-        offscreen
+        Ok(offscreen)
     }
 
     // =========================================================================
@@ -793,16 +839,20 @@ impl GpuReplay {
         queue: &Arc<wgpu::Queue>,
         pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
+        text_renderer: &mut TextRenderer,
+        claimed_text: &mut Vec<std::ops::Range<usize>>,
         encoder: &mut wgpu::CommandEncoder,
         main_target: RenderTarget<'_>,
-    ) {
+    ) -> EngineResult<()> {
         // Zero-size viewports produce no visible pixels; skip GPU work entirely.
         // The UV composite below divides by vp_w/vp_h, so proceeding would push
         // inf/NaN into texture instances.  The pool clamps acquire to 1×1 but
-        // the resulting composite would be meaningless.
+        // the resulting composite would be meaningless.  The layer's text stays
+        // unclaimed here — the trailing gap passes draw it against the same
+        // zero-area viewport, producing no pixels either.
         let (vp_w, vp_h) = viewport_size;
         if vp_w == 0 || vp_h == 0 {
-            return;
+            return Ok(());
         }
 
         let layer_tex = self.render_layer_to_offscreen(
@@ -813,8 +863,10 @@ impl GpuReplay {
             queue,
             pipelines,
             resources,
+            text_renderer,
+            claimed_text,
             encoder,
-        );
+        )?;
 
         // ── Color-filter chain fold (ping-pong) ──────────────────────────────
         //
@@ -902,7 +954,7 @@ impl GpuReplay {
                     bounds = ?layer.bounds,
                     "GpuReplay: composited advanced-blend opacity layer"
                 );
-                return;
+                return Ok(());
             }
             // A `view_only` target has no sampleable backdrop; advanced modes
             // degrade to SrcOver here (warn once).  Production producers pass a
@@ -990,6 +1042,7 @@ impl GpuReplay {
         );
 
         // offscreen texture returned to pool when `offscreen` is dropped here.
+        Ok(())
     }
 }
 

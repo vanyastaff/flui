@@ -238,8 +238,10 @@ impl GpuReplay {
     /// - `DrawItem::OpacityLayer`     → `flush_opacity_layer` (recursive)
     ///
     /// Text renders IN draw order: each segment's glyph range draws at the
-    /// segment's z-position, and only text recorded outside top-level
-    /// segments (opacity-layer recursion) still composites in the trailing
+    /// segment's z-position — including segments replayed inside opacity-layer
+    /// recursion, which range-render into the layer's offscreen. Only text
+    /// captured by the non-layer isolating items (`Filter` inputs,
+    /// `AdvancedShape`/`SsaaPath` segments) still composites in the trailing
     /// gap passes.
     ///
     /// ## R2 — `texture_batch` drain invariant
@@ -324,6 +326,11 @@ impl GpuReplay {
                     // p.texture dropped here, returns to pool
                 }
                 DrawItem::OpacityLayer(layer) => {
+                    // The recursion range-renders the layer's own text into
+                    // its offscreen at each inner segment's z-position and
+                    // pushes those ranges onto `claimed_text`, so the gap
+                    // passes below don't draw the layer's glyphs a second
+                    // time over the composited result.
                     self.flush_opacity_layer(
                         layer,
                         viewport_size,
@@ -332,9 +339,11 @@ impl GpuReplay {
                         queue,
                         pipelines,
                         resources,
+                        text_renderer,
+                        &mut claimed_text,
                         encoder,
                         target,
-                    );
+                    )?;
                 }
                 // ── Advanced (dst-read) shape — DECISION 5 ─────────────────
                 //
@@ -573,15 +582,26 @@ impl GpuReplay {
             }
         }
 
-        // The gaps: text recorded outside any top-level segment (today:
-        // text inside recursive items — opacity layers and their kin —
-        // whose own flushes do not yet range-render). Claimed ranges are
-        // monotone (record order), so everything BETWEEN them, plus the
-        // tail, is exactly the unclaimed text; it keeps the old
-        // over-everything behavior — ordering it within the recursion is
-        // the follow-up named on the tracking issue.
+        // The gaps: text recorded into a segment no pass range-rendered.
+        // Opacity layers claim their own text inside the recursion now, so
+        // what remains unclaimed is exactly the text captured by the
+        // NON-layer isolating items — a `Filter`'s input segment and the
+        // `AdvancedShape`/`SsaaPath` segments — whose offscreen paths remap
+        // geometry into local coordinate frames that glyphon positions
+        // don't participate in. That class keeps the old over-everything
+        // behavior. Claimed ranges are monotone because replay visits items
+        // (and recursion contents) in record order — the debug assert below
+        // pins that; a violation would double- or skip-render glyph ranges.
         let mut cursor = 0usize;
         for claimed in &claimed_text {
+            debug_assert!(
+                claimed.start >= cursor,
+                "claimed text ranges must be monotone in record order \
+                 (claimed {}..{} behind cursor {})",
+                claimed.start,
+                claimed.end,
+                cursor
+            );
             text_renderer.render_range(
                 device,
                 queue,
