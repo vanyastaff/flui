@@ -68,6 +68,7 @@
 //! | `RenderSliverFillRemainingWithScrollable` | `harness_sliver_fill_remaining_with_scrollable_*` | yes | — | — | yes | — |
 //! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderSliverList` | `harness_sliver_list_*` | yes | — | — | yes | — |
+//! | `RenderSliverMainAxisGroup` | `harness_sliver_main_axis_group_*` | yes | — | — | yes | — |
 //! | `RenderSliverListLazy` | `harness_sliver_list_lazy_*` | yes | — | — | yes | — |
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
 //! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | compositing |
@@ -201,6 +202,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverGrid",
     "RenderSliverGridLazy",
     "RenderSliverPadding",
+    "RenderSliverMainAxisGroup",
     "RenderSliverToBoxAdapter",
     "RenderSliverFillViewport",
     "RenderSliverFillRemaining",
@@ -12145,5 +12147,174 @@ fn harness_sliver_persistent_header_extent_change_forces_a_delegate_rebuild() {
         "an extent change must schedule the rebuild even though the header \
          has not moved — the published pair is identical, so only the \
          force-dirty path can carry it",
+    );
+}
+
+#[test]
+fn harness_sliver_main_axis_group_composes_scroll_extents_and_places_children() {
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverMainAxisGroup::new())
+            .label("group")
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .label("first")
+                    .child(box_node(RenderSizedBox::fixed(px(300.0), px(80.0)))),
+            )
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .label("second")
+                    .child(box_node(RenderSizedBox::fixed(px(300.0), px(120.0)))),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(600.0)))
+    .run_layout();
+
+    let group = run.sliver_geometry(run.id("group"));
+    assert_eq!(
+        group.scroll_extent, 200.0,
+        "the group's scroll extent is the sum of its children's (80 + 120)",
+    );
+    assert_eq!(
+        group.paint_extent, 200.0,
+        "everything fits: paint extent equals the composed extent",
+    );
+    assert!(group.visible, "a painting group is visible");
+    // The second child is placed after the first along the main axis.
+    assert_eq!(run.offset(run.id("first")).dy, px(0.0));
+    assert_eq!(run.offset(run.id("second")).dy, px(80.0));
+    assert_has_committed_geometry(
+        run.diagnostics()
+            .find_descendant("RenderSliverMainAxisGroup")
+            .expect("group in diagnostics"),
+    );
+}
+
+#[test]
+fn harness_sliver_main_axis_group_scrolled_consumes_leading_children_first() {
+    // Viewport scrolled 100px into a (80 + 120) group: the first child is
+    // fully consumed (scroll offset 100 > its 80), the second is entered by
+    // 20px — the oracle hands each child max(0, scrollOffset - consumed) and
+    // paints the remainder from the viewport top.
+    let run = RenderTester::mount(viewport_with_scroll(
+        100.0,
+        sliver_node(RenderSliverMainAxisGroup::new())
+            .label("group")
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .label("first")
+                    .child(box_node(RenderSizedBox::fixed(px(300.0), px(80.0)))),
+            )
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .label("second")
+                    .child(box_node(RenderSizedBox::fixed(px(300.0), px(120.0)))),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(600.0)))
+    .run_layout();
+
+    let group = run.sliver_geometry(run.id("group"));
+    assert_eq!(
+        group.scroll_extent, 200.0,
+        "scroll extent is position-independent"
+    );
+    assert_eq!(
+        group.paint_extent, 100.0,
+        "100 of 200 have been consumed; the remainder paints",
+    );
+    let first = run.sliver_geometry(run.id("first"));
+    assert_eq!(
+        first.paint_extent, 0.0,
+        "the fully-consumed first child paints nothing",
+    );
+    let second = run.sliver_geometry(run.id("second"));
+    assert_eq!(
+        second.paint_extent, 100.0,
+        "the second child paints its unconsumed remainder (120 - 20)",
+    );
+}
+
+#[test]
+fn harness_sliver_main_axis_group_childless_reports_zero_geometry() {
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverMainAxisGroup::new()).label("group"),
+    ))
+    .with_size(Size::new(px(300.0), px(600.0)))
+    .run_layout();
+
+    let group = run.sliver_geometry(run.id("group"));
+    assert_eq!(group.scroll_extent, 0.0);
+    assert_eq!(group.paint_extent, 0.0);
+    assert!(!group.visible, "an empty group paints nothing");
+}
+
+#[test]
+fn harness_sliver_main_axis_group_culls_invisible_children_from_paint() {
+    // Two viewport-height red/green children; at rest only the first is on
+    // screen. The group's paint splice must skip the invisible second child
+    // entirely — the oracle's "skips painting invisible children".
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverMainAxisGroup::new())
+            .label("group")
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .child(box_node(RenderColoredBox::red(300.0, 600.0))),
+            )
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .child(box_node(RenderColoredBox::green(300.0, 600.0))),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(600.0)))
+    .run_frame();
+
+    let commands = run.display_commands();
+    let paints_red = commands
+        .iter()
+        .any(|command| command.line.contains("DrawRect") && command.line.contains("#FF0000FF"));
+    let paints_green = commands
+        .iter()
+        .any(|command| command.line.contains("DrawRect") && command.line.contains("#00FF00FF"));
+    assert!(
+        paints_red,
+        "the visible first child paints; commands: {commands:#?}"
+    );
+    assert!(
+        !paints_green,
+        "the offscreen second child must not paint; commands: {commands:#?}"
+    );
+}
+#[test]
+fn harness_sliver_main_axis_group_hit_routes_to_the_child_under_the_position() {
+    // Load-bearing beyond routing: the group's geometry must restate the
+    // oracle constructor's `hitTestExtent ??= paintExtent` default — a
+    // `..ZERO` struct-update that drops it makes the whole group (and every
+    // descendant) unhittable, which is exactly how this test's first red
+    // run found the omission.
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverMainAxisGroup::new())
+            .label("group")
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .label("first")
+                    .child(box_node(RenderColoredBox::red(300.0, 200.0)).label("firstbox")),
+            )
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .label("second")
+                    .child(box_node(RenderColoredBox::green(300.0, 200.0)).label("secondbox")),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(600.0)))
+    .run_layout();
+    assert_eq!(
+        run.hit_first(150.0, 100.0),
+        Some(run.id("firstbox")),
+        "a hit over the first child's strip resolves to its box"
+    );
+    assert_eq!(
+        run.hit_first(150.0, 300.0),
+        Some(run.id("secondbox")),
+        "a hit over the second child's strip resolves to its box"
     );
 }

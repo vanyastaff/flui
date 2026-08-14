@@ -207,9 +207,9 @@ pub use scroll::{
     ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar, SharedScrollPhysics,
     ShrinkWrappingViewport, SingleChildScrollView, SliverChildBuilderDelegate, SliverFillRemaining,
     SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-    SliverOpacity, SliverPadding, SliverPersistentHeader, SliverPersistentHeaderDelegate,
-    SliverToBoxAdapter, StretchTriggerSignal, Viewport,
+    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
+    SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
+    SliverPersistentHeaderDelegate, SliverToBoxAdapter, StretchTriggerSignal, Viewport,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
