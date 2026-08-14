@@ -12274,7 +12274,7 @@ fn harness_sliver_main_axis_group_culls_invisible_children_from_paint() {
         .any(|command| command.line.contains("DrawRect") && command.line.contains("#FF0000FF"));
     let paints_green = commands
         .iter()
-        .any(|command| command.line.contains("#00FF00FF"));
+        .any(|command| command.line.contains("DrawRect") && command.line.contains("#00FF00FF"));
     assert!(
         paints_red,
         "the visible first child paints; commands: {commands:#?}"
