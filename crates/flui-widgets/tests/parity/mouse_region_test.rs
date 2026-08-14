@@ -1458,3 +1458,46 @@ fn hover_fires_leaf_first_through_a_mouse_region_wrapping_a_listener() {
          on_pointer_hover before the outer MouseRegion's on_hover"
     );
 }
+
+/// The cursor leaving the WINDOW (not just the region) fires `on_exit` and
+/// clears hover state — before this wire existed, a widget hovered at the
+/// moment the cursor crossed the window edge kept its hover visuals forever
+/// and `on_exit` never fired (the platform emitted `CursorLeft`, nothing
+/// consumed it). FLUI-added coverage for that wire; Flutter reaches the
+/// same end state via a synthetic pointer-removed update.
+#[test]
+fn the_cursor_leaving_the_window_fires_on_exit_for_the_hovered_region() {
+    let enters: Rc<RefCell<Vec<Offset>>> = Rc::new(RefCell::new(Vec::new()));
+    let exits: Rc<RefCell<Vec<Offset>>> = Rc::new(RefCell::new(Vec::new()));
+    let on_enter = Rc::clone(&enters);
+    let on_exit = Rc::clone(&exits);
+
+    let laid = harness::pump_widget(
+        Align::new(Alignment::CENTER).child(
+            MouseRegion::new()
+                .on_enter(move |_device, position| on_enter.borrow_mut().push(position))
+                .on_exit(move |_device, position| on_exit.borrow_mut().push(position))
+                .child(SizedBox::new(100.0, 100.0)),
+        ),
+        harness::screen_of(300.0, 300.0),
+    );
+
+    laid.dispatch_pointer_hover(150.0, 150.0);
+    assert_eq!(
+        enters.borrow().len(),
+        1,
+        "precondition: the region is hovered"
+    );
+    assert!(exits.borrow().is_empty());
+
+    laid.dispatch_window_hover_left();
+    assert_eq!(
+        exits.borrow().as_slice(),
+        &[offset(150.0, 150.0)],
+        "leaving the window exits the hovered region at its last position"
+    );
+
+    // Idempotent: a second leave (some platforms repeat it) fires nothing.
+    laid.dispatch_window_hover_left();
+    assert_eq!(exits.borrow().len(), 1);
+}

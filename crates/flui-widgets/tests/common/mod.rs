@@ -1054,6 +1054,17 @@ impl LaidOut {
 
     /// Dispatch an already-constructed pointer event through the same complete
     /// binding pipeline as platform input.
+    /// The platform reported the pointer leaving the hosting window
+    /// (winit `CursorLeft`): sweep hover state — every hovered
+    /// `MouseRegion` gets its `on_exit`, and the cursor resets.
+    pub fn dispatch_window_hover_left(&self) {
+        // Inside the owner-lane scope, matching how the production realm
+        // wraps every addressed window signal (`UiRealm::enter`) and how
+        // `dispatch_pointer` above enters it for pointer input.
+        self.binding
+            .enter_owner_scope(|| self.binding.gestures().handle_pointer_left_window());
+    }
+
     pub fn dispatch_pointer_event(&self, event: &PointerEvent) {
         self.binding
             .dispatch_pointer(event, |position| self.hit_test_pointer(position));

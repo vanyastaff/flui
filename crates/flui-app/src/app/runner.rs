@@ -673,6 +673,19 @@ pub(super) enum PlatformToUi {
     // its `on_active_status_change` registration).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     WindowVisibility(bool),
+    /// The pointer entered (`true`) or left (`false`) the window (winit's
+    /// `CursorEntered`/`CursorLeft`, via
+    /// `PlatformWindow::on_hover_status_change`). Leave sweeps the addressed
+    /// presentation's hover state — `MouseRegion::on_exit` fires and the
+    /// cursor resets; without this a widget hovered at the moment the cursor
+    /// crosses the window edge keeps its hover visuals forever. Enter is a
+    /// no-op today: the next `CursorMoved` re-primes hover from a fresh hit
+    /// test on its own.
+    // Constructed by both the desktop and web bootstraps' registrations, so
+    // every backend whose `PlatformWindow` dispatches
+    // `on_hover_status_change` routes here; a backend that never fires the
+    // callback simply never constructs the event.
+    WindowHover(bool),
     /// Drive a lifecycle target that requires owner-local realm cleanup (most
     /// notably Detached during platform shutdown).
     Lifecycle(AppLifecycleState),
@@ -853,6 +866,9 @@ impl PlatformToUi {
                     realm.notify_presentation_focus_gained(presentation_id);
                 }
                 emit_lifecycle_transition(realm, old, new);
+            }
+            Self::WindowHover(inside) => {
+                realm.handle_window_hover_addressed(presentation_id, inside);
             }
             Self::WindowVisibility(visible) => {
                 // Presentation-level `FrameClock` gate — finer
@@ -9074,6 +9090,12 @@ where
                 RealmTask::Event(PlatformToUi::WindowVisibility(visible)),
             );
         }));
+        window.on_hover_status_change(Box::new(move |is_hovered| {
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Event(PlatformToUi::WindowHover(is_hovered)),
+            );
+        }));
 
         // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
         // marking the lifecycle Resumed or requesting the initial redraw.
@@ -10471,6 +10493,15 @@ where
             let _ = dispatch_platform_realm(
                 realm_dispatch,
                 RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+            );
+        }));
+        // The web translation already emits hover-status changes for DOM
+        // pointerenter/pointerleave; route them like the desktop bootstrap
+        // does so a cursor leaving the canvas sweeps hover state.
+        window.on_hover_status_change(Box::new(move |is_hovered| {
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Event(PlatformToUi::WindowHover(is_hovered)),
             );
         }));
 

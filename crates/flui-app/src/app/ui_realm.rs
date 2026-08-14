@@ -2923,6 +2923,32 @@ impl UiRealm {
         }
     }
 
+    /// The pointer entered (`true`) or left (`false`) `presentation_id`'s
+    /// native window. Leave sweeps that presentation's hover state —
+    /// `MouseRegion::on_exit` fires for every hovered region and the cursor
+    /// resets — then pumps a frame so the un-hovered visuals actually paint.
+    /// Enter is a no-op: the next pointer move re-primes hover from a fresh
+    /// hit test on its own. A stale or unknown `presentation_id` is a traced
+    /// no-op, the same posture as every other addressed signal.
+    pub(crate) fn handle_window_hover_addressed(
+        &self,
+        presentation_id: PresentationId,
+        inside: bool,
+    ) {
+        if inside {
+            return;
+        }
+        let Some(presentation) = self.presentations.get(presentation_id) else {
+            tracing::trace!(
+                { flui_foundation::diagnostics::PRESENTATION_ID } = presentation_id.as_u64(),
+                "dropping a window-hover signal for a presentation this realm no longer hosts"
+            );
+            return;
+        };
+        presentation.gestures().handle_pointer_left_window();
+        self.request_redraw_for(presentation);
+    }
+
     /// Record that `presentation_id`'s native window just gained OS focus —
     /// [`FocusCoordinator::note_focus_gained`]'s sole write side. A stale or
     /// unknown `presentation_id` (already closed, or a forged/mixed address)
