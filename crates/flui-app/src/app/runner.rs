@@ -681,9 +681,11 @@ pub(super) enum PlatformToUi {
     /// crosses the window edge keeps its hover visuals forever. Enter is a
     /// no-op today: the next `CursorMoved` re-primes hover from a fresh hit
     /// test on its own.
-    // Only the winit desktop bootstrap constructs this so far; other
-    // backends keep dispatching the platform-level callback with no realm
-    // consumer, exactly as before.
+    // Constructed by the shared desktop bootstrap's registration, so every
+    // backend whose `PlatformWindow` dispatches `on_hover_status_change`
+    // (winit, headless, and the native backends that implement it) routes
+    // here; a backend that never fires the callback simply never constructs
+    // the event.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     WindowHover(bool),
     /// Drive a lifecycle target that requires owner-local realm cleanup (most
