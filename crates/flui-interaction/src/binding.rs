@@ -1075,16 +1075,15 @@ impl GestureBinding {
                     px_f32(scroll.state.position.x),
                     px_f32(scroll.state.position.y),
                 );
-                // The arbitration walk always uses a FRESH hit test at the
-                // event position (a signal has no down-capture; Flutter
-                // hit-tests each signal where it happens), even when an
-                // active contact pinned a cached route for observation.
+                // BOTH channels use a FRESH hit test at the event position:
+                // a signal has no down-capture — the oracle hit-tests every
+                // `PointerSignalEvent` where it happens and asserts the
+                // signal's pointer has no stored result, even mid-contact
+                // (`gestures/binding.dart` `_handlePointerEventImmediately`)
+                // — so a wheel tick during a drag reaches the widgets under
+                // the cursor, not the route captured at Down.
                 let fresh_result = hit_test_fn(position);
-                if self.hit_tests.contains_key(&pointer_id) {
-                    if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
-                        panic.resume();
-                    }
-                } else if let Some(panic) = self.dispatch_ephemeral(event, &fresh_result) {
+                if let Some(panic) = self.dispatch_ephemeral(event, &fresh_result) {
                     panic.resume();
                 }
                 let scroll_data = ScrollEventData::from(scroll);

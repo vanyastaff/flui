@@ -2911,3 +2911,60 @@ fn a_no_op_zoom_falls_through_to_the_outer_scrollable() {
         "the tick the viewer could not use must scroll the outer scrollable"
     );
 }
+
+/// A wheel tick that arrives MID-DRAG is observed by the widgets under the
+/// CURSOR, not by the route captured at Down — the oracle hit-tests every
+/// `PointerSignalEvent` fresh at the signal position and asserts a signal's
+/// pointer has no stored result (`gestures/binding.dart`
+/// `_handlePointerEventImmediately`), so the observation and claim channels
+/// always walk the same fresh path.
+#[test]
+fn a_wheel_tick_mid_drag_is_observed_under_the_cursor_not_the_captured_route() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(150.0, 0.0, 4850.0);
+    let observed_over_listener = Rc::new(Cell::new(0u32));
+
+    // Top half (0..150): a plain observing listener over a hittable surface.
+    // Bottom half (150..300): a scrollable to capture a drag.
+    let observed_in_listener = Rc::clone(&observed_over_listener);
+    let widget = flui_widgets::Column::new(vec![
+        Listener::new()
+            .on_pointer_signal(move |_event| {
+                observed_in_listener.set(observed_in_listener.get() + 1);
+            })
+            .child(SizedBox::new(300.0, 150.0).child(ColoredBox::new(Color::rgb(0x40, 0x40, 0x40))))
+            .into_view()
+            .boxed(),
+        SizedBox::new(300.0, 150.0)
+            .child(
+                Scrollable::new()
+                    .controller(controller.clone())
+                    .child(SizedBox::new(300.0, 5000.0)),
+            )
+            .into_view()
+            .boxed(),
+    ]);
+
+    let vsync = Vsync::new();
+    let wrapped = VsyncScope::new(vsync.clone(), widget);
+    let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
+    scoped.adopt_vsync(vsync);
+
+    // Start a drag on the scrollable and HOLD it (no release): the pointer
+    // now has a captured Down route through the bottom half.
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 220.0);
+    assert!(
+        controller.pixels() > 0.0,
+        "precondition: the drag is live and captured by the scrollable"
+    );
+
+    // A wheel tick over the TOP half, while the drag still holds.
+    scoped.dispatch_scroll(150.0, 75.0, 0.0, 53.0);
+
+    assert_eq!(
+        observed_over_listener.get(),
+        1,
+        "the listener under the cursor observes the signal — not the captured drag route"
+    );
+}
