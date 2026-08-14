@@ -681,12 +681,10 @@ pub(super) enum PlatformToUi {
     /// crosses the window edge keeps its hover visuals forever. Enter is a
     /// no-op today: the next `CursorMoved` re-primes hover from a fresh hit
     /// test on its own.
-    // Constructed by the shared desktop bootstrap's registration, so every
-    // backend whose `PlatformWindow` dispatches `on_hover_status_change`
-    // (winit, headless, and the native backends that implement it) routes
-    // here; a backend that never fires the callback simply never constructs
-    // the event.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    // Constructed by both the desktop and web bootstraps' registrations, so
+    // every backend whose `PlatformWindow` dispatches
+    // `on_hover_status_change` routes here; a backend that never fires the
+    // callback simply never constructs the event.
     WindowHover(bool),
     /// Drive a lifecycle target that requires owner-local realm cleanup (most
     /// notably Detached during platform shutdown).
@@ -10475,6 +10473,15 @@ where
             let _ = dispatch_platform_realm(
                 realm_dispatch,
                 RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+            );
+        }));
+        // The web translation already emits hover-status changes for DOM
+        // pointerenter/pointerleave; route them like the desktop bootstrap
+        // does so a cursor leaving the canvas sweeps hover state.
+        window.on_hover_status_change(Box::new(move |is_hovered| {
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Event(PlatformToUi::WindowHover(is_hovered)),
             );
         }));
 

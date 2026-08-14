@@ -114,6 +114,12 @@ struct DeviceState {
     active_order: Vec<RegionId>,
     /// Current mouse cursor for this device.
     current_cursor: CursorIcon,
+    /// Whether the device's pointer is inside the hosting window. Cleared by
+    /// the window-leave sweep, restored by any subsequent motion — while
+    /// false, ambient re-hit-testing (`update_all_devices`) must skip the
+    /// device, or the frame requested right after a sweep would re-enter the
+    /// regions at the stale last-known position and undo the sweep.
+    inside_window: bool,
 }
 
 impl DeviceState {
@@ -124,6 +130,7 @@ impl DeviceState {
             active_regions: HashSet::new(),
             active_order: Vec::new(),
             current_cursor: CursorIcon::Default,
+            inside_window: true,
         }
     }
 }
@@ -274,6 +281,7 @@ impl MouseTracker {
                     state.active_regions.clear();
                     state.active_order.clear();
                     state.current_cursor = CursorIcon::Default;
+                    state.inside_window = false;
                     Some(DeviceWork {
                         device_id,
                         position,
@@ -285,8 +293,25 @@ impl MouseTracker {
                 })
                 .collect()
         };
+        // Every device is swept even if an earlier device's callback
+        // panics — the first panic resumes only after the loop, the same
+        // all-callbacks-run-first posture `DeviceWork::invoke` has within
+        // one device.
+        let mut first_panic = None;
         for work in sweeps {
-            work.invoke();
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| work.invoke())) {
+                if first_panic.is_none() {
+                    first_panic = Some(payload);
+                } else {
+                    tracing::error!(
+                        "window-leave sweep panicked for a later device after an earlier \
+                         device's callback already panicked; only the first is resumed"
+                    );
+                }
+            }
+        }
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
         }
     }
 
@@ -332,6 +357,7 @@ impl MouseTracker {
                 .entry(device_id)
                 .or_insert_with(|| DeviceState::new(pointer_type, position));
             state.pointer_type = pointer_type;
+            state.inside_window = true;
 
             let entered: SmallVec<[RegionId; 4]> = resolved
                 .order
@@ -465,6 +491,10 @@ impl MouseTracker {
             .borrow()
             .devices
             .iter()
+            // A device swept by a window-leave is not re-hit-tested at its
+            // stale in-window position — that would re-enter the regions the
+            // sweep just exited. Its next real motion re-primes it.
+            .filter(|(_, state)| state.inside_window)
             .map(|(id, state)| (*id, state.last_position))
             .collect();
 
@@ -1126,5 +1156,71 @@ mod tests {
             tracker.mouse_is_connected(),
             "the device registration survives"
         );
+    }
+    /// The frame requested right after a window-leave sweep re-hit-tests all
+    /// devices ambiently (`update_all_devices`); a swept device must be
+    /// SKIPPED there — its last-known position is inside the window and
+    /// would re-enter the region the sweep just exited. The next real
+    /// motion re-primes it.
+    #[test]
+    fn a_swept_device_is_not_re_entered_by_ambient_re_hit_testing() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let tracker = MouseTracker::new();
+        let enters = Rc::new(Cell::new(0));
+        let exits = Rc::new(Cell::new(0));
+
+        let target = lane.enter(|| {
+            let enter_count = Rc::clone(&enters);
+            let exit_count = Rc::clone(&exits);
+            handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_enter: Some(Rc::new(move |_device, _position| {
+                        enter_count.set(enter_count.get() + 1);
+                    })),
+                    on_exit: Some(Rc::new(move |_device, _position| {
+                        exit_count.set(exit_count.get() + 1);
+                    })),
+                    on_hover: None,
+                })
+                .expect("register mouse region")
+        });
+
+        let region_id = RenderId::new(1);
+        let hits_region = move || {
+            let mut result = HitTestResult::new();
+            result.add(
+                HitTestEntry::new(region_id)
+                    .mouse_annotation(MouseTrackerAnnotation::new(region_id, target)),
+            );
+            result
+        };
+
+        add_primary_mouse(&tracker);
+        let inside_event =
+            make_move_event(Offset::new(Pixels(10.0), Pixels(10.0)), PointerType::Mouse);
+        lane.enter(|| {
+            tracker.update_with_motion(&inside_event, PointerMotionKind::Hover, &hits_region());
+        });
+        assert_eq!((enters.get(), exits.get()), (1, 0));
+
+        lane.enter(|| tracker.dispatch_window_left());
+        assert_eq!((enters.get(), exits.get()), (1, 1));
+
+        // The post-sweep frame's ambient refresh: the hit test would still
+        // find the region at the stale position — the swept device must not
+        // be offered to it.
+        lane.enter(|| tracker.update_all_devices(|_| hits_region()));
+        assert_eq!(
+            (enters.get(), exits.get()),
+            (1, 1),
+            "a swept device must not be re-entered at its stale position"
+        );
+
+        // A real motion back inside re-primes normally.
+        lane.enter(|| {
+            tracker.update_with_motion(&inside_event, PointerMotionKind::Hover, &hits_region());
+        });
+        assert_eq!((enters.get(), exits.get()), (2, 1));
     }
 }
