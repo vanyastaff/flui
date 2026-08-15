@@ -73,7 +73,13 @@ pub fn create_linear_gradient_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Linear Gradient Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/linear.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(
+            concat!(
+                include_str!("shaders/common/clip.wgsl"),
+                include_str!("shaders/gradients/linear.wgsl")
+            )
+            .into(),
+        ),
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -132,7 +138,13 @@ pub fn create_radial_gradient_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Radial Gradient Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/radial.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(
+            concat!(
+                include_str!("shaders/common/clip.wgsl"),
+                include_str!("shaders/gradients/radial.wgsl")
+            )
+            .into(),
+        ),
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -191,7 +203,13 @@ pub fn create_sweep_gradient_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Sweep Gradient Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/sweep.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(
+            concat!(
+                include_str!("shaders/common/clip.wgsl"),
+                include_str!("shaders/gradients/sweep.wgsl")
+            )
+            .into(),
+        ),
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

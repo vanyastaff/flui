@@ -31,7 +31,7 @@ impl DrawBatcher {
     /// * `gradient_start`  — gradient start point (local to `bounds`)
     /// * `gradient_end`    — gradient end point (local to `bounds`)
     /// * `stops`           — gradient color stops (max 8)
-    /// * `corner_radius`   — uniform corner radius (0.0 = sharp)
+    /// * `corner_radii`    — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
     #[allow(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
@@ -44,7 +44,7 @@ impl DrawBatcher {
         gradient_start: glam::Vec2,
         gradient_end: glam::Vec2,
         stops: &[effects::GradientStop],
-        corner_radius: f32,
+        corner_radii: [f32; 4],
     ) {
         use super::super::instancing::LinearGradientInstance;
 
@@ -102,7 +102,7 @@ impl DrawBatcher {
             ],
             gradient_start,
             gradient_end,
-            [corner_radius; 4],
+            corner_radii,
             stop_count as u32,
         )
         .with_stop_offset(stop_offset);
@@ -126,7 +126,7 @@ impl DrawBatcher {
     /// * `center`         — gradient center (local to `bounds`)
     /// * `radius`         — gradient radius
     /// * `stops`          — gradient color stops (max 8)
-    /// * `corner_radius`  — uniform corner radius (0.0 = sharp)
+    /// * `corner_radii`   — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
     #[allow(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
@@ -139,7 +139,7 @@ impl DrawBatcher {
         center: glam::Vec2,
         radius: f32,
         stops: &[effects::GradientStop],
-        corner_radius: f32,
+        corner_radii: [f32; 4],
     ) {
         use super::super::instancing::RadialGradientInstance;
 
@@ -194,7 +194,7 @@ impl DrawBatcher {
             ],
             center,
             radius,
-            [corner_radius; 4],
+            corner_radii,
             stop_count as u32,
         )
         .with_stop_offset(stop_offset);
@@ -219,7 +219,7 @@ impl DrawBatcher {
     /// * `start_angle`  — start angle in radians
     /// * `end_angle`    — end angle in radians
     /// * `stops`        — gradient color stops (max 8)
-    /// * `corner_radius`— uniform corner radius (0.0 = sharp)
+    /// * `corner_radii` — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
     #[allow(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
@@ -233,7 +233,7 @@ impl DrawBatcher {
         start_angle: f32,
         end_angle: f32,
         stops: &[effects::GradientStop],
-        corner_radius: f32,
+        corner_radii: [f32; 4],
     ) {
         use super::super::instancing::SweepGradientInstance;
 
@@ -289,7 +289,7 @@ impl DrawBatcher {
             center,
             start_angle,
             end_angle,
-            [corner_radius; 4],
+            corner_radii,
             stop_count as u32,
         )
         .with_stop_offset(stop_offset);
@@ -512,7 +512,7 @@ impl DrawBatcher {
                     start,
                     end,
                     &stops,
-                    corner_radii[0],
+                    corner_radii,
                 );
             }
             Shader::RadialGradient { center, radius, .. } => {
@@ -525,7 +525,7 @@ impl DrawBatcher {
                     c,
                     *radius,
                     &stops,
-                    corner_radii[0],
+                    corner_radii,
                 );
             }
             Shader::SweepGradient {
@@ -544,7 +544,7 @@ impl DrawBatcher {
                     *start_angle,
                     *end_angle,
                     &stops,
-                    corner_radii[0],
+                    corner_radii,
                 );
             }
             Shader::Solid { .. } | _ => return false,
