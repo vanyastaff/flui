@@ -61,19 +61,6 @@ var<storage, read> gradient_stops: array<GradientStop>;
 // SDF Functions
 // =============================================================================
 
-fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    let r2 = select(r.zw, r.xy, p.x > 0.0);
-    let r3 = select(r2.y, r2.x, p.y > 0.0);
-    let q = abs(p) - b + vec2<f32>(r3);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r3;
-}
-
-/// L2 gradient magnitude for ~1-device-px AA on diagonal/rotated clip edges.
-fn sdfToAlpha(dist: f32) -> f32 {
-    let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
-    return 1.0 - smoothstep(-edge_width, edge_width, dist);
-}
-
 // =============================================================================
 // Gradient Interpolation (same as linear)
 // =============================================================================

@@ -3292,6 +3292,106 @@ mod gpu_tests {
         );
     }
 
+    /// A gradient-filled rrect rounds the corner the caller asked for.
+    ///
+    /// The gradient shaders carried their own `sdRoundedBox` whose quadrant
+    /// selection was a permutation of the canonical one:
+    ///
+    /// ```text
+    /// canonical: r2 = select(vec2(r.x, r.w), vec2(r.y, r.z), p.x > 0.0)
+    ///            r3 = select(r2.x, r2.y, p.y > 0.0)
+    /// gradients: r2 = select(r.zw, r.xy, p.x > 0.0)
+    ///            r3 = select(r2.y, r2.x, p.y > 0.0)
+    /// ```
+    ///
+    /// With `r = [tl, tr, br, bl]` the gradient form resolves top-left to `bl`,
+    /// bottom-left to `br`, and bottom-right to `tl` — only top-right is right.
+    /// Four equal radii hide it completely, which is why it survived: the
+    /// single-`f32` `gradient_rect` entry point passes `[r; 4]`. It becomes
+    /// visible through `dispatch_shader_rect`, which carries genuinely
+    /// per-corner radii from `RRect` (`batches/shapes.rs`) — a card rounded on
+    /// top only, filled with a gradient.
+    ///
+    /// Geometry: only the BOTTOM-LEFT corner is rounded, and hugely (56 px on a
+    /// 128 px surface). Sampling the bottom-left corner pixel distinguishes the
+    /// two: correct → cut away; permuted → bottom-left resolves to `br` = 0,
+    /// square, painted.
+    #[test]
+    fn a_gradient_rrect_rounds_the_corner_it_was_given() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        const R: f32 = 56.0;
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        // [tl, tr, br, bl] = [0, 0, 0, R] — bottom-left only.
+        use flui_types::geometry::{RRect, Radius};
+        let zero = Radius::circular(Pixels(0.0));
+        let rrect = RRect::new(full, zero, zero, zero, Radius::circular(Pixels(R)));
+
+        // The base colour is RED and the gradient is BLUE on purpose: a blue
+        // centre pixel proves the gradient pipeline ran at all, so a failure
+        // here cannot be the tessellated fallback quietly standing in.
+        let mut paint = Paint::fill(Color::rgb(255, 0, 0));
+        paint.shader = Some(flui_types::painting::Shader::LinearGradient {
+            from: flui_types::Offset::new(Pixels(0.0), Pixels(0.0)),
+            to: flui_types::Offset::new(Pixels(0.0), Pixels(SURFACE_HEIGHT as f32)),
+            colors: vec![Color::rgb(0, 0, 255), Color::rgb(0, 0, 255)],
+            stops: Some(vec![0.0, 1.0]),
+            tile_mode: flui_types::painting::TileMode::Clamp,
+        });
+        painter.rrect(rrect, &paint);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Gradient RRect Corner Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let h = SURFACE_HEIGHT as usize;
+        let at = |x: usize, y: usize| pixels[y * w + x];
+
+        let centre = at(w / 2, h / 2);
+        assert!(
+            centre[2] > 200 && centre[0] < 64,
+            "precondition: the centre must be the gradient's BLUE, not the base \
+             RED — a red centre means the gradient pipeline never ran and this \
+             test is measuring the tessellated fallback; got {centre:?}"
+        );
+
+        // Top-left: radius 0, so this corner stays square and painted. Without
+        // it the test would pass on a shader that rounded every corner.
+        let top_left = at(2, 2);
+        assert!(
+            top_left[3] > 200,
+            "precondition: the top-left corner has radius 0 and must stay \
+             square; got {top_left:?}"
+        );
+
+        // Bottom-left: radius R, so this pixel is outside the shape.
+        let bottom_left = at(2, h - 3);
+        assert!(
+            bottom_left[3] < 32,
+            "the bottom-left corner was given radius {R} and must be cut away; \
+             got rgba={bottom_left:?} — the gradient shader resolved this \
+             corner to a different entry of [tl, tr, br, bl]"
+        );
+    }
+
     /// Text that is the ONLY content of an opacity layer must still belong
     /// to the layer: composited with the layer (subject to its opacity) and
     /// buried by top-level geometry drawn AFTER the layer — not dropped as
