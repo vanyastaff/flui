@@ -107,7 +107,7 @@ impl DrawBatcher {
         // a 1.0-elevation card otherwise gets a single ~0.75px-offset copy,
         // i.e. no visible soft shadow at all.
         if let Some(rrect) = path.rrect_hint() {
-            Self::draw_analytic_rrect_shadow(segment, state, &rrect, color, elevation);
+            Self::draw_analytic_rrect_shadow(segment, draw_order, state, &rrect, color, elevation);
             return;
         }
 
@@ -178,6 +178,7 @@ impl DrawBatcher {
     /// reproduction — shadow shaping is a sanctioned leapfrog area.
     fn draw_analytic_rrect_shadow(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<super::super::command_ir::DrawItem>,
         state: &GpuStateStack,
         rrect: &flui_types::geometry::RRect,
         color: Color,
@@ -208,7 +209,14 @@ impl DrawBatcher {
         let shadow_color = Color::rgba(color.r, color.g, color.b, alpha);
 
         let params = super::super::effects::ShadowParams::new(offset, blur_sigma, shadow_color);
-        Self::shadow_rect(segment, rect_pos, rect_size, corner_radius, &params);
+        Self::shadow_rect(
+            segment,
+            draw_order,
+            rect_pos,
+            rect_size,
+            corner_radius,
+            &params,
+        );
     }
 
     /// Record a filled or stroked path, using the per-frame tessellation cache

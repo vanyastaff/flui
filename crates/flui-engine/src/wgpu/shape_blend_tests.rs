@@ -534,6 +534,274 @@ mod gpu_tests {
         );
     }
 
+    // ── Painter's algorithm across primitive KINDS ──────────────────────────
+
+    /// Two overlapping SrcOver draws of DIFFERENT primitive kinds composite in
+    /// the order they were recorded.
+    ///
+    /// This is the canvas contract every retained renderer rests on: a command
+    /// recorded later paints over one recorded earlier. `DrawSegment` stores
+    /// primitives in parallel per-kind batches and `flush_segment` replays them
+    /// in a fixed phase order (shadows -> rects -> circles -> arcs -> gradients
+    /// -> tessellated -> images), so without an explicit seal the circle — a
+    /// LATER phase — composites over a rect recorded after it.
+    ///
+    /// Neither draw triggers any existing seal: `seal_text_tail` is a no-op
+    /// with no text recorded, and `Paint::fill` yields `BlendMode::SrcOver`, so
+    /// the non-SrcOver and advanced-blend seals do not fire either.
+    ///
+    /// If reverted (drop the backward-kind-transition seal): the centre pixel
+    /// reads red — the circle painting over a rect that was recorded after it.
+    #[test]
+    fn a_later_rect_paints_over_an_earlier_circle() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_sampleable_surface(&device);
+
+        // Opaque white backdrop, so any read-back colour is unambiguous.
+        clear_surface_to_color(
+            &device,
+            &queue,
+            &surface_view,
+            wgpu::Color {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+
+        // 1. A red circle covering the middle of the surface.
+        painter.circle(
+            flui_types::Point::new(
+                Pixels(SURFACE_WIDTH as f32 / 2.0),
+                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+            ),
+            20.0,
+            &Paint::fill(Color::rgba(255, 0, 0, 255)),
+        );
+
+        // 2. An opaque blue rect recorded AFTER it, covering the same area.
+        painter.rect(
+            Rect::from_xywh(
+                Pixels(SURFACE_WIDTH as f32 / 4.0),
+                Pixels(SURFACE_HEIGHT as f32 / 4.0),
+                Pixels(SURFACE_WIDTH as f32 / 2.0),
+                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+            ),
+            &Paint::fill(Color::rgba(0, 0, 255, 255)),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("kind-order encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let centre = pixels
+            [(SURFACE_HEIGHT as usize / 2) * SURFACE_WIDTH as usize + (SURFACE_WIDTH as usize / 2)];
+
+        assert!(
+            centre[2] > 200 && centre[0] < 50,
+            "the rect was recorded after the circle and must composite over it; \
+             got {centre:?} (R high means the circle won, i.e. draw order is \
+             decided by primitive kind rather than record order)"
+        );
+    }
+
+    /// Two gradients with a rect between them both render their own colours.
+    ///
+    /// This pins the reason gradients are EXCLUDED from the draw-order kind
+    /// seal. Every segment's stop table is uploaded to the same
+    /// `gradient_stops_buffer` at offset 0
+    /// (`PipelineSet::refresh_gradient_bind_group`), and all passes are
+    /// recorded into one `CommandEncoder` before submission — so the last
+    /// `write_buffer` wins and every gradient pass in the frame samples that
+    /// one table. Two gradient-bearing segments therefore cannot both be
+    /// correct today.
+    ///
+    /// Sealing on `Phase::Gradient` would create exactly that situation
+    /// routinely, so `DrawBatcher::gradient_rect` and its siblings do not call
+    /// `begin_phase`. This test is the guard: add gradients to the seal without
+    /// first giving each segment its own slice of the stop buffer (a dynamic
+    /// offset, or one buffer per segment) and the first gradient here reads the
+    /// second's colour.
+    ///
+    /// It is also the acceptance test for that follow-up: once per-segment stop
+    /// tables land, gradients can join the seal and this stays green.
+    #[test]
+    fn two_gradients_separated_by_a_rect_keep_their_own_colours() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_sampleable_surface(&device);
+
+        clear_surface_to_color(
+            &device,
+            &queue,
+            &surface_view,
+            wgpu::Color {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        );
+
+        let solid = |rgba: [f32; 4]| {
+            [
+                crate::wgpu::effects::GradientStop {
+                    color: rgba,
+                    position: 0.0,
+                    padding: [0.0; 3],
+                },
+                crate::wgpu::effects::GradientStop {
+                    color: rgba,
+                    position: 1.0,
+                    padding: [0.0; 3],
+                },
+            ]
+        };
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+
+        // 1. A green gradient in the top-left quadrant — fills the first
+        //    segment's stop table so the second gradient's offset is non-zero.
+        let top_left = Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(24.0), Pixels(24.0));
+        painter.gradient_rect(
+            top_left,
+            glam::Vec2::new(0.0, 0.0),
+            glam::Vec2::new(24.0, 0.0),
+            &solid([0.0, 1.0, 0.0, 1.0]),
+            0.0,
+        );
+
+        // 2. A circle then a rect. Circle -> Rect is a genuine BACKWARD kind
+        //    transition, so `begin_phase` would seal here — and the segment it
+        //    would seal is the one holding the first gradient's stop table.
+        //    Gradients skipping `begin_phase` themselves does not prevent this;
+        //    only the explicit gradient guard in `begin_phase` does. A version
+        //    of this test with just a rect between the gradients never reaches
+        //    a backward transition and passes either way.
+        painter.circle(
+            flui_types::Point::new(Pixels(6.0), Pixels(52.0)),
+            4.0,
+            &Paint::fill(Color::rgba(0, 0, 0, 255)),
+        );
+        painter.rect(
+            Rect::from_xywh(Pixels(0.0), Pixels(40.0), Pixels(8.0), Pixels(8.0)),
+            &Paint::fill(Color::rgba(0, 0, 0, 255)),
+        );
+
+        // 3. A blue gradient recorded into the post-seal segment.
+        let bottom_right = Rect::from_xywh(Pixels(36.0), Pixels(36.0), Pixels(24.0), Pixels(24.0));
+        painter.gradient_rect(
+            bottom_right,
+            glam::Vec2::new(0.0, 0.0),
+            glam::Vec2::new(24.0, 0.0),
+            &solid([0.0, 0.0, 1.0, 1.0]),
+            0.0,
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("gradient stop-table encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let sample = |x: usize, y: usize| pixels[y * SURFACE_WIDTH as usize + x];
+
+        let first = sample(12, 12);
+        assert!(
+            first[1] > 200 && first[2] < 60,
+            "the first gradient must render green; got {first:?} — reading the \
+             SECOND gradient's colour here means the two ended up in different \
+             segments, which the shared stop buffer cannot represent"
+        );
+
+        let second = sample(48, 48);
+        assert!(
+            second[2] > 200 && second[1] < 60,
+            "the second gradient must render blue; got {second:?}"
+        );
+    }
+
+    /// The reverse direction, so the fix cannot be a blanket "always seal
+    /// between kinds" that happens to satisfy the case above.
+    ///
+    /// Circle replays in a LATER phase than rect, so a circle recorded after a
+    /// rect is already correct today and must stay correct — and must NOT pay
+    /// for a segment split, since nothing is out of order.
+    #[test]
+    fn a_later_circle_paints_over_an_earlier_rect() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_sampleable_surface(&device);
+
+        clear_surface_to_color(
+            &device,
+            &queue,
+            &surface_view,
+            wgpu::Color {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+
+        painter.rect(
+            Rect::from_xywh(
+                Pixels(SURFACE_WIDTH as f32 / 4.0),
+                Pixels(SURFACE_HEIGHT as f32 / 4.0),
+                Pixels(SURFACE_WIDTH as f32 / 2.0),
+                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+            ),
+            &Paint::fill(Color::rgba(0, 0, 255, 255)),
+        );
+        painter.circle(
+            flui_types::Point::new(
+                Pixels(SURFACE_WIDTH as f32 / 2.0),
+                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+            ),
+            20.0,
+            &Paint::fill(Color::rgba(255, 0, 0, 255)),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("kind-order encoder (forward)"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let centre = pixels
+            [(SURFACE_HEIGHT as usize / 2) * SURFACE_WIDTH as usize + (SURFACE_WIDTH as usize / 2)];
+
+        assert!(
+            centre[0] > 200 && centre[2] < 50,
+            "the circle was recorded after the rect and must composite over it; \
+             got {centre:?}"
+        );
+    }
+
     // ── S8: Scissor-respecting foreground — advanced shape inside clip_rect ──────
 
     /// S8: A `clip_rect` scissor applied to an advanced shape correctly confines

@@ -162,6 +162,7 @@ impl WgpuPainter {
     ) {
         DrawBatcher::shadow_rect(
             &mut self.current_segment,
+            &mut self.draw_order,
             rect_pos,
             rect_size,
             corner_radius,

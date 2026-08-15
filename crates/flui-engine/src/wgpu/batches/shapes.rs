@@ -8,8 +8,8 @@ use flui_types::{
 
 use super::{
     super::{
-        command_ir::DrawItem, command_ir::DrawSegment, pipeline, state_stack::GpuStateStack,
-        vertex::Vertex,
+        command_ir::DrawItem, command_ir::DrawSegment, command_ir::Phase, pipeline,
+        state_stack::GpuStateStack, vertex::Vertex,
     },
     DrawBatcher,
 };
@@ -81,6 +81,7 @@ impl DrawBatcher {
                     let instance = state.apply_active_clip(
                         super::super::instancing::RectInstance::rect(device_rect, color),
                     );
+                    Self::begin_phase(segment, draw_order, Phase::Rect);
                     let _ = segment.rect_batch.add(instance);
                     DrawSegment::push_scissor_region(
                         &mut segment.rect_scissors,
@@ -107,6 +108,7 @@ impl DrawBatcher {
                             translation,
                         ),
                     );
+                    Self::begin_phase(segment, draw_order, Phase::Rect);
                     let _ = segment.rect_batch.add(instance);
                     // Scissor = the active damage/clip region, exactly as the
                     // axis-aligned path. The shape is bounded by its own quad +
@@ -307,6 +309,7 @@ impl DrawBatcher {
                         radius_bottom_left,
                     ),
                 );
+                Self::begin_phase(segment, draw_order, Phase::Rect);
                 let _ = segment.rect_batch.add(instance);
                 DrawSegment::push_scissor_region(
                     &mut segment.rect_scissors,
@@ -343,6 +346,7 @@ impl DrawBatcher {
                         translation,
                     ),
                 );
+                Self::begin_phase(segment, draw_order, Phase::Rect);
                 let _ = segment.rect_batch.add(instance);
                 // Scissor = the active damage/clip region (same as the axis-aligned
                 // path); the shape is bounded by its own quad + SDF, so a per-shape
@@ -430,6 +434,7 @@ impl DrawBatcher {
                         color,
                         [sx, sy],
                     );
+                    Self::begin_phase(segment, draw_order, Phase::Circle);
                     let _ = segment.circle_batch.add(instance);
                     DrawSegment::push_scissor_region(
                         &mut segment.circle_scissors,
@@ -458,6 +463,7 @@ impl DrawBatcher {
                         color,
                         [tx, ty],
                     );
+                    Self::begin_phase(segment, draw_order, Phase::Circle);
                     let _ = segment.circle_batch.add(instance);
                     DrawSegment::push_scissor_region(
                         &mut segment.circle_scissors,
@@ -590,6 +596,7 @@ impl DrawBatcher {
                 color,
                 [tx, ty],
             );
+            Self::begin_phase(segment, draw_order, Phase::Circle);
             let _ = segment.circle_batch.add(instance);
             DrawSegment::push_scissor_region(&mut segment.circle_scissors, state.current_scissor());
         } else if paint.style == PaintStyle::Fill {
@@ -776,6 +783,7 @@ impl DrawBatcher {
                     color,
                     [tx, ty],
                 );
+                Self::begin_phase(segment, draw_order, Phase::Arc);
                 let _ = segment.arc_batch.add(instance);
                 DrawSegment::push_scissor_region(
                     &mut segment.arc_scissors,
