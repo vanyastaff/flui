@@ -194,7 +194,13 @@ impl GpuReplay {
     /// layer. A batch that gains a clip slot later is remapped by adding it here,
     /// in the one place that already reads them all.
     ///
-    /// Arcs are absent because `ArcInstance` carries no clip slot.
+    /// Two kinds are deliberately absent, neither by oversight. `ArcInstance`
+    /// carries no clip slot at all. `TextureInstance` carries one, but a segment
+    /// holding `cached_images`/`external_images` never reaches a shrunken
+    /// intermediate: `content_aabb` (`painter/layer.rs`) returns `None` for it, so
+    /// `fb_dim == viewport` and this remap would be the identity anyway. If that
+    /// fallback gate ever admits images, their clips must be added here in the
+    /// same change.
     fn remap_segment_clips(
         segment: &mut super::command_ir::DrawSegment,
         origin: (f32, f32),
