@@ -80,6 +80,58 @@ pub(super) struct GpuStateStack {
 
     /// Active SDF superellipse clip uniform. All-zeros means no clip.
     current_rsuperellipse_clip: [f32; 12],
+
+    // ===== Clip-local mapping =====
+    /// Saved device-to-clip-local mappings, one per `save()`.
+    clip_inv_stack: Vec<[f32; 6]>,
+
+    /// Maps a device-space point into the space the active clip's bounds and
+    /// radii are expressed in: `[a, b, c, d, tx, ty]`, columns first, so
+    /// `local = (a, b) * p.x + (c, d) * p.y + (tx, ty)`.
+    ///
+    /// The clip slots hold LOCAL bounds — the shape the caller asked for,
+    /// untransformed — and this is the inverse of the CTM that was current
+    /// when the clip was set. Storing device-space bounds instead cannot
+    /// express a rotation (an axis-aligned box has no rotated form) and
+    /// mangles a non-uniform scale (a scaled circular corner is an ellipse,
+    /// and one radius per corner cannot hold one).
+    ///
+    /// The drawn rrect already worked this way — `with_affine_transform` sends
+    /// local bounds plus the affine and lets the shader place them. This is
+    /// the same information, inverted, because the fragment stage starts from
+    /// a device-space position and has to get back.
+    ///
+    /// Identity is `[1, 0, 0, 1, 0, 0]`.
+    current_clip_inv: [f32; 6],
+}
+
+/// Identity device-to-clip-local mapping: columns `(1, 0)`, `(0, 1)`, no
+/// translation.
+const CLIP_INV_IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// The active SDF clip, in the form every consumer stores it.
+///
+/// One value rather than three loose arrays because the three travel together
+/// everywhere — instance slots, the tessellated batch uniform, and the
+/// offscreen remaps — and a caller that carried two of them would produce a
+/// clip evaluated in the wrong space with nothing to catch it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ResolvedClip {
+    /// `[x, y, w, h, tl, tr, br, bl]` in CLIP-LOCAL space.
+    pub(crate) rrect: [f32; 8],
+    /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
+    pub(crate) kind: [u32; 4],
+    /// Device-to-clip-local mapping — see `GpuStateStack::current_clip_inv`.
+    pub(crate) device_to_local: [f32; 6],
+}
+
+impl ResolvedClip {
+    /// No clip active.
+    pub(crate) const NONE: Self = Self {
+        rrect: [0.0; 8],
+        kind: [0; 4],
+        device_to_local: CLIP_INV_IDENTITY,
+    };
 }
 
 impl GpuStateStack {
@@ -95,6 +147,8 @@ impl GpuStateStack {
             current_rrect_clip: [0.0; 8],
             rsuperellipse_clip_stack: Vec::new(),
             current_rsuperellipse_clip: [0.0; 12],
+            clip_inv_stack: Vec::new(),
+            current_clip_inv: CLIP_INV_IDENTITY,
         }
     }
 
@@ -123,6 +177,8 @@ impl GpuStateStack {
         self.rrect_clip_stack.clear();
         self.current_rsuperellipse_clip = [0.0; 12];
         self.rsuperellipse_clip_stack.clear();
+        self.current_clip_inv = CLIP_INV_IDENTITY;
+        self.clip_inv_stack.clear();
         // Identity is the construction-time value. Reset to the same initial
         // value so no cross-frame CTM leak can occur.
         self.current_transform = glam::Mat4::IDENTITY;
@@ -184,6 +240,7 @@ impl GpuStateStack {
         self.rrect_clip_stack.push(self.current_rrect_clip);
         self.rsuperellipse_clip_stack
             .push(self.current_rsuperellipse_clip);
+        self.clip_inv_stack.push(self.current_clip_inv);
     }
 
     /// Pop transform, scissor (conditionally), and both SDF clip uniforms.
@@ -217,6 +274,10 @@ impl GpuStateStack {
             .rsuperellipse_clip_stack
             .pop()
             .expect("rsuperellipse_clip_stack parallel to transform_stack");
+        self.current_clip_inv = self
+            .clip_inv_stack
+            .pop()
+            .expect("BUG: clip_inv_stack is pushed in save() alongside transform_stack");
 
         #[cfg(debug_assertions)]
         tracing::trace!(
@@ -448,186 +509,91 @@ impl GpuStateStack {
         reason = "r_tl/r_tr/r_br/r_bl mirror the rrect-corner field names; renaming would obscure intent"
     )]
     pub(super) fn clip_rrect(&mut self, rrect: RRect, surface_size: (u32, u32)) {
-        let transform = self.current_transform;
         let rect = rrect.rect;
 
-        // A rotated or skewed CTM has no representation in this slot: the
-        // shader evaluates an axis-aligned box, and the bounds below are
-        // derived from two corners, which for a rotated rect is not even its
-        // AABB — a 45° rotation collapses them onto one vertical, giving a
-        // ZERO-width clip that erases everything it covers. Leaving the slot
-        // empty and relying on the coarse scissor over-includes, which is the
-        // survivable direction of wrong; a clip carried in local space with
-        // its own transform is what would represent this properly.
-        if !self.is_axis_aligned() {
-            self.current_rrect_clip = [0.0; 8];
-            self.current_rsuperellipse_clip = [0.0; 12];
-            self.clip_rect(rrect.rect, surface_size);
-            return;
-        }
-
-        let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
-            (rect.left().0, rect.top().0, rect.width().0, rect.height().0)
-        } else {
-            let tl = transform * glam::Vec4::new(rect.left().0, rect.top().0, 0.0, 1.0);
-            let br = transform * glam::Vec4::new(rect.right().0, rect.bottom().0, 0.0, 1.0);
-            let min_x = tl.x.min(br.x);
-            let min_y = tl.y.min(br.y);
-            let max_x = tl.x.max(br.x);
-            let max_y = tl.y.max(br.y);
-            (min_x, min_y, max_x - min_x, max_y - min_y)
-        };
-
-        // The radii live in the same space as the bounds, so they have to make
-        // the same trip. Transforming the bounds alone leaves them in logical
-        // pixels while the SDF evaluates against a device-pixel rect: at the
-        // root `scale(dpr)` of any HiDPI display a 100×100 circular clip
-        // becomes 200×200 with 50-pixel corners — a rounded square, not a
-        // circle. Derive the per-axis factors from what the bounds actually
-        // did rather than decomposing the matrix, so a translation-only or
-        // identity transform yields exactly 1.0 and the values stay bit-equal
-        // to the untransformed path.
-        // Only meaningful when the CTM is axis-aligned. Under rotation or
-        // skew the bounds above are the AABB of a rotated rect, so this ratio
-        // is the AABB's aspect change and not a scale at all — at 45° it would
-        // inflate every radius by ~1.41 for no reason. The SDF slot cannot
-        // express a rotated clip either way (the shader evaluates an
-        // axis-aligned box), so that case keeps its radii untouched: still an
-        // approximation, but the same one it was before, rather than a new
-        // and larger distortion layered on top. Representing a rotated clip
-        // properly needs the clip carried in local space with its own
-        // transform — a change to the instance format, not to this line.
-        let (scale_x, scale_y) = if rect.width().0 > 0.0 && rect.height().0 > 0.0 {
-            (w / rect.width().0, h / rect.height().0)
-        } else {
-            (1.0, 1.0)
-        };
-        // This slot carries ONE radius per corner, so an elliptical corner is
-        // not representable in it. Under a non-uniform scale — `scale(2, 1)`
-        // turning a circle into an ellipse with radii (100, 50) — the two
-        // scaled axes have to collapse to a scalar, and a bare `max` would
-        // hand the shader a radius larger than the box's own half-height. The
-        // rounded-box SDF is degenerate there and clips visibly INWARD.
+        // LOCAL bounds and radii — exactly what the caller asked for. The
+        // mapping below is what places them; see `current_clip_inv`.
         //
-        // So collapse, then clamp to the largest radius the box can hold. The
-        // result is the largest well-formed rounded shape inside the intended
-        // ellipse: still a divergence under non-uniform scale, but a bounded
-        // one instead of a broken one. Carrying rx/ry per corner through the
-        // instance and both shaders is the real fix and a format change of its
-        // own; the superellipse slot above already has the room for it.
-        let max_radius = (w * 0.5).min(h * 0.5).max(0.0);
-        let collapse = |rx: f32, ry: f32| (rx * scale_x).max(ry * scale_y).min(max_radius);
-        let r_tl = collapse(rrect.top_left.x.0, rrect.top_left.y.0);
-        let r_tr = collapse(rrect.top_right.x.0, rrect.top_right.y.0);
-        let r_br = collapse(rrect.bottom_right.x.0, rrect.bottom_right.y.0);
-        let r_bl = collapse(rrect.bottom_left.x.0, rrect.bottom_left.y.0);
+        // This slot carries ONE radius per corner, so a caller's own
+        // elliptical corner still has to collapse. That is now the only
+        // approximation left here: a corner made elliptical by a non-uniform
+        // CTM stays circular in this space and the mapping produces the
+        // ellipse, which is exact.
+        let max_radius = (rect.width().0 * 0.5).min(rect.height().0 * 0.5).max(0.0);
+        let collapse = |rx: f32, ry: f32| rx.max(ry).min(max_radius);
 
-        self.current_rrect_clip = [x, y, w, h, r_tl, r_tr, r_br, r_bl];
+        self.current_rrect_clip = [
+            rect.left().0,
+            rect.top().0,
+            rect.width().0,
+            rect.height().0,
+            collapse(rrect.top_left.x.0, rrect.top_left.y.0),
+            collapse(rrect.top_right.x.0, rrect.top_right.y.0),
+            collapse(rrect.bottom_right.x.0, rrect.bottom_right.y.0),
+            collapse(rrect.bottom_left.x.0, rrect.bottom_left.y.0),
+        ];
+        self.current_clip_inv = Self::device_to_local(self.current_transform);
         // Clearing the superellipse clip prevents `apply_active_clip` from
         // continuing to apply the squircle SDF after the caller switches to a
         // plain rrect. The two clip kinds are mutually exclusive at the
         // per-instance `clip_kind` level.
         self.current_rsuperellipse_clip = [0.0; 12];
 
-        // Bounding-box scissor for early rasterizer rejection.
+        // Bounding-box scissor for early rasterizer rejection. Conservative
+        // under rotation — `clip_rect` takes the AABB of all four transformed
+        // corners — which is exactly what a coarse pre-pass should be now that
+        // the SDF does the precise work.
         self.clip_rect(rrect.rect, surface_size);
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "GpuStateStack::clip_rrect: SDF clip set [{:.1}, {:.1}, {:.1}, {:.1}] radii=[{:.1}, {:.1}, {:.1}, {:.1}]",
-            x,
-            y,
-            w,
-            h,
-            r_tl,
-            r_tr,
-            r_br,
-            r_bl,
-        );
     }
 
-    /// Set a SDF superellipse (iOS-squircle) clip and clear any active rrect
+    /// Invert the CTM's 2D affine part into the `[a, b, c, d, tx, ty]` column
+    /// form `current_clip_inv` holds.
+    ///
+    /// A singular matrix — `scale(0, …)` collapses geometry to a line — has no
+    /// inverse; the identity is returned, which leaves the clip evaluated in
+    /// device space. Nothing is drawn through a singular CTM anyway, so the
+    /// choice is unobservable; it exists so the arithmetic below never
+    /// produces infinities the shader would then compare against.
+    fn device_to_local(transform: glam::Mat4) -> [f32; 6] {
+        let a = transform.x_axis.x;
+        let b = transform.x_axis.y;
+        let c = transform.y_axis.x;
+        let d = transform.y_axis.y;
+        let tx = transform.w_axis.x;
+        let ty = transform.w_axis.y;
+
+        let det = a * d - b * c;
+        if det.abs() < f32::EPSILON {
+            return CLIP_INV_IDENTITY;
+        }
+        let inv_det = 1.0 / det;
+        let (ia, ib, ic, id) = (d * inv_det, -b * inv_det, -c * inv_det, a * inv_det);
+        // local = M⁻¹ · (p − t)
+        [ia, ib, ic, id, -(ia * tx + ic * ty), -(ib * tx + id * ty)]
+    }
+
+    /// Set an SDF superellipse (iOS-squircle) clip and clear any active rrect
     /// clip (the two kinds are mutually exclusive per-instance).
     ///
-    /// Also applies a bounding-box `clip_rect` for early rasterizer rejection.
-    #[allow(
-        clippy::similar_names,
-        reason = "tl_r/tr_r/br_r/bl_r mirror the rsuperellipse-corner field names; renaming would obscure intent"
-    )]
+    /// Stores LOCAL bounds and radii plus the device-to-local mapping, exactly
+    /// as [`Self::clip_rrect`] does. Unlike the rrect slot this one carries rx
+    /// and ry per corner, so nothing collapses here at all.
     pub(super) fn clip_rsuperellipse(
         &mut self,
         rse: flui_types::geometry::RSuperellipse,
         surface_size: (u32, u32),
     ) {
-        let transform = self.current_transform;
         let rect = rse.outer_rect();
-
-        // Same bail-out as `clip_rrect`, for the same reason: this slot is
-        // axis-aligned in the shader and its bounds cannot survive a rotation.
-        if !self.is_axis_aligned() {
-            self.current_rsuperellipse_clip = [0.0; 12];
-            self.current_rrect_clip = [0.0; 8];
-            self.clip_rect(rect, surface_size);
-            return;
-        }
-
-        let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
-            (rect.left().0, rect.top().0, rect.width().0, rect.height().0)
-        } else {
-            let tl = transform * glam::Vec4::new(rect.left().0, rect.top().0, 0.0, 1.0);
-            let br = transform * glam::Vec4::new(rect.right().0, rect.bottom().0, 0.0, 1.0);
-            let min_x = tl.x.min(br.x);
-            let min_y = tl.y.min(br.y);
-            let max_x = tl.x.max(br.x);
-            let max_y = tl.y.max(br.y);
-            (min_x, min_y, max_x - min_x, max_y - min_y)
-        };
-
         let tl_r = rse.tl_radius();
         let tr_r = rse.tr_radius();
         let br_r = rse.br_radius();
         let bl_r = rse.bl_radius();
 
-        // Same rule as `clip_rrect`: radii live in the bounds' space and must
-        // make the same trip, or the shader compares logical-pixel corners
-        // against a device-pixel rect. Unlike the rrect slot, this one carries
-        // rx and ry per corner, so the per-axis scale is exact here rather
-        // than an approximation.
-        let (scale_x, scale_y) = if rect.width().0 > 0.0 && rect.height().0 > 0.0 {
-            (w / rect.width().0, h / rect.height().0)
-        } else {
-            (1.0, 1.0)
-        };
-
         self.current_rsuperellipse_clip = [
-            x,
-            y,
-            w,
-            h,
-            tl_r.x.0 * scale_x,
-            tl_r.y.0 * scale_y,
-            tr_r.x.0 * scale_x,
-            tr_r.y.0 * scale_y,
-            br_r.x.0 * scale_x,
-            br_r.y.0 * scale_y,
-            bl_r.x.0 * scale_x,
-            bl_r.y.0 * scale_y,
-        ];
-        // Clear the rrect clip to prevent `apply_active_clip` from falling
-        // back to it. Mirror of the corresponding clear in `clip_rrect`.
-        self.current_rrect_clip = [0.0; 8];
-
-        // Bounding-box scissor for early rasterizer rejection.
-        self.clip_rect(rect, surface_size);
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "GpuStateStack::clip_rsuperellipse: SDF clip set [{:.1}, {:.1}, {:.1}, {:.1}] \
-             radii=[(tl {:.1},{:.1}) (tr {:.1},{:.1}) (br {:.1},{:.1}) (bl {:.1},{:.1})]",
-            x,
-            y,
-            w,
-            h,
+            rect.left().0,
+            rect.top().0,
+            rect.width().0,
+            rect.height().0,
             tl_r.x.0,
             tl_r.y.0,
             tr_r.x.0,
@@ -636,7 +602,14 @@ impl GpuStateStack {
             br_r.y.0,
             bl_r.x.0,
             bl_r.y.0,
-        );
+        ];
+        self.current_clip_inv = Self::device_to_local(self.current_transform);
+        // Clear the rrect clip to prevent `apply_active_clip` from falling
+        // back to it. Mirror of the corresponding clear in `clip_rrect`.
+        self.current_rrect_clip = [0.0; 8];
+
+        // Bounding-box scissor for early rasterizer rejection.
+        self.clip_rect(rect, surface_size);
     }
 
     // =========================================================================
@@ -644,7 +617,7 @@ impl GpuStateStack {
     // =========================================================================
 
     /// The currently-active SDF clip, resolved to the single form every
-    /// consumer stores: `([x, y, w, h, tl, tr, br, bl], [kind, _, _, _])`.
+    /// consumer stores.
     ///
     /// Branch order: a non-trivial `current_rsuperellipse_clip` wins
     /// (`kind = 2`), otherwise the rrect slot is used (`kind = 1` when
@@ -653,20 +626,21 @@ impl GpuStateStack {
     /// This is the ONE place that selection happens. Instanced primitives
     /// reach it through `apply_active_clip`; tessellated geometry, which has
     /// no instance to hang a slot on, reads it directly for its batch uniform.
-    pub(super) fn active_clip(&self) -> ([f32; 8], [u32; 4]) {
+    pub(super) fn active_clip(&self) -> ResolvedClip {
         // Exact equality against the all-zero "no clip active" sentinel is
-        // intentional: the field is set bit-exact to `[0.0; 12]` whenever the
-        // clip is cleared, never via arithmetic that would introduce ULP noise.
+        // intentional: the field is set bit-exact whenever the clip is
+        // cleared, never via arithmetic that would introduce ULP noise.
         #[expect(
             clippy::float_cmp,
             reason = "exact comparison against the bit-exact 'no clip' sentinels"
         )]
         let superellipse_active = self.current_rsuperellipse_clip != [0.0; 12];
         if superellipse_active {
-            return (
-                super::instancing::reduce_superellipse_clip(self.current_rsuperellipse_clip),
-                [2, 0, 0, 0],
-            );
+            return ResolvedClip {
+                rrect: super::instancing::reduce_superellipse_clip(self.current_rsuperellipse_clip),
+                kind: [2, 0, 0, 0],
+                device_to_local: self.current_clip_inv,
+            };
         }
         #[expect(
             clippy::float_cmp,
@@ -674,9 +648,13 @@ impl GpuStateStack {
         )]
         let rrect_active = self.current_rrect_clip != [0.0; 8];
         if rrect_active {
-            (self.current_rrect_clip, [1, 0, 0, 0])
+            ResolvedClip {
+                rrect: self.current_rrect_clip,
+                kind: [1, 0, 0, 0],
+                device_to_local: self.current_clip_inv,
+            }
         } else {
-            ([0.0; 8], [0; 4])
+            ResolvedClip::NONE
         }
     }
 
@@ -688,12 +666,7 @@ impl GpuStateStack {
         &self,
         instance: I,
     ) -> I {
-        let (_, kind) = self.active_clip();
-        if kind[0] == 2 {
-            instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)
-        } else {
-            instance.with_clip_rrect(self.current_rrect_clip)
-        }
+        instance.with_clip(self.active_clip())
     }
 }
 
@@ -987,40 +960,6 @@ mod tests {
         );
     }
 
-    /// A scaled circular clip must stay a circle.
-    ///
-    /// `clip_rrect` transforms the bounds through the CTM. If the radii do not
-    /// make the same trip they stay in logical pixels while the SDF evaluates
-    /// against a device-pixel rect — so at the root `scale(dpr)` of any HiDPI
-    /// display a circular clip renders as a rounded square. The invariant that
-    /// makes it a circle is `radius == shorter_side / 2`, and it has to hold
-    /// after the transform, not just before it.
-    #[test]
-    fn a_scaled_circular_clip_keeps_its_radius_proportional_to_its_bounds() {
-        let mut stack = GpuStateStack::new_for_test();
-        let surface = (400u32, 400u32);
-
-        let circle = RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            px(50.0),
-        );
-
-        stack.scale(2.0, 2.0);
-        stack.clip_rrect(circle, surface);
-
-        let clip = stack.current_rrect_clip;
-        let (w, h) = (clip[2], clip[3]);
-        assert_eq!((w, h), (200.0, 200.0), "the bounds scale with the CTM");
-        for (corner, radius) in ["tl", "tr", "br", "bl"].iter().zip(&clip[4..8]) {
-            assert!(
-                (radius - w / 2.0).abs() < 0.01,
-                "corner {corner} must stay at half the scaled side ({}), got {radius} — a \
-                 smaller radius is a rounded square wearing a circle's bounds",
-                w / 2.0,
-            );
-        }
-    }
-
     /// The untransformed path must be untouched by the scaling fix.
     #[test]
     fn an_unscaled_clip_keeps_its_radii_bit_exact() {
@@ -1039,92 +978,110 @@ mod tests {
         );
     }
 
-    /// The superellipse slot has room for per-axis radii, so its scaling is
-    /// exact — no collapse, no clamp.
-    #[test]
-    fn a_scaled_superellipse_clip_scales_each_radius_axis() {
-        use flui_types::geometry::RSuperellipse;
-
-        let mut stack = GpuStateStack::new_for_test();
-        let rse = RSuperellipse::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            px(20.0),
-        );
-
-        stack.scale(2.0, 3.0);
-        stack.clip_rsuperellipse(rse, (600, 600));
-
-        let clip = stack.current_rsuperellipse_clip;
-        assert_eq!((clip[2], clip[3]), (200.0, 300.0), "bounds follow the CTM");
-        for (i, corner) in ["tl", "tr", "br", "bl"].iter().enumerate() {
-            let (rx, ry) = (clip[4 + i * 2], clip[5 + i * 2]);
-            assert!(
-                (rx - 40.0).abs() < 0.01 && (ry - 60.0).abs() < 0.01,
-                "corner {corner} must scale per axis (40, 60), got ({rx}, {ry}) — leaving \
-                 either in logical pixels leaks the clip on a HiDPI display",
-            );
-        }
-    }
-
-    /// A non-uniform scale cannot be represented in the rrect slot's single
-    /// radius per corner, so the collapse must at least stay well-formed.
+    /// The clip slot holds the caller's shape untouched, whatever the CTM.
     ///
-    /// `scale(2, 1)` turns a circular clip into a 200×100 box whose intended
-    /// corners are (100, 50). The scalar collapse picks 100, which exceeds the
-    /// box's own half-height — a rounded-box SDF with a radius larger than its
-    /// half-extent is degenerate and clips inward, eating the image. Clamping
-    /// to the largest radius the box can hold keeps it a bounded divergence
-    /// rather than a broken one.
+    /// The slot used to hold DEVICE-space bounds, which forced the radii to
+    /// make the same trip — and a scaled circular corner is an ellipse, which
+    /// one radius per corner cannot hold. Keeping the shape local moves that
+    /// job to the mapping, where it is exact.
+    ///
+    /// This replaces three tests that pinned the device-space form: a HiDPI
+    /// proportionality check, a non-uniform-scale radius clamp, and a
+    /// per-axis superellipse scale. Each protected the same underlying rule —
+    /// a circular clip must not become a rounded square — which now holds by
+    /// construction rather than by arithmetic.
     #[test]
-    fn a_non_uniform_scale_clamps_the_collapsed_radius_to_the_box() {
+    fn a_scaled_clip_keeps_its_shape_and_scales_through_the_mapping() {
         let mut stack = GpuStateStack::new_for_test();
         let circle = RRect::from_rect_circular(
             Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
             px(50.0),
         );
 
-        stack.scale(2.0, 1.0);
-        stack.clip_rrect(circle, (400, 400));
+        stack.scale(2.0, 3.0);
+        stack.clip_rrect(circle, (600, 600));
 
-        let clip = stack.current_rrect_clip;
-        let (w, h) = (clip[2], clip[3]);
-        assert_eq!((w, h), (200.0, 100.0));
-        for radius in &clip[4..8] {
-            assert!(
-                *radius <= h / 2.0 + 0.01,
-                "a radius of {radius} exceeds the half-height {} — the SDF is degenerate \
-                 there and clips inward",
-                h / 2.0,
-            );
-        }
+        let clip = stack.active_clip();
+        assert_eq!(
+            &clip.rrect[0..4],
+            &[0.0, 0.0, 100.0, 100.0],
+            "bounds stay in the caller's space"
+        );
+        assert_eq!(&clip.rrect[4..8], &[50.0; 4], "and so do the radii");
+
+        // The mapping is the inverse: device (2x, 3y) must land back on (x, y).
+        let m = clip.device_to_local;
+        let local_x = m[0] * 200.0 + m[2] * 300.0 + m[4];
+        let local_y = m[1] * 200.0 + m[3] * 300.0 + m[5];
+        assert!(
+            (local_x - 100.0).abs() < 1e-3 && (local_y - 100.0).abs() < 1e-3,
+            "device (200, 300) must map to local (100, 100), got ({local_x}, {local_y})"
+        );
     }
 
-    /// A rotated CTM must leave the SDF slot empty rather than fill it with
-    /// something the shader cannot represent.
+    /// A rotated CTM now populates the slot instead of surrendering to the
+    /// scissor.
     ///
-    /// The bounds are derived from two corners, which for a rotated rect is
-    /// not even its AABB: a 45° rotation puts both on one vertical, giving a
-    /// zero-width box. Combined with the radius clamp that is a clip which
-    /// erases everything it covers. Falling back to the coarse scissor
-    /// over-includes instead, which is the survivable direction of wrong.
+    /// The old device-space form could not express a rotation at all — its
+    /// bounds came from two corners, which for a rotated rect is not even the
+    /// AABB — so `clip_rrect` detected the case and fell back to the coarse
+    /// scissor, over-including by 41% per axis at 45°. A local shape plus a
+    /// mapping has no such limit.
     #[test]
-    fn a_rotated_clip_populates_no_sdf_slot() {
+    fn a_rotated_clip_populates_the_slot_and_maps_back() {
         let mut stack = GpuStateStack::new_for_test();
         let rrect = RRect::from_rect_circular(
             Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
             px(10.0),
         );
 
-        stack.rotate(std::f32::consts::FRAC_PI_4);
+        stack.rotate(std::f32::consts::FRAC_PI_2);
         stack.clip_rrect(rrect, (400, 400));
 
+        let clip = stack.active_clip();
         assert_eq!(
-            stack.current_rrect_clip, [0.0; 8],
-            "a rotated clip must not populate the axis-aligned SDF slot",
+            clip.kind[0], 1,
+            "a rotated clip must still populate the slot"
         );
+        assert_eq!(
+            &clip.rrect[0..4],
+            &[0.0, 0.0, 100.0, 100.0],
+            "with the caller's own bounds"
+        );
+
+        // A 90° rotation sends local (100, 0) to device (0, 100); the mapping
+        // must send it back.
+        let m = clip.device_to_local;
+        let local_x = m[0] * 0.0 + m[2] * 100.0 + m[4];
+        let local_y = m[1] * 0.0 + m[3] * 100.0 + m[5];
+        assert!(
+            (local_x - 100.0).abs() < 1e-3 && local_y.abs() < 1e-3,
+            "device (0, 100) must map to local (100, 0), got ({local_x}, {local_y})"
+        );
+
         assert!(
             stack.current_scissor().is_some(),
-            "the coarse scissor still applies — the clip is loosened, not dropped",
+            "the coarse scissor still applies as an early-rejection pre-pass"
+        );
+    }
+
+    /// A singular CTM has no inverse; the mapping falls back to the identity
+    /// rather than producing infinities the shader would compare against.
+    #[test]
+    fn a_singular_ctm_yields_the_identity_mapping() {
+        let mut stack = GpuStateStack::new_for_test();
+        stack.scale(0.0, 1.0);
+        stack.clip_rrect(
+            RRect::from_rect_circular(
+                Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+                px(10.0),
+            ),
+            (400, 400),
+        );
+        assert_eq!(
+            stack.active_clip().device_to_local,
+            CLIP_INV_IDENTITY,
+            "a collapsed CTM must not put NaN or inf in the mapping"
         );
     }
 }

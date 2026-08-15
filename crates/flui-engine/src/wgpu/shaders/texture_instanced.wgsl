@@ -19,7 +19,9 @@ struct InstanceInput {
     @location(5) transform: vec4<f32>,     // [cos(angle), sin(angle), tx, ty]
     @location(6) clip_bounds: vec4<f32>,   // [x, y, width, height] of clip
     @location(7) clip_radii: vec4<f32>,    // [tl, tr, br, bl] of clip
-    @location(8) clip_kind: vec4<u32>,     // [kind, _, _, _]: 0=none, 1=rrect, 2=rsuperellipse
+    @location(8) clip_kind: vec4<u32>,           // [kind, _, _, _]: 0=none, 1=rrect, 2=rsuperellipse
+    @location(9) clip_device_to_local: vec4<f32>,  // [a, b, c, d], columns first
+    @location(10) clip_local_origin: vec4<f32>,    // [tx, ty, 0, 0]
 }
 
 // Vertex output / Fragment input
@@ -31,6 +33,8 @@ struct VertexOutput {
     @location(3) clip_bounds: vec4<f32>,   // Clip rect bounds
     @location(4) clip_radii: vec4<f32>,    // Clip corner radii
     @location(5) @interpolate(flat) clip_kind: u32, // 0=none, 1=rrect, 2=rsuperellipse
+    @location(6) clip_device_to_local: vec4<f32>,
+    @location(7) clip_local_origin: vec4<f32>,
 }
 
 // =============================================================================
@@ -120,6 +124,8 @@ fn vs_main(
     out.world_pos = world_pos;
     out.clip_bounds = instance.clip_bounds;
     out.clip_radii = instance.clip_radii;
+    out.clip_device_to_local = instance.clip_device_to_local;
+    out.clip_local_origin = instance.clip_local_origin;
     out.clip_kind = instance.clip_kind.x;
 
     return out;
@@ -134,7 +140,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     tex_color = tex_color * in.tint;
 
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
-    let clip_alpha = clipAlpha(in.world_pos, in.clip_bounds, in.clip_radii, in.clip_kind);
+    let clip_alpha = clipAlpha(
+        in.world_pos,
+        in.clip_bounds,
+        in.clip_radii,
+        in.clip_kind,
+        in.clip_device_to_local,
+        in.clip_local_origin,
+    );
 
     tex_color.a = tex_color.a * clip_alpha;
 

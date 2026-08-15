@@ -63,28 +63,47 @@ fn sdfToAlpha(dist: f32) -> f32 {
     return 1.0 - smoothstep(-edge_width, edge_width, dist);
 }
 
-/// Coverage from the per-instance SDF clip; 1.0 when no clip is attached.
+/// Coverage from the SDF clip; 1.0 when no clip is attached.
 ///
-/// `clip_bounds` is `[x, y, w, h]` in DEVICE space and `clip_radii` is
-/// `[tl, tr, br, bl]`, matching the instance slot the Rust side fills via
-/// `ClippableInstance`. `clip_kind` selects the distance function: 0 = none,
-/// 2 = rounded superellipse, anything else = rounded rect (the safe default
-/// for a kind this shader has not learned about yet).
+/// `clip_bounds` is `[x, y, w, h]` and `clip_radii` is `[tl, tr, br, bl]`, both
+/// in CLIP-LOCAL space — the shape the caller asked for, untransformed.
+/// `device_to_local` maps a device-space fragment position into that space:
+/// `[a, b, c, d]` columns first, `local_origin.xy` the translation.
 ///
-/// The whole evaluation lives here rather than being pasted into each
-/// fragment shader for the same reason the distance functions do: every
-/// clip-capable primitive must agree on what a clip means, and a pasted copy
-/// is free to disagree silently.
+/// Evaluating in local space is what lets a rotated or non-uniformly scaled
+/// clip be exact. Device-space bounds cannot express a rotation at all, and a
+/// scaled circular corner is an ellipse that one radius per corner cannot
+/// hold — so the old form refused rotations and clamped scaled radii.
+///
+/// AA survives the change: `sdfToAlpha` measures the distance field's rate of
+/// change per SCREEN pixel via `dpdx`/`dpdy`, so it picks up the mapping's
+/// Jacobian automatically and the band stays ~1 device pixel wide.
+///
+/// `clip_kind` selects the distance function: 0 = none, 2 = rounded
+/// superellipse, anything else = rounded rect (the safe default for a kind
+/// this shader has not learned about yet).
+///
+/// The whole evaluation lives here rather than being pasted into each fragment
+/// shader for the same reason the distance functions do: every clip-capable
+/// primitive must agree on what a clip means, and a pasted copy is free to
+/// disagree silently.
 fn clipAlpha(
     world_pos: vec2<f32>,
     clip_bounds: vec4<f32>,
     clip_radii: vec4<f32>,
     clip_kind: u32,
+    device_to_local: vec4<f32>,
+    local_origin: vec4<f32>,
 ) -> f32 {
     var alpha = 1.0;
     if (clip_kind != 0u && clip_bounds.z > 0.0 && clip_bounds.w > 0.0) {
+        let local = vec2<f32>(
+            device_to_local.x * world_pos.x + device_to_local.z * world_pos.y + local_origin.x,
+            device_to_local.y * world_pos.x + device_to_local.w * world_pos.y + local_origin.y,
+        );
+
         let clip_center = clip_bounds.xy + clip_bounds.zw * 0.5;
-        let clip_p = world_pos - clip_center;
+        let clip_p = local - clip_center;
         let clip_half = clip_bounds.zw * 0.5;
 
         var clip_dist = 0.0;

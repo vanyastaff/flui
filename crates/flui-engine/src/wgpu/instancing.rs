@@ -91,6 +91,15 @@ pub struct RectInstance {
     /// instance attributes. Only the `.x` lane carries the kind; the other
     /// three lanes are padding.
     pub clip_kind: [u32; 4],
+    /// Device-to-clip-local linear part: `[a, b, c, d]`, columns first.
+    ///
+    /// The clip's bounds and radii are in the space the caller set them in;
+    /// this maps a device-space fragment position back there. Identity is
+    /// `[1, 0, 0, 1]`.
+    pub clip_device_to_local: [f32; 4],
+    /// Device-to-clip-local translation, padded to a `vec4` attribute:
+    /// `[tx, ty, 0, 0]`.
+    pub clip_local_origin: [f32; 4],
 
     /// Translation part of the affine transform: `[tx, ty, 0, 0]`.
     ///
@@ -116,6 +125,8 @@ impl RectInstance {
             transform: [1.0, 0.0, 0.0, 1.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
             transform_translate: [0.0; 4],
         }
     }
@@ -145,6 +156,8 @@ impl RectInstance {
             transform: [1.0, 0.0, 0.0, 1.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
             transform_translate: [0.0; 4],
         }
     }
@@ -178,54 +191,10 @@ impl RectInstance {
             transform: linear_cols,
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
             transform_translate: [translation[0], translation[1], 0.0, 0.0],
         }
-    }
-
-    /// Set the SDF clip rounded rectangle on this instance.
-    ///
-    /// The clip is specified as `[x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]`.
-    /// All zeros means no clip. When non-zero, the fragment shader discards
-    /// pixels that fall outside the rounded rectangle using an SDF test.
-    /// Sets `clip_kind = 1` (rrect) when the clip is non-trivial; leaves
-    /// `clip_kind = 0` when all-zero (no clip).
-    #[must_use]
-    pub fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
-        self.clip_rrect = clip;
-        // Exact equality against the bit-exact `[0.0; 8]` "no clip" sentinel —
-        // never set via arithmetic, so ULP slop is not a concern.
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let is_empty = clip == [0.0; 8];
-        self.clip_kind = if is_empty { [0; 4] } else { [1, 0, 0, 0] };
-        self
-    }
-
-    /// Set an SDF clip rounded-superellipse (iOS-squircle) on this instance.
-    ///
-    /// The 12-float superellipse uniform produced by
-    /// `Painter::clip_rsuperellipse` carries separate-axis radii per corner.
-    /// At the per-instance level we average each corner's `rx`/`ry` into a
-    /// single radius to fit the existing `clip_rrect` slot — this is the
-    /// "single-radius-per-corner" first-pass interpretation called out in
-    /// the plan's Outstanding Questions Q9. Sets `clip_kind = 2`.
-    ///
-    /// Layout of `superellipse_clip`: `[x, y, w, h, tl_x, tl_y, tr_x, tr_y,
-    /// br_x, br_y, bl_x, bl_y]`. Layout in the resulting `clip_rrect` slot:
-    /// `[x, y, w, h, avg(tl_x,tl_y), avg(tr_x,tr_y), avg(br_x,br_y),
-    /// avg(bl_x,bl_y)]`.
-    #[must_use]
-    pub fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
-        self.clip_rrect = reduce_superellipse_clip(superellipse_clip);
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let cleared = self.clip_rrect == [0.0; 8];
-        self.clip_kind = if cleared { [0; 4] } else { [2, 0, 0, 0] };
-        self
     }
 
     // `RectInstance::with_transform(scale_x, scale_y, translate_x,
@@ -260,8 +229,12 @@ impl RectInstance {
             7 => Float32x4,
             // Clip kind: [kind, _pad, _pad, _pad] (location 8) — 0=none, 1=rrect, 2=rsuperellipse
             8 => Uint32x4,
-            // Affine translation [tx, ty, 0, 0] (location 9)
+            // Device-to-clip-local linear part (location 9)
             9 => Float32x4,
+            // Device-to-clip-local translation, padded (location 10)
+            10 => Float32x4,
+            // Affine translation [tx, ty, 0, 0] (location 9)
+            11 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -344,6 +317,15 @@ pub struct CircleInstance {
     /// `[0, _, _, _]` none, `[1, _, _, _]` rounded rect, `[2, _, _, _]`
     /// rounded superellipse. Only `.x` is read; the rest is padding.
     pub clip_kind: [u32; 4],
+    /// Device-to-clip-local linear part: `[a, b, c, d]`, columns first.
+    ///
+    /// The clip's bounds and radii are in the space the caller set them in;
+    /// this maps a device-space fragment position back there. Identity is
+    /// `[1, 0, 0, 1]`.
+    pub clip_device_to_local: [f32; 4],
+    /// Device-to-clip-local translation, padded to a `vec4` attribute:
+    /// `[tx, ty, 0, 0]`.
+    pub clip_local_origin: [f32; 4],
 }
 
 impl CircleInstance {
@@ -374,6 +356,8 @@ impl CircleInstance {
             // No clip until `ClippableInstance::with_clip_*` attaches one.
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
         }
     }
 
@@ -408,6 +392,8 @@ impl CircleInstance {
             // No clip until `ClippableInstance::with_clip_*` attaches one.
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
         }
     }
 
@@ -438,6 +424,10 @@ impl CircleInstance {
             7 => Float32x4,
             // Clip kind [kind, _, _, _] (location 8)
             8 => Uint32x4,
+            // Device-to-clip-local linear part (location 9)
+            9 => Float32x4,
+            // Device-to-clip-local translation, padded (location 10)
+            10 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -619,6 +609,15 @@ pub struct TextureInstance {
     /// encoding to [`RectInstance::clip_kind`], including the `[u32; 4]`
     /// padding for 16-byte vec4 alignment.
     pub clip_kind: [u32; 4],
+    /// Device-to-clip-local linear part: `[a, b, c, d]`, columns first.
+    ///
+    /// The clip's bounds and radii are in the space the caller set them in;
+    /// this maps a device-space fragment position back there. Identity is
+    /// `[1, 0, 0, 1]`.
+    pub clip_device_to_local: [f32; 4],
+    /// Device-to-clip-local translation, padded to a `vec4` attribute:
+    /// `[tx, ty, 0, 0]`.
+    pub clip_local_origin: [f32; 4],
 }
 
 impl TextureInstance {
@@ -641,6 +640,8 @@ impl TextureInstance {
             transform: [1.0, 0.0, 0.0, 0.0], // No rotation
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
         }
     }
 
@@ -668,6 +669,8 @@ impl TextureInstance {
             transform: [1.0, 0.0, 0.0, 0.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
         }
     }
 
@@ -704,6 +707,8 @@ impl TextureInstance {
             transform: [1.0, 0.0, 0.0, 0.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
         }
     }
 
@@ -725,6 +730,10 @@ impl TextureInstance {
             7 => Float32x4,
             // Clip kind: [kind, _pad, _pad, _pad] (location 8) — 0=none, 1=rrect, 2=rsuperellipse
             8 => Uint32x4,
+            // Device-to-clip-local linear part (location 9)
+            9 => Float32x4,
+            // Device-to-clip-local translation, padded (location 10)
+            10 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -772,169 +781,102 @@ pub(crate) fn reduce_superellipse_clip(c: [f32; 12]) -> [f32; 8] {
 }
 
 pub trait ClippableInstance {
-    /// Attach a rounded-rect SDF clip (`clip_kind = 1`), or clear the clip
-    /// when the slot is the all-zero "no clip" sentinel.
+    /// Store the active clip, or clear the slot when no clip is active.
+    ///
+    /// One method rather than a per-kind pair: every implementor has the same
+    /// body, and a two-method form made each of them re-derive the kind flag
+    /// and the superellipse reduction — six copies of arithmetic that has one
+    /// right answer.
     #[must_use]
-    fn with_clip_rrect(self, clip: [f32; 8]) -> Self;
-
-    /// Attach a rounded-superellipse SDF clip (`clip_kind = 2`), or clear the
-    /// clip when the slot is the all-zero sentinel.
-    #[must_use]
-    fn with_clip_rsuperellipse(self, superellipse_clip: [f32; 12]) -> Self;
+    fn with_clip(self, clip: super::state_stack::ResolvedClip) -> Self;
 }
 
 impl ClippableInstance for RectInstance {
-    fn with_clip_rrect(self, clip: [f32; 8]) -> Self {
-        RectInstance::with_clip_rrect(self, clip)
-    }
-
-    fn with_clip_rsuperellipse(self, superellipse_clip: [f32; 12]) -> Self {
-        RectInstance::with_clip_rsuperellipse(self, superellipse_clip)
+    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
+        self.clip_rrect = clip.rrect;
+        self.clip_kind = clip.kind;
+        self.clip_device_to_local = [
+            clip.device_to_local[0],
+            clip.device_to_local[1],
+            clip.device_to_local[2],
+            clip.device_to_local[3],
+        ];
+        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
+        self
     }
 }
 
 impl ClippableInstance for CircleInstance {
-    fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
-        // Exact equality against the bit-exact `[0.0; 8]` sentinel, matching
-        // `RectInstance`/`TextureInstance` — the slot is assigned, never
-        // computed, so there is no ULP slop to tolerate.
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let is_empty = clip == [0.0; 8];
-        self.clip_rrect = clip;
-        self.clip_kind = if is_empty { [0; 4] } else { [1, 0, 0, 0] };
-        self
-    }
-
-    fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
-        self.clip_rrect = reduce_superellipse_clip(superellipse_clip);
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let cleared = self.clip_rrect == [0.0; 8];
-        self.clip_kind = if cleared { [0; 4] } else { [2, 0, 0, 0] };
+    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
+        self.clip_rrect = clip.rrect;
+        self.clip_kind = clip.kind;
+        self.clip_device_to_local = [
+            clip.device_to_local[0],
+            clip.device_to_local[1],
+            clip.device_to_local[2],
+            clip.device_to_local[3],
+        ];
+        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
         self
     }
 }
 
 impl ClippableInstance for LinearGradientInstance {
-    fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
-        // Exact equality against the bit-exact `[0.0; 8]` sentinel, matching
-        // `RectInstance` — the slot is assigned, never computed.
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let no_clip = clip == [0.0; 8];
-        if no_clip {
-            self.clip_rrect = [0.0; 8];
-            self.clip_kind = [0; 4];
-        } else {
-            self.clip_rrect = clip;
-            self.clip_kind = [1, 0, 0, 0];
-        }
-        self
-    }
-
-    fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
-        self.clip_rrect = reduce_superellipse_clip(superellipse_clip);
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let cleared = self.clip_rrect == [0.0; 8];
-        self.clip_kind = if cleared { [0; 4] } else { [2, 0, 0, 0] };
+    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
+        self.clip_rrect = clip.rrect;
+        self.clip_kind = clip.kind;
+        self.clip_device_to_local = [
+            clip.device_to_local[0],
+            clip.device_to_local[1],
+            clip.device_to_local[2],
+            clip.device_to_local[3],
+        ];
+        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
         self
     }
 }
 
 impl ClippableInstance for RadialGradientInstance {
-    fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
-        // Exact equality against the bit-exact `[0.0; 8]` sentinel, matching
-        // `RectInstance` — the slot is assigned, never computed.
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let no_clip = clip == [0.0; 8];
-        if no_clip {
-            self.clip_rrect = [0.0; 8];
-            self.clip_kind = [0; 4];
-        } else {
-            self.clip_rrect = clip;
-            self.clip_kind = [1, 0, 0, 0];
-        }
-        self
-    }
-
-    fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
-        self.clip_rrect = reduce_superellipse_clip(superellipse_clip);
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let cleared = self.clip_rrect == [0.0; 8];
-        self.clip_kind = if cleared { [0; 4] } else { [2, 0, 0, 0] };
+    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
+        self.clip_rrect = clip.rrect;
+        self.clip_kind = clip.kind;
+        self.clip_device_to_local = [
+            clip.device_to_local[0],
+            clip.device_to_local[1],
+            clip.device_to_local[2],
+            clip.device_to_local[3],
+        ];
+        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
         self
     }
 }
 
 impl ClippableInstance for SweepGradientInstance {
-    fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
-        // Exact equality against the bit-exact `[0.0; 8]` sentinel, matching
-        // `RectInstance` — the slot is assigned, never computed.
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let no_clip = clip == [0.0; 8];
-        if no_clip {
-            self.clip_rrect = [0.0; 8];
-            self.clip_kind = [0; 4];
-        } else {
-            self.clip_rrect = clip;
-            self.clip_kind = [1, 0, 0, 0];
-        }
-        self
-    }
-
-    fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
-        self.clip_rrect = reduce_superellipse_clip(superellipse_clip);
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let cleared = self.clip_rrect == [0.0; 8];
-        self.clip_kind = if cleared { [0; 4] } else { [2, 0, 0, 0] };
+    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
+        self.clip_rrect = clip.rrect;
+        self.clip_kind = clip.kind;
+        self.clip_device_to_local = [
+            clip.device_to_local[0],
+            clip.device_to_local[1],
+            clip.device_to_local[2],
+            clip.device_to_local[3],
+        ];
+        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
         self
     }
 }
 
 impl ClippableInstance for TextureInstance {
-    fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
-        self.clip_rrect = clip;
-        // Exact equality against the bit-exact `[0.0; 8]` sentinel, matching
-        // `RectInstance` — the slot is assigned, never computed, so no ULP slop.
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let is_empty = clip == [0.0; 8];
-        self.clip_kind = if is_empty { [0; 4] } else { [1, 0, 0, 0] };
-        self
-    }
-
-    fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
-        self.clip_rrect = reduce_superellipse_clip(superellipse_clip);
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
-        )]
-        let cleared = self.clip_rrect == [0.0; 8];
-        self.clip_kind = if cleared { [0; 4] } else { [2, 0, 0, 0] };
+    fn with_clip(mut self, clip: super::state_stack::ResolvedClip) -> Self {
+        self.clip_rrect = clip.rrect;
+        self.clip_kind = clip.kind;
+        self.clip_device_to_local = [
+            clip.device_to_local[0],
+            clip.device_to_local[1],
+            clip.device_to_local[2],
+            clip.device_to_local[3],
+        ];
+        self.clip_local_origin = [clip.device_to_local[4], clip.device_to_local[5], 0.0, 0.0];
         self
     }
 }
@@ -972,6 +914,10 @@ impl LinearGradientInstance {
             9 => Float32x4,
             // Clip kind (location 10)
             10 => Uint32x4,
+            // Device-to-clip-local linear part (location 11)
+            11 => Float32x4,
+            // Device-to-clip-local translation, padded (location 12)
+            12 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -1008,6 +954,10 @@ impl RadialGradientInstance {
             9 => Float32x4,
             // Clip kind (location 10)
             10 => Uint32x4,
+            // Device-to-clip-local linear part (location 11)
+            11 => Float32x4,
+            // Device-to-clip-local translation, padded (location 12)
+            12 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -1048,6 +998,10 @@ impl SweepGradientInstance {
             9 => Float32x4,
             // Clip kind (location 10)
             10 => Uint32x4,
+            // Device-to-clip-local linear part (location 11)
+            11 => Float32x4,
+            // Device-to-clip-local translation, padded (location 12)
+            12 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -1186,7 +1140,7 @@ mod tests {
         //   clip_kind:           [u32; 4]  = 16 bytes
         //   transform_translate: [f32; 4]  = 16 bytes  ← appended for affine path
         //   Total: 128 bytes
-        assert_eq!(std::mem::size_of::<RectInstance>(), 128);
+        assert_eq!(std::mem::size_of::<RectInstance>(), 160);
     }
 
     #[test]
@@ -1203,7 +1157,7 @@ mod tests {
         // The clip pair is APPENDED, so every pre-existing field offset is
         // byte-identical and the `vertex_attr_array!` offsets for locations
         // 2–5 are unchanged; locations 6–8 are new at the end.
-        assert_eq!(std::mem::size_of::<CircleInstance>(), 112);
+        assert_eq!(std::mem::size_of::<CircleInstance>(), 144);
     }
 
     #[test]
@@ -1222,11 +1176,11 @@ mod tests {
     fn test_texture_instance_size() {
         // Tightly packed for the GPU, and the count must match `desc()`:
         // dst_rect + src_uv + tint + transform (4 vec4s) + the clip slot
-        // (clip_rrect is 2 vec4s, clip_kind 1 uvec4) = 7 * 16 bytes. A
-        // mismatch here means an attribute in the vertex layout has no
-        // storage behind it, which reads as garbage clip bounds on the GPU
-        // rather than as a compile error.
-        assert_eq!(std::mem::size_of::<TextureInstance>(), 7 * 16);
+        // (clip_rrect is 2 vec4s, clip_kind 1 uvec4) + the device-to-clip-local
+        // mapping (2 vec4s) = 9 * 16 bytes. A mismatch here means an attribute
+        // in the vertex layout has no storage behind it, which reads as garbage
+        // clip bounds on the GPU rather than as a compile error.
+        assert_eq!(std::mem::size_of::<TextureInstance>(), 9 * 16);
     }
 
     #[test]
@@ -1363,50 +1317,62 @@ mod tests {
     }
 
     #[test]
-    fn test_with_clip_rrect_sets_kind_one() {
-        // Non-zero clip_rrect must set clip_kind[0] = 1 (sdRoundedBox).
-        let clip: [f32; 8] = [5.0, 5.0, 90.0, 40.0, 4.0, 4.0, 4.0, 4.0];
+    fn with_clip_stores_the_resolved_clip_verbatim() {
+        let clip = super::super::state_stack::ResolvedClip {
+            rrect: [5.0, 5.0, 90.0, 40.0, 4.0, 4.0, 4.0, 4.0],
+            kind: [1, 0, 0, 0],
+            device_to_local: [0.5, 0.0, 0.0, 2.0, -3.0, 7.0],
+        };
         let instance = RectInstance::rect(
             Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
             Color::RED,
         )
-        .with_clip_rrect(clip);
-        assert_eq!(instance.clip_rrect, clip);
-        assert_eq!(instance.clip_kind[0], 1u32);
-        // Padding lanes must be zero.
-        assert_eq!(instance.clip_kind[1], 0u32);
-        assert_eq!(instance.clip_kind[2], 0u32);
-        assert_eq!(instance.clip_kind[3], 0u32);
+        .with_clip(clip);
+
+        assert_eq!(instance.clip_rrect, clip.rrect);
+        assert_eq!(instance.clip_kind, clip.kind);
+        assert_eq!(
+            instance.clip_device_to_local,
+            [0.5, 0.0, 0.0, 2.0],
+            "the linear part goes in first"
+        );
+        assert_eq!(
+            instance.clip_local_origin,
+            [-3.0, 7.0, 0.0, 0.0],
+            "and the translation is padded to a vec4"
+        );
     }
 
     #[test]
-    fn test_with_clip_rrect_all_zeros_keeps_no_clip() {
-        // Passing the all-zeros sentinel must leave clip_kind == 0.
+    fn with_clip_none_leaves_the_slot_empty() {
         let instance = RectInstance::rect(
             Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
             Color::RED,
         )
-        .with_clip_rrect([0.0; 8]);
+        .with_clip(super::super::state_stack::ResolvedClip::NONE);
         assert_eq!(instance.clip_kind, [0u32; 4]);
+        assert_eq!(instance.clip_rrect, [0.0; 8]);
     }
 
+    /// The 12-slot superellipse clip averages each corner's `(rx, ry)` into
+    /// the one radius the instance slot holds.
     #[test]
-    fn test_with_clip_rsuperellipse_sets_kind_two() {
-        // Non-zero squircle clip must set clip_kind[0] = 2.
+    fn reduce_superellipse_clip_averages_each_corner() {
         let se: [f32; 12] = [
             0.0, 0.0, 100.0, 50.0, 8.0, 10.0, 8.0, 10.0, 8.0, 10.0, 8.0, 10.0,
         ];
-        let instance = RectInstance::rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
-            Color::RED,
-        )
-        .with_clip_rsuperellipse(se);
-        assert_eq!(instance.clip_kind[0], 2u32);
-        // Averaged corner radii: avg(8,10) = 9.0 for each corner.
-        assert_eq!(instance.clip_rrect[4], 9.0);
-        assert_eq!(instance.clip_rrect[5], 9.0);
-        assert_eq!(instance.clip_rrect[6], 9.0);
-        assert_eq!(instance.clip_rrect[7], 9.0);
+        let reduced = reduce_superellipse_clip(se);
+        assert_eq!(
+            &reduced[0..4],
+            &[0.0, 0.0, 100.0, 50.0],
+            "bounds pass through"
+        );
+        assert_eq!(&reduced[4..8], &[9.0; 4], "avg(8, 10) per corner");
+        assert_eq!(
+            reduce_superellipse_clip([0.0; 12]),
+            [0.0; 8],
+            "the sentinel survives unchanged"
+        );
     }
 
     /// The instance stride the vertex layout advertises must be the struct's
@@ -1421,28 +1387,30 @@ mod tests {
     #[test]
     fn test_gradient_instance_sizes() {
         // Shared by all three: clip_rrect[8]=32  clip_kind[4u32]=16 → 48 bytes
-        // of clip, placed before the trailing padding.
+        // of clip, plus clip_device_to_local[4]=16 + clip_local_origin[4]=16 →
+        // 32 bytes of device-to-clip-local mapping. All of it placed before
+        // the trailing padding.
 
         // LinearGradientInstance:
         //   bounds[4]=16  gradient_start[2]=8  gradient_end[2]=8
         //   corner_radii[4]=16  stop_count(u32)=4  stop_offset(u32)=4
-        //   clip=48  padding[2u32]=8
-        //   Total: 112 bytes
-        assert_eq!(std::mem::size_of::<LinearGradientInstance>(), 112);
+        //   clip=48  mapping=32  padding[2u32]=8
+        //   Total: 144 bytes
+        assert_eq!(std::mem::size_of::<LinearGradientInstance>(), 144);
 
         // RadialGradientInstance:
         //   bounds[4]=16  center[2]=8  radius(f32)=4  padding1(f32)=4
         //   corner_radii[4]=16  stop_count(u32)=4  stop_offset(u32)=4
         //   clip=48  padding2[2u32]=8
         //   Total: 112 bytes
-        assert_eq!(std::mem::size_of::<RadialGradientInstance>(), 112);
+        assert_eq!(std::mem::size_of::<RadialGradientInstance>(), 144);
 
         // SweepGradientInstance:
         //   bounds[4]=16  center[2]=8  angles[2]=8
         //   corner_radii[4]=16  stop_count(u32)=4  stop_offset(u32)=4
-        //   clip=48  padding[2u32]=8
-        //   Total: 112 bytes
-        assert_eq!(std::mem::size_of::<SweepGradientInstance>(), 112);
+        //   clip=48  mapping=32  padding[2u32]=8
+        //   Total: 144 bytes
+        assert_eq!(std::mem::size_of::<SweepGradientInstance>(), 144);
     }
 
     /// The clip attributes must be reachable within the advertised stride.

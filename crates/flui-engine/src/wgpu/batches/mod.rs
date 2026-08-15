@@ -253,8 +253,7 @@ impl DrawBatcher {
                 // The isolated shape carries the clip that was active when it
                 // was recorded — it renders into an offscreen at full-frame
                 // device coordinates, so the device-space clip still applies.
-                clip_rrect: clip_for_isolated.0,
-                clip_kind: clip_for_isolated.1,
+                clip: clip_for_isolated,
             });
 
             draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
@@ -284,19 +283,12 @@ impl DrawBatcher {
 
         let index_count = indices.len() as u32;
 
-        let (clip_rrect, clip_kind) = state.active_clip();
+        let clip = state.active_clip();
         // Merging also requires the SAME clip: two different rounded clips can
         // share one bounding scissor (same rect, different radii), and the
         // batch's clip is what its draw binds.
-        #[expect(
-            clippy::float_cmp,
-            reason = "both sides are assigned bit-exact from the same state slot"
-        )]
         let mergeable = segment.tess_batches.last().is_some_and(|last| {
-            last.pipeline_key == key
-                && last.scissor == state.current_scissor()
-                && last.clip_rrect == clip_rrect
-                && last.clip_kind == clip_kind
+            last.pipeline_key == key && last.scissor == state.current_scissor() && last.clip == clip
         });
         if mergeable && let Some(last) = segment.tess_batches.last_mut() {
             last.index_count += index_count;
@@ -307,8 +299,7 @@ impl DrawBatcher {
                 scissor: state.current_scissor(),
                 index_start,
                 index_count,
-                clip_rrect,
-                clip_kind,
+                clip,
             });
         }
 
@@ -377,8 +368,7 @@ impl DrawBatcher {
             scissor: state.current_scissor(),
             index_start: 0,
             index_count: indices.len() as u32,
-            clip_rrect: clip_for_isolated.0,
-            clip_kind: clip_for_isolated.1,
+            clip: clip_for_isolated,
         });
 
         draw_order.push(DrawItem::SsaaPath(SsaaPathOp {

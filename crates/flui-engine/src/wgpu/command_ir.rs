@@ -375,12 +375,31 @@ pub(crate) struct ScissorRegion {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct ClipUniform {
-    /// Device-space `[x, y, w, h]`.
+    /// Clip-local `[x, y, w, h]`.
     pub(crate) bounds: [f32; 4],
-    /// `[tl, tr, br, bl]`.
+    /// `[tl, tr, br, bl]`, in the same space as `bounds`.
     pub(crate) radii: [f32; 4],
     /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
     pub(crate) kind: [u32; 4],
+    /// Device-to-clip-local linear part `[a, b, c, d]`, columns first.
+    pub(crate) device_to_local: [f32; 4],
+    /// Device-to-clip-local translation `[tx, ty, 0, 0]`.
+    pub(crate) local_origin: [f32; 4],
+}
+
+impl ClipUniform {
+    /// Regroup a [`ResolvedClip`](super::state_stack::ResolvedClip) into the
+    /// `vec4` members WGSL uniform layout wants.
+    pub(crate) fn from_resolved(clip: super::state_stack::ResolvedClip) -> Self {
+        let m = clip.device_to_local;
+        Self {
+            bounds: [clip.rrect[0], clip.rrect[1], clip.rrect[2], clip.rrect[3]],
+            radii: [clip.rrect[4], clip.rrect[5], clip.rrect[6], clip.rrect[7]],
+            kind: clip.kind,
+            device_to_local: [m[0], m[1], m[2], m[3]],
+            local_origin: [m[4], m[5], 0.0, 0.0],
+        }
+    }
 }
 
 /// A recorded batch of tessellated geometry sharing the same pipeline key.
@@ -400,17 +419,14 @@ pub(crate) struct TessellatedBatch {
     pub(crate) index_start: u32,
     /// Number of indices in this batch
     pub(crate) index_count: u32,
-    /// Device-space rounded-rect clip active when this batch was recorded:
-    /// `[x, y, w, h, tl, tr, br, bl]`, all-zero meaning "no clip".
+    /// The SDF clip active when this batch was recorded.
     ///
     /// Tessellated geometry carries no per-instance slot — there are no
     /// instances, only vertices — so the clip lives on the batch and is bound
     /// as a uniform for its draw. The batch is the right granularity because
     /// `add_tessellated_with_key` only merges into the previous batch when the
     /// pipeline key AND the clip both match.
-    pub(crate) clip_rrect: [f32; 8],
-    /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
-    pub(crate) clip_kind: [u32; 4],
+    pub(crate) clip: super::state_stack::ResolvedClip,
 }
 
 // ─── Offscreen / layer snapshots ─────────────────────────────────────────────
