@@ -1,5 +1,11 @@
 // Signed Distance Field (SDF) Utility Library for FLUI
 //
+// REFERENCE ONLY — no `include_str!` consumer. Nothing in this file reaches a
+// GPU. The SDF helpers that ship are in `common/clip.wgsl`, which every
+// clip-evaluating shader is prepended with. Shader comments used to say they
+// "mirror common/sdf.wgsl", which read as though this file were authoritative;
+// it is not. Editing it changes no rendering.
+//
 // This library provides reusable SDF functions for rendering 2D primitives
 // with perfect antialiasing and efficient GPU execution.
 //

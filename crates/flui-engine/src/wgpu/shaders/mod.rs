@@ -20,11 +20,35 @@
 pub const SHAPE: &str = include_str!("shape.wgsl");
 
 // Instanced rendering
+//
+// Every shader that evaluates a per-instance SDF clip is prepended with
+// `common/clip.wgsl`. WGSL has no include directive, but module-scope
+// declarations are order-independent, so plain concatenation is the whole
+// mechanism. These three shaders each carried a byte-for-byte copy of the
+// clip helpers; a distance function copied per shader drifts silently, and
+// the same `ClipRRect` would then round different primitives by different
+// amounts with nothing failing.
+//
+// `arc_instanced` is NOT prepended: `ArcInstance` carries no clip slot, and
+// adding unused functions to a shader is noise, not symmetry.
+//
+// `concat!` takes the `include_str!` calls directly rather than a named
+// `CLIP_SDF` const: it concatenates literals, and a `const` is not one.
+
 /// Instanced rectangle rendering shader.
-pub const RECT_INSTANCED: &str = include_str!("rect_instanced.wgsl");
+pub const RECT_INSTANCED: &str = concat!(
+    include_str!("common/clip.wgsl"),
+    include_str!("rect_instanced.wgsl")
+);
 /// Instanced circle rendering shader.
-pub const CIRCLE_INSTANCED: &str = include_str!("circle_instanced.wgsl");
+pub const CIRCLE_INSTANCED: &str = concat!(
+    include_str!("common/clip.wgsl"),
+    include_str!("circle_instanced.wgsl")
+);
 /// Instanced arc rendering shader.
 pub const ARC_INSTANCED: &str = include_str!("arc_instanced.wgsl");
 /// Instanced texture rendering shader.
-pub const TEXTURE_INSTANCED: &str = include_str!("texture_instanced.wgsl");
+pub const TEXTURE_INSTANCED: &str = concat!(
+    include_str!("common/clip.wgsl"),
+    include_str!("texture_instanced.wgsl")
+);

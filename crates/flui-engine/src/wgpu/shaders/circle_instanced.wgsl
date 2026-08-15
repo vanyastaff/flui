@@ -103,60 +103,9 @@ var<uniform> viewport: Viewport;
 // clip a circle evaluates is literally the same function a rect evaluates — the
 // point of routing both through `ClippableInstance`.
 
-
 // =============================================================================
 // SDF Functions (inline for this shader, can be extracted to common library)
 // =============================================================================
-
-/// Rounded box SDF with per-corner radii
-/// p: point to test (centered at origin)
-/// b: half-extents (half width, half height)
-/// r: corner radii [top-left, top-right, bottom-right, bottom-left]
-fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    // Select radius based on quadrant (branchless!)
-    // r2 = (top, bottom) radii for the active horizontal side:
-    //   right (p.x>0) → (tr=r.y, br=r.z); left → (tl=r.x, bl=r.w).
-    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
-    // r3 = bottom (p.y>0) → r2.y; top → r2.x.
-    let r3 = select(r2.x, r2.y, p.y > 0.0);
-
-    let q = abs(p) - b + vec2<f32>(r3);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r3;
-}
-
-/// Rounded superellipse SDF (iOS-squircle, n=4) with per-corner radii.
-///
-/// Mirrors `sdRoundedSuperellipse` from `common/sdf.wgsl`; inlined here per
-/// the existing `sdRoundedBox` inlining convention. See the common-library
-/// version for full prose.
-fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    // (top, bottom) radii for the active side — see sdRoundedBox.
-    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
-    let r3 = select(r2.x, r2.y, p.y > 0.0);
-
-    let q = abs(p) - b + vec2<f32>(r3);
-
-    if (q.x < 0.0 && q.y < 0.0) {
-        return max(q.x, q.y) - r3;
-    }
-
-    if (r3 <= 0.0) {
-        return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
-    }
-
-    let ax = max(q.x, 0.0) / r3;
-    let ay = max(q.y, 0.0) / r3;
-    let n_norm = sqrt(sqrt(ax * ax * ax * ax + ay * ay * ay * ay));
-    return (n_norm - 1.0) * r3;
-}
-
-/// Convert SDF distance to alpha with adaptive antialiasing.
-/// Uses the L2 (Euclidean) gradient magnitude so a diagonal/rotated edge
-/// receives ~1-device-px AA exactly, not ~1.41× as with L1/fwidth.
-fn sdfToAlpha(dist: f32) -> f32 {
-    let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
-    return 1.0 - smoothstep(-edge_width, edge_width, dist);
-}
 
 // =============================================================================
 // Vertex Shader
