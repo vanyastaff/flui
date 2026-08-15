@@ -124,8 +124,30 @@ impl SliverGeometry {
 
     /// Creates geometry with basic extents.
     ///
-    /// Sets paint_extent as layout and cache extent, visible if paint_extent >
-    /// 0.
+    /// Applies Flutter's constructor default chain
+    /// (`.flutter/packages/flutter/lib/src/rendering/sliver.dart:662-665`) as
+    /// it resolves for a call that passes only these three arguments:
+    /// `layout_extent`, `hit_test_extent` and `cache_extent` all default to
+    /// `paint_extent`, and `visible` to `paint_extent > 0.0`.
+    ///
+    /// Note the chain is resolved ONCE, here — these are plain field values,
+    /// not lazy rules. Flutter's `cacheExtent ?? layoutExtent ?? paintExtent`
+    /// means a caller that narrows `layout_extent` also narrows `cache_extent`;
+    /// with a builder the two are independent, so
+    /// [`with_layout_extent`](Self::with_layout_extent) does NOT drag
+    /// `cache_extent` down with it. Narrow both when that is what you mean —
+    /// every persistent-header variant does. Prefer this plus
+    /// the `with_*` setters over a struct literal with `..ZERO` — the
+    /// struct-update form silently substitutes zero/false for every field it
+    /// omits, which is a *different* contract and has produced three separate
+    /// header bugs (`layout_extent`, `visible`, and `hit_test_extent`).
+    ///
+    /// # Divergence from Flutter
+    ///
+    /// This also sets `max_paint_extent = paint_extent`, where Flutter
+    /// requires it explicitly and defaults it to `0.0`. Callers that know
+    /// their unconstrained extent must say so with
+    /// [`with_max_paint_extent`](Self::with_max_paint_extent).
     #[inline]
     #[must_use]
     pub const fn new(scroll_extent: f32, paint_extent: f32, paint_origin: f32) -> Self {
@@ -241,6 +263,40 @@ impl SliverGeometry {
     #[must_use]
     pub const fn with_max_scroll_obstruction(mut self, extent: f32) -> Self {
         self.max_scroll_obstruction_extent = extent;
+        self
+    }
+
+    /// Sets layout extent — the space this sliver takes from the following
+    /// sliver's layout offset, which may be less than what it paints.
+    ///
+    /// Only needed to *narrow* it: [`new`](Self::new) already defaults it to
+    /// `paint_extent`, matching Flutter's `layoutExtent ??= paintExtent`.
+    #[inline]
+    #[must_use]
+    pub const fn with_layout_extent(mut self, extent: f32) -> Self {
+        self.layout_extent = extent;
+        self
+    }
+
+    /// Sets cache extent.
+    ///
+    /// Only needed to widen or narrow it: [`new`](Self::new) already defaults
+    /// it to `paint_extent`.
+    #[inline]
+    #[must_use]
+    pub const fn with_cache_extent(mut self, extent: f32) -> Self {
+        self.cache_extent = extent;
+        self
+    }
+
+    /// Sets visibility explicitly.
+    ///
+    /// Only needed to override it: [`new`](Self::new) already derives it as
+    /// `paint_extent > 0.0`, matching Flutter's `visible ??= paintExtent > 0`.
+    #[inline]
+    #[must_use]
+    pub const fn with_visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
         self
     }
 
