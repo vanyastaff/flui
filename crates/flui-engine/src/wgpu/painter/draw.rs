@@ -261,10 +261,31 @@ impl super::WgpuPainter {
             "WgpuPainter::text"
         );
         let transformed_position = self.state.apply_transform(position);
+        let placement = self.text_placement();
         let entry_index = self.text_renderer.text_count();
-        self.text_renderer
-            .add_text(text, transformed_position, font_size, paint.color);
+        self.text_renderer.add_text(
+            text,
+            transformed_position,
+            font_size,
+            paint.color,
+            placement,
+        );
         self.claim_text_entry(entry_index);
+    }
+
+    /// Capture the painter state a glyph run needs at raster time.
+    ///
+    /// Only the run's ORIGIN crosses the CTM (`apply_transform` above); the
+    /// scale and the active clip have to be carried explicitly, because glyphon
+    /// rasterises from a `TextArea` rather than from the painter's state. Read
+    /// here, at the record seam, so the values are the ones in force when the
+    /// run was issued — reading them at flush time would give whatever the last
+    /// draw of the frame left behind.
+    fn text_placement(&self) -> super::super::text::TextPlacement {
+        super::super::text::TextPlacement {
+            scale: self.state.max_scale(),
+            clip: self.state.current_scissor(),
+        }
     }
 
     /// Stamp a freshly-recorded text batch entry onto the CURRENT segment's
@@ -322,6 +343,7 @@ impl super::WgpuPainter {
             "WgpuPainter::rich_text"
         );
         let transformed_position = self.state.apply_transform(position);
+        let placement = self.text_placement();
         let entry_index = self.text_renderer.text_count();
         self.text_renderer.add_rich_text(
             runs,
@@ -329,6 +351,7 @@ impl super::WgpuPainter {
             base_font_size,
             base_color,
             wrap_width,
+            placement,
         );
         self.claim_text_entry(entry_index);
     }

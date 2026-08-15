@@ -316,21 +316,84 @@ struct CachedBuffer {
     last_used_frame: u64,
 }
 
+/// The GPU draw state a glyph run has to carry from record time to its raster.
+///
+/// A glyph run is recorded with only its transformed ORIGIN; everything else
+/// about the painter's state used to be dropped. These two travel together
+/// because they are the same fact — "what was true when this run was recorded"
+/// — and because each was independently missing:
+///
+/// * `scale` — the framework paints in logical pixels and puts the device-pixel
+///   ratio on the root transform, so every other primitive is scaled by the CTM.
+///   Rasterising glyphs at a fixed 1.0 made a 16px label occupy 16 physical
+///   pixels in a box that reserved 32 on a 2x display.
+/// * `clip` — every run was handed the whole viewport as its bound, so no clip
+///   of any kind reached text: scrolled rows painted through the app bar above
+///   them.
+#[derive(Debug, Clone, Copy)]
+pub struct TextPlacement {
+    /// Uniform scale taken from the CTM at record time.
+    ///
+    /// Applied as `TextArea::scale`, which glyphon threads into
+    /// `glyph.physical(offset, scale)` — so the glyph is rasterised at
+    /// `font_size * scale` and cached under it, rather than upscaled from a 1x
+    /// atlas. `(left, top)` is already the transformed origin, so the run grows
+    /// from where it was placed.
+    ///
+    /// # Known limit: anisotropic transforms
+    ///
+    /// This is ONE number because `glyphon::TextArea::scale` is one `f32`;
+    /// glyphon 0.11 has no way to express a different scale per axis. Under a
+    /// non-uniform CTM such as `scale(2.0, 1.0)` the larger axis wins, so a
+    /// glyph run is stretched on both axes while the geometry around it
+    /// stretches on one. Neither this nor the previous behaviour (a hard `1.0`,
+    /// ignoring the transform entirely) is correct there; this one is at least
+    /// right on one axis, and exactly right for the case that motivated it —
+    /// the device-pixel ratio, which is always uniform.
+    ///
+    /// Fixing it properly means giving text a transform glyphon cannot carry:
+    /// either a per-area matrix, or routing rotated/skewed/anisotropic runs
+    /// through the tessellated path. `anisotropic_scale_stretches_glyphs_
+    /// uniformly` pins the current behaviour so the day that lands is a
+    /// deliberate change rather than a silent one.
+    pub scale: f32,
+    /// The scissor active at record time, `(x, y, w, h)` in device pixels, or
+    /// `None` for "unclipped".
+    pub clip: Option<(u32, u32, u32, u32)>,
+}
+
+impl Default for TextPlacement {
+    /// Unscaled and unclipped — the identity, not the all-zero value.
+    ///
+    /// `scale: 1.0` rather than `f32::default()`, for the same reason an
+    /// identity matrix is not the zero matrix: a run recorded with no painter
+    /// state should rasterise at its nominal size, and a zero scale would make
+    /// it vanish.
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            clip: None,
+        }
+    }
+}
+
 /// Discriminated batch entry: either a plain-text buffer or a rich-text buffer.
 ///
-/// Both variants carry the screen position and the glyphon default color (used
+/// Both variants carry the screen position, the glyphon default color (used
 /// as `TextArea::default_color`; per-run colors come from `Attrs::color` on the
-/// rich path).
+/// rich path), and the [`TextPlacement`] captured when the run was recorded.
 enum BatchEntry {
     Plain {
         key: TextCacheKey,
         position: Point<Pixels>,
         color: GlyphonColor,
+        placement: TextPlacement,
     },
     Rich {
         key: RichTextCacheKey,
         position: Point<Pixels>,
         default_color: GlyphonColor,
+        placement: TextPlacement,
     },
 }
 
@@ -351,7 +414,16 @@ enum BatchEntry {
 /// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format, font_system);
 ///
 /// // Add plain text during frame
-/// text_renderer.add_text("Hello, World!", Point::new(10.0, 10.0), 16.0, Color::BLACK);
+/// // `TextPlacement` carries the CTM scale and the active clip; a caller with
+/// // no painter state uses the identity. `WgpuPainter::text` reads the real
+/// // values from its own state stack at record time.
+/// text_renderer.add_text(
+///     "Hello, World!",
+///     Point::new(10.0, 10.0),
+///     16.0,
+///     Color::BLACK,
+///     TextPlacement::default(),
+/// );
 ///
 /// // Render a batch range at its draw-order position, then finish the pass
 /// text_renderer.render_range(&device, &queue, &view, &mut encoder, (800, 600), 0..usize::MAX)?;
@@ -580,7 +652,14 @@ impl TextRenderer {
     ///
     /// Buffers are cached by `(text, font_size)` to avoid re-layout when the
     /// same string appears in subsequent frames.
-    pub fn add_text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, color: Color) {
+    pub fn add_text(
+        &mut self,
+        text: &str,
+        position: Point<Pixels>,
+        font_size: f32,
+        color: Color,
+        placement: TextPlacement,
+    ) {
         // `text_len`, never `text`. This string is every label, message body,
         // and text-field value the UI draws, and a tracing field is world-
         // readable in Apple's unified log and in logcat. The length and the
@@ -600,6 +679,7 @@ impl TextRenderer {
             key,
             position,
             color: glyphon_color,
+            placement,
         });
     }
 
@@ -625,6 +705,7 @@ impl TextRenderer {
         base_font_size: f32,
         base_color: Color,
         wrap_width: Option<f32>,
+        placement: TextPlacement,
     ) {
         if runs.is_empty() {
             return;
@@ -694,6 +775,7 @@ impl TextRenderer {
             key,
             position,
             default_color,
+            placement,
         });
     }
 
@@ -914,7 +996,7 @@ fn build_text_areas<'cache>(
     batch: &[BatchEntry],
     plain_cache: &'cache HashMap<TextCacheKey, CachedBuffer>,
     rich_cache: &'cache HashMap<RichTextCacheKey, CachedBuffer>,
-    bounds: TextBounds,
+    viewport: TextBounds,
 ) -> Vec<TextArea<'cache>> {
     batch
         .iter()
@@ -923,12 +1005,13 @@ fn build_text_areas<'cache>(
                 key,
                 position,
                 color,
+                placement,
             } => plain_cache.get(key).map(|c| TextArea {
                 buffer: &c.buffer,
                 left: position.x.0,
                 top: position.y.0,
-                scale: 1.0,
-                bounds,
+                scale: placement.scale,
+                bounds: clip_bounds(placement.clip, viewport),
                 default_color: *color,
                 custom_glyphs: &[],
             }),
@@ -936,17 +1019,45 @@ fn build_text_areas<'cache>(
                 key,
                 position,
                 default_color,
+                placement,
             } => rich_cache.get(key).map(|c| TextArea {
                 buffer: &c.buffer,
                 left: position.x.0,
                 top: position.y.0,
-                scale: 1.0,
-                bounds,
+                scale: placement.scale,
+                bounds: clip_bounds(placement.clip, viewport),
                 default_color: *default_color,
                 custom_glyphs: &[],
             }),
         })
         .collect()
+}
+
+/// The `TextBounds` a run recorded under `clip` must rasterise within.
+///
+/// `None` means the run was unclipped, so the viewport is the only limit.
+/// Otherwise the scissor is intersected with the viewport — a scissor may sit
+/// partly outside the attachment, and glyphon offers no clamping of its own.
+///
+/// An empty intersection is returned as an empty rect rather than skipped, so a
+/// fully-clipped run still occupies its slot in the batch: replay addresses
+/// glyph ranges by index (`DrawSegment::text_start..text_end`), and dropping an
+/// entry here would shift every later run into the wrong segment.
+#[allow(clippy::cast_possible_wrap)]
+fn clip_bounds(clip: Option<(u32, u32, u32, u32)>, viewport: TextBounds) -> TextBounds {
+    let Some((x, y, w, h)) = clip else {
+        return viewport;
+    };
+    let left = (x as i32).max(viewport.left);
+    let top = (y as i32).max(viewport.top);
+    let right = (x.saturating_add(w) as i32).min(viewport.right);
+    let bottom = (y.saturating_add(h) as i32).min(viewport.bottom);
+    TextBounds {
+        left,
+        top,
+        right: right.max(left),
+        bottom: bottom.max(top),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,7 +1424,7 @@ mod gpu_tests {
     use flui_painting::PaintingBinding;
     use flui_types::{geometry::Pixels, geometry::Point, styling::Color};
 
-    use super::TextRenderer;
+    use super::{TextPlacement, TextRenderer};
 
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
     const W: u32 = 128;
@@ -1482,13 +1593,20 @@ mod gpu_tests {
                 Point::new(Pixels(2.0), Pixels(2.0)),
                 10.0 + (frame % 8) as f32,
                 white,
+                TextPlacement::default(),
             );
             render_one(&mut tr, &device, &queue, &view);
             tr.atlas_trim();
         }
 
         // Final known frame: opaque white text on a transparent target.
-        tr.add_text("FLUI", Point::new(Pixels(4.0), Pixels(8.0)), 16.0, white);
+        tr.add_text(
+            "FLUI",
+            Point::new(Pixels(4.0), Pixels(8.0)),
+            16.0,
+            white,
+            TextPlacement::default(),
+        );
         render_one(&mut tr, &device, &queue, &view);
         tr.atlas_trim();
 
