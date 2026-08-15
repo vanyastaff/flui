@@ -2998,6 +2998,145 @@ mod gpu_tests {
         );
     }
 
+    /// Text obeys an active clip.
+    ///
+    /// Every glyph run in a frame is handed to glyphon with the SAME
+    /// `TextBounds`, built from the whole viewport, and the text pass sets no
+    /// scissor — so no clip of any kind reaches text. A `ListView`'s rows paint
+    /// straight through the app bar above them, and a `ClipRRect` avatar spills
+    /// its label past the rounded corner.
+    ///
+    /// Driven through `WgpuPainter`, deliberately: the clip is discarded at the
+    /// RECORD seam, so a test that calls `TextRenderer::add_text` directly with
+    /// a hand-built bound would pass with the production read reverted.
+    ///
+    /// If reverted (`build_text_areas` back to a shared whole-viewport bound):
+    /// glyph pixels appear below the clip and this fails.
+    #[test]
+    fn text_is_clipped_by_the_active_clip_rect() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        const CLIP_BOTTOM: f32 = 24.0;
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.clip_rect(flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(CLIP_BOTTOM),
+        ));
+        // Positioned so the run straddles the clip edge: some of it is legally
+        // inside, the rest must be cut.
+        painter.text(
+            "Spill",
+            flui_types::Point::new(Pixels(4.0), Pixels(12.0)),
+            28.0,
+            &Paint::fill(Color::rgb(0, 0, 255)),
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Text Clip Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let inked = |p: &[u8; 4]| p[3] > 16;
+
+        let above: usize = (0..CLIP_BOTTOM as usize)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| inked(&pixels[y * w + x]))
+            .count();
+        assert!(
+            above > 0,
+            "precondition: the run must actually paint inside the clip"
+        );
+
+        let below: usize = ((CLIP_BOTTOM as usize)..SURFACE_HEIGHT as usize)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| inked(&pixels[y * w + x]))
+            .count();
+        assert_eq!(
+            below, 0,
+            "text must not paint outside the active clip; {below} glyph pixels \
+             below y={CLIP_BOTTOM} — the clip never reached the glyph run"
+        );
+    }
+
+    /// Glyphs scale with the transform, like every other primitive.
+    ///
+    /// The framework paints in logical pixels and puts the device-pixel ratio on
+    /// the root transform, so a 2x display multiplies every extent by two. Glyph
+    /// runs escape that: only the run's ORIGIN crosses the CTM, while the raster
+    /// is emitted at `scale: 1.0`. A 16px label then occupies 16 physical pixels
+    /// in a box that reserved 32 — the most visible defect on HiDPI hardware.
+    ///
+    /// Ink coverage is the oracle rather than a sampled pixel: doubling the
+    /// linear scale must roughly quadruple the painted area, which no amount of
+    /// repositioning can fake.
+    ///
+    /// If reverted (`TextArea::scale` back to a hard `1.0`): both renders ink
+    /// the same number of pixels and the ratio collapses to ~1.
+    #[test]
+    fn glyphs_scale_with_the_current_transform() {
+        fn ink_at_scale(scale: f32) -> usize {
+            let (device, queue) = acquire_test_device_and_queue();
+            let (surface_texture, surface_view) = create_render_surface(&device);
+            clear_surface(&device, &queue, &surface_view);
+
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            painter.save();
+            painter.scale(scale, scale);
+            painter.text(
+                "Ab",
+                flui_types::Point::new(Pixels(4.0), Pixels(10.0)),
+                16.0,
+                &Paint::fill(Color::rgb(0, 0, 255)),
+            );
+            painter.restore();
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Text Scale Encoder"),
+            });
+            painter
+                .render(
+                    RenderTarget::sampleable(&surface_view, &surface_texture),
+                    &mut encoder,
+                )
+                .expect("painter.render must succeed");
+            queue.submit(std::iter::once(encoder.finish()));
+
+            readback_pixels(&device, &queue, &surface_texture)
+                .iter()
+                .filter(|p| p[3] > 16)
+                .count()
+        }
+
+        let one = ink_at_scale(1.0);
+        let two = ink_at_scale(2.0);
+        assert!(one > 0, "precondition: the label paints at scale 1");
+
+        // Exactly 4x is not expected — antialiasing and hinting shift coverage —
+        // but 2.5x is far outside what those can explain, and a scale-blind
+        // raster lands at ~1.0x.
+        let ratio = two as f32 / one as f32;
+        assert!(
+            ratio > 2.5,
+            "doubling the transform scale must roughly quadruple glyph ink; got \
+             {two}/{one} = {ratio:.2}x — the raster ignored the transform"
+        );
+    }
+
     /// Text that is the ONLY content of an opacity layer must still belong
     /// to the layer: composited with the layer (subject to its opacity) and
     /// buried by top-level geometry drawn AFTER the layer — not dropped as
