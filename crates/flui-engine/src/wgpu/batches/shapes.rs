@@ -428,12 +428,13 @@ impl DrawBatcher {
                     let transformed_center = state.apply_transform(center);
                     let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
                     let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
-                    let instance = super::super::instancing::CircleInstance::new(
-                        transformed_center,
-                        radius,
-                        color,
-                        [sx, sy],
-                    );
+                    let instance =
+                        state.apply_active_clip(super::super::instancing::CircleInstance::new(
+                            transformed_center,
+                            radius,
+                            color,
+                            [sx, sy],
+                        ));
                     Self::begin_phase(segment, draw_order, Phase::Circle);
                     let _ = segment.circle_batch.add(instance);
                     DrawSegment::push_scissor_region(
@@ -458,10 +459,12 @@ impl DrawBatcher {
                     // center is already in local space (pre-transform coordinates).
                     let tx = m.x_axis.x * center.x.0 + m.y_axis.x * center.y.0 + m.w_axis.x;
                     let ty = m.x_axis.y * center.x.0 + m.y_axis.y * center.y.0 + m.w_axis.y;
-                    let instance = super::super::instancing::CircleInstance::with_affine_transform(
-                        linear_cols,
-                        color,
-                        [tx, ty],
+                    let instance = state.apply_active_clip(
+                        super::super::instancing::CircleInstance::with_affine_transform(
+                            linear_cols,
+                            color,
+                            [tx, ty],
+                        ),
                     );
                     Self::begin_phase(segment, draw_order, Phase::Circle);
                     let _ = segment.circle_batch.add(instance);
@@ -591,10 +594,12 @@ impl DrawBatcher {
             let tx = m.x_axis.x * cx + m.y_axis.x * cy + m.w_axis.x;
             let ty = m.x_axis.y * cx + m.y_axis.y * cy + m.w_axis.y;
 
-            let instance = super::super::instancing::CircleInstance::with_affine_transform(
-                linear_cols,
-                color,
-                [tx, ty],
+            let instance = state.apply_active_clip(
+                super::super::instancing::CircleInstance::with_affine_transform(
+                    linear_cols,
+                    color,
+                    [tx, ty],
+                ),
             );
             Self::begin_phase(segment, draw_order, Phase::Circle);
             let _ = segment.circle_batch.add(instance);
