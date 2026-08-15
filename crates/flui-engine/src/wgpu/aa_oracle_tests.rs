@@ -3210,6 +3210,88 @@ mod gpu_tests {
         );
     }
 
+    /// A rounded clip actually rounds a circle.
+    ///
+    /// `apply_active_clip` — the one place an SDF clip is attached to a draw —
+    /// is called only for SrcOver rect/rrect fills and for textures, and
+    /// `ClippableInstance` is implemented only by `RectInstance` and
+    /// `TextureInstance`. Circles and ovals therefore receive only the clip's
+    /// axis-aligned bounding scissor, so a `ClipRRect` around an avatar leaves
+    /// square corners.
+    ///
+    /// The geometry is chosen so the assertion cannot pass by accident: the
+    /// circle is far LARGER than the clip and covers every corner of the
+    /// surface, so a sampled corner pixel is inside the drawn shape and outside
+    /// the clip. (Drawing a disc that happens to coincide with the clip is the
+    /// trap here — the corner would then be outside the geometry itself, and
+    /// the test would pass with no clip support at all.)
+    ///
+    /// If reverted (drop the `apply_active_clip` call at the circle record
+    /// sites, or the clip block in `circle_instanced.wgsl`): the corner is
+    /// painted and this fails.
+    #[test]
+    fn a_rounded_clip_rounds_a_circle() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        const R: f32 = 40.0;
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            flui_types::Rect::from_xywh(
+                Pixels(0.0),
+                Pixels(0.0),
+                Pixels(SURFACE_WIDTH as f32),
+                Pixels(SURFACE_HEIGHT as f32),
+            ),
+            Pixels(R),
+        ));
+        // Radius 90 about the centre of a 128x128 surface: every corner of the
+        // surface is well inside this circle.
+        painter.circle(
+            flui_types::Point::new(
+                Pixels(SURFACE_WIDTH as f32 / 2.0),
+                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+            ),
+            90.0,
+            &Paint::fill(Color::rgb(0, 0, 255)),
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Circle Clip Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let at = |x: usize, y: usize| pixels[y * w + x];
+
+        // Centre: inside both the circle and the clip — must be painted, or the
+        // test would pass by drawing nothing at all.
+        let centre = at(w / 2, SURFACE_HEIGHT as usize / 2);
+        assert!(
+            centre[2] > 200,
+            "precondition: the circle must paint inside the clip; got {centre:?}"
+        );
+
+        // Corner: inside the circle, OUTSIDE the rounded clip.
+        let corner = at(3, 3);
+        assert!(
+            corner[3] < 32,
+            "a rounded clip must round the circle inside it; corner rgba={corner:?} \
+             — the circle received only the clip's bounding scissor"
+        );
+    }
+
     /// Text that is the ONLY content of an opacity layer must still belong
     /// to the layer: composited with the layer (subject to its opacity) and
     /// buried by top-level geometry drawn AFTER the layer — not dropped as

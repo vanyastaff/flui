@@ -351,6 +351,18 @@ pub struct CircleInstance {
     /// Affine path: device-space center = `M_w * center_local + t_w`.
     /// The `.zw` lanes are padding for 16-byte vec4 alignment.
     pub transform_translate: [f32; 4],
+    /// SDF clip rounded rectangle, in device space:
+    /// `[x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]`.
+    ///
+    /// All zeros means no clip. Identical slot and semantics to
+    /// [`RectInstance::clip_rrect`] — circles go through the same
+    /// [`ClippableInstance`] seam so the two cannot drift.
+    pub clip_rrect: [f32; 8],
+
+    /// Which SDF the fragment evaluates against `clip_rrect`:
+    /// `[0, _, _, _]` none, `[1, _, _, _]` rounded rect, `[2, _, _, _]`
+    /// rounded superellipse. Only `.x` is read; the rest is padding.
+    pub clip_kind: [u32; 4],
 }
 
 impl CircleInstance {
@@ -378,6 +390,9 @@ impl CircleInstance {
             // x-col = (sx, 0), y-col = (0, sy).
             transform: [scale_xy[0], 0.0, 0.0, scale_xy[1]],
             transform_translate: [center.x.0, center.y.0, 0.0, 0.0],
+            // No clip until `ClippableInstance::with_clip_*` attaches one.
+            clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
@@ -409,6 +424,9 @@ impl CircleInstance {
             color: color.to_f32_array(),
             transform: linear_cols,
             transform_translate: [translation[0], translation[1], 0.0, 0.0],
+            // No clip until `ClippableInstance::with_clip_*` attaches one.
+            clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
@@ -433,6 +451,12 @@ impl CircleInstance {
             4 => Float32x4,
             // Affine translation [tx, ty, 0, 0] (location 5)
             5 => Float32x4,
+            // SDF clip bounds [x, y, w, h] (location 6)
+            6 => Float32x4,
+            // SDF clip corner radii [tl, tr, br, bl] (location 7)
+            7 => Float32x4,
+            // Clip kind [kind, _, _, _] (location 8)
+            8 => Uint32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -759,6 +783,56 @@ impl ClippableInstance for RectInstance {
     }
 }
 
+impl ClippableInstance for CircleInstance {
+    fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
+        // Exact equality against the bit-exact `[0.0; 8]` sentinel, matching
+        // `RectInstance`/`TextureInstance` — the slot is assigned, never
+        // computed, so there is no ULP slop to tolerate.
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
+        )]
+        let is_empty = clip == [0.0; 8];
+        self.clip_rrect = clip;
+        self.clip_kind = if is_empty { [0; 4] } else { [1, 0, 0, 0] };
+        self
+    }
+
+    fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact `[0.0; 12]` 'no clip' sentinel"
+        )]
+        let is_empty = superellipse_clip == [0.0; 12];
+        if is_empty {
+            self.clip_rrect = [0.0; 8];
+            self.clip_kind = [0; 4];
+            return self;
+        }
+        // Per-corner rx/ry averaged into one scalar, exactly as `RectInstance`
+        // does: the shared 8-float slot has room for one radius per corner, and
+        // `sdRoundedSuperellipse` takes one too. Elliptical corners therefore
+        // round to a circular approximation — a pre-existing divergence, kept
+        // identical here rather than given a second behaviour.
+        let tl = 0.5 * (superellipse_clip[4] + superellipse_clip[5]);
+        let tr = 0.5 * (superellipse_clip[6] + superellipse_clip[7]);
+        let br = 0.5 * (superellipse_clip[8] + superellipse_clip[9]);
+        let bl = 0.5 * (superellipse_clip[10] + superellipse_clip[11]);
+        self.clip_rrect = [
+            superellipse_clip[0],
+            superellipse_clip[1],
+            superellipse_clip[2],
+            superellipse_clip[3],
+            tl,
+            tr,
+            br,
+            bl,
+        ];
+        self.clip_kind = [2, 0, 0, 0];
+        self
+    }
+}
+
 impl ClippableInstance for TextureInstance {
     fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
         self.clip_rrect = clip;
@@ -1040,8 +1114,14 @@ mod tests {
         //   color:               [f32; 4]  = 16 bytes
         //   transform:           [f32; 4]  = 16 bytes  ← 2×2 linear affine
         //   transform_translate: [f32; 4]  = 16 bytes  ← appended for affine path
-        //   Total: 64 bytes
-        assert_eq!(std::mem::size_of::<CircleInstance>(), 64);
+        //   clip_rrect:          [f32; 8]  = 32 bytes  ← appended for the SDF clip
+        //   clip_kind:           [u32; 4]  = 16 bytes  ← appended for the SDF clip
+        //   Total: 112 bytes
+        //
+        // The clip pair is APPENDED, so every pre-existing field offset is
+        // byte-identical and the `vertex_attr_array!` offsets for locations
+        // 2–5 are unchanged; locations 6–8 are new at the end.
+        assert_eq!(std::mem::size_of::<CircleInstance>(), 112);
     }
 
     #[test]

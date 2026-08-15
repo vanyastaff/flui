@@ -59,6 +59,9 @@ struct InstanceInput {
     @location(3) color: vec4<f32>,              // [r, g, b, a] in 0-1 range
     @location(4) transform: vec4<f32>,          // 2×2 linear affine col-major: [a, b, c, d]
     @location(5) transform_translate: vec4<f32>,// [tx, ty, 0, 0] — translation part
+    @location(6) clip_bounds: vec4<f32>,        // [x, y, width, height] of the SDF clip
+    @location(7) clip_radii: vec4<f32>,         // [tl, tr, br, bl] of the SDF clip
+    @location(8) clip_kind: vec4<u32>,          // [kind, _, _, _]: 0=none, 1=rrect, 2=rsuperellipse
 }
 
 // Vertex output / Fragment input
@@ -70,6 +73,15 @@ struct VertexOutput {
     // The SDF evaluates `length(unit_pos) - 1.0`; the L2 gradient (dpdx/dpdy) gives
     // correct screen-space AA width regardless of the affine applied in the vertex shader.
     @location(1) unit_pos: vec2<f32>,
+    // Device-space position of the fragment, for the clip SDF. The vertex
+    // shader already computes it to produce `@builtin(position)`; passing it
+    // through costs one varying and no extra math.
+    @location(2) world_pos: vec2<f32>,
+    @location(3) clip_bounds: vec4<f32>,
+    @location(4) clip_radii: vec4<f32>,
+    // Flat: the clip is per-instance, so interpolating it would be both wrong
+    // and a source of branch divergence within a draw call.
+    @location(5) @interpolate(flat) clip_kind: u32,
 }
 
 // Viewport uniform (for screen-space to clip-space conversion)
@@ -80,6 +92,71 @@ struct Viewport {
 
 @group(0) @binding(0)
 var<uniform> viewport: Viewport;
+
+// =============================================================================
+// Shared SDF helpers
+// =============================================================================
+//
+// Inlined rather than imported: this project's WGSL sources are `include_str!`
+// constants with no preprocessor, so every shader that needs an SDF carries its
+// own copy. These three are byte-identical to `rect_instanced.wgsl`'s, so the
+// clip a circle evaluates is literally the same function a rect evaluates — the
+// point of routing both through `ClippableInstance`.
+
+
+// =============================================================================
+// SDF Functions (inline for this shader, can be extracted to common library)
+// =============================================================================
+
+/// Rounded box SDF with per-corner radii
+/// p: point to test (centered at origin)
+/// b: half-extents (half width, half height)
+/// r: corner radii [top-left, top-right, bottom-right, bottom-left]
+fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
+    // Select radius based on quadrant (branchless!)
+    // r2 = (top, bottom) radii for the active horizontal side:
+    //   right (p.x>0) → (tr=r.y, br=r.z); left → (tl=r.x, bl=r.w).
+    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
+    // r3 = bottom (p.y>0) → r2.y; top → r2.x.
+    let r3 = select(r2.x, r2.y, p.y > 0.0);
+
+    let q = abs(p) - b + vec2<f32>(r3);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r3;
+}
+
+/// Rounded superellipse SDF (iOS-squircle, n=4) with per-corner radii.
+///
+/// Mirrors `sdRoundedSuperellipse` from `common/sdf.wgsl`; inlined here per
+/// the existing `sdRoundedBox` inlining convention. See the common-library
+/// version for full prose.
+fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
+    // (top, bottom) radii for the active side — see sdRoundedBox.
+    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
+    let r3 = select(r2.x, r2.y, p.y > 0.0);
+
+    let q = abs(p) - b + vec2<f32>(r3);
+
+    if (q.x < 0.0 && q.y < 0.0) {
+        return max(q.x, q.y) - r3;
+    }
+
+    if (r3 <= 0.0) {
+        return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+    }
+
+    let ax = max(q.x, 0.0) / r3;
+    let ay = max(q.y, 0.0) / r3;
+    let n_norm = sqrt(sqrt(ax * ax * ax * ax + ay * ay * ay * ay));
+    return (n_norm - 1.0) * r3;
+}
+
+/// Convert SDF distance to alpha with adaptive antialiasing.
+/// Uses the L2 (Euclidean) gradient magnitude so a diagonal/rotated edge
+/// receives ~1-device-px AA exactly, not ~1.41× as with L1/fwidth.
+fn sdfToAlpha(dist: f32) -> f32 {
+    let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
+    return 1.0 - smoothstep(-edge_width, edge_width, dist);
+}
 
 // =============================================================================
 // Vertex Shader
@@ -158,6 +235,10 @@ fn vs_main(
     // `length(unit_pos) - 1.0` relative to the true unit-circle edge,
     // even on the expanded fringe (exp_unit ranges slightly outside [-1,1] there).
     out.unit_pos = exp_unit;
+    out.world_pos = device_pos;
+    out.clip_bounds = instance.clip_bounds;
+    out.clip_radii = instance.clip_radii;
+    out.clip_kind = instance.clip_kind.x;
 
     return out;
 }
@@ -190,10 +271,38 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let aa = length(vec2<f32>(dpdx(d), dpdy(d))) * 0.5;
     let alpha = 1.0 - smoothstep(-aa, aa, d);
 
+    // --- SDF Clip Test ---
+    // Identical to `rect_instanced.wgsl`: the clip_bounds + clip_radii slot is
+    // shared between clip kinds and the flat `clip_kind` selects the SDF. Kept
+    // byte-for-byte the same shape as the rect path so the two cannot drift —
+    // circles previously received only the clip's bounding scissor, leaving an
+    // avatar inside a `ClipRRect` with square corners.
+    var clip_alpha = 1.0;
+    if (in.clip_kind != 0u && in.clip_bounds.z > 0.0 && in.clip_bounds.w > 0.0) {
+        let clip_center = in.clip_bounds.xy + in.clip_bounds.zw * 0.5;
+        let clip_p = in.world_pos - clip_center;
+        let clip_half = in.clip_bounds.zw * 0.5;
+
+        var clip_dist = 0.0;
+        if (in.clip_kind == 2u) {
+            clip_dist = sdRoundedSuperellipse(clip_p, clip_half, in.clip_radii);
+        } else {
+            // clip_kind == 1u (rrect), and the safe default for any kind this
+            // shader has not learned about.
+            clip_dist = sdRoundedBox(clip_p, clip_half, in.clip_radii);
+        }
+        clip_alpha = sdfToAlpha(clip_dist);
+    }
+
+    let final_alpha = alpha * clip_alpha;
+
     // Discard fully transparent pixels to reduce overdraw on expanded fringe.
-    if (alpha < 0.001) {
+    if (final_alpha < 0.001) {
         discard;
     }
 
-    return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    // Straight (non-premultiplied) alpha, as before: the blend state does the
+    // premultiply. Folding the clip into the alpha is therefore correct here —
+    // it would NOT be in a shader that returns `rgb * a`.
+    return vec4<f32>(in.color.rgb, in.color.a * final_alpha);
 }
