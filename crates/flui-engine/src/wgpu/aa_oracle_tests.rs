@@ -3392,6 +3392,252 @@ mod gpu_tests {
         );
     }
 
+    /// A rounded clip actually rounds a gradient fill.
+    ///
+    /// The same gap circles had, one primitive over: the gradient instances did
+    /// not implement `ClippableInstance`, so a gradient received only the
+    /// clip's axis-aligned bounding scissor and a `ClipRRect` around a gradient
+    /// card left square corners.
+    ///
+    /// The geometry avoids the coincide-with-the-clip trap: the gradient is
+    /// drawn with SQUARE corners over the whole surface, so a sampled corner
+    /// pixel is inside the drawn shape and outside the clip. A gradient whose
+    /// own `corner_radius` matched the clip would pass with no clip support at
+    /// all.
+    ///
+    /// Reverted (drop `apply_active_clip` at the gradient record sites, or the
+    /// `clipAlpha` call in the gradient shaders): the corner is painted and
+    /// this fails.
+    #[test]
+    fn a_rounded_clip_rounds_a_gradient() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        const R: f32 = 40.0;
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            full,
+            Pixels(R),
+        ));
+        painter.gradient_rect(
+            full,
+            glam::Vec2::new(0.0, 0.0),
+            glam::Vec2::new(0.0, SURFACE_HEIGHT as f32),
+            &[
+                crate::wgpu::effects::GradientStop::start(Color::rgb(0, 0, 255)),
+                crate::wgpu::effects::GradientStop::end(Color::rgb(0, 0, 255)),
+            ],
+            // Square corners: the clip, not the shape, is what must round this.
+            0.0,
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Gradient Clip Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let at = |x: usize, y: usize| pixels[y * w + x];
+
+        let centre = at(w / 2, SURFACE_HEIGHT as usize / 2);
+        assert!(
+            centre[2] > 200,
+            "precondition: the gradient must paint inside the clip; got {centre:?}"
+        );
+
+        let corner = at(3, 3);
+        assert!(
+            corner[3] < 32,
+            "a rounded clip must round the gradient inside it; corner rgba={corner:?} \
+             — the gradient received only the clip's bounding scissor"
+        );
+    }
+
+    /// A rounded clip actually rounds tessellated geometry.
+    ///
+    /// Strokes and path fills never reach the instanced SDF path — they are
+    /// tessellated by lyon and drawn through `shape.wgsl`, which receives only
+    /// the clip's axis-aligned bounding scissor. A stroked border inside a
+    /// `ClipRRect` therefore keeps square corners while the rrect fill beside
+    /// it is correctly rounded.
+    ///
+    /// Geometry: a stroke wide enough to cover the whole surface, so a corner
+    /// pixel is inside the stroked band and outside the clip. The stroke is
+    /// centred on the surface so it cannot coincide with the clip's own
+    /// boundary — a stroke that merely traced the clip would leave the corner
+    /// unpainted with no clip support at all.
+    ///
+    /// Reverted (drop the clip uniform from the tessellated draw, or the
+    /// `clipAlpha` call in `shape.wgsl`): the corner is painted and this fails.
+    #[test]
+    fn a_rounded_clip_rounds_tessellated_geometry() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        const R: f32 = 40.0;
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            full,
+            Pixels(R),
+        ));
+        // A stroke this wide covers the surface, corners included. `Paint`
+        // with a Stroke style routes through the tessellator, not the
+        // instanced rect path.
+        painter.rect(
+            flui_types::Rect::from_xywh(
+                Pixels(SURFACE_WIDTH as f32 / 2.0),
+                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+                Pixels(1.0),
+                Pixels(1.0),
+            ),
+            &Paint::stroke(Color::rgb(0, 0, 255), SURFACE_WIDTH as f32 * 2.0),
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Tess Clip Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let at = |x: usize, y: usize| pixels[y * w + x];
+
+        let centre = at(w / 2, SURFACE_HEIGHT as usize / 2);
+        assert!(
+            centre[2] > 200,
+            "precondition: the stroke must paint inside the clip; got {centre:?}"
+        );
+
+        let corner = at(3, 3);
+        assert!(
+            corner[3] < 32,
+            "a rounded clip must round tessellated geometry inside it; corner \
+             rgba={corner:?} — the stroke received only the clip's bounding scissor"
+        );
+    }
+
+    /// A tessellated draw that routes through the SSAA tile still honours its
+    /// clip.
+    ///
+    /// `render_ssaa_path` rebases vertex positions into tile-local 2x space, so
+    /// the `world_pos` the fragment stage sees is tile-local while the batch's
+    /// SDF clip is in full-frame device space. Left unremapped the shader
+    /// compares the two and the clip lands somewhere else entirely. Same shape
+    /// as the grown-offscreen bug on circles, a different rebasing seam.
+    ///
+    /// `BlendMode::Plus` is tile-safe and not SrcOver, so a draw above the
+    /// 256 px² area threshold takes the SSAA route rather than the direct one.
+    ///
+    /// The geometry sits AWAY from the origin on purpose: a tile whose origin
+    /// is (0, 0) at scale 1 makes the remap an identity and the test would pass
+    /// with no remap at all.
+    #[test]
+    fn an_ssaa_tiled_draw_honours_its_clip() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        // Bottom-right region of a 128x128 surface, heavily rounded.
+        let region =
+            flui_types::Rect::from_xywh(Pixels(48.0), Pixels(48.0), Pixels(80.0), Pixels(80.0));
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            region,
+            Pixels(40.0),
+        ));
+        // A FILL, and a large one: the SSAA gate reads the rect's own area
+        // (80x80 = 6400 px², over the 256 px² threshold), not the painted
+        // area — a hairline rect with a huge stroke width stays under it and
+        // silently takes the direct path instead.
+        painter.rect(
+            region,
+            &Paint::fill(Color::rgb(0, 0, 255))
+                .with_blend_mode(flui_types::painting::BlendMode::Plus),
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("SSAA Clip Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let at = |x: usize, y: usize| pixels[y * w + x];
+
+        let centre = at(88, 88);
+        assert!(
+            centre[2] > 200,
+            "precondition: the fill must paint inside the clip; got {centre:?}"
+        );
+
+        // Top-left of the region, inside the rounded clip: cut away.
+        let corner = at(52, 52);
+        assert!(
+            corner[3] < 32,
+            "the clip's rounded corner must still cut; got rgba={corner:?}"
+        );
+
+        // THE discriminating sample. The tile is `origin=(48, 48)`,
+        // `scale=1.6`, so this pixel is tile-local (20, 64):
+        //
+        //   remapped clip   → bounds (0, 0, 128, 128), radii 64  → inside
+        //   full-frame clip → bounds (48, 48, 80, 80), radii 40  → outside
+        //
+        // Most sample points agree between the two — the corner above is
+        // clipped either way — so an assertion placed anywhere else passes
+        // with the remap deleted.
+        let discriminating = at(60, 88);
+        assert!(
+            discriminating[2] > 200,
+            "an SSAA-tiled draw's clip must be remapped into tile space; \
+             rgba={discriminating:?} at a pixel the correctly-remapped clip \
+             keeps — its clip was left in full-frame coordinates while its \
+             vertices were rebased to the tile"
+        );
+    }
+
     /// Text that is the ONLY content of an opacity layer must still belong
     /// to the layer: composited with the layer (subject to its opacity) and
     /// buried by top-level geometry drawn AFTER the layer — not dropped as

@@ -17,7 +17,10 @@
 
 // Basic shapes
 /// Basic shape rendering shader.
-pub const SHAPE: &str = include_str!("shape.wgsl");
+///
+/// Prepended with the shared clip block: tessellated geometry evaluates the
+/// same SDF clip the instanced primitives do, from a per-batch uniform.
+pub const SHAPE: &str = concat!(include_str!("common/clip.wgsl"), include_str!("shape.wgsl"));
 
 // Instanced rendering
 //

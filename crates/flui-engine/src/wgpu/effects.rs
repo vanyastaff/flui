@@ -70,6 +70,20 @@ pub struct LinearGradientInstance {
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
+    /// Device-space rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
+    ///
+    /// All-zero means "no clip". Attached by `apply_active_clip`, evaluated per
+    /// pixel by the shader against `world_pos`. The scissor alone can only
+    /// express the clip's axis-aligned bounding box, which leaves square
+    /// corners on a `ClipRRect`.
+    ///
+    /// Placed BEFORE the trailing padding field on purpose: `desc()` builds its
+    /// attribute offsets with `vertex_attr_array!`, which lays attributes out
+    /// contiguously and knows nothing about padding fields. A clip slot after
+    /// the padding would be read 8 bytes early.
+    pub clip_rrect: [f32; 8],
+    /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
+    pub clip_kind: [u32; 4],
     /// Padding for GPU alignment
     pub padding: [u32; 2],
 }
@@ -91,6 +105,8 @@ impl LinearGradientInstance {
             stop_count: stop_count.min(8),
             stop_offset: 0,
             padding: [0; 2],
+            clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
@@ -156,6 +172,20 @@ pub struct RadialGradientInstance {
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
+    /// Device-space rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
+    ///
+    /// All-zero means "no clip". Attached by `apply_active_clip`, evaluated per
+    /// pixel by the shader against `world_pos`. The scissor alone can only
+    /// express the clip's axis-aligned bounding box, which leaves square
+    /// corners on a `ClipRRect`.
+    ///
+    /// Placed BEFORE the trailing padding field on purpose: `desc()` builds its
+    /// attribute offsets with `vertex_attr_array!`, which lays attributes out
+    /// contiguously and knows nothing about padding fields. A clip slot after
+    /// the padding would be read 8 bytes early.
+    pub clip_rrect: [f32; 8],
+    /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
+    pub clip_kind: [u32; 4],
     /// Padding for GPU alignment
     pub padding2: [u32; 2],
 }
@@ -178,6 +208,8 @@ impl RadialGradientInstance {
             stop_count: stop_count.min(8),
             stop_offset: 0,
             padding2: [0; 2],
+            clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
@@ -220,6 +252,20 @@ pub struct SweepGradientInstance {
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
+    /// Device-space rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
+    ///
+    /// All-zero means "no clip". Attached by `apply_active_clip`, evaluated per
+    /// pixel by the shader against `world_pos`. The scissor alone can only
+    /// express the clip's axis-aligned bounding box, which leaves square
+    /// corners on a `ClipRRect`.
+    ///
+    /// Placed BEFORE the trailing padding field on purpose: `desc()` builds its
+    /// attribute offsets with `vertex_attr_array!`, which lays attributes out
+    /// contiguously and knows nothing about padding fields. A clip slot after
+    /// the padding would be read 8 bytes early.
+    pub clip_rrect: [f32; 8],
+    /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
+    pub clip_kind: [u32; 4],
     /// Padding for GPU alignment
     pub padding: [u32; 2],
 }
@@ -242,6 +288,8 @@ impl SweepGradientInstance {
             stop_count: stop_count.min(8),
             stop_offset: 0,
             padding: [0; 2],
+            clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 

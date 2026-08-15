@@ -368,6 +368,21 @@ pub(crate) struct ScissorRegion {
     pub(crate) count: u32,
 }
 
+/// The per-batch SDF clip, in the layout `shape.wgsl`'s `ClipUniform` expects.
+///
+/// `vec4` members because WGSL uniform layout aligns them to 16 bytes; the
+/// three arrays are the same values `TessellatedBatch` stores, regrouped.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct ClipUniform {
+    /// Device-space `[x, y, w, h]`.
+    pub(crate) bounds: [f32; 4],
+    /// `[tl, tr, br, bl]`.
+    pub(crate) radii: [f32; 4],
+    /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
+    pub(crate) kind: [u32; 4],
+}
+
 /// A recorded batch of tessellated geometry sharing the same pipeline key.
 ///
 /// During a frame, each call to
@@ -385,6 +400,17 @@ pub(crate) struct TessellatedBatch {
     pub(crate) index_start: u32,
     /// Number of indices in this batch
     pub(crate) index_count: u32,
+    /// Device-space rounded-rect clip active when this batch was recorded:
+    /// `[x, y, w, h, tl, tr, br, bl]`, all-zero meaning "no clip".
+    ///
+    /// Tessellated geometry carries no per-instance slot — there are no
+    /// instances, only vertices — so the clip lives on the batch and is bound
+    /// as a uniform for its draw. The batch is the right granularity because
+    /// `add_tessellated_with_key` only merges into the previous batch when the
+    /// pipeline key AND the clip both match.
+    pub(crate) clip_rrect: [f32; 8],
+    /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
+    pub(crate) clip_kind: [u32; 4],
 }
 
 // ─── Offscreen / layer snapshots ─────────────────────────────────────────────

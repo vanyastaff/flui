@@ -273,6 +273,12 @@ pub struct PipelineCache {
 
     /// Viewport bind group layout (for coordinate transformation)
     viewport_bind_group_layout: wgpu::BindGroupLayout,
+
+    /// Per-batch SDF clip bind group layout (group 1).
+    ///
+    /// Owned here rather than passed in, because every pipeline this cache
+    /// builds uses it and there is exactly one shader module behind them all.
+    clip_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl PipelineCache {
@@ -294,11 +300,27 @@ impl PipelineCache {
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
+        let clip_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Tessellated Clip Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
         Self {
             cache: HashMap::new(),
             shader,
             format,
             viewport_bind_group_layout,
+            clip_bind_group_layout,
         }
     }
 
@@ -339,7 +361,10 @@ impl PipelineCache {
         // Create layout with viewport bind group
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Shape Pipeline Layout"),
-            bind_group_layouts: &[Some(&self.viewport_bind_group_layout)],
+            bind_group_layouts: &[
+                Some(&self.viewport_bind_group_layout),
+                Some(&self.clip_bind_group_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -404,6 +429,12 @@ impl PipelineCache {
     /// exact same layout object that the pipeline expects.
     pub fn viewport_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.viewport_bind_group_layout
+    }
+
+    /// The per-batch SDF clip bind-group layout (group 1) every tessellated
+    /// draw binds against.
+    pub fn clip_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.clip_bind_group_layout
     }
 }
 
