@@ -16,7 +16,7 @@ var<uniform> viewport: Viewport;
 // slot on, so the clip is bound once per `TessellatedBatch` — the granularity
 // the batcher already splits at, since it refuses to merge across a clip change.
 struct ClipUniform {
-    bounds: vec4<f32>,  // Device-space [x, y, w, h]
+    bounds: vec4<f32>,  // Clip-local [x, y, w, h]; device_to_local maps into it
     radii: vec4<f32>,   // [tl, tr, br, bl]
     kind: vec4<u32>,    // [kind, _, _, _]: 0 = none, 1 = rrect, 2 = rsuperellipse
     device_to_local: vec4<f32>, // [a, b, c, d], columns first

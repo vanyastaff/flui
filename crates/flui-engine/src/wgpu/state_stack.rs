@@ -549,11 +549,21 @@ impl GpuStateStack {
     /// Invert the CTM's 2D affine part into the `[a, b, c, d, tx, ty]` column
     /// form `current_clip_inv` holds.
     ///
-    /// A singular matrix — `scale(0, …)` collapses geometry to a line — has no
-    /// inverse; the identity is returned, which leaves the clip evaluated in
-    /// device space. Nothing is drawn through a singular CTM anyway, so the
-    /// choice is unobservable; it exists so the arithmetic below never
-    /// produces infinities the shader would then compare against.
+    /// The fallback is keyed on the arithmetic actually breaking down, not on
+    /// the determinant clearing a threshold. An absolute epsilon rejects
+    /// matrices that ARE invertible: `f32::EPSILON` is ~1.19e-7, so
+    /// `scale(1e-4, 1e-4)` has determinant 1e-8 and would be declared
+    /// singular — and a scale animation starting near zero passes through
+    /// exactly those frames. With the clip silently identity-mapped there, its
+    /// local bounds get compared against device coordinates and the draw can
+    /// vanish for a frame or two at the start of every such animation.
+    ///
+    /// A genuinely singular matrix — `scale(0, …)` collapses geometry to a
+    /// line — yields infinities, which the finiteness check catches along with
+    /// NaN and any overflow the reciprocal produces. The identity is returned
+    /// there, which leaves the clip evaluated in device space; nothing is drawn
+    /// through a singular CTM anyway, so the choice is unobservable. It exists
+    /// so the shader never compares against a non-finite mapping.
     fn device_to_local(transform: glam::Mat4) -> [f32; 6] {
         let a = transform.x_axis.x;
         let b = transform.x_axis.y;
@@ -562,14 +572,16 @@ impl GpuStateStack {
         let tx = transform.w_axis.x;
         let ty = transform.w_axis.y;
 
-        let det = a * d - b * c;
-        if det.abs() < f32::EPSILON {
-            return CLIP_INV_IDENTITY;
-        }
-        let inv_det = 1.0 / det;
+        let inv_det = 1.0 / (a * d - b * c);
         let (ia, ib, ic, id) = (d * inv_det, -b * inv_det, -c * inv_det, a * inv_det);
         // local = M⁻¹ · (p − t)
-        [ia, ib, ic, id, -(ia * tx + ic * ty), -(ib * tx + id * ty)]
+        let inv = [ia, ib, ic, id, -(ia * tx + ic * ty), -(ib * tx + id * ty)];
+
+        if inv.iter().all(|v| v.is_finite()) {
+            inv
+        } else {
+            CLIP_INV_IDENTITY
+        }
     }
 
     /// Set an SDF superellipse (iOS-squircle) clip and clear any active rrect
@@ -1062,6 +1074,43 @@ mod tests {
         assert!(
             stack.current_scissor().is_some(),
             "the coarse scissor still applies as an early-rejection pre-pass"
+        );
+    }
+
+    /// A tiny-but-invertible scale is inverted, not written off as singular.
+    ///
+    /// An absolute determinant threshold gets this wrong: `f32::EPSILON` is
+    /// ~1.19e-7, so `scale(1e-4, 1e-4)` has determinant 1e-8 and clears no
+    /// such bar despite being perfectly invertible. A scale animation starting
+    /// near zero passes through exactly these frames, and an identity-mapped
+    /// clip there compares its local bounds against device coordinates — the
+    /// draw can vanish for a frame or two at the start of every one.
+    ///
+    /// A local 1,000,000-unit box under this scale is a 100-unit box on
+    /// screen, so a device point at 50 must map back to 500,000.
+    #[test]
+    fn a_tiny_but_invertible_scale_is_still_inverted() {
+        let mut stack = GpuStateStack::new_for_test();
+        stack.scale(1e-4, 1e-4);
+        stack.clip_rrect(
+            RRect::from_rect_circular(
+                Rect::from_xywh(px(0.0), px(0.0), px(1.0e6), px(1.0e6)),
+                px(1.0e5),
+            ),
+            (400, 400),
+        );
+
+        let m = stack.active_clip().device_to_local;
+        assert_ne!(
+            m, CLIP_INV_IDENTITY,
+            "an invertible CTM must not be written off as singular"
+        );
+
+        let local_x = m[0] * 50.0 + m[2] * 50.0 + m[4];
+        let local_y = m[1] * 50.0 + m[3] * 50.0 + m[5];
+        assert!(
+            (local_x - 500_000.0).abs() < 1.0 && (local_y - 500_000.0).abs() < 1.0,
+            "device (50, 50) must map to local (500000, 500000), got ({local_x}, {local_y})"
         );
     }
 

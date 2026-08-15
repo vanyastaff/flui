@@ -70,10 +70,11 @@ pub struct LinearGradientInstance {
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
-    /// Device-space rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
+    /// Clip-local rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
     ///
-    /// All-zero means "no clip". Attached by `apply_active_clip`, evaluated per
-    /// pixel by the shader against `world_pos`. The scissor alone can only
+    /// All-zero means "no clip". Attached by `apply_active_clip`; the shader
+    /// maps a fragment's device position into this space with
+    /// `clip_device_to_local` before evaluating it. The scissor alone can only
     /// express the clip's axis-aligned bounding box, which leaves square
     /// corners on a `ClipRRect`.
     ///
@@ -183,10 +184,11 @@ pub struct RadialGradientInstance {
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
-    /// Device-space rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
+    /// Clip-local rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
     ///
-    /// All-zero means "no clip". Attached by `apply_active_clip`, evaluated per
-    /// pixel by the shader against `world_pos`. The scissor alone can only
+    /// All-zero means "no clip". Attached by `apply_active_clip`; the shader
+    /// maps a fragment's device position into this space with
+    /// `clip_device_to_local` before evaluating it. The scissor alone can only
     /// express the clip's axis-aligned bounding box, which leaves square
     /// corners on a `ClipRRect`.
     ///
@@ -274,10 +276,11 @@ pub struct SweepGradientInstance {
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
-    /// Device-space rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
+    /// Clip-local rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
     ///
-    /// All-zero means "no clip". Attached by `apply_active_clip`, evaluated per
-    /// pixel by the shader against `world_pos`. The scissor alone can only
+    /// All-zero means "no clip". Attached by `apply_active_clip`; the shader
+    /// maps a fragment's device position into this space with
+    /// `clip_device_to_local` before evaluating it. The scissor alone can only
     /// express the clip's axis-aligned bounding box, which leaves square
     /// corners on a `ClipRRect`.
     ///

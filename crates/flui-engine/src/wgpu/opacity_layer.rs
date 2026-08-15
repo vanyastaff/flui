@@ -431,9 +431,10 @@ impl GpuReplay {
             inst.transform[3] *= scale_y;
         }
 
-        // The SDF clip each instance carries is in DEVICE space, so it moves
-        // with them. One call covering every clip-carrying batch, rather than a
-        // line per transform loop above — see `remap_segment_clips`.
+        // Each clip's device-to-local mapping consumes a device-space
+        // position, so the rebase above has to be composed into it. One call
+        // covering every clip carrier, rather than a line per transform loop
+        // above — see `remap_segment_clips`.
         Self::remap_segment_clips(
             &mut remapped_segment,
             (origin_x, origin_y),

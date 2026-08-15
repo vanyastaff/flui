@@ -233,7 +233,8 @@ impl RectInstance {
             9 => Float32x4,
             // Device-to-clip-local translation, padded (location 10)
             10 => Float32x4,
-            // Affine translation [tx, ty, 0, 0] (location 9)
+            // Affine translation [tx, ty, 0, 0] (location 11 — it moved off 9
+            // when the clip mapping took 9 and 10)
             11 => Float32x4,
         ];
 

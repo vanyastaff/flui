@@ -252,7 +252,8 @@ impl DrawBatcher {
                 index_count: indices.len() as u32,
                 // The isolated shape carries the clip that was active when it
                 // was recorded — it renders into an offscreen at full-frame
-                // device coordinates, so the device-space clip still applies.
+                // device coordinates, so the clip's mapping still applies
+                // unchanged — there is no rebase to compose in.
                 clip: clip_for_isolated,
             });
 
