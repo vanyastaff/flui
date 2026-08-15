@@ -1,8 +1,8 @@
 //! CPU-side smoke test for `sdRoundedSuperellipse` math correctness.
 //!
 //! Transliterates the WGSL `sdRoundedBox` and `sdRoundedSuperellipse`
-//! functions from [`shaders/common/sdf.wgsl`](crate::wgpu::shaders) into
-//! Rust helpers, then samples both at known points to verify:
+//! functions from `shaders/common/clip.wgsl` into Rust helpers, then samples
+//! both at known points to verify:
 //!
 //! 1. **Corner-region divergence:** At a sample inside the
 //!    corner-curvature zone, the superellipse SDF produces a measurably
@@ -22,16 +22,24 @@
 //! corner radii = 80, large enough that corner curvature is visible and
 //! the SDF difference is well above floating-point noise.
 //!
-//! These helpers must stay in sync with the WGSL functions. Future edits
-//! to either side that change behavior trigger the divergence test
-//! failure, surfacing the desync.
+//! **What these tests do NOT pin.** Both sides of every comparison here are
+//! the Rust transliterations, so editing the WGSL changes nothing that runs
+//! in this file — a desync between Rust and WGSL passes silently. What they
+//! DO pin is the math relationship the squircle has to satisfy: it must
+//! differ from an rrect in the corner zone and agree everywhere else, so a
+//! silent regression to the rrect fallback fails here without a GPU.
+//!
+//! The shader itself is pinned by the readback oracles in `aa_oracle_tests`
+//! (`a_rounded_clip_rounds_a_circle` and its neighbours), which run the real
+//! WGSL and read back pixels. Those are the tests to extend when the clip's
+//! observable behavior changes.
 
 #![cfg(test)]
 
 /// CPU transliteration of WGSL `sdRoundedBox`.
 ///
-/// Must stay in sync with [`shaders/common/sdf.wgsl::sdRoundedBox`]
-/// (and the inlined copy in `shaders/rect_instanced.wgsl`).
+/// Mirrors `sdRoundedBox` in `shaders/common/clip.wgsl` by hand — nothing
+/// checks the two agree; see the module docs.
 fn sd_rounded_box(p: [f32; 2], b: [f32; 2], r: [f32; 4]) -> f32 {
     // Per-corner radius selection (branchless equivalent of WGSL `select`)
     // (top, bottom) radii for the active horizontal side — see WGSL sdRoundedBox:
@@ -52,8 +60,8 @@ fn sd_rounded_box(p: [f32; 2], b: [f32; 2], r: [f32; 4]) -> f32 {
 
 /// CPU transliteration of WGSL `sdRoundedSuperellipse`.
 ///
-/// Must stay in sync with [`shaders/common/sdf.wgsl::sdRoundedSuperellipse`]
-/// (and the inlined copy in `shaders/rect_instanced.wgsl`).
+/// Mirrors `sdRoundedSuperellipse` in `shaders/common/clip.wgsl` by hand —
+/// nothing checks the two agree; see the module docs.
 fn sd_rounded_superellipse(p: [f32; 2], b: [f32; 2], r: [f32; 4]) -> f32 {
     // (top, bottom) radii for the active horizontal side — see WGSL sdRoundedBox:
     //   right (p.x>0) → (tr=r[1], br=r[2]); left → (tl=r[0], bl=r[3]).
