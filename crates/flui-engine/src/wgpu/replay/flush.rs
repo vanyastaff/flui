@@ -589,6 +589,47 @@ impl GpuReplay {
             return;
         }
 
+        // Build every batch's clip bind group BEFORE the vertex/index buffers.
+        //
+        // Two reasons it cannot happen inside the loop: `alloc` needs the
+        // resources borrow that the vertex/index buffers below hold for the
+        // rest of this function, and the pool hands out a buffer that must
+        // stay distinct for the whole submit — every tessellated batch lands
+        // in ONE submit, so a reused buffer would give them all the last clip
+        // written.
+        let clip_bind_groups: Vec<wgpu::BindGroup> = segment
+            .tess_batches
+            .iter()
+            .map(|batch| {
+                let uniform = super::super::command_ir::ClipUniform {
+                    bounds: [
+                        batch.clip_rrect[0],
+                        batch.clip_rrect[1],
+                        batch.clip_rrect[2],
+                        batch.clip_rrect[3],
+                    ],
+                    radii: [
+                        batch.clip_rrect[4],
+                        batch.clip_rrect[5],
+                        batch.clip_rrect[6],
+                        batch.clip_rrect[7],
+                    ],
+                    kind: batch.clip_kind,
+                };
+                let buffer = resources
+                    .uniform_pool_mut()
+                    .alloc(bytemuck::bytes_of(&uniform));
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Tessellated Clip Bind Group"),
+                    layout: pipelines.shape_cache_mut().clip_bind_group_layout(),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    }],
+                })
+            })
+            .collect();
+
         let (vertex_buffer, index_buffer) =
             resources.buffer_pool_mut().get_vertex_and_index_buffers(
                 device,
@@ -636,7 +677,7 @@ impl GpuReplay {
         render_pass.set_viewport(0.0, 0.0, full_w as f32, full_h as f32, 0.0, 1.0);
 
         let mut active_key: Option<PipelineKey> = None;
-        for batch in &segment.tess_batches {
+        for (batch, clip_bind_group) in segment.tess_batches.iter().zip(&clip_bind_groups) {
             if active_key != Some(batch.pipeline_key) {
                 // `pipelines` and `device` are disjoint from the encoder/render_pass
                 // borrows — no borrow conflict.
@@ -652,6 +693,8 @@ impl GpuReplay {
                 // remap's off-target sentinel) — nothing to draw for this batch.
                 continue;
             }
+
+            render_pass.set_bind_group(1, clip_bind_group, &[]);
 
             let start = batch.index_start;
             let end = start + batch.index_count;

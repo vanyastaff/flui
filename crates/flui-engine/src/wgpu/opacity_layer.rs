@@ -201,7 +201,7 @@ impl GpuReplay {
     /// `fb_dim == viewport` and this remap would be the identity anyway. If that
     /// fallback gate ever admits images, their clips must be added here in the
     /// same change.
-    fn remap_segment_clips(
+    pub(super) fn remap_segment_clips(
         segment: &mut super::command_ir::DrawSegment,
         origin: (f32, f32),
         scale: (f32, f32),
@@ -211,6 +211,13 @@ impl GpuReplay {
         }
         for inst in &mut segment.circle_batch.instances {
             Self::remap_clip_rrect(&mut inst.clip_rrect, inst.clip_kind, origin, scale);
+        }
+        // Tessellated geometry carries its clip on the BATCH, not on instances
+        // — and unlike shadows/gradients/images it IS repositioned into a
+        // shrunken intermediate (`content_aabb` returns `Some` for a
+        // vertices-only segment), so it needs the remap just as much.
+        for batch in &mut segment.tess_batches {
+            Self::remap_clip_rrect(&mut batch.clip_rrect, batch.clip_kind, origin, scale);
         }
     }
 
@@ -1315,8 +1322,7 @@ mod grown_offscreen_clip_tests {
     use super::super::instancing::{CircleInstance, ClippableInstance, RectInstance};
     use flui_types::{Color, Point, Rect, geometry::Pixels};
 
-    /// A device-space clip attached to a circle is remapped into a grown
-    /// offscreen exactly as the same clip on a rect is.
+    /// Every clip carrier is remapped into a grown offscreen the same way.
     ///
     /// `render_segment_to_grown_offscreen` rebases and scales instances into a
     /// filter intermediate that is smaller than the viewport. `clip_rrect` is in
@@ -1325,13 +1331,14 @@ mod grown_offscreen_clip_tests {
     /// rounded clip is displaced far enough to erase the filtered shape.
     ///
     /// The rect loop always did this inline; the circle loop did not, because
-    /// circles had no clip slot until they gained one. Asserting the two AGREE,
-    /// rather than asserting a literal, is what stops them drifting again.
+    /// circles had no clip slot until they gained one, and tessellated batches
+    /// arrived later still. Asserting they all AGREE, rather than asserting a
+    /// literal, is what stops the next carrier being forgotten.
     ///
-    /// Reverted (drop the `remap_segment_clips` circle loop): the circle keeps
-    /// full-frame bounds and this fails on the final `assert_eq!`.
+    /// Reverted (drop any one loop in `remap_segment_clips`): that carrier
+    /// keeps full-frame bounds and this fails on its `assert_eq!`.
     #[test]
-    fn a_circles_clip_is_remapped_like_a_rects() {
+    fn every_clip_carrier_is_remapped_the_same_way() {
         const ORIGIN: (f32, f32) = (40.0, 24.0);
         const SCALE: (f32, f32) = (0.5, 0.25);
         // [x, y, w, h, tl, tr, br, bl] in device space.
@@ -1360,6 +1367,16 @@ mod grown_offscreen_clip_tests {
         // `add` returns "batch is now full", not "succeeded".
         assert!(!segment.rect_batch.add(rect), "rect batch not full");
         assert!(!segment.circle_batch.add(circle), "circle batch not full");
+        segment
+            .tess_batches
+            .push(super::super::command_ir::TessellatedBatch {
+                pipeline_key: super::super::pipeline::PipelineKey::alpha_blend(),
+                scissor: None,
+                index_start: 0,
+                index_count: 3,
+                clip_rrect: CLIP,
+                clip_kind: [1, 0, 0, 0],
+            });
 
         super::GpuReplay::remap_segment_clips(&mut segment, ORIGIN, SCALE);
 
@@ -1368,6 +1385,12 @@ mod grown_offscreen_clip_tests {
         assert_ne!(
             remapped_rect, CLIP,
             "precondition: the remap actually changed the rect's clip"
+        );
+        assert_eq!(
+            segment.tess_batches[0].clip_rrect, remapped_rect,
+            "a tessellated batch's clip must be remapped like a rect's; it IS \
+             repositioned into the shrunken intermediate, unlike gradients and \
+             images, which `content_aabb` keeps out of that path"
         );
         assert_eq!(
             remapped_circle, remapped_rect,

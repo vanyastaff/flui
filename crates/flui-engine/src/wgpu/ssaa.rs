@@ -460,6 +460,17 @@ impl GpuReplay {
             v.position[1] = (v.position[1] - tile_origin_y) * scale_y;
         }
 
+        // The vertices above just became tile-local, so `world_pos` in the
+        // fragment stage is tile-local too — and a tessellated batch's SDF clip
+        // is in FULL-FRAME device space. Left alone it would be compared
+        // against the wrong coordinates and displace or erase the path. Same
+        // remap, same helper as the grown-offscreen path.
+        Self::remap_segment_clips(
+            &mut remapped_segment,
+            (tile_origin_x, tile_origin_y),
+            (scale_x, scale_y),
+        );
+
         // ── Scissor remap: full-frame → tile-local 2× space ─────────────────
         //
         // The `tess_batches` scissor was captured at record time in full-frame

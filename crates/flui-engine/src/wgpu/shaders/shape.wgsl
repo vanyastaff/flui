@@ -12,6 +12,18 @@ struct Viewport {
 @group(0) @binding(0)
 var<uniform> viewport: Viewport;
 
+// Per-batch SDF clip. Tessellated geometry has no instances to hang a clip
+// slot on, so the clip is bound once per `TessellatedBatch` — the granularity
+// the batcher already splits at, since it refuses to merge across a clip change.
+struct ClipUniform {
+    bounds: vec4<f32>,  // Device-space [x, y, w, h]
+    radii: vec4<f32>,   // [tl, tr, br, bl]
+    kind: vec4<u32>,    // [kind, _, _, _]: 0 = none, 1 = rrect, 2 = rsuperellipse
+}
+
+@group(1) @binding(0)
+var<uniform> clip: ClipUniform;
+
 struct VertexInput {
     @location(0) position: vec2<f32>,  // Position in pixel coordinates
     @location(1) color: vec4<f32>,     // RGBA color [0-1]
@@ -21,6 +33,9 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
+    // Device-space position, carried for the clip SDF. `clip_position` is in
+    // NDC by the time the fragment stage sees it, so it cannot serve here.
+    @location(1) world_pos: vec2<f32>,
 }
 
 @vertex
@@ -33,6 +48,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
     output.clip_position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     output.color = input.color;
+    output.world_pos = input.position;
 
     return output;
 }
@@ -44,11 +60,13 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 // tessellated pipeline selects per `PipelineKey::blend_mode`. The default
 // SrcOver case pairs this with `BlendState::PREMULTIPLIED_ALPHA_BLENDING`
 // (src factor One), making it visually identical to the previous straight
-// `input.color` + `ALPHA_BLENDING` output. No clip/opacity factor is applied
-// to alpha in this shader, so premultiplying by `c.a` is the full final alpha.
+// `input.color` + `ALPHA_BLENDING` output. The batch clip is folded into alpha
+// BEFORE premultiplying, so `a` below is the full final alpha.
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let c = input.color;
-    return vec4<f32>(c.rgb * c.a, c.a);
+    // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
+    let a = c.a * clipAlpha(input.world_pos, clip.bounds, clip.radii, clip.kind.x);
+    return vec4<f32>(c.rgb * a, a);
 }

@@ -643,29 +643,53 @@ impl GpuStateStack {
     // SDF clip application
     // =========================================================================
 
-    /// Apply the currently-active SDF clip (rrect or rsuperellipse) to a
-    /// `RectInstance`.
+    /// The currently-active SDF clip, resolved to the single form every
+    /// consumer stores: `([x, y, w, h, tl, tr, br, bl], [kind, _, _, _])`.
     ///
-    /// Branch order: if `current_rsuperellipse_clip` is non-trivial the
-    /// superellipse clip wins (`clip_kind = 2`). Otherwise the rrect slot is
-    /// used (`clip_kind = 1` when non-zero, `clip_kind = 0` when both are zero).
+    /// Branch order: a non-trivial `current_rsuperellipse_clip` wins
+    /// (`kind = 2`), otherwise the rrect slot is used (`kind = 1` when
+    /// non-zero, `kind = 0` when both are zero).
     ///
-    /// Centralises the per-instance clip-kind selection so the two
-    /// `rect`/`rrect` batch-build sites do not drift apart.
+    /// This is the ONE place that selection happens. Instanced primitives
+    /// reach it through `apply_active_clip`; tessellated geometry, which has
+    /// no instance to hang a slot on, reads it directly for its batch uniform.
+    pub(super) fn active_clip(&self) -> ([f32; 8], [u32; 4]) {
+        // Exact equality against the all-zero "no clip active" sentinel is
+        // intentional: the field is set bit-exact to `[0.0; 12]` whenever the
+        // clip is cleared, never via arithmetic that would introduce ULP noise.
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact 'no clip' sentinels"
+        )]
+        let superellipse_active = self.current_rsuperellipse_clip != [0.0; 12];
+        if superellipse_active {
+            return (
+                super::instancing::reduce_superellipse_clip(self.current_rsuperellipse_clip),
+                [2, 0, 0, 0],
+            );
+        }
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact 'no clip' sentinels"
+        )]
+        let rrect_active = self.current_rrect_clip != [0.0; 8];
+        if rrect_active {
+            (self.current_rrect_clip, [1, 0, 0, 0])
+        } else {
+            ([0.0; 8], [0; 4])
+        }
+    }
+
+    /// Apply the currently-active SDF clip to an instance.
+    ///
+    /// Delegates the selection to [`Self::active_clip`] so the instanced and
+    /// tessellated paths cannot disagree about which clip is in force.
     pub(super) fn apply_active_clip<I: super::instancing::ClippableInstance>(
         &self,
         instance: I,
     ) -> I {
-        // Exact equality against the all-zero "no clip active" sentinel is
-        // intentional: the field is set bit-exact to `[0.0; 12]` whenever
-        // the clip is cleared, never via arithmetic that would introduce
-        // ULP noise.
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 12]` 'no clip' sentinel"
-        )]
-        let superellipse_active = self.current_rsuperellipse_clip != [0.0; 12];
-        if superellipse_active {
+        let (_, kind) = self.active_clip();
+        if kind[0] == 2 {
             instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)
         } else {
             instance.with_clip_rrect(self.current_rrect_clip)

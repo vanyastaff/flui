@@ -3470,6 +3470,85 @@ mod gpu_tests {
         );
     }
 
+    /// A rounded clip actually rounds tessellated geometry.
+    ///
+    /// Strokes and path fills never reach the instanced SDF path — they are
+    /// tessellated by lyon and drawn through `shape.wgsl`, which receives only
+    /// the clip's axis-aligned bounding scissor. A stroked border inside a
+    /// `ClipRRect` therefore keeps square corners while the rrect fill beside
+    /// it is correctly rounded.
+    ///
+    /// Geometry: a stroke wide enough to cover the whole surface, so a corner
+    /// pixel is inside the stroked band and outside the clip. The stroke is
+    /// centred on the surface so it cannot coincide with the clip's own
+    /// boundary — a stroke that merely traced the clip would leave the corner
+    /// unpainted with no clip support at all.
+    ///
+    /// Reverted (drop the clip uniform from the tessellated draw, or the
+    /// `clipAlpha` call in `shape.wgsl`): the corner is painted and this fails.
+    #[test]
+    fn a_rounded_clip_rounds_tessellated_geometry() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        const R: f32 = 40.0;
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            full,
+            Pixels(R),
+        ));
+        // A stroke this wide covers the surface, corners included. `Paint`
+        // with a Stroke style routes through the tessellator, not the
+        // instanced rect path.
+        painter.rect(
+            flui_types::Rect::from_xywh(
+                Pixels(SURFACE_WIDTH as f32 / 2.0),
+                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+                Pixels(1.0),
+                Pixels(1.0),
+            ),
+            &Paint::stroke(Color::rgb(0, 0, 255), SURFACE_WIDTH as f32 * 2.0),
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Tess Clip Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let at = |x: usize, y: usize| pixels[y * w + x];
+
+        let centre = at(w / 2, SURFACE_HEIGHT as usize / 2);
+        assert!(
+            centre[2] > 200,
+            "precondition: the stroke must paint inside the clip; got {centre:?}"
+        );
+
+        let corner = at(3, 3);
+        assert!(
+            corner[3] < 32,
+            "a rounded clip must round tessellated geometry inside it; corner \
+             rgba={corner:?} — the stroke received only the clip's bounding scissor"
+        );
+    }
+
     /// Text that is the ONLY content of an opacity layer must still belong
     /// to the layer: composited with the layer (subject to its opacity) and
     /// buried by top-level geometry drawn AFTER the layer — not dropped as

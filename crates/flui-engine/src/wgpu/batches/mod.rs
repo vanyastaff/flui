@@ -234,6 +234,7 @@ impl DrawBatcher {
             let device_bounds = vertices_aabb(&vertices);
 
             // Step 3: build an isolated DrawSegment containing only this shape.
+            let clip_for_isolated = state.active_clip();
             let mut shape_segment = DrawSegment::new();
             // Indices reference vertices[0..], so base_index = 0.
             shape_segment.vertices.extend_from_slice(&vertices);
@@ -249,6 +250,11 @@ impl DrawBatcher {
                 scissor: state.current_scissor(),
                 index_start: 0,
                 index_count: indices.len() as u32,
+                // The isolated shape carries the clip that was active when it
+                // was recorded — it renders into an offscreen at full-frame
+                // device coordinates, so the device-space clip still applies.
+                clip_rrect: clip_for_isolated.0,
+                clip_kind: clip_for_isolated.1,
             });
 
             draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
@@ -278,10 +284,21 @@ impl DrawBatcher {
 
         let index_count = indices.len() as u32;
 
-        if let Some(last) = segment.tess_batches.last_mut()
-            && last.pipeline_key == key
-            && last.scissor == state.current_scissor()
-        {
+        let (clip_rrect, clip_kind) = state.active_clip();
+        // Merging also requires the SAME clip: two different rounded clips can
+        // share one bounding scissor (same rect, different radii), and the
+        // batch's clip is what its draw binds.
+        #[expect(
+            clippy::float_cmp,
+            reason = "both sides are assigned bit-exact from the same state slot"
+        )]
+        let mergeable = segment.tess_batches.last().is_some_and(|last| {
+            last.pipeline_key == key
+                && last.scissor == state.current_scissor()
+                && last.clip_rrect == clip_rrect
+                && last.clip_kind == clip_kind
+        });
+        if mergeable && let Some(last) = segment.tess_batches.last_mut() {
             last.index_count += index_count;
         } else {
             segment.current_pipeline_key = Some(key);
@@ -290,6 +307,8 @@ impl DrawBatcher {
                 scissor: state.current_scissor(),
                 index_start,
                 index_count,
+                clip_rrect,
+                clip_kind,
             });
         }
 
@@ -348,6 +367,7 @@ impl DrawBatcher {
         // The internal pipeline is always SrcOver (alpha-blend): the geometry is
         // rendered into a transparent offscreen tile.  The SSAA blend mode is stored
         // in `SsaaPathOp::blend` and applied at composite time, not at raster time.
+        let clip_for_isolated = state.active_clip();
         let mut path_segment = DrawSegment::new();
         path_segment.vertices.extend_from_slice(vertices);
         path_segment.indices.extend(indices.iter().copied());
@@ -357,6 +377,8 @@ impl DrawBatcher {
             scissor: state.current_scissor(),
             index_start: 0,
             index_count: indices.len() as u32,
+            clip_rrect: clip_for_isolated.0,
+            clip_kind: clip_for_isolated.1,
         });
 
         draw_order.push(DrawItem::SsaaPath(SsaaPathOp {
