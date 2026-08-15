@@ -170,6 +170,65 @@ impl GpuReplay {
     ///
     /// Cross-reference: `ssaa.rs` `GpuReplay::render_ssaa_path` lines 443-512
     /// for the analogous full-frame→tile remap at 2× scale.
+    /// Rebase and scale a device-space SDF clip slot into a grown offscreen's
+    /// local space.
+    ///
+    /// Every instance kind that carries `clip_rrect` needs exactly this, so it
+    /// lives in one function rather than once per batch loop: the rect loop had it
+    /// inline and the circle loop did not, which is precisely how a clip ends up
+    /// evaluated against the wrong coordinate space.
+    ///
+    /// Radii are dimension-like and scale proportionally. For a non-square
+    /// framebuffer crop (`scale_x != scale_y`) this slightly warps corner radii —
+    /// acceptable for a filter intermediate, since the composite restores the shape.
+    ///
+    /// A cleared slot (`clip_kind[0] == 0`) is left untouched: the all-zero sentinel
+    /// must stay bit-exact, and scaling zeros could introduce signed zeros.
+    /// Remap EVERY device-space SDF clip in `segment` into a grown offscreen's
+    /// local space.
+    ///
+    /// One call covering every clip-carrying batch, rather than a line inside each
+    /// batch's transform loop. That shape is deliberate: the rect loop carried this
+    /// inline and the circle loop did not, and a clip left in full-frame
+    /// coordinates is invisible until something is drawn inside a blur or filter
+    /// layer. A batch that gains a clip slot later is remapped by adding it here,
+    /// in the one place that already reads them all.
+    ///
+    /// Arcs are absent because `ArcInstance` carries no clip slot.
+    fn remap_segment_clips(
+        segment: &mut super::command_ir::DrawSegment,
+        origin: (f32, f32),
+        scale: (f32, f32),
+    ) {
+        for inst in &mut segment.rect_batch.instances {
+            Self::remap_clip_rrect(&mut inst.clip_rrect, inst.clip_kind, origin, scale);
+        }
+        for inst in &mut segment.circle_batch.instances {
+            Self::remap_clip_rrect(&mut inst.clip_rrect, inst.clip_kind, origin, scale);
+        }
+    }
+
+    fn remap_clip_rrect(
+        clip_rrect: &mut [f32; 8],
+        clip_kind: [u32; 4],
+        origin: (f32, f32),
+        scale: (f32, f32),
+    ) {
+        if clip_kind[0] == 0 {
+            return;
+        }
+        let (origin_x, origin_y) = origin;
+        let (scale_x, scale_y) = scale;
+        clip_rrect[0] = (clip_rrect[0] - origin_x) * scale_x;
+        clip_rrect[1] = (clip_rrect[1] - origin_y) * scale_y;
+        clip_rrect[2] *= scale_x;
+        clip_rrect[3] *= scale_y;
+        let avg_scale = (scale_x + scale_y) * 0.5;
+        for r in &mut clip_rrect[4..8] {
+            *r *= avg_scale;
+        }
+    }
+
     pub(in crate::wgpu) fn render_segment_to_grown_offscreen(
         &mut self,
         segment: &mut DrawSegment,
@@ -293,22 +352,6 @@ impl GpuReplay {
                 inst.transform[2] *= scale_x; // c: y-col.x  (cross-axis — scale_x)
                 inst.transform[3] *= scale_y; // d: y-col.y
             }
-
-            // Clip rrect (if active): [x, y, w, h, radii…].
-            // Radii are dimension-like; scale them proportionally. For non-square
-            // fb crops (scale_x ≠ scale_y) this slightly warps circle-corner radii —
-            // acceptable for a filter intermediate (the composite restores shape).
-            if inst.clip_kind[0] != 0 {
-                inst.clip_rrect[0] = (inst.clip_rrect[0] - origin_x) * scale_x;
-                inst.clip_rrect[1] = (inst.clip_rrect[1] - origin_y) * scale_y;
-                inst.clip_rrect[2] *= scale_x;
-                inst.clip_rrect[3] *= scale_y;
-                // Radii [4..8]: scale by average of scale_x and scale_y.
-                let avg_scale = (scale_x + scale_y) * 0.5;
-                for r in &mut inst.clip_rrect[4..8] {
-                    *r *= avg_scale;
-                }
-            }
         }
 
         // Circle and arc instances: center is in transform_translate; the linear
@@ -330,6 +373,15 @@ impl GpuReplay {
             inst.transform[2] *= scale_x;
             inst.transform[3] *= scale_y;
         }
+
+        // The SDF clip each instance carries is in DEVICE space, so it moves
+        // with them. One call covering every clip-carrying batch, rather than a
+        // line per transform loop above — see `remap_segment_clips`.
+        Self::remap_segment_clips(
+            &mut remapped_segment,
+            (origin_x, origin_y),
+            (scale_x, scale_y),
+        );
 
         // ── Scissor remap: full-frame → fb-local (non-negotiable #6) ─────────
         //
@@ -1249,4 +1301,73 @@ pub(in crate::wgpu) fn apply_image_filter_passes(
         };
     }
     acc
+}
+
+#[cfg(test)]
+mod grown_offscreen_clip_tests {
+    use super::super::command_ir::DrawSegment;
+    use super::super::instancing::{CircleInstance, ClippableInstance, RectInstance};
+    use flui_types::{Color, Point, Rect, geometry::Pixels};
+
+    /// A device-space clip attached to a circle is remapped into a grown
+    /// offscreen exactly as the same clip on a rect is.
+    ///
+    /// `render_segment_to_grown_offscreen` rebases and scales instances into a
+    /// filter intermediate that is smaller than the viewport. `clip_rrect` is in
+    /// DEVICE space, so it has to move with them — otherwise the shader compares
+    /// a framebuffer-local `world_pos` against full-frame clip bounds, and the
+    /// rounded clip is displaced far enough to erase the filtered shape.
+    ///
+    /// The rect loop always did this inline; the circle loop did not, because
+    /// circles had no clip slot until they gained one. Asserting the two AGREE,
+    /// rather than asserting a literal, is what stops them drifting again.
+    ///
+    /// Reverted (drop the `remap_segment_clips` circle loop): the circle keeps
+    /// full-frame bounds and this fails on the final `assert_eq!`.
+    #[test]
+    fn a_circles_clip_is_remapped_like_a_rects() {
+        const ORIGIN: (f32, f32) = (40.0, 24.0);
+        const SCALE: (f32, f32) = (0.5, 0.25);
+        // [x, y, w, h, tl, tr, br, bl] in device space.
+        const CLIP: [f32; 8] = [60.0, 44.0, 200.0, 120.0, 8.0, 8.0, 8.0, 8.0];
+
+        let rect = RectInstance::rect(
+            Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(10.0), Pixels(10.0)),
+            Color::rgb(255, 0, 0),
+        )
+        .with_clip_rrect(CLIP);
+        let circle = CircleInstance::new(
+            Point::new(Pixels(5.0), Pixels(5.0)),
+            5.0,
+            Color::rgb(255, 0, 0),
+            [1.0, 1.0],
+        )
+        .with_clip_rrect(CLIP);
+
+        assert_eq!(
+            rect.clip_rrect, circle.clip_rrect,
+            "precondition: both kinds start from the same device-space clip"
+        );
+        assert_ne!(rect.clip_kind[0], 0, "precondition: the clip is active");
+
+        let mut segment = DrawSegment::new();
+        // `add` returns "batch is now full", not "succeeded".
+        assert!(!segment.rect_batch.add(rect), "rect batch not full");
+        assert!(!segment.circle_batch.add(circle), "circle batch not full");
+
+        super::GpuReplay::remap_segment_clips(&mut segment, ORIGIN, SCALE);
+
+        let remapped_rect = segment.rect_batch.instances[0].clip_rrect;
+        let remapped_circle = segment.circle_batch.instances[0].clip_rrect;
+        assert_ne!(
+            remapped_rect, CLIP,
+            "precondition: the remap actually changed the rect's clip"
+        );
+        assert_eq!(
+            remapped_circle, remapped_rect,
+            "a circle's clip must be remapped into the grown offscreen exactly as \
+             a rect's is; leaving it in full-frame device space displaces the \
+             rounded clip inside every blur/filter layer"
+        );
+    }
 }
