@@ -334,9 +334,28 @@ struct CachedBuffer {
 pub struct TextPlacement {
     /// Uniform scale taken from the CTM at record time.
     ///
-    /// Applied as `TextArea::scale`, which glyphon scales the shaped buffer by
-    /// about `(left, top)` — and `(left, top)` is already the transformed
-    /// origin, so the run grows from where it was placed.
+    /// Applied as `TextArea::scale`, which glyphon threads into
+    /// `glyph.physical(offset, scale)` — so the glyph is rasterised at
+    /// `font_size * scale` and cached under it, rather than upscaled from a 1x
+    /// atlas. `(left, top)` is already the transformed origin, so the run grows
+    /// from where it was placed.
+    ///
+    /// # Known limit: anisotropic transforms
+    ///
+    /// This is ONE number because `glyphon::TextArea::scale` is one `f32`;
+    /// glyphon 0.11 has no way to express a different scale per axis. Under a
+    /// non-uniform CTM such as `scale(2.0, 1.0)` the larger axis wins, so a
+    /// glyph run is stretched on both axes while the geometry around it
+    /// stretches on one. Neither this nor the previous behaviour (a hard `1.0`,
+    /// ignoring the transform entirely) is correct there; this one is at least
+    /// right on one axis, and exactly right for the case that motivated it —
+    /// the device-pixel ratio, which is always uniform.
+    ///
+    /// Fixing it properly means giving text a transform glyphon cannot carry:
+    /// either a per-area matrix, or routing rotated/skewed/anisotropic runs
+    /// through the tessellated path. `anisotropic_scale_stretches_glyphs_
+    /// uniformly` pins the current behaviour so the day that lands is a
+    /// deliberate change rather than a silent one.
     pub scale: f32,
     /// The scissor active at record time, `(x, y, w, h)` in device pixels, or
     /// `None` for "unclipped".
@@ -395,7 +414,16 @@ enum BatchEntry {
 /// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format, font_system);
 ///
 /// // Add plain text during frame
-/// text_renderer.add_text("Hello, World!", Point::new(10.0, 10.0), 16.0, Color::BLACK);
+/// // `TextPlacement` carries the CTM scale and the active clip; a caller with
+/// // no painter state uses the identity. `WgpuPainter::text` reads the real
+/// // values from its own state stack at record time.
+/// text_renderer.add_text(
+///     "Hello, World!",
+///     Point::new(10.0, 10.0),
+///     16.0,
+///     Color::BLACK,
+///     TextPlacement::default(),
+/// );
 ///
 /// // Render a batch range at its draw-order position, then finish the pass
 /// text_renderer.render_range(&device, &queue, &view, &mut encoder, (800, 600), 0..usize::MAX)?;

@@ -3003,8 +3003,13 @@ mod gpu_tests {
     /// Every glyph run in a frame is handed to glyphon with the SAME
     /// `TextBounds`, built from the whole viewport, and the text pass sets no
     /// scissor — so no clip of any kind reaches text. A `ListView`'s rows paint
-    /// straight through the app bar above them, and a `ClipRRect` avatar spills
-    /// its label past the rounded corner.
+    /// straight through the app bar above them.
+    ///
+    /// Scope: this is the RECTANGULAR clip. A `ClipRRect` still leaks its
+    /// label past the rounded corner, because `current_scissor()` carries only
+    /// the rounded rect's bounding box — the per-corner SDF lives in a separate
+    /// slot that no glyph pipeline reads. Text should join the shared clip
+    /// uniform when that lands rather than grow a second clip model.
     ///
     /// Driven through `WgpuPainter`, deliberately: the clip is discarded at the
     /// RECORD seam, so a test that calls `TextRenderer::add_text` directly with
@@ -3134,6 +3139,74 @@ mod gpu_tests {
             ratio > 2.5,
             "doubling the transform scale must roughly quadruple glyph ink; got \
              {two}/{one} = {ratio:.2}x — the raster ignored the transform"
+        );
+    }
+
+    /// KNOWN LIMIT, pinned: a non-uniform transform stretches glyphs uniformly.
+    ///
+    /// `TextPlacement::scale` is one `f32` because `glyphon::TextArea::scale`
+    /// is one `f32`; glyphon 0.11 cannot express a different scale per axis. So
+    /// under `scale(2.0, 1.0)` the larger axis wins and a run is stretched both
+    /// ways, while the geometry around it stretches one way.
+    ///
+    /// This is not a regression — before, glyphs ignored the transform entirely
+    /// and were wrong on both axes — and it does not affect the case the scale
+    /// exists for, the device-pixel ratio, which is uniform by construction.
+    ///
+    /// It is pinned rather than left implicit so that carrying a real transform
+    /// for text (a per-area matrix, or routing such runs through the
+    /// tessellated path) is a deliberate change: this test will fail, and
+    /// whoever makes it should read the note on `TextPlacement::scale` and
+    /// replace the assertion with the correct anisotropic one.
+    #[test]
+    fn anisotropic_scale_stretches_glyphs_uniformly() {
+        fn ink(sx: f32, sy: f32) -> usize {
+            let (device, queue) = acquire_test_device_and_queue();
+            let (surface_texture, surface_view) = create_render_surface(&device);
+            clear_surface(&device, &queue, &surface_view);
+
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            painter.save();
+            painter.scale(sx, sy);
+            painter.text(
+                "Ab",
+                flui_types::Point::new(Pixels(4.0), Pixels(10.0)),
+                16.0,
+                &Paint::fill(Color::rgb(0, 0, 255)),
+            );
+            painter.restore();
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Anisotropic Text Encoder"),
+            });
+            painter
+                .render(
+                    RenderTarget::sampleable(&surface_view, &surface_texture),
+                    &mut encoder,
+                )
+                .expect("painter.render must succeed");
+            queue.submit(std::iter::once(encoder.finish()));
+
+            readback_pixels(&device, &queue, &surface_texture)
+                .iter()
+                .filter(|p| p[3] > 16)
+                .count()
+        }
+
+        let uniform_2x = ink(2.0, 2.0);
+        let wide_only = ink(2.0, 1.0);
+        assert!(uniform_2x > 0, "precondition: the label paints");
+
+        // Correct anisotropic behaviour would put `wide_only` near HALF of
+        // `uniform_2x` (twice the width, unchanged height). It sits near
+        // parity instead, because `max_scale()` reports 2.0 for both.
+        let ratio = wide_only as f32 / uniform_2x as f32;
+        assert!(
+            ratio > 0.75,
+            "known limit: scale(2,1) is expected to stretch glyphs like scale(2,2) \
+             until text can carry a real transform; got {wide_only}/{uniform_2x} = \
+             {ratio:.2} — if this now reports ~0.5, anisotropic scaling started \
+             working and this test should be replaced, not relaxed"
         );
     }
 
