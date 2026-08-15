@@ -768,6 +768,21 @@ impl UiRealm {
             async_driver,
             scheduler,
         } = services;
+
+        // The realm's scheduler fires the SAME platform wake its presentation
+        // and command sender use. This is the edge an async completion travels:
+        // a background task's `Waker::wake()` reaches `AsyncDriver`'s
+        // request-frame, which reaches `UpdateScheduler::request_frame`, whose
+        // `frame_scheduled` false->true transition fires this hook. Without it
+        // that demand is a bare atomic store only an already-running pump can
+        // observe, so an idle `ControlFlow::Wait` loop sleeps through it and
+        // the future silently stops advancing until unrelated input arrives.
+        //
+        // Installed here rather than at each constructor because `construct`
+        // is the single chokepoint every `UiRealm` is built through — a realm
+        // with an unwired scheduler wake is not constructible.
+        scheduler.set_on_frame_scheduled(Some(Arc::clone(&wake)));
+
         let interaction_lane = InteractionLane::try_new()?;
         let global_key_scope = GlobalKeyScope::new();
 
@@ -7328,6 +7343,82 @@ mod tests {
                 calls_b.load(AtomicOrdering::Relaxed),
                 1,
                 "dirtying B's own pipeline must poke B's own window"
+            );
+        }
+
+        /// A frame demanded through the realm's own `UpdateScheduler` must
+        /// reach the realm's platform wake.
+        ///
+        /// This is the edge an async completion travels: `TaskWaker::
+        /// wake_by_ref` -> `AsyncDriver`'s request-frame -> `UpdateScheduler::
+        /// request_frame` -> the `frame_scheduled` false->true edge -> the
+        /// `on_frame_scheduled` hook. If that hook is never installed the
+        /// scheduler's demand is a bare atomic store that only a pump already
+        /// in flight can observe, and an idle `ControlFlow::Wait` loop sleeps
+        /// through it — the window updates on the next unrelated event, or
+        /// never.
+        ///
+        /// If reverted (drop the `set_on_frame_scheduled` install in
+        /// `UiRealm::construct`): `on_frame_scheduled` stays `None`,
+        /// `request_frame_impl` returns after the swap, and this observes
+        /// zero wakes.
+        #[test]
+        fn a_scheduler_frame_request_reaches_the_realms_platform_wake() {
+            let wakes = Arc::new(AtomicU32::new(0));
+            let wake_counter = Arc::clone(&wakes);
+            let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                wake_counter.fetch_add(1, AtomicOrdering::Relaxed);
+            });
+
+            let (window, _calls) = counting_window(1);
+            let realm = UiRealm::new(wake, window, 1.0, Arc::new(AtomicBool::new(false)))
+                .expect("realm constructs");
+
+            // Construction may legitimately have demanded a first frame;
+            // measure only the transition this test causes.
+            // Clear the `frame_scheduled` latch so the request below is a real
+            // false->true transition — the only edge the hook fires on.
+            realm.scheduler().finish_async_pump();
+            let before = wakes.load(AtomicOrdering::Relaxed);
+
+            realm.scheduler().request_frame();
+
+            assert!(
+                wakes.load(AtomicOrdering::Relaxed) > before,
+                "a scheduler frame request must reach the realm's platform wake; \
+                 without it an async completion cannot wake an idle event loop"
+            );
+        }
+
+        /// The same edge, fired from a foreign thread — the shape an async
+        /// task completing on a background executor actually takes.
+        ///
+        /// The wake handed to a realm is `Send + Sync` precisely so this is
+        /// legal; this pins that the scheduler seam preserves it.
+        #[test]
+        fn a_cross_thread_frame_request_reaches_the_realms_platform_wake() {
+            let wakes = Arc::new(AtomicU32::new(0));
+            let wake_counter = Arc::clone(&wakes);
+            let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                wake_counter.fetch_add(1, AtomicOrdering::Relaxed);
+            });
+
+            let (window, _calls) = counting_window(1);
+            let realm = UiRealm::new(wake, window, 1.0, Arc::new(AtomicBool::new(false)))
+                .expect("realm constructs");
+            // Clear the `frame_scheduled` latch so the request below is a real
+            // false->true transition — the only edge the hook fires on.
+            realm.scheduler().finish_async_pump();
+            let before = wakes.load(AtomicOrdering::Relaxed);
+
+            let scheduler = realm.scheduler().clone();
+            std::thread::spawn(move || scheduler.request_frame())
+                .join()
+                .expect("waker thread completes");
+
+            assert!(
+                wakes.load(AtomicOrdering::Relaxed) > before,
+                "a frame request raised off the owner thread must still reach the wake"
             );
         }
     }
