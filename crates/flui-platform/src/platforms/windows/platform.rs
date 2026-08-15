@@ -758,7 +758,7 @@ impl WindowsPlatform {
                         ctx.callbacks.dispatch_hover_status_change(true);
 
                         use super::events::mouse_move_event;
-                        let event = mouse_move_event(lparam, ctx.scale_factor.get());
+                        let event = mouse_move_event(wparam, lparam, ctx.scale_factor.get());
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
@@ -790,6 +790,7 @@ impl WindowsPlatform {
                         let event = mouse_button_event(
                             PointerButton::Primary,
                             true,
+                            wparam,
                             lparam,
                             ctx.scale_factor.get(),
                         );
@@ -806,6 +807,7 @@ impl WindowsPlatform {
                         let event = mouse_button_event(
                             PointerButton::Secondary,
                             true,
+                            wparam,
                             lparam,
                             ctx.scale_factor.get(),
                         );
@@ -822,6 +824,7 @@ impl WindowsPlatform {
                         let event = mouse_button_event(
                             PointerButton::Auxiliary,
                             true,
+                            wparam,
                             lparam,
                             ctx.scale_factor.get(),
                         );
@@ -838,6 +841,7 @@ impl WindowsPlatform {
                         let event = mouse_button_event(
                             PointerButton::Primary,
                             false,
+                            wparam,
                             lparam,
                             ctx.scale_factor.get(),
                         );
@@ -854,6 +858,7 @@ impl WindowsPlatform {
                         let event = mouse_button_event(
                             PointerButton::Secondary,
                             false,
+                            wparam,
                             lparam,
                             ctx.scale_factor.get(),
                         );
@@ -870,6 +875,7 @@ impl WindowsPlatform {
                         let event = mouse_button_event(
                             PointerButton::Auxiliary,
                             false,
+                            wparam,
                             lparam,
                             ctx.scale_factor.get(),
                         );

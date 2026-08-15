@@ -46,7 +46,13 @@ pub fn convert_motion_event(
             let idx = event.pointer_index();
             let pointer = event.pointer_at_index(idx);
             let info = make_pointer_info(&pointer);
-            let state = make_pointer_state(&pointer, time_ns, scale_factor, modifiers);
+            let state = make_pointer_state(
+                &pointer,
+                time_ns,
+                scale_factor,
+                modifiers,
+                contact_buttons(),
+            );
 
             vec![PlatformInput::Pointer(PointerEvent::Down(
                 PointerButtonEvent {
@@ -61,7 +67,13 @@ pub fn convert_motion_event(
             let idx = event.pointer_index();
             let pointer = event.pointer_at_index(idx);
             let info = make_pointer_info(&pointer);
-            let state = make_pointer_state(&pointer, time_ns, scale_factor, modifiers);
+            let state = make_pointer_state(
+                &pointer,
+                time_ns,
+                scale_factor,
+                modifiers,
+                PointerButtons::default(),
+            );
 
             vec![PlatformInput::Pointer(PointerEvent::Up(
                 PointerButtonEvent {
@@ -78,7 +90,13 @@ pub fn convert_motion_event(
                 .pointers()
                 .map(|pointer| {
                     let info = make_pointer_info(&pointer);
-                    let state = make_pointer_state(&pointer, time_ns, scale_factor, modifiers);
+                    let state = make_pointer_state(
+                        &pointer,
+                        time_ns,
+                        scale_factor,
+                        modifiers,
+                        contact_buttons(),
+                    );
 
                     PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
                         pointer: info,
@@ -121,7 +139,13 @@ pub fn convert_motion_event(
                 .pointers()
                 .map(|pointer| {
                     let info = make_pointer_info(&pointer);
-                    let state = make_pointer_state(&pointer, time_ns, scale_factor, modifiers);
+                    let state = make_pointer_state(
+                        &pointer,
+                        time_ns,
+                        scale_factor,
+                        modifiers,
+                        PointerButtons::default(),
+                    );
 
                     PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
                         pointer: info,
@@ -181,6 +205,20 @@ pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Optio
 // Helpers
 // ============================================================================
 
+/// The held-button set for a pointer that is in contact with the screen.
+///
+/// Android reports no button mask for touch or stylus contact, but the W3C
+/// contract still requires one: a touch that is down reports the primary
+/// button held, exactly as a pressed mouse does. The framework's
+/// contact-vs-hover discrimination reads this, so reporting an empty set for
+/// an in-contact Move delivers a drag as a hover.
+#[inline]
+fn contact_buttons() -> PointerButtons {
+    let mut buttons = PointerButtons::default();
+    buttons.insert(PointerButton::Primary);
+    buttons
+}
+
 /// Build `PointerInfo` from an Android pointer.
 fn make_pointer_info(pointer: &android_activity::input::Pointer<'_>) -> PointerInfo {
     // Android pointer IDs start at 0. PointerId::PRIMARY is 1 (NonZeroU64::MIN).
@@ -195,11 +233,24 @@ fn make_pointer_info(pointer: &android_activity::input::Pointer<'_>) -> PointerI
 }
 
 /// Build `PointerState` from an Android pointer.
+///
+/// `buttons` is the set held AFTER this event (press included, release
+/// excluded), per the W3C `PointerEvent.buttons` contract — the same rule the
+/// winit backend tracks explicitly. It is a required argument rather than a
+/// defaulted field because the framework's contact-vs-hover discrimination
+/// reads it: a Move that reports an empty set is delivered as a *hover*, so a
+/// touch drag never reaches a recognizer and is silently re-interpreted as a
+/// tap when the finger lifts.
+///
+/// Android does not report a button mask for touch, but its `MotionAction`
+/// already states the answer: the `Down`/`Move` actions are contact, the
+/// `Hover*` actions are not, and `Up` is the release itself.
 fn make_pointer_state(
     pointer: &android_activity::input::Pointer<'_>,
     time_ns: u64,
     scale_factor: f64,
     modifiers: Modifiers,
+    buttons: PointerButtons,
 ) -> PointerState {
     // Android reports coordinates in physical (device) pixels
     let x = pointer.x() as f64;
@@ -225,7 +276,7 @@ fn make_pointer_state(
     PointerState {
         time: time_ns,
         position: PhysicalPosition::new(x, y),
-        buttons: PointerButtons::default(),
+        buttons,
         modifiers,
         count: 1,
         contact_geometry: contact,

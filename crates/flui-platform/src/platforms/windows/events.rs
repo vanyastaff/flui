@@ -179,12 +179,53 @@ unsafe fn get_modifiers() -> KeyboardModifiers {
 // Pointer Event Conversion (W3C ui-events 0.3 API)
 // ============================================================================
 
+/// The set of mouse buttons Win32 reports as held in a message's `WPARAM`.
+///
+/// Every mouse message (`WM_MOUSEMOVE`, `WM_*BUTTONDOWN`, `WM_*BUTTONUP`,
+/// `WM_MOUSEWHEEL`) carries the `MK_*` mask in the low word of `WPARAM`, and
+/// Win32 already applies the W3C rule for us: the bit for a button is set on
+/// its DOWN message and clear on its UP message, i.e. the set held *after*
+/// the event. That makes this stateless — unlike the winit backend, which has
+/// to track the transition itself because winit does not surface a mask.
+///
+/// This matters beyond fidelity: the framework tells a drag-move from a hover
+/// by asking whether any button is held. A move that always reports an empty
+/// set is delivered as a hover, so no gesture recognizer ever sees it and the
+/// drag is silently re-interpreted as a tap on release.
+///
+/// `MK_LBUTTON`/`MK_RBUTTON`/`MK_MBUTTON` are `0x0001`/`0x0002`/`0x0010`
+/// (`winuser.h`); the X buttons have no `PointerButton` mapping here.
+#[inline]
+fn held_buttons(wparam: WPARAM) -> PointerButtons {
+    const MK_LBUTTON: usize = 0x0001;
+    const MK_RBUTTON: usize = 0x0002;
+    const MK_MBUTTON: usize = 0x0010;
+
+    let mask = wparam.0 & 0xffff;
+    let mut buttons = PointerButtons::default();
+    if mask & MK_LBUTTON != 0 {
+        buttons.insert(PointerButton::Primary);
+    }
+    if mask & MK_RBUTTON != 0 {
+        buttons.insert(PointerButton::Secondary);
+    }
+    if mask & MK_MBUTTON != 0 {
+        buttons.insert(PointerButton::Auxiliary);
+    }
+    buttons
+}
+
 /// Build a `PointerState` from LPARAM coordinates and scale factor.
+///
+/// `buttons` is the held set from [`held_buttons`]; it is a required argument
+/// rather than a defaulted field so a new message arm cannot silently ship an
+/// empty set.
 #[inline]
 fn pointer_state(
     lparam: LPARAM,
     scale_factor: f32,
     pressure: f32,
+    buttons: PointerButtons,
 ) -> (PointerState, KeyboardModifiers) {
     let x = get_x_lparam(lparam);
     let y = get_y_lparam(lparam);
@@ -197,7 +238,7 @@ fn pointer_state(
     let state = PointerState {
         time: event_timestamp_ms(),
         position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
-        buttons: PointerButtons::default(),
+        buttons,
         modifiers,
         count: 1,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
@@ -213,10 +254,16 @@ fn pointer_state(
 pub fn mouse_button_event(
     button: PointerButton,
     is_down: bool,
+    wparam: WPARAM,
     lparam: LPARAM,
     scale_factor: f32,
 ) -> PlatformInput {
-    let (state, modifiers) = pointer_state(lparam, scale_factor, if is_down { 0.5 } else { 0.0 });
+    let (state, modifiers) = pointer_state(
+        lparam,
+        scale_factor,
+        if is_down { 0.5 } else { 0.0 },
+        held_buttons(wparam),
+    );
 
     let _ = modifiers;
 
@@ -238,8 +285,8 @@ pub fn mouse_button_event(
 }
 
 /// Convert WM_MOUSEMOVE to W3C PointerEvent
-pub fn mouse_move_event(lparam: LPARAM, scale_factor: f32) -> PlatformInput {
-    let (state, modifiers) = pointer_state(lparam, scale_factor, 0.0);
+pub fn mouse_move_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> PlatformInput {
+    let (state, modifiers) = pointer_state(lparam, scale_factor, 0.0, held_buttons(wparam));
     let _ = modifiers;
 
     let event = PointerEvent::Move(PointerUpdate {
@@ -257,7 +304,7 @@ pub fn mouse_wheel_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> P
     let delta = ((wparam.0 as i32) >> 16) as i16 as f32;
     let lines = delta / 120.0; // WHEEL_DELTA = 120
 
-    let (state, modifiers) = pointer_state(lparam, scale_factor, 0.0);
+    let (state, modifiers) = pointer_state(lparam, scale_factor, 0.0, held_buttons(wparam));
     let _ = modifiers;
 
     let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
@@ -335,12 +382,17 @@ mod tests {
     #[test]
     fn test_mouse_button_down() {
         let lparam = LPARAM(((0xC8 << 16) | 0x64) as isize); // y=200, x=100
-        let event = mouse_button_event(PointerButton::Primary, true, lparam, 1.0);
+        // WM_LBUTTONDOWN carries MK_LBUTTON in its own WPARAM.
+        let event = mouse_button_event(PointerButton::Primary, true, WPARAM(0x0001), lparam, 1.0);
 
         if let PlatformInput::Pointer(PointerEvent::Down(down_event)) = event {
             assert_eq!(down_event.state.position.x, 100.0);
             assert_eq!(down_event.state.position.y, 200.0);
             assert_eq!(down_event.button, Some(PointerButton::Primary));
+            assert!(
+                down_event.state.buttons.contains(PointerButton::Primary),
+                "a press must report its own button as held"
+            );
         } else {
             panic!("Expected Pointer Down event");
         }
@@ -349,13 +401,66 @@ mod tests {
     #[test]
     fn test_mouse_move() {
         let lparam = LPARAM(((0xC8 << 16) | 0x64) as isize); // y=200, x=100
-        let event = mouse_move_event(lparam, 1.0);
+        // A drag: WM_MOUSEMOVE with MK_LBUTTON still held.
+        let event = mouse_move_event(WPARAM(0x0001), lparam, 1.0);
 
         if let PlatformInput::Pointer(PointerEvent::Move(move_event)) = event {
             assert_eq!(move_event.current.position.x, 100.0);
             assert_eq!(move_event.current.position.y, 200.0);
+            assert!(
+                move_event.current.buttons.contains(PointerButton::Primary),
+                "a move with a button held is a drag, not a hover; reporting an \
+                 empty set here routes it to on_hover and no recognizer sees it"
+            );
         } else {
             panic!("Expected Pointer Move event");
         }
+
+        // The same message with nothing held is a genuine hover.
+        let hover = mouse_move_event(WPARAM(0), lparam, 1.0);
+        if let PlatformInput::Pointer(PointerEvent::Move(move_event)) = hover {
+            assert!(move_event.current.buttons.is_empty());
+        } else {
+            panic!("Expected Pointer Move event");
+        }
+    }
+}
+
+#[cfg(test)]
+mod held_button_tests {
+    use super::*;
+
+    /// Win32 reports the held set directly, and already applies the W3C
+    /// "after the event" rule — a DOWN message carries its own bit, an UP
+    /// message does not. Reporting an empty set for an in-contact move is
+    /// what makes the framework deliver a drag as a hover.
+    ///
+    /// If reverted (`pointer_state` back to `PointerButtons::default()`):
+    /// the first two assertions read an empty set.
+    #[test]
+    fn wparam_mask_becomes_the_held_button_set() {
+        assert!(
+            held_buttons(WPARAM(0x0001)).contains(PointerButton::Primary),
+            "MK_LBUTTON must report the primary button held"
+        );
+        assert!(
+            held_buttons(WPARAM(0x0002)).contains(PointerButton::Secondary),
+            "MK_RBUTTON must report the secondary button held"
+        );
+        assert!(
+            held_buttons(WPARAM(0x0010)).contains(PointerButton::Auxiliary),
+            "MK_MBUTTON must report the auxiliary button held"
+        );
+
+        // A move with no button held is a genuine hover.
+        assert!(held_buttons(WPARAM(0)).is_empty());
+
+        // The high word carries the wheel delta on WM_MOUSEWHEEL and must not
+        // leak into the mask.
+        assert!(held_buttons(WPARAM(0x0078_0000)).is_empty());
+
+        let both = held_buttons(WPARAM(0x0003));
+        assert!(both.contains(PointerButton::Primary));
+        assert!(both.contains(PointerButton::Secondary));
     }
 }
