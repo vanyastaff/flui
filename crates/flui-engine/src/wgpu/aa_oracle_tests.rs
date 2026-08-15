@@ -3392,6 +3392,84 @@ mod gpu_tests {
         );
     }
 
+    /// A rounded clip actually rounds a gradient fill.
+    ///
+    /// The same gap circles had, one primitive over: the gradient instances did
+    /// not implement `ClippableInstance`, so a gradient received only the
+    /// clip's axis-aligned bounding scissor and a `ClipRRect` around a gradient
+    /// card left square corners.
+    ///
+    /// The geometry avoids the coincide-with-the-clip trap: the gradient is
+    /// drawn with SQUARE corners over the whole surface, so a sampled corner
+    /// pixel is inside the drawn shape and outside the clip. A gradient whose
+    /// own `corner_radius` matched the clip would pass with no clip support at
+    /// all.
+    ///
+    /// Reverted (drop `apply_active_clip` at the gradient record sites, or the
+    /// `clipAlpha` call in the gradient shaders): the corner is painted and
+    /// this fails.
+    #[test]
+    fn a_rounded_clip_rounds_a_gradient() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        const R: f32 = 40.0;
+        let full = flui_types::Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(SURFACE_WIDTH as f32),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            full,
+            Pixels(R),
+        ));
+        painter.gradient_rect(
+            full,
+            glam::Vec2::new(0.0, 0.0),
+            glam::Vec2::new(0.0, SURFACE_HEIGHT as f32),
+            &[
+                crate::wgpu::effects::GradientStop::start(Color::rgb(0, 0, 255)),
+                crate::wgpu::effects::GradientStop::end(Color::rgb(0, 0, 255)),
+            ],
+            // Square corners: the clip, not the shape, is what must round this.
+            0.0,
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Gradient Clip Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let at = |x: usize, y: usize| pixels[y * w + x];
+
+        let centre = at(w / 2, SURFACE_HEIGHT as usize / 2);
+        assert!(
+            centre[2] > 200,
+            "precondition: the gradient must paint inside the clip; got {centre:?}"
+        );
+
+        let corner = at(3, 3);
+        assert!(
+            corner[3] < 32,
+            "a rounded clip must round the gradient inside it; corner rgba={corner:?} \
+             — the gradient received only the clip's bounding scissor"
+        );
+    }
+
     /// Text that is the ONLY content of an opacity layer must still belong
     /// to the layer: composited with the layer (subject to its opacity) and
     /// buried by top-level geometry drawn AFTER the layer — not dropped as

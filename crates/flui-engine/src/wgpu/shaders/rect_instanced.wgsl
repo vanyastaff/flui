@@ -169,28 +169,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // The L2 screen-space gradient automatically adjusts AA based on zoom level and pixel density
     let alpha = sdfToAlpha(dist);
 
-    // --- SDF Clip Test ---
-    // Branch on clip_kind: 0 = no clip, 1 = sdRoundedBox, 2 = sdRoundedSuperellipse.
-    // The clip_bounds + clip_radii slot is shared between clip kinds; the
-    // kind flag selects the SDF function. Per-instance flat interpolation
-    // keeps the branch divergence-free within a draw call.
-    var clip_alpha = 1.0;
-    if (in.clip_kind != 0u && in.clip_bounds.z > 0.0 && in.clip_bounds.w > 0.0) {
-        let clip_center = in.clip_bounds.xy + in.clip_bounds.zw * 0.5;
-        let clip_p = in.world_pos - clip_center;
-        let clip_half = in.clip_bounds.zw * 0.5;
-
-        var clip_dist = 0.0;
-        if (in.clip_kind == 2u) {
-            clip_dist = sdRoundedSuperellipse(clip_p, clip_half, in.clip_radii);
-        } else {
-            // clip_kind == 1u (rrect) — also the safe default for any
-            // future kind we haven't yet learned about.
-            clip_dist = sdRoundedBox(clip_p, clip_half, in.clip_radii);
-        }
-
-        clip_alpha = sdfToAlpha(clip_dist);
-    }
+    // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
+    let clip_alpha = clipAlpha(in.world_pos, in.clip_bounds, in.clip_radii, in.clip_kind);
 
     // Return color with antialiased alpha, modulated by clip alpha
     return vec4<f32>(in.color.rgb, in.color.a * alpha * clip_alpha);

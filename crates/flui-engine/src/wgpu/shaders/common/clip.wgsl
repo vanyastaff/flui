@@ -62,3 +62,39 @@ fn sdfToAlpha(dist: f32) -> f32 {
     let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
     return 1.0 - smoothstep(-edge_width, edge_width, dist);
 }
+
+/// Coverage from the per-instance SDF clip; 1.0 when no clip is attached.
+///
+/// `clip_bounds` is `[x, y, w, h]` in DEVICE space and `clip_radii` is
+/// `[tl, tr, br, bl]`, matching the instance slot the Rust side fills via
+/// `ClippableInstance`. `clip_kind` selects the distance function: 0 = none,
+/// 2 = rounded superellipse, anything else = rounded rect (the safe default
+/// for a kind this shader has not learned about yet).
+///
+/// The whole evaluation lives here rather than being pasted into each
+/// fragment shader for the same reason the distance functions do: every
+/// clip-capable primitive must agree on what a clip means, and a pasted copy
+/// is free to disagree silently.
+fn clipAlpha(
+    world_pos: vec2<f32>,
+    clip_bounds: vec4<f32>,
+    clip_radii: vec4<f32>,
+    clip_kind: u32,
+) -> f32 {
+    var alpha = 1.0;
+    if (clip_kind != 0u && clip_bounds.z > 0.0 && clip_bounds.w > 0.0) {
+        let clip_center = clip_bounds.xy + clip_bounds.zw * 0.5;
+        let clip_p = world_pos - clip_center;
+        let clip_half = clip_bounds.zw * 0.5;
+
+        var clip_dist = 0.0;
+        if (clip_kind == 2u) {
+            clip_dist = sdRoundedSuperellipse(clip_p, clip_half, clip_radii);
+        } else {
+            clip_dist = sdRoundedBox(clip_p, clip_half, clip_radii);
+        }
+
+        alpha = sdfToAlpha(clip_dist);
+    }
+    return alpha;
+}

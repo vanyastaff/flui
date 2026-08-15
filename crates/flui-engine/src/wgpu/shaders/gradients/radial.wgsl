@@ -22,6 +22,9 @@ struct InstanceInput {
     @location(5) corner_radii: vec4<f32>,   // [tl, tr, br, bl]
     @location(6) stop_count: u32,
     @location(7) stop_offset: u32,          // Offset into gradient stops buffer
+    @location(8) clip_bounds: vec4<f32>,    // Device-space [x, y, w, h]
+    @location(9) clip_radii: vec4<f32>,     // [tl, tr, br, bl]
+    @location(10) clip_kind: vec4<u32>,     // [kind, _, _, _]
 }
 
 // Gradient stop (same as linear)
@@ -43,6 +46,12 @@ struct VertexOutput {
     @location(4) corner_radii: vec4<f32>,
     @location(5) @interpolate(flat) stop_count: u32,
     @location(6) @interpolate(flat) stop_offset: u32,
+    // Device-space position, carried only for the clip SDF. Linear
+    // already had one at location 0; these two did not.
+    @location(7) world_pos: vec2<f32>,
+    @location(8) clip_bounds: vec4<f32>,
+    @location(9) clip_radii: vec4<f32>,
+    @location(10) @interpolate(flat) clip_kind: u32,
 }
 
 // Uniforms
@@ -126,6 +135,10 @@ fn vs_main(
     out.corner_radii = instance.corner_radii;
     out.stop_count = instance.stop_count;
     out.stop_offset = instance.stop_offset;
+    out.world_pos = world_pos;
+    out.clip_bounds = instance.clip_bounds;
+    out.clip_radii = instance.clip_radii;
+    out.clip_kind = instance.clip_kind.x;
 
     return out;
 }
@@ -160,7 +173,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Apply corner clipping (derivatives dpdx/dpdy must be called from uniform control flow)
     let alpha = sdfToAlpha(dist);
-    color = vec4<f32>(color.rgb, color.a * alpha);
+    // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
+    let clip_alpha = clipAlpha(in.world_pos, in.clip_bounds, in.clip_radii, in.clip_kind);
+    color = vec4<f32>(color.rgb, color.a * alpha * clip_alpha);
 
     return color;
 }

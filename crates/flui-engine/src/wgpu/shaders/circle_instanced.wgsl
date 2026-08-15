@@ -220,28 +220,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let aa = length(vec2<f32>(dpdx(d), dpdy(d))) * 0.5;
     let alpha = 1.0 - smoothstep(-aa, aa, d);
 
-    // --- SDF Clip Test ---
-    // Identical to `rect_instanced.wgsl`: the clip_bounds + clip_radii slot is
-    // shared between clip kinds and the flat `clip_kind` selects the SDF. Kept
-    // byte-for-byte the same shape as the rect path so the two cannot drift —
-    // circles previously received only the clip's bounding scissor, leaving an
-    // avatar inside a `ClipRRect` with square corners.
-    var clip_alpha = 1.0;
-    if (in.clip_kind != 0u && in.clip_bounds.z > 0.0 && in.clip_bounds.w > 0.0) {
-        let clip_center = in.clip_bounds.xy + in.clip_bounds.zw * 0.5;
-        let clip_p = in.world_pos - clip_center;
-        let clip_half = in.clip_bounds.zw * 0.5;
-
-        var clip_dist = 0.0;
-        if (in.clip_kind == 2u) {
-            clip_dist = sdRoundedSuperellipse(clip_p, clip_half, in.clip_radii);
-        } else {
-            // clip_kind == 1u (rrect), and the safe default for any kind this
-            // shader has not learned about.
-            clip_dist = sdRoundedBox(clip_p, clip_half, in.clip_radii);
-        }
-        clip_alpha = sdfToAlpha(clip_dist);
-    }
+    // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
+    let clip_alpha = clipAlpha(in.world_pos, in.clip_bounds, in.clip_radii, in.clip_kind);
 
     let final_alpha = alpha * clip_alpha;
 

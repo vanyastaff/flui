@@ -133,32 +133,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Apply tint (multiply)
     tex_color = tex_color * in.tint;
 
-    // --- SDF Clip Test ---
-    // Same branch order and kind encoding as `rect_instanced.wgsl`: the kind
-    // flag selects the SDF, the bounds+radii slot is shared between kinds, and
-    // flat interpolation keeps the branch uniform across the draw call.
-    //
-    // A circle is expressed here as radii of half the shorter side. Because
-    // this is a distance field rather than tessellated geometry, that is an
-    // exact circle at any scale — the ~6% diagonal bulge that rules out
-    // drrect for circular *geometry* does not apply to a clip.
-    var clip_alpha = 1.0;
-    if (in.clip_kind != 0u && in.clip_bounds.z > 0.0 && in.clip_bounds.w > 0.0) {
-        let clip_center = in.clip_bounds.xy + in.clip_bounds.zw * 0.5;
-        let clip_p = in.world_pos - clip_center;
-        let clip_half = in.clip_bounds.zw * 0.5;
-
-        var clip_dist = 0.0;
-        if (in.clip_kind == 2u) {
-            clip_dist = sdRoundedSuperellipse(clip_p, clip_half, in.clip_radii);
-        } else {
-            // clip_kind == 1u (rrect), and the safe default for a kind this
-            // shader has not learned about yet.
-            clip_dist = sdRoundedBox(clip_p, clip_half, in.clip_radii);
-        }
-
-        clip_alpha = sdfToAlpha(clip_dist);
-    }
+    // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
+    let clip_alpha = clipAlpha(in.world_pos, in.clip_bounds, in.clip_radii, in.clip_kind);
 
     tex_color.a = tex_color.a * clip_alpha;
 

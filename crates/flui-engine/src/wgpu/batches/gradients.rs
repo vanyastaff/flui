@@ -106,6 +106,7 @@ impl DrawBatcher {
             stop_count as u32,
         )
         .with_stop_offset(stop_offset);
+        let instance = state.apply_active_clip(instance);
 
         let _ = segment.linear_gradient_batch.add(instance);
         DrawSegment::push_scissor_region(
@@ -198,6 +199,7 @@ impl DrawBatcher {
             stop_count as u32,
         )
         .with_stop_offset(stop_offset);
+        let instance = state.apply_active_clip(instance);
 
         let _ = segment.radial_gradient_batch.add(instance);
         DrawSegment::push_scissor_region(
@@ -293,6 +295,7 @@ impl DrawBatcher {
             stop_count as u32,
         )
         .with_stop_offset(stop_offset);
+        let instance = state.apply_active_clip(instance);
 
         let _ = segment.sweep_gradient_batch.add(instance);
         DrawSegment::push_scissor_region(&mut segment.sweep_grad_scissors, state.current_scissor());
@@ -421,6 +424,7 @@ impl DrawBatcher {
                         stop_count as u32,
                     )
                     .with_stop_offset(0);
+                    let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.linear_gradient_batch.add(instance);
                     DrawSegment::push_scissor_region(
                         &mut shape_segment.linear_grad_scissors,
@@ -446,6 +450,7 @@ impl DrawBatcher {
                         stop_count as u32,
                     )
                     .with_stop_offset(0);
+                    let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.radial_gradient_batch.add(instance);
                     DrawSegment::push_scissor_region(
                         &mut shape_segment.radial_grad_scissors,
@@ -477,6 +482,7 @@ impl DrawBatcher {
                         stop_count as u32,
                     )
                     .with_stop_offset(0);
+                    let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.sweep_gradient_batch.add(instance);
                     DrawSegment::push_scissor_region(
                         &mut shape_segment.sweep_grad_scissors,
