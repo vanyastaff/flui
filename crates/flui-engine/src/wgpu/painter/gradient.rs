@@ -51,7 +51,10 @@ impl WgpuPainter {
             gradient_start,
             gradient_end,
             stops,
-            corner_radius,
+            // This entry point is the uniform-radius convenience form; the
+            // per-corner path is `rrect` with a shader paint, which reaches
+            // the same batcher with genuine `[tl, tr, br, bl]`.
+            [corner_radius; 4],
         );
     }
 
@@ -93,7 +96,10 @@ impl WgpuPainter {
             center,
             radius,
             stops,
-            corner_radius,
+            // This entry point is the uniform-radius convenience form; the
+            // per-corner path is `rrect` with a shader paint, which reaches
+            // the same batcher with genuine `[tl, tr, br, bl]`.
+            [corner_radius; 4],
         );
     }
 
@@ -123,7 +129,10 @@ impl WgpuPainter {
             start_angle,
             end_angle,
             stops,
-            corner_radius,
+            // This entry point is the uniform-radius convenience form; the
+            // per-corner path is `rrect` with a shader paint, which reaches
+            // the same batcher with genuine `[tl, tr, br, bl]`.
+            [corner_radius; 4],
         );
     }
 
