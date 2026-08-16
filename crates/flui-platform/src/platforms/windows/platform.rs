@@ -22,9 +22,9 @@ use windows::{
                 SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
                 WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
                 WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
-                WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
-                WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
+                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+                WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -888,6 +888,15 @@ impl WindowsPlatform {
                     if let Some(ctx) = ctx {
                         use super::events::mouse_wheel_event;
                         let event = mouse_wheel_event(wparam, lparam, ctx.scale_factor.get());
+                        ctx.callbacks.dispatch_input(event);
+                    }
+                    LRESULT(0)
+                }
+
+                WM_MOUSEHWHEEL => {
+                    if let Some(ctx) = ctx {
+                        use super::events::mouse_hwheel_event;
+                        let event = mouse_hwheel_event(wparam, lparam, ctx.scale_factor.get());
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)

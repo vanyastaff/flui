@@ -7,7 +7,6 @@ use std::{sync::LazyLock, time::Instant};
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::Modifiers as KeyboardModifiers;
 use ui_events::{
-    ScrollDelta,
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
         PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
@@ -248,14 +247,14 @@ pub fn mouse_wheel_event(
     // way). winit's wheel axes are the inverse (positive = away from the
     // user), and its `PixelDelta` is PHYSICAL pixels while pointer
     // positions (and the scroll positions consuming this) are logical —
-    // flip the sign and divide by the scale factor here, never in a
+    // flip the sign and divide by the scale factor here (via the shared
+    // per-backend table in `crate::shared::scroll`), never in a
     // platform-neutral widget.
     let scroll_delta = match delta {
-        MouseScrollDelta::LineDelta(x, y) => ScrollDelta::LineDelta(-x, -y),
-        MouseScrollDelta::PixelDelta(pos) => ScrollDelta::PixelDelta(PhysicalPosition::new(
-            -pos.x / scale_factor,
-            -pos.y / scale_factor,
-        )),
+        MouseScrollDelta::LineDelta(x, y) => crate::shared::scroll::from_winit_lines(x, y),
+        MouseScrollDelta::PixelDelta(pos) => {
+            crate::shared::scroll::from_winit_pixels(pos.x, pos.y, scale_factor)
+        }
     };
 
     let state = pointer_state(
@@ -499,7 +498,7 @@ pub fn keyboard_event(
 #[cfg(test)]
 mod pointer_translation_tests {
     use super::*;
-    use ui_events::pointer::PointerEvent;
+    use ui_events::{ScrollDelta, pointer::PointerEvent};
 
     /// A cursor move with a button held is a DRAG move: the emitted
     /// `PointerState.buttons` carries the held set (what the gesture layer

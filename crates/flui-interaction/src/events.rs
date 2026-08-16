@@ -47,6 +47,22 @@
 //! let cursor = CursorIcon::Pointer; // Hand cursor for clickable elements
 //! let text_cursor = CursorIcon::Text; // I-beam for text selection
 //! ```
+//!
+//! # Scroll Delta Contract
+//!
+//! Every [`ScrollDelta`] delivered here obeys one cross-backend convention,
+//! normalized by each platform backend at ITS translation boundary
+//! (`flui-platform`'s `shared::scroll` module holds the per-backend sign/unit
+//! table) — consumers must never re-flip or re-scale per platform:
+//!
+//! - **Sign**: positive = content scrolls down / right (the scroll offset
+//!   increases) — the W3C `WheelEvent.deltaX`/`deltaY` convention.
+//! - **`PixelDelta`** is LOGICAL pixels (scale-factor independent, like
+//!   pointer positions).
+//! - **`LineDelta`** is unit-less wheel lines; THIS crate owns the line
+//!   height and converts at 53 logical pixels per line in
+//!   [`ScrollEventData::delta_to_offset`].
+//! - **`PageDelta`** is unit-less pages, likewise converted only here.
 
 use flui_types::geometry::{Offset, PixelDelta, Pixels};
 
@@ -487,14 +503,19 @@ impl ScrollEventData {
         }
     }
 
-    /// Converts a ScrollDelta to pixel offset.
+    /// Converts a ScrollDelta to a logical-pixel offset.
+    ///
+    /// This is the single owner of the line-height and page-height factors
+    /// in the scroll delta contract (see the module docs): backends deliver
+    /// normalized signs and units, and only this function turns lines and
+    /// pages into pixels.
     pub fn delta_to_offset(delta: &ScrollDelta) -> Offset<PixelDelta> {
         match delta {
             ScrollDelta::PixelDelta(pos) => {
                 Offset::new(PixelDelta(pos.x as f32), PixelDelta(pos.y as f32))
             }
             ScrollDelta::LineDelta(x, y) => {
-                // One wheel line = 53 physical pixels — the exact factor
+                // One wheel line = 53 logical pixels — the exact factor
                 // Flutter's Linux embedder applies to GTK scroll units
                 // (`kScrollOffsetMultiplier`, `fl_scrolling_manager.cc`), so
                 // wheel speed and `InteractiveViewer`'s scroll-to-scale

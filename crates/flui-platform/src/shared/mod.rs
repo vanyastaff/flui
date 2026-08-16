@@ -4,5 +4,6 @@
 //! duplication.
 
 mod handlers;
+pub mod scroll;
 
 pub use handlers::{PlatformHandlers, WindowCallbacks};
