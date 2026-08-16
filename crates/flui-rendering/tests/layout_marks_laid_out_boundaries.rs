@@ -24,7 +24,27 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     testing::{box_node, tree},
 };
-use flui_types::{Size, geometry::px};
+use flui_types::{EdgeInsets, Size, geometry::px};
+
+/// Change a `RenderPadding`'s inset and report the impact, the same way an
+/// element update does.
+fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f32) {
+    let impact = {
+        let entry = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("padding node")
+            .as_box_mut()
+            .expect("box entry");
+        entry
+            .render_object_mut()
+            .as_any_mut()
+            .downcast_mut::<RenderPadding>()
+            .expect("RenderPadding")
+            .set_padding(EdgeInsets::all(px(value)))
+    };
+    owner.apply_render_update_impact(id, impact);
+}
 
 /// Relayout an outer subtree that contains an inner repaint boundary; the
 /// inner boundary must be queued for paint.
@@ -72,9 +92,18 @@ fn a_boundary_nested_in_a_relayout_subtree_is_queued_for_paint() {
         "precondition: the settled frame leaves nothing queued for paint"
     );
 
-    // Dirty the padding only. Layout re-runs for it and everything under it,
-    // which includes the inner boundary.
-    owner.mark_needs_layout(padding_id);
+    // Change the padding. This is the shape that exposes the bug, and the
+    // three cheaper shapes do not:
+    //
+    // - dirtying the LEAF makes the leaf its own relayout root (its
+    //   constraints are tight), so `mark_needs_paint` walks UP from it and
+    //   correctly reaches the inner boundary on the way;
+    // - dirtying the padding WITHOUT changing it leaves the inner boundary
+    //   clean with unchanged constraints, so layout short-circuits it — its
+    //   content is not stale and it must NOT be queued;
+    // - only a parent that hands its child DIFFERENT constraints forces the
+    //   inner boundary to re-lay out while the relayout root sits above it.
+    set_padding(&mut owner, padding_id, 4.0);
 
     let mut layout_owner = owner.into_layout();
     layout_owner.run_layout().expect("relayout must succeed");

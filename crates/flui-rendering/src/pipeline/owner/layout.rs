@@ -226,7 +226,6 @@ impl PipelineOwner<Layout> {
                 // hides that; a paint pass that lets a clean boundary reuse
                 // its previous layers would show the stale pixels.
                 self.mark_needs_paint(dirty_node.id);
-                self.queue_boundaries_under(dirty_node.id);
             }
 
             // exit_phase clears debug_doing_layout AND drains
@@ -712,7 +711,16 @@ impl PipelineOwner<Layout> {
         let pending_retain_bands = arena.take_pending_retain_bands();
         let layout_failures = arena.take_layout_failures();
         let layout_successes = arena.take_layout_successes();
+        let laid_out = arena.take_laid_out();
         drop(arena);
+
+        // Flutter marks needs-paint per object at the end of
+        // `RenderObject.layout`; this is the same rule, applied once per walk
+        // to exactly the boundaries that reached layout. Anything else is
+        // covered by `mark_needs_paint` finding its enclosing boundary.
+        for id in laid_out {
+            self.mark_needs_paint(id);
+        }
 
         // Poison bookkeeping for the walk's descendant failures/successes.
         // A success clears the node's failure record; failures are deduped
@@ -790,142 +798,5 @@ impl PipelineOwner<Layout> {
         self.pending_retain_bands.extend(pending_retain_bands);
 
         result
-    }
-}
-
-impl PipelineOwner<Layout> {
-    /// Queue every repaint boundary inside `root`'s subtree for paint.
-    ///
-    /// [`Self::mark_needs_paint`] walks UP to the nearest established
-    /// boundary, which is the right shape for an invalidation originating at a
-    /// leaf. It is the wrong shape for "this whole subtree just re-laid out":
-    /// the boundaries INSIDE the subtree also ran layout, their content is
-    /// stale, and nothing walking upward from the subtree's root will ever
-    /// reach them.
-    ///
-    /// Flutter has no equivalent sweep because it marks per object —
-    /// `RenderObject.layout` ends with `markNeedsPaint()` for every object it
-    /// lays out. This is that behaviour expressed once per relayout root
-    /// instead of once per object, which costs one downward walk over a
-    /// subtree layout has just traversed anyway.
-    ///
-    /// Descends through boundaries rather than stopping at them: a boundary
-    /// nested inside another one laid out just the same.
-    ///
-    /// # Known imprecision
-    ///
-    /// This queues every boundary under `root`, including ones whose layout
-    /// the walk skipped. Those are not hypothetical:
-    /// `layout_subtree_borrowed_impl` short-circuits a node that is not dirty
-    /// and is offered the constraints it already has, returning its cached
-    /// geometry without descending. In a list where one row changed, every
-    /// other row is skipped by layout and queued by this sweep anyway.
-    ///
-    /// It is the safe direction — an extra repaint, never a stale one — but
-    /// blunter than Flutter, which marks exactly the objects it laid out
-    /// because the mark happens inside `RenderObject.layout`. Reaching that
-    /// precision here means recording ids from inside the layout walk, where
-    /// the node's slot is exclusively borrowed and the scheduler is out of
-    /// scope; `SubtreeArena` already carries four side-collections drained
-    /// after the walk for exactly this shape of problem.
-    ///
-    /// Worth doing BEFORE a retaining paint pass trusts the queue to decide
-    /// what to skip: over-queueing costs precisely the repaints retention
-    /// exists to avoid.
-    fn queue_boundaries_under(&mut self, root: RenderId) {
-        let mut stack = vec![root];
-        while let Some(id) = stack.pop() {
-            let Some(node) = self.render_tree.get(id) else {
-                continue;
-            };
-            stack.extend_from_slice(node.children());
-            // The root itself is already handled by the `mark_needs_paint`
-            // above.
-            //
-            // Route through `mark_needs_paint` rather than enqueueing
-            // directly. It is the one place that decides WHICH node owns the
-            // affected retained layer, and the answer is not always this node:
-            // a boundary introduced this frame
-            // (`is_repaint_boundary_flag() && !was_repaint_boundary()`) owns
-            // no layer yet, so invalidation has to walk past it to an
-            // established ancestor — the contract
-            // `mark_needs_paint_walks_past_a_new_repaint_boundary` pins.
-            // Enqueueing here would also leave `NEEDS_PAINT` unset on the
-            // node, putting the queue and the per-node flags out of step.
-            //
-            // It stays cheap: the walk returns at the first already-dirty
-            // node, so an established boundary costs one step.
-            let is_boundary = node.is_repaint_boundary_flag();
-            if id != root && is_boundary {
-                self.mark_needs_paint(id);
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod deferred_insert_tests {
-    use flui_tree::Leaf;
-    use flui_types::Size;
-
-    use super::*;
-    use crate::{
-        context::BoxLayoutContext, parent_data::BoxParentData,
-        pipeline::deferred::DeferredRenderObject, traits::RenderBox,
-    };
-
-    #[derive(Debug)]
-    struct LeafBox;
-
-    impl flui_foundation::Diagnosticable for LeafBox {}
-
-    impl RenderBox for LeafBox {
-        type Arity = Leaf;
-        type ParentData = BoxParentData;
-
-        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            Size::ZERO
-        }
-    }
-
-    #[test]
-    fn deferred_insert_applies_exact_parent_membership_impact() {
-        let mut idle_owner = PipelineOwner::new();
-        let parent = idle_owner.set_root_render_object(Box::new(LeafBox));
-        idle_owner.set_semantics_enabled(true);
-        idle_owner.clear_all_dirty_nodes();
-        let parent_node = idle_owner.render_tree().get(parent).unwrap();
-        parent_node.clear_needs_layout();
-        parent_node.clear_needs_paint();
-        parent_node.clear_needs_compositing_bits_update();
-
-        let mut owner = idle_owner.into_layout();
-        owner.apply_deferred_mutation(DeferredMutation::Insert {
-            parent_id: parent,
-            render_object: DeferredRenderObject::Box(Box::new(LeafBox)),
-            index: None,
-            logical_index: None,
-            initial_parent_data: None,
-        });
-
-        let child = owner.render_tree().get(parent).unwrap().children()[0];
-        let layout_ids = owner
-            .nodes_needing_layout()
-            .iter()
-            .map(|dirty| dirty.id)
-            .collect::<Vec<_>>();
-        assert!(layout_ids.contains(&parent));
-        assert!(layout_ids.contains(&child));
-        assert!(owner.render_tree().get(parent).unwrap().needs_layout());
-        assert!(
-            owner
-                .render_tree()
-                .get(parent)
-                .unwrap()
-                .needs_compositing_bits_update()
-        );
-        assert_eq!(owner.nodes_needing_compositing_bits_update()[0].id, parent);
-        assert_eq!(owner.nodes_needing_semantics()[0].id, parent);
-        assert!(owner.nodes_needing_paint().is_empty());
     }
 }
