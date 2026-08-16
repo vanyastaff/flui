@@ -17,6 +17,12 @@ autotests = false
 [[bin]]
 name = "flui"
 path = "src/main.rs"
+# The bin shares its name with the root facade LIB target; both resolve to
+# target/doc/flui and race in the merge-blocking doc job (cargo#6313 —
+# rustdoc reports it as a warning locally and fails with a phantom I/O
+# error under parallel jobs). The binary carries no public API worth
+# documenting; the crate's docs live in its lib and README.
+doc = false
 
 [dependencies]
 # Build system
