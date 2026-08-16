@@ -17,14 +17,15 @@ use windows::{
             WindowsAndMessaging::{
                 CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, GWLP_USERDATA, GetForegroundWindow, GetMessageW,
-                GetWindowLongPtrW, HICON, HTCLIENT, HWND_MESSAGE, IDC_ARROW, MSG, PostQuitMessage,
-                RegisterClassW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-                WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
-                WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
+                GetWindowLongPtrW, HICON, HTCLIENT, HWND_MESSAGE, IDC_ARROW, MSG, PM_REMOVE,
+                PeekMessageW, PostQuitMessage, RegisterClassW, SW_SHOWNORMAL, SWP_NOACTIVATE,
+                SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_CREATE,
+                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP,
+                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+                WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONDOWN,
+                WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN,
+                WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -87,6 +88,12 @@ pub(super) struct WindowContext {
     /// Stored here instead of in `WindowMode` to keep the cross-platform enum
     /// free of platform-specific fields.
     pub restore_style: std::cell::Cell<u32>,
+    /// High half of a UTF-16 surrogate pair from an out-of-band `WM_CHAR`,
+    /// held until its low half arrives in the next message (Windows splits
+    /// astral-plane characters across two `WM_CHAR`s). Only the stray-char
+    /// path in `window_proc` uses this; the `WM_KEYDOWN` drain sees a whole
+    /// burst at once and never needs cross-message state.
+    pub pending_high_surrogate: std::cell::Cell<Option<u16>>,
 }
 
 impl WindowContext {
@@ -923,9 +930,19 @@ impl WindowsPlatform {
                         // Track modifiers (T035)
                         ctx.modifiers.set(current_modifiers());
 
+                        // Merge the fully-translated character(s) for this
+                        // keystroke into the keydown. The message loop runs
+                        // `TranslateMessage` before `DispatchMessageW` (see
+                        // `run`), so the WM_CHAR burst for this keydown —
+                        // shift/caps/AltGr applied, dead keys resolved — is
+                        // already in the queue and is drained synchronously
+                        // here. Pairing model and merge rules:
+                        // `crate::shared::keys` module doc.
+                        let translated = drain_translated_chars(hwnd);
+
                         // Dispatch keyboard event via per-window callback
                         use super::events::key_down_event;
-                        let event = key_down_event(wparam, lparam);
+                        let event = key_down_event(wparam, lparam, translated);
                         ctx.callbacks.dispatch_input(event);
                     }
 
@@ -945,8 +962,27 @@ impl WindowsPlatform {
                 }
 
                 WM_CHAR => {
-                    // WM_CHAR is handled by the framework via KeyboardEvent
-                    // No per-window callback dispatch needed here
+                    // Normally unreachable: the WM_KEYDOWN arm drains the
+                    // paired WM_CHAR burst before it would be dispatched
+                    // here. What remains is an out-of-band character with no
+                    // owning keydown — Alt+numpad composition (queued by
+                    // TranslateMessage of the Alt KEYUP) or a directly-sent
+                    // message — dispatched as its own key-down instead of
+                    // being discarded, so the text lane still receives it.
+                    // Astral-plane characters arrive as two WM_CHARs; the
+                    // high surrogate is parked in the context until its low
+                    // half arrives.
+                    if let Some(ctx) = ctx {
+                        let (pending, text) = crate::shared::keys::assemble_stray_wm_char(
+                            ctx.pending_high_surrogate.get(),
+                            wparam.0 as u16,
+                        );
+                        ctx.pending_high_surrogate.set(pending);
+                        if let Some(text) = text {
+                            use super::events::stray_char_event;
+                            ctx.callbacks.dispatch_input(stray_char_event(text));
+                        }
+                    }
                     LRESULT(0)
                 }
 
@@ -1600,6 +1636,37 @@ fn current_modifiers() -> keyboard_types::Modifiers {
         }
         mods
     }
+}
+
+/// Drain the `WM_CHAR` burst `TranslateMessage` queued for the keydown
+/// currently being handled, and decode it into typeable text.
+///
+/// Called from `window_proc`'s `WM_KEYDOWN`/`WM_SYSKEYDOWN` arm. The burst
+/// is complete at that point — the message loop runs `TranslateMessage`
+/// before `DispatchMessageW`, so every `WM_CHAR` belonging to this keystroke
+/// (two of them for an astral-plane character) is already posted. Draining
+/// filters exactly `WM_CHAR` for this window: `WM_SYSCHAR` is deliberately
+/// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`,
+/// and `WM_DEADCHAR` is left to expire so dead-key state stays Windows'
+/// business. Returns `None` for keystrokes with no typeable translation
+/// (navigation keys, Ctrl chords — see `shared::keys::wm_char_text`).
+fn drain_translated_chars(hwnd: HWND) -> Option<String> {
+    let mut units: Vec<u16> = Vec::new();
+    let mut msg = MSG::default();
+
+    // SAFETY: `msg` is a live, writable local and `PeekMessageW` writes
+    // nothing else. `PM_REMOVE` only ever removes messages from this
+    // thread's own queue (the wndproc runs on the queue's owning thread).
+    // Note `PeekMessageW` may deliver pending nonqueued (sent) messages,
+    // re-entering `window_proc` — the same re-entrancy any modal Win32 API
+    // call permits, and `window_proc` holds no lock across this call.
+    unsafe {
+        while PeekMessageW(&raw mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() {
+            units.push(msg.wParam.0 as u16);
+        }
+    }
+
+    crate::shared::keys::wm_char_text(&units)
 }
 
 // Windows platform capabilities

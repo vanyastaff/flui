@@ -239,6 +239,7 @@ impl WindowsWindow {
                 modifiers: std::cell::Cell::new(keyboard_types::Modifiers::empty()),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
+                pending_high_surrogate: std::cell::Cell::new(None),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);

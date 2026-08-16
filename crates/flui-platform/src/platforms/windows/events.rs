@@ -22,19 +22,14 @@ use ui_events::{
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
     Graphics::Gdi::ScreenToClient,
-    UI::Input::KeyboardAndMouse::{
-        VIRTUAL_KEY, VK_0, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_B,
-        VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DELETE, VK_DOWN, VK_E, VK_END, VK_ESCAPE, VK_F, VK_F1,
-        VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12, VK_G, VK_H,
-        VK_HOME, VK_I, VK_INSERT, VK_J, VK_K, VK_L, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
-        VK_LWIN, VK_M, VK_MENU, VK_N, VK_NEXT, VK_O, VK_P, VK_PRIOR, VK_Q, VK_R, VK_RCONTROL,
-        VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SHIFT, VK_SPACE, VK_T, VK_TAB,
-        VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
-    },
+    UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT},
 };
 
 use super::util::{get_x_lparam, get_y_lparam, is_key_pressed};
-use crate::traits::{Key, PlatformInput, device_to_logical};
+use crate::{
+    shared::keys,
+    traits::{Key, PlatformInput, device_to_logical},
+};
 
 /// Process-start epoch for monotonic event timestamps.
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
@@ -58,93 +53,12 @@ fn primary_mouse_info() -> PointerInfo {
 // ============================================================================
 // Keyboard Event Conversion
 // ============================================================================
-
-/// Convert VK_* to keyboard-types Key
-fn vk_to_key(vk: VIRTUAL_KEY, _scan_code: u16) -> Key {
-    use keyboard_types::{Key as K, NamedKey};
-
-    match vk {
-        // Named keys
-        VK_RETURN => K::Named(NamedKey::Enter),
-        VK_TAB => K::Named(NamedKey::Tab),
-        VK_SPACE => K::Character(" ".into()),
-        VK_BACK => K::Named(NamedKey::Backspace),
-        VK_DELETE => K::Named(NamedKey::Delete),
-        VK_ESCAPE => K::Named(NamedKey::Escape),
-
-        VK_LEFT => K::Named(NamedKey::ArrowLeft),
-        VK_RIGHT => K::Named(NamedKey::ArrowRight),
-        VK_UP => K::Named(NamedKey::ArrowUp),
-        VK_DOWN => K::Named(NamedKey::ArrowDown),
-
-        VK_HOME => K::Named(NamedKey::Home),
-        VK_END => K::Named(NamedKey::End),
-        VK_PRIOR => K::Named(NamedKey::PageUp),
-        VK_NEXT => K::Named(NamedKey::PageDown),
-        VK_INSERT => K::Named(NamedKey::Insert),
-
-        VK_F1 => K::Named(NamedKey::F1),
-        VK_F2 => K::Named(NamedKey::F2),
-        VK_F3 => K::Named(NamedKey::F3),
-        VK_F4 => K::Named(NamedKey::F4),
-        VK_F5 => K::Named(NamedKey::F5),
-        VK_F6 => K::Named(NamedKey::F6),
-        VK_F7 => K::Named(NamedKey::F7),
-        VK_F8 => K::Named(NamedKey::F8),
-        VK_F9 => K::Named(NamedKey::F9),
-        VK_F10 => K::Named(NamedKey::F10),
-        VK_F11 => K::Named(NamedKey::F11),
-        VK_F12 => K::Named(NamedKey::F12),
-
-        // Modifiers
-        VK_LSHIFT | VK_RSHIFT => K::Named(NamedKey::Shift),
-        VK_LCONTROL | VK_RCONTROL => K::Named(NamedKey::Control),
-        VK_LMENU | VK_RMENU => K::Named(NamedKey::Alt),
-        VK_LWIN | VK_RWIN => K::Named(NamedKey::Meta),
-
-        // Letters
-        VK_A => K::Character("a".into()),
-        VK_B => K::Character("b".into()),
-        VK_C => K::Character("c".into()),
-        VK_D => K::Character("d".into()),
-        VK_E => K::Character("e".into()),
-        VK_F => K::Character("f".into()),
-        VK_G => K::Character("g".into()),
-        VK_H => K::Character("h".into()),
-        VK_I => K::Character("i".into()),
-        VK_J => K::Character("j".into()),
-        VK_K => K::Character("k".into()),
-        VK_L => K::Character("l".into()),
-        VK_M => K::Character("m".into()),
-        VK_N => K::Character("n".into()),
-        VK_O => K::Character("o".into()),
-        VK_P => K::Character("p".into()),
-        VK_Q => K::Character("q".into()),
-        VK_R => K::Character("r".into()),
-        VK_S => K::Character("s".into()),
-        VK_T => K::Character("t".into()),
-        VK_U => K::Character("u".into()),
-        VK_V => K::Character("v".into()),
-        VK_W => K::Character("w".into()),
-        VK_X => K::Character("x".into()),
-        VK_Y => K::Character("y".into()),
-        VK_Z => K::Character("z".into()),
-
-        // Numbers
-        VK_0 => K::Character("0".into()),
-        VK_1 => K::Character("1".into()),
-        VK_2 => K::Character("2".into()),
-        VK_3 => K::Character("3".into()),
-        VK_4 => K::Character("4".into()),
-        VK_5 => K::Character("5".into()),
-        VK_6 => K::Character("6".into()),
-        VK_7 => K::Character("7".into()),
-        VK_8 => K::Character("8".into()),
-        VK_9 => K::Character("9".into()),
-
-        _ => K::Named(NamedKey::Unidentified),
-    }
-}
+//
+// The translation decisions themselves (vk -> Key fallback, scancode -> Code,
+// the WM_CHAR merge) are pure functions in `crate::shared::keys`, where their
+// tests execute on every host; this file only unpacks the Win32 message
+// parameters and feeds them through. The WM_CHAR pairing model is documented
+// on that module.
 
 /// Get current modifiers state
 ///
@@ -410,39 +324,76 @@ pub fn mouse_hwheel_event(
 // Keyboard events (simple wrappers)
 // ============================================================================
 
-/// Convert WM_KEYDOWN to W3C KeyboardEvent
-pub fn key_down_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
-    let vk = VIRTUAL_KEY(wparam.0 as u16);
-    let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
-    let is_repeat = (lparam.0 & (1 << 30)) != 0;
+/// Convert WM_KEYDOWN to W3C KeyboardEvent.
+///
+/// `translated_text` is the drained `WM_CHAR` burst for this keydown (see
+/// `window_proc`'s `WM_KEYDOWN` arm and `crate::shared::keys`'s module doc
+/// for the pairing model); when present and typeable it becomes the event's
+/// `Key::Character`, otherwise the layout-independent virtual-key fallback
+/// applies.
+pub fn key_down_event(
+    wparam: WPARAM,
+    lparam: LPARAM,
+    translated_text: Option<String>,
+) -> PlatformInput {
+    let vk = wparam.0 as u16;
+    let (scan_code, extended, is_repeat) = keys::parse_key_lparam(lparam.0);
 
     // SAFETY: see `pointer_state` above — same call, no precondition.
     let modifiers = unsafe { get_modifiers() };
-    let key = vk_to_key(vk, scan_code);
+    let fallback = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
+    let key = keys::merge_wm_char(fallback, translated_text);
+    let code = keys::scancode_to_code(scan_code, extended);
 
     PlatformInput::Keyboard(KeyboardEvent {
         state: KeyState::Down,
         key,
-        code: Code::Unidentified,
-        location: Location::Standard,
+        code,
+        location: keys::location_for_code(code),
         modifiers,
         repeat: is_repeat,
         is_composing: false,
     })
 }
 
-/// Convert WM_KEYUP to W3C KeyboardEvent
+/// Convert WM_KEYUP to W3C KeyboardEvent.
+///
+/// No `WM_CHAR` pairs with a keyup, so the key is always the virtual-key
+/// fallback — for a letter that is its shift-respecting character, for OEM
+/// punctuation the US-layout position. Consumers that type text act on
+/// `KeyState::Down` only, so this asymmetry never reaches a text field.
 pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
-    let vk = VIRTUAL_KEY(wparam.0 as u16);
-    let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
+    let vk = wparam.0 as u16;
+    let (scan_code, extended, _) = keys::parse_key_lparam(lparam.0);
 
     // SAFETY: see `pointer_state` above — same call, no precondition.
     let modifiers = unsafe { get_modifiers() };
-    let key = vk_to_key(vk, scan_code);
+    let key = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
+    let code = keys::scancode_to_code(scan_code, extended);
 
     PlatformInput::Keyboard(KeyboardEvent {
         state: KeyState::Up,
         key,
+        code,
+        location: keys::location_for_code(code),
+        modifiers,
+        repeat: false,
+        is_composing: false,
+    })
+}
+
+/// Build the KeyboardEvent for an out-of-band `WM_CHAR` — one that reached
+/// `window_proc` instead of being drained by a `WM_KEYDOWN` (Alt+numpad
+/// composition, or a directly-sent message). There is no owning physical
+/// key, so it is dispatched as a key-down with `Code::Unidentified` and no
+/// paired key-up; the text lane consumes `Key::Character` on key-down only.
+pub fn stray_char_event(text: String) -> PlatformInput {
+    // SAFETY: see `pointer_state` above — same call, no precondition.
+    let modifiers = unsafe { get_modifiers() };
+
+    PlatformInput::Keyboard(KeyboardEvent {
+        state: KeyState::Down,
+        key: Key::Character(text),
         code: Code::Unidentified,
         location: Location::Standard,
         modifiers,
@@ -451,22 +402,30 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     })
 }
 
-/// Convert WM_CHAR to a character
-pub fn char_from_wparam(wparam: WPARAM) -> Option<char> {
-    char::from_u32(wparam.0 as u32)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::NamedKey;
 
+    /// The Win32 wire assembles its keyboard events from the shared,
+    /// host-testable tables plus the live modifier query: a WM_KEYDOWN for
+    /// VK_A (scancode 0x1E) with the translated text "A" merged in must
+    /// carry the shifted character AND the physical-key code — this is the
+    /// wire that used to hardcode `Code::Unidentified` and case-fold every
+    /// character.
     #[test]
-    fn test_vk_to_key() {
-        assert!(matches!(vk_to_key(VK_A, 0), Key::Character(_)));
-        assert_eq!(vk_to_key(VK_RETURN, 0), Key::Named(NamedKey::Enter));
-        assert_eq!(vk_to_key(VK_LEFT, 0), Key::Named(NamedKey::ArrowLeft));
-        assert_eq!(vk_to_key(VK_F1, 0), Key::Named(NamedKey::F1));
+    fn test_key_down_event_carries_text_and_code() {
+        let lparam = LPARAM(0x1E << 16); // scancode 0x1E, not extended
+        let event = key_down_event(WPARAM(0x41), lparam, Some("A".to_string()));
+
+        if let PlatformInput::Keyboard(kb) = event {
+            assert_eq!(kb.state, KeyState::Down);
+            assert_eq!(kb.key, Key::Character("A".to_string()));
+            assert_eq!(kb.code, Code::KeyA);
+            assert_eq!(kb.location, Location::Standard);
+            assert!(!kb.repeat);
+        } else {
+            panic!("Expected Keyboard event");
+        }
     }
 
     #[test]
