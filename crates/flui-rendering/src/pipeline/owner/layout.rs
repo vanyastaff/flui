@@ -215,10 +215,18 @@ impl PipelineOwner<Layout> {
                 // unconditionally ends with `markNeedsPaint()`): a
                 // subtree that re-laid out must repaint, otherwise a
                 // pure-layout invalidation (setState moving a child)
-                // leaves stale pixels on screen. One entry per dirty
-                // root suffices — run_paint walks the whole tree from
-                // the root, so triggering the phase is what matters.
+                // leaves stale pixels on screen.
+                //
+                // Flutter marks per OBJECT, and the difference is not
+                // cosmetic. `mark_needs_paint` walks UP to the nearest
+                // established boundary, so marking only the relayout root
+                // reaches the boundary ABOVE the subtree and never the
+                // boundaries INSIDE it — which also re-laid out and whose
+                // content is therefore stale. A full-tree paint descent
+                // hides that; a paint pass that lets a clean boundary reuse
+                // its previous layers would show the stale pixels.
                 self.mark_needs_paint(dirty_node.id);
+                self.queue_boundaries_under(dirty_node.id);
             }
 
             // exit_phase clears debug_doing_layout AND drains
@@ -782,6 +790,76 @@ impl PipelineOwner<Layout> {
         self.pending_retain_bands.extend(pending_retain_bands);
 
         result
+    }
+}
+
+impl PipelineOwner<Layout> {
+    /// Queue every repaint boundary inside `root`'s subtree for paint.
+    ///
+    /// [`Self::mark_needs_paint`] walks UP to the nearest established
+    /// boundary, which is the right shape for an invalidation originating at a
+    /// leaf. It is the wrong shape for "this whole subtree just re-laid out":
+    /// the boundaries INSIDE the subtree also ran layout, their content is
+    /// stale, and nothing walking upward from the subtree's root will ever
+    /// reach them.
+    ///
+    /// Flutter has no equivalent sweep because it marks per object —
+    /// `RenderObject.layout` ends with `markNeedsPaint()` for every object it
+    /// lays out. This is that behaviour expressed once per relayout root
+    /// instead of once per object, which costs one downward walk over a
+    /// subtree layout has just traversed anyway.
+    ///
+    /// Descends through boundaries rather than stopping at them: a boundary
+    /// nested inside another one laid out just the same.
+    ///
+    /// # Known imprecision
+    ///
+    /// This queues every boundary under `root`, including ones whose layout
+    /// the walk skipped. Those are not hypothetical:
+    /// `layout_subtree_borrowed_impl` short-circuits a node that is not dirty
+    /// and is offered the constraints it already has, returning its cached
+    /// geometry without descending. In a list where one row changed, every
+    /// other row is skipped by layout and queued by this sweep anyway.
+    ///
+    /// It is the safe direction — an extra repaint, never a stale one — but
+    /// blunter than Flutter, which marks exactly the objects it laid out
+    /// because the mark happens inside `RenderObject.layout`. Reaching that
+    /// precision here means recording ids from inside the layout walk, where
+    /// the node's slot is exclusively borrowed and the scheduler is out of
+    /// scope; `SubtreeArena` already carries four side-collections drained
+    /// after the walk for exactly this shape of problem.
+    ///
+    /// Worth doing BEFORE a retaining paint pass trusts the queue to decide
+    /// what to skip: over-queueing costs precisely the repaints retention
+    /// exists to avoid.
+    fn queue_boundaries_under(&mut self, root: RenderId) {
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.render_tree.get(id) else {
+                continue;
+            };
+            stack.extend_from_slice(node.children());
+            // The root itself is already handled by the `mark_needs_paint`
+            // above.
+            //
+            // Route through `mark_needs_paint` rather than enqueueing
+            // directly. It is the one place that decides WHICH node owns the
+            // affected retained layer, and the answer is not always this node:
+            // a boundary introduced this frame
+            // (`is_repaint_boundary_flag() && !was_repaint_boundary()`) owns
+            // no layer yet, so invalidation has to walk past it to an
+            // established ancestor — the contract
+            // `mark_needs_paint_walks_past_a_new_repaint_boundary` pins.
+            // Enqueueing here would also leave `NEEDS_PAINT` unset on the
+            // node, putting the queue and the per-node flags out of step.
+            //
+            // It stays cheap: the walk returns at the first already-dirty
+            // node, so an established boundary costs one step.
+            let is_boundary = node.is_repaint_boundary_flag();
+            if id != root && is_boundary {
+                self.mark_needs_paint(id);
+            }
+        }
     }
 }
 
