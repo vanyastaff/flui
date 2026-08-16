@@ -3037,14 +3037,15 @@ fn plain_wheel_scrolls_and_ctrl_wheel_zooms_under_the_ctrl_gate() {
     scoped.pump_for(Duration::from_millis(16));
 
     // CTRL+wheel over the plain LIST region (no viewer under the cursor):
-    // the scrollable itself must decline the chord — this leg is what pins
-    // the scrollable's own gate, since over the viewer the inner claim
-    // wins before the scrollable is ever asked.
+    // the scrollable is deliberately modifier-agnostic — the oracle reads
+    // no modifiers, so the chord scrolls a bare list exactly as a plain
+    // tick does. The zoom split lives entirely in the chord-gated viewer,
+    // which the leaf-first walk asks first.
     let pixels_before = outer.pixels();
     scoped.dispatch_scroll_with_modifiers(150.0, 250.0, 0.0, 53.0, Modifiers::CONTROL);
     assert_eq!(
         outer.pixels(),
-        pixels_before,
-        "a ctrl tick over the bare list is declined by the scrollable"
+        pixels_before + 53.0,
+        "a ctrl tick over the bare list scrolls like any other (Flutter parity)"
     );
 }

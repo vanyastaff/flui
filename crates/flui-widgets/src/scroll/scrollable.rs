@@ -64,7 +64,7 @@ use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{AnimatedBuilder, GestureDetector, Listener, SingleChildScrollView};
-use flui_interaction::events::{Modifiers, ScrollEventData};
+use flui_interaction::events::ScrollEventData;
 use flui_interaction::routing::EventPropagation;
 use flui_scheduler::PostFrameHandle;
 
@@ -640,15 +640,13 @@ impl ViewState<Scrollable> for ScrollableState {
             let fling_wheel = fling_controller.clone();
             Listener::new()
                 .on_scroll_claim(move |data: &ScrollEventData| {
-                    // Ctrl+wheel is the desktop zoom chord, never a scroll
-                    // — decline it so a zoom consumer above (an
-                    // InteractiveViewer gating its scroll-to-scale on the
-                    // same chord) can take the tick; with no such consumer
-                    // the tick is simply inert, matching every desktop
-                    // toolkit's ctrl+wheel-over-a-plain-list behavior.
-                    if data.modifiers.contains(Modifiers::CONTROL) {
-                        return EventPropagation::Continue;
-                    }
+                    // Deliberately modifier-agnostic — the oracle's
+                    // `_receivedPointerSignal` reads no modifiers, so a
+                    // ctrl+wheel tick over a plain list scrolls exactly as
+                    // Flutter's does. The ctrl+wheel-zooms contract needs no
+                    // decline here: a chord-gated zoom consumer sits INSIDE
+                    // the scrollable, and the leaf-first claim walk asks it
+                    // first.
                     let axis_delta = match scroll_direction {
                         Axis::Vertical => data.delta.dy.get(),
                         Axis::Horizontal => data.delta.dx.get(),

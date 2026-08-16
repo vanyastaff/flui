@@ -848,6 +848,7 @@ pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> Poi
     make_scroll_event_with_modifiers(position, delta, Modifiers::empty())
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// As `make_scroll_event`, with an explicit modifier set — for asserting
 /// chord-gated scroll consumers (ctrl+wheel zoom vs plain-wheel scroll).
 pub fn make_scroll_event_with_modifiers(
