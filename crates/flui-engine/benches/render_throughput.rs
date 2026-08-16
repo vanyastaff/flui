@@ -41,6 +41,7 @@ use flui_engine::WgpuPainter;
 use flui_engine::wgpu::path_cache::PathCache;
 use flui_engine::wgpu::superellipse_cache::{SuperellipseKey, SuperellipsePathCache};
 use flui_painting::Paint;
+use flui_types::Rect;
 use flui_types::painting::path::Path;
 use flui_types::{Offset, geometry::px, painting::Shader, styling::Color};
 
@@ -322,6 +323,113 @@ fn alloc_micro(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// damage_scissor — what a partial repaint would save
+// ============================================================================
+
+/// The same scene rasterised full-screen versus clipped to a small damage
+/// rect, at a realistic surface size.
+///
+/// `DamageTracker` and the scissor that consumes it both exist and are wired
+/// in `render_scene`; what is missing is a PRODUCER — `Renderer::mark_dirty`
+/// has no production caller, so every frame calls `mark_full_repaint` and the
+/// scissor never narrows. This measures what that costs, so the producer, when
+/// it lands, has a baseline to be checked against rather than an assertion.
+///
+/// The layer counts are the axis that matters: with the damage rect fixed at
+/// 0.8% of the surface, the scissored cost stays roughly flat while the full
+/// cost grows with the fragment work, so the ratio shows how much of a frame
+/// is pixels that did not change.
+fn damage_scissor(c: &mut Criterion) {
+    let Some((device, queue)) = try_create_gpu() else {
+        println!("skipping damage benches: no GPU available");
+        return;
+    };
+
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let (width, height) = (1920_u32, 1080_u32);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("damage-bench-target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        format,
+        (width, height),
+    );
+
+    // Translucent full-surface rects: the shape that makes fragment work, and
+    // the one a scissor can actually cull. A UI's own layers are smaller, so
+    // treat these as an upper bound on the saving per layer, not a forecast.
+    fn build(painter: &mut WgpuPainter, layers: u32, damage: Option<f32>, w: f32, h: f32) {
+        painter.save();
+        if let Some(side) = damage {
+            painter.clip_rect(Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)));
+        }
+        for i in 0..layers {
+            let f = i as f32;
+            painter.rect(
+                Rect::from_xywh(px(f * 2.0), px(f * 1.5), px(w), px(h)),
+                &Paint::fill(Color::rgba(0, 0, 255, 40)),
+            );
+        }
+        painter.restore();
+    }
+
+    const VARIANTS: [(&str, Option<f32>); 2] = [("full", None), ("damage_128px", Some(128.0))];
+
+    let mut group = c.benchmark_group("damage_scissor");
+    for &layers in &[4_u32, 16, 64] {
+        // Warm BOTH variants before timing EITHER. The damaged variant is
+        // timed second, so anything that makes later work look faster — GPU
+        // clock ramp, warmed caches — would flatter exactly the case whose
+        // saving this benchmark reports. Warming both first removes the
+        // cache half; the probe that produced these numbers also ran the
+        // order reversed and agreed, which removes the ramp half.
+        for (_, damage) in VARIANTS {
+            for _ in 0..2 {
+                build(&mut painter, layers, damage, width as f32, height as f32);
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("damage-warmup"),
+                });
+                let _ = painter.render_to_view(&view, &mut enc);
+                queue.submit([enc.finish()]);
+                let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            }
+        }
+
+        for (label, damage) in VARIANTS {
+            group.bench_function(format!("{label}/{layers}"), |b| {
+                b.iter(|| {
+                    build(&mut painter, layers, damage, width as f32, height as f32);
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("damage-frame"),
+                    });
+                    let result = painter.render_to_view(&view, &mut enc);
+                    queue.submit([enc.finish()]);
+                    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+                    black_box(result)
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(benches, render_throughput);
 criterion_group!(alloc_benches, alloc_micro);
-criterion_main!(benches, alloc_benches);
+criterion_group!(damage_benches, damage_scissor);
+criterion_main!(benches, damage_benches, alloc_benches);
