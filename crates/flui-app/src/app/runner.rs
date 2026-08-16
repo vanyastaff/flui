@@ -673,6 +673,11 @@ pub(super) enum PlatformToUi {
     // its `on_active_status_change` registration).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     WindowVisibility(bool),
+    /// The OS light/dark appearance changed (winit's `ThemeChanged`, or the
+    /// equivalent per-backend signal). Republishes
+    /// `MediaQueryData::platform_brightness` through the root media query.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    AppearanceChanged(flui_platform::WindowAppearance),
     /// The pointer entered (`true`) or left (`false`) the window (winit's
     /// `CursorEntered`/`CursorLeft`, via
     /// `PlatformWindow::on_hover_status_change`). Leave sweeps the addressed
@@ -826,6 +831,18 @@ impl PlatformToUi {
                     }
                 }
                 realm.set_device_pixel_ratio(scale_factor);
+                // The root MediaQuery lives in the PRIMARY presentation's
+                // tree; a secondary window's resize must not republish its
+                // size there (SharedRealm hosts several windows). The
+                // realm-wide ratio/surface handling above keeps its
+                // pre-existing behavior — only the media-query write is
+                // addressed.
+                if realm.is_primary_presentation(presentation_id) {
+                    realm.media_query().update(|data| {
+                        data.size = size;
+                        data.device_pixel_ratio = scale_factor;
+                    });
+                }
                 realm.request_redraw();
                 tracing::trace!(?size, scale_factor, "realm resize committed");
             }
@@ -894,6 +911,23 @@ impl PlatformToUi {
             }
             Self::WindowHover(inside) => {
                 realm.handle_window_hover_addressed(presentation_id, inside);
+            }
+            Self::AppearanceChanged(appearance) => {
+                use flui_platform::WindowAppearance;
+                let brightness = match appearance {
+                    WindowAppearance::Dark | WindowAppearance::VibrantDark => {
+                        flui_types::platform::Brightness::Dark
+                    }
+                    WindowAppearance::Light | WindowAppearance::VibrantLight => {
+                        flui_types::platform::Brightness::Light
+                    }
+                };
+                if realm.is_primary_presentation(presentation_id) {
+                    realm.media_query().update(|data| {
+                        data.platform_brightness = brightness;
+                    });
+                    realm.request_redraw();
+                }
             }
             Self::WindowVisibility(visible) => {
                 // Presentation-level `FrameClock` gate — finer
@@ -9258,6 +9292,36 @@ where
                 RealmTask::Event(PlatformToUi::WindowHover(is_hovered)),
             );
         }));
+        // The platform callback carries no payload; query the window's
+        // current appearance at dispatch time. Weak: the callback lives
+        // inside the window's own handler table, and a strong capture
+        // would cycle it alive past close.
+        let appearance_window = Arc::downgrade(&window);
+        window.on_appearance_changed(Box::new(move || {
+            if let Some(win) = appearance_window.upgrade() {
+                let _ = dispatch_platform_realm(
+                    realm_dispatch,
+                    RealmTask::Event(PlatformToUi::AppearanceChanged(win.appearance())),
+                );
+            }
+        }));
+        // Seed the initial brightness — a user on a dark desktop must not
+        // start light until the first live theme flip.
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::AppearanceChanged(window.appearance())),
+        );
+        // Seed the initial size and device-pixel ratio the same way: the
+        // source must not sit on defaults until the first live resize —
+        // on the web backend no resize observer exists, so a default
+        // would be permanent there.
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::Resized {
+                size: window.logical_size(),
+                scale_factor: window.scale_factor() as f32,
+            }),
+        );
 
         // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
         // marking the lifecycle Resumed or requesting the initial redraw.

@@ -428,6 +428,10 @@ pub(crate) struct UiRealm {
     local_post_frame: LocalPostFrameLane,
     /// Owner-local interaction callback storage, activated with the realm scope.
     interaction_lane: InteractionLane,
+    /// The live source behind the root `MediaQuery` — the platform's resize
+    /// and appearance signals write it, the root wrapper republishes it.
+    /// Primary-presentation-scoped, like `attach_root_widget` itself.
+    media_query: std::rc::Rc<crate::app::media_query_root::MediaQuerySource>,
     /// This realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043 §1),
     /// installed into every presentation's `BuildOwner` at assembly time
     /// (`PresentationState::new`). Retained here (not just handed off once)
@@ -816,6 +820,7 @@ impl UiRealm {
             realm_id,
             local_post_frame,
             interaction_lane,
+            media_query: std::rc::Rc::new(crate::app::media_query_root::MediaQuerySource::default()),
             global_key_scope,
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
@@ -902,6 +907,12 @@ impl UiRealm {
     /// resolves — closing the last presentation is closing the REALM, and
     /// must route there instead (see that match arm's own doc).
     #[must_use]
+    /// Whether `id` addresses this realm's primary presentation — the one
+    /// whose widget tree hosts the root `MediaQuery`.
+    pub(crate) fn is_primary_presentation(&self, id: PresentationId) -> bool {
+        self.presentations.primary().id() == id
+    }
+
     pub(crate) fn is_sole_presentation(&self, id: PresentationId) -> bool {
         self.presentations.len() == 1 && self.presentations.get(id).is_some()
     }
@@ -1251,6 +1262,11 @@ impl UiRealm {
     ///
     /// Crate-private so platform input can only reach it through the entered
     /// realm dispatch path rather than exposing a second public owner seam.
+    /// The live root media-query source (see the field doc).
+    pub(crate) fn media_query(&self) -> &crate::app::media_query_root::MediaQuerySource {
+        &self.media_query
+    }
+
     pub(crate) fn gestures(&self) -> &GestureBinding {
         self.presentations.primary().gestures()
     }
@@ -1968,7 +1984,15 @@ impl UiRealm {
         // registry, and FocusRoot publishes this presentation's exact focus
         // tree. These wrappers have no render object, so the render root is
         // unchanged.
-        let focused = FocusRoot::new(view.clone());
+        // The root MediaQuery publishes the realm's live platform data
+        // (size, device pixel ratio, brightness) to the whole user subtree;
+        // the realm's resize/appearance arms write the shared source and the
+        // wrapper republishes.
+        let with_media_query = crate::app::media_query_root::MediaQueryRoot::new(
+            std::rc::Rc::clone(&self.media_query),
+            flui_view::view::ViewExt::boxed(view.clone()),
+        );
+        let focused = FocusRoot::new(with_media_query);
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated);
         self.presentations
@@ -2051,7 +2075,13 @@ impl UiRealm {
     where
         V: flui_view::View + Clone + 'static,
     {
-        let focused = FocusRoot::new(view.clone());
+        // Same root MediaQuery as the production attach path — the sized
+        // variant must not present a different ambient environment.
+        let with_media_query = crate::app::media_query_root::MediaQueryRoot::new(
+            std::rc::Rc::clone(&self.media_query),
+            flui_view::view::ViewExt::boxed(view.clone()),
+        );
+        let focused = FocusRoot::new(with_media_query);
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated);
         self.presentations
@@ -4155,6 +4185,68 @@ mod tests {
             wake_count.load(Ordering::Relaxed) >= 1,
             "request_redraw must fire the platform wake — flag-only requests \
              leave a parked event loop asleep and the screen frozen"
+        );
+    }
+
+    /// The realm installs a live root `MediaQuery`: the user's subtree can
+    /// read it from the very first build, and a platform appearance change
+    /// republishes the new brightness through the same root on the next
+    /// frame — the wire nothing used to consume.
+    #[test]
+    fn the_root_media_query_republishes_a_brightness_change() {
+        use std::cell::Cell;
+
+        #[derive(Clone)]
+        struct BrightnessProbe {
+            seen: std::rc::Rc<Cell<Option<flui_types::platform::Brightness>>>,
+        }
+        impl flui_view::View for BrightnessProbe {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateless(self)
+            }
+        }
+        impl flui_view::StatelessView for BrightnessProbe {
+            fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+                self.seen
+                    .set(Some(flui_widgets::MediaQuery::of(ctx).platform_brightness));
+                SizedBox::new(10.0, 10.0)
+            }
+        }
+
+        let seen = std::rc::Rc::new(Cell::new(None));
+        let realm = new_runtime(noop_wake()).expect("realm claims cleanly");
+        realm
+            .attach_root_widget_with_size(
+                &BrightnessProbe {
+                    seen: std::rc::Rc::clone(&seen),
+                },
+                10.0,
+                10.0,
+            )
+            .expect("mounts under the root MediaQuery");
+        let _ = realm.draw_frame(coexistence_constraints());
+        assert_eq!(
+            seen.get(),
+            Some(flui_types::platform::Brightness::Light),
+            "the first build reads the installed root MediaQuery (default light)"
+        );
+
+        // The appearance arm's write side: mutate the shared source and pump.
+        seen.set(None);
+        realm.media_query().update(|data| {
+            data.platform_brightness = flui_types::platform::Brightness::Dark;
+        });
+        assert!(
+            realm.presentations.primary().widgets().has_pending_builds(),
+            "the appearance write's externally-scheduled rebuild must count as \
+             dirty work — a frame gate blind to the external inbox skips the \
+             very frame the schedule woke"
+        );
+        let _ = realm.draw_frame(coexistence_constraints());
+        assert_eq!(
+            seen.get(),
+            Some(flui_types::platform::Brightness::Dark),
+            "an appearance change republishes through the root on the next frame"
         );
     }
 
