@@ -72,17 +72,23 @@ impl SliverChildBuilderDelegate {
     /// Pass `false` when the items are cheaper to repaint than to composite —
     /// solid colour blocks, a short line of text — which is the same guidance
     /// Flutter gives.
+    ///
+    /// `pub(crate)` on purpose: no scroll widget accepts a prebuilt delegate,
+    /// so a public form would be unreachable API. Flutter exposes the flag on
+    /// `ListView.builder` / `GridView.count` themselves; giving the FLUI
+    /// widgets the same knob is the follow-up, and this stays internal until
+    /// there is a caller.
     #[must_use]
-    pub fn with_options<F>(item_count: usize, add_repaint_boundaries: bool, builder: F) -> Self
+    pub(crate) fn with_options<F>(
+        item_count: usize,
+        add_repaint_boundaries: bool,
+        builder: F,
+    ) -> Self
     where
         F: Fn(usize) -> Option<BoxedView> + 'static,
     {
         let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = if add_repaint_boundaries {
-            Rc::new(move |index| {
-                builder(index).map(|child| {
-                    BoxedView(Box::new(crate::paint::RepaintBoundary::new().child(child)))
-                })
-            })
+            Rc::new(move |index| builder(index).map(wrap_in_repaint_boundary))
         } else {
             Rc::new(builder)
         };
@@ -102,10 +108,23 @@ impl SliverChildBuilderDelegate {
 /// nothing for `PipelineOwner::retained_boundaries` to reuse.
 #[must_use]
 pub(crate) fn wrap_in_repaint_boundaries(children: Vec<BoxedView>) -> Vec<BoxedView> {
-    children
-        .into_iter()
-        .map(|child| BoxedView(Box::new(crate::paint::RepaintBoundary::new().child(child))))
-        .collect()
+    children.into_iter().map(wrap_in_repaint_boundary).collect()
+}
+
+/// Wrap one child, keeping its key visible to the parent.
+///
+/// The key matters: a lazy sliver reconciles its children by key, and an
+/// unkeyed wrapper would hide the item's own key, costing element state on
+/// insert, remove, and reorder. Flutter restores the key outside the boundary
+/// with `KeyedSubtree`; FLUI carries it on the boundary itself, because a lazy
+/// sliver child must own a render node and a stateless `KeyedSubtree`
+/// equivalent has none — see `RepaintBoundary::forwards_child_key`.
+fn wrap_in_repaint_boundary(child: BoxedView) -> BoxedView {
+    BoxedView(Box::new(
+        crate::paint::RepaintBoundary::new()
+            .child(child)
+            .forwarding_child_key(),
+    ))
 }
 
 impl fmt::Debug for SliverChildBuilderDelegate {
@@ -121,6 +140,54 @@ mod tests {
     use flui_view::ViewExt;
 
     use super::*;
+
+    /// The repaint-boundary wrap keeps the item's own key visible.
+    ///
+    /// A lazy sliver reconciles its children by key. An unkeyed wrapper hides
+    /// the item's key from the parent, which then treats every insert, remove,
+    /// or reorder as a fresh child and drops its element state. Flutter avoids
+    /// this by restoring the key OUTSIDE the boundary with `KeyedSubtree`
+    /// (`widgets/scroll_delegate.dart:559`, `:572`); FLUI carries it on the
+    /// boundary, which is the outermost element the parent reconciles either
+    /// way.
+    ///
+    /// Reverted (drop `forwarding_child_key`) the wrapper reports `None`.
+    #[test]
+    fn the_repaint_boundary_wrap_keeps_the_items_key() {
+        use flui_foundation::ValueKey;
+        use flui_view::{BuildContext, IntoView, StatelessView, View};
+
+        #[derive(Clone)]
+        struct KeyedItem(ValueKey<u32>);
+
+        impl View for KeyedItem {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateless(self)
+            }
+
+            fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+                Some(&self.0)
+            }
+        }
+
+        impl StatelessView for KeyedItem {
+            fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+                self.clone()
+            }
+        }
+
+        let wrapped =
+            wrap_in_repaint_boundary(BoxedView(Box::new(KeyedItem(ValueKey::new(7_u32)))));
+        let expected = ValueKey::new(7_u32);
+
+        let actual = wrapped
+            .key()
+            .expect("the wrapper must expose the item's key, not swallow it");
+        assert!(
+            actual.key_eq(&expected),
+            "the wrapper's key must BE the item's key, not merely present"
+        );
+    }
 
     #[test]
     fn new_stores_the_item_count_and_invokes_the_builder_by_index() {
