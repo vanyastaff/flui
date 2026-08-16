@@ -386,6 +386,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.device_pixel_ratio
     }
 
+    /// Number of repaint boundaries whose painted output is currently kept
+    /// for reuse.
+    ///
+    /// Diagnostic surface for the retention cache — a test asserting that
+    /// removing a node drops its entry has nothing else to look at, and the
+    /// alternative is making the map itself public.
+    #[must_use]
+    pub fn retained_boundary_count(&self) -> usize {
+        self.retained_boundaries.len()
+    }
+
     /// Removes the subtree rooted at `id` — THE dispose site.
     ///
     /// Removal is where owner-side state dies (the inversion of the
@@ -440,6 +451,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // the map does not accumulate entries for nodes that no longer
         // exist.
         self.layout_poison.evict(&removed);
+        // So do retained paint outputs. A stale entry can never be SERVED to a
+        // different node — `RenderId` is generational, so a recycled slab slot
+        // misses the map — but without this the map grows for the lifetime of
+        // the owner as boundaries come and go.
+        self.retained_boundaries
+            .retain(|id, _| !removed.contains(id));
 
         let count = self.render_tree.remove_recursive(id);
         if self.root_id == Some(id) {

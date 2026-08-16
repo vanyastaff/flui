@@ -6,6 +6,7 @@
 
 use flui_painting::{DisplayList, DisplayListCore};
 use flui_types::geometry::{Pixels, Rect};
+use std::sync::Arc;
 
 /// Picture layer - a leaf layer that contains an immutable recorded picture
 ///
@@ -59,8 +60,14 @@ use flui_types::geometry::{Pixels, Rect};
 /// - Enables partial screen updates
 #[derive(Clone)]
 pub struct PictureLayer {
-    /// The recorded drawing commands (immutable `DisplayList`).
-    picture: DisplayList,
+    /// The recorded drawing commands.
+    ///
+    /// `Arc` because a `DisplayList` is immutable once recorded and a
+    /// retained boundary subtree is cloned into each frame's fresh
+    /// `LayerTree`. Copying the command `Vec` per clone would cost about what
+    /// regenerating it costs, which is what made cross-frame retention
+    /// pointless before this.
+    picture: Arc<DisplayList>,
 
     /// Estimated bounds for culling
     bounds: Rect<Pixels>,
@@ -96,7 +103,10 @@ impl PictureLayer {
     /// ```
     pub fn new(picture: DisplayList) -> Self {
         let bounds = picture.bounds();
-        Self { picture, bounds }
+        Self {
+            picture: Arc::new(picture),
+            bounds,
+        }
     }
 
     /// Creates a picture layer with explicit bounds.
@@ -109,7 +119,10 @@ impl PictureLayer {
     /// * `picture` - The recorded `DisplayList`
     /// * `bounds` - Explicit bounds for this layer
     pub fn with_bounds(picture: DisplayList, bounds: Rect<Pixels>) -> Self {
-        Self { picture, bounds }
+        Self {
+            picture: Arc::new(picture),
+            bounds,
+        }
     }
 
     /// Returns a reference to the stored picture.
@@ -146,7 +159,7 @@ impl PictureLayer {
     /// * `picture` - New recorded `DisplayList` to store
     pub fn set_picture(&mut self, picture: DisplayList) {
         self.bounds = picture.bounds();
-        self.picture = picture;
+        self.picture = Arc::new(picture);
     }
 
     /// Returns the number of drawing commands in the picture.
