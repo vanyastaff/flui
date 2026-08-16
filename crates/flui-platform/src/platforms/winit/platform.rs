@@ -1138,6 +1138,52 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_input(input);
                 }
             }
+            // NaN is documented as possible for the pinch delta; a NaN
+            // scale tick is meaningless to every consumer — the guard drops
+            // it without touching the rest of this handler.
+            WinitWindowEvent::PinchGesture { delta, .. } if !delta.is_nan() => {
+                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
+                    (
+                        s.current_modifiers,
+                        s.cursor_positions
+                            .get(&platform_id)
+                            .copied()
+                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                    )
+                });
+                if let Some(ref win) = window {
+                    let input = winit_events::trackpad_gesture_event(
+                        ui_events::pointer::PointerGesture::Pinch(delta as f32),
+                        cursor_pos,
+                        win.scale_factor(),
+                        modifiers,
+                    );
+                    win.callbacks().dispatch_input(input);
+                }
+            }
+            WinitWindowEvent::RotationGesture { delta, .. } => {
+                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
+                    (
+                        s.current_modifiers,
+                        s.cursor_positions
+                            .get(&platform_id)
+                            .copied()
+                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                    )
+                });
+                if let Some(ref win) = window {
+                    // winit: counterclockwise degrees; the lane's contract
+                    // is clockwise radians.
+                    let clockwise_radians = -delta.to_radians();
+                    let input = winit_events::trackpad_gesture_event(
+                        ui_events::pointer::PointerGesture::Rotate(clockwise_radians),
+                        cursor_pos,
+                        win.scale_factor(),
+                        modifiers,
+                    );
+                    win.callbacks().dispatch_input(input);
+                }
+            }
             WinitWindowEvent::Touch(touch) => {
                 let (modifiers, pointer_id) = self.platform.with_state(|s| {
                     let pointer_id = resolve_touch_pointer_id(
