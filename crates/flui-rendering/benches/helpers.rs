@@ -8,7 +8,8 @@
 // uses only the subset it needs, so unused-in-this-unit helpers are expected.
 #![allow(dead_code)]
 
-use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding};
+use flui_foundation::RenderId;
+use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::{Compositing, Layout, PaintPhase, PipelineOwner},
@@ -121,4 +122,61 @@ fn advance_to_paint(mut layout_owner: PipelineOwner<Layout>) -> PipelineOwner<Pa
         .run_compositing()
         .expect("run_compositing must succeed: all nodes were freshly inserted");
     compositing_owner.into_paint()
+}
+
+// ============================================================================
+// Boundaries: RenderFlex root + N repaint-boundary-wrapped leaves
+// ============================================================================
+
+/// Build a wide tree whose every leaf sits under its own
+/// `RenderRepaintBoundary`, painted once so the pipeline is in steady state,
+/// and return it alongside the ids of the labelled leaves.
+///
+/// This is the shape retention is for: an app where a single boundary's
+/// content changes per frame while the rest of the tree is untouched. The
+/// caller marks some subset of the returned leaves and re-runs paint, so the
+/// measurement is the cost of a frame in which almost nothing changed.
+///
+/// The warm-up pass's layer tree is TAKEN before returning. Leaving it in
+/// place would make the timed `run_paint` drop an entire N-boundary tree while
+/// building the next one, putting an O(N) destruction inside the measurement
+/// that a real frame does not pay: `PipelineOwner::run_frame` ends with
+/// `take_layer_tree()` before returning to idle.
+pub fn build_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>, Vec<RenderId>) {
+    const LABELS: [&str; 8] = [
+        "leaf-0", "leaf-1", "leaf-2", "leaf-3", "leaf-4", "leaf-5", "leaf-6", "leaf-7",
+    ];
+    let spec = box_node(RenderFlex::row()).children((0..n).map(|i| {
+        let leaf = box_node(RenderColoredBox::red(1.0, 1.0));
+        // Label a bounded sample rather than all `n`: the labels only exist so
+        // the bench can dirty specific leaves, and one is enough for the
+        // single-dirty case while eight gives the control something to spread
+        // across without a per-`n` label table.
+        let leaf = match LABELS.get(i) {
+            Some(&label) => leaf.label(label),
+            None => leaf,
+        };
+        box_node(RenderRepaintBoundary::new()).child(leaf)
+    }));
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(&mut owner, spec);
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(root_constraints()));
+
+    let leaf_ids: Vec<RenderId> = LABELS
+        .iter()
+        .filter_map(|label| registry.get(label))
+        .collect();
+    assert!(
+        !leaf_ids.is_empty(),
+        "at least one leaf must be labelled at construction"
+    );
+
+    let mut owner = advance_to_paint(owner.into_layout());
+    owner
+        .run_paint()
+        .expect("the first paint must succeed on a freshly composited tree");
+    drop(owner.take_layer_tree());
+    (owner, leaf_ids)
 }
