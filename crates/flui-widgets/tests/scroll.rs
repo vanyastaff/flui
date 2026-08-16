@@ -2968,3 +2968,84 @@ fn a_wheel_tick_mid_drag_is_observed_under_the_cursor_not_the_captured_route() {
         "the listener under the cursor observes the signal — not the captured drag route"
     );
 }
+
+/// The desktop wheel contract, composable at last: a ctrl-gated
+/// `InteractiveViewer` inside a `Scrollable` — a PLAIN wheel tick scrolls
+/// the list (the viewer declines it under `WheelScaleGate::CtrlWheel`),
+/// and a CTRL+wheel tick zooms the viewer (the scrollable declines every
+/// ctrl tick, zoom chord or not). Before this split, whichever widget was
+/// inner claimed everything and the two gestures could not coexist.
+#[test]
+fn plain_wheel_scrolls_and_ctrl_wheel_zooms_under_the_ctrl_gate() {
+    use flui_interaction::events::Modifiers;
+    use flui_types::Matrix4;
+    use flui_widgets::{InteractiveViewer, TransformationController, WheelScaleGate};
+
+    let outer = ScrollController::new();
+    outer.update_dimensions(300.0, 0.0, 4700.0);
+    let transformation = TransformationController::new();
+
+    let viewer = InteractiveViewer::new()
+        .controller(transformation.clone())
+        .wheel_scale_gate(WheelScaleGate::CtrlWheel)
+        .boundary_margin(flui_types::EdgeInsets::all(px(f32::INFINITY)))
+        .child(SizedBox::new(300.0, 200.0));
+    let widget = Scrollable::new()
+        .controller(outer.clone())
+        .child(flui_widgets::Column::new(vec![
+            SizedBox::new(300.0, 200.0)
+                .child(viewer)
+                .into_view()
+                .boxed(),
+            SizedBox::new(300.0, 4800.0).into_view().boxed(),
+        ]));
+
+    let vsync = Vsync::new();
+    let wrapped = VsyncScope::new(vsync.clone(), widget);
+    let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
+    scoped.adopt_vsync(vsync);
+
+    // A PLAIN wheel-down over the viewer: the viewer declines, the list
+    // scrolls.
+    scoped.dispatch_scroll(150.0, 100.0, 0.0, 53.0);
+    assert_eq!(
+        outer.pixels(),
+        53.0,
+        "a plain tick over the ctrl-gated viewer scrolls the list"
+    );
+    assert_eq!(
+        transformation.value().m,
+        Matrix4::identity().m,
+        "…and does not zoom"
+    );
+
+    scoped.pump_for(Duration::from_millis(16));
+
+    // CTRL+wheel over the viewer: the scrollable declines, the viewer zooms.
+    scoped.dispatch_scroll_with_modifiers(150.0, 50.0, 0.0, 53.0, Modifiers::CONTROL);
+    assert_eq!(
+        outer.pixels(),
+        53.0,
+        "a ctrl tick never scrolls the list, even with scroll room"
+    );
+    assert_ne!(
+        transformation.value().m,
+        Matrix4::identity().m,
+        "the ctrl tick zooms the viewer"
+    );
+
+    scoped.pump_for(Duration::from_millis(16));
+
+    // CTRL+wheel over the plain LIST region (no viewer under the cursor):
+    // the scrollable is deliberately modifier-agnostic — the oracle reads
+    // no modifiers, so the chord scrolls a bare list exactly as a plain
+    // tick does. The zoom split lives entirely in the chord-gated viewer,
+    // which the leaf-first walk asks first.
+    let pixels_before = outer.pixels();
+    scoped.dispatch_scroll_with_modifiers(150.0, 250.0, 0.0, 53.0, Modifiers::CONTROL);
+    assert_eq!(
+        outer.pixels(),
+        pixels_before + 53.0,
+        "a ctrl tick over the bare list scrolls like any other (Flutter parity)"
+    );
+}

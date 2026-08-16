@@ -170,6 +170,7 @@ pub use interaction::{
     InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MouseRegion,
     NextFocusAction, NextFocusIntent, Offstage, PanAxis, PreviousFocusAction, PreviousFocusIntent,
     ShortcutCallback, Shortcuts, SingleActivator, TransformationController, Visibility,
+    WheelScaleGate,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,

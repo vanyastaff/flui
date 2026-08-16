@@ -845,6 +845,17 @@ pub fn make_move_event_with_button(
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Scroll for testing
 pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> PointerEvent {
+    make_scroll_event_with_modifiers(position, delta, Modifiers::empty())
+}
+
+#[cfg(any(test, feature = "testing"))]
+/// As `make_scroll_event`, with an explicit modifier set — for asserting
+/// chord-gated scroll consumers (ctrl+wheel zoom vs plain-wheel scroll).
+pub fn make_scroll_event_with_modifiers(
+    position: Offset<Pixels>,
+    delta: Offset<Pixels>,
+    modifiers: Modifiers,
+) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerOrientation, PointerScrollEvent, PointerState,
     };
@@ -866,7 +877,7 @@ pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> Poi
                 position.dy.get() as f64,
             ),
             buttons: PointerButtons::new(),
-            modifiers: Modifiers::empty(),
+            modifiers,
             count: 0,
             contact_geometry: ContactGeometry {
                 width: 1.0,

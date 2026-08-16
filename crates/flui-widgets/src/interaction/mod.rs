@@ -43,7 +43,7 @@ pub use gesture_detector::{GestureDetector, GestureDetectorState};
 pub use ignore_pointer::IgnorePointer;
 pub use interactive_viewer::{
     InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
-    InteractiveViewerState, PanAxis,
+    InteractiveViewerState, PanAxis, WheelScaleGate,
 };
 pub use listener::Listener;
 pub use mouse_region::MouseRegion;
