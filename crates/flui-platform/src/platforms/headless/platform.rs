@@ -628,6 +628,21 @@ impl MockWindow {
         self.callbacks.dispatch_resize(size, scale);
     }
 
+    /// Simulate a monitor DPI change for testing: the scale factor moves
+    /// with NO size change, and — matching the winit backend — the new
+    /// scale is delivered through the resize path with the current logical
+    /// size, because that path is the only one the realm learns its
+    /// device-pixel ratio from.
+    #[allow(dead_code)]
+    pub fn simulate_scale_factor_change(&self, scale_factor: f64) {
+        let size = {
+            let mut state = self.state.lock();
+            state.scale_factor = scale_factor;
+            state.bounds.size
+        };
+        self.callbacks.dispatch_resize(size, scale_factor as f32);
+    }
+
     /// Simulate focus change for testing.
     /// Fires the registered `on_active_status_change` callback.
     #[allow(dead_code)]
@@ -1357,6 +1372,35 @@ mod tests {
 
         window.simulate_resize(1024.0, 768.0);
         assert!(called.load(Ordering::SeqCst));
+    }
+
+    /// A DPI change with no size change must still reach the resize
+    /// callback — that path is the only one the realm learns its
+    /// device-pixel ratio from, so a scale-only signal that bypassed it
+    /// would leave the realm rendering at the stale ratio until some
+    /// unrelated resize arrived.
+    #[test]
+    fn a_scale_only_change_delivers_the_current_size_at_the_new_scale() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
+        let size_before = window.logical_size();
+
+        let called = Arc::new(AtomicBool::new(false));
+        let called_probe = called.clone();
+        window.on_resize(Box::new(move |size, scale| {
+            assert_eq!(size, size_before, "the size is unchanged");
+            assert_eq!(scale, 2.0, "the new scale rides the resize path");
+            called_probe.store(true, Ordering::SeqCst);
+        }));
+
+        window.simulate_scale_factor_change(2.0);
+        assert!(called.load(Ordering::SeqCst));
+        assert_eq!(
+            window.scale_factor(),
+            2.0,
+            "the window reports the new scale"
+        );
     }
 
     #[test]
