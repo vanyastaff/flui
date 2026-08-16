@@ -210,6 +210,26 @@ pub(super) struct SubtreeArena<'tree> {
     /// `Mutex` discipline as the other sinks.  Empty unless an element-owned
     /// sliver (`RenderSliverList`) completed layout this frame.
     pending_retain_bands: Mutex<Vec<(flui_foundation::RenderId, usize, usize)>>,
+    /// Ids of the repaint BOUNDARIES this walk actually laid out.
+    ///
+    /// Recorded once the short-circuit has declined to fire, so a boundary
+    /// that kept its cached geometry — not dirty, same constraints — is
+    /// absent. Non-boundaries are filtered at the record site rather than on
+    /// drain: only boundaries are ever used from this list, and pushing every
+    /// laid-out node instead cost a measurable ~5% on `layout/flat/1000`,
+    /// where the tree holds no boundaries at all.
+    /// `run_layout` marks the repaint boundaries among these for paint, which
+    /// is Flutter's per-object `markNeedsPaint()` at the end of
+    /// `RenderObject.layout` expressed as one drain instead of one call per
+    /// object.
+    ///
+    /// The alternative it replaced was a downward sweep over the dirty root's
+    /// subtree, which had to queue every boundary it found because it could
+    /// not tell which ones layout had skipped. Over-queueing is safe but costs
+    /// exactly the repaints a retaining paint pass exists to avoid.
+    ///
+    /// Same `Mutex` discipline and post-walk drain as the sinks above.
+    laid_out: Mutex<Vec<flui_foundation::RenderId>>,
     /// Read-only view of the owner's layout-poison table for the whole
     /// walk.  Consulted at the top of each recursion level: a node
     /// poisoned under the *same* constraints it is now offered is
@@ -297,6 +317,7 @@ impl<'tree> SubtreeArena<'tree> {
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
+            laid_out: Mutex::new(Vec::new()),
             layout_poison,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
@@ -397,6 +418,11 @@ impl<'tree> SubtreeArena<'tree> {
         &self,
     ) -> Vec<(flui_foundation::RenderId, usize, usize)> {
         std::mem::take(&mut *self.pending_retain_bands.lock())
+    }
+
+    /// Drains the ids this walk actually laid out — see [`Self::laid_out`].
+    pub(super) fn take_laid_out(&self) -> Vec<flui_foundation::RenderId> {
+        std::mem::take(&mut *self.laid_out.lock())
     }
 
     /// Records a descendant layout failure swallowed at a layout-child
@@ -864,7 +890,14 @@ unsafe fn layout_subtree_borrowed_impl(
     // narrow: `parent_shared` and everything derived from it must not be
     // used after the `&mut *node_ptr` reborrow opens Phase 2.
     // -----------------------------------------------------------------------
-    let (child_ids, needs_layout_flag, cached_geometry, node_protocol, is_leaf) = {
+    let (
+        child_ids,
+        needs_layout_flag,
+        cached_geometry,
+        node_protocol,
+        is_leaf,
+        is_repaint_boundary,
+    ) = {
         // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
         // an ancestor frame; this shared reborrow is the only live borrow, and
         // nothing derived from it outlives the block.
@@ -893,12 +926,16 @@ unsafe fn layout_subtree_borrowed_impl(
                 .flatten()
         };
         let is_leaf = child_ids.is_empty();
+        // Snapshotted here, in the block that already holds the shared borrow,
+        // so the record below costs a branch rather than another node read.
+        let is_repaint_boundary = entry.state().is_repaint_boundary();
         (
             child_ids,
             needs_layout_flag,
             cached_geometry,
             node_protocol,
             is_leaf,
+            is_repaint_boundary,
         )
         // `parent_shared` drops here — the shared borrow of `id`'s slot ends.
     };
@@ -917,6 +954,16 @@ unsafe fn layout_subtree_borrowed_impl(
             "layout short-circuit: clean constraints cache but missing geometry; \
              proceeding with layout (invariant violation)"
         );
+    }
+
+    // Past the short-circuit: this node is being laid out for real. Recorded
+    // here rather than at each `clear_needs_layout` because the leaf path
+    // returns before those, and one entry point covers leaf and non-leaf
+    // alike. An error later in the walk leaves the id recorded, which
+    // over-queues that one node — the safe direction, and bounded to nodes
+    // that genuinely entered layout.
+    if is_repaint_boundary {
+        arena.laid_out.lock().push(id);
     }
 
     // -----------------------------------------------------------------------
@@ -1630,7 +1677,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // borrow of `id`'s slot at this point.  Nothing derived from
     // `parent_shared` may be used after the `&mut *node_ptr` reborrow (Phase 2).
     // -----------------------------------------------------------------------
-    let (child_ids, node_protocol) = {
+    let (child_ids, node_protocol, is_repaint_boundary) = {
         // SAFETY: the cycle guard rejects re-entry into this slot before any
         // borrow of it opens, so this shared reborrow is the only live borrow.
         let parent_shared: &crate::storage::RenderNode = unsafe { &*node_ptr };
@@ -1645,9 +1692,26 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             }
         };
         let child_ids: Vec<RenderId> = entry.links().children().to_vec();
-        (child_ids, node_protocol)
+        // Snapshotted in the block that already holds the shared borrow, as
+        // in the Box walk.
+        let is_repaint_boundary = entry.state().is_repaint_boundary();
+        (child_ids, node_protocol, is_repaint_boundary)
         // `parent_shared` drops here — the shared borrow of `id`'s slot ends.
     };
+
+    // A sliver reached here is being laid out: this walk has no short-circuit
+    // (sliver constraints change with scroll position every frame, see the
+    // note above `layout_sliver_subtree_borrowed`), so arriving IS the
+    // condition the Box path has to test for.
+    //
+    // Recording here is not symmetry for its own sake. A custom `RenderSliver`
+    // that is a repaint boundary re-lays out under a viewport relayout, and
+    // the mark the viewport contributes walks UPWARD — it can never reach a
+    // boundary below it. Without this, retained painting would reuse stale
+    // sliver content.
+    if is_repaint_boundary {
+        arena.laid_out.lock().push(id);
+    }
 
     // No early-return here for the empty case: a lazy sliver (e.g.
     // `RenderSliverListLazy`) starts with zero attached children and must
@@ -2067,6 +2131,7 @@ mod tests {
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
+            laid_out: Mutex::new(Vec::new()),
             layout_poison: &poison,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
@@ -2107,6 +2172,7 @@ mod tests {
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
+            laid_out: Mutex::new(Vec::new()),
             layout_poison: &poison,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
