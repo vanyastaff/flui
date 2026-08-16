@@ -815,15 +815,23 @@ impl PipelineOwner<Layout> {
     /// # Known imprecision
     ///
     /// This queues every boundary under `root`, including ones whose layout
-    /// the walk skipped because their constraints were unchanged. That is the
-    /// safe direction — an extra repaint, never a stale one — but it is
+    /// the walk skipped. Those are not hypothetical:
+    /// `layout_subtree_borrowed_impl` short-circuits a node that is not dirty
+    /// and is offered the constraints it already has, returning its cached
+    /// geometry without descending. In a list where one row changed, every
+    /// other row is skipped by layout and queued by this sweep anyway.
+    ///
+    /// It is the safe direction — an extra repaint, never a stale one — but
     /// blunter than Flutter, which marks exactly the objects it laid out
-    /// because the mark happens inside `RenderObject.layout`. Reaching the
-    /// same precision here means recording ids from inside the layout walk
-    /// (`subtree_arena`), where the node's slot is exclusively borrowed and
-    /// the scheduler is not in scope. Worth doing before a retaining paint
-    /// pass relies on the queue to decide what to skip, since over-queueing
-    /// costs exactly the repaints retention is meant to avoid.
+    /// because the mark happens inside `RenderObject.layout`. Reaching that
+    /// precision here means recording ids from inside the layout walk, where
+    /// the node's slot is exclusively borrowed and the scheduler is out of
+    /// scope; `SubtreeArena` already carries four side-collections drained
+    /// after the walk for exactly this shape of problem.
+    ///
+    /// Worth doing BEFORE a retaining paint pass trusts the queue to decide
+    /// what to skip: over-queueing costs precisely the repaints retention
+    /// exists to avoid.
     fn queue_boundaries_under(&mut self, root: RenderId) {
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
