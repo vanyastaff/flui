@@ -887,7 +887,7 @@ impl WindowsPlatform {
                 WM_MOUSEWHEEL => {
                     if let Some(ctx) = ctx {
                         use super::events::mouse_wheel_event;
-                        let event = mouse_wheel_event(wparam, lparam, ctx.scale_factor.get());
+                        let event = mouse_wheel_event(hwnd, wparam, lparam, ctx.scale_factor.get());
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
@@ -896,7 +896,8 @@ impl WindowsPlatform {
                 WM_MOUSEHWHEEL => {
                     if let Some(ctx) = ctx {
                         use super::events::mouse_hwheel_event;
-                        let event = mouse_hwheel_event(wparam, lparam, ctx.scale_factor.get());
+                        let event =
+                            mouse_hwheel_event(hwnd, wparam, lparam, ctx.scale_factor.get());
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
