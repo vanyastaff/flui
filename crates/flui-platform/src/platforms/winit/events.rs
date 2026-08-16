@@ -308,12 +308,9 @@ pub fn trackpad_gesture_event(
     scale_factor: f64,
     modifiers: KeyboardModifiers,
 ) -> PlatformInput {
-    /// One shared identity for the gesture stream — see the function doc.
-    const GESTURE_POINTER_ID: u64 = u64::MAX;
-
     let event = PointerEvent::Gesture(ui_events::pointer::PointerGestureEvent {
         pointer: PointerInfo {
-            pointer_id: PointerId::new(GESTURE_POINTER_ID),
+            pointer_id: PointerId::new(crate::shared::gestures::GESTURE_POINTER_ID),
             pointer_type: PointerType::Touch,
             persistent_device_id: None,
         },

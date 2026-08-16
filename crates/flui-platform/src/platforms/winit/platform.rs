@@ -1138,10 +1138,14 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_input(input);
                 }
             }
-            // NaN is documented as possible for the pinch delta; a NaN
-            // scale tick is meaningless to every consumer — the guard drops
-            // it without touching the rest of this handler.
-            WinitWindowEvent::PinchGesture { delta, .. } if !delta.is_nan() => {
+            // NaN (documented possible) folds to None in the shared
+            // conversion; the guard drops the tick without touching the
+            // rest of this handler (the trailing wildcard arm covers it).
+            WinitWindowEvent::PinchGesture { delta, .. }
+                if crate::shared::gestures::pinch(delta).is_some() =>
+            {
+                let gesture = crate::shared::gestures::pinch(delta)
+                    .expect("BUG: the match guard just checked Some");
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {
                     (
                         s.current_modifiers,
@@ -1153,7 +1157,7 @@ impl ApplicationHandler for WinitApp {
                 });
                 if let Some(ref win) = window {
                     let input = winit_events::trackpad_gesture_event(
-                        ui_events::pointer::PointerGesture::Pinch(delta as f32),
+                        gesture,
                         cursor_pos,
                         win.scale_factor(),
                         modifiers,
@@ -1172,11 +1176,8 @@ impl ApplicationHandler for WinitApp {
                     )
                 });
                 if let Some(ref win) = window {
-                    // winit: counterclockwise degrees; the lane's contract
-                    // is clockwise radians.
-                    let clockwise_radians = -delta.to_radians();
                     let input = winit_events::trackpad_gesture_event(
-                        ui_events::pointer::PointerGesture::Rotate(clockwise_radians),
+                        crate::shared::gestures::rotation_ccw_degrees(delta),
                         cursor_pos,
                         win.scale_factor(),
                         modifiers,

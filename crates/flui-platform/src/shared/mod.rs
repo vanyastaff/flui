@@ -3,6 +3,7 @@
 //! Components shared between platform implementations to reduce code
 //! duplication.
 
+pub mod gestures;
 mod handlers;
 pub mod scroll;
 
