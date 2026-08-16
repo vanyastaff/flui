@@ -74,6 +74,11 @@ pub struct GridView {
     children: Vec<BoxedView>,
     /// Builder delegate for the lazy variant.  `None` in the eager variants.
     builder_source: Option<SliverChildBuilderDelegate>,
+    /// Wrap each tile in a `RepaintBoundary` (default `true`).
+    ///
+    /// Flutter parity: `addRepaintBoundaries` on the delegates `GridView`
+    /// builds, which defaults to `true`.
+    add_repaint_boundaries: bool,
 }
 
 impl GridView {
@@ -90,8 +95,9 @@ impl GridView {
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
-            children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
+            children: children.into_boxed_vec(),
             builder_source: None,
+            add_repaint_boundaries: true,
         }
     }
 
@@ -110,8 +116,9 @@ impl GridView {
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
-            children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
+            children: children.into_boxed_vec(),
             builder_source: None,
+            add_repaint_boundaries: true,
         }
     }
 
@@ -139,7 +146,20 @@ impl GridView {
             grid_delegate,
             children: Vec::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
+            add_repaint_boundaries: true,
         }
+    }
+
+    /// Wrap each tile in a `RepaintBoundary` (default `true`).
+    ///
+    /// Flutter parity: the `addRepaintBoundaries` knob its delegates carry,
+    /// defaulting to `true` for the reason its doc gives — children in a
+    /// scrolling container "do not need to be repainted as the list scrolls".
+    /// Pass `false` when a tile is cheaper to repaint than to composite.
+    #[must_use]
+    pub fn repaint_boundaries(mut self, add: bool) -> Self {
+        self.add_repaint_boundaries = add;
+        self
     }
 
     /// Set the scroll axis (default [`Axis::Vertical`]).
@@ -196,7 +216,8 @@ impl fmt::Debug for GridView {
             s.field("builder_source", &self.builder_source);
         } else {
             s.field("grid_delegate", &self.grid_delegate)
-                .field("children", &self.children.len());
+                .field("children", &self.children.len())
+                .field("add_repaint_boundaries", &self.add_repaint_boundaries);
         }
         s.finish()
     }
@@ -213,15 +234,25 @@ impl StatelessView for GridView {
 
         let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
             // Lazy variant: wire SliverGridLazy (element-owned request strategy).
+            let builder = if self.add_repaint_boundaries {
+                super::sliver_list::wrap_builder_in_repaint_boundaries(&delegate.builder)
+            } else {
+                Rc::clone(&delegate.builder)
+            };
             SliverGridLazy::new(
                 Arc::clone(&self.grid_delegate),
                 delegate.item_count,
-                Rc::clone(&delegate.builder),
+                builder,
             )
             .boxed()
         } else {
             // Eager variant: all children pre-attached.
-            SliverGrid::new(Arc::clone(&self.grid_delegate), self.children.clone()).boxed()
+            let children = if self.add_repaint_boundaries {
+                super::sliver_list::wrap_in_repaint_boundaries(self.children.clone())
+            } else {
+                self.children.clone()
+            };
+            SliverGrid::new(Arc::clone(&self.grid_delegate), children).boxed()
         };
 
         if self.shrink_wrap {

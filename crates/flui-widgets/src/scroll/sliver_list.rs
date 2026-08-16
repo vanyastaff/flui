@@ -56,45 +56,9 @@ impl SliverChildBuilderDelegate {
     where
         F: Fn(usize) -> Option<BoxedView> + 'static,
     {
-        Self::with_options(item_count, true, builder)
-    }
-
-    /// Like [`Self::new`], but lets the caller decline the per-item repaint
-    /// boundary.
-    ///
-    /// Flutter parity: `SliverChildBuilderDelegate.addRepaintBoundaries`,
-    /// which defaults to `true` for the reason its own doc gives — children in
-    /// a scrolling container "do not need to be repainted as the list
-    /// scrolls". Without the boundary the paint walk descends into every
-    /// visible item on every frame, and nothing the retention path
-    /// (`PipelineOwner::retained_boundaries`) can reuse ever exists.
-    ///
-    /// Pass `false` when the items are cheaper to repaint than to composite —
-    /// solid colour blocks, a short line of text — which is the same guidance
-    /// Flutter gives.
-    ///
-    /// `pub(crate)` on purpose: no scroll widget accepts a prebuilt delegate,
-    /// so a public form would be unreachable API. Flutter exposes the flag on
-    /// `ListView.builder` / `GridView.count` themselves; giving the FLUI
-    /// widgets the same knob is the follow-up, and this stays internal until
-    /// there is a caller.
-    #[must_use]
-    pub(crate) fn with_options<F>(
-        item_count: usize,
-        add_repaint_boundaries: bool,
-        builder: F,
-    ) -> Self
-    where
-        F: Fn(usize) -> Option<BoxedView> + 'static,
-    {
-        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = if add_repaint_boundaries {
-            Rc::new(move |index| builder(index).map(wrap_in_repaint_boundary))
-        } else {
-            Rc::new(builder)
-        };
         Self {
             item_count,
-            builder,
+            builder: Rc::new(builder),
         }
     }
 }
@@ -109,6 +73,19 @@ impl SliverChildBuilderDelegate {
 #[must_use]
 pub(crate) fn wrap_in_repaint_boundaries(children: Vec<BoxedView>) -> Vec<BoxedView> {
     children.into_iter().map(wrap_in_repaint_boundary).collect()
+}
+
+/// Wrap a lazy builder's output in per-item repaint boundaries.
+///
+/// Applied where a widget builds its sliver rather than where the delegate is
+/// constructed, so `repaint_boundaries(false)` still takes effect on a widget
+/// whose delegate already exists.
+#[must_use]
+pub(crate) fn wrap_builder_in_repaint_boundaries(
+    builder: &Rc<dyn Fn(usize) -> Option<BoxedView>>,
+) -> Rc<dyn Fn(usize) -> Option<BoxedView>> {
+    let inner = Rc::clone(builder);
+    Rc::new(move |index| inner(index).map(wrap_in_repaint_boundary))
 }
 
 /// Wrap one child, keeping its key visible to the parent.
