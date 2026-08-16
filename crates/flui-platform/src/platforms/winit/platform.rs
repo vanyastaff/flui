@@ -1037,17 +1037,18 @@ impl ApplicationHandler for WinitApp {
                         scale_factor,
                     },
                 );
-                // A DPI change with no size change delivers NO trailing
-                // Resized on every window manager, and the realm learns its
-                // device-pixel ratio only from the resize path — so route
-                // the new scale through that same proven path with the
-                // window's current logical size. When a real Resized does
-                // follow, the second dispatch is idempotent (same size,
-                // same scale).
-                if let Some(ref win) = window {
-                    win.callbacks()
-                        .dispatch_resize(win.logical_size(), scale_factor as f32);
-                }
+                // Deliberately NO resize dispatch here. winit applies the
+                // OS-suggested inner size right after this event ("By
+                // default, the window is resized to the value suggested by
+                // the OS" — winit::event::WindowEvent::ScaleFactorChanged),
+                // so a Resized always follows, and THAT arm reads the
+                // post-change scale factor — the realm's device-pixel ratio
+                // updates through the proven path with the correct new
+                // size. Dispatching here would divide the still-unchanged
+                // physical size by the new scale and publish a transiently
+                // wrong logical size. Backends without winit's guarantee
+                // must dispatch the resize themselves (the headless mock's
+                // simulate_scale_factor_change pins that contract).
             }
             WinitWindowEvent::CursorMoved { position, .. } => {
                 let (modifiers, held_buttons) = self.platform.with_state(|state| {
