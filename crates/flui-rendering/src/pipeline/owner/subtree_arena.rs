@@ -1677,7 +1677,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // borrow of `id`'s slot at this point.  Nothing derived from
     // `parent_shared` may be used after the `&mut *node_ptr` reborrow (Phase 2).
     // -----------------------------------------------------------------------
-    let (child_ids, node_protocol) = {
+    let (child_ids, node_protocol, is_repaint_boundary) = {
         // SAFETY: the cycle guard rejects re-entry into this slot before any
         // borrow of it opens, so this shared reborrow is the only live borrow.
         let parent_shared: &crate::storage::RenderNode = unsafe { &*node_ptr };
@@ -1692,9 +1692,26 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             }
         };
         let child_ids: Vec<RenderId> = entry.links().children().to_vec();
-        (child_ids, node_protocol)
+        // Snapshotted in the block that already holds the shared borrow, as
+        // in the Box walk.
+        let is_repaint_boundary = entry.state().is_repaint_boundary();
+        (child_ids, node_protocol, is_repaint_boundary)
         // `parent_shared` drops here — the shared borrow of `id`'s slot ends.
     };
+
+    // A sliver reached here is being laid out: this walk has no short-circuit
+    // (sliver constraints change with scroll position every frame, see the
+    // note above `layout_sliver_subtree_borrowed`), so arriving IS the
+    // condition the Box path has to test for.
+    //
+    // Recording here is not symmetry for its own sake. A custom `RenderSliver`
+    // that is a repaint boundary re-lays out under a viewport relayout, and
+    // the mark the viewport contributes walks UPWARD — it can never reach a
+    // boundary below it. Without this, retained painting would reuse stale
+    // sliver content.
+    if is_repaint_boundary {
+        arena.laid_out.lock().push(id);
+    }
 
     // No early-return here for the empty case: a lazy sliver (e.g.
     // `RenderSliverListLazy`) starts with zero attached children and must

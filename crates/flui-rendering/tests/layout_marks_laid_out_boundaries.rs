@@ -136,3 +136,94 @@ fn a_boundary_nested_in_a_relayout_subtree_is_queued_for_paint() {
          nested inside that subtree is never reached"
     );
 }
+
+/// The same rule holds on the sliver walk.
+///
+/// The two protocols have separate layout walks, and the sweep this replaced
+/// was protocol-agnostic — it walked `children()` and checked a flag, so it
+/// covered both. Recording inside the walks does not, unless both walks
+/// record. A custom `RenderSliver` that is a repaint boundary re-lays out
+/// under a viewport relayout, and the mark the viewport contributes walks
+/// UPWARD, so it can never reach a boundary below it.
+///
+/// The sliver walk has no short-circuit at all — sliver constraints change
+/// with scroll position every frame — so arriving in the walk IS the condition
+/// the box path has to test for.
+#[test]
+fn a_sliver_repaint_boundary_that_laid_out_is_queued_for_paint() {
+    use flui_objects::RenderViewport;
+    use flui_rendering::{
+        constraints::SliverGeometry,
+        context::{SliverHitTestContext, SliverLayoutContext},
+        testing::sliver_node,
+        traits::RenderSliver,
+    };
+    use flui_tree::Leaf;
+    use flui_types::layout::AxisDirection;
+
+    /// A sliver that declares itself a repaint boundary and produces a fixed
+    /// extent, so the viewport lays it out for real.
+    #[derive(Debug, Default)]
+    struct BoundarySliver;
+
+    impl flui_foundation::Diagnosticable for BoundarySliver {}
+
+    impl RenderSliver for BoundarySliver {
+        type Arity = Leaf;
+        type ParentData = flui_rendering::parent_data::SliverParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+        ) -> SliverGeometry {
+            let extent = 40.0_f32.min(ctx.constraints().remaining_paint_extent);
+            SliverGeometry::new(40.0, extent, 0.0)
+        }
+
+        fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+            false
+        }
+
+        fn is_repaint_boundary(&self) -> bool {
+            true
+        }
+    }
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderViewport::new(AxisDirection::TopToBottom))
+            .child(sliver_node(BoundarySliver).label("sliver-boundary")),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+
+    let sliver_id = registry
+        .get("sliver-boundary")
+        .expect("sliver boundary is labelled");
+
+    let (owner_idle, result) = owner.run_frame();
+    result.expect("the first frame must succeed");
+    let mut owner = owner_idle;
+
+    assert!(
+        owner.nodes_needing_paint().is_empty(),
+        "precondition: the settled frame leaves nothing queued for paint"
+    );
+
+    // Dirty the VIEWPORT, above the sliver boundary.
+    owner.mark_needs_layout(root_id);
+
+    let mut layout_owner = owner.into_layout();
+    layout_owner.run_layout().expect("relayout must succeed");
+
+    assert!(
+        layout_owner
+            .render_tree()
+            .get(sliver_id)
+            .expect("sliver boundary is in the tree")
+            .needs_paint(),
+        "a sliver repaint boundary that re-laid out must be marked for paint — \
+         the viewport's own mark walks upward and cannot reach it"
+    );
+}
