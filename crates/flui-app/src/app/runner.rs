@@ -852,6 +852,24 @@ impl PlatformToUi {
                     );
                     return;
                 }
+                // An authoritative focus loss terminates in-flight pointer
+                // sequences with a synthesized Cancel: a defocused window
+                // may never receive the Up matching a Down landed before
+                // the alt-tab, which would strand the sequence (and any
+                // recognizer mid-drag) until a superseding Down. The
+                // lifecycle ladder below reaches only Inactive here, so
+                // `emit_lifecycle_transition`'s own gesture drain — gated
+                // on Hidden/Paused/Detached — never covers this case. A
+                // panic from a user cancel handler is deferred so the
+                // lifecycle transition still runs.
+                let gesture_cancel_panic = if focused {
+                    None
+                } else {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        realm.gestures().cancel_active_pointers();
+                    }))
+                    .err()
+                };
                 let (old, new) = APP_RUNTIME.with(|slot| {
                     let mut state = slot.borrow_mut();
                     let old = derive_lifecycle_state(state.visible, state.focused);
@@ -866,6 +884,9 @@ impl PlatformToUi {
                     realm.notify_presentation_focus_gained(presentation_id);
                 }
                 emit_lifecycle_transition(realm, old, new);
+                if let Some(payload) = gesture_cancel_panic {
+                    std::panic::resume_unwind(payload);
+                }
             }
             Self::WindowHover(inside) => {
                 realm.handle_window_hover_addressed(presentation_id, inside);
@@ -6059,6 +6080,94 @@ mod realm_dispatch_tests {
                      still suspend the realm -- the guard drops only NON-active focus-loss, \
                      never focus-loss unconditionally"
                 );
+            })),
+        )
+        .expect("frame task dispatches");
+
+        teardown_platform_realm();
+    }
+
+    /// Losing OS focus mid-contact must cancel the realm's in-flight
+    /// pointer sequences (alt-tab means the matching Up may never arrive),
+    /// but ONLY for an authoritative focus loss: a stale `WindowFocus(false)`
+    /// from a presentation that is not the realm's active one is a normal
+    /// consequence of focus moving to a sibling window of the SAME realm,
+    /// and must leave a drag in the still-focused sibling untouched. Driven
+    /// through the REAL dispatch seam, so this pins the wire from
+    /// `PlatformToUi::run`'s `WindowFocus` arm to
+    /// `GestureBinding::cancel_active_pointers`, including its interplay
+    /// with the stale-focus-loss guard.
+    #[test]
+    fn window_focus_loss_cancels_pointer_sequences_only_when_authoritative() {
+        let platform = flui_platform::headless_platform();
+        let window_a = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window a");
+        let window_b = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window b");
+
+        let realm = super::super::ui_realm::UiRealm::for_test();
+        let dispatcher_a = install_platform_realm(realm, &window_a);
+        let dispatcher_b = install_presentation_alongside(dispatcher_a, &window_b)
+            .expect("B installs alongside A with a real window mapping");
+
+        // B's window holds OS focus; B is the realm's active presentation.
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Event(PlatformToUi::WindowFocus(true)),
+        )
+        .expect("WindowFocus(true) for B dispatches");
+
+        // A contact lands and stays in flight (no Up).
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(|realm| {
+                let down =
+                    make_down_event(Offset::new(Pixels(8.0), Pixels(13.0)), PointerType::Mouse);
+                realm
+                    .gestures()
+                    .handle_pointer_event(&down, |_| HitTestResult::new());
+                assert_eq!(realm.gestures().active_pointer_count(), 1);
+            })),
+        )
+        .expect("down frame task dispatches");
+
+        // Stale focus loss (A is not active): the sequence must survive.
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Event(PlatformToUi::WindowFocus(false)),
+        )
+        .expect("stale WindowFocus(false) for A dispatches");
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(|realm| {
+                assert_eq!(
+                    realm.gestures().active_pointer_count(),
+                    1,
+                    "a stale focus loss from a non-active presentation must never cancel \
+                     the active sibling's in-flight sequence"
+                );
+            })),
+        )
+        .expect("frame task dispatches");
+
+        // Authoritative focus loss (B IS active): the sequence cancels.
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Event(PlatformToUi::WindowFocus(false)),
+        )
+        .expect("authoritative WindowFocus(false) for B dispatches");
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(|realm| {
+                assert_eq!(
+                    realm.gestures().active_pointer_count(),
+                    0,
+                    "an authoritative focus loss must cancel every in-flight pointer \
+                     sequence -- the platform may never deliver the matching Up"
+                );
+                assert!(realm.gestures().arena().is_empty());
             })),
         )
         .expect("frame task dispatches");

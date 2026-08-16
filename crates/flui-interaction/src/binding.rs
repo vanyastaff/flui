@@ -119,6 +119,10 @@ struct CachedPointerRoute {
     token: Option<ResolvedRouteToken>,
     sequence: PointerSequence,
     resampler: PointerEventResampler,
+    /// Device kind stamped on the sequence's Down, so a synthesized
+    /// terminal event (cancel-on-defocus) carries the same kind the
+    /// sequence's recognizers have been observing.
+    pointer_type: PointerType,
 }
 
 struct DetachedPointerSequence {
@@ -802,6 +806,51 @@ impl GestureBinding {
         }
     }
 
+    /// Synthesize a terminal [`PointerEvent::Cancel`] for every pointer
+    /// with an active contact sequence, delivered through the normal
+    /// terminal path — recognizers observe a real Cancel (route dispatch,
+    /// arena abandonment, cache release), exactly as if the platform had
+    /// sent one.
+    ///
+    /// Call this when the window loses OS focus: a defocused window may
+    /// never receive the Up matching an in-flight Down (alt-tab mid-drag),
+    /// which would otherwise strand the sequence until a superseding Down.
+    /// This is the contract Flutter's platforms honor by sending a cancel
+    /// for in-flight contacts when the view deactivates; FLUI's backends
+    /// send no such event, so the app runner synthesizes it here.
+    ///
+    /// Unlike [`Self::cancel_all_pointer_sequences`] — the silent teardown
+    /// for pause/detach, where user code should no longer run — this
+    /// delivers the Cancel to handlers, so a widget mid-drag can undo the
+    /// gesture's visible effect. Hover state (pending hover moves, mouse
+    /// tracker) is untouched: a pointer can keep hovering an unfocused
+    /// window.
+    pub fn cancel_active_pointers(&self) {
+        let mut pointers: Vec<(PointerId, PointerType)> = self
+            .hit_tests
+            .iter()
+            .map(|entry| (*entry.key(), entry.pointer_type))
+            .collect();
+        pointers.sort_unstable_by_key(|(pointer_id, _)| *pointer_id);
+        for (pointer_id, pointer_type) in pointers {
+            // A handler run by an earlier iteration may have re-entered the
+            // binding and already terminated this sequence.
+            if !self.hit_tests.contains_key(&pointer_id) {
+                continue;
+            }
+            let cancel = PointerEvent::Cancel(ui_events::pointer::PointerInfo {
+                pointer_id: Some(pointer_id),
+                pointer_type,
+                persistent_device_id: None,
+            });
+            // The terminal arm never invokes the hit-test callback: Cancel
+            // resolves over the route cached at Down.
+            self.handle_pointer_event_kernel(&cancel, |_| {
+                unreachable!("BUG: a terminal Cancel must never hit-test")
+            });
+        }
+    }
+
     /// Defensive cleanup for app-lifecycle pause / detach transitions.
     ///
     /// Cancels every binding-owned pointer sequence. Call this from the app
@@ -979,6 +1028,7 @@ impl GestureBinding {
                         token,
                         sequence,
                         resampler,
+                        pointer_type: down.pointer.pointer_type,
                     },
                 );
 
@@ -1562,6 +1612,7 @@ mod tests {
             token: None,
             sequence: PointerSequence(1),
             resampler: PointerEventResampler::new(PointerId::PRIMARY),
+            pointer_type: PointerType::Mouse,
         }
     }
 
@@ -2815,6 +2866,76 @@ mod tests {
             panic!("no known device position: the hit-test callback must not run");
         });
         assert_eq!(routed.get(), 1);
+    }
+
+    /// Losing OS focus mid-contact must terminate the sequence like a real
+    /// platform Cancel: the route cached at Down observes the Cancel, the
+    /// arena rejects its members, and a following Move — the pointer may
+    /// keep moving while the window is defocused — is a hover, not a drag
+    /// update on the dead sequence's route.
+    #[test]
+    fn cancel_active_pointers_delivers_cancel_and_demotes_following_moves_to_hover() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = Rc::new(GestureBinding::new());
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let arena_member = Arc::new(CountingArenaMember::default());
+
+        lane.enter(|| {
+            let sink = Rc::clone(&log);
+            let target = handle
+                .register_pointer(move |event| {
+                    sink.borrow_mut().push(match event {
+                        PointerEvent::Down(_) => "down",
+                        PointerEvent::Move(_) => "move",
+                        PointerEvent::Cancel(_) => "cancel",
+                        _ => "other",
+                    });
+                })
+                .expect("register");
+            let result = hit_result(target);
+
+            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            let binding_for_down = Rc::clone(&binding);
+            let member = arena_member.clone();
+            binding.handle_pointer_event(&down, move |_| {
+                binding_for_down.arena().add(PointerId::PRIMARY, member);
+                result
+            });
+            assert_eq!(&*log.borrow(), &["down"]);
+            assert!(binding.has_hit_test(PointerId::PRIMARY));
+
+            binding.cancel_active_pointers();
+
+            assert_eq!(
+                &*log.borrow(),
+                &["down", "cancel"],
+                "the cached route must observe a synthesized terminal Cancel"
+            );
+            assert_eq!(
+                arena_member.rejects.load(Ordering::Relaxed),
+                1,
+                "the arena must reject its members, never silently keep them"
+            );
+            assert!(!binding.has_hit_test(PointerId::PRIMARY));
+            assert!(binding.arena().is_empty());
+
+            // The pointer keeps moving after defocus: with the sequence
+            // gone this is a hover (fresh hit test, ephemeral dispatch) —
+            // the dead sequence's route must not receive it as a drag.
+            let mv = make_move_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Touch);
+            binding.handle_pointer_event(&mv, |_| HitTestResult::new());
+            binding.flush_pending_moves();
+            assert_eq!(
+                &*log.borrow(),
+                &["down", "cancel"],
+                "a post-cancel Move must not be delivered on the cancelled route"
+            );
+
+            // Idempotent: nothing left to cancel.
+            binding.cancel_active_pointers();
+            assert_eq!(&*log.borrow(), &["down", "cancel"]);
+        });
     }
 
     /// Mid-contact (a button held while the pointer crosses the window
