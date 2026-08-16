@@ -907,6 +907,12 @@ impl UiRealm {
     /// resolves — closing the last presentation is closing the REALM, and
     /// must route there instead (see that match arm's own doc).
     #[must_use]
+    /// Whether `id` addresses this realm's primary presentation — the one
+    /// whose widget tree hosts the root `MediaQuery`.
+    pub(crate) fn is_primary_presentation(&self, id: PresentationId) -> bool {
+        self.presentations.primary().id() == id
+    }
+
     pub(crate) fn is_sole_presentation(&self, id: PresentationId) -> bool {
         self.presentations.len() == 1 && self.presentations.get(id).is_some()
     }

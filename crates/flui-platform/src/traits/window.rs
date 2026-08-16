@@ -556,6 +556,18 @@ impl PlatformWindow for WinitWindow {
         )
     }
 
+    fn appearance(&self) -> WindowAppearance {
+        // The live winit theme, so an appearance-change consumer querying at
+        // dispatch time (and the bootstrap's initial seed) reads the REAL
+        // value — the trait default is a permanent `Light` that silently
+        // killed the whole dark-mode wire. `None` (winit cannot determine
+        // the theme on this platform) keeps the light default.
+        match self.window.theme() {
+            Some(winit::window::Theme::Dark) => WindowAppearance::Dark,
+            Some(winit::window::Theme::Light) | None => WindowAppearance::Light,
+        }
+    }
+
     fn scale_factor(&self) -> f64 {
         self.window.scale_factor()
     }

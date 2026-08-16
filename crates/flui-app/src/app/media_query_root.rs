@@ -4,7 +4,8 @@
 //! Nothing used to install an ambient `MediaQuery` at all — the
 //! `platform_brightness` republish this crate's docs promised was
 //! unimplemented, and every `MediaQuery::maybe_of` consumer fell back to
-//! defaults. The realm now owns one [`MediaQuerySource`] per presentation:
+//! defaults. The realm now owns one [`MediaQuerySource`], scoped to its
+//! PRIMARY presentation (the tree `attach_root_widget` serves):
 //! the platform's resize path keeps `size`/`device_pixel_ratio` current,
 //! the appearance path keeps `platform_brightness` current, and the
 //! [`MediaQueryRoot`] wrapper re-publishes on every change through the

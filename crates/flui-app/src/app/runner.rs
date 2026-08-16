@@ -831,10 +831,18 @@ impl PlatformToUi {
                     }
                 }
                 realm.set_device_pixel_ratio(scale_factor);
-                realm.media_query().update(|data| {
-                    data.size = size;
-                    data.device_pixel_ratio = scale_factor;
-                });
+                // The root MediaQuery lives in the PRIMARY presentation's
+                // tree; a secondary window's resize must not republish its
+                // size there (SharedRealm hosts several windows). The
+                // realm-wide ratio/surface handling above keeps its
+                // pre-existing behavior — only the media-query write is
+                // addressed.
+                if realm.is_primary_presentation(presentation_id) {
+                    realm.media_query().update(|data| {
+                        data.size = size;
+                        data.device_pixel_ratio = scale_factor;
+                    });
+                }
                 realm.request_redraw();
                 tracing::trace!(?size, scale_factor, "realm resize committed");
             }
@@ -889,10 +897,12 @@ impl PlatformToUi {
                         flui_types::platform::Brightness::Light
                     }
                 };
-                realm.media_query().update(|data| {
-                    data.platform_brightness = brightness;
-                });
-                realm.request_redraw();
+                if realm.is_primary_presentation(presentation_id) {
+                    realm.media_query().update(|data| {
+                        data.platform_brightness = brightness;
+                    });
+                    realm.request_redraw();
+                }
             }
             Self::WindowVisibility(visible) => {
                 // Presentation-level `FrameClock` gate — finer
@@ -9138,6 +9148,17 @@ where
         let _ = dispatch_platform_realm(
             realm_dispatch,
             RealmTask::Event(PlatformToUi::AppearanceChanged(window.appearance())),
+        );
+        // Seed the initial size and device-pixel ratio the same way: the
+        // source must not sit on defaults until the first live resize —
+        // on the web backend no resize observer exists, so a default
+        // would be permanent there.
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::Resized {
+                size: window.logical_size(),
+                scale_factor: window.scale_factor() as f32,
+            }),
         );
 
         // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
