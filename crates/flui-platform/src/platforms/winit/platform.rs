@@ -1037,6 +1037,17 @@ impl ApplicationHandler for WinitApp {
                         scale_factor,
                     },
                 );
+                // A DPI change with no size change delivers NO trailing
+                // Resized on every window manager, and the realm learns its
+                // device-pixel ratio only from the resize path — so route
+                // the new scale through that same proven path with the
+                // window's current logical size. When a real Resized does
+                // follow, the second dispatch is idempotent (same size,
+                // same scale).
+                if let Some(ref win) = window {
+                    win.callbacks()
+                        .dispatch_resize(win.logical_size(), scale_factor as f32);
+                }
             }
             WinitWindowEvent::CursorMoved { position, .. } => {
                 let (modifiers, held_buttons) = self.platform.with_state(|state| {
