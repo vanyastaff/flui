@@ -37,6 +37,8 @@ mod intrinsics_cache;
 mod layout_cycle_guard;
 #[path = "layout_dirty_root.rs"]
 mod layout_dirty_root;
+#[path = "layout_marks_laid_out_boundaries.rs"]
+mod layout_marks_laid_out_boundaries;
 #[path = "layout_offset_commit.rs"]
 mod layout_offset_commit;
 #[path = "layout_poison.rs"]
@@ -45,6 +47,7 @@ mod layout_poison;
 mod layout_raw_bridge;
 #[path = "lazy_sliver_list_child_build_contract.rs"]
 mod lazy_sliver_list_child_build_contract;
+
 #[path = "paint_dirty_flag_discipline.rs"]
 mod paint_dirty_flag_discipline;
 #[path = "paint_fragment_snapshot.rs"]
