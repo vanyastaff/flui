@@ -1089,6 +1089,14 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_input(input);
                 }
             }
+            WinitWindowEvent::Touch(touch) => {
+                let modifiers = self.platform.with_state(|s| s.current_modifiers);
+                if let Some(ref win) = window {
+                    let scale = win.scale_factor();
+                    let input = winit_events::touch_event(touch, scale, modifiers);
+                    win.callbacks().dispatch_input(input);
+                }
+            }
             WinitWindowEvent::MouseWheel { delta, .. } => {
                 tracing::debug!(?delta, "MouseWheel");
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {

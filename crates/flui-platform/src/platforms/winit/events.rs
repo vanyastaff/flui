@@ -164,6 +164,77 @@ pub fn mouse_button_event(
     PlatformInput::Pointer(event)
 }
 
+/// Convert winit `Touch` to a per-contact W3C pointer event.
+///
+/// Contact identity: winit's `Touch.id` is a per-contact id starting at 0
+/// and reused after release. The mouse owns `PointerId::PRIMARY` (1), so a
+/// contact maps to `id + 2` — a touch never aliases the mouse's cached
+/// routes or gesture sequences in the interaction binding, and simultaneous
+/// contacts stay distinct (the binding is fully multi-pointer).
+///
+/// Buttons: a touch contact IS the primary "button" for its whole
+/// Started..Ended span — the W3C contract reports `buttons = 1` while any
+/// part of the finger touches. Move events must carry it, or the gesture
+/// layer classifies them as hovers and an active pan never receives
+/// updates (the exact live-drag failure the mouse path once shipped).
+pub fn touch_event(
+    touch: winit::event::Touch,
+    scale_factor: f64,
+    modifiers: KeyboardModifiers,
+) -> PlatformInput {
+    use winit::event::TouchPhase;
+
+    let info = PointerInfo {
+        pointer_id: PointerId::new(touch.id + 2),
+        pointer_type: PointerType::Touch,
+        persistent_device_id: None,
+    };
+    // Hardware without force reporting gets the same 0.5 stand-in the mouse
+    // path uses for a held button.
+    let contact_pressure = touch.force.map_or(0.5, |force| force.normalized() as f32);
+    let contact_buttons = PointerButtons::from(PointerButton::Primary);
+
+    let event = match touch.phase {
+        TouchPhase::Started => PointerEvent::Down(PointerButtonEvent {
+            pointer: info,
+            state: pointer_state(
+                touch.location,
+                scale_factor,
+                contact_pressure,
+                modifiers,
+                contact_buttons,
+            ),
+            button: Some(PointerButton::Primary),
+        }),
+        TouchPhase::Moved => PointerEvent::Move(PointerUpdate {
+            pointer: info,
+            current: pointer_state(
+                touch.location,
+                scale_factor,
+                contact_pressure,
+                modifiers,
+                contact_buttons,
+            ),
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }),
+        TouchPhase::Ended => PointerEvent::Up(PointerButtonEvent {
+            pointer: info,
+            state: pointer_state(
+                touch.location,
+                scale_factor,
+                0.0,
+                modifiers,
+                PointerButtons::default(),
+            ),
+            button: Some(PointerButton::Primary),
+        }),
+        TouchPhase::Cancelled => PointerEvent::Cancel(info),
+    };
+
+    PlatformInput::Pointer(event)
+}
+
 /// Convert winit MouseWheel to W3C PointerEvent::Scroll
 pub fn mouse_wheel_event(
     delta: MouseScrollDelta,
@@ -532,6 +603,96 @@ mod pointer_translation_tests {
             panic!("release must translate to PointerEvent::Up");
         };
         assert_eq!(event.state.buttons, PointerButtons::default());
+    }
+    /// A touch contact must never alias the mouse pointer, must stamp the
+    /// primary "button" for its whole contact span (a buttons-empty touch
+    /// move is classified as a hover and kills live pan tracking), and must
+    /// map every winit phase onto the matching pointer event.
+    #[test]
+    fn touch_phases_map_to_distinct_contact_pointer_events() {
+        use winit::event::{Force, Touch, TouchPhase};
+
+        let dev = winit::event::DeviceId::dummy();
+        let touch = |phase, id| Touch {
+            device_id: dev,
+            phase,
+            location: winit::dpi::PhysicalPosition::new(200.0, 100.0),
+            force: Some(Force::Normalized(0.75)),
+            id,
+        };
+        let pointer = |input: PlatformInput| match input {
+            PlatformInput::Pointer(event) => event,
+            other => panic!("expected a pointer event, got {other:?}"),
+        };
+
+        let down = pointer(touch_event(
+            touch(TouchPhase::Started, 0),
+            2.0,
+            KeyboardModifiers::empty(),
+        ));
+        let PointerEvent::Down(down) = down else {
+            panic!("Started must translate to Down, got {down:?}");
+        };
+        assert_eq!(down.pointer.pointer_type, PointerType::Touch);
+        assert_ne!(
+            down.pointer.pointer_id,
+            Some(PointerId::PRIMARY),
+            "contact 0 must not alias the mouse's PRIMARY pointer id"
+        );
+        assert_eq!(down.state.position.x, 100.0, "positions are logical");
+        assert!(
+            down.state.buttons.contains(PointerButton::Primary),
+            "a contact stamps the primary button"
+        );
+        assert!((down.state.pressure - 0.75).abs() < 1e-6);
+
+        let moved = pointer(touch_event(
+            touch(TouchPhase::Moved, 0),
+            2.0,
+            KeyboardModifiers::empty(),
+        ));
+        let PointerEvent::Move(moved) = moved else {
+            panic!("Moved must translate to Move, got {moved:?}");
+        };
+        assert!(
+            moved.current.buttons.contains(PointerButton::Primary),
+            "a contact move carries the held set — an empty set is a hover"
+        );
+
+        let up = pointer(touch_event(
+            touch(TouchPhase::Ended, 0),
+            2.0,
+            KeyboardModifiers::empty(),
+        ));
+        let PointerEvent::Up(up) = up else {
+            panic!("Ended must translate to Up, got {up:?}");
+        };
+        assert_eq!(
+            up.state.buttons,
+            PointerButtons::default(),
+            "after release nothing is held"
+        );
+
+        let cancel = pointer(touch_event(
+            touch(TouchPhase::Cancelled, 0),
+            2.0,
+            KeyboardModifiers::empty(),
+        ));
+        assert!(
+            matches!(cancel, PointerEvent::Cancel(_)),
+            "Cancelled must translate to Cancel, got {cancel:?}"
+        );
+
+        // Two simultaneous contacts stay distinct pointers.
+        let second = pointer(touch_event(
+            touch(TouchPhase::Started, 1),
+            2.0,
+            KeyboardModifiers::empty(),
+        ));
+        let PointerEvent::Down(second) = second else {
+            panic!("expected Down");
+        };
+        assert_ne!(second.pointer.pointer_id, down.pointer.pointer_id);
     }
 }
 
