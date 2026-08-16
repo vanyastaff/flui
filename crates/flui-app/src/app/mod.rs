@@ -14,6 +14,7 @@ mod config;
 pub mod direct;
 pub(crate) mod hot_reload;
 pub(crate) mod logging;
+pub(crate) mod media_query_root;
 pub(crate) mod presentation;
 pub(crate) mod presentation_forest;
 pub mod runner;

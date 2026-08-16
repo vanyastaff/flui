@@ -976,6 +976,12 @@ impl BuildOwner {
             || self.build_scope_queues.as_ref().is_some_and(|queues| {
                 !queues.root.is_empty() || queues.isolated.values().any(|bucket| !bucket.is_empty())
             })
+            // Externally scheduled rebuilds (RebuildHandle) land in a shared
+            // inbox that build_scope drains at frame START — so a pending
+            // entry IS dirty work, and a frame gate that ignored it skipped
+            // the very frame the handle's own frame-request hook woke: the
+            // schedule stalled until some unrelated dirty state arrived.
+            || !self.external_inbox.lock().is_empty()
     }
 
     /// Get the number of dirty elements.
