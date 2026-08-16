@@ -59,6 +59,9 @@
 //! 4. **Pointer Up**: Use cached hit test → dispatch → sweep arena → clear cache
 //! 5. **Pointer Cancel**: Use cached hit test → dispatch recognizer rejection →
 //!    clear cache without a binding sweep
+//! 6. **Enter/Leave**: cached route mid-contact; otherwise a fresh ephemeral
+//!    hit test at the device's last-known hover position (the events carry
+//!    no position of their own)
 //!
 //! # Example
 //!
@@ -1048,7 +1051,33 @@ impl GestureBinding {
                 }
             }
             PointerEvent::Enter(_) | PointerEvent::Leave(_) => {
-                if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
+                // An active contact keeps capture semantics: deliver on the
+                // route hit-tested at Down, like every other mid-contact
+                // event of the sequence (Flutter parity:
+                // `gestures/binding.dart` routes a down pointer's events
+                // over the result stored for it at Down).
+                let panic = if self.hit_tests.contains_key(&pointer_id) {
+                    self.dispatch_on_cached_route(pointer_id, event)
+                } else {
+                    // A HOVERING pointer — the only state in which a
+                    // window-boundary Enter/Leave normally arrives — has no
+                    // cached route, so resolve a fresh ephemeral path the
+                    // way Scroll does. The event itself carries no position
+                    // (the macOS and Android producers only identify the
+                    // pointer), so the path is resolved at the device's
+                    // last-known hover position. A device this binding has
+                    // never seen has no position to resolve; the event
+                    // still reaches the pointer router (Flutter parity:
+                    // an added/removed-class event dispatches with no hit
+                    // path, router only).
+                    use crate::events::PointerEventExt as _;
+                    let result = match self.mouse_tracker.device_position(event.device_id()) {
+                        Some(position) => hit_test_fn(position),
+                        None => HitTestResult::new(),
+                    };
+                    self.dispatch_ephemeral(event, &result)
+                };
+                if let Some(panic) = panic {
                     panic.resume();
                 }
             }
@@ -2704,6 +2733,122 @@ mod tests {
                 handler_dropped.get(),
                 "Cancel must release the cached route, dropping the last handler owner"
             );
+        });
+    }
+
+    /// Builds the window-boundary Enter/Leave shape the macOS and Android
+    /// backends produce: pointer identity only, no position payload.
+    fn make_boundary_event(entering: bool) -> PointerEvent {
+        use ui_events::pointer::PointerInfo;
+
+        let info = PointerInfo {
+            pointer_id: Some(PointerId::PRIMARY),
+            pointer_type: PointerType::Mouse,
+            persistent_device_id: None,
+        };
+        if entering {
+            PointerEvent::Enter(info)
+        } else {
+            PointerEvent::Leave(info)
+        }
+    }
+
+    /// A HOVERING pointer (no active contact) has no cached Down route, so
+    /// Enter/Leave must resolve a fresh ephemeral path — at the device's
+    /// last-known hover position, since the events carry none of their own —
+    /// instead of being silently dropped by the cached-route lookup.
+    #[test]
+    fn enter_and_leave_without_contact_deliver_over_a_fresh_hit_test() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        lane.enter(|| {
+            let sink = Rc::clone(&log);
+            let target = handle
+                .register_pointer(move |event| {
+                    sink.borrow_mut().push(match event {
+                        PointerEvent::Enter(_) => "enter",
+                        PointerEvent::Leave(_) => "leave",
+                        _ => "other",
+                    });
+                })
+                .expect("register");
+            let result = hit_result(target);
+
+            // A hover move teaches the mouse tracker this device's position.
+            let hover_position = Offset::new(Pixels(30.0), Pixels(40.0));
+            let mv = make_move_event(hover_position, PointerType::Mouse);
+            binding.handle_pointer_event(&mv, |_| result.clone());
+
+            let enter_result = result.clone();
+            binding.handle_pointer_event(&make_boundary_event(true), move |position| {
+                assert_eq!(
+                    position, hover_position,
+                    "the ephemeral path must resolve at the last-known hover position"
+                );
+                enter_result
+            });
+            assert_eq!(&*log.borrow(), &["enter"]);
+
+            binding.handle_pointer_event(&make_boundary_event(false), move |_| result);
+            assert_eq!(&*log.borrow(), &["enter", "leave"]);
+        });
+    }
+
+    /// An Enter for a device the binding has never seen has no position to
+    /// resolve a path at: the hit-test callback must not run, but the event
+    /// still reaches the pointer router rather than vanishing.
+    #[test]
+    fn enter_for_an_unseen_device_reaches_the_pointer_router_without_hit_testing() {
+        let binding = GestureBinding::new();
+        let routed = Rc::new(Cell::new(0));
+        let counter = Rc::clone(&routed);
+        let global: crate::routing::GlobalPointerHandler = Rc::new(move |event| {
+            if matches!(event, PointerEvent::Enter(_)) {
+                counter.set(counter.get() + 1);
+            }
+        });
+        binding.pointer_router().add_global_handler(global);
+
+        binding.handle_pointer_event(&make_boundary_event(true), |_| {
+            panic!("no known device position: the hit-test callback must not run");
+        });
+        assert_eq!(routed.get(), 1);
+    }
+
+    /// Mid-contact (a button held while the pointer crosses the window
+    /// boundary) the sequence keeps capture semantics: Enter/Leave deliver
+    /// on the route hit-tested at Down, with no fresh hit test.
+    #[test]
+    fn leave_mid_contact_delivers_on_the_cached_down_route() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        lane.enter(|| {
+            let sink = Rc::clone(&log);
+            let target = handle
+                .register_pointer(move |event| {
+                    sink.borrow_mut().push(match event {
+                        PointerEvent::Down(_) => "down",
+                        PointerEvent::Leave(_) => "leave",
+                        _ => "other",
+                    });
+                })
+                .expect("register");
+            let result = hit_result(target);
+
+            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&down, |_| result);
+
+            binding.handle_pointer_event(&make_boundary_event(false), |_| {
+                panic!("an active contact must reuse its Down route, never re-hit-test");
+            });
+            assert_eq!(&*log.borrow(), &["down", "leave"]);
+
+            let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&up, |_| HitTestResult::new());
         });
     }
 
