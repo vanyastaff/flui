@@ -90,7 +90,7 @@ impl GridView {
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
-            children: children.into_boxed_vec(),
+            children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
             builder_source: None,
         }
     }
@@ -110,7 +110,7 @@ impl GridView {
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
-            children: children.into_boxed_vec(),
+            children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
             builder_source: None,
         }
     }

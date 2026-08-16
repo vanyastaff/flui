@@ -56,12 +56,18 @@ fn lazy_list_view_builder_builds_visible_items() {
     // tick2: sliver dirty → laid out with real children.
     laid.tick();
 
-    // Expected: 1 (RenderViewport) + 1 (RenderSliverList) + 3 (item nodes) = 5.
+    // Expected: 1 (RenderViewport) + 1 (RenderSliverList) + 3 (per-item
+    // RenderRepaintBoundary) + 3 (item nodes) = 8.
+    //
+    // The per-item boundary is Flutter's: `SliverChildBuilderDelegate` defaults
+    // `addRepaintBoundaries` to `true` and wraps each child
+    // (`widgets/scroll_delegate.dart:560`), so a scrolling list does not
+    // repaint items that did not change.
     let nodes_after_settle = laid.render_node_count();
     assert_eq!(
-        nodes_after_settle, 5,
-        "after settle, render tree should have 1 viewport + 1 sliver + 3 items = 5 nodes; \
-         got {nodes_after_settle}"
+        nodes_after_settle, 8,
+        "after settle, render tree should have 1 viewport + 1 sliver + 3 boundaries \
+         + 3 items = 8 nodes; got {nodes_after_settle}"
     );
 }
 
@@ -92,7 +98,10 @@ fn lazy_list_view_builder_none_at_k_caps_build_count() {
 
     // Expected: 1 (viewport) + 1 (sliver) + K (items capped by None-return) = 4.
     let nodes_after_settle = laid.render_node_count();
-    let expected = 1 + 1 + K;
+    // `+ 2 * K`, not `+ K`: each item carries its own `RenderRepaintBoundary`,
+    // which `SliverChildBuilderDelegate` adds by default exactly as Flutter's
+    // does (`widgets/scroll_delegate.dart:560`).
+    let expected = 1 + 1 + 2 * K;
     assert_eq!(
         nodes_after_settle, expected,
         "None-at-K must cap build count: expected {expected} nodes, \
@@ -135,9 +144,10 @@ fn lazy_list_view_builder_multi_node_child() {
     // 1 (RenderViewport) + 1 (RenderSliverList) + 3 × 2 (Padding + SizedBox) = 8.
     let nodes_after_settle = laid.render_node_count();
     assert_eq!(
-        nodes_after_settle, 8,
-        "each 2-node item must contribute exactly 2 render nodes; \
-         got {nodes_after_settle} (expected 8 = 1 viewport + 1 sliver + 3 × 2 items)"
+        nodes_after_settle, 11,
+        "each 2-node item must contribute exactly 2 render nodes, plus its own \
+         repaint boundary; got {nodes_after_settle} (expected 11 = 1 viewport \
+         + 1 sliver + 3 boundaries + 3 × 2 items)"
     );
 }
 
@@ -433,5 +443,52 @@ fn lazy_list_view_builder_off_band_eviction_bounded() {
         nodes_after_relayout <= nodes_after_settle,
         "a post-settle relayout tick must not leak render nodes; \
          count went from {nodes_after_settle} to {nodes_after_relayout}"
+    );
+}
+
+// ============================================================================
+// Repaint boundaries per item (Flutter parity)
+// ============================================================================
+
+/// Every list item sits under its own `RenderRepaintBoundary`.
+///
+/// Flutter parity: `SliverChildBuilderDelegate` and `SliverChildListDelegate`
+/// both default `addRepaintBoundaries` to `true` and wrap each child
+/// (`widgets/scroll_delegate.dart:560` and `:774`). Their doc gives the reason
+/// — children in a scrolling container "do not need to be repainted as the
+/// list scrolls".
+///
+/// This is the structural precondition for
+/// `PipelineOwner::retained_boundaries` to do anything in a list: without a
+/// boundary per item, the paint walk descends into every visible item on every
+/// frame and there is nothing to reuse. The behaviour that follows from it is
+/// pinned in `flui-rendering`'s `retained_boundary_layers` tests.
+#[test]
+fn lazy_list_view_builder_wraps_each_item_in_a_repaint_boundary() {
+    const ITEMS: usize = 3;
+
+    let mut laid = lay_out(
+        ListView::builder(ITEMS, 100.0, |i| {
+            (i < ITEMS).then(|| SizedBox::square(100.0).boxed())
+        }),
+        tight(200.0, 400.0),
+    );
+    laid.tick();
+    laid.tick();
+
+    let boundaries = laid.find_all_by_render_type("RenderRepaintBoundary");
+    let items = laid.find_all_by_render_type("RenderConstrainedBox");
+
+    assert_eq!(
+        items.len(),
+        ITEMS,
+        "precondition: all {ITEMS} items are built and attached; got {items:?}"
+    );
+    assert_eq!(
+        boundaries.len(),
+        ITEMS,
+        "each item must carry its own repaint boundary — one per item, not one \
+         for the list; got {} boundaries for {ITEMS} items",
+        boundaries.len()
     );
 }
