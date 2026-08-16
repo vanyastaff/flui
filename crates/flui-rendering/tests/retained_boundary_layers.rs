@@ -68,7 +68,12 @@ fn fingerprint(t: &flui_layer::LayerTree) -> Vec<usize> {
     };
     let mut stack = vec![root];
     while let Some(id) = stack.pop() {
-        let children = t.children(id).unwrap_or(&[]);
+        // Not `unwrap_or(&[])`: the walk only ever visits ids the tree just
+        // handed out, so a `None` here means the graft minted a dangling
+        // reference — the oracle must fail on that, not treat it as a leaf.
+        let children = t
+            .children(id)
+            .expect("every id in this walk came from the tree itself");
         out.push(children.len());
         for &child in children.iter().rev() {
             stack.push(child);
@@ -239,4 +244,93 @@ fn removing_a_boundary_drops_its_retained_output() {
         2,
         "the removed boundary's retained output must be dropped with it"
     );
+}
+
+/// A dirty boundary nested inside a clean one still repaints.
+///
+/// `mark_needs_paint` stops at the nearest established boundary, so
+/// invalidating something inside an INNER boundary queues only that inner
+/// boundary — the outer one is clean. Grafting the outer boundary replays its
+/// cached subtree, which contains the inner boundary's OLD layers, and the
+/// inner boundary is never descended into. Its updated pixels never reach the
+/// screen, and the residue scan clears its dirty flag so the next frame does
+/// not retry either.
+#[test]
+fn a_dirty_boundary_nested_in_a_clean_one_still_repaints() {
+    use flui_rendering::{
+        context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+        parent_data::BoxParentData,
+        traits::RenderBox,
+    };
+    use flui_tree::Leaf;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Debug)]
+    struct CountingLeaf(Arc<AtomicUsize>);
+
+    impl flui_foundation::Diagnosticable for CountingLeaf {}
+
+    impl RenderBox for CountingLeaf {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            ctx.constrain(Size::new(px(10.0), px(10.0)))
+        }
+
+        fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
+            false
+        }
+    }
+
+    let inner_paints = Arc::new(AtomicUsize::new(0));
+
+    let mut owner = PipelineOwner::new();
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row()).child(
+            // Outer boundary, never dirtied.
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderOpacity::new(0.5)).child(
+                    // Inner boundary, the one that changes.
+                    box_node(RenderRepaintBoundary::new())
+                        .label("inner")
+                        .child(box_node(CountingLeaf(Arc::clone(&inner_paints)))),
+                ),
+            ),
+        ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    let inner_id = registry.get("inner").expect("inner boundary is labelled");
+
+    let (mut owner, result) = owner.run_frame();
+    result.expect("first frame");
+
+    let after_first = inner_paints.load(Ordering::Relaxed);
+    assert!(
+        after_first >= 1,
+        "precondition: the first frame paints the inner leaf; got {after_first}"
+    );
+
+    // Dirty the INNER boundary only. The outer stays clean.
+    owner.mark_needs_paint(inner_id);
+    let (owner, result) = owner.run_frame();
+    result.expect("second frame");
+
+    assert!(
+        inner_paints.load(Ordering::Relaxed) > after_first,
+        "a dirty boundary must repaint even when its enclosing boundary is \
+         reused; got {} paints, unchanged from frame 1 — the outer graft \
+         replayed the inner boundary's stale layers and never descended",
+        inner_paints.load(Ordering::Relaxed)
+    );
+    drop(owner);
 }

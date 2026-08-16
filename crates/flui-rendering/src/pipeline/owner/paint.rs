@@ -380,22 +380,40 @@ impl PipelineOwner<PaintPhase> {
                         // `run_layout` marks every boundary layout touched and
                         // `mark_needs_paint` marks the rest, so absence from
                         // `dirty_set` genuinely means unchanged content.
+                        // Every boundary is recorded into the captures open
+                        // above it, so each learns what is nested beneath.
+                        composer.note_boundary(child_id);
+
                         let retained = (!dirty_set.contains(&child_id))
                             .then(|| self.retained_boundaries.get(&child_id))
-                            .flatten();
+                            .flatten()
+                            // A cached subtree replays its nested boundaries'
+                            // layers too, so it is reusable only while none of
+                            // them is dirty — see `nested_boundaries`.
+                            .filter(|subtree| {
+                                !subtree
+                                    .nested_boundaries
+                                    .iter()
+                                    .any(|nested| dirty_set.contains(nested))
+                            });
                         if let Some(subtree) = retained {
                             composer.graft(subtree);
                         } else {
+                            composer.open_capture();
                             self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set)?;
                             // Seal before capturing: the boundary's
                             // trailing run is part of its output, and
                             // `pop_layer` would otherwise flush it after
                             // the snapshot was taken.
                             composer.seal_picture();
+                            let nested_boundaries = composer.close_capture();
                             // `None` evicts: a subtree that GAINED a
                             // Leader/Follower must not be served its
                             // pre-link form. See `capture`.
-                            let captured = composer.capture(boundary_root);
+                            let captured = composer.capture(boundary_root).map(|mut subtree| {
+                                subtree.nested_boundaries = nested_boundaries;
+                                subtree
+                            });
                             composer.retained_captures.push((child_id, captured));
                         }
                         composer.pop_layer();
@@ -435,6 +453,23 @@ impl PipelineOwner<PaintPhase> {
 #[derive(Clone, Debug)]
 pub(super) struct RetainedSubtree {
     nodes: Vec<RetainedNode>,
+    /// Every repaint boundary nested anywhere inside this capture.
+    ///
+    /// A nested boundary's layers are flattened into this subtree, so replaying
+    /// it replays THEIR last output too. `mark_needs_paint` stops at the
+    /// nearest established boundary, which means invalidating something deep
+    /// inside leaves every enclosing boundary clean — and grafting one of those
+    /// would replay the inner boundary's stale layers and never descend into
+    /// it. Worse, the residue scan then clears the inner boundary's dirty flag,
+    /// so the next frame does not retry.
+    ///
+    /// Checking this list at graft time is the bounded fix: an outer boundary
+    /// declines to reuse itself while anything under it is dirty, and repaints
+    /// in full. It costs the outer boundary's reuse on those frames. Keeping
+    /// the reuse would mean capturing nested boundaries as HOLES and
+    /// re-descending into them at graft time, which is a different and larger
+    /// design.
+    nested_boundaries: Vec<RenderId>,
 }
 
 #[derive(Clone, Debug)]
@@ -478,6 +513,10 @@ struct FragmentComposer {
     /// walk itself only has `&self`, so this is the same side-collection shape
     /// the layout walk uses for the sinks it cannot commit in place.
     retained_captures: Vec<(RenderId, Option<RetainedSubtree>)>,
+    /// Open capture scopes, innermost last. Every boundary the walk meets is
+    /// recorded into all of them, so each capture learns the boundaries nested
+    /// anywhere beneath it — see `RetainedSubtree::nested_boundaries`.
+    capture_scopes: Vec<Vec<RenderId>>,
 }
 
 impl FragmentComposer {
@@ -505,6 +544,7 @@ impl FragmentComposer {
             link_registry: LinkRegistry::new(),
             follower_correlations: Vec::new(),
             retained_captures: Vec::new(),
+            capture_scopes: Vec::new(),
         }
     }
 
@@ -585,6 +625,23 @@ impl FragmentComposer {
     /// replaying the registration (and the `RenderId` correlation a follower
     /// also needs, which the flattened form does not carry) is the complete
     /// one.
+    /// Record a boundary into every open capture scope.
+    fn note_boundary(&mut self, id: RenderId) {
+        for scope in &mut self.capture_scopes {
+            scope.push(id);
+        }
+    }
+
+    fn open_capture(&mut self) {
+        self.capture_scopes.push(Vec::new());
+    }
+
+    fn close_capture(&mut self) -> Vec<RenderId> {
+        self.capture_scopes.pop().expect(
+            "BUG: close_capture without a matching open_capture — the paint walk pairs them",
+        )
+    }
+
     fn capture(&self, root: LayerId) -> Option<RetainedSubtree> {
         let mut nodes: Vec<RetainedNode> = Vec::new();
         // (tree id, parent index in `nodes`)
@@ -613,7 +670,10 @@ impl FragmentComposer {
                 stack.push((child, Some(index)));
             }
         }
-        Some(RetainedSubtree { nodes })
+        Some(RetainedSubtree {
+            nodes,
+            nested_boundaries: Vec::new(),
+        })
     }
 
     /// Re-insert a captured subtree under the current stack top.
