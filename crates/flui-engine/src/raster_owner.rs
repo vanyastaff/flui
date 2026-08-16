@@ -1633,7 +1633,7 @@ mod tests {
     use std::sync::Barrier;
     use std::sync::mpsc;
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use flui_foundation::{FrameStamp, PresentationId, RealmId};
     use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene};
@@ -4007,54 +4007,33 @@ mod tests {
     /// permanently stuck — only a wall-clock bound distinguishes "correct"
     /// from "correct but frozen".
     ///
-    /// # The gate opens on a timer, not after the burst — and here is why that matters
+    /// # The burst runs on its own thread; the main thread waits on a channel
     ///
-    /// An earlier revision held the pump thread's gate closed until AFTER
-    /// the resize burst finished, then released it. That shape has a real
-    /// flaw: this workspace has no `nextest.toml`, hence no
-    /// `terminate-after`, so if `resize` really did rendezvous with the
-    /// pump thread, the FIRST call in the burst would block forever
-    /// waiting for a pump that is itself parked behind a gate this test
-    /// only opens once the (never-finishing) burst returns — a genuine
-    /// deadlock, not a slow assertion.
+    /// The property: `RasterHandle::resize` never rendezvouses with the pump
+    /// side — a burst of N resizes completes while the pump thread is parked.
+    /// Earlier shapes could not both MEASURE that and stay bounded: releasing
+    /// the pump after the burst deadlocks if resize blocks (no `nextest.toml`,
+    /// no terminate-after), and releasing it from an independent sleep timer
+    /// unblocks only call 1 of the burst — call 2 blocks forever and the hang
+    /// just moves — while also violating the barriers-not-sleeps criterion.
     ///
-    /// **This test does not catch a blocking `resize`, and three attempts to
-    /// make it do so have each been wrong in a different way.** The last one
-    /// released the gate from an independent timer, which unblocks the
-    /// *first* call of the burst; call two then blocks forever with no pump
-    /// left to satisfy it, so the hang moves from iteration 1 to iteration 2
-    /// and nothing is measured. A gated thread servicing exactly one request
-    /// cannot bound a burst of N — the released side has to be able to
-    /// satisfy every caller, not just the first.
-    ///
-    /// What this test genuinely pins, and all it is now claimed to pin: with
-    /// the real non-blocking implementation, N coalesced resizes complete
-    /// promptly and a frame published afterwards presents. The oracle for
-    /// "a blocking `resize` would be caught" is
-    /// `resize_stamp_submit_pump_interleaved_across_two_threads_never_stalls_entirely`,
-    /// where the pumping thread runs continuously and a blocked stamper is
-    /// converted into a diagnosed panic by that test's own pump cap.
-    ///
-    /// Mutant this kills: make `RasterHandle::resize` rendezvous with the
-    /// pump side (e.g. block on an ack channel until `pump` has applied the
-    /// resize) instead of only taking the mailbox's own short-lived lock —
-    /// the burst below would then block until the independent timer thread
-    /// releases the pump side ~300ms later, failing the elapsed-time
-    /// assertion (not merely running slowly and not hanging the test
-    /// process either way). Not verified live against an actual
-    /// rendezvousing `resize` implementation — writing one is a
-    /// significantly larger change than a single-call mutation, unlike
-    /// this suite's other mutants — so this is a structural argument for
-    /// the bound, not an empirically-confirmed kill.
+    /// This shape resolves the conflict: the burst (and its follow-up submit)
+    /// runs on its OWN thread that reports completion over a channel, and the
+    /// main thread's `recv_timeout` is the bound — a bounded rendezvous, not
+    /// a pacing sleep. A rendezvousing `resize` parks the burst thread behind
+    /// the closed pump gate, the channel stays empty, and the timeout turns
+    /// the hang into this test's own diagnosed failure; the stuck burst
+    /// thread is deliberately NOT joined on that path (the test process exits
+    /// with the failure regardless), so nothing can hang the run. On the
+    /// green path the gate opens only AFTER the burst provably finished, the
+    /// pump services the coalesced mailbox once, and the frame stamped with
+    /// the final generation presents.
     #[test]
     fn n_coalesced_resizes_never_block_the_caller_even_while_the_pump_thread_is_busy() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
 
-        // Simulates the raster/pump side being busy elsewhere (e.g. parked
-        // in surface acquisition) until an INDEPENDENT timer releases it —
-        // never conditioned on the resize burst below finishing. See this
-        // test's own doc for why that independence is what keeps this test
-        // from being able to hang the process outright.
+        // The pump side is busy elsewhere (parked behind this gate) for the
+        // whole burst; it opens only after the burst has PROVABLY finished.
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let pump_gate = Arc::clone(&gate);
         let pump_thread = thread::spawn(move || {
@@ -4067,43 +4046,42 @@ mod tests {
             }
             owner.pump()
         });
-        let timer_gate = Arc::clone(&gate);
-        let timer_thread = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(300));
-            let (lock, cvar) = &*timer_gate;
-            *lock.lock() = true;
-            cvar.notify_one();
+
+        // The burst runs on its own thread and reports over a channel; the
+        // main thread's recv_timeout below is the bound that converts a
+        // rendezvousing (blocking) resize into a diagnosed failure.
+        const RESIZE_BURST: u32 = 50;
+        let (burst_done_tx, burst_done_rx) = std::sync::mpsc::channel();
+        let epoch = FrameEpoch::ZERO.next();
+        let burst_thread = thread::spawn(move || {
+            let mut last_generation = SurfaceGeneration::ZERO;
+            for i in 0..RESIZE_BURST {
+                last_generation = handle.resize(100 + i, 100 + i);
+            }
+            // Stamped with the final minted generation while the pump is
+            // still parked — the coalesced mailbox must hold exactly this.
+            handle
+                .submit(test_frame(epoch, last_generation))
+                .expect("submit");
+            burst_done_tx.send(()).expect("main thread is waiting");
         });
 
-        let start = Instant::now();
-        let mut last_generation = SurfaceGeneration::ZERO;
-        const RESIZE_BURST: u32 = 50;
-        for i in 0..RESIZE_BURST {
-            last_generation = handle.resize(100 + i, 100 + i);
-        }
-        let burst_elapsed = start.elapsed();
+        let burst_completed = burst_done_rx.recv_timeout(Duration::from_secs(10));
         assert!(
-            burst_elapsed < Duration::from_millis(200),
-            "{RESIZE_BURST} coalesced resizes must return promptly even \
-             while the pump thread is still busy elsewhere — a \
-             rendezvousing resize would stall here until the independent \
-             timer thread releases the pump side ~300ms later (took \
-             {burst_elapsed:?})"
+            burst_completed.is_ok(),
+            "{RESIZE_BURST} coalesced resizes must complete while the pump \
+             thread is parked — a rendezvousing resize blocks the burst \
+             thread behind the closed gate and this bounded wait expires \
+             (the stuck thread is deliberately left unjoined)"
         );
+        burst_thread.join().expect("burst thread must not panic");
 
-        // Submit a frame stamped with the last minted generation. Under a
-        // correct, non-blocking `resize` this lands well before the timer
-        // fires; the pump thread is still parked at this point.
-        let epoch = FrameEpoch::ZERO.next();
-        handle
-            .submit(test_frame(epoch, last_generation))
-            .expect("submit");
-
-        // The timer thread releases the pump thread on its own schedule —
-        // nothing here conditions that release on the burst or the submit
-        // above, which is the property that keeps this test bounded no
-        // matter what `resize` does internally.
-        timer_thread.join().expect("timer thread must not panic");
+        // Only now — with the burst provably finished — release the pump.
+        {
+            let (lock, cvar) = &*gate;
+            *lock.lock() = true;
+            cvar.notify_one();
+        }
 
         let outcome = pump_thread.join().expect("pump thread must not panic");
         assert_eq!(
