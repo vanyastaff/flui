@@ -59,6 +59,9 @@
 //! 4. **Pointer Up**: Use cached hit test → dispatch → sweep arena → clear cache
 //! 5. **Pointer Cancel**: Use cached hit test → dispatch recognizer rejection →
 //!    clear cache without a binding sweep
+//! 6. **Enter/Leave**: cached route mid-contact; otherwise a fresh ephemeral
+//!    hit test at the device's last-known hover position (the events carry
+//!    no position of their own)
 //!
 //! # Example
 //!
@@ -116,6 +119,10 @@ struct CachedPointerRoute {
     token: Option<ResolvedRouteToken>,
     sequence: PointerSequence,
     resampler: PointerEventResampler,
+    /// Device kind stamped on the sequence's Down, so a synthesized
+    /// terminal event (cancel-on-defocus) carries the same kind the
+    /// sequence's recognizers have been observing.
+    pointer_type: PointerType,
 }
 
 struct DetachedPointerSequence {
@@ -799,6 +806,62 @@ impl GestureBinding {
         }
     }
 
+    /// Synthesize a terminal [`PointerEvent::Cancel`] for every pointer
+    /// with an active contact sequence, delivered through the normal
+    /// terminal path — recognizers observe a real Cancel (route dispatch,
+    /// arena abandonment, cache release), exactly as if the platform had
+    /// sent one.
+    ///
+    /// Call this when the window loses OS focus: a defocused window may
+    /// never receive the Up matching an in-flight Down (alt-tab mid-drag),
+    /// which would otherwise strand the sequence until a superseding Down.
+    /// This is the contract Flutter's platforms honor by sending a cancel
+    /// for in-flight contacts when the view deactivates; FLUI's backends
+    /// send no such event, so the app runner synthesizes it here.
+    ///
+    /// Unlike [`Self::cancel_all_pointer_sequences`] — the silent teardown
+    /// for pause/detach, where user code should no longer run — this
+    /// delivers the Cancel to handlers, so a widget mid-drag can undo the
+    /// gesture's visible effect. Hover state (pending hover moves, mouse
+    /// tracker) is untouched: a pointer can keep hovering an unfocused
+    /// window.
+    pub fn cancel_active_pointers(&self) {
+        let mut pointers: Vec<(PointerId, PointerType)> = self
+            .hit_tests
+            .iter()
+            .map(|entry| (*entry.key(), entry.pointer_type))
+            .collect();
+        pointers.sort_unstable_by_key(|(pointer_id, _)| *pointer_id);
+        let mut first_panic = None;
+        for (pointer_id, pointer_type) in pointers {
+            // A handler run by an earlier iteration may have re-entered the
+            // binding and already terminated this sequence.
+            if !self.hit_tests.contains_key(&pointer_id) {
+                continue;
+            }
+            let cancel = PointerEvent::Cancel(ui_events::pointer::PointerInfo {
+                pointer_id: Some(pointer_id),
+                pointer_type,
+                persistent_device_id: None,
+            });
+            // The terminal arm never invokes the hit-test callback: Cancel
+            // resolves over the route cached at Down. A panicking handler
+            // must not exempt the remaining contacts from cancellation —
+            // every snapshotted pointer is cancelled first, then the first
+            // panic resumes (the same all-work-first posture the kernel
+            // itself has within one sequence).
+            let delivered = RoutePanic::capture(|| {
+                self.handle_pointer_event_kernel(&cancel, |_| {
+                    unreachable!("BUG: a terminal Cancel must never hit-test")
+                });
+            });
+            RoutePanic::preserve_first(&mut first_panic, delivered, "focus-loss pointer cancel");
+        }
+        if let Some(panic) = first_panic {
+            panic.resume();
+        }
+    }
+
     /// Defensive cleanup for app-lifecycle pause / detach transitions.
     ///
     /// Cancels every binding-owned pointer sequence. Call this from the app
@@ -976,6 +1039,7 @@ impl GestureBinding {
                         token,
                         sequence,
                         resampler,
+                        pointer_type: down.pointer.pointer_type,
                     },
                 );
 
@@ -1048,7 +1112,33 @@ impl GestureBinding {
                 }
             }
             PointerEvent::Enter(_) | PointerEvent::Leave(_) => {
-                if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
+                // An active contact keeps capture semantics: deliver on the
+                // route hit-tested at Down, like every other mid-contact
+                // event of the sequence (Flutter parity:
+                // `gestures/binding.dart` routes a down pointer's events
+                // over the result stored for it at Down).
+                let panic = if self.hit_tests.contains_key(&pointer_id) {
+                    self.dispatch_on_cached_route(pointer_id, event)
+                } else {
+                    // A HOVERING pointer — the only state in which a
+                    // window-boundary Enter/Leave normally arrives — has no
+                    // cached route, so resolve a fresh ephemeral path the
+                    // way Scroll does. The event itself carries no position
+                    // (the macOS and Android producers only identify the
+                    // pointer), so the path is resolved at the device's
+                    // last-known hover position. A device this binding has
+                    // never seen has no position to resolve; the event
+                    // still reaches the pointer router (Flutter parity:
+                    // an added/removed-class event dispatches with no hit
+                    // path, router only).
+                    use crate::events::PointerEventExt as _;
+                    let result = match self.mouse_tracker.device_position(event.device_id()) {
+                        Some(position) => hit_test_fn(position),
+                        None => HitTestResult::new(),
+                    };
+                    self.dispatch_ephemeral(event, &result)
+                };
+                if let Some(panic) = panic {
                     panic.resume();
                 }
             }
@@ -1533,6 +1623,7 @@ mod tests {
             token: None,
             sequence: PointerSequence(1),
             resampler: PointerEventResampler::new(PointerId::PRIMARY),
+            pointer_type: PointerType::Mouse,
         }
     }
 
@@ -2704,6 +2795,254 @@ mod tests {
                 handler_dropped.get(),
                 "Cancel must release the cached route, dropping the last handler owner"
             );
+        });
+    }
+
+    /// Builds the window-boundary Enter/Leave shape the macOS and Android
+    /// backends produce: pointer identity only, no position payload.
+    fn make_boundary_event(entering: bool) -> PointerEvent {
+        use ui_events::pointer::PointerInfo;
+
+        let info = PointerInfo {
+            pointer_id: Some(PointerId::PRIMARY),
+            pointer_type: PointerType::Mouse,
+            persistent_device_id: None,
+        };
+        if entering {
+            PointerEvent::Enter(info)
+        } else {
+            PointerEvent::Leave(info)
+        }
+    }
+
+    /// A HOVERING pointer (no active contact) has no cached Down route, so
+    /// Enter/Leave must resolve a fresh ephemeral path — at the device's
+    /// last-known hover position, since the events carry none of their own —
+    /// instead of being silently dropped by the cached-route lookup.
+    #[test]
+    fn enter_and_leave_without_contact_deliver_over_a_fresh_hit_test() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        lane.enter(|| {
+            let sink = Rc::clone(&log);
+            let target = handle
+                .register_pointer(move |event| {
+                    sink.borrow_mut().push(match event {
+                        PointerEvent::Enter(_) => "enter",
+                        PointerEvent::Leave(_) => "leave",
+                        _ => "other",
+                    });
+                })
+                .expect("register");
+            let result = hit_result(target);
+
+            // A hover move teaches the mouse tracker this device's position.
+            let hover_position = Offset::new(Pixels(30.0), Pixels(40.0));
+            let mv = make_move_event(hover_position, PointerType::Mouse);
+            binding.handle_pointer_event(&mv, |_| result.clone());
+
+            let enter_result = result.clone();
+            binding.handle_pointer_event(&make_boundary_event(true), move |position| {
+                assert_eq!(
+                    position, hover_position,
+                    "the ephemeral path must resolve at the last-known hover position"
+                );
+                enter_result
+            });
+            assert_eq!(&*log.borrow(), &["enter"]);
+
+            binding.handle_pointer_event(&make_boundary_event(false), move |_| result);
+            assert_eq!(&*log.borrow(), &["enter", "leave"]);
+        });
+    }
+
+    /// An Enter for a device the binding has never seen has no position to
+    /// resolve a path at: the hit-test callback must not run, but the event
+    /// still reaches the pointer router rather than vanishing.
+    #[test]
+    fn enter_for_an_unseen_device_reaches_the_pointer_router_without_hit_testing() {
+        let binding = GestureBinding::new();
+        let routed = Rc::new(Cell::new(0));
+        let counter = Rc::clone(&routed);
+        let global: crate::routing::GlobalPointerHandler = Rc::new(move |event| {
+            if matches!(event, PointerEvent::Enter(_)) {
+                counter.set(counter.get() + 1);
+            }
+        });
+        binding.pointer_router().add_global_handler(global);
+
+        binding.handle_pointer_event(&make_boundary_event(true), |_| {
+            panic!("no known device position: the hit-test callback must not run");
+        });
+        assert_eq!(routed.get(), 1);
+    }
+
+    /// Losing OS focus mid-contact must terminate the sequence like a real
+    /// platform Cancel: the route cached at Down observes the Cancel, the
+    /// arena rejects its members, and a following Move — the pointer may
+    /// keep moving while the window is defocused — is a hover, not a drag
+    /// update on the dead sequence's route.
+    #[test]
+    fn cancel_active_pointers_delivers_cancel_and_demotes_following_moves_to_hover() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = Rc::new(GestureBinding::new());
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let arena_member = Arc::new(CountingArenaMember::default());
+
+        lane.enter(|| {
+            let sink = Rc::clone(&log);
+            let target = handle
+                .register_pointer(move |event| {
+                    sink.borrow_mut().push(match event {
+                        PointerEvent::Down(_) => "down",
+                        PointerEvent::Move(_) => "move",
+                        PointerEvent::Cancel(_) => "cancel",
+                        _ => "other",
+                    });
+                })
+                .expect("register");
+            let result = hit_result(target);
+
+            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            let binding_for_down = Rc::clone(&binding);
+            let member = arena_member.clone();
+            binding.handle_pointer_event(&down, move |_| {
+                binding_for_down.arena().add(PointerId::PRIMARY, member);
+                result
+            });
+            assert_eq!(&*log.borrow(), &["down"]);
+            assert!(binding.has_hit_test(PointerId::PRIMARY));
+
+            binding.cancel_active_pointers();
+
+            assert_eq!(
+                &*log.borrow(),
+                &["down", "cancel"],
+                "the cached route must observe a synthesized terminal Cancel"
+            );
+            assert_eq!(
+                arena_member.rejects.load(Ordering::Relaxed),
+                1,
+                "the arena must reject its members, never silently keep them"
+            );
+            assert!(!binding.has_hit_test(PointerId::PRIMARY));
+            assert!(binding.arena().is_empty());
+
+            // The pointer keeps moving after defocus: with the sequence
+            // gone this is a hover (fresh hit test, ephemeral dispatch) —
+            // the dead sequence's route must not receive it as a drag.
+            let mv = make_move_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Touch);
+            binding.handle_pointer_event(&mv, |_| HitTestResult::new());
+            binding.flush_pending_moves();
+            assert_eq!(
+                &*log.borrow(),
+                &["down", "cancel"],
+                "a post-cancel Move must not be delivered on the cancelled route"
+            );
+
+            // Idempotent: nothing left to cancel.
+            binding.cancel_active_pointers();
+            assert_eq!(&*log.borrow(), &["down", "cancel"]);
+        });
+    }
+
+    /// A panicking Cancel handler must not exempt the remaining contacts:
+    /// every snapshotted pointer is cancelled before the first panic
+    /// resumes, so no sequence survives a focus loss just because an
+    /// earlier-sorted pointer's handler blew up.
+    #[test]
+    fn cancel_active_pointers_cancels_every_contact_before_resuming_a_handler_panic() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let second_saw_cancel = Rc::new(Cell::new(false));
+
+        lane.enter(|| {
+            let panicking = handle
+                .register_pointer(|event| {
+                    if matches!(event, PointerEvent::Cancel(_)) {
+                        panic!("first contact cancel panic");
+                    }
+                })
+                .expect("register panicking target");
+            let observed = Rc::clone(&second_saw_cancel);
+            let second = handle
+                .register_pointer(move |event| {
+                    if matches!(event, PointerEvent::Cancel(_)) {
+                        observed.set(true);
+                    }
+                })
+                .expect("register second target");
+
+            // PRIMARY sorts before pointer 2, so the panicking handler runs
+            // first — the arrangement the loop must survive.
+            let first_down =
+                make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            binding.handle_pointer_event(&first_down, |_| hit_result(panicking));
+            let second_down = make_down_event_for_id(
+                PointerId::new(2).expect("nonzero pointer id"),
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                PointerType::Touch,
+            );
+            binding.handle_pointer_event(&second_down, |_| hit_result(second));
+            assert_eq!(binding.active_pointer_count(), 2);
+
+            let unwind = catch_unwind(AssertUnwindSafe(|| binding.cancel_active_pointers()));
+            let payload = unwind.expect_err("the handler panic must propagate");
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"first contact cancel panic"),
+                "the FIRST panic in cancellation order must win"
+            );
+
+            assert!(
+                second_saw_cancel.get(),
+                "the second contact must still observe its Cancel"
+            );
+            assert_eq!(
+                binding.active_pointer_count(),
+                0,
+                "no sequence may survive the sweep because an earlier handler panicked"
+            );
+            assert!(binding.arena().is_empty());
+        });
+    }
+
+    /// Mid-contact (a button held while the pointer crosses the window
+    /// boundary) the sequence keeps capture semantics: Enter/Leave deliver
+    /// on the route hit-tested at Down, with no fresh hit test.
+    #[test]
+    fn leave_mid_contact_delivers_on_the_cached_down_route() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        lane.enter(|| {
+            let sink = Rc::clone(&log);
+            let target = handle
+                .register_pointer(move |event| {
+                    sink.borrow_mut().push(match event {
+                        PointerEvent::Down(_) => "down",
+                        PointerEvent::Leave(_) => "leave",
+                        _ => "other",
+                    });
+                })
+                .expect("register");
+            let result = hit_result(target);
+
+            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&down, |_| result);
+
+            binding.handle_pointer_event(&make_boundary_event(false), |_| {
+                panic!("an active contact must reuse its Down route, never re-hit-test");
+            });
+            assert_eq!(&*log.borrow(), &["down", "leave"]);
+
+            let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&up, |_| HitTestResult::new());
         });
     }
 

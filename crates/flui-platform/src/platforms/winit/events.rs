@@ -72,14 +72,59 @@ fn pointer_state(
 /// Convert winit MouseButton to W3C PointerButton
 pub(crate) fn convert_mouse_button(button: MouseButton) -> PointerButton {
     match button {
-        // `Other` carries a vendor-specific button id ui-events has no slot
-        // for; treat it as the primary button like an unrecognized click.
-        MouseButton::Left | MouseButton::Other(_) => PointerButton::Primary,
+        MouseButton::Left => PointerButton::Primary,
         MouseButton::Right => PointerButton::Secondary,
         MouseButton::Middle => PointerButton::Auxiliary,
         MouseButton::Back => PointerButton::X1,
         MouseButton::Forward => PointerButton::X2,
+        MouseButton::Other(id) => vendor_button(id),
     }
+}
+
+/// Map a vendor-specific button id onto ui-events' exotic-button band.
+///
+/// winit reports mouse buttons beyond left/right/middle/back/forward as
+/// `Other(id)` with a backend-specific id. Such a button must never alias
+/// onto an actuating button — `Primary` in particular makes every tap/click
+/// recognizer treat the press as tap-eligible, so a vendor side-button would
+/// click whatever is under the cursor. ui-events reserves `B7`..`B32` for
+/// exactly these devices; the id is folded onto that band with a modulo, so
+/// the release of a vendor button always carries the same `PointerButton`
+/// as its press. Two ids a multiple of the band width apart share a slot —
+/// acceptable, because nothing in the gesture layer actuates on this band;
+/// determinism per id is the load-bearing property (the raw winit button
+/// set tracked by the platform, not this normalized value, is what decides
+/// which physical buttons are still held).
+fn vendor_button(id: u16) -> PointerButton {
+    const EXOTIC_BAND: [PointerButton; 26] = [
+        PointerButton::B7,
+        PointerButton::B8,
+        PointerButton::B9,
+        PointerButton::B10,
+        PointerButton::B11,
+        PointerButton::B12,
+        PointerButton::B13,
+        PointerButton::B14,
+        PointerButton::B15,
+        PointerButton::B16,
+        PointerButton::B17,
+        PointerButton::B18,
+        PointerButton::B19,
+        PointerButton::B20,
+        PointerButton::B21,
+        PointerButton::B22,
+        PointerButton::B23,
+        PointerButton::B24,
+        PointerButton::B25,
+        PointerButton::B26,
+        PointerButton::B27,
+        PointerButton::B28,
+        PointerButton::B29,
+        PointerButton::B30,
+        PointerButton::B31,
+        PointerButton::B32,
+    ];
+    EXOTIC_BAND[usize::from(id) % EXOTIC_BAND.len()]
 }
 
 /// Convert winit modifiers state to keyboard-types Modifiers
@@ -604,6 +649,56 @@ mod pointer_translation_tests {
         };
         assert_eq!(event.state.buttons, PointerButtons::default());
     }
+
+    /// A vendor side-button (winit `MouseButton::Other`) must never
+    /// translate to an actuating button: `Primary` makes every tap
+    /// recognizer treat the press as a left click, so button 6/7/... on a
+    /// gaming mouse would click whatever is under the cursor. It lands in
+    /// ui-events' exotic `B7`..`B32` band, deterministically per id, so a
+    /// release always carries the same button as its press.
+    #[test]
+    fn vendor_side_buttons_do_not_synthesize_primary_clicks() {
+        let actuating = [
+            PointerButton::Primary,
+            PointerButton::Secondary,
+            PointerButton::Auxiliary,
+            PointerButton::X1,
+            PointerButton::X2,
+        ];
+        for id in [0u16, 6, 7, 25, 26, 1000] {
+            let converted = convert_mouse_button(MouseButton::Other(id));
+            for banned in actuating {
+                assert_ne!(
+                    converted, banned,
+                    "Other({id}) must not alias onto the actuating button {banned:?}"
+                );
+            }
+            assert_eq!(
+                converted,
+                convert_mouse_button(MouseButton::Other(id)),
+                "press and release of Other({id}) must carry the same button"
+            );
+        }
+
+        // Full translation shape: the Down event for Other(6) carries the
+        // non-actuating button, and the held set never gains Primary.
+        let side_button = convert_mouse_button(MouseButton::Other(6));
+        let down = mouse_button_event(
+            MouseButton::Other(6),
+            ElementState::Pressed,
+            winit::dpi::PhysicalPosition::new(10.0, 10.0),
+            1.0,
+            KeyboardModifiers::empty(),
+            PointerButtons::from(side_button),
+        );
+        let PlatformInput::Pointer(PointerEvent::Down(event)) = down else {
+            panic!("press must translate to PointerEvent::Down");
+        };
+        assert_eq!(event.button, Some(side_button));
+        assert_ne!(event.button, Some(PointerButton::Primary));
+        assert!(!event.state.buttons.contains(PointerButton::Primary));
+    }
+
     /// A touch contact must never alias the mouse pointer, must stamp the
     /// primary "button" for its whole contact span (a buttons-empty touch
     /// move is classified as a hover and kills live pan tracking), and must

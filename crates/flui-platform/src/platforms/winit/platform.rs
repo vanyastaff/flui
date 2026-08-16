@@ -250,11 +250,12 @@ struct WinitPlatformState {
     /// the gesture layer, so without this the pan recognizer never receives
     /// drag updates (live drag-scrolling did nothing).
     ///
-    /// Raw, not normalized: `convert_mouse_button` maps every
-    /// `MouseButton::Other(_)` onto `Primary`, so a normalized set would
-    /// let releasing an aliased button clear `Primary` while the physical
-    /// left button is still down. The normalized set is DERIVED per event
-    /// by [`held_pointer_buttons`].
+    /// Raw, not normalized: `convert_mouse_button` folds the unbounded
+    /// `MouseButton::Other(_)` id space onto ui-events' finite exotic
+    /// button band, so two distinct vendor buttons can normalize to the
+    /// same `PointerButton` — a normalized set would let releasing one
+    /// clear the shared bit while the other is still down. The normalized
+    /// set is DERIVED per event by [`held_pointer_buttons`].
     pressed_buttons: std::collections::HashSet<winit::event::MouseButton>,
     /// Stable pointer ids for live touch contacts, keyed by the winit
     /// `(device, contact)` pair — two touch devices commonly both report
