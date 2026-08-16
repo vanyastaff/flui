@@ -3638,6 +3638,180 @@ mod gpu_tests {
         );
     }
 
+    /// A rotated `ClipRRect` clips to the rotated rounded rect, not to its
+    /// bounding box.
+    ///
+    /// The clip slot used to hold device-space bounds, which cannot express a
+    /// rotation: `clip_rrect` detected a non-axis-aligned CTM and fell back to
+    /// the coarse scissor. At 45° the scissor is the AABB of the rotated rect,
+    /// 41% larger per axis, so content leaked well outside the intended shape.
+    ///
+    /// The drawn rrect had already solved this — `RectInstance::with_affine_transform`
+    /// passes local bounds plus the affine and lets the shader do the work
+    /// (see `o4_rotated_rrect_correct_size_orientation_and_aa`). The clip now
+    /// carries the same information, inverted, so the fragment stage maps
+    /// `world_pos` back into clip-local space.
+    ///
+    /// Sample points, for a 80x80 clip at (24, 24) rotated 45° about the
+    /// surface centre (64, 64):
+    ///
+    /// - (64, 64) — the centre, inside under any interpretation. Paints, or
+    ///   the test would pass by drawing nothing.
+    /// - (14, 14) — inside the AABB of the rotated rect, OUTSIDE the rect
+    ///   itself. This is the discriminating sample: the scissor fallback
+    ///   paints it, a correct rotated clip does not.
+    ///
+    /// The point has to be near an AABB CORNER. The clip is rotated about its
+    /// own centre, so the AABB grows along the diagonals and a point pushed
+    /// straight out along an axis — (18, 64), say — is still inside the
+    /// rotated square and correctly painted either way.
+    #[test]
+    fn a_rotated_clip_follows_the_rotation() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.translate(flui_types::Offset::new(Pixels(64.0), Pixels(64.0)));
+        painter.rotate(std::f32::consts::FRAC_PI_4);
+        painter.translate(flui_types::Offset::new(Pixels(-64.0), Pixels(-64.0)));
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            flui_types::Rect::from_xywh(Pixels(24.0), Pixels(24.0), Pixels(80.0), Pixels(80.0)),
+            Pixels(12.0),
+        ));
+        // Far larger than the surface, so every sample point is inside the
+        // drawn shape and only the clip can remove it.
+        painter.rect(
+            flui_types::Rect::from_xywh(
+                Pixels(-200.0),
+                Pixels(-200.0),
+                Pixels(600.0),
+                Pixels(600.0),
+            ),
+            &Paint::fill(Color::rgb(0, 0, 255)),
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Rotated Clip Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let at = |x: usize, y: usize| pixels[y * w + x];
+
+        let centre = at(64, 64);
+        assert!(
+            centre[2] > 200,
+            "precondition: the fill must paint inside the clip; got {centre:?}"
+        );
+
+        let outside = at(14, 14);
+        assert!(
+            outside[3] < 32,
+            "a rotated clip must follow its rotation; rgba={outside:?} at a \
+             pixel inside the rotated rect's BOUNDING BOX but outside the rect \
+             — the clip fell back to the coarse scissor"
+        );
+    }
+
+    /// A non-uniformly scaled circular clip produces elliptical corners, not a
+    /// clamped scalar radius.
+    ///
+    /// The clip slot holds ONE radius per corner, so a device-space form had
+    /// to collapse a scaled circular corner — an ellipse — to a scalar, then
+    /// clamp it to the box's half-height or the rounded-box SDF went
+    /// degenerate and clipped inward. Keeping the radius in the caller's own
+    /// space and letting the mapping stretch it removes the collapse entirely.
+    ///
+    /// `scale(1, 3)` on a 96x32 clip with radius 16: device bounds 96x96,
+    /// corners 16 wide and 48 tall. The old form collapsed those to
+    /// `max(16, 48) = 48`, clamped to `min(96, 96)/2 = 48`, and rounded every
+    /// corner by 48 — a stadium, not the intended shape.
+    ///
+    /// Sample (20, 48) is on the left edge at mid-height: outside a 48-radius
+    /// corner sweep, inside the true ellipse.
+    ///
+    /// What this test can and cannot show. Its counterfactual is the ENTIRE
+    /// previous representation — device-space bounds with pre-scaled radii —
+    /// which no longer exists as a line to revert; in local space the
+    /// anisotropy problem cannot be expressed at all, which is the point. The
+    /// old form's arithmetic is pinned instead by the `state_stack` unit tests
+    /// that replaced its device-space ones. What this test does prove is that
+    /// the mapping is live: making `clipAlpha` use `world_pos` directly fails
+    /// the first precondition with `[0, 0, 0, 0]`.
+    #[test]
+    fn a_non_uniformly_scaled_clip_keeps_elliptical_corners() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.scale(1.0, 3.0);
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            flui_types::Rect::from_xywh(Pixels(16.0), Pixels(0.0), Pixels(96.0), Pixels(32.0)),
+            Pixels(16.0),
+        ));
+        painter.rect(
+            flui_types::Rect::from_xywh(
+                Pixels(-200.0),
+                Pixels(-200.0),
+                Pixels(600.0),
+                Pixels(600.0),
+            ),
+            &Paint::fill(Color::rgb(0, 0, 255)),
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Anisotropic Clip Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+        let w = SURFACE_WIDTH as usize;
+        let at = |x: usize, y: usize| pixels[y * w + x];
+
+        let centre = at(64, 48);
+        assert!(
+            centre[2] > 200,
+            "precondition: the fill must paint inside the clip; got {centre:?}"
+        );
+
+        // Just outside the device-space bounds: clipped under any reading, so
+        // a shader that ignored the clip entirely would not pass.
+        let beyond = at(120, 48);
+        assert!(
+            beyond[3] < 32,
+            "precondition: outside the clip's own bounds; got {beyond:?}"
+        );
+
+        // Left edge at mid-height. A 48-radius corner sweep would have eaten
+        // this pixel; the true ellipse (16 wide, 48 tall) does not.
+        let edge = at(20, 48);
+        assert!(
+            edge[2] > 200,
+            "a non-uniformly scaled clip must keep elliptical corners; \
+             rgba={edge:?} — the radius collapsed to a clamped scalar and \
+             rounded the shape into a stadium"
+        );
+    }
+
     /// Text that is the ONLY content of an opacity layer must still belong
     /// to the layer: composited with the layer (subject to its opacity) and
     /// buried by top-level geometry drawn AFTER the layer — not dropped as

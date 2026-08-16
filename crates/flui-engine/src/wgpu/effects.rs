@@ -70,10 +70,11 @@ pub struct LinearGradientInstance {
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
-    /// Device-space rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
+    /// Clip-local rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
     ///
-    /// All-zero means "no clip". Attached by `apply_active_clip`, evaluated per
-    /// pixel by the shader against `world_pos`. The scissor alone can only
+    /// All-zero means "no clip". Attached by `apply_active_clip`; the shader
+    /// maps a fragment's device position into this space with
+    /// `clip_device_to_local` before evaluating it. The scissor alone can only
     /// express the clip's axis-aligned bounding box, which leaves square
     /// corners on a `ClipRRect`.
     ///
@@ -84,6 +85,15 @@ pub struct LinearGradientInstance {
     pub clip_rrect: [f32; 8],
     /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
     pub clip_kind: [u32; 4],
+    /// Device-to-clip-local linear part: `[a, b, c, d]`, columns first.
+    ///
+    /// The clip's bounds and radii are in the space the caller set them in;
+    /// this maps a device-space fragment position back there. Identity is
+    /// `[1, 0, 0, 1]`.
+    pub clip_device_to_local: [f32; 4],
+    /// Device-to-clip-local translation, padded to a `vec4` attribute:
+    /// `[tx, ty, 0, 0]`.
+    pub clip_local_origin: [f32; 4],
     /// Padding for GPU alignment
     pub padding: [u32; 2],
 }
@@ -107,6 +117,8 @@ impl LinearGradientInstance {
             padding: [0; 2],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
         }
     }
 
@@ -172,10 +184,11 @@ pub struct RadialGradientInstance {
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
-    /// Device-space rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
+    /// Clip-local rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
     ///
-    /// All-zero means "no clip". Attached by `apply_active_clip`, evaluated per
-    /// pixel by the shader against `world_pos`. The scissor alone can only
+    /// All-zero means "no clip". Attached by `apply_active_clip`; the shader
+    /// maps a fragment's device position into this space with
+    /// `clip_device_to_local` before evaluating it. The scissor alone can only
     /// express the clip's axis-aligned bounding box, which leaves square
     /// corners on a `ClipRRect`.
     ///
@@ -186,6 +199,15 @@ pub struct RadialGradientInstance {
     pub clip_rrect: [f32; 8],
     /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
     pub clip_kind: [u32; 4],
+    /// Device-to-clip-local linear part: `[a, b, c, d]`, columns first.
+    ///
+    /// The clip's bounds and radii are in the space the caller set them in;
+    /// this maps a device-space fragment position back there. Identity is
+    /// `[1, 0, 0, 1]`.
+    pub clip_device_to_local: [f32; 4],
+    /// Device-to-clip-local translation, padded to a `vec4` attribute:
+    /// `[tx, ty, 0, 0]`.
+    pub clip_local_origin: [f32; 4],
     /// Padding for GPU alignment
     pub padding2: [u32; 2],
 }
@@ -210,6 +232,8 @@ impl RadialGradientInstance {
             padding2: [0; 2],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
         }
     }
 
@@ -252,10 +276,11 @@ pub struct SweepGradientInstance {
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
-    /// Device-space rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
+    /// Clip-local rounded-rect clip: `[x, y, w, h, tl, tr, br, bl]`.
     ///
-    /// All-zero means "no clip". Attached by `apply_active_clip`, evaluated per
-    /// pixel by the shader against `world_pos`. The scissor alone can only
+    /// All-zero means "no clip". Attached by `apply_active_clip`; the shader
+    /// maps a fragment's device position into this space with
+    /// `clip_device_to_local` before evaluating it. The scissor alone can only
     /// express the clip's axis-aligned bounding box, which leaves square
     /// corners on a `ClipRRect`.
     ///
@@ -266,6 +291,15 @@ pub struct SweepGradientInstance {
     pub clip_rrect: [f32; 8],
     /// `[kind, _, _, _]`: 0 = none, 1 = rrect, 2 = rounded superellipse.
     pub clip_kind: [u32; 4],
+    /// Device-to-clip-local linear part: `[a, b, c, d]`, columns first.
+    ///
+    /// The clip's bounds and radii are in the space the caller set them in;
+    /// this maps a device-space fragment position back there. Identity is
+    /// `[1, 0, 0, 1]`.
+    pub clip_device_to_local: [f32; 4],
+    /// Device-to-clip-local translation, padded to a `vec4` attribute:
+    /// `[tx, ty, 0, 0]`.
+    pub clip_local_origin: [f32; 4],
     /// Padding for GPU alignment
     pub padding: [u32; 2],
 }
@@ -290,6 +324,8 @@ impl SweepGradientInstance {
             padding: [0; 2],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
+            clip_local_origin: [0.0; 4],
         }
     }
 

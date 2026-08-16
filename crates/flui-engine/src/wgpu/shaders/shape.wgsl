@@ -16,9 +16,11 @@ var<uniform> viewport: Viewport;
 // slot on, so the clip is bound once per `TessellatedBatch` — the granularity
 // the batcher already splits at, since it refuses to merge across a clip change.
 struct ClipUniform {
-    bounds: vec4<f32>,  // Device-space [x, y, w, h]
+    bounds: vec4<f32>,  // Clip-local [x, y, w, h]; device_to_local maps into it
     radii: vec4<f32>,   // [tl, tr, br, bl]
     kind: vec4<u32>,    // [kind, _, _, _]: 0 = none, 1 = rrect, 2 = rsuperellipse
+    device_to_local: vec4<f32>, // [a, b, c, d], columns first
+    local_origin: vec4<f32>,    // [tx, ty, 0, 0]
 }
 
 @group(1) @binding(0)
@@ -33,7 +35,8 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    // Device-space position, carried for the clip SDF. `clip_position` is in
+    // Device-space position, carried for the clip SDF, which maps it
+    // into clip-local space itself. `clip_position` is in
     // NDC by the time the fragment stage sees it, so it cannot serve here.
     @location(1) world_pos: vec2<f32>,
 }
@@ -67,6 +70,14 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let c = input.color;
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
-    let a = c.a * clipAlpha(input.world_pos, clip.bounds, clip.radii, clip.kind.x);
+    let a = c.a
+        * clipAlpha(
+            input.world_pos,
+            clip.bounds,
+            clip.radii,
+            clip.kind.x,
+            clip.device_to_local,
+            clip.local_origin,
+        );
     return vec4<f32>(c.rgb * a, a);
 }

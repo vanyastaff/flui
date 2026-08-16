@@ -184,45 +184,82 @@ impl GpuReplay {
     ///
     /// A cleared slot (`clip_kind[0] == 0`) is left untouched: the all-zero sentinel
     /// must stay bit-exact, and scaling zeros could introduce signed zeros.
-    /// Remap EVERY device-space SDF clip in `segment` into a grown offscreen's
-    /// local space.
+    /// Rebase EVERY SDF clip in `segment` into a shrunken intermediate's local
+    /// space.
     ///
-    /// One call covering every clip-carrying batch, rather than a line inside each
-    /// batch's transform loop. That shape is deliberate: the rect loop carried this
-    /// inline and the circle loop did not, and a clip left in full-frame
-    /// coordinates is invisible until something is drawn inside a blur or filter
-    /// layer. A batch that gains a clip slot later is remapped by adding it here,
-    /// in the one place that already reads them all.
+    /// One call covering every clip carrier, rather than a line inside each
+    /// batch's transform loop. That shape is deliberate: the rect loop carried
+    /// this inline and the circle loop did not, and a clip left in the wrong
+    /// space is invisible until something is drawn inside a blur or filter
+    /// layer. A carrier added later is covered by editing the one place that
+    /// already reads them all.
     ///
     /// Two kinds are deliberately absent, neither by oversight. `ArcInstance`
-    /// carries no clip slot at all. `TextureInstance` carries one, but a segment
-    /// holding `cached_images`/`external_images` never reaches a shrunken
-    /// intermediate: `content_aabb` (`painter/layer.rs`) returns `None` for it, so
-    /// `fb_dim == viewport` and this remap would be the identity anyway. If that
-    /// fallback gate ever admits images, their clips must be added here in the
-    /// same change.
+    /// carries no clip slot at all. Gradients carry one but, like shadows and
+    /// images, are excluded from the shrunken path by `content_aabb`; if that
+    /// gate ever admits them, their clips must be added here in the same
+    /// change.
     pub(super) fn remap_segment_clips(
         segment: &mut super::command_ir::DrawSegment,
         origin: (f32, f32),
         scale: (f32, f32),
     ) {
         for inst in &mut segment.rect_batch.instances {
-            Self::remap_clip_rrect(&mut inst.clip_rrect, inst.clip_kind, origin, scale);
+            Self::rebase_clip(
+                &mut inst.clip_device_to_local,
+                &mut inst.clip_local_origin,
+                inst.clip_kind,
+                origin,
+                scale,
+            );
         }
         for inst in &mut segment.circle_batch.instances {
-            Self::remap_clip_rrect(&mut inst.clip_rrect, inst.clip_kind, origin, scale);
+            Self::rebase_clip(
+                &mut inst.clip_device_to_local,
+                &mut inst.clip_local_origin,
+                inst.clip_kind,
+                origin,
+                scale,
+            );
         }
         // Tessellated geometry carries its clip on the BATCH, not on instances
         // — and unlike shadows/gradients/images it IS repositioned into a
         // shrunken intermediate (`content_aabb` returns `Some` for a
-        // vertices-only segment), so it needs the remap just as much.
+        // vertices-only segment), so it needs the rebase just as much.
         for batch in &mut segment.tess_batches {
-            Self::remap_clip_rrect(&mut batch.clip_rrect, batch.clip_kind, origin, scale);
+            let mut m = [
+                batch.clip.device_to_local[0],
+                batch.clip.device_to_local[1],
+                batch.clip.device_to_local[2],
+                batch.clip.device_to_local[3],
+            ];
+            let mut t = [
+                batch.clip.device_to_local[4],
+                batch.clip.device_to_local[5],
+                0.0,
+                0.0,
+            ];
+            Self::rebase_clip(&mut m, &mut t, batch.clip.kind, origin, scale);
+            batch.clip.device_to_local = [m[0], m[1], m[2], m[3], t[0], t[1]];
         }
     }
 
-    fn remap_clip_rrect(
-        clip_rrect: &mut [f32; 8],
+    /// Compose a framebuffer rebase into a clip's device-to-local mapping.
+    ///
+    /// The intermediate's fragments arrive at `p' = (p − origin) · scale`, so
+    /// the mapping that used to consume `p` must now consume `p'`:
+    ///
+    /// ```text
+    /// p     = p' / scale + origin
+    /// local = M · p + t
+    ///       = (M · diag(1/scale)) · p' + (M · origin + t)
+    /// ```
+    ///
+    /// Composing rather than moving the bounds is what makes this exact under
+    /// rotation: there is no AABB step to lose the orientation in.
+    fn rebase_clip(
+        device_to_local: &mut [f32; 4],
+        local_origin: &mut [f32; 4],
         clip_kind: [u32; 4],
         origin: (f32, f32),
         scale: (f32, f32),
@@ -232,13 +269,20 @@ impl GpuReplay {
         }
         let (origin_x, origin_y) = origin;
         let (scale_x, scale_y) = scale;
-        clip_rrect[0] = (clip_rrect[0] - origin_x) * scale_x;
-        clip_rrect[1] = (clip_rrect[1] - origin_y) * scale_y;
-        clip_rrect[2] *= scale_x;
-        clip_rrect[3] *= scale_y;
-        let avg_scale = (scale_x + scale_y) * 0.5;
-        for r in &mut clip_rrect[4..8] {
-            *r *= avg_scale;
+        let [a, b, c, d] = *device_to_local;
+
+        // t' = M · origin + t, using the PRE-scale columns.
+        local_origin[0] += a * origin_x + c * origin_y;
+        local_origin[1] += b * origin_x + d * origin_y;
+
+        // M' = M · diag(1/sx, 1/sy) — scale each column by its own axis.
+        if scale_x != 0.0 {
+            device_to_local[0] = a / scale_x;
+            device_to_local[1] = b / scale_x;
+        }
+        if scale_y != 0.0 {
+            device_to_local[2] = c / scale_y;
+            device_to_local[3] = d / scale_y;
         }
     }
 
@@ -387,9 +431,10 @@ impl GpuReplay {
             inst.transform[3] *= scale_y;
         }
 
-        // The SDF clip each instance carries is in DEVICE space, so it moves
-        // with them. One call covering every clip-carrying batch, rather than a
-        // line per transform loop above — see `remap_segment_clips`.
+        // Each clip's device-to-local mapping consumes a device-space
+        // position, so the rebase above has to be composed into it. One call
+        // covering every clip carrier, rather than a line per transform loop
+        // above — see `remap_segment_clips`.
         Self::remap_segment_clips(
             &mut remapped_segment,
             (origin_x, origin_y),
@@ -1318,17 +1363,20 @@ pub(in crate::wgpu) fn apply_image_filter_passes(
 
 #[cfg(test)]
 mod grown_offscreen_clip_tests {
-    use super::super::command_ir::DrawSegment;
+    use super::super::command_ir::{DrawSegment, TessellatedBatch};
     use super::super::instancing::{CircleInstance, ClippableInstance, RectInstance};
+    use super::super::pipeline::PipelineKey;
+    use super::super::state_stack::ResolvedClip;
     use flui_types::{Color, Point, Rect, geometry::Pixels};
 
-    /// Every clip carrier is remapped into a grown offscreen the same way.
+    /// Every clip carrier is rebased into a shrunken intermediate the same way.
     ///
-    /// `render_segment_to_grown_offscreen` rebases and scales instances into a
-    /// filter intermediate that is smaller than the viewport. `clip_rrect` is in
-    /// DEVICE space, so it has to move with them — otherwise the shader compares
-    /// a framebuffer-local `world_pos` against full-frame clip bounds, and the
-    /// rounded clip is displaced far enough to erase the filtered shape.
+    /// `render_segment_to_grown_offscreen` rebases and scales geometry into a
+    /// filter intermediate smaller than the viewport, so the mapping that takes
+    /// a fragment position into clip-local space has to absorb that rebase —
+    /// otherwise the shader feeds it a framebuffer-local position while the
+    /// mapping still expects a full-frame one, and the clip lands somewhere
+    /// else entirely.
     ///
     /// The rect loop always did this inline; the circle loop did not, because
     /// circles had no clip slot until they gained one, and tessellated batches
@@ -1336,30 +1384,35 @@ mod grown_offscreen_clip_tests {
     /// literal, is what stops the next carrier being forgotten.
     ///
     /// Reverted (drop any one loop in `remap_segment_clips`): that carrier
-    /// keeps full-frame bounds and this fails on its `assert_eq!`.
+    /// keeps its full-frame mapping and this fails on its `assert_eq!`.
     #[test]
     fn every_clip_carrier_is_remapped_the_same_way() {
         const ORIGIN: (f32, f32) = (40.0, 24.0);
         const SCALE: (f32, f32) = (0.5, 0.25);
-        // [x, y, w, h, tl, tr, br, bl] in device space.
-        const CLIP: [f32; 8] = [60.0, 44.0, 200.0, 120.0, 8.0, 8.0, 8.0, 8.0];
+        // A rotated, translated clip: the case device-space bounds could not
+        // express at all, and the one a per-component remap would mangle.
+        const CLIP: ResolvedClip = ResolvedClip {
+            rrect: [0.0, 0.0, 200.0, 120.0, 8.0, 8.0, 8.0, 8.0],
+            kind: [1, 0, 0, 0],
+            device_to_local: [0.7, 0.7, -0.7, 0.7, 12.0, -5.0],
+        };
 
         let rect = RectInstance::rect(
             Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(10.0), Pixels(10.0)),
             Color::rgb(255, 0, 0),
         )
-        .with_clip_rrect(CLIP);
+        .with_clip(CLIP);
         let circle = CircleInstance::new(
             Point::new(Pixels(5.0), Pixels(5.0)),
             5.0,
             Color::rgb(255, 0, 0),
             [1.0, 1.0],
         )
-        .with_clip_rrect(CLIP);
+        .with_clip(CLIP);
 
         assert_eq!(
-            rect.clip_rrect, circle.clip_rrect,
-            "precondition: both kinds start from the same device-space clip"
+            rect.clip_device_to_local, circle.clip_device_to_local,
+            "precondition: both kinds start from the same mapping"
         );
         assert_ne!(rect.clip_kind[0], 0, "precondition: the clip is active");
 
@@ -1367,36 +1420,88 @@ mod grown_offscreen_clip_tests {
         // `add` returns "batch is now full", not "succeeded".
         assert!(!segment.rect_batch.add(rect), "rect batch not full");
         assert!(!segment.circle_batch.add(circle), "circle batch not full");
-        segment
-            .tess_batches
-            .push(super::super::command_ir::TessellatedBatch {
-                pipeline_key: super::super::pipeline::PipelineKey::alpha_blend(),
-                scissor: None,
-                index_start: 0,
-                index_count: 3,
-                clip_rrect: CLIP,
-                clip_kind: [1, 0, 0, 0],
-            });
+        segment.tess_batches.push(TessellatedBatch {
+            pipeline_key: PipelineKey::alpha_blend(),
+            scissor: None,
+            index_start: 0,
+            index_count: 3,
+            clip: CLIP,
+        });
 
         super::GpuReplay::remap_segment_clips(&mut segment, ORIGIN, SCALE);
 
-        let remapped_rect = segment.rect_batch.instances[0].clip_rrect;
-        let remapped_circle = segment.circle_batch.instances[0].clip_rrect;
+        let rect_m = segment.rect_batch.instances[0].clip_device_to_local;
+        let rect_t = segment.rect_batch.instances[0].clip_local_origin;
         assert_ne!(
-            remapped_rect, CLIP,
-            "precondition: the remap actually changed the rect's clip"
+            rect_m,
+            [
+                CLIP.device_to_local[0],
+                CLIP.device_to_local[1],
+                CLIP.device_to_local[2],
+                CLIP.device_to_local[3]
+            ],
+            "precondition: the rebase actually changed the rect's mapping"
+        );
+
+        assert_eq!(
+            segment.circle_batch.instances[0].clip_device_to_local, rect_m,
+            "a circle's clip must be rebased exactly as a rect's is"
         );
         assert_eq!(
-            segment.tess_batches[0].clip_rrect, remapped_rect,
-            "a tessellated batch's clip must be remapped like a rect's; it IS \
+            segment.circle_batch.instances[0].clip_local_origin, rect_t,
+            "a circle's clip origin must be rebased exactly as a rect's is"
+        );
+
+        let tess = segment.tess_batches[0].clip.device_to_local;
+        assert_eq!(
+            [tess[0], tess[1], tess[2], tess[3]],
+            rect_m,
+            "a tessellated batch's clip must be rebased like a rect's; it IS \
              repositioned into the shrunken intermediate, unlike gradients and \
              images, which `content_aabb` keeps out of that path"
         );
         assert_eq!(
-            remapped_circle, remapped_rect,
-            "a circle's clip must be remapped into the grown offscreen exactly as \
-             a rect's is; leaving it in full-frame device space displaces the \
-             rounded clip inside every blur/filter layer"
+            [tess[4], tess[5]],
+            [rect_t[0], rect_t[1]],
+            "and so must its origin"
+        );
+    }
+
+    /// The rebase is a composition, so applying it must equal mapping through
+    /// the original clip after undoing the framebuffer transform.
+    ///
+    /// A per-component remap of device-space bounds cannot satisfy this under
+    /// rotation — there is no axis-aligned box to move — which is why the old
+    /// representation had to refuse rotated clips outright.
+    #[test]
+    fn the_rebase_composes_with_the_framebuffer_transform() {
+        const ORIGIN: (f32, f32) = (40.0, 24.0);
+        const SCALE: (f32, f32) = (0.5, 0.25);
+        // A 45°-ish rotation with a translation.
+        let m0 = [0.7_f32, 0.7, -0.7, 0.7];
+        let t0 = [12.0_f32, -5.0, 0.0, 0.0];
+
+        let mut m = m0;
+        let mut t = t0;
+        super::GpuReplay::rebase_clip(&mut m, &mut t, [1, 0, 0, 0], ORIGIN, SCALE);
+
+        // A device-space point, and the framebuffer-local point it becomes.
+        let p = (137.0_f32, 91.0_f32);
+        let p_fb = ((p.0 - ORIGIN.0) * SCALE.0, (p.1 - ORIGIN.1) * SCALE.1);
+
+        let apply = |m: [f32; 4], t: [f32; 4], q: (f32, f32)| {
+            (
+                m[0] * q.0 + m[2] * q.1 + t[0],
+                m[1] * q.0 + m[3] * q.1 + t[1],
+            )
+        };
+        let want = apply(m0, t0, p);
+        let got = apply(m, t, p_fb);
+
+        assert!(
+            (want.0 - got.0).abs() < 1e-3 && (want.1 - got.1).abs() < 1e-3,
+            "rebased mapping applied to the framebuffer-local point must land \
+             where the original lands for the device point: want {want:?}, got {got:?}"
         );
     }
 }

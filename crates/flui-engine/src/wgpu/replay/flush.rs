@@ -601,21 +601,7 @@ impl GpuReplay {
             .tess_batches
             .iter()
             .map(|batch| {
-                let uniform = super::super::command_ir::ClipUniform {
-                    bounds: [
-                        batch.clip_rrect[0],
-                        batch.clip_rrect[1],
-                        batch.clip_rrect[2],
-                        batch.clip_rrect[3],
-                    ],
-                    radii: [
-                        batch.clip_rrect[4],
-                        batch.clip_rrect[5],
-                        batch.clip_rrect[6],
-                        batch.clip_rrect[7],
-                    ],
-                    kind: batch.clip_kind,
-                };
+                let uniform = super::super::command_ir::ClipUniform::from_resolved(batch.clip);
                 let buffer = resources
                     .uniform_pool_mut()
                     .alloc(bytemuck::bytes_of(&uniform));
