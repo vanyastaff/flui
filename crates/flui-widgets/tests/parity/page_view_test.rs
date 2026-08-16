@@ -1107,3 +1107,33 @@ fn next_page_and_previous_page_navigate_and_clamp_at_the_ends() {
         "previous_page below the first page must clamp at 0.0, not go negative"
     );
 }
+
+/// Every page sits under its own `RenderRepaintBoundary`.
+///
+/// Flutter parity: `PageView` builds a `SliverChildListDelegate(children)`
+/// (`widgets/page_view.dart:711`) and takes that delegate's default
+/// `addRepaintBoundaries: true`, so each page is wrapped
+/// (`widgets/scroll_delegate.dart:774`).
+///
+/// A page carousel is the case the boundary is most obviously for: swiping
+/// between pages changes which page is visible, not what any page contains.
+/// Without the boundary every visible page repaints on every frame of the
+/// swipe.
+#[test]
+fn page_view_wraps_each_page_in_a_repaint_boundary() {
+    const PAGES: usize = 3;
+
+    let laid = lay_out(PageView::new(pages(PAGES)), tight(300.0, 300.0));
+
+    let boundaries = laid.find_all_by_render_type("RenderRepaintBoundary");
+    assert!(
+        !boundaries.is_empty(),
+        "pages must carry repaint boundaries; found none"
+    );
+    assert!(
+        boundaries.len() <= PAGES,
+        "at most one boundary per page — {} boundaries for {PAGES} pages means \
+         something is wrapping more than once",
+        boundaries.len()
+    );
+}

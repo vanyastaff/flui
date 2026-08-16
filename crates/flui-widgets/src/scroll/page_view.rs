@@ -466,7 +466,7 @@ impl PageView {
             scroll_direction: Axis::Horizontal,
             on_page_changed: None,
             cache_extent: Some((0.0, CacheExtentStyle::Viewport)),
-            children: children.into_boxed_vec(),
+            children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
         }
     }
 
