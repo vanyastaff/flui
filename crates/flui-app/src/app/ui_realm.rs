@@ -962,6 +962,18 @@ impl UiRealm {
             .widgets()
     }
 
+    /// This realm's `GestureBinding` for the presentation named `id` — the
+    /// addressed counterpart to [`Self::gestures`] (primary-only), for the
+    /// tests proving focus-loss cancellation reaches exactly the binding
+    /// the addressed presentation's pointer input lands in.
+    #[cfg(test)]
+    pub(crate) fn presentation_gestures_for_test(&self, id: PresentationId) -> &GestureBinding {
+        self.presentations
+            .get(id)
+            .expect("BUG: presentation_gestures_for_test called with an unknown id")
+            .gestures()
+    }
+
     /// This realm's `TextInputHandle` for the presentation named `id` — the
     /// addressed counterpart to [`Self::text_input_handle`] (primary-only),
     /// for the isolation suite proving IME sessions stay exclusive to the
@@ -1241,6 +1253,30 @@ impl UiRealm {
     /// realm dispatch path rather than exposing a second public owner seam.
     pub(crate) fn gestures(&self) -> &GestureBinding {
         self.presentations.primary().gestures()
+    }
+
+    /// Cancel in-flight pointer sequences on the ADDRESSED presentation's
+    /// own gesture binding.
+    ///
+    /// Pointer input routes per presentation
+    /// ([`Self::handle_input_addressed`] dispatches to
+    /// `presentation.gestures()`), so a focus-loss cancellation must reach
+    /// the same binding that presentation's Downs landed in — the
+    /// realm-level [`Self::gestures`] wrapper is primary-only, and under a
+    /// shared-realm window policy it would cancel a sibling presentation's
+    /// sequences while leaving the defocused window's own drag stranded. A
+    /// presentation this realm no longer hosts is a traced no-op, matching
+    /// the addressed-input path's posture for the same race.
+    pub(crate) fn cancel_pointer_sequences_for(&self, presentation_id: PresentationId) {
+        let Some(presentation) = self.presentations.get(presentation_id) else {
+            tracing::debug!(
+                { flui_foundation::diagnostics::PRESENTATION_ID } = presentation_id.as_u64(),
+                "dropping a pointer-sequence cancellation addressed to a presentation this \
+                 realm no longer hosts"
+            );
+            return;
+        };
+        presentation.gestures().cancel_active_pointers();
     }
 
     /// Focus state for the realm's current primary presentation. Since

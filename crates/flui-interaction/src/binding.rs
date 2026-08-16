@@ -832,6 +832,7 @@ impl GestureBinding {
             .map(|entry| (*entry.key(), entry.pointer_type))
             .collect();
         pointers.sort_unstable_by_key(|(pointer_id, _)| *pointer_id);
+        let mut first_panic = None;
         for (pointer_id, pointer_type) in pointers {
             // A handler run by an earlier iteration may have re-entered the
             // binding and already terminated this sequence.
@@ -844,10 +845,20 @@ impl GestureBinding {
                 persistent_device_id: None,
             });
             // The terminal arm never invokes the hit-test callback: Cancel
-            // resolves over the route cached at Down.
-            self.handle_pointer_event_kernel(&cancel, |_| {
-                unreachable!("BUG: a terminal Cancel must never hit-test")
+            // resolves over the route cached at Down. A panicking handler
+            // must not exempt the remaining contacts from cancellation —
+            // every snapshotted pointer is cancelled first, then the first
+            // panic resumes (the same all-work-first posture the kernel
+            // itself has within one sequence).
+            let delivered = RoutePanic::capture(|| {
+                self.handle_pointer_event_kernel(&cancel, |_| {
+                    unreachable!("BUG: a terminal Cancel must never hit-test")
+                });
             });
+            RoutePanic::preserve_first(&mut first_panic, delivered, "focus-loss pointer cancel");
+        }
+        if let Some(panic) = first_panic {
+            panic.resume();
         }
     }
 
@@ -2935,6 +2946,68 @@ mod tests {
             // Idempotent: nothing left to cancel.
             binding.cancel_active_pointers();
             assert_eq!(&*log.borrow(), &["down", "cancel"]);
+        });
+    }
+
+    /// A panicking Cancel handler must not exempt the remaining contacts:
+    /// every snapshotted pointer is cancelled before the first panic
+    /// resumes, so no sequence survives a focus loss just because an
+    /// earlier-sorted pointer's handler blew up.
+    #[test]
+    fn cancel_active_pointers_cancels_every_contact_before_resuming_a_handler_panic() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let second_saw_cancel = Rc::new(Cell::new(false));
+
+        lane.enter(|| {
+            let panicking = handle
+                .register_pointer(|event| {
+                    if matches!(event, PointerEvent::Cancel(_)) {
+                        panic!("first contact cancel panic");
+                    }
+                })
+                .expect("register panicking target");
+            let observed = Rc::clone(&second_saw_cancel);
+            let second = handle
+                .register_pointer(move |event| {
+                    if matches!(event, PointerEvent::Cancel(_)) {
+                        observed.set(true);
+                    }
+                })
+                .expect("register second target");
+
+            // PRIMARY sorts before pointer 2, so the panicking handler runs
+            // first — the arrangement the loop must survive.
+            let first_down =
+                make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            binding.handle_pointer_event(&first_down, |_| hit_result(panicking));
+            let second_down = make_down_event_for_id(
+                PointerId::new(2).expect("nonzero pointer id"),
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                PointerType::Touch,
+            );
+            binding.handle_pointer_event(&second_down, |_| hit_result(second));
+            assert_eq!(binding.active_pointer_count(), 2);
+
+            let unwind = catch_unwind(AssertUnwindSafe(|| binding.cancel_active_pointers()));
+            let payload = unwind.expect_err("the handler panic must propagate");
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"first contact cancel panic"),
+                "the FIRST panic in cancellation order must win"
+            );
+
+            assert!(
+                second_saw_cancel.get(),
+                "the second contact must still observe its Cancel"
+            );
+            assert_eq!(
+                binding.active_pointer_count(),
+                0,
+                "no sequence may survive the sweep because an earlier handler panicked"
+            );
+            assert!(binding.arena().is_empty());
         });
     }
 
