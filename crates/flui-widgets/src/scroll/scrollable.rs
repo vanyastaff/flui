@@ -640,6 +640,13 @@ impl ViewState<Scrollable> for ScrollableState {
             let fling_wheel = fling_controller.clone();
             Listener::new()
                 .on_scroll_claim(move |data: &ScrollEventData| {
+                    // Deliberately modifier-agnostic — the oracle's
+                    // `_receivedPointerSignal` reads no modifiers, so a
+                    // ctrl+wheel tick over a plain list scrolls exactly as
+                    // Flutter's does. The ctrl+wheel-zooms contract needs no
+                    // decline here: a chord-gated zoom consumer sits INSIDE
+                    // the scrollable, and the leaf-first claim walk asks it
+                    // first.
                     let axis_delta = match scroll_direction {
                         Axis::Vertical => data.delta.dy.get(),
                         Axis::Horizontal => data.delta.dx.get(),

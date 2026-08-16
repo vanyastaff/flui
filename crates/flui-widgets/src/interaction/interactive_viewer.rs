@@ -63,7 +63,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_geometry::{Matrix4, px};
-use flui_interaction::events::ScrollEventData;
+use flui_interaction::events::{Modifiers, ScrollEventData};
 use flui_interaction::routing::EventPropagation;
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
 use flui_objects::SubtreeAnchor;
@@ -153,6 +153,26 @@ type EndCallback = Rc<dyn Fn(InteractionEndDetails)>;
 // InteractiveViewer
 // ============================================================================
 
+/// When the wheel is allowed to drive scroll-to-scale.
+///
+/// The desktop contract "wheel scrolls, ctrl+wheel zooms" is only
+/// composable when the viewer restricts itself to the chord — an enclosing
+/// scrollable declines ctrl+wheel ticks, so under [`CtrlWheel`] the two
+/// gestures split cleanly. [`AnyWheel`] keeps Flutter's own behavior
+/// (`_receivedPointerSignal` zooms on every vertical tick) and is the
+/// default.
+///
+/// [`CtrlWheel`]: WheelScaleGate::CtrlWheel
+/// [`AnyWheel`]: WheelScaleGate::AnyWheel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WheelScaleGate {
+    /// Every vertical wheel tick zooms (Flutter parity).
+    #[default]
+    AnyWheel,
+    /// Only ctrl+wheel zooms; plain ticks are left to enclosing consumers.
+    CtrlWheel,
+}
+
 /// Pans and zooms `child` through a [`TransformationController`]-held
 /// [`Matrix4`].
 ///
@@ -165,6 +185,7 @@ pub struct InteractiveViewer {
     max_scale: f32,
     pan_enabled: bool,
     scale_enabled: bool,
+    wheel_scale_gate: WheelScaleGate,
     pan_axis: PanAxis,
     scale_factor: f32,
     clip_behavior: Clip,
@@ -184,6 +205,7 @@ impl std::fmt::Debug for InteractiveViewer {
             .field("max_scale", &self.max_scale)
             .field("pan_enabled", &self.pan_enabled)
             .field("scale_enabled", &self.scale_enabled)
+            .field("wheel_scale_gate", &self.wheel_scale_gate)
             .field("pan_axis", &self.pan_axis)
             .finish_non_exhaustive()
     }
@@ -200,6 +222,7 @@ impl Default for InteractiveViewer {
             max_scale: 2.5,
             pan_enabled: true,
             scale_enabled: true,
+            wheel_scale_gate: WheelScaleGate::default(),
             pan_axis: PanAxis::Free,
             // Flutter parity: `kDefaultMouseScrollToScaleFactor`.
             scale_factor: 200.0,
@@ -297,6 +320,14 @@ impl InteractiveViewer {
     #[must_use]
     pub fn scale_enabled(mut self, scale_enabled: bool) -> Self {
         self.scale_enabled = scale_enabled;
+        self
+    }
+
+    /// Gate wheel-driven zooming on the ctrl chord (default: every vertical
+    /// tick zooms, Flutter parity). See [`WheelScaleGate`].
+    #[must_use]
+    pub fn wheel_scale_gate(mut self, gate: WheelScaleGate) -> Self {
+        self.wheel_scale_gate = gate;
         self
     }
 
@@ -456,6 +487,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         let max_scale = view.max_scale;
         let pan_enabled = view.pan_enabled;
         let scale_enabled = view.scale_enabled;
+        let wheel_scale_gate = view.wheel_scale_gate;
         let pan_axis = view.pan_axis;
         let scale_factor = view.scale_factor;
         let clip_behavior = view.clip_behavior;
@@ -568,6 +600,13 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let on_update_wheel = on_update.clone();
             let on_end_wheel = on_end.clone();
             let scroll_claim = move |data: &ScrollEventData| {
+                if wheel_scale_gate == WheelScaleGate::CtrlWheel
+                    && !data.modifiers.contains(Modifiers::CONTROL)
+                {
+                    // Plain ticks belong to an enclosing scrollable under
+                    // the ctrl-gated contract.
+                    return EventPropagation::Continue;
+                }
                 if data.delta.dy.get() == 0.0 {
                     // Ignore horizontal-only wheel scroll, matching the
                     // oracle (`_receivedPointerSignal` returns early on
