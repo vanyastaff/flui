@@ -1187,6 +1187,24 @@ impl LaidOut {
         self.dispatch_pointer_event(&event);
     }
 
+    /// As [`dispatch_scroll`](Self::dispatch_scroll), with a modifier chord
+    /// held — for the ctrl+wheel zoom-vs-scroll contract.
+    pub fn dispatch_scroll_with_modifiers(
+        &self,
+        x: f32,
+        y: f32,
+        dx: f32,
+        dy: f32,
+        modifiers: flui_interaction::events::Modifiers,
+    ) {
+        let event = flui_interaction::events::make_scroll_event_with_modifiers(
+            offset(x, y),
+            offset(dx, dy),
+            modifiers,
+        );
+        self.dispatch_pointer_event(&event);
+    }
+
     /// Cancel the in-flight contact on its cached Down route.
     pub fn dispatch_pointer_cancel(&self) {
         let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);
