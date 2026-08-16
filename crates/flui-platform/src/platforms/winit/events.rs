@@ -166,11 +166,10 @@ pub fn mouse_button_event(
 
 /// Convert winit `Touch` to a per-contact W3C pointer event.
 ///
-/// Contact identity: winit's `Touch.id` is a per-contact id starting at 0
-/// and reused after release. The mouse owns `PointerId::PRIMARY` (1), so a
-/// contact maps to `id + 2` — a touch never aliases the mouse's cached
-/// routes or gesture sequences in the interaction binding, and simultaneous
-/// contacts stay distinct (the binding is fully multi-pointer).
+/// Contact identity: `pointer_id` is allocated by the platform from the
+/// `(device, contact)` pair (see `WinitPlatformState::touch_contacts`) —
+/// never `PointerId::PRIMARY` (the mouse), never shared between two live
+/// contacts even across touch devices, and never reused within a session.
 ///
 /// Buttons: a touch contact IS the primary "button" for its whole
 /// Started..Ended span — the W3C contract reports `buttons = 1` while any
@@ -179,13 +178,14 @@ pub fn mouse_button_event(
 /// updates (the exact live-drag failure the mouse path once shipped).
 pub fn touch_event(
     touch: winit::event::Touch,
+    pointer_id: u64,
     scale_factor: f64,
     modifiers: KeyboardModifiers,
 ) -> PlatformInput {
     use winit::event::TouchPhase;
 
     let info = PointerInfo {
-        pointer_id: PointerId::new(touch.id + 2),
+        pointer_id: PointerId::new(pointer_id),
         pointer_type: PointerType::Touch,
         persistent_device_id: None,
     };
@@ -627,6 +627,7 @@ mod pointer_translation_tests {
 
         let down = pointer(touch_event(
             touch(TouchPhase::Started, 0),
+            2,
             2.0,
             KeyboardModifiers::empty(),
         ));
@@ -648,6 +649,7 @@ mod pointer_translation_tests {
 
         let moved = pointer(touch_event(
             touch(TouchPhase::Moved, 0),
+            2,
             2.0,
             KeyboardModifiers::empty(),
         ));
@@ -661,6 +663,7 @@ mod pointer_translation_tests {
 
         let up = pointer(touch_event(
             touch(TouchPhase::Ended, 0),
+            2,
             2.0,
             KeyboardModifiers::empty(),
         ));
@@ -675,6 +678,7 @@ mod pointer_translation_tests {
 
         let cancel = pointer(touch_event(
             touch(TouchPhase::Cancelled, 0),
+            2,
             2.0,
             KeyboardModifiers::empty(),
         ));
@@ -686,6 +690,7 @@ mod pointer_translation_tests {
         // Two simultaneous contacts stay distinct pointers.
         let second = pointer(touch_event(
             touch(TouchPhase::Started, 1),
+            3,
             2.0,
             KeyboardModifiers::empty(),
         ));

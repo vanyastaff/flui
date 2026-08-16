@@ -256,9 +256,43 @@ struct WinitPlatformState {
     /// left button is still down. The normalized set is DERIVED per event
     /// by [`held_pointer_buttons`].
     pressed_buttons: std::collections::HashSet<winit::event::MouseButton>,
+    /// Stable pointer ids for live touch contacts, keyed by the winit
+    /// `(device, contact)` pair — two touch devices commonly both report
+    /// contact 0, and the interaction binding keys routes, pending moves and
+    /// gesture arenas solely by pointer id, so a shared id would let either
+    /// contact tear down the other's sequence. Entries are removed on the
+    /// terminal phases (Ended/Cancelled).
+    touch_contacts: std::collections::HashMap<(winit::event::DeviceId, u64), u64>,
+    /// Next pointer id to hand a new touch contact. Starts past
+    /// `PointerId::PRIMARY` (the mouse) and only grows — contact ids are
+    /// never reused within a session, which keeps a late event for a dead
+    /// contact from aliasing a live one.
+    next_touch_pointer_id: u64,
 }
 
 /// The normalized W3C button set for the currently held raw buttons.
+/// Resolve a stable pointer id for one touch contact, allocating on the
+/// first sighting and releasing on the terminal phases. See the
+/// `touch_contacts` field doc for why identity is the `(device, contact)`
+/// pair and why ids are never reused.
+fn resolve_touch_pointer_id(
+    contacts: &mut std::collections::HashMap<(winit::event::DeviceId, u64), u64>,
+    next_id: &mut u64,
+    key: (winit::event::DeviceId, u64),
+    phase: winit::event::TouchPhase,
+) -> u64 {
+    use winit::event::TouchPhase;
+    let pointer_id = *contacts.entry(key).or_insert_with(|| {
+        let id = *next_id;
+        *next_id += 1;
+        id
+    });
+    if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+        contacts.remove(&key);
+    }
+    pointer_id
+}
+
 fn held_pointer_buttons(
     pressed: &std::collections::HashSet<winit::event::MouseButton>,
 ) -> ui_events::pointer::PointerButtons {
@@ -300,6 +334,8 @@ impl WinitPlatformState {
             cursor_positions: HashMap::new(),
             current_modifiers: KeyboardModifiers::empty(),
             pressed_buttons: std::collections::HashSet::new(),
+            touch_contacts: std::collections::HashMap::new(),
+            next_touch_pointer_id: 2,
         }
     }
 
@@ -1090,10 +1126,18 @@ impl ApplicationHandler for WinitApp {
                 }
             }
             WinitWindowEvent::Touch(touch) => {
-                let modifiers = self.platform.with_state(|s| s.current_modifiers);
+                let (modifiers, pointer_id) = self.platform.with_state(|s| {
+                    let pointer_id = resolve_touch_pointer_id(
+                        &mut s.touch_contacts,
+                        &mut s.next_touch_pointer_id,
+                        (touch.device_id, touch.id),
+                        touch.phase,
+                    );
+                    (s.current_modifiers, pointer_id)
+                });
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
-                    let input = winit_events::touch_event(touch, scale, modifiers);
+                    let input = winit_events::touch_event(touch, pointer_id, scale, modifiers);
                     win.callbacks().dispatch_input(input);
                 }
             }
@@ -3045,6 +3089,64 @@ mod tests {
             matches!(error, ProxySendError::OwnerGone { .. }),
             "a stopped winit loop must report OwnerGone (a lane existed and \
              died), not Unsupported (no lane ever existed here) -- got {error:?}"
+        );
+    }
+    /// Two touch devices routinely both report contact 0; identity must be
+    /// the `(device, contact)` pair or the binding tears one sequence down
+    /// with the other's events. Terminal phases release the entry, and ids
+    /// are never reused within a session.
+    #[test]
+    fn touch_contact_identity_is_per_device_and_never_reused() {
+        use winit::event::TouchPhase;
+
+        let mut contacts = std::collections::HashMap::new();
+        let mut next = 2u64;
+        let device_a = winit::event::DeviceId::dummy();
+        // winit exposes no second dummy device; distinct CONTACT ids on one
+        // device exercise the same map key shape.
+        let a0 = super::resolve_touch_pointer_id(
+            &mut contacts,
+            &mut next,
+            (device_a, 0),
+            TouchPhase::Started,
+        );
+        let a1 = super::resolve_touch_pointer_id(
+            &mut contacts,
+            &mut next,
+            (device_a, 1),
+            TouchPhase::Started,
+        );
+        assert_ne!(a0, a1, "simultaneous contacts get distinct pointer ids");
+        assert_ne!(a0, 1, "never the mouse's PRIMARY");
+
+        // A move resolves to the same id as its Down.
+        let a0_move = super::resolve_touch_pointer_id(
+            &mut contacts,
+            &mut next,
+            (device_a, 0),
+            TouchPhase::Moved,
+        );
+        assert_eq!(a0, a0_move);
+
+        // The terminal phase releases the entry; the NEXT contact 0 gets a
+        // fresh id — a late event for the dead contact can never alias it.
+        let a0_up = super::resolve_touch_pointer_id(
+            &mut contacts,
+            &mut next,
+            (device_a, 0),
+            TouchPhase::Ended,
+        );
+        assert_eq!(a0, a0_up, "the Up itself still addresses the old sequence");
+        let a0_reborn = super::resolve_touch_pointer_id(
+            &mut contacts,
+            &mut next,
+            (device_a, 0),
+            TouchPhase::Started,
+        );
+        assert_ne!(a0, a0_reborn, "contact ids are not reused after release");
+        assert!(
+            contacts.len() == 2,
+            "live entries: contact 1 and reborn contact 0"
         );
     }
 }
