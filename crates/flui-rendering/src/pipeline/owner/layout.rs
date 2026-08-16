@@ -832,10 +832,24 @@ impl PipelineOwner<Layout> {
             };
             stack.extend_from_slice(node.children());
             // The root itself is already handled by the `mark_needs_paint`
-            // above; queueing it again is harmless but pointless.
-            if id != root && node.is_repaint_boundary_flag() {
-                let depth = node.depth() as usize;
-                self.scheduler.schedule_paint_boundary(id, depth);
+            // above.
+            //
+            // Route through `mark_needs_paint` rather than enqueueing
+            // directly. It is the one place that decides WHICH node owns the
+            // affected retained layer, and the answer is not always this node:
+            // a boundary introduced this frame
+            // (`is_repaint_boundary_flag() && !was_repaint_boundary()`) owns
+            // no layer yet, so invalidation has to walk past it to an
+            // established ancestor — the contract
+            // `mark_needs_paint_walks_past_a_new_repaint_boundary` pins.
+            // Enqueueing here would also leave `NEEDS_PAINT` unset on the
+            // node, putting the queue and the per-node flags out of step.
+            //
+            // It stays cheap: the walk returns at the first already-dirty
+            // node, so an established boundary costs one step.
+            let is_boundary = node.is_repaint_boundary_flag();
+            if id != root && is_boundary {
+                self.mark_needs_paint(id);
             }
         }
     }

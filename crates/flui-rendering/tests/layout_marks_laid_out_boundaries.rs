@@ -29,7 +29,13 @@ use flui_types::{Size, geometry::px};
 /// Relayout an outer subtree that contains an inner repaint boundary; the
 /// inner boundary must be queued for paint.
 ///
-/// Tree: root → outer boundary → padding → inner boundary → leaf.
+/// Tree: padding root → outer boundary → padding → inner boundary → leaf.
+///
+/// The root is a `RenderPadding`, not a `RenderColoredBox`: a coloured box
+/// paints no children, so the paint walk would stop at it and no boundary
+/// below would ever record `was_repaint_boundary` — which
+/// `mark_needs_paint` reads to decide whether a boundary owns a retained
+/// layer.
 ///
 /// The padding is marked for layout, so the walk re-lays out the padding, the
 /// inner boundary, and the leaf. The inner boundary's content is therefore
@@ -40,7 +46,7 @@ fn a_boundary_nested_in_a_relayout_subtree_is_queued_for_paint() {
     let mut owner = PipelineOwner::new();
     let (root_id, registry) = tree::mount(
         &mut owner,
-        box_node(RenderColoredBox::red(1.0, 1.0)).child(
+        box_node(RenderPadding::all(0.0)).child(
             box_node(RenderRepaintBoundary::new()).label("outer").child(
                 box_node(RenderPadding::all(0.0)).label("padding").child(
                     box_node(RenderRepaintBoundary::new())
@@ -78,6 +84,20 @@ fn a_boundary_nested_in_a_relayout_subtree_is_queued_for_paint() {
         .iter()
         .map(|d| d.id)
         .collect();
+
+    // The queue and the per-node flags must agree. Enqueueing the boundary
+    // directly would satisfy the assertion below while leaving this false —
+    // and `mark_needs_paint` is also the only place that knows a boundary
+    // introduced this frame owns no retained layer yet and must be walked
+    // past (see `mark_needs_paint_walks_past_a_new_repaint_boundary`).
+    assert!(
+        layout_owner
+            .render_tree()
+            .get(inner_id)
+            .expect("inner boundary is in the tree")
+            .needs_paint(),
+        "the inner boundary must carry NEEDS_PAINT, not just sit in the queue"
+    );
 
     assert!(
         queued.contains(&inner_id),
