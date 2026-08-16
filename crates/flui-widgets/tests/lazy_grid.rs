@@ -48,9 +48,9 @@ fn lazy_grid_view_builder_builds_visible_tiles() {
     // Expected: 1 (RenderViewport) + 1 (RenderSliverGridLazy) + 4 (tiles) = 6.
     let nodes_after_settle = laid.render_node_count();
     assert_eq!(
-        nodes_after_settle, 6,
-        "after settle, render tree should have 1 viewport + 1 lazy grid + 4 tiles = 6; \
-         got {nodes_after_settle}"
+        nodes_after_settle, 10,
+        "after settle, render tree should have 1 viewport + 1 lazy grid + 4 \
+         repaint boundaries + 4 tiles = 10; got {nodes_after_settle}"
     );
 }
 
@@ -85,7 +85,11 @@ fn lazy_grid_view_builder_places_tiles_at_oracle_positions() {
     laid.tick();
     laid.tick();
 
-    let tile_ids = laid.find_all_by_render_type("RenderConstrainedBox");
+    // The grid positions the per-item `RenderRepaintBoundary`; the tile inside
+    // it sits at (0, 0) relative to that. Reading the leaf's offset would give
+    // four zeroes — the same structure Flutter produces, since its delegates
+    // wrap children in a boundary by default.
+    let tile_ids = laid.find_all_by_render_type("RenderRepaintBoundary");
     assert_eq!(
         tile_ids.len(),
         4,
@@ -302,7 +306,10 @@ fn lazy_grid_view_builder_none_at_k_caps_build_count() {
 
     // Expected: 1 (viewport) + 1 (lazy grid) + K (tiles capped by None-return) = 5.
     let nodes_after_settle = laid.render_node_count();
-    let expected = 1 + 1 + K;
+    // `+ 2 * K`, not `+ K`: each item carries its own `RenderRepaintBoundary`,
+    // which `SliverChildBuilderDelegate` adds by default exactly as Flutter's
+    // does (`widgets/scroll_delegate.dart:560`).
+    let expected = 1 + 1 + 2 * K;
     assert_eq!(
         nodes_after_settle, expected,
         "None-at-K must cap build count: expected {expected} nodes, \

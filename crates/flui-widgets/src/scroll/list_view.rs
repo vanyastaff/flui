@@ -90,7 +90,7 @@ impl ListView {
             item_extent_estimate: item_extent,
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
-            children: children.into_boxed_vec(),
+            children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
             builder_source: None,
         }
     }

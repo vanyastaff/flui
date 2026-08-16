@@ -42,7 +42,7 @@ use crate::harness;
 /// 200-wide grid. Node-count form used in place of `find.byType` (see
 /// divergence notes above).
 #[test]
-fn grid_view_extent_four_tiles_builds_six_render_nodes() {
+fn grid_view_extent_four_tiles_builds_ten_render_nodes() {
     let children: Vec<flui_view::BoxedView> = (0..4).map(|_| SizedBox::shrink().boxed()).collect();
     let root = GridView::extent(100.0, children);
     // 200 × 600: same cross-axis budget as Flutter's `SizedBox(width: 200)`.
@@ -50,28 +50,36 @@ fn grid_view_extent_four_tiles_builds_six_render_nodes() {
 
     assert_eq!(
         laid.render_node_count(),
-        6,
-        "GridView.extent(100, 4 tiles) on 200-wide surface: \
-         expected 6 render nodes (1 viewport + 1 sliver-grid + 4 tiles)"
+        10,
+        "GridView.extent(100, 4 tiles) on 200-wide surface: expected 10 render \
+         nodes (1 viewport + 1 sliver-grid + 4 repaint boundaries + 4 tiles)"
     );
 }
 
 /// `GridView.count(cross_axis_count=3)` on an 800-wide surface with 6 children
-/// builds 8 render nodes: 1 viewport + 1 sliver-grid + 6 tiles.
+/// builds 14 render nodes: 1 viewport + 1 sliver-grid + 6 repaint boundaries
+/// + 6 tiles.
 ///
 /// Flutter parity: derived from `grid_view_layout_test.dart` — the 3-column
 /// variant places all 6 tiles in 2 rows (3 × 2) within the visible band.
+///
+/// The per-tile boundary is Flutter's, not an addition: `GridView.count`
+/// builds a `SliverChildListDelegate` with `addRepaintBoundaries` defaulting
+/// to `true` (`widgets/scroll_view.dart:2143`), and that delegate wraps each
+/// child in a `RepaintBoundary` (`widgets/scroll_delegate.dart:774`). The
+/// counts here used to omit them, which pinned FLUI's divergence rather than
+/// the parity the module claims.
 #[test]
-fn grid_view_count_three_columns_six_tiles_builds_eight_render_nodes() {
+fn grid_view_count_three_columns_six_tiles_builds_fourteen_render_nodes() {
     let children: Vec<flui_view::BoxedView> = (0..6).map(|_| SizedBox::shrink().boxed()).collect();
     let root = GridView::count(3, children);
     let laid = harness::pump_widget(root, harness::screen());
 
     assert_eq!(
         laid.render_node_count(),
-        8,
-        "GridView.count(3, 6 tiles): expected 8 render nodes \
-         (1 viewport + 1 sliver-grid + 6 tiles)"
+        14,
+        "GridView.count(3, 6 tiles): expected 14 render nodes \
+         (1 viewport + 1 sliver-grid + 6 repaint boundaries + 6 tiles)"
     );
 }
 

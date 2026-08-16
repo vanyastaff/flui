@@ -1453,10 +1453,14 @@ fn sliver_grid_delegate_negative_main_axis_extent_recovers_from_an_internal_asse
 
     assert_eq!(
         laid.render_node_count(),
-        4,
+        5,
         "the frame recovers rather than crashing, but into a still-degraded tree — \
-         only 4 nodes (viewport + sliver + 2 tiles) exist against the 50 requested, \
-         unlike Flutter's clean, message-carrying rejection at construction time"
+         5 nodes exist against the 50 requested, unlike Flutter's clean, \
+         message-carrying rejection at construction time. The number is a \
+         description of the damage a recovered panic leaves, not a contract; \
+         it moved from 4 when list/grid delegates began wrapping each item in \
+         a repaint boundary, and a probe at that point found one boundary and \
+         one tile attached"
     );
 }
 
@@ -1581,8 +1585,8 @@ fn sliver_grid_delegate_with_max_cross_axis_extent_negative_main_axis_extent_rec
 
     assert_eq!(
         laid.render_node_count(),
-        4,
-        "same degraded-recovery shape as the FixedCrossAxisCount half: only 4 nodes \
-         (viewport + sliver + 2 tiles) exist against the 50 requested"
+        5,
+        "same degraded-recovery shape as the FixedCrossAxisCount half: only 5 \
+         nodes exist against the 50 requested"
     );
 }

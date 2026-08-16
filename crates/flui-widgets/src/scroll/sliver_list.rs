@@ -56,11 +56,56 @@ impl SliverChildBuilderDelegate {
     where
         F: Fn(usize) -> Option<BoxedView> + 'static,
     {
+        Self::with_options(item_count, true, builder)
+    }
+
+    /// Like [`Self::new`], but lets the caller decline the per-item repaint
+    /// boundary.
+    ///
+    /// Flutter parity: `SliverChildBuilderDelegate.addRepaintBoundaries`,
+    /// which defaults to `true` for the reason its own doc gives — children in
+    /// a scrolling container "do not need to be repainted as the list
+    /// scrolls". Without the boundary the paint walk descends into every
+    /// visible item on every frame, and nothing the retention path
+    /// (`PipelineOwner::retained_boundaries`) can reuse ever exists.
+    ///
+    /// Pass `false` when the items are cheaper to repaint than to composite —
+    /// solid colour blocks, a short line of text — which is the same guidance
+    /// Flutter gives.
+    #[must_use]
+    pub fn with_options<F>(item_count: usize, add_repaint_boundaries: bool, builder: F) -> Self
+    where
+        F: Fn(usize) -> Option<BoxedView> + 'static,
+    {
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = if add_repaint_boundaries {
+            Rc::new(move |index| {
+                builder(index).map(|child| {
+                    BoxedView(Box::new(crate::paint::RepaintBoundary::new().child(child)))
+                })
+            })
+        } else {
+            Rc::new(builder)
+        };
         Self {
             item_count,
-            builder: Rc::new(builder),
+            builder,
         }
     }
+}
+
+/// Wrap each child in a [`RepaintBoundary`](crate::paint::RepaintBoundary).
+///
+/// Flutter parity: the delegates in `widgets/scroll_delegate.dart` do this by
+/// default (`addRepaintBoundaries = true`) so that "children in a scrolling
+/// container ... do not need to be repainted as the list scrolls". Without it
+/// the paint walk descends into every visible item every frame and there is
+/// nothing for `PipelineOwner::retained_boundaries` to reuse.
+#[must_use]
+pub(crate) fn wrap_in_repaint_boundaries(children: Vec<BoxedView>) -> Vec<BoxedView> {
+    children
+        .into_iter()
+        .map(|child| BoxedView(Box::new(crate::paint::RepaintBoundary::new().child(child))))
+        .collect()
 }
 
 impl fmt::Debug for SliverChildBuilderDelegate {

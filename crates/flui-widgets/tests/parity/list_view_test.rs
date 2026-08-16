@@ -79,12 +79,18 @@ fn list_view_builder_builds_all_visible_items() {
     // tick 2: sliver re-lays with the built children.
     laid.tick();
 
-    // 1 RenderViewport + 1 RenderSliverList + 3 SizedBox nodes = 5.
+    // 1 RenderViewport + 1 RenderSliverList + 3 RenderRepaintBoundary
+    // + 3 SizedBox nodes = 8.
+    //
+    // The per-item boundary matches Flutter: `SliverChildBuilderDelegate`
+    // defaults `addRepaintBoundaries` to `true` and wraps each child
+    // (`widgets/scroll_delegate.dart:560`), so items that did not change are
+    // not repainted as the list scrolls.
     assert_eq!(
         laid.render_node_count(),
-        5,
-        "ListView(3 items) must have exactly 5 render nodes after settle \
-         (1 viewport + 1 sliver-list + 3 items)"
+        8,
+        "ListView(3 items) must have exactly 8 render nodes after settle \
+         (1 viewport + 1 sliver-list + 3 boundaries + 3 items)"
     );
 }
 
