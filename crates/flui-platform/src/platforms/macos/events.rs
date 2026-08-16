@@ -33,7 +33,6 @@ use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::{Key, Modifiers, NamedKey};
 use objc::{class, msg_send, sel, sel_impl};
 use ui_events::{
-    ScrollDelta,
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
         PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
@@ -408,6 +407,15 @@ unsafe fn convert_mouse_move(ns_event: id, scale_factor: f64, view_height: f64) 
 
 /// Convert scroll wheel event
 ///
+/// AppKit's `scrollingDeltaX/Y` are positive for a swipe/scroll UP or LEFT
+/// (Apple's NSEvent docs: same sign as the legacy `deltaX/deltaY`; the
+/// system applies the natural-scrolling preference before delivery) — the
+/// inverse of the cross-backend convention (positive = content scrolls
+/// down/right), so `from_appkit` negates both axes at this boundary. Precise
+/// (trackpad) deltas are points, which are already logical pixels — no
+/// scale-factor conversion. See `crate::shared::scroll` for the sign/unit
+/// table and citations.
+///
 /// # Safety
 ///
 /// `ns_event` must be a valid, live `NSEvent*` of a scroll-wheel event.
@@ -417,20 +425,14 @@ unsafe fn convert_scroll_event(ns_event: id, scale_factor: f64, view_height: f64
     unsafe {
         let state = pointer_state(ns_event, scale_factor, view_height);
 
-        // Get scroll delta
         let delta_x: f64 = msg_send![ns_event, scrollingDeltaX];
         let delta_y: f64 = msg_send![ns_event, scrollingDeltaY];
 
-        // Check if precise scrolling (trackpad) or line scrolling (mouse wheel)
+        // Precise scrolling (trackpad) delivers point deltas; a conventional
+        // mouse wheel delivers whole lines.
         let has_precise_delta: bool = msg_send![ns_event, hasPreciseScrollingDeltas];
 
-        let delta = if has_precise_delta {
-            // Trackpad: use pixel delta
-            ScrollDelta::PixelDelta(PhysicalPosition::new(delta_x, delta_y))
-        } else {
-            // Mouse wheel: use line delta
-            ScrollDelta::LineDelta(delta_x as f32, delta_y as f32)
-        };
+        let delta = crate::shared::scroll::from_appkit(delta_x, delta_y, has_precise_delta);
 
         PlatformInput::Pointer(PointerEvent::Scroll(PointerScrollEvent {
             pointer: primary_mouse_info(),

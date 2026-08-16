@@ -20,7 +20,8 @@ use ui_events::{
     },
 };
 use windows::Win32::{
-    Foundation::{LPARAM, WPARAM},
+    Foundation::{HWND, LPARAM, POINT, WPARAM},
+    Graphics::Gdi::ScreenToClient,
     UI::Input::KeyboardAndMouse::{
         VIRTUAL_KEY, VK_0, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_B,
         VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DELETE, VK_DOWN, VK_E, VK_END, VK_ESCAPE, VK_F, VK_F1,
@@ -33,7 +34,7 @@ use windows::Win32::{
 };
 
 use super::util::{get_x_lparam, get_y_lparam, is_key_pressed};
-use crate::traits::{Key, PlatformInput, ScrollDelta, device_to_logical};
+use crate::traits::{Key, PlatformInput, device_to_logical};
 
 /// Process-start epoch for monotonic event timestamps.
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
@@ -227,8 +228,26 @@ fn pointer_state(
     pressure: f32,
     buttons: PointerButtons,
 ) -> (PointerState, KeyboardModifiers) {
-    let x = get_x_lparam(lparam);
-    let y = get_y_lparam(lparam);
+    pointer_state_at(
+        get_x_lparam(lparam),
+        get_y_lparam(lparam),
+        scale_factor,
+        pressure,
+        buttons,
+    )
+}
+
+/// [`pointer_state`] with the CLIENT-space device coordinates already in
+/// hand — for the wheel messages, whose `lParam` needs a screen-to-client
+/// conversion first (see [`wheel_pointer_state`]).
+#[inline]
+fn pointer_state_at(
+    x: i32,
+    y: i32,
+    scale_factor: f32,
+    pressure: f32,
+    buttons: PointerButtons,
+) -> (PointerState, KeyboardModifiers) {
     // SAFETY: see `get_modifiers`'s own `# Safety` section — no
     // precondition to discharge here.
     let modifiers = unsafe { get_modifiers() };
@@ -299,18 +318,89 @@ pub fn mouse_move_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> Pl
     PlatformInput::Pointer(event)
 }
 
-/// Convert WM_MOUSEWHEEL to W3C PointerEvent with Scroll
-pub fn mouse_wheel_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> PlatformInput {
-    let delta = ((wparam.0 as i32) >> 16) as i16 as f32;
-    let lines = delta / 120.0; // WHEEL_DELTA = 120
+/// The signed scroll distance both wheel messages carry in the high word of
+/// `wParam` (`GET_WHEEL_DELTA_WPARAM`), in multiples of `WHEEL_DELTA` (120).
+fn wheel_distance(wparam: WPARAM) -> i16 {
+    ((wparam.0 as i32) >> 16) as i16
+}
 
-    let (state, modifiers) = pointer_state(lparam, scale_factor, 0.0, held_buttons(wparam));
+/// Build the pointer state for a wheel message.
+///
+/// Unlike every other client-area mouse message, `WM_MOUSEWHEEL` and
+/// `WM_MOUSEHWHEEL` deliver the cursor position in SCREEN coordinates
+/// (both messages' `lParam` docs:
+/// <https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel>),
+/// so the point is converted to client space here before the shared
+/// [`pointer_state_at`] path DPI-scales it — otherwise scroll hit-testing
+/// targets the wrong child whenever the window's client origin is not the
+/// desktop origin.
+fn wheel_pointer_state(
+    hwnd: HWND,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    scale_factor: f32,
+) -> (PointerState, KeyboardModifiers) {
+    let mut point = POINT {
+        x: get_x_lparam(lparam),
+        y: get_y_lparam(lparam),
+    };
+    // SAFETY: `point` is a live, writable local; `ScreenToClient` writes
+    // nothing else. On failure (invalid `hwnd`) it returns FALSE and leaves
+    // `point` unchanged.
+    let converted = unsafe { ScreenToClient(hwnd, &raw mut point) };
+    if !converted.as_bool() {
+        tracing::warn!(
+            "ScreenToClient failed for a wheel message; scroll position stays in screen space"
+        );
+    }
+    pointer_state_at(point.x, point.y, scale_factor, 0.0, held_buttons(wparam))
+}
+
+/// Convert WM_MOUSEWHEEL to W3C PointerEvent with Scroll
+///
+/// Win32's vertical sign (positive = wheel rotated away from the user) is the
+/// inverse of the cross-backend convention — positive = content scrolls down —
+/// so `from_win32_wheel` negates it at this boundary; see
+/// `crate::shared::scroll` for the sign/unit table and citations. The cursor
+/// position arrives in screen coordinates; see [`wheel_pointer_state`].
+pub fn mouse_wheel_event(
+    hwnd: HWND,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    scale_factor: f32,
+) -> PlatformInput {
+    let (state, modifiers) = wheel_pointer_state(hwnd, wparam, lparam, scale_factor);
     let _ = modifiers;
 
     let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
         pointer: primary_mouse_info(),
         state,
-        delta: ScrollDelta::LineDelta(0.0, lines),
+        delta: crate::shared::scroll::from_win32_wheel(wheel_distance(wparam)),
+    });
+
+    PlatformInput::Pointer(event)
+}
+
+/// Convert WM_MOUSEHWHEEL to W3C PointerEvent with Scroll
+///
+/// Win32's horizontal sign (positive = wheel tilted right) already matches
+/// the cross-backend convention — positive = content scrolls right — so only
+/// the `WHEEL_DELTA` division applies; see `crate::shared::scroll`. The
+/// cursor position arrives in screen coordinates; see
+/// [`wheel_pointer_state`].
+pub fn mouse_hwheel_event(
+    hwnd: HWND,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    scale_factor: f32,
+) -> PlatformInput {
+    let (state, modifiers) = wheel_pointer_state(hwnd, wparam, lparam, scale_factor);
+    let _ = modifiers;
+
+    let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
+        pointer: primary_mouse_info(),
+        state,
+        delta: crate::shared::scroll::from_win32_hwheel(wheel_distance(wparam)),
     });
 
     PlatformInput::Pointer(event)

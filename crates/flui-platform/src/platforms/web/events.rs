@@ -290,22 +290,21 @@ fn convert_pointer_move(pe: &web_sys::PointerEvent) -> PlatformInput {
     }))
 }
 
+/// Convert a DOM `WheelEvent` to a W3C `PointerEvent::Scroll`.
+///
+/// The DOM already speaks the cross-backend wheel convention (positive =
+/// content scrolls down/right; `DOM_DELTA_PIXEL` deltas are CSS = logical
+/// pixels), so `from_web` is a passthrough that only maps `deltaMode` onto
+/// the `ScrollDelta` variants — kept in `crate::shared::scroll` so this
+/// boundary appears in the same sign/unit table (and executing contract
+/// tests) as the backends that DO have to flip or rescale.
 fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
     use dpi::PhysicalPosition;
-    use ui_events::ScrollDelta;
     use ui_events::pointer::{
         PointerEvent, PointerInfo, PointerScrollEvent, PointerState, PointerType,
     };
 
-    let delta = match we.delta_mode() {
-        // DOM_DELTA_PIXEL = 0
-        0 => ScrollDelta::PixelDelta(PhysicalPosition::new(we.delta_x(), we.delta_y())),
-        // DOM_DELTA_LINE = 1
-        1 => ScrollDelta::LineDelta(we.delta_x() as f32, we.delta_y() as f32),
-        // DOM_DELTA_PAGE = 2
-        2 => ScrollDelta::PageDelta(we.delta_x() as f32, we.delta_y() as f32),
-        _ => ScrollDelta::PixelDelta(PhysicalPosition::new(we.delta_x(), we.delta_y())),
-    };
+    let delta = crate::shared::scroll::from_web(we.delta_mode(), we.delta_x(), we.delta_y());
 
     let modifiers = extract_modifiers_from_mouse(we);
 
