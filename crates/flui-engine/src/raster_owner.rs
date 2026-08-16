@@ -4063,7 +4063,10 @@ mod tests {
             handle
                 .submit(test_frame(epoch, last_generation))
                 .expect("submit");
-            burst_done_tx.send(()).expect("main thread is waiting");
+            // Ignored, not expected: on the red path the main thread has
+            // already timed out and panicked — a second panic from this
+            // thread would only muddy the diagnosis.
+            let _ = burst_done_tx.send(());
         });
 
         let burst_completed = burst_done_rx.recv_timeout(Duration::from_secs(10));
