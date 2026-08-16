@@ -83,8 +83,22 @@ impl PipelineOwner<PaintPhase> {
             let mut composer = FragmentComposer::new(self.device_pixel_ratio);
             match self.paint_subtree(&mut composer, root_id, Offset::ZERO, &dirty_ids) {
                 Ok(()) => {
-                    let (layer_tree, link_registry, follower_correlations) = composer.finish();
+                    let (layer_tree, link_registry, follower_correlations, retained_captures) =
+                        composer.finish();
                     tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
+
+                    // Commit the walk's retention decisions now that its
+                    // `&self` borrow has ended.
+                    for (id, captured) in retained_captures {
+                        match captured {
+                            Some(subtree) => {
+                                self.retained_boundaries.insert(id, subtree);
+                            }
+                            None => {
+                                self.retained_boundaries.remove(&id);
+                            }
+                        }
+                    }
 
                     // ADR-0015: resolve each paint-phase-correlated
                     // follower's composite-resolved offset against the SAME
@@ -358,8 +372,32 @@ impl PipelineOwner<PaintPhase> {
                         // Boundary children rebase to ZERO under their
                         // own OffsetLayer so a future offset-only move
                         // is a layer-property update, not a repaint.
-                        composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
-                        self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set)?;
+                        let boundary_root = composer
+                            .push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
+
+                        // Reuse the previous frame's output when this boundary
+                        // is clean. Sound only because the queue is exact:
+                        // `run_layout` marks every boundary layout touched and
+                        // `mark_needs_paint` marks the rest, so absence from
+                        // `dirty_set` genuinely means unchanged content.
+                        let retained = (!dirty_set.contains(&child_id))
+                            .then(|| self.retained_boundaries.get(&child_id))
+                            .flatten();
+                        if let Some(subtree) = retained {
+                            composer.graft(subtree);
+                        } else {
+                            self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set)?;
+                            // Seal before capturing: the boundary's
+                            // trailing run is part of its output, and
+                            // `pop_layer` would otherwise flush it after
+                            // the snapshot was taken.
+                            composer.seal_picture();
+                            // `None` evicts: a subtree that GAINED a
+                            // Leader/Follower must not be served its
+                            // pre-link form. See `capture`.
+                            let captured = composer.capture(boundary_root);
+                            composer.retained_captures.push((child_id, captured));
+                        }
                         composer.pop_layer();
                     } else {
                         // Inline children bake into the shared picture
@@ -381,6 +419,31 @@ impl PipelineOwner<PaintPhase> {
 // ============================================================================
 // Fragment composition (paint phase plumbing)
 // ============================================================================
+
+/// A repaint boundary's painted output, kept for reuse on a later frame.
+///
+/// Flattened in preorder with local indices: `parent` is `None` for a node
+/// that hung directly off the boundary's own `OffsetLayer`, and `Some(i)` for
+/// a child of `nodes[i]`. Local indices rather than `LayerId`s because every
+/// frame builds a fresh `LayerTree` whose slab indices differ — grafting mints
+/// new ids and maps them through this vector.
+///
+/// This is offset-independent, which is what makes it reusable at all: the
+/// paint walk rebases a boundary's subtree to `Offset::ZERO` under its own
+/// `OffsetLayer`, so a boundary that merely MOVED needs a different offset on
+/// the layer above and nothing else.
+#[derive(Clone, Debug)]
+pub(super) struct RetainedSubtree {
+    nodes: Vec<RetainedNode>,
+}
+
+#[derive(Clone, Debug)]
+struct RetainedNode {
+    layer: Layer,
+    parent: Option<usize>,
+    offset: Option<flui_types::Offset<flui_types::geometry::Pixels>>,
+    element_id: Option<flui_foundation::ElementId>,
+}
 
 /// Builds the frame's [`LayerTree`] from replayed paint fragments,
 /// merging adjacent inline draw runs into shared `PictureLayer`s.
@@ -408,6 +471,13 @@ struct FragmentComposer {
     /// `flui_layer::resolve_follower_offset` into `PipelineOwner
     /// ::last_follower_offsets` / `::last_hidden_follower_ids`.
     follower_correlations: Vec<(RenderId, LayerId)>,
+    /// Retention decisions taken during the walk, applied by `run_paint` once
+    /// the walk's `&self` borrow ends.
+    ///
+    /// `Some` replaces the boundary's stored output, `None` evicts it. The
+    /// walk itself only has `&self`, so this is the same side-collection shape
+    /// the layout walk uses for the sinks it cannot commit in place.
+    retained_captures: Vec<(RenderId, Option<RetainedSubtree>)>,
 }
 
 impl FragmentComposer {
@@ -434,6 +504,7 @@ impl FragmentComposer {
             open: DisplayList::new(),
             link_registry: LinkRegistry::new(),
             follower_correlations: Vec::new(),
+            retained_captures: Vec::new(),
         }
     }
 
@@ -444,16 +515,24 @@ impl FragmentComposer {
 
     /// Flushes the open picture into a `PictureLayer` under the
     /// current stack top (no-op when empty).
+    /// The layer everything recorded right now hangs off.
+    ///
+    /// One accessor rather than the same `stack.last().expect(..)` repeated at
+    /// every insertion point: the invariant has one owner, and the message
+    /// naming it is written once.
+    fn current_parent(&self) -> LayerId {
+        *self.stack.last().expect(
+            "BUG: the composer stack always holds the root layer — pop_layer refuses to remove it",
+        )
+    }
+
     fn seal_picture(&mut self) {
         if flui_painting::DisplayListCore::is_empty(&self.open) {
             return;
         }
         let list = std::mem::take(&mut self.open);
         let layer_id = self.tree.insert(Layer::from(PictureLayer::new(list)));
-        let parent = *self
-            .stack
-            .last()
-            .expect("composer stack always holds the root layer (popping it is rejected)");
+        let parent = self.current_parent();
         self.tree.add_child(parent, layer_id);
     }
 
@@ -479,10 +558,7 @@ impl FragmentComposer {
             self.link_registry.register_follower(id, link);
         }
 
-        let parent = *self
-            .stack
-            .last()
-            .expect("composer stack always holds the root layer (popping it is rejected)");
+        let parent = self.current_parent();
         self.tree.add_child(parent, id);
         self.stack.push(id);
         id
@@ -493,6 +569,83 @@ impl FragmentComposer {
     fn record_follower_correlation(&mut self, render_id: RenderId, follower_layer_id: LayerId) {
         self.follower_correlations
             .push((render_id, follower_layer_id));
+    }
+
+    /// Flatten everything painted under `root` into a reusable
+    /// [`RetainedSubtree`].
+    ///
+    /// Called after the boundary's own paint finished and its trailing picture
+    /// run was sealed, so the tree under `root` is complete.
+    ///
+    /// Returns `None` when the subtree contains a `Leader` or `Follower`.
+    /// Those register into `link_registry` as a side effect of
+    /// [`Self::push_layer`], and a graft re-inserts layers without replaying
+    /// that registration — a retained follower would lose its link on every
+    /// frame it was reused. Refusing to retain them is the bounded answer;
+    /// replaying the registration (and the `RenderId` correlation a follower
+    /// also needs, which the flattened form does not carry) is the complete
+    /// one.
+    fn capture(&self, root: LayerId) -> Option<RetainedSubtree> {
+        let mut nodes: Vec<RetainedNode> = Vec::new();
+        // (tree id, parent index in `nodes`)
+        let mut stack: Vec<(LayerId, Option<usize>)> = self
+            .tree
+            .children(root)?
+            .iter()
+            .rev()
+            .map(|&id| (id, None))
+            .collect();
+
+        while let Some((id, parent)) = stack.pop() {
+            let node = self.tree.get(id)?;
+            let layer = node.layer();
+            if layer.as_leader().is_some() || layer.as_follower().is_some() {
+                return None;
+            }
+            let index = nodes.len();
+            nodes.push(RetainedNode {
+                layer: layer.clone(),
+                parent,
+                offset: node.offset(),
+                element_id: node.element_id(),
+            });
+            for &child in node.children().iter().rev() {
+                stack.push((child, Some(index)));
+            }
+        }
+        Some(RetainedSubtree { nodes })
+    }
+
+    /// Re-insert a captured subtree under the current stack top.
+    ///
+    /// Mints fresh ids and maps the flattened parent indices through them, so
+    /// the result is structurally identical to what painting would have
+    /// produced — the layers themselves are clones, cheap because a
+    /// `PictureLayer` shares its `DisplayList` behind an `Arc`.
+    fn graft(&mut self, retained: &RetainedSubtree) {
+        // Seal first: an open picture run belongs BEFORE the grafted content
+        // in draw order, exactly as it would if the boundary had painted.
+        self.seal_picture();
+        let root = self.current_parent();
+
+        let mut minted: Vec<LayerId> = Vec::with_capacity(retained.nodes.len());
+        for node in &retained.nodes {
+            // Built as a whole `LayerNode` rather than inserted-then-mutated:
+            // `offset` and `element_id` are construction-time fields with no
+            // setters, which is also the shape that keeps a disposed node from
+            // being resurrected by a stray mutation.
+            let mut layer_node = flui_layer::LayerNode::new(node.layer.clone());
+            if let Some(element_id) = node.element_id {
+                layer_node = layer_node.with_element_id(element_id);
+            }
+            if let Some(offset) = node.offset {
+                layer_node = layer_node.with_offset(offset);
+            }
+            let id = self.tree.insert_node(layer_node);
+            let parent = node.parent.map_or(root, |i| minted[i]);
+            self.tree.add_child(parent, id);
+            minted.push(id);
+        }
     }
 
     fn pop_layer(&mut self) {
@@ -508,7 +661,14 @@ impl FragmentComposer {
         }
     }
 
-    fn finish(mut self) -> (LayerTree, LinkRegistry, Vec<(RenderId, LayerId)>) {
+    fn finish(
+        mut self,
+    ) -> (
+        LayerTree,
+        LinkRegistry,
+        Vec<(RenderId, LayerId)>,
+        Vec<(RenderId, Option<RetainedSubtree>)>,
+    ) {
         self.seal_picture();
         debug_assert_eq!(
             self.stack.len(),
@@ -516,7 +676,12 @@ impl FragmentComposer {
             "composer finished with unbalanced layer stack — every \
              push_layer in the replay loop must have a matching pop_layer",
         );
-        (self.tree, self.link_registry, self.follower_correlations)
+        (
+            self.tree,
+            self.link_registry,
+            self.follower_correlations,
+            self.retained_captures,
+        )
     }
 }
 
@@ -771,7 +936,7 @@ mod tests {
         owner
             .paint_subtree(&mut composer, root_id, Offset::ZERO, &dirty_ids)
             .expect("paint_subtree should succeed");
-        let (layer_tree, _link_registry, follower_correlations) = composer.finish();
+        let (layer_tree, _link_registry, follower_correlations, _retained) = composer.finish();
 
         assert_eq!(
             follower_correlations.len(),

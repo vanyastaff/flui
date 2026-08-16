@@ -198,6 +198,21 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// cache-from-last-composite contract, one frame stale by design.
     last_follower_offsets: FxHashMap<RenderId, Offset>,
 
+    /// Painted output kept per repaint boundary, reused when that boundary is
+    /// clean on a later frame.
+    ///
+    /// Keyed by the boundary's `RenderId`, holding the layer subtree its last
+    /// paint produced. `run_paint` grafts the entry instead of descending when
+    /// the boundary is absent from the paint queue, which is only sound
+    /// because `run_layout` queues exactly the boundaries layout touched and
+    /// `mark_needs_paint` queues the rest.
+    ///
+    /// Entries are replaced on repaint and evicted when their node leaves the
+    /// tree. A stale entry cannot be served to a different node: `RenderId` is
+    /// generational, so a recycled slab slot carries a new generation and
+    /// misses the map.
+    retained_boundaries: FxHashMap<RenderId, paint::RetainedSubtree>,
+
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
     /// `show_when_unlinked == false`) — ADR-0015's companion to
@@ -322,6 +337,7 @@ where
         last_layer_tree: from.last_layer_tree,
         last_link_registry: from.last_link_registry,
         last_follower_offsets: from.last_follower_offsets,
+        retained_boundaries: from.retained_boundaries,
         last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,
         deferred_mutations: from.deferred_mutations,

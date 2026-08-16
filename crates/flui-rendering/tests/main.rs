@@ -48,6 +48,9 @@ mod layout_raw_bridge;
 #[path = "lazy_sliver_list_child_build_contract.rs"]
 mod lazy_sliver_list_child_build_contract;
 
+#[path = "retained_boundary_layers.rs"]
+mod retained_boundary_layers;
+
 #[path = "paint_dirty_flag_discipline.rs"]
 mod paint_dirty_flag_discipline;
 #[path = "paint_fragment_snapshot.rs"]
