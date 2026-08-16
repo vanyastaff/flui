@@ -400,13 +400,22 @@ impl PipelineOwner<PaintPhase> {
                             composer.graft(subtree);
                         } else {
                             composer.open_capture();
-                            self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set)?;
+                            // The result is held rather than propagated with
+                            // `?` so the scope closes on the error path too.
+                            // Today an errored paint abandons the whole frame
+                            // and the composer with it, but an unbalanced
+                            // stack would mis-assign nested lists rather than
+                            // fail loudly the moment paint errors become
+                            // recoverable.
+                            let painted =
+                                self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set);
                             // Seal before capturing: the boundary's
                             // trailing run is part of its output, and
                             // `pop_layer` would otherwise flush it after
                             // the snapshot was taken.
                             composer.seal_picture();
                             let nested_boundaries = composer.close_capture();
+                            painted?;
                             // `None` evicts: a subtree that GAINED a
                             // Leader/Follower must not be served its
                             // pre-link form. See `capture`.
