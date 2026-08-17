@@ -369,6 +369,11 @@ pub fn keycode_to_key(key_code: u16) -> Option<Key> {
         // Insert, matching this key's `Code` (see [`kvk::HELP`]).
         kvk::HELP => NamedKey::Insert,
         kvk::PC_MENU => NamedKey::ContextMenu,
+        // Keypad Clear delivers the PUA scalar `NSClearLineFunctionKey`
+        // (U+F739, AppKit `NSEvent.h`) as its `characters`; its W3C `key`
+        // value is `Clear` (Firefox maps `kVK_ANSI_KeypadClear` so), even
+        // though its physical `code` is the registry's NumLock position.
+        kvk::ANSI_KEYPAD_CLEAR => NamedKey::Clear,
 
         // Modifiers arrive via `flagsChanged:`, not `keyDown:` — mapped for
         // table completeness (see the module doc).
@@ -530,6 +535,14 @@ mod tests {
             Some(Key::Named(NamedKey::Enter))
         );
         assert_eq!(keycode_to_key(kvk::ANSI_KEYPAD_5), None);
+        // Keypad Clear's `characters` is the PUA scalar
+        // `NSClearLineFunctionKey` (U+F739): without a named intercept it
+        // would ship as `Key::Character("\u{F739}")` and a focused text
+        // field would insert it.
+        assert_eq!(
+            keycode_to_key(kvk::ANSI_KEYPAD_CLEAR),
+            Some(Key::Named(NamedKey::Clear))
+        );
     }
 
     /// The function row's keycodes are thoroughly shuffled (F3 is 0x63,
