@@ -1138,6 +1138,53 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_input(input);
                 }
             }
+            // NaN (documented possible) folds to None in the shared
+            // conversion; the guard drops the tick without touching the
+            // rest of this handler (the trailing wildcard arm covers it).
+            WinitWindowEvent::PinchGesture { delta, .. }
+                if crate::shared::gestures::pinch(delta).is_some() =>
+            {
+                let gesture = crate::shared::gestures::pinch(delta)
+                    .expect("BUG: the match guard just checked Some");
+                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
+                    (
+                        s.current_modifiers,
+                        s.cursor_positions
+                            .get(&platform_id)
+                            .copied()
+                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                    )
+                });
+                if let Some(ref win) = window {
+                    let input = winit_events::trackpad_gesture_event(
+                        gesture,
+                        cursor_pos,
+                        win.scale_factor(),
+                        modifiers,
+                    );
+                    win.callbacks().dispatch_input(input);
+                }
+            }
+            WinitWindowEvent::RotationGesture { delta, .. } => {
+                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
+                    (
+                        s.current_modifiers,
+                        s.cursor_positions
+                            .get(&platform_id)
+                            .copied()
+                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                    )
+                });
+                if let Some(ref win) = window {
+                    let input = winit_events::trackpad_gesture_event(
+                        crate::shared::gestures::rotation_ccw_degrees(delta),
+                        cursor_pos,
+                        win.scale_factor(),
+                        modifiers,
+                    );
+                    win.callbacks().dispatch_input(input);
+                }
+            }
             WinitWindowEvent::Touch(touch) => {
                 let (modifiers, pointer_id) = self.platform.with_state(|s| {
                     let pointer_id = resolve_touch_pointer_id(

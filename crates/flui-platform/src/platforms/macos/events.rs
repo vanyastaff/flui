@@ -180,6 +180,28 @@ pub unsafe fn convert_ns_event(
                 Some(convert_scroll_event(ns_event, scale_factor, view_height))
             }
 
+            // Trackpad pinch/rotation — the native producer for the pan-zoom
+            // lane (ordinary macOS apps select THIS backend, not winit).
+            // `magnification` is the fraction the shared conversion expects;
+            // `rotation` is counterclockwise degrees, converted to the
+            // lane's clockwise radians in the same shared function the winit
+            // boundary uses, so the two backends cannot drift.
+            NSEventType::NSEventTypeMagnify => {
+                let magnification: f64 = msg_send![ns_event, magnification];
+                crate::shared::gestures::pinch(magnification).map(|gesture| {
+                    convert_gesture_event(ns_event, scale_factor, view_height, gesture)
+                })
+            }
+            NSEventType::NSEventTypeRotate => {
+                let degrees: f32 = msg_send![ns_event, rotation];
+                Some(convert_gesture_event(
+                    ns_event,
+                    scale_factor,
+                    view_height,
+                    crate::shared::gestures::rotation_ccw_degrees(degrees),
+                ))
+            }
+
             // Mouse enter/exit carry no useful position payload in the W3C
             // model — Enter/Leave only identify the pointer.
             NSEventType::NSMouseEntered => Some(PlatformInput::Pointer(PointerEvent::Enter(
@@ -440,6 +462,37 @@ unsafe fn convert_scroll_event(ns_event: id, scale_factor: f64, view_height: f64
             delta,
         }))
     }
+}
+
+/// Assemble a `PointerEvent::Gesture` around an already-converted
+/// [`PointerGesture`] at the event's own location, with the shared
+/// synthetic gesture identity (see `shared::gestures`).
+///
+/// # Safety
+///
+/// Caller guarantees `ns_event` validity; `pointer_state` reads only
+/// documented NSEvent getters.
+unsafe fn convert_gesture_event(
+    ns_event: id,
+    scale_factor: f64,
+    view_height: f64,
+    gesture: ui_events::pointer::PointerGesture,
+) -> PlatformInput {
+    // SAFETY: forwarded caller guarantee.
+    let state = unsafe { pointer_state(ns_event, scale_factor, view_height) };
+    PlatformInput::Pointer(PointerEvent::Gesture(
+        ui_events::pointer::PointerGestureEvent {
+            pointer: PointerInfo {
+                pointer_id: ui_events::pointer::PointerId::new(
+                    crate::shared::gestures::GESTURE_POINTER_ID,
+                ),
+                pointer_type: PointerType::Touch,
+                persistent_device_id: None,
+            },
+            gesture,
+            state,
+        },
+    ))
 }
 
 // ============================================================================

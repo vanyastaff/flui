@@ -279,6 +279,54 @@ pub fn touch_event(
     PlatformInput::Pointer(event)
 }
 
+/// Convert a winit trackpad pinch or rotation tick into a
+/// `PointerEvent::Gesture` — the producer side the pan-zoom lane never had
+/// (its consumer chain, `from_w3c_event` → `Listener::on_pointer_pan_zoom_update`,
+/// existed with zero producers on any backend).
+///
+/// Delta conventions, each converted AT THIS boundary:
+/// - winit `PinchGesture.delta` is a magnification fraction (positive =
+///   zoom in) — the exact semantics of `PointerGesture::Pinch`, passed
+///   through (NaN, which winit documents as possible, is dropped by the
+///   caller).
+/// - winit `RotationGesture.delta` is COUNTERCLOCKWISE degrees;
+///   `PointerGesture::Rotate` wants CLOCKWISE radians — negate and convert.
+///
+/// winit's `PanGesture` (iOS-only) has no `PointerGesture` counterpart and
+/// macOS trackpad pans already arrive as `MouseWheel` `PixelDelta` ticks;
+/// `DoubleTapGesture` carries no delta to translate. Both stay untranslated
+/// deliberately.
+///
+/// The synthetic gesture pointer: gestures arrive without a pointer id from
+/// winit; the whole tick stream shares one identity distinct from the mouse
+/// and any touch contact, typed `Touch` (a trackpad gesture is a touch-class
+/// input, and the binding's ephemeral no-contact dispatch keys on the id
+/// only).
+pub fn trackpad_gesture_event(
+    gesture: ui_events::pointer::PointerGesture,
+    position: winit::dpi::PhysicalPosition<f64>,
+    scale_factor: f64,
+    modifiers: KeyboardModifiers,
+) -> PlatformInput {
+    let event = PointerEvent::Gesture(ui_events::pointer::PointerGestureEvent {
+        pointer: PointerInfo {
+            pointer_id: PointerId::new(crate::shared::gestures::GESTURE_POINTER_ID),
+            pointer_type: PointerType::Touch,
+            persistent_device_id: None,
+        },
+        gesture,
+        state: pointer_state(
+            position,
+            scale_factor,
+            0.0,
+            modifiers,
+            PointerButtons::default(),
+        ),
+    });
+
+    PlatformInput::Pointer(event)
+}
+
 /// Convert winit MouseWheel to W3C PointerEvent::Scroll
 pub fn mouse_wheel_event(
     delta: MouseScrollDelta,
@@ -792,6 +840,48 @@ mod pointer_translation_tests {
             panic!("expected Down");
         };
         assert_ne!(second.pointer.pointer_id, down.pointer.pointer_id);
+    }
+
+    /// A trackpad gesture tick becomes a `PointerEvent::Gesture` with one
+    /// stable synthetic identity that can never alias the mouse or a touch
+    /// contact, logical coordinates, and the delta passed through in the
+    /// lane's own convention.
+    #[test]
+    fn trackpad_gestures_produce_gesture_events_with_a_distinct_identity() {
+        use ui_events::pointer::PointerGesture;
+
+        let pinch = trackpad_gesture_event(
+            PointerGesture::Pinch(0.1),
+            winit::dpi::PhysicalPosition::new(200.0, 100.0),
+            2.0,
+            KeyboardModifiers::empty(),
+        );
+        let PlatformInput::Pointer(PointerEvent::Gesture(pinch)) = pinch else {
+            panic!("expected a gesture event, got {pinch:?}");
+        };
+        assert!(matches!(pinch.gesture, PointerGesture::Pinch(delta) if delta == 0.1));
+        assert_eq!(pinch.pointer.pointer_type, PointerType::Touch);
+        assert_ne!(
+            pinch.pointer.pointer_id,
+            Some(PointerId::PRIMARY),
+            "the gesture stream must not alias the mouse"
+        );
+        assert_eq!(pinch.state.position.x, 100.0, "positions are logical");
+
+        let rotate = trackpad_gesture_event(
+            PointerGesture::Rotate(-0.5),
+            winit::dpi::PhysicalPosition::new(0.0, 0.0),
+            1.0,
+            KeyboardModifiers::empty(),
+        );
+        let PlatformInput::Pointer(PointerEvent::Gesture(rotate)) = rotate else {
+            panic!("expected a gesture event, got {rotate:?}");
+        };
+        assert!(matches!(rotate.gesture, PointerGesture::Rotate(delta) if delta == -0.5));
+        assert_eq!(
+            rotate.pointer.pointer_id, pinch.pointer.pointer_id,
+            "one gesture stream, one identity"
+        );
     }
 }
 
