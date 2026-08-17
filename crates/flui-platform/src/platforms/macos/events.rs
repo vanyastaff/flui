@@ -16,7 +16,9 @@
 //!
 //! # Key Mappings
 //!
-//! - NSEvent.characters / keyCode → keyboard_types::Key
+//! - NSEvent.characters / keyCode → keyboard_types::Key (named-key
+//!   intercepts and the physical-key `Code` table live in
+//!   `crate::shared::keys_macos`, where their tests execute on any host)
 //! - NSEventModifierFlags → keyboard_types::Modifiers
 //! - NSEventType → PointerEvent / KeyboardEvent
 //! - NSPoint → logical pixels (NSEvent coordinates are already logical;
@@ -33,7 +35,7 @@ use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::{Key, Modifiers, NamedKey};
 use objc::{class, msg_send, sel, sel_impl};
 use ui_events::{
-    keyboard::{Code, KeyState, KeyboardEvent, Location},
+    keyboard::{KeyState, KeyboardEvent},
     pointer::{
         PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
         PointerOrientation, PointerScrollEvent, PointerState, PointerType, PointerUpdate,
@@ -94,15 +96,17 @@ pub unsafe fn convert_ns_event(
         match event_type {
             // Keyboard events
             NSEventType::NSKeyDown => {
-                let key = extract_key(ns_event);
+                let key_code: u16 = msg_send![ns_event, keyCode];
+                let key = extract_key(ns_event, key_code);
+                let code = crate::shared::keys_macos::keycode_to_code(key_code);
                 let modifiers = extract_modifiers(ns_event);
                 let is_repeat: bool = msg_send![ns_event, isARepeat];
 
                 Some(PlatformInput::Keyboard(KeyboardEvent {
                     state: KeyState::Down,
                     key,
-                    code: Code::Unidentified,
-                    location: Location::Standard,
+                    code,
+                    location: crate::shared::keys::location_for_code(code),
                     modifiers,
                     repeat: is_repeat,
                     is_composing: false,
@@ -110,14 +114,16 @@ pub unsafe fn convert_ns_event(
             }
 
             NSEventType::NSKeyUp => {
-                let key = extract_key(ns_event);
+                let key_code: u16 = msg_send![ns_event, keyCode];
+                let key = extract_key(ns_event, key_code);
+                let code = crate::shared::keys_macos::keycode_to_code(key_code);
                 let modifiers = extract_modifiers(ns_event);
 
                 Some(PlatformInput::Keyboard(KeyboardEvent {
                     state: KeyState::Up,
                     key,
-                    code: Code::Unidentified,
-                    location: Location::Standard,
+                    code,
+                    location: crate::shared::keys::location_for_code(code),
                     modifiers,
                     repeat: false,
                     is_composing: false,
@@ -230,19 +236,22 @@ pub unsafe fn convert_ns_event(
 
 /// Extract key from NSEvent
 ///
-/// Uses NSEvent.keyCode for special keys, NSEvent.characters otherwise
+/// The shared named-key table (`shared::keys_macos`) intercepts keys whose
+/// `NSEvent.characters` are control characters or private-use-area
+/// codepoints; everything else types through `characters`, the layout- and
+/// modifier-aware translation.
 ///
 /// # Safety
 ///
-/// `ns_event` must be a valid, live `NSEvent*` of a keyboard event.
-unsafe fn extract_key(ns_event: id) -> Key {
+/// `ns_event` must be a valid, live `NSEvent*` of a keyboard event, and
+/// `key_code` must be its `keyCode`.
+unsafe fn extract_key(ns_event: id, key_code: u16) -> Key {
     // SAFETY: caller guarantees `ns_event` is a valid NSEvent*; `characters`
     // returns an autoreleased NSString whose UTF8String buffer is valid while
     // the event is alive (we copy it into an owned String before returning).
     unsafe {
         // Check for special keys via key code first
-        let key_code: u16 = msg_send![ns_event, keyCode];
-        if let Some(special_key) = key_code_to_key(key_code) {
+        if let Some(special_key) = crate::shared::keys_macos::keycode_to_key(key_code) {
             return special_key;
         }
 
@@ -299,50 +308,6 @@ unsafe fn extract_modifiers(ns_event: id) -> Modifiers {
 
         modifiers
     }
-}
-
-/// Convert macOS key code to Key
-///
-/// Reference: https://developer.apple.com/documentation/appkit/nsevent/1534513-keycode
-fn key_code_to_key(key_code: u16) -> Option<Key> {
-    let named = match key_code {
-        // Arrow keys
-        123 => NamedKey::ArrowLeft,
-        124 => NamedKey::ArrowRight,
-        125 => NamedKey::ArrowDown,
-        126 => NamedKey::ArrowUp,
-
-        // Function keys
-        122 => NamedKey::F1,
-        120 => NamedKey::F2,
-        99 => NamedKey::F3,
-        118 => NamedKey::F4,
-        96 => NamedKey::F5,
-        97 => NamedKey::F6,
-        98 => NamedKey::F7,
-        100 => NamedKey::F8,
-        101 => NamedKey::F9,
-        109 => NamedKey::F10,
-        103 => NamedKey::F11,
-        111 => NamedKey::F12,
-
-        // Special keys
-        36 => NamedKey::Enter,
-        48 => NamedKey::Tab,
-        51 => NamedKey::Backspace,
-        53 => NamedKey::Escape,
-        117 => NamedKey::Delete,
-        115 => NamedKey::Home,
-        119 => NamedKey::End,
-        116 => NamedKey::PageUp,
-        121 => NamedKey::PageDown,
-
-        // Space
-        49 => return Some(Key::Character(" ".to_string())),
-
-        _ => return None,
-    };
-    Some(Key::Named(named))
 }
 
 // ============================================================================
@@ -545,39 +510,5 @@ unsafe fn extract_mouse_buttons() -> PointerButtons {
         }
 
         buttons
-    }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_key_code_mappings() {
-        // Arrow keys
-        assert_eq!(key_code_to_key(123), Some(Key::Named(NamedKey::ArrowLeft)));
-        assert_eq!(key_code_to_key(124), Some(Key::Named(NamedKey::ArrowRight)));
-        assert_eq!(key_code_to_key(125), Some(Key::Named(NamedKey::ArrowDown)));
-        assert_eq!(key_code_to_key(126), Some(Key::Named(NamedKey::ArrowUp)));
-
-        // Function keys
-        assert_eq!(key_code_to_key(122), Some(Key::Named(NamedKey::F1)));
-        assert_eq!(key_code_to_key(111), Some(Key::Named(NamedKey::F12)));
-
-        // Special keys
-        assert_eq!(key_code_to_key(36), Some(Key::Named(NamedKey::Enter)));
-        assert_eq!(key_code_to_key(48), Some(Key::Named(NamedKey::Tab)));
-        assert_eq!(key_code_to_key(51), Some(Key::Named(NamedKey::Backspace)));
-        assert_eq!(key_code_to_key(53), Some(Key::Named(NamedKey::Escape)));
-
-        // Space maps to a character key
-        assert_eq!(key_code_to_key(49), Some(Key::Character(" ".to_string())));
-
-        // Unknown key
-        assert_eq!(key_code_to_key(999), None);
     }
 }
