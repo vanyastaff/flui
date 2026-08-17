@@ -453,6 +453,47 @@ pub fn merge_wm_char(fallback: Key, text: Option<String>) -> Key {
     }
 }
 
+/// The complete `key` decision for a Win32 keydown: the [`merge_wm_char`]
+/// merge, plus the Alt+numpad composition guard.
+///
+/// While Alt is held without Ctrl, a numpad-digit keydown that produced no
+/// `WM_CHAR` is a step of Windows' Alt+numpad character entry, not a
+/// keystroke of its own: the digits type nothing (their character arrives
+/// composed, as an out-of-band `WM_CHAR` on Alt release — see
+/// [`assemble_stray_wm_char`]), so surfacing the digit fallback would type
+/// `65` before Alt+65's `A`, and — because NumLock-off composition reports
+/// the navigation VKs on the same physical keys — surfacing a `Home`/arrow
+/// fallback would fire caret movement mid-composition. Such a keydown
+/// reports `Unidentified` instead. The guard is keyed on the physical
+/// numpad cluster (`Code::Numpad0..=Numpad9`), which is NumLock-invariant;
+/// Ctrl+Alt is excluded because that chord is AltGr, whose translated text
+/// arrives on the keydown itself and must keep winning.
+pub fn key_for_keydown(
+    fallback: Key,
+    text: Option<String>,
+    alt: bool,
+    ctrl: bool,
+    code: Code,
+) -> Key {
+    let numpad_digit = matches!(
+        code,
+        Code::Numpad0
+            | Code::Numpad1
+            | Code::Numpad2
+            | Code::Numpad3
+            | Code::Numpad4
+            | Code::Numpad5
+            | Code::Numpad6
+            | Code::Numpad7
+            | Code::Numpad8
+            | Code::Numpad9
+    );
+    if alt && !ctrl && text.is_none() && numpad_digit {
+        return Key::Named(NamedKey::Unidentified);
+    }
+    merge_wm_char(fallback, text)
+}
+
 /// Fold one out-of-band `WM_CHAR` code unit (no owning keydown — Alt+numpad
 /// composition, or a directly-sent message) into at most one completed text.
 ///
@@ -554,6 +595,49 @@ mod tests {
         assert_eq!(wm_char_text(&[0xD83D, 0xDE00]).as_deref(), Some("😀"));
         assert_eq!(wm_char_text(&[0xD83D]), None);
         assert_eq!(wm_char_text(&[]), None);
+    }
+
+    /// Alt+numpad character entry: while Alt (without Ctrl) is held, the
+    /// intermediate numpad keydowns are composition input, not keystrokes —
+    /// they produce no WM_CHAR of their own, and the composed character
+    /// arrives as an out-of-band WM_CHAR on Alt release. Letting the digit
+    /// fallbacks through would make Alt+6 5 type "65" into a text field
+    /// (and, with NumLock off, fire Home/End/arrow editing actions mid-
+    /// composition) before the composed character lands, so a numpad-
+    /// cluster keydown under plain Alt with no translated text must not
+    /// surface a typeable or editing key at all.
+    #[test]
+    fn alt_numpad_composition_steps_do_not_surface_keys() {
+        // NumLock on: VK_NUMPAD6, scancode 0x4D non-extended → Numpad6.
+        let fallback = vk_to_key(0x66, false); // VK_NUMPAD6 → "6"
+        assert_eq!(
+            key_for_keydown(fallback, None, true, false, Code::Numpad6),
+            Key::Named(NamedKey::Unidentified),
+            "an Alt+numpad digit with no translation is a composition step"
+        );
+        // NumLock off: the same physical key reports VK_HOME → Named(Home);
+        // Code is still Numpad7, and a Home fallback would move the caret.
+        assert_eq!(
+            key_for_keydown(Key::Named(NamedKey::Home), None, true, false, Code::Numpad7),
+            Key::Named(NamedKey::Unidentified),
+            "NumLock-off composition digits must not surface editing keys"
+        );
+        // AltGr (Ctrl+Alt) is NOT composition: translated text still wins.
+        assert_eq!(
+            key_for_keydown(ch("q"), Some("@".into()), true, true, Code::KeyQ),
+            ch("@")
+        );
+        // A numpad digit without Alt types normally.
+        assert_eq!(
+            key_for_keydown(ch("6"), Some("6".into()), false, false, Code::Numpad6),
+            ch("6")
+        );
+        // Alt over a NON-numpad key keeps its fallback (mnemonic/shortcut
+        // identity, same as the winit wire's logical_key).
+        assert_eq!(
+            key_for_keydown(ch("s"), None, true, false, Code::KeyS),
+            ch("s")
+        );
     }
 
     /// The out-of-band WM_CHAR path (Alt+numpad composition) assembles one

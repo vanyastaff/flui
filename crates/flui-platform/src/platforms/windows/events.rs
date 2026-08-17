@@ -342,8 +342,14 @@ pub fn key_down_event(
     // SAFETY: see `pointer_state` above — same call, no precondition.
     let modifiers = unsafe { get_modifiers() };
     let fallback = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
-    let key = keys::merge_wm_char(fallback, translated_text);
     let code = keys::scancode_to_code(scan_code, extended);
+    let key = keys::key_for_keydown(
+        fallback,
+        translated_text,
+        modifiers.contains(KeyboardModifiers::ALT),
+        modifiers.contains(KeyboardModifiers::CONTROL),
+        code,
+    );
 
     PlatformInput::Keyboard(KeyboardEvent {
         state: KeyState::Down,
