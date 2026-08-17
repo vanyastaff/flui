@@ -703,8 +703,81 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 .on_pan_end(pan_end_details)
                 .child(clipped);
 
+            // -- Trackpad pinch (Listener::on_pointer_pan_zoom_update) ----
+            //
+            // The pan-zoom lane delivers per-tick updates whose `scale` is
+            // the tick's own factor (each converted gesture is a one-tick
+            // "cumulative" — see `convert_gesture`'s doc), so composing is
+            // a straight multiply per update, with the identical
+            // clamp-and-keep-the-focal-point-fixed steps the wheel branch
+            // uses. Ticks that change nothing (pure rotation, scale 1.0)
+            // fire the interaction callbacks and leave the transform alone.
+            let controller_pinch = controller.clone();
+            let anchor_pinch = anchor.clone();
+            let pipeline_cell_pinch = pipeline_cell.clone();
+            let on_start_pinch = on_start.clone();
+            let on_update_pinch = on_update.clone();
+            let on_end_pinch = on_end.clone();
+            let pan_zoom = move |event: &flui_interaction::PointerPanZoomEvent| {
+                let flui_interaction::PointerPanZoomEvent::Update {
+                    position, scale, ..
+                } = *event
+                else {
+                    return;
+                };
+                if let Some(callback) = &on_start_pinch {
+                    callback(InteractionStartDetails {
+                        focal_point: position,
+                        local_focal_point: position,
+                    });
+                }
+                #[allow(clippy::cast_possible_truncation)] // per-tick factors are near 1.0
+                let scale_change = scale as f32;
+                if scale_enabled
+                    && scale_change != 1.0
+                    && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
+                        pipeline_cell_pinch.as_ref(),
+                        &anchor_pinch,
+                        boundary_margin,
+                    )
+                {
+                    let scene_before = controller_pinch.to_scene(position);
+                    let scaled = clamp_scale(
+                        controller_pinch.value(),
+                        scale_change,
+                        min_scale,
+                        max_scale,
+                        viewport,
+                        boundary,
+                    );
+                    controller_pinch.set_value(scaled);
+                    let scene_after = controller_pinch.to_scene(position);
+                    let correction = Offset::new(
+                        scene_after.dx - scene_before.dx,
+                        scene_after.dy - scene_before.dy,
+                    );
+                    let translated =
+                        clamp_translation(controller_pinch.value(), correction, viewport, boundary);
+                    controller_pinch.set_value(translated);
+                }
+                if let Some(callback) = &on_update_pinch {
+                    callback(InteractionUpdateDetails {
+                        focal_point: position,
+                        local_focal_point: position,
+                        scale: scale_change,
+                        focal_point_delta: Offset::ZERO,
+                    });
+                }
+                if let Some(callback) = &on_end_pinch {
+                    callback(InteractionEndDetails {
+                        velocity: Velocity::ZERO,
+                    });
+                }
+            };
+
             Listener::new()
                 .on_scroll_claim(scroll_claim)
+                .on_pointer_pan_zoom_update(pan_zoom)
                 .child(recognized)
         })
     }

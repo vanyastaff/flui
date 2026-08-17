@@ -653,3 +653,42 @@ fn unmounting_the_widget_unsubscribes_from_an_external_controller() {
          forever, even though nothing is mounted against the controller anymore"
     );
 }
+
+/// A trackpad pinch tick — `PointerEvent::Gesture` through the real binding
+/// dispatch — scales the transform with the same focal-point correction the
+/// wheel path has. FLUI-added coverage: the gesture lane's producers landed
+/// after this port's V1 scoped pinch out; the lane delivers per-tick scale
+/// factors (each converted gesture is a one-tick cumulative), so two ticks
+/// compose multiplicatively.
+#[test]
+fn a_trackpad_pinch_tick_scales_the_transform() {
+    let controller = TransformationController::new();
+    let widget = InteractiveViewer::new()
+        .controller(controller.clone())
+        .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
+        .min_scale(0.01)
+        .max_scale(100.0)
+        .child(child());
+    let laid = lay_out(widget, loose(500.0));
+
+    let pinch_tick = |fraction: f32| {
+        flui_interaction::events::make_pinch_gesture_event(
+            Offset::new(px(100.0), px(100.0)),
+            fraction,
+        )
+    };
+
+    laid.dispatch_pointer_event(&pinch_tick(0.5));
+    let after_one = scale_of(controller.value());
+    assert!(
+        (after_one - 1.5).abs() < 1e-4,
+        "one +0.5 pinch tick scales by 1.5, got {after_one}"
+    );
+
+    laid.dispatch_pointer_event(&pinch_tick(0.5));
+    let after_two = scale_of(controller.value());
+    assert!(
+        (after_two - 2.25).abs() < 1e-3,
+        "ticks compose multiplicatively (1.5 * 1.5), got {after_two}"
+    );
+}
