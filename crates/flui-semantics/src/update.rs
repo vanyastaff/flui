@@ -54,10 +54,14 @@ use crate::role::SemanticsRole;
 pub struct SemanticsNodeData {
     /// The node's stable OS-facing identity.
     ///
-    /// `None` only for a node never bound to a render boundary — such a node
-    /// is unaddressable and is not published (the same skip rule as
-    /// [`tree_to_update`](crate::tree_to_update)). Every node the pipeline
-    /// assembles carries an identity.
+    /// `None` only in hand-built content (fixtures, node-level export of a
+    /// node never bound to a render boundary). Such a payload is
+    /// unaddressable and never enters an update: the constructor
+    /// ([`SemanticsTree::node_data`](crate::tree::SemanticsTree::node_data))
+    /// returns `None` for an unaddressable node, and
+    /// [`SemanticsTreeUpdateBuilder::add_node`] omits an id-less payload —
+    /// the same skip rule as [`tree_to_update`](crate::tree_to_update).
+    /// Every node the pipeline assembles carries an identity.
     pub id: Option<AccessibilityNodeId>,
     /// Flags bitmask.
     pub flags: u64,
@@ -210,7 +214,21 @@ impl SemanticsTreeUpdateBuilder {
     }
 
     /// Adds a node to the update.
+    ///
+    /// A payload without an identity ([`SemanticsNodeData::id`] of `None`) is
+    /// **omitted**: an update entry the platform cannot address or diff is
+    /// worse than an absent one, and the tree-level constructor
+    /// ([`SemanticsTree::node_data`](crate::tree::SemanticsTree::node_data))
+    /// never produces one — only a hand-built payload can get here without an
+    /// id, and it is dropped with a warning rather than batched.
     pub fn add_node(&mut self, node: SemanticsNodeData) {
+        if node.id.is_none() {
+            tracing::warn!(
+                label = node.label.as_deref(),
+                "dropping a semantics update payload without a stable identity"
+            );
+            return;
+        }
         self.nodes.push(node);
     }
 
@@ -420,6 +438,40 @@ mod tests {
         let update = builder.build();
 
         assert_eq!(update.removed_node_ids[0].as_u64(), published);
+    }
+
+    /// A payload names its subject; a node with no stable identity has no
+    /// payload. Returning content under `id: None` would let it into an
+    /// update that platform and diff consumers cannot address.
+    #[test]
+    fn node_data_is_none_for_an_unaddressable_node() {
+        let mut tree = SemanticsTree::new();
+        let unaddressable = tree.insert(SemanticsNode::new());
+        tree.set_root(Some(unaddressable));
+
+        assert!(tree.node_data(unaddressable).is_none());
+    }
+
+    /// The builder is the assembly seam for `SemanticsTreeUpdate`, so the
+    /// publish path's skip rule must hold there too: a hand-built payload
+    /// without identity is omitted, never batched.
+    #[test]
+    fn the_builder_omits_a_payload_without_identity() {
+        let mut builder = SemanticsTreeUpdateBuilder::new();
+
+        builder.add_node(SemanticsNodeData::default());
+        builder.add_node(SemanticsNodeData {
+            id: Some(AccessibilityNodeId::from(render_id(9))),
+            ..Default::default()
+        });
+
+        let update = builder.build();
+        assert_eq!(update.node_count(), 1);
+        assert_eq!(
+            update.nodes[0].id,
+            Some(AccessibilityNodeId::from(render_id(9))),
+            "only the addressable payload survives into the update"
+        );
     }
 
     #[test]

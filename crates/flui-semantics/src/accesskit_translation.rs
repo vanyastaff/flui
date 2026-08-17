@@ -463,11 +463,14 @@ pub fn tree_to_update(
 
     let nodes: Vec<(NodeId, Node)> = tree
         .iter()
-        .filter_map(|(id, node)| {
-            let node_id = NodeId(node.accessibility_id()?.as_u64());
-            // `node_data` resolves the children into the same stable space
-            // and applies the identical skip rule for unaddressable ones.
-            Some((node_id, to_node(&tree.node_data(id)?)))
+        .filter_map(|(_, node)| {
+            // `node_data_of` skips an unaddressable node (returns `None`),
+            // resolves the children into the same stable space with the
+            // identical skip rule, and works from the reference already in
+            // hand — no second arena lookup per node on the publish path.
+            let data = tree.node_data_of(node)?;
+            let node_id = NodeId(data.id?.as_u64());
+            Some((node_id, to_node(&data)))
         })
         .collect();
 
