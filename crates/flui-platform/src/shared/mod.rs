@@ -5,6 +5,7 @@
 
 pub mod gestures;
 mod handlers;
+pub mod keys;
 pub mod scroll;
 
 pub use handlers::{PlatformHandlers, WindowCallbacks};
