@@ -1117,14 +1117,22 @@ impl ApplicationHandler for WinitApp {
                     }
                     (
                         s.current_modifiers,
-                        s.cursor_positions
-                            .get(&platform_id)
-                            .copied()
-                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                        s.cursor_positions.get(&platform_id).copied(),
                         held_pointer_buttons(&s.pressed_buttons),
                     )
                 });
 
+                // A click delivered before any CursorMoved has no tracked
+                // position; the old (0,0) stand-in actuated whatever widget
+                // sat in the top-left corner. No portable position query
+                // exists at this point — drop the event, traced.
+                let Some(cursor_pos) = cursor_pos else {
+                    tracing::debug!(
+                        ?platform_id,
+                        "dropping a mouse button event with no tracked cursor position"
+                    );
+                    return;
+                };
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
                     let input = winit_events::mouse_button_event(
@@ -1206,12 +1214,17 @@ impl ApplicationHandler for WinitApp {
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {
                     (
                         s.current_modifiers,
-                        s.cursor_positions
-                            .get(&platform_id)
-                            .copied()
-                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                        s.cursor_positions.get(&platform_id).copied(),
                     )
                 });
+                // Same untracked-position posture as the button arm above.
+                let Some(cursor_pos) = cursor_pos else {
+                    tracing::debug!(
+                        ?platform_id,
+                        "dropping a wheel event with no tracked cursor position"
+                    );
+                    return;
+                };
 
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();

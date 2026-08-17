@@ -39,10 +39,16 @@ use crate::traits::{Key, PlatformInput, device_to_logical};
 /// Process-start epoch for monotonic event timestamps.
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-/// Get monotonic timestamp in milliseconds since process start.
+/// Get monotonic timestamp in nanoseconds since process start.
 #[inline]
-fn event_timestamp_ms() -> u64 {
-    PROCESS_START.elapsed().as_millis() as u64
+fn event_timestamp_ns() -> u64 {
+    // Upstream ui-events documents PointerState.time as NANOSECONDS
+    // ("u64 nanoseconds real time"); a millisecond stamp here silently
+    // broke the unit for every consumer comparing across devices.
+    #[allow(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
+    {
+        PROCESS_START.elapsed().as_nanos() as u64
+    }
 }
 
 /// Create a `PointerInfo` for the primary mouse pointer.
@@ -255,7 +261,7 @@ fn pointer_state_at(
     let logical_y = device_to_logical(y as f32, scale_factor);
 
     let state = PointerState {
-        time: event_timestamp_ms(),
+        time: event_timestamp_ns(),
         position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
         buttons,
         modifiers,

@@ -1,5 +1,23 @@
 //! Event types for user interactions.
 //!
+//! # The pointer field contract (one contract, both wires)
+//!
+//! Every live translation and every synthetic constructor stamps the same
+//! values, so a recognizer developed against either wire meets the other
+//! unchanged:
+//!
+//! - `time` — **nanoseconds**, monotonic, process-start base (upstream
+//!   ui-events documents the unit; the base only has to agree per device).
+//! - `buttons` — the set held at the instant, transition included on Down /
+//!   excluded on Up; a Move with an empty set IS a hover.
+//! - `pressure` — `0.5` while any button/contact is active on hardware
+//!   without a pressure sensor (the W3C default), `0.0` otherwise; real
+//!   sensors (touch force, pen) report their normalized value.
+//! - `count` — click/tap count: `1` on Down/Up, `0` on motion, hover,
+//!   scroll and gesture states.
+//! - Events that arrive before any position is known are DROPPED at the
+//!   platform boundary, never delivered at a made-up origin.
+//!
 //! This module provides standardized event types following W3C specifications:
 //!
 //! - **Pointer events** - Mouse, touch, pen input via [`ui_events`]
@@ -592,7 +610,10 @@ pub fn make_down_event_for_id(
                 height: 1.0,
             },
             orientation: PointerOrientation::default(),
-            pressure: 1.0,
+            // The W3C default for active-button hardware with no pressure
+            // sensor — the value every live translation stamps; a synthetic
+            // 1.0 here let tests pass against a contract no real wire meets.
+            pressure: 0.5,
             tangential_pressure: 0.0,
             scale_factor: 1.0,
         },
@@ -683,7 +704,10 @@ pub fn make_move_event_for_id(
                 height: 1.0,
             },
             orientation: PointerOrientation::default(),
-            pressure: 1.0,
+            // The W3C default for active-button hardware with no pressure
+            // sensor — the value every live translation stamps; a synthetic
+            // 1.0 here let tests pass against a contract no real wire meets.
+            pressure: 0.5,
             tangential_pressure: 0.0,
             scale_factor: 1.0,
         },
@@ -760,7 +784,10 @@ pub fn make_down_event_for_id_with_button(
                 height: 1.0,
             },
             orientation: PointerOrientation::default(),
-            pressure: 1.0,
+            // The W3C default for active-button hardware with no pressure
+            // sensor — the value every live translation stamps; a synthetic
+            // 1.0 here let tests pass against a contract no real wire meets.
+            pressure: 0.5,
             tangential_pressure: 0.0,
             scale_factor: 1.0,
         },
@@ -854,7 +881,10 @@ pub fn make_move_event_with_button(
                 height: 1.0,
             },
             orientation: PointerOrientation::default(),
-            pressure: 1.0,
+            // The W3C default for active-button hardware with no pressure
+            // sensor — the value every live translation stamps; a synthetic
+            // 1.0 here let tests pass against a contract no real wire meets.
+            pressure: 0.5,
             tangential_pressure: 0.0,
             scale_factor: 1.0,
         },
