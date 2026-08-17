@@ -1282,7 +1282,49 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_input(input);
                 }
             }
-            WinitWindowEvent::KeyboardInput { event, .. } => {
+            WinitWindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => {
+                // winit synthesizes press events for every key held when a
+                // window gains focus, and release events for every key held
+                // when it loses focus (X11 and Windows only — the
+                // `is_synthetic` doc in winit 0.30 `src/event.rs`). Both are
+                // keyboard-state synchronization, not user keystrokes, but
+                // they get opposite treatment:
+                //
+                // - Synthetic PRESSES are dropped. Every framework key
+                //   consumer — `EditableText` typing, `Shortcuts`, focus
+                //   traversal — actuates on `KeyState::Down`, so dispatching
+                //   one would re-type and re-trigger every held key each
+                //   time the window regains focus; and no consumer needs
+                //   the press for state (modifier state rides
+                //   `ModifiersChanged`, which winit emits on focus change
+                //   in its own right).
+                // - Synthetic RELEASES are dispatched. When the physical
+                //   release happens while the window is unfocused, this
+                //   synthetic release is the ONLY key-up the window will
+                //   ever receive — an app-level `Focus::on_key_event`
+                //   handler latching a key on Down (held-key movement, a
+                //   push-to-talk toggle) would otherwise stay stuck after
+                //   an Alt-Tab. A stray Up is inert to every Down-actuated
+                //   consumer.
+                //
+                // Flutter draws the same line, from the other side: its
+                // embedders deliver state-sync as `synthesized` events that
+                // update key state without being treated as the user's
+                // direct action (`hardware_keyboard.dart`). FLUI's
+                // `KeyboardEvent` carries no such flag, so the press half —
+                // which WOULD actuate — cannot be forwarded safely and is
+                // dropped instead.
+                if is_synthetic && event.state == winit::event::ElementState::Pressed {
+                    tracing::trace!(
+                        ?event,
+                        "dropping synthetic key press (focus-change state sync)"
+                    );
+                    return;
+                }
                 let modifiers = self.platform.with_state(|s| s.current_modifiers);
 
                 if let Some(ref win) = window {

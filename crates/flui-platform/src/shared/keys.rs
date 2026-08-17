@@ -393,7 +393,9 @@ pub fn scancode_to_code(scancode: u16, extended: bool) -> Code {
 
 /// The W3C `location` a `code` implies: numpad keys report `Numpad`, sided
 /// modifiers report their side, everything else is `Standard`. Mirrors the
-/// winit backend's location derivation so the two Windows wires agree.
+/// winit backend's location derivation so the native wires (this module's
+/// Win32 caller, and the AppKit caller via [`super::keys_macos`]) agree
+/// with the fallback wire.
 pub fn location_for_code(code: Code) -> Location {
     match code {
         Code::ShiftLeft | Code::ControlLeft | Code::AltLeft | Code::MetaLeft => Location::Left,
