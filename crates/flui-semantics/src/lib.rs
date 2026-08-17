@@ -129,8 +129,7 @@ pub use node::SemanticsNode;
 // RE-EXPORTS - Owner Types
 // ============================================================================
 pub use owner::{
-    SemanticsActionError, SemanticsActionInvocation, SemanticsNodeUpdate, SemanticsOwner,
-    SemanticsUpdateCallback,
+    SemanticsActionError, SemanticsActionInvocation, SemanticsOwner, SemanticsUpdateCallback,
 };
 // ============================================================================
 // RE-EXPORTS - Property Types
@@ -182,8 +181,8 @@ pub mod prelude {
         SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
         SemanticsActionRequest, SemanticsConfiguration, SemanticsEvent, SemanticsEventType,
         SemanticsFlag, SemanticsFlags, SemanticsId, SemanticsNode, SemanticsNodeData,
-        SemanticsNodeSnapshot, SemanticsNodeUpdate, SemanticsOwner, SemanticsProperties,
-        SemanticsRole, SemanticsSnapshot, SemanticsSnapshotError, SemanticsTag, SemanticsTree,
+        SemanticsNodeSnapshot, SemanticsOwner, SemanticsProperties, SemanticsRole,
+        SemanticsSnapshot, SemanticsSnapshotError, SemanticsTag, SemanticsTree,
         SemanticsTreeUpdate, SemanticsTreeUpdateBuilder, TextDirection,
     };
 }

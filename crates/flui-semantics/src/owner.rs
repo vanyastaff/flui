@@ -16,7 +16,6 @@ use crate::{
     node::SemanticsNode,
     snapshot::{SemanticsSnapshot, SemanticsSnapshotError},
     tree::SemanticsTree,
-    update::SemanticsNodeData,
 };
 
 // ============================================================================
@@ -34,10 +33,11 @@ use crate::{
 /// - The platform capability speaks accesskit types only, because
 ///   `flui-platform` (layer 2) cannot depend on `flui-semantics` (layer 3).
 ///   Translating on the producing side is what keeps that edge absent.
-/// - [`SemanticsNodeUpdate`] carries `SemanticsId`s, which are arena positions
-///   in a tree the pipeline rebuilds every pass. It cannot express the stable
-///   `AccessibilityNodeId` an adapter must publish and route actions back
-///   through — see [`crate::tree_to_update`].
+/// - The payload must be keyed by the stable `AccessibilityNodeId` an adapter
+///   publishes and routes actions back through — never by `SemanticsId`,
+///   which is an arena position in a tree the pipeline rebuilds every pass.
+///   (A per-node payload keyed on `SemanticsId` used to live here and was
+///   removed for exactly that reason.) See [`crate::tree_to_update`].
 pub type SemanticsUpdateCallback = Arc<dyn Fn(&crate::TreeUpdate) + Send + Sync>;
 
 // ============================================================================
@@ -137,56 +137,6 @@ impl SemanticsActionInvocation {
 }
 
 // ============================================================================
-// SEMANTICS NODE UPDATE
-// ============================================================================
-
-/// A single semantics node update to send to the platform.
-///
-/// This represents an update for one node in the semantics tree,
-/// including its data, parent reference, and children.
-///
-/// See also [`SemanticsTreeUpdate`](crate::update::SemanticsTreeUpdate) for
-/// batched tree-level updates.
-#[derive(Debug, Clone)]
-pub struct SemanticsNodeUpdate {
-    /// The semantics node ID.
-    pub id: SemanticsId,
-
-    /// The semantics data for this node.
-    pub data: SemanticsNodeData,
-
-    /// Parent node ID (None for root).
-    pub parent: Option<SemanticsId>,
-
-    /// Child node IDs.
-    pub children: Vec<SemanticsId>,
-}
-
-impl SemanticsNodeUpdate {
-    /// Creates a new semantics node update.
-    pub fn new(id: SemanticsId, data: SemanticsNodeData) -> Self {
-        Self {
-            id,
-            data,
-            parent: None,
-            children: Vec::new(),
-        }
-    }
-
-    /// Sets the parent node ID.
-    pub fn with_parent(mut self, parent: Option<SemanticsId>) -> Self {
-        self.parent = parent;
-        self
-    }
-
-    /// Sets the child node IDs.
-    pub fn with_children(mut self, children: Vec<SemanticsId>) -> Self {
-        self.children = children;
-        self
-    }
-}
-
-// ============================================================================
 // SEMANTICS OWNER
 // ============================================================================
 
@@ -212,9 +162,9 @@ impl SemanticsNodeUpdate {
 /// use std::sync::Arc;
 ///
 /// // Create owner with platform callback
-/// let callback = Arc::new(|updates: &[SemanticsNodeUpdate]| {
-///     for update in updates {
-///         println!("Semantics update: {:?}", update.id);
+/// let callback = Arc::new(|update: &flui_semantics::TreeUpdate| {
+///     for (id, _node) in &update.nodes {
+///         tracing::debug!(?id, "semantics update");
 ///     }
 /// });
 /// let mut owner = SemanticsOwner::new(callback);
@@ -947,22 +897,6 @@ mod tests {
 
         assert!(owner.tree().is_empty());
         assert!(owner.root().is_none());
-    }
-
-    #[test]
-    fn test_semantics_node_update() {
-        let data = SemanticsNodeData {
-            label: Some("Test".into()),
-            ..Default::default()
-        };
-
-        let update = SemanticsNodeUpdate::new(SemanticsId::new(1), data)
-            .with_parent(Some(SemanticsId::new(2)))
-            .with_children(vec![SemanticsId::new(3), SemanticsId::new(4)]);
-
-        assert_eq!(update.id, SemanticsId::new(1));
-        assert_eq!(update.parent, Some(SemanticsId::new(2)));
-        assert_eq!(update.children.len(), 2);
     }
 
     #[test]

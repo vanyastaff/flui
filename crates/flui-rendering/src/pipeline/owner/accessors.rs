@@ -1639,8 +1639,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// lazy-creation path in [`Self::set_semantics_enabled`].
     ///
     /// The escape hatch for a platform binding that needs its own update
-    /// callback (forwarding [`flui_semantics::SemanticsNodeUpdate`] batches
-    /// to a real OS accessibility bridge once one exists), or a test that
+    /// callback (forwarding the translated [`flui_semantics::TreeUpdate`]s
+    /// to a real OS accessibility bridge), or a test that
     /// wants to observe `flush()`'s callback invocations directly. Call
     /// this *before* `set_semantics_enabled(true)` — the enable path only
     /// lazily creates a no-op-callback owner when none is installed yet.

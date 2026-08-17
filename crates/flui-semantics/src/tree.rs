@@ -309,6 +309,46 @@ impl SemanticsTree {
         self.get(id).map(SemanticsNode::children)
     }
 
+    /// Builds the stable-identity payload for one node, or `None` if `id` is
+    /// not live **or the node is unaddressable** (never bound to a render
+    /// boundary). A payload names its subject, so a node with no stable
+    /// identity has no payload — the same skip rule as
+    /// [`tree_to_update`](crate::tree_to_update), applied at construction
+    /// rather than trusted to every consumer.
+    ///
+    /// This is the constructor for
+    /// [`SemanticsNodeData`](crate::update::SemanticsNodeData): content and
+    /// identity come from the node
+    /// ([`SemanticsNode::to_node_data`](crate::SemanticsNode::to_node_data)),
+    /// and `children` — which a node alone cannot resolve, since it stores its
+    /// children as arena [`SemanticsId`]s — is filled here with each
+    /// addressable child's stable
+    /// [`AccessibilityNodeId`](crate::AccessibilityNodeId), in child order. An
+    /// unaddressable child is likewise omitted, so the payload never
+    /// references a node the platform was not given.
+    pub fn node_data(&self, id: SemanticsId) -> Option<crate::update::SemanticsNodeData> {
+        self.node_data_of(self.get(id)?)
+    }
+
+    /// [`Self::node_data`] for a node reference already in hand — the
+    /// whole-tree publish path iterates nodes and must not pay a second
+    /// arena lookup per node just to rebuild the reference it started from.
+    pub(crate) fn node_data_of(
+        &self,
+        node: &SemanticsNode,
+    ) -> Option<crate::update::SemanticsNodeData> {
+        let mut data = node.to_node_data();
+        // No identity, no payload: an update entry the platform cannot
+        // address is worse than an absent one.
+        data.id?;
+        data.children = node
+            .children()
+            .iter()
+            .filter_map(|&child| self.get(child).and_then(SemanticsNode::accessibility_id))
+            .collect();
+        Some(data)
+    }
+
     // ========== Dirty Tracking ==========
 
     /// Returns all dirty node ids in the tree.

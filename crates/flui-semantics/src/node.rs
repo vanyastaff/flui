@@ -279,13 +279,17 @@ impl SemanticsNode {
 
     // ========== Data Export ==========
 
-    /// Converts this node to [`SemanticsNodeData`] — an in-process batching
-    /// payload whose `id`/`children` are 0-based arena positions, NOT the
-    /// stable platform identity (see `update.rs`'s module doc; the platform
-    /// payload is built by `tree_to_update` from `accessibility_id`).
-    pub fn to_node_data(&self, id: SemanticsId) -> SemanticsNodeData {
+    /// Converts this node's content to [`SemanticsNodeData`], keyed by its
+    /// stable [`accessibility_id`](Self::accessibility_id) (`None` for a node
+    /// never bound to a render boundary — such a node is not publishable).
+    ///
+    /// `children` is left **empty**: a node stores its children as arena
+    /// [`SemanticsId`]s and cannot resolve their stable identities alone. The
+    /// payload constructor that fills `children` is
+    /// [`SemanticsTree::node_data`](crate::tree::SemanticsTree::node_data).
+    pub fn to_node_data(&self) -> SemanticsNodeData {
         SemanticsNodeData {
-            id: (id.get() - 1) as u64,
+            id: self.accessibility_id(),
             flags: self.config.flags().bits(),
             actions: self.config.effective_actions_as_bits(),
             label: self.config.label().map(|l| l.string.clone()),
@@ -298,7 +302,7 @@ impl SemanticsNode {
             role: self.config.role(),
             rect: self.rect,
             transform: self.transform.unwrap_or(Matrix4::IDENTITY),
-            children: self.children.iter().map(|c| (c.get() - 1) as u64).collect(),
+            children: smallvec::SmallVec::new(),
             platform_view_id: self.config.platform_view_id(),
             max_value_length: self.config.max_value_length(),
             current_value_length: self.config.current_value_length(),
@@ -479,7 +483,11 @@ mod tests {
 
     #[test]
     fn test_semantics_node_to_data() {
-        let mut node = SemanticsNode::new();
+        let source = RenderId::new_gen(
+            9,
+            core::num::NonZeroU32::new(3).expect("test generation is non-zero"),
+        );
+        let mut node = SemanticsNode::new().with_source_render_id(source);
         node.config_mut().set_label("Test Label");
         node.config_mut().set_button(true);
         node.config_mut()
@@ -491,10 +499,13 @@ mod tests {
         node.config_mut().set_blocks_user_actions(true);
         node.set_rect(Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)));
 
-        let id = SemanticsId::new(5);
-        let data = node.to_node_data(id);
+        let data = node.to_node_data();
 
-        assert_eq!(data.id, 4); // id - 1
+        assert_eq!(
+            data.id,
+            Some(AccessibilityNodeId::from(source)),
+            "the payload identity is the stable render-boundary id, never an arena position"
+        );
         assert_eq!(data.label, Some("Test Label".into()));
         assert!(data.flags & SemanticsFlag::IsButton.value() != 0);
         assert_eq!(
@@ -524,7 +535,7 @@ mod role_propagation_tests {
         let mut node = SemanticsNode::new();
         node.config_mut().set_role(SemanticsRole::ColumnHeader);
 
-        let data = node.to_node_data(SemanticsId::new(1));
+        let data = node.to_node_data();
 
         assert_eq!(
             data.role,
@@ -538,7 +549,15 @@ mod role_propagation_tests {
     #[test]
     fn a_node_without_an_explicit_role_reports_none() {
         let node = SemanticsNode::new();
-        let data = node.to_node_data(SemanticsId::new(1));
+        let data = node.to_node_data();
         assert_eq!(data.role, SemanticsRole::None);
+    }
+
+    /// A node never bound to a render boundary has no stable identity to
+    /// export; the payload must say so rather than fabricate one.
+    #[test]
+    fn an_unbound_node_exports_no_payload_identity() {
+        let node = SemanticsNode::new();
+        assert_eq!(node.to_node_data().id, None);
     }
 }

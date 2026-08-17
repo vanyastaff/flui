@@ -161,8 +161,8 @@ pub mod prelude {
         pipeline::{Canvas, Paint, PaintStyle, PipelineCell, PipelineOwner},
         protocol::{BoxProtocol, Protocol, SliverProtocol},
         semantics::{
-            SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
-            SemanticsOwner, SemanticsTreeUpdate,
+            SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner,
+            SemanticsTreeUpdate,
         },
         traits::{RenderBox, RenderObject, TextBaseline},
         view::{
