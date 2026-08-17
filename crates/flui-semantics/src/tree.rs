@@ -309,6 +309,31 @@ impl SemanticsTree {
         self.get(id).map(SemanticsNode::children)
     }
 
+    /// Builds the stable-identity payload for one node, or `None` if `id` is
+    /// not live.
+    ///
+    /// This is the constructor for
+    /// [`SemanticsNodeData`](crate::update::SemanticsNodeData): content and
+    /// identity come from the node
+    /// ([`SemanticsNode::to_node_data`](crate::SemanticsNode::to_node_data)),
+    /// and `children` — which a node alone cannot resolve, since it stores its
+    /// children as arena [`SemanticsId`]s — is filled here with each
+    /// addressable child's stable
+    /// [`AccessibilityNodeId`](crate::AccessibilityNodeId), in child order. An
+    /// unaddressable child (never bound to a render boundary) is omitted, the
+    /// same skip rule as [`tree_to_update`](crate::tree_to_update), so the
+    /// payload never references a node the platform was not given.
+    pub fn node_data(&self, id: SemanticsId) -> Option<crate::update::SemanticsNodeData> {
+        let node = self.get(id)?;
+        let mut data = node.to_node_data();
+        data.children = node
+            .children()
+            .iter()
+            .filter_map(|&child| self.get(child).and_then(SemanticsNode::accessibility_id))
+            .collect();
+        Some(data)
+    }
+
     // ========== Dirty Tracking ==========
 
     /// Returns all dirty node ids in the tree.

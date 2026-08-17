@@ -1,33 +1,44 @@
-//! Batched semantics-update payloads.
+//! Batched semantics-update payloads, keyed by stable identity.
 //!
-//! # These payloads are NOT the platform format — their ids are arena positions
+//! # One id space: [`AccessibilityNodeId`]
 //!
-//! Every identity in this module (`SemanticsNodeData::id`, its `children`,
-//! `SemanticsTreeUpdate::removed_node_ids`) is a 0-based arena position in a
-//! tree the pipeline rebuilds every pass. Inserting or removing a sibling
-//! shifts later positions, and a recycled slot hands a retired control's
-//! number to an unrelated one — so publishing these values to an OS
-//! accessibility adapter drops screen-reader focus on unrelated changes, and
-//! an action request addressed back with one of them lands in the wrong
-//! number space entirely (`SemanticsOwner::resolve_action` matches the stable
-//! [`AccessibilityNodeId`](crate::AccessibilityNodeId) space, so every such
-//! action fails as `NodeNotFound`). That is the exact bug the AccessKit
-//! translation shipped once and was caught in review.
+//! Every identity in this module — [`SemanticsNodeData::id`], its
+//! [`children`](SemanticsNodeData::children), and
+//! [`SemanticsTreeUpdate::removed_node_ids`] — is the stable OS-facing
+//! [`AccessibilityNodeId`], the same space [`tree_to_update`](crate::tree_to_update)
+//! publishes and [`SemanticsOwner::resolve_action`](crate::SemanticsOwner::resolve_action)
+//! matches inbound actions against. `SemanticsId` — an arena position in a
+//! tree the pipeline rebuilds every pass — never appears here.
 //!
-//! What actually crosses to a platform adapter is [`accesskit::TreeUpdate`],
-//! produced by [`tree_to_update`](crate::tree_to_update), which takes node
-//! identity from [`SemanticsNode::accessibility_id`](crate::SemanticsNode::accessibility_id)
-//! — never from these payloads. Use this module for in-process batching and
-//! diagnostics. If a consumer ever needs stable identity here, add
-//! `accessibility_id` to the payload *with* that consumer — the field is
-//! deliberately not added speculatively, because an identity nothing reads
-//! cannot be verified against anything.
+//! This mirrors Flutter, whose update payload
+//! (`SemanticsUpdateBuilder.updateNode`) carries the node's stable
+//! `SemanticsNode.id` and its children (`childrenInTraversalOrder`) in that
+//! one id space, with no positional identity anywhere in the payload. FLUI
+//! derives the stable id from the boundary's generational render identity
+//! instead of a construction-time counter — see
+//! [`AccessibilityNodeId`] for that documented
+//! divergence — but the payload contract is the same: a node that logically
+//! persists keeps its id across rebuilds and sibling reorders, so an adapter
+//! can diff two updates and assistive-technology focus stays attached.
+//!
+//! An earlier shape of this payload carried 0-based arena positions and was
+//! doc-labelled as the platform format; publishing those values shifts a
+//! control's identity whenever a sibling is inserted or removed, and an
+//! action request addressed back with one lands in the wrong number space
+//! entirely. The types here now make that unrepresentable: there is no arena
+//! value to leak.
+//!
+//! The constructor that fills a node's payload — including resolving its
+//! children into this space — is
+//! [`SemanticsTree::node_data`](crate::tree::SemanticsTree::node_data); only
+//! the tree can resolve child identities, because a node stores its children
+//! as arena ids.
 
-use flui_foundation::SemanticsId;
 use flui_types::{Matrix4, Rect, geometry::Pixels};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
+use crate::identity::AccessibilityNodeId;
 use crate::properties::TextDirection;
 use crate::role::SemanticsRole;
 
@@ -35,17 +46,19 @@ use crate::role::SemanticsRole;
 // SemanticsNodeData
 // ============================================================================
 
-/// Serialized data for one semantics node.
+/// Serialized data for one semantics node, keyed by its stable identity.
 ///
-/// **Not the platform format**: `id` and `children` are 0-based arena
-/// positions, valid only within the pass that produced them — see the module
-/// doc for why publishing them to an accessibility adapter is a bug and what
-/// the real platform payload is.
+/// `id` and `children` are [`AccessibilityNodeId`]s — the space the platform
+/// tree is published in and actions come back in (see the module doc).
 #[derive(Debug, Clone)]
 pub struct SemanticsNodeData {
-    /// The node's 0-based arena position — NOT its stable
-    /// [`AccessibilityNodeId`](crate::AccessibilityNodeId); see the module doc.
-    pub id: u64,
+    /// The node's stable OS-facing identity.
+    ///
+    /// `None` only for a node never bound to a render boundary — such a node
+    /// is unaddressable and is not published (the same skip rule as
+    /// [`tree_to_update`](crate::tree_to_update)). Every node the pipeline
+    /// assembles carries an identity.
+    pub id: Option<AccessibilityNodeId>,
     /// Flags bitmask.
     pub flags: u64,
     /// Actions bitmask.
@@ -68,9 +81,16 @@ pub struct SemanticsNodeData {
     pub rect: Rect<Pixels>,
     /// Transform matrix.
     pub transform: Matrix4,
-    /// Children as 0-based arena positions — same space and caveat as
-    /// [`Self::id`].
-    pub children: SmallVec<[u64; 4]>,
+    /// Stable identities of this node's addressable children, in child order.
+    ///
+    /// Same space as [`Self::id`]. An unaddressable child is omitted rather
+    /// than exported under a fabricated id. Only
+    /// [`SemanticsTree::node_data`](crate::tree::SemanticsTree::node_data)
+    /// can fill this — a node alone cannot resolve its children's stable
+    /// identities — so a node-level export
+    /// ([`SemanticsNode::to_node_data`](crate::SemanticsNode::to_node_data))
+    /// leaves it empty.
+    pub children: SmallVec<[AccessibilityNodeId; 4]>,
     /// Platform view ID.
     pub platform_view_id: Option<i32>,
     /// Maximum value length for text fields.
@@ -102,7 +122,7 @@ pub struct SemanticsNodeData {
 impl Default for SemanticsNodeData {
     fn default() -> Self {
         Self {
-            id: 0,
+            id: None,
             flags: 0,
             actions: 0,
             label: None,
@@ -134,20 +154,17 @@ impl Default for SemanticsNodeData {
 
 /// A batched semantics-tree update: added/updated nodes plus removed ids.
 ///
-/// **Not the platform format** — every id here is a 0-based arena position
-/// (see the module doc). In particular, a removal notice keyed on an arena
-/// position would tell an adapter to drop an id it was never given.
-///
-/// See also [`SemanticsNodeUpdate`](crate::owner::SemanticsNodeUpdate) for
-/// individual node updates.
+/// Every id is a stable [`AccessibilityNodeId`] (module doc). In particular a
+/// removal notice names exactly the id the node was published under, so an
+/// adapter told to drop it is dropping an id it was actually given.
 #[derive(Debug, Clone, Default)]
 pub struct SemanticsTreeUpdate {
     /// Nodes that have been added or updated.
     pub nodes: Vec<SemanticsNodeData>,
 
-    /// 0-based arena positions of nodes that have been removed — the same
-    /// in-process space as [`SemanticsNodeData::id`], with the same caveat.
-    pub removed_node_ids: SmallVec<[u64; 8]>,
+    /// Stable identities of nodes that have been removed — the same space as
+    /// [`SemanticsNodeData::id`].
+    pub removed_node_ids: SmallVec<[AccessibilityNodeId; 8]>,
 }
 
 impl SemanticsTreeUpdate {
@@ -183,7 +200,7 @@ impl SemanticsTreeUpdate {
 #[derive(Debug, Default)]
 pub struct SemanticsTreeUpdateBuilder {
     nodes: Vec<SemanticsNodeData>,
-    removed_node_ids: SmallVec<[u64; 8]>,
+    removed_node_ids: SmallVec<[AccessibilityNodeId; 8]>,
 }
 
 impl SemanticsTreeUpdateBuilder {
@@ -197,15 +214,15 @@ impl SemanticsTreeUpdateBuilder {
         self.nodes.push(node);
     }
 
-    /// Adds a removed node ID.
-    pub fn add_removed_node(&mut self, id: SemanticsId) {
-        // 0-based arena position — same in-process space as the rest
-        // of this payload, NOT a platform-facing identity (module doc).
-        self.removed_node_ids.push((id.get() - 1) as u64);
-    }
-
-    /// Adds a removed node by raw ID.
-    pub fn add_removed_node_raw(&mut self, id: u64) {
+    /// Records the removal of the node published under `id`.
+    ///
+    /// Takes the stable [`AccessibilityNodeId`] — obtained from
+    /// [`SemanticsNode::accessibility_id`](crate::SemanticsNode::accessibility_id)
+    /// *before* the node is dropped from the tree, since the identity is not
+    /// resolvable afterwards. There is deliberately no raw-integer variant:
+    /// re-entering this space from an untyped number is how an arena position
+    /// leaks back in.
+    pub fn add_removed_node(&mut self, id: AccessibilityNodeId) {
         self.removed_node_ids.push(id);
     }
 
@@ -232,7 +249,20 @@ impl SemanticsTreeUpdateBuilder {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::RenderId;
+
     use super::*;
+    use crate::node::SemanticsNode;
+    use crate::tree::SemanticsTree;
+
+    /// A render identity whose packed value is deliberately unequal to any
+    /// plausible arena position, so a test cannot pass by coincidence.
+    fn render_id(index: u32) -> RenderId {
+        RenderId::new_gen(
+            index,
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        )
+    }
 
     #[test]
     fn test_semantics_tree_update_empty() {
@@ -247,29 +277,149 @@ mod tests {
         let mut builder = SemanticsTreeUpdateBuilder::new();
 
         builder.add_node(SemanticsNodeData {
-            id: 0,
+            id: Some(AccessibilityNodeId::from(render_id(1))),
             label: Some(SmolStr::from("Test")),
             ..Default::default()
         });
 
-        builder.add_removed_node_raw(5);
+        let removed = AccessibilityNodeId::from(render_id(5));
+        builder.add_removed_node(removed);
 
         let update = builder.build();
 
         assert!(!update.is_empty());
         assert_eq!(update.node_count(), 1);
         assert_eq!(update.removed_count(), 1);
-        assert!(update.removed_node_ids.contains(&5));
+        assert!(update.removed_node_ids.contains(&removed));
     }
 
     #[test]
     fn test_semantics_node_data_default() {
         let data = SemanticsNodeData::default();
-        assert_eq!(data.id, 0);
+        assert!(data.id.is_none());
         assert_eq!(data.flags, 0);
         assert_eq!(data.actions, 0);
         assert!(data.label.is_none());
         assert!(data.children.is_empty());
+    }
+
+    /// **The identity-stability contract this payload exists for.** Inserting
+    /// a sibling ahead of a control shifts its arena position; its payload
+    /// identity must not move, or an adapter diffing two updates sees an
+    /// unchanged control as removed-and-replaced and drops focus.
+    #[test]
+    fn payload_identity_survives_a_sibling_inserted_before_the_node() {
+        let source = render_id(42);
+
+        let data_for = |leading_siblings: u32| {
+            let mut tree = SemanticsTree::new();
+            let mut root_node = SemanticsNode::new().with_source_render_id(render_id(1));
+            for index in 0..leading_siblings {
+                let sibling =
+                    tree.insert(SemanticsNode::new().with_source_render_id(render_id(100 + index)));
+                root_node.add_child(sibling);
+            }
+            let target = tree.insert(SemanticsNode::new().with_source_render_id(source));
+            root_node.add_child(target);
+            let root = tree.insert(root_node);
+            tree.set_root(Some(root));
+            tree.node_data(target).expect("target is live")
+        };
+
+        let before = data_for(0);
+        let after = data_for(3);
+
+        assert_eq!(
+            before.id,
+            Some(AccessibilityNodeId::from(source)),
+            "the payload id is the stable render-boundary identity"
+        );
+        assert_eq!(
+            before.id, after.id,
+            "arena positions shifted; the payload identity must not"
+        );
+    }
+
+    /// Children are exported in the same stable space as the ids they will be
+    /// published under — never as arena positions.
+    #[test]
+    fn payload_children_are_stable_identities_in_child_order() {
+        let first = render_id(51);
+        let second = render_id(52);
+
+        let mut tree = SemanticsTree::new();
+        let first_id = tree.insert(SemanticsNode::new().with_source_render_id(first));
+        let second_id = tree.insert(SemanticsNode::new().with_source_render_id(second));
+        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(50));
+        root_node.add_child(first_id);
+        root_node.add_child(second_id);
+        let root = tree.insert(root_node);
+        tree.set_root(Some(root));
+
+        let data = tree.node_data(root).expect("root is live");
+        assert_eq!(
+            data.children.as_slice(),
+            &[
+                AccessibilityNodeId::from(first),
+                AccessibilityNodeId::from(second),
+            ],
+        );
+        assert_ne!(
+            data.children[0].as_u64(),
+            (first_id.get() - 1) as u64,
+            "the fixture is only meaningful while the two id spaces differ"
+        );
+    }
+
+    /// An unaddressable child has no identity to export; omitting it mirrors
+    /// the publish path's skip rule rather than inventing an id that could
+    /// collide with a real control.
+    #[test]
+    fn an_unaddressable_child_is_omitted_from_the_payload() {
+        let mut tree = SemanticsTree::new();
+        let unaddressable = tree.insert(SemanticsNode::new());
+        let addressable_render = render_id(61);
+        let addressable =
+            tree.insert(SemanticsNode::new().with_source_render_id(addressable_render));
+        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(60));
+        root_node.add_child(unaddressable);
+        root_node.add_child(addressable);
+        let root = tree.insert(root_node);
+        tree.set_root(Some(root));
+
+        let data = tree.node_data(root).expect("root is live");
+        assert_eq!(
+            data.children.as_slice(),
+            &[AccessibilityNodeId::from(addressable_render)],
+        );
+    }
+
+    /// A removal notice names exactly the id the node was published under, so
+    /// the two ends of the payload cannot drift into different number spaces.
+    #[test]
+    fn a_removal_notice_names_the_id_the_node_was_published_under() {
+        let source = render_id(71);
+        let mut tree = SemanticsTree::new();
+        let root = tree.insert(SemanticsNode::new().with_source_render_id(source));
+        tree.set_root(Some(root));
+
+        let published = crate::tree_to_update(&tree, None)
+            .expect("a rooted tree yields an update")
+            .nodes
+            .first()
+            .map(|(id, _)| id.0)
+            .expect("one node");
+
+        let identity = tree
+            .get(root)
+            .and_then(SemanticsNode::accessibility_id)
+            .expect("a render-backed node is addressable");
+
+        let mut builder = SemanticsTreeUpdateBuilder::new();
+        builder.add_removed_node(identity);
+        let update = builder.build();
+
+        assert_eq!(update.removed_node_ids[0].as_u64(), published);
     }
 
     #[test]
@@ -277,10 +427,10 @@ mod tests {
         let mut data = SemanticsNodeData::default();
 
         // Add children up to inline capacity
-        data.children.push(1);
-        data.children.push(2);
-        data.children.push(3);
-        data.children.push(4);
+        for index in 1..=4 {
+            data.children
+                .push(AccessibilityNodeId::from(render_id(index)));
+        }
 
         assert_eq!(data.children.len(), 4);
         // Should be inline, not heap allocated

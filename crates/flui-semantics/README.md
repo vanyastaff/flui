@@ -24,7 +24,7 @@ RenderObject (flui-rendering)
     │  assembleSemanticsNode() during the paint phase
     ▼
 SemanticsNode (this crate)  —  SemanticsTree (slab storage, 1-based SemanticsId)
-    │  flush() batches dirty nodes into a SemanticsTreeUpdate
+    │  flush() publishes an accesskit::TreeUpdate keyed by stable AccessibilityNodeId
     ▼
 Platform accessibility API (via flui-platform backends)
 ```

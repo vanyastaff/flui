@@ -321,12 +321,14 @@ pub fn semantics_action_args_for(
 
 /// Translate one FLUI semantics node into an AccessKit node.
 ///
-/// `children` are the caller's already-resolved AccessKit ids. They are NOT
-/// derived from [`SemanticsNodeData::children`], which holds arena positions in
-/// the `SemanticsId` space — see [`tree_to_update`] for why that space must not
-/// reach an adapter.
+/// Children come from [`SemanticsNodeData::children`], which carries the
+/// stable [`AccessibilityNodeId`](crate::AccessibilityNodeId)s — the same
+/// space AccessKit ids are published in, so the mapping is a transparent
+/// repack. (An earlier payload shape held arena positions there, and this
+/// function had to refuse them; the type now makes that leak
+/// unrepresentable.)
 #[must_use]
-pub(crate) fn to_node(data: &SemanticsNodeData, children: Vec<NodeId>) -> Node {
+pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     let mut node = Node::new(resolve_role(data));
 
     if let Some(label) = &data.label {
@@ -370,7 +372,12 @@ pub(crate) fn to_node(data: &SemanticsNodeData, children: Vec<NodeId>) -> Node {
     apply_state(&mut node, data.flags);
     apply_actions(&mut node, data.actions);
 
-    node.set_children(children);
+    node.set_children(
+        data.children
+            .iter()
+            .map(|child| NodeId(child.as_u64()))
+            .collect::<Vec<_>>(),
+    );
 
     node
 }
@@ -457,13 +464,10 @@ pub fn tree_to_update(
     let nodes: Vec<(NodeId, Node)> = tree
         .iter()
         .filter_map(|(id, node)| {
-            let node_id = stable_id(id)?;
-            let children = node
-                .children()
-                .iter()
-                .filter_map(|&child| stable_id(child))
-                .collect();
-            Some((node_id, to_node(&node.to_node_data(id), children)))
+            let node_id = NodeId(node.accessibility_id()?.as_u64());
+            // `node_data` resolves the children into the same stable space
+            // and applies the identical skip rule for unaddressable ones.
+            Some((node_id, to_node(&tree.node_data(id)?)))
         })
         .collect();
 
@@ -493,7 +497,7 @@ mod tests {
 
     /// Childless translation; child wiring is covered by the tree-level tests.
     fn translate(data: &SemanticsNodeData) -> Node {
-        to_node(data, Vec::new())
+        to_node(data)
     }
 
     /// A render identity whose packed value is deliberately unequal to any
