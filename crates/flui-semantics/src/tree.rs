@@ -111,9 +111,20 @@ impl SemanticsTree {
     }
 
     /// Set the root SemanticsNode ID.
-    #[inline]
+    ///
+    /// Changing which node is the root is a published-state change even
+    /// when no node's content moved — the flush path detects the identity
+    /// transition and escalates to a self-contained full update, but only
+    /// if its dirty gate lets it run at all. So a *changed* root marks the
+    /// new root node dirty; re-setting the same root stays free.
     pub fn set_root(&mut self, root: Option<SemanticsId>) {
+        if self.root == root {
+            return;
+        }
         self.root = root;
+        if let Some(id) = root {
+            self.mark_dirty(id);
+        }
     }
 
     // ========== Basic Operations ==========

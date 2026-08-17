@@ -545,9 +545,14 @@ impl SemanticsOwner {
 
     // ========== Dirty Tracking ==========
 
-    /// Returns true if any node needs to be sent to the platform.
+    /// Returns true if the next [`Self::flush`] would have work to do —
+    /// dirty nodes, or a scheduled full publish
+    /// ([`Self::schedule_full_publish`]) that is pending on an otherwise
+    /// clean tree. This predicate mirrors `flush`'s own gate exactly: a
+    /// frame loop consulting a narrower one would never deliver the
+    /// reconnect update.
     pub fn needs_flush(&self) -> bool {
-        self.enabled && self.tree.has_dirty_nodes()
+        self.enabled && (self.tree.has_dirty_nodes() || self.full_publish_pending)
     }
 
     /// Marks a specific node as dirty.

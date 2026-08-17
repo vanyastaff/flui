@@ -266,6 +266,82 @@ fn a_focus_change_is_published_even_when_no_node_payload_changed() {
     );
 }
 
+/// Re-pointing the root at an already-published, otherwise-untouched node
+/// is a root-identity change with zero dirty content — `set_root` itself
+/// must count as a change, or the flush gate returns before the
+/// root-escalation check ever runs and the adapter stays on the old root
+/// forever.
+#[test]
+fn repointing_the_root_at_a_clean_node_escalates_to_a_full_update() {
+    let (mut owner, received) = recording_owner();
+
+    // Two independent addressable nodes; `a` is the published root.
+    let a = owner.insert(node(1, "a"));
+    let b = owner.insert(node(2, "b"));
+    owner.set_root(Some(a));
+    owner.flush();
+    assert_eq!(received.lock().len(), 1, "the initial publish under root a");
+
+    // Only the root pointer moves; no node content is touched.
+    owner.set_root(Some(b));
+    owner.flush();
+
+    let updates = received.lock();
+    assert_eq!(
+        updates.len(),
+        2,
+        "a root-identity change must be delivered even with no dirty content"
+    );
+    let repointed = &updates[1];
+    let new_root = repointed
+        .tree
+        .as_ref()
+        .expect("a root change is a self-contained, adapter-initializing update")
+        .root;
+    let b_identity = owner
+        .get(b)
+        .and_then(flui_semantics::SemanticsNode::accessibility_id)
+        .expect("b is render-backed");
+    assert_eq!(
+        new_root.0,
+        b_identity.as_u64(),
+        "and it names the new root identity"
+    );
+}
+
+/// `needs_flush` is the public would-a-flush-do-anything predicate, so it
+/// must match `flush`'s own gate: a scheduled full publish is pending work
+/// even when every node is clean. A frame loop consulting the narrower
+/// predicate would never deliver the reconnect update.
+#[test]
+fn needs_flush_reports_a_scheduled_full_publish_on_a_clean_tree() {
+    let (mut owner, received) = recording_owner();
+
+    rebuild(&mut owner, &["alpha"]);
+    owner.flush();
+    assert!(
+        !owner.needs_flush(),
+        "a settled owner has nothing to deliver"
+    );
+
+    owner.schedule_full_publish();
+    assert!(
+        owner.needs_flush(),
+        "a pending full publish is pending work — the predicate must say so"
+    );
+
+    owner.flush();
+    assert!(
+        !owner.needs_flush(),
+        "delivering it settles the owner again"
+    );
+    assert_eq!(
+        received.lock().len(),
+        2,
+        "and the flush the predicate promised actually happened"
+    );
+}
+
 /// A different root identity is a different tree to the adapter; a diff
 /// cannot express that, so it must escalate to a self-contained full
 /// update.
