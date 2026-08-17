@@ -226,15 +226,20 @@ struct PublishedState {
 
 impl PublishedState {
     /// Mirror of a self-contained full update the adapter was just given.
-    fn mirror_of(update: &crate::TreeUpdate) -> Self {
+    ///
+    /// Consumes the update (callers are done delivering it by reference) so
+    /// the mirror is built by moving the translated nodes, not re-cloning
+    /// every label and property the adapter just received — on the full
+    /// publish path that clone was the single largest added cost.
+    fn mirror_of(update: crate::TreeUpdate) -> Self {
         Self {
-            nodes: update.nodes.iter().cloned().collect(),
             root: update
                 .tree
                 .as_ref()
                 .map(|tree| tree.root)
                 .expect("BUG: a full update always carries tree metadata"),
             focus: update.focus,
+            nodes: update.nodes.into_iter().collect(),
         }
     }
 }
@@ -317,7 +322,7 @@ impl SemanticsOwner {
             && let Some(update) = crate::tree_to_update(&self.tree, None)
         {
             callback(&update);
-            self.published = Some(PublishedState::mirror_of(&update));
+            self.published = Some(PublishedState::mirror_of(update));
         }
         self.callback = Some(callback);
     }
@@ -647,7 +652,7 @@ impl SemanticsOwner {
             callback(&update);
         }
 
-        self.published = Some(PublishedState::mirror_of(&update));
+        self.published = Some(PublishedState::mirror_of(update));
         self.full_publish_pending = false;
         self.tree.mark_all_clean();
     }
