@@ -894,6 +894,43 @@ pub fn make_move_event_with_button(
 }
 
 #[cfg(any(test, feature = "testing"))]
+/// Create a trackpad pinch `PointerEvent::Gesture` tick for testing — the
+/// shape the platform gesture producers emit (shared synthetic identity,
+/// touch-typed, per-tick magnification fraction).
+pub fn make_pinch_gesture_event(position: Offset<Pixels>, fraction: f32) -> PointerEvent {
+    use ui_events::pointer::{
+        ContactGeometry, PointerGesture, PointerGestureEvent, PointerOrientation, PointerState,
+    };
+
+    PointerEvent::Gesture(PointerGestureEvent {
+        pointer: PointerInfo {
+            pointer_id: PointerId::new(u64::MAX),
+            pointer_type: PointerType::Touch,
+            persistent_device_id: None,
+        },
+        gesture: PointerGesture::Pinch(fraction),
+        state: PointerState {
+            time: 0,
+            position: dpi::PhysicalPosition::new(
+                position.dx.get() as f64,
+                position.dy.get() as f64,
+            ),
+            buttons: PointerButtons::new(),
+            modifiers: Modifiers::empty(),
+            count: 0,
+            contact_geometry: ContactGeometry {
+                width: 1.0,
+                height: 1.0,
+            },
+            orientation: PointerOrientation::default(),
+            pressure: 0.0,
+            tangential_pressure: 0.0,
+            scale_factor: 1.0,
+        },
+    })
+}
+
+#[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Scroll for testing
 pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> PointerEvent {
     make_scroll_event_with_modifiers(position, delta, Modifiers::empty())

@@ -653,3 +653,86 @@ fn unmounting_the_widget_unsubscribes_from_an_external_controller() {
          forever, even though nothing is mounted against the controller anymore"
     );
 }
+
+/// A trackpad pinch tick — `PointerEvent::Gesture` through the real binding
+/// dispatch — scales the transform with the same focal-point correction the
+/// wheel path has. FLUI-added coverage: the gesture lane's producers landed
+/// after this port's V1 scoped pinch out; the lane delivers per-tick scale
+/// factors (each converted gesture is a one-tick cumulative), so two ticks
+/// compose multiplicatively.
+#[test]
+fn a_trackpad_pinch_tick_scales_the_transform() {
+    let controller = TransformationController::new();
+    let widget = InteractiveViewer::new()
+        .controller(controller.clone())
+        .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
+        .min_scale(0.01)
+        .max_scale(100.0)
+        .child(child());
+    let laid = lay_out(widget, loose(500.0));
+
+    // Deliberately OFF-CENTER: a focal point at the viewport's center
+    // produces a zero correction by symmetry and would leave the
+    // keep-the-point-fixed half of the contract unasserted.
+    let focal = Offset::new(px(30.0), px(70.0));
+    let pinch_tick =
+        |fraction: f32| flui_interaction::events::make_pinch_gesture_event(focal, fraction);
+
+    let scene_before = controller.to_scene(focal);
+    laid.dispatch_pointer_event(&pinch_tick(0.5));
+    let scene_after = controller.to_scene(focal);
+    assert!(
+        (scene_before.dx.get() - scene_after.dx.get()).abs() < 1e-3
+            && (scene_before.dy.get() - scene_after.dy.get()).abs() < 1e-3,
+        "an off-center pinch keeps its scene point fixed"
+    );
+    let after_one = scale_of(controller.value());
+    assert!(
+        (after_one - 1.5).abs() < 1e-4,
+        "one +0.5 pinch tick scales by 1.5, got {after_one}"
+    );
+
+    laid.dispatch_pointer_event(&pinch_tick(0.5));
+    let after_two = scale_of(controller.value());
+    assert!(
+        (after_two - 2.25).abs() < 1e-3,
+        "ticks compose multiplicatively (1.5 * 1.5), got {after_two}"
+    );
+}
+
+/// A pinch over a viewer that does NOT sit at the window origin must keep
+/// the scene point under the fingers fixed — the routing layer localizes
+/// the gesture's focal position per hit entry exactly as it does for
+/// scrolls. Without that, the handler receives a window-global point and
+/// the content jumps on every tick.
+#[test]
+fn a_pinch_over_an_offset_viewer_keeps_the_focal_point_fixed() {
+    let controller = TransformationController::new();
+    // 100px of padding on every side puts the viewer's own origin at
+    // window (100, 100).
+    let widget = flui_widgets::Padding::all(100.0).child(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
+            .min_scale(0.01)
+            .max_scale(100.0)
+            .child(child()),
+    );
+    let laid = lay_out(widget, loose(500.0));
+
+    // Pinch at the viewer's LOCAL (50, 50) — window (150, 150). With
+    // correct localization the handler sees (50, 50), and after the zoom
+    // the same scene point maps back to that local position.
+    let scene_before = controller.to_scene(Offset::new(px(50.0), px(50.0)));
+    laid.dispatch_pointer_event(&flui_interaction::events::make_pinch_gesture_event(
+        Offset::new(px(150.0), px(150.0)),
+        0.5,
+    ));
+    let scene_after = controller.to_scene(Offset::new(px(50.0), px(50.0)));
+    assert!(
+        (scene_before.dx.get() - scene_after.dx.get()).abs() < 1e-3
+            && (scene_before.dy.get() - scene_after.dy.get()).abs() < 1e-3,
+        "the scene point under the fingers must stay fixed: before {scene_before:?}, \
+         after {scene_after:?}"
+    );
+}

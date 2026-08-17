@@ -792,6 +792,19 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
                 delta: e.delta,
             })
         }
+        PointerEvent::Gesture(e) => {
+            // A gesture's focal point localizes exactly like a scroll's
+            // position — without this, a pinch consumer under any offset or
+            // transform scales around a window-global point and the content
+            // jumps instead of staying under the fingers.
+            let mut new_state = e.state.clone();
+            new_state.position = transform_position(e.state.position);
+            PointerEvent::Gesture(ui_events::pointer::PointerGestureEvent {
+                pointer: e.pointer,
+                gesture: e.gesture.clone(),
+                state: new_state,
+            })
+        }
         // Cancel, Enter, Leave don't have position - just clone
         other => other.clone(),
     }
