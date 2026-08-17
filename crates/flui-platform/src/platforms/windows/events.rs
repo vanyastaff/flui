@@ -34,10 +34,16 @@ use crate::{
 /// Process-start epoch for monotonic event timestamps.
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-/// Get monotonic timestamp in milliseconds since process start.
+/// Get monotonic timestamp in nanoseconds since process start.
 #[inline]
-fn event_timestamp_ms() -> u64 {
-    PROCESS_START.elapsed().as_millis() as u64
+fn event_timestamp_ns() -> u64 {
+    // Upstream ui-events documents PointerState.time as NANOSECONDS
+    // ("u64 nanoseconds real time"); a millisecond stamp here silently
+    // broke the unit for every consumer comparing across devices.
+    #[allow(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
+    {
+        PROCESS_START.elapsed().as_nanos() as u64
+    }
 }
 
 /// Create a `PointerInfo` for the primary mouse pointer.
@@ -141,6 +147,7 @@ fn pointer_state(
     scale_factor: f32,
     pressure: f32,
     buttons: PointerButtons,
+    count: u8,
 ) -> (PointerState, KeyboardModifiers) {
     pointer_state_at(
         get_x_lparam(lparam),
@@ -148,6 +155,7 @@ fn pointer_state(
         scale_factor,
         pressure,
         buttons,
+        count,
     )
 }
 
@@ -155,12 +163,15 @@ fn pointer_state(
 /// hand — for the wheel messages, whose `lParam` needs a screen-to-client
 /// conversion first (see [`wheel_pointer_state`]).
 #[inline]
+/// `count` is the W3C click count — `1` on Down/Up transitions, `0`
+/// elsewhere (the cross-wire contract in flui-interaction's module doc).
 fn pointer_state_at(
     x: i32,
     y: i32,
     scale_factor: f32,
     pressure: f32,
     buttons: PointerButtons,
+    count: u8,
 ) -> (PointerState, KeyboardModifiers) {
     // SAFETY: see `get_modifiers`'s own `# Safety` section — no
     // precondition to discharge here.
@@ -169,11 +180,11 @@ fn pointer_state_at(
     let logical_y = device_to_logical(y as f32, scale_factor);
 
     let state = PointerState {
-        time: event_timestamp_ms(),
+        time: event_timestamp_ns(),
         position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
         buttons,
         modifiers,
-        count: 1,
+        count,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
         orientation: PointerOrientation::default(),
         pressure,
@@ -196,6 +207,7 @@ pub fn mouse_button_event(
         scale_factor,
         if is_down { 0.5 } else { 0.0 },
         held_buttons(wparam),
+        1,
     );
 
     let _ = modifiers;
@@ -219,7 +231,15 @@ pub fn mouse_button_event(
 
 /// Convert WM_MOUSEMOVE to W3C PointerEvent
 pub fn mouse_move_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> PlatformInput {
-    let (state, modifiers) = pointer_state(lparam, scale_factor, 0.0, held_buttons(wparam));
+    let held = held_buttons(wparam);
+    // Sensor-less pressure rule: 0.5 while any button is held (a drag),
+    // 0.0 on a hover.
+    let pressure = if held == PointerButtons::default() {
+        0.0
+    } else {
+        0.5
+    };
+    let (state, modifiers) = pointer_state(lparam, scale_factor, pressure, held, 0);
     let _ = modifiers;
 
     let event = PointerEvent::Move(PointerUpdate {
@@ -267,7 +287,7 @@ fn wheel_pointer_state(
             "ScreenToClient failed for a wheel message; scroll position stays in screen space"
         );
     }
-    pointer_state_at(point.x, point.y, scale_factor, 0.0, held_buttons(wparam))
+    pointer_state_at(point.x, point.y, scale_factor, 0.0, held_buttons(wparam), 0)
 }
 
 /// Convert WM_MOUSEWHEEL to W3C PointerEvent with Scroll

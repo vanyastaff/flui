@@ -45,10 +45,16 @@ use crate::traits::PlatformInput;
 /// Process-start epoch for monotonic event timestamps.
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-/// Get monotonic timestamp in milliseconds since process start.
+/// Get monotonic timestamp in nanoseconds since process start.
 #[inline]
-fn event_timestamp_ms() -> u64 {
-    PROCESS_START.elapsed().as_millis() as u64
+fn event_timestamp_ns() -> u64 {
+    // Upstream ui-events documents PointerState.time as NANOSECONDS
+    // ("u64 nanoseconds real time"); a millisecond stamp here silently
+    // broke the unit for every consumer comparing across devices.
+    #[allow(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
+    {
+        PROCESS_START.elapsed().as_nanos() as u64
+    }
 }
 
 /// Create a `PointerInfo` for the primary mouse pointer.
@@ -348,7 +354,16 @@ fn key_code_to_key(key_code: u16) -> Option<Key> {
 /// # Safety
 ///
 /// `ns_event` must be a valid, live `NSEvent*` of a mouse event.
-unsafe fn pointer_state(ns_event: id, scale_factor: f64, view_height: f64) -> PointerState {
+/// `count` is the W3C click count — `1` on Down/Up transitions, `0`
+/// elsewhere; `pressure` follows the sensor-less rule (`0.5` while any
+/// button is held per the live `pressedMouseButtons` state, `0.0`
+/// otherwise) — the cross-wire contract in flui-interaction's module doc.
+unsafe fn pointer_state(
+    ns_event: id,
+    scale_factor: f64,
+    view_height: f64,
+    count: u8,
+) -> PointerState {
     // SAFETY: caller guarantees `ns_event` is a valid NSEvent*;
     // `locationInWindow` is a plain NSPoint getter.
     unsafe {
@@ -357,16 +372,21 @@ unsafe fn pointer_state(ns_event: id, scale_factor: f64, view_height: f64) -> Po
         let location: NSPoint = msg_send![ns_event, locationInWindow];
         let modifiers = extract_modifiers(ns_event);
         let buttons = extract_mouse_buttons();
+        let pressure = if buttons == PointerButtons::default() {
+            0.0
+        } else {
+            0.5
+        };
 
         PointerState {
-            time: event_timestamp_ms(),
+            time: event_timestamp_ns(),
             position: PhysicalPosition::new(location.x, view_height - location.y),
             buttons,
             modifiers,
-            count: 1,
+            count,
             contact_geometry: PhysicalSize::new(1.0, 1.0),
             orientation: PointerOrientation::default(),
-            pressure: 0.0,
+            pressure,
             tangential_pressure: 0.0,
             scale_factor,
         }
@@ -388,8 +408,10 @@ unsafe fn convert_mouse_button(
     // SAFETY: caller guarantees `ns_event` validity; forwarded to
     // `pointer_state` under the same contract.
     unsafe {
-        let mut state = pointer_state(ns_event, scale_factor, view_height);
-        state.pressure = if is_down { 0.5 } else { 0.0 };
+        // The held-set-derived pressure is already right for both edges:
+        // `pressedMouseButtons` includes the pressed button at Down and
+        // excludes it at Up.
+        let state = pointer_state(ns_event, scale_factor, view_height, 1);
 
         let button_event = PointerButtonEvent {
             pointer: primary_mouse_info(),
@@ -416,7 +438,7 @@ unsafe fn convert_mouse_move(ns_event: id, scale_factor: f64, view_height: f64) 
     // SAFETY: caller guarantees `ns_event` validity; forwarded to
     // `pointer_state` under the same contract.
     unsafe {
-        let state = pointer_state(ns_event, scale_factor, view_height);
+        let state = pointer_state(ns_event, scale_factor, view_height, 0);
 
         PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
             pointer: primary_mouse_info(),
@@ -445,7 +467,7 @@ unsafe fn convert_scroll_event(ns_event: id, scale_factor: f64, view_height: f64
     // SAFETY: caller guarantees `ns_event` validity; `scrollingDeltaX/Y` and
     // `hasPreciseScrollingDeltas` are documented NSEvent getters.
     unsafe {
-        let state = pointer_state(ns_event, scale_factor, view_height);
+        let state = pointer_state(ns_event, scale_factor, view_height, 0);
 
         let delta_x: f64 = msg_send![ns_event, scrollingDeltaX];
         let delta_y: f64 = msg_send![ns_event, scrollingDeltaY];
@@ -479,7 +501,7 @@ unsafe fn convert_gesture_event(
     gesture: ui_events::pointer::PointerGesture,
 ) -> PlatformInput {
     // SAFETY: forwarded caller guarantee.
-    let state = unsafe { pointer_state(ns_event, scale_factor, view_height) };
+    let state = unsafe { pointer_state(ns_event, scale_factor, view_height, 0) };
     PlatformInput::Pointer(PointerEvent::Gesture(
         ui_events::pointer::PointerGestureEvent {
             pointer: PointerInfo {

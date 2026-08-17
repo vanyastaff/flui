@@ -224,18 +224,22 @@ fn buttons_from_mask(mask: u16) -> ui_events::pointer::PointerButtons {
     buttons
 }
 
-fn make_pointer_state(pe: &web_sys::PointerEvent) -> ui_events::pointer::PointerState {
+/// `count` is the W3C click count — `1` on Down/Up, `0` on motion (the
+/// cross-wire contract in flui-interaction's module doc). `time` converts
+/// the DOM event's millisecond `timeStamp` (page-load base) to the
+/// contract's nanoseconds.
+fn make_pointer_state(pe: &web_sys::PointerEvent, count: u8) -> ui_events::pointer::PointerState {
     use dpi::{PhysicalPosition, PhysicalSize};
     use ui_events::pointer::{PointerOrientation, PointerState};
 
     let modifiers = extract_modifiers_from_mouse(pe);
 
     PointerState {
-        time: 0, // Browser doesn't expose nanosecond timestamps easily
+        time: (pe.time_stamp() * 1_000_000.0) as u64,
         position: PhysicalPosition::new(pe.offset_x() as f64, pe.offset_y() as f64),
         buttons: buttons_from_mask(pe.buttons()),
         modifiers,
-        count: 0,
+        count,
         contact_geometry: PhysicalSize::new(pe.width().max(1) as f64, pe.height().max(1) as f64),
         orientation: PointerOrientation::default(),
         pressure: pe.pressure(),
@@ -265,7 +269,7 @@ fn convert_pointer_down(pe: &web_sys::PointerEvent) -> PlatformInput {
     PlatformInput::Pointer(PointerEvent::Down(PointerButtonEvent {
         button: map_button(pe.button()),
         pointer: make_pointer_info(pe),
-        state: make_pointer_state(pe),
+        state: make_pointer_state(pe, 1),
     }))
 }
 
@@ -275,7 +279,7 @@ fn convert_pointer_up(pe: &web_sys::PointerEvent) -> PlatformInput {
     PlatformInput::Pointer(PointerEvent::Up(PointerButtonEvent {
         button: map_button(pe.button()),
         pointer: make_pointer_info(pe),
-        state: make_pointer_state(pe),
+        state: make_pointer_state(pe, 1),
     }))
 }
 
@@ -284,7 +288,7 @@ fn convert_pointer_move(pe: &web_sys::PointerEvent) -> PlatformInput {
 
     PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
         pointer: make_pointer_info(pe),
-        current: make_pointer_state(pe),
+        current: make_pointer_state(pe, 0),
         coalesced: Vec::new(),
         predicted: Vec::new(),
     }))
@@ -316,7 +320,7 @@ fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
         },
         delta,
         state: PointerState {
-            time: 0,
+            time: (we.time_stamp() * 1_000_000.0) as u64,
             position: PhysicalPosition::new(we.offset_x() as f64, we.offset_y() as f64),
             buttons: buttons_from_mask(we.buttons()),
             modifiers,

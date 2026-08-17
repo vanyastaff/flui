@@ -20,10 +20,16 @@ use crate::traits::PlatformInput;
 /// Process-start epoch for monotonic event timestamps.
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-/// Get monotonic timestamp in milliseconds since process start.
+/// Get monotonic timestamp in nanoseconds since process start.
 #[inline]
-fn event_timestamp_ms() -> u64 {
-    PROCESS_START.elapsed().as_millis() as u64
+fn event_timestamp_ns() -> u64 {
+    // Upstream ui-events documents PointerState.time as NANOSECONDS
+    // ("u64 nanoseconds real time"); a millisecond stamp here silently
+    // broke the unit for every consumer comparing across devices.
+    #[allow(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
+    {
+        PROCESS_START.elapsed().as_nanos() as u64
+    }
 }
 
 /// Create a `PointerInfo` for the primary mouse pointer.
@@ -44,22 +50,27 @@ fn primary_mouse_info() -> PointerInfo {
 /// the held set the same way). A move that always reports an empty set is
 /// classified as a hover, so an active pan never receives updates and
 /// drag-scrolling in a live window silently does nothing.
+/// `count` is the W3C click/tap count: `1` on Down/Up transitions, `0` on
+/// motion, hover, scroll and gesture states — the synthetic constructors
+/// stamp the same rule, so a recognizer reading it sees one contract on
+/// both wires.
 fn pointer_state(
     position: winit::dpi::PhysicalPosition<f64>,
     scale_factor: f64,
     pressure: f32,
     modifiers: KeyboardModifiers,
     buttons: PointerButtons,
+    count: u8,
 ) -> PointerState {
     let logical_x = position.x / scale_factor;
     let logical_y = position.y / scale_factor;
 
     PointerState {
-        time: event_timestamp_ms(),
+        time: event_timestamp_ns(),
         position: PhysicalPosition::new(logical_x, logical_y),
         buttons,
         modifiers,
-        count: 1,
+        count,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
         orientation: PointerOrientation::default(),
         pressure,
@@ -163,7 +174,7 @@ pub fn cursor_moved_event(
     } else {
         0.5
     };
-    let state = pointer_state(position, scale_factor, pressure, modifiers, held_buttons);
+    let state = pointer_state(position, scale_factor, pressure, modifiers, held_buttons, 0);
 
     let event = PointerEvent::Move(PointerUpdate {
         pointer: primary_mouse_info(),
@@ -189,7 +200,7 @@ pub fn mouse_button_event(
     let is_down = state == ElementState::Pressed;
     let pointer_button = convert_mouse_button(button);
     let pressure = if is_down { 0.5 } else { 0.0 };
-    let pointer_state = pointer_state(position, scale_factor, pressure, modifiers, held_buttons);
+    let pointer_state = pointer_state(position, scale_factor, pressure, modifiers, held_buttons, 1);
 
     let event = if is_down {
         PointerEvent::Down(PointerButtonEvent {
@@ -247,6 +258,7 @@ pub fn touch_event(
                 contact_pressure,
                 modifiers,
                 contact_buttons,
+                1,
             ),
             button: Some(PointerButton::Primary),
         }),
@@ -258,6 +270,7 @@ pub fn touch_event(
                 contact_pressure,
                 modifiers,
                 contact_buttons,
+                0,
             ),
             coalesced: Vec::new(),
             predicted: Vec::new(),
@@ -270,6 +283,7 @@ pub fn touch_event(
                 0.0,
                 modifiers,
                 PointerButtons::default(),
+                1,
             ),
             button: Some(PointerButton::Primary),
         }),
@@ -321,6 +335,7 @@ pub fn trackpad_gesture_event(
             0.0,
             modifiers,
             PointerButtons::default(),
+            0,
         ),
     });
 
@@ -356,6 +371,7 @@ pub fn mouse_wheel_event(
         0.0,
         modifiers,
         PointerButtons::default(),
+        0,
     );
 
     let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
@@ -882,6 +898,64 @@ mod pointer_translation_tests {
             rotate.pointer.pointer_id, pinch.pointer.pointer_id,
             "one gesture stream, one identity"
         );
+    }
+
+    /// The cross-wire field contract (flui-interaction's module doc): time
+    /// in NANOSECONDS, pressure 0.5 while a button is held on sensor-less
+    /// hardware, click count 1 on transitions and 0 on motion/scroll.
+    #[test]
+    fn translated_events_meet_the_pointer_field_contract() {
+        let position = winit::dpi::PhysicalPosition::new(10.0, 10.0);
+        let held = PointerButtons::from(PointerButton::Primary);
+
+        // time: nanosecond scale — spin ~2ms of real time between two
+        // stamps; a millisecond stamp would show a delta of ~2, a
+        // nanosecond stamp ~2_000_000. (A bounded spin on Instant, not a
+        // pacing sleep: elapsed time IS the measured phenomenon here.)
+        let PlatformInput::Pointer(PointerEvent::Move(first)) = cursor_moved_event(
+            position,
+            1.0,
+            KeyboardModifiers::empty(),
+            PointerButtons::default(),
+        ) else {
+            panic!("expected Move");
+        };
+        let spin_start = Instant::now();
+        while spin_start.elapsed() < std::time::Duration::from_millis(2) {
+            std::hint::spin_loop();
+        }
+        let PlatformInput::Pointer(PointerEvent::Move(second)) = cursor_moved_event(
+            position,
+            1.0,
+            KeyboardModifiers::empty(),
+            PointerButtons::default(),
+        ) else {
+            panic!("expected Move");
+        };
+        let delta = second.current.time - first.current.time;
+        assert!(
+            delta >= 1_000_000,
+            "~2ms between stamps must read as ~2,000,000 time units — the \
+             contract is nanoseconds, and a millisecond stamp reads {delta}"
+        );
+
+        // pressure + count on a Down with a held button.
+        let PlatformInput::Pointer(PointerEvent::Down(down)) = mouse_button_event(
+            MouseButton::Left,
+            ElementState::Pressed,
+            position,
+            1.0,
+            KeyboardModifiers::empty(),
+            held,
+        ) else {
+            panic!("expected Down");
+        };
+        assert_eq!(down.state.pressure, 0.5, "W3C sensor-less held default");
+        assert_eq!(down.state.count, 1, "a Down is a click transition");
+
+        // A hover move carries neither.
+        assert_eq!(first.current.pressure, 0.0);
+        assert_eq!(first.current.count, 0, "motion is not a click");
     }
 }
 

@@ -52,6 +52,7 @@ pub fn convert_motion_event(
                 scale_factor,
                 modifiers,
                 contact_buttons(),
+                1,
             );
 
             vec![PlatformInput::Pointer(PointerEvent::Down(
@@ -73,6 +74,7 @@ pub fn convert_motion_event(
                 scale_factor,
                 modifiers,
                 PointerButtons::default(),
+                1,
             );
 
             vec![PlatformInput::Pointer(PointerEvent::Up(
@@ -96,6 +98,7 @@ pub fn convert_motion_event(
                         scale_factor,
                         modifiers,
                         contact_buttons(),
+                        0,
                     );
 
                     PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
@@ -145,6 +148,7 @@ pub fn convert_motion_event(
                         scale_factor,
                         modifiers,
                         PointerButtons::default(),
+                        0,
                     );
 
                     PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
@@ -245,12 +249,16 @@ fn make_pointer_info(pointer: &android_activity::input::Pointer<'_>) -> PointerI
 /// Android does not report a button mask for touch, but its `MotionAction`
 /// already states the answer: the `Down`/`Move` actions are contact, the
 /// `Hover*` actions are not, and `Up` is the release itself.
+/// `count` is the W3C click/tap count — `1` on Down/Up transitions, `0`
+/// on motion and hover (the cross-wire contract in flui-interaction's
+/// module doc).
 fn make_pointer_state(
     pointer: &android_activity::input::Pointer<'_>,
     time_ns: u64,
     scale_factor: f64,
     modifiers: Modifiers,
     buttons: PointerButtons,
+    count: u8,
 ) -> PointerState {
     // Android reports coordinates in physical (device) pixels
     let x = pointer.x() as f64;
@@ -278,7 +286,7 @@ fn make_pointer_state(
         position: PhysicalPosition::new(x, y),
         buttons,
         modifiers,
-        count: 1,
+        count,
         contact_geometry: contact,
         orientation: PointerOrientation::default(),
         pressure,

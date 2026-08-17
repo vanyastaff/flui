@@ -264,6 +264,11 @@ struct WinitPlatformState {
     /// contact tear down the other's sequence. Entries are removed on the
     /// terminal phases (Ended/Cancelled).
     touch_contacts: std::collections::HashMap<(winit::event::DeviceId, u64), u64>,
+    /// Buttons whose PRESS was dropped for lack of a tracked cursor
+    /// position: the matching release must be suppressed too, or consumers
+    /// receive an orphan Up (and, in between, moves that look like a drag
+    /// for a Down that never existed). Entries clear on the release.
+    suppressed_buttons: std::collections::HashSet<winit::event::MouseButton>,
     /// Next pointer id to hand a new touch contact. Starts past
     /// `PointerId::PRIMARY` (the mouse) and only grows — contact ids are
     /// never reused within a session, which keeps a late event for a dead
@@ -336,6 +341,7 @@ impl WinitPlatformState {
             current_modifiers: KeyboardModifiers::empty(),
             pressed_buttons: std::collections::HashSet::new(),
             touch_contacts: std::collections::HashMap::new(),
+            suppressed_buttons: std::collections::HashSet::new(),
             next_touch_pointer_id: 2,
         }
     }
@@ -1104,27 +1110,66 @@ impl ApplicationHandler for WinitApp {
                 }
             }
             WinitWindowEvent::MouseInput { state, button, .. } => {
-                let (modifiers, cursor_pos, held_buttons) = self.platform.with_state(|s| {
-                    // Track the RAW transition first: the emitted event's
-                    // `buttons` is the set held AFTER it (press included,
-                    // release excluded), per the W3C contract. Raw tracking
-                    // keeps aliased buttons (`Other(_)` normalizes onto
-                    // `Primary`) from clearing each other's bits.
-                    if state == winit::event::ElementState::Pressed {
-                        s.pressed_buttons.insert(button);
-                    } else {
-                        s.pressed_buttons.remove(&button);
-                    }
-                    (
-                        s.current_modifiers,
-                        s.cursor_positions
-                            .get(&platform_id)
-                            .copied()
-                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
-                        held_pointer_buttons(&s.pressed_buttons),
-                    )
-                });
+                let (modifiers, cursor_pos, held_buttons, suppressed) =
+                    self.platform.with_state(|s| {
+                        let cursor_pos = s.cursor_positions.get(&platform_id).copied();
+                        // A press with no tracked cursor position cannot be
+                        // delivered anywhere real (the old (0,0) stand-in
+                        // actuated the top-left widget) — suppress the WHOLE
+                        // sequence: the press never enters the held set, and
+                        // the matching release is swallowed below, so
+                        // consumers never see a drag or an orphan Up for a
+                        // Down that never existed.
+                        let suppressed = match state {
+                            winit::event::ElementState::Pressed => {
+                                if cursor_pos.is_none() {
+                                    s.suppressed_buttons.insert(button);
+                                    true
+                                } else {
+                                    // Track the RAW transition: the emitted
+                                    // event's `buttons` is the set held AFTER
+                                    // it, and raw tracking keeps aliased
+                                    // buttons from clearing each other's bits.
+                                    s.pressed_buttons.insert(button);
+                                    false
+                                }
+                            }
+                            winit::event::ElementState::Released => {
+                                if s.suppressed_buttons.remove(&button) {
+                                    true
+                                } else {
+                                    s.pressed_buttons.remove(&button);
+                                    false
+                                }
+                            }
+                        };
+                        (
+                            s.current_modifiers,
+                            cursor_pos,
+                            held_pointer_buttons(&s.pressed_buttons),
+                            suppressed,
+                        )
+                    });
 
+                if suppressed {
+                    tracing::debug!(
+                        ?platform_id,
+                        ?state,
+                        "suppressing a button event from an unpositioned press sequence"
+                    );
+                    return;
+                }
+                let Some(cursor_pos) = cursor_pos else {
+                    // A release whose press WAS delivered but whose position
+                    // tracking has since been lost (focus loss cleared it):
+                    // nothing sane to deliver at — drop, traced. The raw set
+                    // was already updated above.
+                    tracing::debug!(
+                        ?platform_id,
+                        "dropping a mouse button event with no tracked cursor position"
+                    );
+                    return;
+                };
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
                     let input = winit_events::mouse_button_event(
@@ -1149,12 +1194,18 @@ impl ApplicationHandler for WinitApp {
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {
                     (
                         s.current_modifiers,
-                        s.cursor_positions
-                            .get(&platform_id)
-                            .copied()
-                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                        s.cursor_positions.get(&platform_id).copied(),
                     )
                 });
+                // Same no-made-up-origin contract as clicks and wheels: a
+                // gesture with no tracked cursor position is dropped.
+                let Some(cursor_pos) = cursor_pos else {
+                    tracing::debug!(
+                        ?platform_id,
+                        "dropping a trackpad gesture with no tracked cursor position"
+                    );
+                    return;
+                };
                 if let Some(ref win) = window {
                     let input = winit_events::trackpad_gesture_event(
                         gesture,
@@ -1169,12 +1220,18 @@ impl ApplicationHandler for WinitApp {
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {
                     (
                         s.current_modifiers,
-                        s.cursor_positions
-                            .get(&platform_id)
-                            .copied()
-                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                        s.cursor_positions.get(&platform_id).copied(),
                     )
                 });
+                // Same no-made-up-origin contract as clicks and wheels: a
+                // gesture with no tracked cursor position is dropped.
+                let Some(cursor_pos) = cursor_pos else {
+                    tracing::debug!(
+                        ?platform_id,
+                        "dropping a trackpad gesture with no tracked cursor position"
+                    );
+                    return;
+                };
                 if let Some(ref win) = window {
                     let input = winit_events::trackpad_gesture_event(
                         crate::shared::gestures::rotation_ccw_degrees(delta),
@@ -1206,12 +1263,17 @@ impl ApplicationHandler for WinitApp {
                 let (modifiers, cursor_pos) = self.platform.with_state(|s| {
                     (
                         s.current_modifiers,
-                        s.cursor_positions
-                            .get(&platform_id)
-                            .copied()
-                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                        s.cursor_positions.get(&platform_id).copied(),
                     )
                 });
+                // Same untracked-position posture as the button arm above.
+                let Some(cursor_pos) = cursor_pos else {
+                    tracing::debug!(
+                        ?platform_id,
+                        "dropping a wheel event with no tracked cursor position"
+                    );
+                    return;
+                };
 
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
