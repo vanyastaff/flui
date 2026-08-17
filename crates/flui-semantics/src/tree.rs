@@ -60,6 +60,27 @@ pub struct SemanticsTree {
 
     /// Root SemanticsNode ID (None if tree is empty)
     root: Option<SemanticsId>,
+
+    /// Upper bound on the number of dirty nodes, maintained at every seam
+    /// that can flip a node's dirty bit ([`Self::insert`], [`Self::get_mut`],
+    /// [`Self::iter_mut`], [`Self::remove_shallow`], [`Self::clear`],
+    /// [`Self::mark_all_dirty`], [`Self::mark_all_clean`]).
+    ///
+    /// This is what makes [`Self::has_dirty_nodes`] O(1): the previous
+    /// implementation scanned with `any()`, which short-circuits on a dirty
+    /// tree but walks the whole arena on a clean one — the *idle* frame was
+    /// the worst case. Flutter maintains the same information as
+    /// `SemanticsOwner._dirtyNodes` (a set filled by `_markDirty`), so its
+    /// `sendSemanticsUpdate` early-out is O(1); this counter is the
+    /// arena-storage port of that.
+    ///
+    /// Deliberately an upper bound, not an exact count: handing out
+    /// `&mut SemanticsNode` (via [`Self::get_mut`] / [`Self::iter_mut`])
+    /// counts the node as dirty *at the borrow*, so nothing the caller does
+    /// through the borrow can under-count. Over-counting is self-healing —
+    /// a flush that finds no dirty bits publishes nothing and resets the
+    /// counter via [`Self::mark_all_clean`].
+    dirty_count: usize,
 }
 
 impl SemanticsTree {
@@ -68,6 +89,7 @@ impl SemanticsTree {
         Self {
             nodes: Slab::new(),
             root: None,
+            dirty_count: 0,
         }
     }
 
@@ -76,6 +98,7 @@ impl SemanticsTree {
         Self {
             nodes: Slab::with_capacity(capacity),
             root: None,
+            dirty_count: 0,
         }
     }
 
@@ -131,6 +154,9 @@ impl SemanticsTree {
     /// let id = tree.insert(node);
     /// ```
     pub fn insert(&mut self, node: SemanticsNode) -> SemanticsId {
+        if node.is_dirty() {
+            self.dirty_count += 1;
+        }
         let slab_index = self.nodes.insert(node);
         SemanticsId::new(slab_index + 1) // +1 offset
     }
@@ -156,9 +182,20 @@ impl SemanticsTree {
     }
 
     /// Returns a mutable reference to a SemanticsNode.
-    #[inline]
+    ///
+    /// The node is conservatively counted as dirty **at the borrow**: the
+    /// tree cannot observe what the caller does through `&mut SemanticsNode`
+    /// (node-level mutators set the node's own dirty bit, but the tree's
+    /// O(1) dirty accounting cannot see that transition), so it presumes
+    /// mutation. A borrow that turns out to be read-only costs one spurious
+    /// dirty bit that the next flush clears without publishing anything.
     pub fn get_mut(&mut self, id: SemanticsId) -> Option<&mut SemanticsNode> {
-        self.nodes.get_mut(id.get() - 1)
+        let node = self.nodes.get_mut(id.get() - 1)?;
+        if !node.is_dirty() {
+            node.mark_dirty();
+            self.dirty_count += 1;
+        }
+        Some(node)
     }
 
     // NOTE: the inherent `pub fn remove` that used to live here was
@@ -194,7 +231,10 @@ impl SemanticsTree {
             return None;
         }
         // Unlink from parent's children vec — matches the trait
-        // contract.
+        // contract. `get_mut` also marks the parent dirty, which is
+        // load-bearing for incremental publishing: the parent's children
+        // list is part of its published payload, and republishing the
+        // parent is what tells an adapter the child is gone.
         if let Some(parent_id) = self.get(id).and_then(SemanticsNode::parent)
             && let Some(parent) = self.get_mut(parent_id)
         {
@@ -203,13 +243,18 @@ impl SemanticsTree {
         if self.root == Some(id) {
             self.root = None;
         }
-        self.nodes.try_remove(id.get() - 1)
+        let removed = self.nodes.try_remove(id.get() - 1);
+        if removed.as_ref().is_some_and(SemanticsNode::is_dirty) {
+            self.dirty_count = self.dirty_count.saturating_sub(1);
+        }
+        removed
     }
 
     /// Clears all nodes from the tree.
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.root = None;
+        self.dirty_count = 0;
     }
 
     // ========== Tree Operations ==========
@@ -372,16 +417,43 @@ impl SemanticsTree {
             .map(|(index, node)| (SemanticsId::new(index + 1), node))
     }
 
+    /// Marks a single node as dirty (no-op for a missing id).
+    ///
+    /// The tree-level entry point for "this node's published payload is
+    /// stale" — routes through [`Self::get_mut`] so the O(1) dirty
+    /// accounting observes the transition.
+    pub fn mark_dirty(&mut self, id: SemanticsId) {
+        let _ = self.get_mut(id);
+    }
+
+    /// Marks every node as dirty.
+    ///
+    /// The full-republish primitive (`SemanticsOwner::send_full_tree`):
+    /// after this, a flush re-examines every node.
+    pub fn mark_all_dirty(&mut self) {
+        for (_, node) in &mut self.nodes {
+            node.mark_dirty();
+        }
+        self.dirty_count = self.nodes.len();
+    }
+
     /// Marks all nodes as clean.
     pub fn mark_all_clean(&mut self) {
         for (_, node) in &mut self.nodes {
             node.mark_clean();
         }
+        self.dirty_count = 0;
     }
 
-    /// Returns true if any node is dirty.
+    /// Returns true if any node may be dirty — O(1).
+    ///
+    /// Backed by the maintained counter rather than a scan; see the
+    /// `dirty_count` field doc for why the scan was the wrong shape (it
+    /// walked the entire arena precisely on the idle frame) and for the
+    /// conservative-upper-bound contract (`true` can be spurious after a
+    /// read-only `&mut` borrow; `false` is always exact).
     pub fn has_dirty_nodes(&self) -> bool {
-        self.nodes.iter().any(|(_, node)| node.is_dirty())
+        self.dirty_count > 0
     }
 
     // ========== Iteration ==========
@@ -402,7 +474,13 @@ impl SemanticsTree {
 
     /// Returns a mutable iterator over all (SemanticsId, &mut SemanticsNode)
     /// pairs.
+    ///
+    /// Every yielded node is conservatively counted as dirty, for the same
+    /// reason [`Self::get_mut`] counts its borrow: the tree cannot observe
+    /// mutation through the handed-out `&mut`, and under-counting would let
+    /// a real change slip past the O(1) dirty check.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (SemanticsId, &mut SemanticsNode)> + '_ {
+        self.mark_all_dirty();
         self.nodes
             .iter_mut()
             .map(|(index, node)| (SemanticsId::new(index + 1), node))
@@ -679,6 +757,76 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&id1));
         assert!(ids.contains(&id2));
+    }
+
+    /// `has_dirty_nodes` is counter-backed (O(1)), and the counter must stay
+    /// truthful across every seam that can flip a dirty bit. A silent
+    /// under-count here would make an idle-looking tree swallow a real
+    /// change; an over-count only costs a no-op flush.
+    #[test]
+    fn the_dirty_gate_tracks_insert_remove_and_clear() {
+        let mut tree = SemanticsTree::new();
+        assert!(!tree.has_dirty_nodes(), "an empty tree is clean");
+
+        let id = tree.insert(SemanticsNode::new());
+        assert!(tree.has_dirty_nodes(), "a fresh insert is dirty");
+
+        tree.mark_all_clean();
+        assert!(!tree.has_dirty_nodes());
+
+        tree.mark_dirty(id);
+        assert!(tree.has_dirty_nodes());
+        let removed = tree.remove_shallow(id);
+        assert!(removed.is_some());
+        assert!(
+            !tree.has_dirty_nodes(),
+            "removing the only dirty node cleans the gate"
+        );
+
+        let _ = tree.insert(SemanticsNode::new());
+        tree.clear();
+        assert!(!tree.has_dirty_nodes(), "clear resets the gate");
+    }
+
+    /// Handing out `&mut SemanticsNode` counts the node as dirty at the
+    /// borrow — the tree cannot see what happens through the borrow, and
+    /// presuming mutation is the only direction that cannot under-count.
+    #[test]
+    fn a_mutable_borrow_counts_as_dirty() {
+        let mut tree = SemanticsTree::new();
+        let id = tree.insert(SemanticsNode::new());
+        tree.mark_all_clean();
+
+        let _ = tree.get_mut(id);
+        assert!(
+            tree.has_dirty_nodes(),
+            "a mutable borrow must be presumed a mutation"
+        );
+        assert_eq!(tree.dirty_nodes().count(), 1);
+
+        tree.mark_all_clean();
+        let _ = tree.iter_mut();
+        assert!(
+            tree.has_dirty_nodes(),
+            "a mutable iteration presumes mutation of every node"
+        );
+    }
+
+    /// `mark_all_dirty` is the full-republish primitive: every node becomes
+    /// re-examinable, and `mark_all_clean` fully resets the gate after.
+    #[test]
+    fn mark_all_dirty_marks_every_node() {
+        let mut tree = SemanticsTree::new();
+        let _ = tree.insert(SemanticsNode::new());
+        let _ = tree.insert(SemanticsNode::new());
+        tree.mark_all_clean();
+
+        tree.mark_all_dirty();
+        assert_eq!(tree.dirty_nodes().count(), 2);
+        assert!(tree.has_dirty_nodes());
+
+        tree.mark_all_clean();
+        assert!(!tree.has_dirty_nodes());
     }
 
     #[test]

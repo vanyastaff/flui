@@ -355,10 +355,18 @@ impl PresentationState {
         });
 
         let enabled_flag = semantics.platform_semantics_enabled_handle();
+        let republish_flag = semantics.full_republish_handle();
         let wake = Arc::clone(wake);
         let awaken_window = Arc::downgrade(window);
         bridge.set_activation_listener(Arc::new(move |active| {
             enabled_flag.store(active, Ordering::Relaxed);
+            if active {
+                // A (re)attached assistive technology's state is unknown —
+                // it may have forgotten everything — and flushes publish
+                // incrementally, so it must be answered with a
+                // self-contained full tree, not the next diff.
+                republish_flag.store(true, Ordering::Relaxed);
+            }
             // The flag alone changes nothing until a frame runs: wake the
             // loop and poke this window so the reconcile actually happens.
             wake();
@@ -877,9 +885,22 @@ impl PresentationState {
     /// the two transitions.
     pub(crate) fn reconcile_semantics_enablement(&self) {
         let wanted = self.semantics.semantics_enabled();
+        // Consumed unconditionally: a request that arrives alongside a
+        // deactivation must not linger and fire on some later re-enable.
+        let full_republish = self.semantics.take_full_republish_request();
         self.pipeline.with_mut(|owner| {
             if owner.semantics_enabled() != wanted {
                 owner.set_semantics_enabled(wanted);
+            }
+            if full_republish && wanted {
+                // Activation with an owner already alive (a screen reader
+                // restarting without an intervening deactivation, or one
+                // attaching after a handle enabled semantics first): the
+                // adapter must be re-answered with a self-contained tree.
+                // On the enable transition just above this is a no-op-shaped
+                // reinforcement — the fresh owner's first flush is full
+                // anyway.
+                owner.request_semantics_full_publish();
             }
         });
     }

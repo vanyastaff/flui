@@ -1624,6 +1624,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.semantics_update_callback = Some(callback);
     }
 
+    /// Schedules a self-contained full semantics publish, re-seeding the
+    /// assembly pass so it actually happens.
+    ///
+    /// The reconnect path: assistive technology (re)activated, so whatever
+    /// the adapter previously held is unknown — the owner forgets its
+    /// published-state mirror ([`flui_semantics::SemanticsOwner::schedule_full_publish`])
+    /// and the root is marked as needing semantics so the next
+    /// `run_semantics` rebuilds and flushes even on an otherwise-idle
+    /// frame. A no-op while no owner exists: the enable transition that
+    /// creates one starts from an empty mirror, which is already a full
+    /// first publish.
+    pub fn request_semantics_full_publish(&mut self) {
+        let Some(owner) = self.semantics_owner.as_mut() else {
+            return;
+        };
+        owner.schedule_full_publish();
+        if let Some(root_id) = self.root_id {
+            self.mark_needs_semantics(root_id);
+        }
+    }
+
     /// Returns the semantics owner, if semantics is currently enabled.
     ///
     /// `None` until [`Self::set_semantics_enabled`]`(true)` lazily creates

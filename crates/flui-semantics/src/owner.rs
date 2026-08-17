@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use flui_foundation::SemanticsId;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -191,6 +191,52 @@ pub struct SemanticsOwner {
 
     /// Whether semantics is enabled.
     enabled: bool,
+
+    /// What the last update told the platform, keyed by stable identity.
+    ///
+    /// `None` until the first publish (or after
+    /// [`Self::schedule_full_publish`] deliberately forgets it): the next
+    /// flush is then a self-contained full update. While `Some`, a flush
+    /// diffs each dirty node's translation against this mirror and publishes
+    /// only what actually changed — which is what keeps a rebuild-everything
+    /// assembly pass (ADR-0014) from republishing an entire tree because one
+    /// checkbox toggled.
+    published: Option<PublishedState>,
+
+    /// Forces the next flush to publish the complete tree even if the diff
+    /// would be empty. Set by [`Self::send_full_tree`] and
+    /// [`Self::schedule_full_publish`]; cleared once a full update is
+    /// actually delivered (an unrooted tree leaves it pending, exactly like
+    /// the dirty bits it travels with).
+    full_publish_pending: bool,
+}
+
+/// Mirror of the adapter-visible tree as of the last delivered update.
+///
+/// The map holds the translated [`accesskit::Node`] per published
+/// [`accesskit::NodeId`] — equality against a fresh translation is the diff.
+/// Entries are pruned when their node leaves the arena, so a node that is
+/// removed and later returns with identical content is correctly republished
+/// (the adapter dropped it in between; the mirror must forget it too).
+struct PublishedState {
+    nodes: FxHashMap<accesskit::NodeId, accesskit::Node>,
+    root: accesskit::NodeId,
+    focus: accesskit::NodeId,
+}
+
+impl PublishedState {
+    /// Mirror of a self-contained full update the adapter was just given.
+    fn mirror_of(update: &crate::TreeUpdate) -> Self {
+        Self {
+            nodes: update.nodes.iter().cloned().collect(),
+            root: update
+                .tree
+                .as_ref()
+                .map(|tree| tree.root)
+                .expect("BUG: a full update always carries tree metadata"),
+            focus: update.focus,
+        }
+    }
 }
 
 impl std::fmt::Debug for SemanticsOwner {
@@ -199,6 +245,11 @@ impl std::fmt::Debug for SemanticsOwner {
             .field("tree", &self.tree)
             .field("callback", &self.callback.as_ref().map(|_| "<callback>"))
             .field("enabled", &self.enabled)
+            .field(
+                "published",
+                &self.published.as_ref().map(|state| state.nodes.len()),
+            )
+            .field("full_publish_pending", &self.full_publish_pending)
             .finish()
     }
 }
@@ -210,6 +261,8 @@ impl SemanticsOwner {
             tree: SemanticsTree::new(),
             callback: Some(callback),
             enabled: true,
+            published: None,
+            full_publish_pending: false,
         }
     }
 
@@ -225,6 +278,8 @@ impl SemanticsOwner {
             tree: SemanticsTree::new(),
             callback: None,
             enabled: true,
+            published: None,
+            full_publish_pending: false,
         }
     }
 
@@ -234,6 +289,8 @@ impl SemanticsOwner {
             tree: SemanticsTree::with_capacity(capacity),
             callback: Some(callback),
             enabled: true,
+            published: None,
+            full_publish_pending: false,
         }
     }
 
@@ -249,11 +306,18 @@ impl SemanticsOwner {
     /// until the user did something. So a rooted current tree is published
     /// through the new callback immediately; translation is snapshot-shaped,
     /// so this says exactly what a flush would say.
+    ///
+    /// The swap also resets the published-state mirror to exactly what the
+    /// new callback was just told: the previous adapter's knowledge is
+    /// irrelevant to this one, and diffing future flushes against it would
+    /// withhold nodes the new adapter has never seen.
     pub fn set_callback(&mut self, callback: SemanticsUpdateCallback) {
+        self.published = None;
         if self.enabled
             && let Some(update) = crate::tree_to_update(&self.tree, None)
         {
             callback(&update);
+            self.published = Some(PublishedState::mirror_of(&update));
         }
         self.callback = Some(callback);
     }
@@ -458,6 +522,8 @@ impl SemanticsOwner {
         self.tree.clear();
         self.callback = None;
         self.enabled = false;
+        self.published = None;
+        self.full_publish_pending = false;
     }
 
     // ========== Tree Operations ==========
@@ -488,33 +554,80 @@ impl SemanticsOwner {
 
     // ========== Flush to Platform ==========
 
-    /// Publishes the tree to the platform when anything has changed.
+    /// Publishes what changed — and only what changed — to the platform.
     ///
-    /// Assembly is a classic full rebuild (ADR-0014), so the published
-    /// [`accesskit::TreeUpdate`] carries every node rather than a diff. That is
-    /// what `TreeUpdate` permits but does not require; adapters suppress
-    /// extraneous events, so this is correct-but-chatty. Incremental diffing
-    /// needs the identity to be carried per node and gets its own oracle.
+    /// The observable contract is Flutter's (`SemanticsOwner
+    /// .sendSemanticsUpdate`): an idle frame publishes nothing and returns in
+    /// O(1); only nodes whose content actually changed serialize into the
+    /// update. The *mechanism* diverges because FLUI rebuilds the semantics
+    /// arena every assembly pass (ADR-0014) where Flutter mutates persistent
+    /// nodes: a rebuild marks every node dirty, so the dirty bit alone cannot
+    /// say what changed. The diff therefore compares each dirty node's
+    /// translation, keyed by its stable [`AccessibilityNodeId`], against the
+    /// [`PublishedState`] mirror of the last delivered update — payload
+    /// equality is authoritative, dirty bits only bound how much is
+    /// re-examined.
     ///
-    /// A clean tree publishes nothing and performs no translation. The trigger
-    /// is [`SemanticsTree::has_dirty_nodes`], which scans until it finds dirt:
-    /// O(1) average on a dirty tree (it stops at the first dirty node), O(n)
-    /// worst case — and the worst case is the *idle* frame, since a clean tree
-    /// is the one that must be scanned to the end. `n` is the number of
-    /// semantics boundaries, not widgets. A cached dirty count would make this
-    /// O(1) unconditionally; that is a separate change, with a benchmark, not
-    /// an assertion made in a doc comment.
+    /// Three shapes come out of one call:
+    ///
+    /// - **Clean tree** — O(1) early return, no translation, no callback.
+    /// - **First publish / [`Self::schedule_full_publish`] pending / root
+    ///   identity changed** — a self-contained full update carrying
+    ///   [`accesskit::TreeUpdate::tree`] metadata. `tree: Some` is this
+    ///   owner's promise that the update stands alone (the Linux bridge
+    ///   retains exactly these to answer a late-activating screen reader).
+    /// - **Otherwise** — an incremental update: changed nodes only,
+    ///   `tree: None`. Structure changes ride along for free because a
+    ///   node's children list is part of its payload — the parent whose
+    ///   children changed is itself a changed node, which is also how an
+    ///   adapter learns a removed child is gone. If nothing survives the
+    ///   diff and focus is unchanged, no update is delivered at all.
+    ///
+    /// An unrooted tree publishes nothing and stays dirty, so the first
+    /// rooted flush retries (unchanged from the pre-diff behavior; see the
+    /// comment inside [`Self::publish_full`]).
     pub fn flush(&mut self) {
-        if !self.enabled || !self.tree.has_dirty_nodes() {
+        if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return;
         }
 
+        let needs_full = self.full_publish_pending
+            || match (&self.published, self.current_root_id()) {
+                // A changed root identity is a different tree to the
+                // adapter; a diff cannot express that transition, so it
+                // escalates to a self-contained full update.
+                (Some(state), Some(root)) => state.root != root,
+                // Nothing published yet — or no addressable root (both
+                // paths publish nothing and stay dirty; route through the
+                // full path for one exit).
+                _ => true,
+            };
+
+        if needs_full {
+            self.publish_full();
+        } else {
+            self.publish_incremental();
+        }
+    }
+
+    /// The stable identity the current root would publish under.
+    fn current_root_id(&self) -> Option<accesskit::NodeId> {
+        self.tree
+            .root()
+            .and_then(|root| self.tree.get(root))
+            .and_then(SemanticsNode::accessibility_id)
+            .map(|id| accesskit::NodeId(id.as_u64()))
+    }
+
+    /// Publishes the complete rooted tree and resets the mirror to it.
+    fn publish_full(&mut self) {
         // Translate before touching the callback so the borrow of `self.tree`
         // ends first.
         let Some(update) = crate::tree_to_update(&self.tree, None) else {
             // No root yet — nothing an adapter could apply. Leave the tree
-            // dirty so the next flush retries once assembly has rooted it,
-            // rather than silently swallowing the first real update.
+            // dirty (and any full publish pending) so the next flush retries
+            // once assembly has rooted it, rather than silently swallowing
+            // the first real update.
             //
             // A tree that *loses* its root after publishing takes this path
             // too, and nothing withdraws the tree already sent: the adapter
@@ -534,24 +647,130 @@ impl SemanticsOwner {
             callback(&update);
         }
 
+        self.published = Some(PublishedState::mirror_of(&update));
+        self.full_publish_pending = false;
         self.tree.mark_all_clean();
     }
 
-    /// Forces a full tree update.
+    /// Diffs dirty nodes against the mirror and publishes only the changes.
     ///
-    /// Marks all nodes dirty and flushes to platform.
-    /// Use when accessibility services reconnect or request full tree.
+    /// One pass over the arena does all four jobs: collect the live id set
+    /// (to prune mirror entries for removed nodes), re-translate dirty nodes
+    /// (clean ones are unchanged by the dirty-bit contract and are skipped),
+    /// compare against the mirror, and derive focus. The pass is O(arena)
+    /// with translation cost O(dirty) — the arena walk itself is the same
+    /// order as the assembly pass that produced the dirt.
+    fn publish_incremental(&mut self) {
+        let state = self
+            .published
+            .as_mut()
+            .expect("BUG: incremental publish requires a prior published state");
+
+        let mut live: FxHashSet<accesskit::NodeId> =
+            FxHashSet::with_capacity_and_hasher(self.tree.len(), rustc_hash::FxBuildHasher);
+        let mut changed: Vec<(accesskit::NodeId, accesskit::Node)> = Vec::new();
+        // Focus derivation, folded into the same pass `focused_node` would
+        // otherwise repeat: exactly one claimant wins, ambiguity falls back
+        // to the root (matching `tree_to_update`).
+        let mut focus_claimant: Option<accesskit::NodeId> = None;
+        let mut focus_ambiguous = false;
+
+        for (_, node) in self.tree.iter() {
+            let Some(identity) = node.accessibility_id() else {
+                // Unaddressable: never published, nothing to diff. Same
+                // skip rule as `tree_to_update`.
+                continue;
+            };
+            let id = accesskit::NodeId(identity.as_u64());
+            live.insert(id);
+
+            if node.config().is_focused() {
+                if focus_claimant.is_some() {
+                    focus_ambiguous = true;
+                } else {
+                    focus_claimant = Some(id);
+                }
+            }
+
+            if !node.is_dirty() {
+                continue;
+            }
+            let Some(data) = self.tree.node_data_of(node) else {
+                continue;
+            };
+            let translated = crate::accesskit_translation::to_node(&data);
+            if state.nodes.get(&id) != Some(&translated) {
+                changed.push((id, translated));
+            }
+        }
+
+        // Prune mirror entries whose nodes left the arena. Without this, a
+        // node that is removed and later returns with identical content
+        // would diff as "unchanged" against a mirror the adapter no longer
+        // agrees with — the adapter dropped it when its parent was
+        // republished without it — and never be re-sent.
+        state.nodes.retain(|id, _| live.contains(id));
+
+        if focus_ambiguous {
+            tracing::warn!("semantics tree has more than one focused node; publishing the root");
+        }
+        let focus = focus_claimant
+            .filter(|_| !focus_ambiguous)
+            .filter(|claimant| live.contains(claimant))
+            .unwrap_or(state.root);
+
+        if changed.is_empty() && focus == state.focus {
+            // Everything the dirty bits pointed at translated identically —
+            // a rebuild that reproduced the same tree. The adapter hears
+            // nothing; the dirt is simply consumed.
+            self.tree.mark_all_clean();
+            return;
+        }
+
+        for (id, node) in &changed {
+            state.nodes.insert(*id, node.clone());
+        }
+        state.focus = focus;
+
+        let update = crate::TreeUpdate {
+            nodes: changed,
+            tree: None,
+            tree_id: accesskit::TreeId::ROOT,
+            focus,
+        };
+
+        let callback = self.callback.as_ref().map(Arc::clone);
+        if let Some(callback) = callback {
+            callback(&update);
+        }
+
+        self.tree.mark_all_clean();
+    }
+
+    /// Forces the next flush to publish a self-contained full update, even
+    /// if no node is dirty.
+    ///
+    /// The reconnect primitive: when assistive technology (re)activates, the
+    /// adapter's state is unknown — it may have forgotten everything — so the
+    /// mirror is forgotten with it. The composition root pairs this with
+    /// re-seeding the assembly pass so a flush actually runs.
+    pub fn schedule_full_publish(&mut self) {
+        self.published = None;
+        self.full_publish_pending = true;
+    }
+
+    /// Forces a full tree update, now.
+    ///
+    /// Marks all nodes dirty and publishes the complete tree, bypassing the
+    /// incremental diff. Use when accessibility services reconnect or
+    /// request the full tree.
     pub fn send_full_tree(&mut self) {
         if !self.enabled {
             return;
         }
 
-        // Mark all nodes dirty
-        for (_, node) in self.tree.iter_mut() {
-            node.mark_dirty();
-        }
-
-        // Flush
+        self.tree.mark_all_dirty();
+        self.full_publish_pending = true;
         self.flush();
     }
 }

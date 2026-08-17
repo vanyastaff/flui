@@ -90,6 +90,21 @@ pub(crate) struct SemanticsHost {
     /// `needs_redraw` handle-sharing shape for the identical reason.
     platform_semantics_enabled: Arc<AtomicBool>,
 
+    /// Whether the platform adapter needs a self-contained full republish.
+    ///
+    /// Set (from the adapter's own thread, via
+    /// [`Self::full_republish_handle`]) whenever assistive technology
+    /// activates: the adapter's state is unknown at that moment — a freshly
+    /// started screen reader has nothing, and `SemanticsOwner::flush`
+    /// publishes incrementally, so waiting for the next diff would leave it
+    /// with a fragment. Consumed on the owner thread by
+    /// [`Self::take_full_republish_request`] during
+    /// `PresentationState::reconcile_semantics_enablement`, which routes it
+    /// to `PipelineOwner::request_semantics_full_publish`. Same
+    /// `Arc`-wrapped shape as `platform_semantics_enabled`, for the same
+    /// self-reference reason.
+    full_republish_requested: Arc<AtomicBool>,
+
     /// Callback for accessibility announcements. `PresentationState::close()`
     /// clears this unconditionally in production (see
     /// [`Self::clear_announce_callback`]); `announce()`'s read side still
@@ -113,6 +128,7 @@ impl SemanticsHost {
         Self {
             handle_count: Arc::new(AtomicUsize::new(0)),
             platform_semantics_enabled: Arc::new(AtomicBool::new(false)),
+            full_republish_requested: Arc::new(AtomicBool::new(false)),
             announce_callback: RwLock::new(None),
             event_callback: RwLock::new(None),
         }
@@ -179,6 +195,20 @@ impl SemanticsHost {
     /// borrowing `&self`. Wired at `UiRealm::construct`.
     pub(crate) fn platform_semantics_enabled_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.platform_semantics_enabled)
+    }
+
+    /// A cheap clone of the full-republish request flag, for the activation
+    /// listener (which runs on the adapter's thread and can only touch
+    /// `Send + Sync` state). See the field's own doc for the contract.
+    pub(crate) fn full_republish_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.full_republish_requested)
+    }
+
+    /// Consumes a pending full-republish request, if any — the owner-thread
+    /// half of the activation seam. Returns `true` at most once per
+    /// request.
+    pub(crate) fn take_full_republish_request(&self) -> bool {
+        self.full_republish_requested.swap(false, Ordering::Relaxed)
     }
 
     // ========== Announcements ==========

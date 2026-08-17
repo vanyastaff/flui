@@ -715,6 +715,108 @@ mod tests {
         );
     }
 
+    /// The pipeline-level idle contract: `run_semantics` reassembles the
+    /// whole arena whenever anything is marked (ADR-0014), but a pass whose
+    /// assembly reproduces the same tree must deliver NOTHING to the
+    /// platform — the owner's flush diffs per-node payloads against the
+    /// last delivered update. Before that diff, every marked-but-unchanged
+    /// pass republished the entire tree.
+    #[test]
+    fn an_identical_second_semantics_pass_publishes_nothing() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+
+        let mut owner = PipelineOwner::new();
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                    .push(update.clone());
+            },
+        ));
+        let root_id = owner.set_root_render_object(Box::new(SemanticLeaf::labeled("Submit")));
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("first semantics pass");
+        let mut owner = owner.finish();
+        assert_eq!(
+            captured
+                .lock()
+                .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                .len(),
+            1,
+            "the first pass publishes the initializing full tree"
+        );
+
+        // Mark the root again without changing anything observable — the
+        // shape of "a repaint touched this subtree, semantics did not move".
+        owner.mark_needs_semantics(root_id);
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("second semantics pass");
+
+        assert_eq!(
+            captured
+                .lock()
+                .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                .len(),
+            1,
+            "a pass that reassembles an identical tree must publish nothing"
+        );
+    }
+
+    /// The reconnect path: `request_semantics_full_publish` must make the
+    /// next pass republish a self-contained full tree even though nothing
+    /// changed — a (re)activated adapter's state is unknown, and an
+    /// incremental flush would answer it with silence. The accessor also
+    /// re-seeds assembly itself; the test deliberately marks nothing.
+    #[test]
+    fn request_semantics_full_publish_makes_an_idle_pass_republish_everything() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+
+        let mut owner = PipelineOwner::new();
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                    .push(update.clone());
+            },
+        ));
+        let _ = owner.set_root_render_object(Box::new(SemanticLeaf::labeled("Submit")));
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("first semantics pass");
+        let mut owner = owner.finish();
+
+        owner.request_semantics_full_publish();
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("reconnect semantics pass");
+
+        let published = captured
+            .lock()
+            .expect("BUG: capture mutex is uncontended in this single-threaded test");
+        assert_eq!(
+            published.len(),
+            2,
+            "the reconnect pass must publish despite zero changes"
+        );
+        assert!(
+            published[1].tree.is_some(),
+            "and what it publishes is self-contained (tree metadata present)"
+        );
+        assert_eq!(
+            published[1].nodes.len(),
+            published[0].nodes.len(),
+            "carrying every node, not a diff"
+        );
+    }
+
     #[test]
     fn run_semantics_builds_owner_tree() {
         let mut owner = PipelineOwner::new();

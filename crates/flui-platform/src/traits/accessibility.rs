@@ -55,16 +55,20 @@ pub type AccessibilityActionListener = Arc<dyn Fn(ActionRequest) + Send + Sync>;
 
 /// Platform capability for exposing one window's accessibility tree.
 pub trait PlatformAccessibility: Send + Sync {
-    /// Hand the platform the current tree.
+    /// Hand the platform an update — incremental or self-contained.
     ///
-    /// Taken **by value** so an implementation can move it into the platform's
-    /// own update call instead of cloning. A full-tree update is what
-    /// `SemanticsOwner::flush` produces, so on the active path a borrowed
-    /// parameter would charge one whole-tree clone per publish, per frame that
-    /// changed anything — see the cost issue on the semantics pipeline.
+    /// `SemanticsOwner::flush` publishes incrementally: most updates carry
+    /// only the nodes that changed, with `TreeUpdate::tree` set to `None`.
+    /// An update whose `tree` metadata is present is the producer's promise
+    /// that it is **self-contained** (the initializing publish, a root
+    /// change, and every reconnect-driven `send_full_tree`) — the only kind
+    /// an implementation may retain to answer a late-activating screen
+    /// reader on its own.
     ///
-    /// An implementation with nothing attached simply drops it, which costs
-    /// nothing the caller had not already spent building it.
+    /// Taken **by value** so an implementation can move it into the
+    /// platform's own update call instead of cloning. An implementation with
+    /// nothing attached simply drops it, which costs nothing the caller had
+    /// not already spent building it.
     fn publish(&self, update: TreeUpdate);
 
     /// Whether assistive technology is currently attached.
