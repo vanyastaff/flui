@@ -568,10 +568,9 @@ impl SemanticsOwner {
     /// arena every assembly pass (ADR-0014) where Flutter mutates persistent
     /// nodes: a rebuild marks every node dirty, so the dirty bit alone cannot
     /// say what changed. The diff therefore compares each dirty node's
-    /// translation, keyed by its stable [`AccessibilityNodeId`], against the
-    /// [`PublishedState`] mirror of the last delivered update — payload
-    /// equality is authoritative, dirty bits only bound how much is
-    /// re-examined.
+    /// translation, keyed by its stable [`AccessibilityNodeId`], against a
+    /// private mirror of the last delivered update — payload equality is
+    /// authoritative, dirty bits only bound how much is re-examined.
     ///
     /// Three shapes come out of one call:
     ///
@@ -590,7 +589,7 @@ impl SemanticsOwner {
     ///
     /// An unrooted tree publishes nothing and stays dirty, so the first
     /// rooted flush retries (unchanged from the pre-diff behavior; see the
-    /// comment inside [`Self::publish_full`]).
+    /// comment inside the private full-publish path).
     pub fn flush(&mut self) {
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return;
