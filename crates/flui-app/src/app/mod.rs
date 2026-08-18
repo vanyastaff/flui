@@ -19,6 +19,7 @@ pub(crate) mod logging;
 pub(crate) mod media_query_root;
 pub(crate) mod presentation;
 pub(crate) mod presentation_forest;
+pub(crate) mod raster_lane;
 pub mod runner;
 pub(crate) mod runtime;
 pub(crate) mod semantics_host;

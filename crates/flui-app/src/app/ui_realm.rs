@@ -33,7 +33,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_animation::Vsync;
-use flui_engine::{EngineError, RasterBackend};
+use flui_engine::RasterBackend;
+#[cfg(test)]
+use flui_engine::EngineError;
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::{FocusManager, GestureBinding, InteractionLane};
 use flui_layer::Scene;
@@ -2582,20 +2584,53 @@ impl UiRealm {
     /// still do all the work to produce frames, but those frames are never
     /// sent to the engine"), so a deferred presentation's segment can very
     /// much have produced a real `Painted` outcome here, and this check is
-    /// what keeps it off the engine. `SurfaceLost`/`DeviceLost`/
-    /// `SurfaceValidation`, a pipeline `Errored` outcome, and any other
-    /// render error all count as a dropped (not settled) frame, arming a
-    /// retry via [`Self::wake_frame`] instead of [`Self::mark_rendered`]'s
-    /// idle-clear — but only the three named submit failures additionally
-    /// re-dirty the pipeline via [`Self::mark_needs_full_repaint_for`]; see
-    /// the `retry_needs_repaint` binding below for why a pipeline `Errored`
-    /// outcome does not get the same treatment.
+    /// what keeps it off the engine. A stale/lost surface, a lost device,
+    /// and a pipeline `Errored` outcome all count as a dropped (not
+    /// settled) frame, arming a retry via [`Self::wake_frame`] instead of
+    /// [`Self::mark_rendered`]'s idle-clear — but only the submit-failure
+    /// verdicts (`SurfaceStale`/`DeviceLost`) additionally re-dirty the
+    /// pipeline via [`Self::mark_needs_full_repaint_for`]; see the
+    /// `retry_needs_repaint` binding below for why a pipeline `Errored`
+    /// outcome (and a generic `Failed` submit) does not get the same
+    /// treatment.
     #[tracing::instrument(level = "debug", skip_all)]
+    #[cfg_attr(
+        all(not(target_arch = "wasm32"), not(test)),
+        expect(
+            dead_code,
+            reason = "the direct-sink entry point is the web runner's production frame path \
+                      (wasm32) and the scripted-backend test seam; native production drives \
+                      render_frame_on_lane instead -- see FrameSink's own doc"
+        )
+    )]
     pub(crate) fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
+        self.render_frame_with_sink(&mut super::raster_lane::DirectSink::new(renderer))
+    }
+
+    /// [`Self::render_frame_entered`], driven through the raster mailbox:
+    /// the desktop/Android runners' canonical frame path (ADR-0045's inline
+    /// lane). The scene crosses the raster boundary as an owned, stamped
+    /// `SceneSnapshot` and is rendered by the lane's own pump; the direct
+    /// entry point above remains for the web runner and for tests that pin
+    /// this transaction against scripted backends — both feed the same
+    /// classification arms below, so the retry/telemetry semantics cannot
+    /// drift between the two.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn render_frame_on_lane<B: RasterBackend>(
+        &self,
+        lane: &mut super::raster_lane::RasterLane<B>,
+    ) -> bool {
+        self.render_frame_with_sink(lane)
+    }
+
+    /// The shared frame transaction behind both entry points above. See
+    /// [`Self::render_frame_entered`]'s doc for the step-by-step contract.
+    fn render_frame_with_sink<S: super::raster_lane::FrameSink>(&self, sink: &mut S) -> bool {
         self.gestures().drain_deferred_arena_resolutions();
         self.gestures().flush_pending_moves();
 
-        let (width, height) = renderer.size();
+        let (width, height) = sink.surface_size();
         let dpr = self
             .presentations
             .primary()
@@ -2665,8 +2700,8 @@ impl UiRealm {
         let mut retry_needed = any_failed;
         // Tracks a NARROWER condition than `retry_needed`: whether the
         // eventual retry also needs [`Self::mark_needs_full_repaint_for`]
-        // to have something to redo. Only the three submit-failure arms
-        // below (`SurfaceLost`/`DeviceLost`/`SurfaceValidation`) set this —
+        // to have something to redo. Only the submit-failure arms below
+        // (`SurfaceStale`/`DeviceLost`) set this —
         // deliberately NOT `errored` (a `FramePaintOutcome::Errored`
         // outcome, i.e. `run_frame_with_layout_builders` itself returned
         // `Err`): on that path `render_scene` is never called at all, so
@@ -2679,17 +2714,25 @@ impl UiRealm {
         // still paying its cost every wake. That arm keeps its PRE-#637
         // behavior unchanged: `wake_frame()` only, same as `main`.
         let mut retry_needs_repaint = false;
+        use super::raster_lane::SubmitVerdict;
         if should_send
-            && let FramePaintOutcome::Painted(ref scene) = outcome
+            && let FramePaintOutcome::Painted(scene) = outcome
             && scene.has_content()
         {
-            renderer.mark_full_repaint();
-            let render_result = renderer.render_scene(scene);
-            // Telemetry: sampled AFTER `render_scene` returns, never before
-            // it -- on the production wgpu backend, a `Ok(true)` result
-            // means `render_scene` itself called `output.present()`, which
+            let frame_number = scene.frame_number();
+            // The scene is handed over BY VALUE: on the raster-lane path it
+            // crosses the raster boundary as an owned, stamped
+            // `SceneSnapshot` (the mailbox seam's own no-`Arc<Scene>`
+            // contract); the direct path borrows it internally and drops it
+            // when the render returns.
+            let render_verdict = sink.submit(scene);
+            // Telemetry: sampled AFTER the submit returns, never before
+            // it -- on the production wgpu backend, a `Presented` verdict
+            // means the backend called `output.present()`, which
             // under the default `Fifo` presentation mode BLOCKS until the
-            // next vsync before returning. Sampling before the call (as an
+            // next vsync before returning (on the inline raster lane the
+            // pump runs synchronously inside `submit`, so that block still
+            // lands within this call). Sampling before the call (as an
             // earlier version of this method did) understates every
             // "input-to-present"/"produce-to-present" latency by up to a
             // full frame interval -- it would measure submit, not present,
@@ -2697,40 +2740,39 @@ impl UiRealm {
             // `input_to_present_histogram`/`produce_to_present_histogram`
             // names (and `FrameSnapshot::submit_at`'s own doc) already
             // claim the present-inclusive meaning. Sampling once, here,
-            // after the call returns -- for EVERY outcome, not just
-            // `Ok(true)` -- keeps that claim true uniformly: a failure
-            // arm's `submit_at` is likewise "whenever `render_scene`
-            // finished attempting this submit", including whatever work
-            // (partial blocking, driver validation) it did before failing.
-            // Never recorded for `Ok(false)` (no damage/occluded, nothing
+            // after the call returns -- for EVERY verdict, not just
+            // `Presented` -- keeps that claim true uniformly: a failure
+            // arm's `submit_at` is likewise "whenever the backend finished
+            // attempting this submit", including whatever work (partial
+            // blocking, driver validation) it did before failing. Never
+            // recorded for `NoPresent` (no damage/occluded, nothing
             // actually reached the backend): that branch's pending input
             // epochs stay buffered on the clock for whichever later pump
             // does submit, per `FrameClock::record_frame`'s own doc.
             let submit_at = producer.clock().now();
-            match render_result {
-                Ok(did_present) => {
-                    presented = did_present;
-                    if did_present {
-                        producer.record_frame_rendered();
-                        Self::record_submit_telemetry(
-                            producer,
-                            submit_at,
-                            PresentOutcome::Presented,
-                            EpochDisposition::Drain,
-                        );
-                        tracing::trace!(
-                            frame = scene.frame_number(),
-                            total = producer.frames_rendered(),
-                            "Frame rendered successfully"
-                        );
-                    } else {
-                        tracing::trace!(
-                            frame = scene.frame_number(),
-                            "Frame skipped: no damage or surface occluded (no present)"
-                        );
-                    }
+            match render_verdict {
+                SubmitVerdict::Presented => {
+                    presented = true;
+                    producer.record_frame_rendered();
+                    Self::record_submit_telemetry(
+                        producer,
+                        submit_at,
+                        PresentOutcome::Presented,
+                        EpochDisposition::Drain,
+                    );
+                    tracing::trace!(
+                        frame = frame_number,
+                        total = producer.frames_rendered(),
+                        "Frame rendered successfully"
+                    );
                 }
-                Err(EngineError::SurfaceLost) => {
+                SubmitVerdict::NoPresent => {
+                    tracing::trace!(
+                        frame = frame_number,
+                        "Frame skipped: no damage or surface occluded (no present)"
+                    );
+                }
+                SubmitVerdict::SurfaceStale => {
                     producer.record_frame_dropped();
                     // `Retain`, not `Drain`: this arm arms a retry
                     // (`retry_needed = true` below) via `wake_frame()`, and
@@ -2746,13 +2788,34 @@ impl UiRealm {
                     retry_needed = true;
                     // See `retry_needs_repaint`'s own binding above for why
                     // this arm (a genuine submit failure, not a pipeline
-                    // error) is one of the three that also re-dirties
+                    // error) is one of the arms that also re-dirties
                     // `producer`'s pipeline via
                     // `mark_needs_full_repaint_for` below.
+                    //
+                    // Covers a lost surface, a validation failure, and (on
+                    // the raster-lane path) a stale surface-generation
+                    // stamp — the lane has already restamped itself from
+                    // the mailbox's required generation, so the retry armed
+                    // here submits against the reconfigured surface. NOTE:
+                    // the wgpu backend does NOT yet reconfigure the surface
+                    // before a validation-failure retry's own acquire
+                    // attempt (`Renderer::acquire_surface_texture`'s
+                    // `Validation` arm gaining reconfigure-and-retry-once
+                    // ships separately, issue #626) — until it lands, that
+                    // flavor of armed retry re-attempts the identical
+                    // acquire and may keep failing, at the runner's
+                    // no-present throttle (~62 Hz), indefinitely; arming it
+                    // anyway is still strictly better than a permanently
+                    // dropped frame nothing ever retries. Whether that
+                    // steady state deserves its own backoff (like
+                    // `DeviceRecoveryBackoff` gates device recovery) is a
+                    // real question this arm does not answer.
                     retry_needs_repaint = true;
-                    tracing::debug!("Surface lost; frame dropped — retry armed via wake_frame()");
+                    tracing::debug!(
+                        "Surface stale/lost; frame dropped — retry armed via wake_frame()"
+                    );
                 }
-                Err(EngineError::DeviceLost) => {
+                SubmitVerdict::DeviceLost => {
                     producer.record_frame_dropped();
                     // `Retain`, not `Drain`: this arm now arms a retry
                     // (`retry_needed = true` below), and the eventual real
@@ -2787,58 +2850,7 @@ impl UiRealm {
                          attempted by the renderer owner"
                     );
                 }
-                Err(EngineError::SurfaceValidation) => {
-                    producer.record_frame_dropped();
-                    // `Retain`, not `Drain`: this arm now arms a retry, and
-                    // the eventual real submit that retry produces must
-                    // still find the epochs that arrived before this
-                    // failure — see `record_submit_telemetry`'s own doc.
-                    Self::record_submit_telemetry(
-                        producer,
-                        submit_at,
-                        PresentOutcome::Errored,
-                        EpochDisposition::Retain,
-                    );
-                    // Retry armed for the same reason as `DeviceLost`
-                    // above. NOTE: as of this change the wgpu backend does
-                    // NOT yet reconfigure the surface before the retry's
-                    // own acquire attempt — `Renderer::acquire_surface_
-                    // texture`'s `Validation` arm gaining its own
-                    // reconfigure-and-retry-once (with its own test) ships
-                    // separately. Until it lands, an armed retry here
-                    // re-attempts the identical acquire and may keep
-                    // failing; arming it anyway is still strictly better
-                    // than the alternative (a permanently dropped frame
-                    // with nothing ever retrying it), and gives a
-                    // transient validation error the chance to clear on a
-                    // later wake.
-                    //
-                    // Updated by issue #637: this NOTE was written when the
-                    // armed retry silently parked after one no-op frame (see
-                    // that issue) — "may keep failing" understated the old
-                    // behavior, since a parked retry could not keep doing
-                    // anything past its first no-op. Now that the retry
-                    // actually re-submits (`retry_needs_repaint` below), a
-                    // PERMANENTLY misconfigured surface genuinely repeats
-                    // this failure indefinitely, at `NO_PRESENT_FALLBACK_
-                    // PACE`'s ~62 Hz throttle (`runner.rs`) rather than a
-                    // busy spin — a real, continuous full-tree paint cost
-                    // that did not exist before this fix. Whether that
-                    // steady state should sit behind its own backoff (like
-                    // `DeviceRecoveryBackoff` already gates the pre-frame
-                    // device-recovery path) is a real question this change
-                    // does not answer — a working retry that costs CPU
-                    // indefinitely on a permanently broken surface is still
-                    // strictly better than one that silently gives up, but
-                    // is not obviously the final shape either.
-                    retry_needed = true;
-                    retry_needs_repaint = true;
-                    tracing::error!(
-                        "Surface validation error — surface misconfig; retry armed for \
-                         the next wake"
-                    );
-                }
-                Err(e) => {
+                SubmitVerdict::Failed => {
                     producer.record_frame_dropped();
                     Self::record_submit_telemetry(
                         producer,
@@ -2846,7 +2858,10 @@ impl UiRealm {
                         PresentOutcome::Errored,
                         EpochDisposition::Drain,
                     );
-                    tracing::error!(error = ?e, "Render error (non-recoverable this frame)");
+                    // The sink already logged the backend-specific error at
+                    // classification time; this records the transaction-
+                    // level consequence.
+                    tracing::error!("Render error (non-recoverable this frame)");
                 }
             }
         }
@@ -2861,8 +2876,8 @@ impl UiRealm {
             // `mark_rendered()` clears the flag having never reached
             // `render_scene`: one no-op frame, then the retry silently parks.
             //
-            // `retry_needs_repaint` (set only by the three submit-failure
-            // arms above, never by a pipeline `Errored` outcome — see that
+            // `retry_needs_repaint` (set only by the submit-failure arms
+            // above, never by a pipeline `Errored` outcome — see that
             // binding's own comment) gates
             // [`Self::mark_needs_full_repaint_for`], the same fix #630
             // already established for the pre-frame device-recovery-success
