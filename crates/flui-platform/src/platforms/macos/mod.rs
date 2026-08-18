@@ -43,6 +43,8 @@
 // the module boundary, rather than for the whole crate (see `lib.rs`).
 #![allow(unsafe_code)]
 
+#[cfg(feature = "a11y")]
+mod accessibility;
 mod clipboard;
 mod display;
 mod events;
@@ -54,6 +56,8 @@ mod window_ext;
 mod window_manager;
 mod window_tiling;
 
+#[cfg(feature = "a11y")]
+pub use accessibility::MacosAccessibility;
 pub use clipboard::MacOSClipboard;
 pub use display::MacOSDisplay;
 pub use events::convert_ns_event;

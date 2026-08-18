@@ -31,67 +31,24 @@
 //! next [`publish`](PlatformAccessibility::publish) delivers the tree once
 //! assembly has produced one.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, TreeUpdate};
 use parking_lot::Mutex;
 
+use crate::shared::accessibility_bridge::BridgeShared;
 use crate::traits::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };
 
-/// State shared between the capability and the three handlers the adapter owns.
-///
-/// The handlers are moved into `Adapter::new` and thereafter live on the
-/// adapter's own thread, so everything they touch has to be reachable from both
-/// sides. This is that shared middle.
-#[derive(Default)]
-struct Shared {
-    /// Whether assistive technology is currently attached.
-    active: AtomicBool,
-    /// The most recent **self-contained** update (one carrying
-    /// [`TreeUpdate::tree`] metadata — the producer's promise that it stands
-    /// alone), kept so a late activation can be answered immediately rather
-    /// than showing an empty application until the next frame happens to
-    /// dirty something.
-    ///
-    /// Incremental updates (`tree: None`) are deliberately not retained:
-    /// applied in isolation they describe a handful of changed nodes, and
-    /// answering a fresh screen reader with one would present a fragment as
-    /// the whole interface. The composition root re-publishes a full tree on
-    /// every activation, so this retained answer is at worst one full
-    /// publish behind and is corrected within a frame.
-    latest: Mutex<Option<TreeUpdate>>,
-    activation_listener: Mutex<Option<AccessibilityActivationListener>>,
-    action_listener: Mutex<Option<AccessibilityActionListener>>,
-}
+// The state shared between the capability and the three handlers the adapter
+// owns lives in `crate::shared::accessibility_bridge`: the handlers are moved
+// into `Adapter::new` and thereafter live on the adapter's own thread, so
+// everything they touch has to be reachable from both sides — and the
+// retention/dispatch rules are common to every OS adapter, so they are
+// written and unit-tested once there rather than re-derived per OS.
 
-impl Shared {
-    /// Clone the listener out of its lock, then call it.
-    ///
-    /// A listener re-entering this type (the composition root's natural
-    /// response to "attached" is to publish) would deadlock against a held
-    /// guard. Same discipline as the semantics owner's callback dispatch.
-    fn notify_activation(&self, active: bool) {
-        self.active.store(active, Ordering::SeqCst);
-        let listener = self.activation_listener.lock().clone();
-        if let Some(listener) = listener {
-            listener(active);
-        }
-    }
-
-    fn notify_action(&self, request: ActionRequest) {
-        let listener = self.action_listener.lock().clone();
-        if let Some(listener) = listener {
-            listener(request);
-        }
-    }
-}
-
-struct Activation(Arc<Shared>);
+struct Activation(Arc<BridgeShared>);
 
 impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
@@ -101,11 +58,11 @@ impl ActivationHandler for Activation {
         // first would answer `None` even when a synchronous listener could
         // have supplied one.
         self.0.notify_activation(true);
-        self.0.latest.lock().clone()
+        self.0.retained()
     }
 }
 
-struct Deactivation(Arc<Shared>);
+struct Deactivation(Arc<BridgeShared>);
 
 impl DeactivationHandler for Deactivation {
     fn deactivate_accessibility(&mut self) {
@@ -113,7 +70,7 @@ impl DeactivationHandler for Deactivation {
     }
 }
 
-struct Action(Arc<Shared>);
+struct Action(Arc<BridgeShared>);
 
 impl ActionHandler for Action {
     fn do_action(&mut self, request: ActionRequest) {
@@ -123,7 +80,7 @@ impl ActionHandler for Action {
 
 /// AT-SPI accessibility for one window.
 pub struct UnixAccessibility {
-    shared: Arc<Shared>,
+    shared: Arc<BridgeShared>,
     /// The adapter needs `&mut` to publish, and the capability is shared behind
     /// an `Arc`, so the mutability lives here rather than in the trait.
     adapter: Mutex<accesskit_unix::Adapter>,
@@ -137,7 +94,7 @@ impl UnixAccessibility {
     /// activates, which is exactly the state a headless CI machine is in.
     #[must_use]
     pub fn new() -> Self {
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(BridgeShared::new());
         let adapter = accesskit_unix::Adapter::new(
             Activation(Arc::clone(&shared)),
             Action(Arc::clone(&shared)),
@@ -160,7 +117,7 @@ impl Default for UnixAccessibility {
 impl std::fmt::Debug for UnixAccessibility {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UnixAccessibility")
-            .field("active", &self.shared.active.load(Ordering::SeqCst))
+            .field("active", &self.shared.is_active())
             .finish_non_exhaustive()
     }
 }
@@ -171,34 +128,34 @@ impl PlatformAccessibility for UnixAccessibility {
         // reader started later asks for an initial tree, and answering it
         // from here shows the real interface immediately instead of an empty
         // window until something next changes. Incremental updates are not
-        // retained — see the field doc for why a fragment must never answer
+        // retained — see `BridgeShared` for why a fragment must never answer
         // an activation.
         //
         // Exactly one clone, and it buys that retention. `update_if_active`
         // takes a factory, so the owned value moves into the adapter only when
         // something is attached; with nobody listening the closure never runs
         // and the value is simply dropped.
-        if update.tree.is_some() {
-            *self.shared.latest.lock() = Some(update.clone());
-        }
+        self.shared.retain_if_self_contained(&update);
         self.adapter.lock().update_if_active(move || update);
     }
 
     fn is_active(&self) -> bool {
-        self.shared.active.load(Ordering::SeqCst)
+        self.shared.is_active()
     }
 
     fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
-        *self.shared.activation_listener.lock() = Some(listener);
+        self.shared.set_activation_listener(listener);
     }
 
     fn set_action_listener(&self, listener: AccessibilityActionListener) {
-        *self.shared.action_listener.lock() = Some(listener);
+        self.shared.set_action_listener(listener);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use accesskit::{Node, NodeId, Role, Tree, TreeId};
 
     use super::*;
@@ -237,8 +194,10 @@ mod tests {
 
         accessibility.publish(tree_update("Submit"));
 
-        let retained = accessibility.shared.latest.lock().clone();
-        let retained = retained.expect("the tree is kept for a late activation");
+        let retained = accessibility
+            .shared
+            .retained()
+            .expect("the tree is kept for a late activation");
         let (_, node) = retained.nodes.first().expect("one node");
         assert_eq!(node.label(), Some("Submit"));
     }
@@ -256,8 +215,10 @@ mod tests {
         fragment.tree = None;
         accessibility.publish(fragment);
 
-        let retained = accessibility.shared.latest.lock().clone();
-        let retained = retained.expect("the earlier full update stays retained");
+        let retained = accessibility
+            .shared
+            .retained()
+            .expect("the earlier full update stays retained");
         let (_, node) = retained.nodes.first().expect("one node");
         assert_eq!(
             node.label(),

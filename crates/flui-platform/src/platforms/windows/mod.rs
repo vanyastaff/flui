@@ -11,6 +11,8 @@
 // that makes it sound.
 #![allow(unsafe_code)]
 
+#[cfg(feature = "a11y")]
+mod accessibility;
 mod clipboard;
 mod display;
 mod events;
@@ -19,6 +21,8 @@ mod util;
 mod window;
 mod window_ext;
 
+#[cfg(feature = "a11y")]
+pub use accessibility::WindowsAccessibility;
 pub use clipboard::WindowsClipboard;
 pub use display::{WindowsDisplay, enumerate_displays};
 pub use platform::WindowsPlatform;

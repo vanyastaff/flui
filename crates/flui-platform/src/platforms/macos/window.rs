@@ -48,6 +48,14 @@ pub struct MacOSWindow {
 
     /// Window configuration
     config: WindowConfiguration,
+
+    /// This window's NSAccessibility bridge, subclassed onto the content
+    /// view. A `OnceLock` slot rather than a plain field because the window
+    /// value is constructed *before* its content view exists (the view
+    /// holds a `Weak` back-reference to the window's callbacks); the
+    /// constructor fills it immediately after installing the view.
+    #[cfg(feature = "a11y")]
+    accessibility: std::sync::OnceLock<Arc<super::accessibility::MacosAccessibility>>,
 }
 
 // SAFETY: the NSWindow pointer is only messaged from the main thread (AppKit
@@ -172,12 +180,28 @@ impl MacOSWindow {
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
                 config,
+                #[cfg(feature = "a11y")]
+                accessibility: std::sync::OnceLock::new(),
             });
 
             // Create content view for input events
             let content_view =
                 view::create_content_view(frame, scale, Arc::downgrade(&window.callbacks));
             let _: () = msg_send![ns_window, setContentView: content_view];
+
+            // Subclass the freshly installed content view for VoiceOver.
+            // SAFETY: `content_view` is the live NSView this window just
+            // created and installed; the window owns the capability, so the
+            // adapter cannot outlive the view; and window construction runs
+            // on the main thread (AppKit affinity, asserted by this whole
+            // `unsafe` block's contract).
+            #[cfg(feature = "a11y")]
+            {
+                let bridge = super::accessibility::MacosAccessibility::new(
+                    content_view.cast::<std::ffi::c_void>(),
+                );
+                let _ = window.accessibility.set(Arc::new(bridge));
+            }
 
             // Enable mouse tracking for mouse moved events
             view::enable_mouse_tracking(content_view);
@@ -219,6 +243,17 @@ impl MacOSWindow {
 impl PlatformWindow for MacOSWindow {
     fn id(&self) -> WindowId {
         WindowId(self.ns_window as u64)
+    }
+
+    /// The window's own NSAccessibility bridge — the capability the
+    /// composition root's accessibility wire discovers. Without this
+    /// override the trait default (`None`) leaves every real macOS window
+    /// silently invisible to VoiceOver.
+    #[cfg(feature = "a11y")]
+    fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
+        self.accessibility
+            .get()
+            .map(|bridge| Arc::clone(bridge) as _)
     }
 
     fn physical_size(&self) -> Size<DevicePixels> {
@@ -536,6 +571,11 @@ impl Clone for MacOSWindow {
             windows_map: Arc::clone(&self.windows_map),
             callbacks: Arc::clone(&self.callbacks),
             config: self.config.clone(),
+            // The clone shares the same window, so it shares the same
+            // NSAccessibility bridge — one subclass per content view,
+            // never two (`OnceLock<Arc<_>>` clones the shared handle).
+            #[cfg(feature = "a11y")]
+            accessibility: self.accessibility.clone(),
         }
     }
 }
