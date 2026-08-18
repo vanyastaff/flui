@@ -156,6 +156,60 @@ impl<'a> RenderObjectContext<'a> {
         Ok(self.dispatch_handle()?.unregister_scroll(target)?)
     }
 
+    /// Register an arbitrated trackpad pan-zoom handler in the active owner
+    /// lane.
+    ///
+    /// The pan-zoom counterpart of [`register_scroll`](Self::register_scroll):
+    /// the handler *competes* for the tick, leaf-first dispatch stopping at
+    /// the first one returning `EventPropagation::Stop`, so nested pinch
+    /// consumers do not all act on the same gesture. The returned target is
+    /// data-only and may be stored in a render object.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error when no owner lane is active,
+    /// the element was mounted detached, or the owner is gone.
+    pub fn register_pan_zoom(
+        &self,
+        handler: impl Fn(
+            &flui_interaction::PointerPanZoomEvent,
+        ) -> flui_interaction::routing::EventPropagation
+        + 'static,
+    ) -> Result<flui_interaction::routing::PanZoomTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_pan_zoom(handler)?)
+    }
+
+    /// Replace an existing pan-zoom target's handler without changing its
+    /// data-plane identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn replace_pan_zoom(
+        &self,
+        target: flui_interaction::routing::PanZoomTarget,
+        handler: impl Fn(
+            &flui_interaction::PointerPanZoomEvent,
+        ) -> flui_interaction::routing::EventPropagation
+        + 'static,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.replace_pan_zoom(target, handler)?)
+    }
+
+    /// Remove a pan-zoom target from future arbitration.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target already removed from the active owner lane.
+    pub fn unregister_pan_zoom(
+        &self,
+        target: flui_interaction::routing::PanZoomTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.unregister_pan_zoom(target)?)
+    }
+
     /// Register mouse-region callbacks in the active owner lane.
     ///
     /// The returned target is data-only and may be stored in a render object;

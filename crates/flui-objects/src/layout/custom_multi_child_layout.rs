@@ -219,13 +219,29 @@ impl<'ctx, 'layout> DelegateLayoutContext<'ctx, 'layout> {
         })
     }
 
+    /// Reject a delegate that left any child unlaid, naming EVERY forgotten
+    /// id in one diagnostic.
+    ///
+    /// Enumerating all of them rather than stopping at the first is the
+    /// oracle's own contract: Flutter's end-of-layout check collects the
+    /// whole `_debugChildrenNeedingLayout` set into one `DiagnosticsBlock`
+    /// (`rendering/custom_layout.dart`), and its test suite has a separate
+    /// case for the multi-child message precisely to pin that completeness.
+    /// A message that named only the first forgotten child would send an
+    /// author back for another layout run per missing id.
     fn finish(self) {
-        if let Some(index) = self.laid_out.iter().position(|laid_out| !*laid_out) {
-            panic!(
-                "Each child of RenderCustomMultiChildLayoutBox must be laid out exactly once; missing id {:?}",
-                self.slots.index_to_id[index]
-            );
-        }
+        let missing: Vec<String> = self
+            .laid_out
+            .iter()
+            .enumerate()
+            .filter(|(_, laid_out)| !**laid_out)
+            .map(|(index, _)| format!("missing id {:?}", self.slots.index_to_id[index]))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "Each child of RenderCustomMultiChildLayoutBox must be laid out exactly once; {}",
+            missing.join(", ")
+        );
     }
 }
 

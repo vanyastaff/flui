@@ -20,12 +20,23 @@
 //! - **Scale** is wired through [`Listener::on_pointer_signal`] — a real mouse
 //!   wheel / discrete-scroll event, matching Flutter's `_receivedPointerSignal`
 //!   mouse-wheel branch (`scaleChange = exp(-scrollDelta.dy / scaleFactor)`).
-//! - **Pinch-to-zoom and two-finger rotation are out of scope.** Flutter
-//!   recognizes them through `GestureDetector`'s combined scale gesture
-//!   (`onScaleStart`/`onScaleUpdate`/`onScaleEnd`, fed by two simultaneous
-//!   pointers); FLUI's `GestureDetector` has no such recognizer yet — this is
-//!   a framework-level gap, not merely a test-harness one. Rotation is in the
-//!   same position Flutter's own upstream is: `_rotateEnabled` is hardcoded
+//! - **Trackpad pinch** arrives on the pan-zoom lane
+//!   ([`Listener::on_pointer_pan_zoom_claim`]) and is *arbitrated*: the
+//!   leaf-most viewer that will actually transform claims the tick, so
+//!   nested viewers do not all zoom on one pinch. Flutter resolves the same
+//!   contention through the SCALE GESTURE ARENA
+//!   (`PointerPanZoomStartEvent` opens a `ScaleGestureRecognizer` entry,
+//!   `gestures/scale.dart`); this claim walk is FLUI's interim arbitration
+//!   until that recognizer lands, deliberately shaped like the
+//!   pointer-signal claim the wheel branch already uses. It is not the
+//!   recognizer: nothing here tracks a gesture's start/end boundary or
+//!   competes with a pan in the arena.
+//! - **Two-pointer pinch-to-zoom and two-finger rotation are out of scope.**
+//!   Flutter recognizes them through `GestureDetector`'s combined scale
+//!   gesture (`onScaleStart`/`onScaleUpdate`/`onScaleEnd`, fed by two
+//!   simultaneous pointers); FLUI's `GestureDetector` has no such recognizer
+//!   yet — this is a framework-level gap, not merely a test-harness one.
+//!   Rotation is in the same position Flutter's own upstream is: `_rotateEnabled` is hardcoded
 //!   `false` in the oracle too (`interactive_viewer.dart` — rotation is
 //!   unimplemented pending flutter/flutter#57698), so dropping the
 //!   `Quad`/rotation-aware boundary math it would otherwise need is a
@@ -703,7 +714,15 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 .on_pan_end(pan_end_details)
                 .child(clipped);
 
-            // -- Trackpad pinch (Listener::on_pointer_pan_zoom_update) ----
+            // -- Trackpad pinch (Listener::on_pointer_pan_zoom_claim) -----
+            //
+            // Arbitrated, for the same reason the wheel branch above is:
+            // ordinary pan-zoom delivery reaches every listener on the hit
+            // path, so two nested enabled viewers would both scale on one
+            // pinch tick. The claim walk hands the tick to the leaf-most
+            // viewer that actually transforms. (Flutter arbitrates this
+            // through the scale gesture arena instead, which FLUI's V1
+            // viewer scopes out; see this module's own docs.)
             //
             // The pan-zoom lane delivers per-tick updates whose `scale` is
             // the tick's own factor (each converted gesture is a one-tick
@@ -723,7 +742,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                     position, scale, ..
                 } = *event
                 else {
-                    return;
+                    return EventPropagation::Continue;
                 };
                 if let Some(callback) = &on_start_pinch {
                     callback(InteractionStartDetails {
@@ -733,6 +752,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 }
                 #[allow(clippy::cast_possible_truncation)] // per-tick factors are near 1.0
                 let scale_change = scale as f32;
+                let value_before_zoom = controller_pinch.value();
                 if scale_enabled
                     && scale_change != 1.0
                     && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
@@ -773,11 +793,21 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         velocity: Velocity::ZERO,
                     });
                 }
+                // Claim only when the viewer actually transformed — the same
+                // predicate the wheel branch uses. Scaling disabled, a pure
+                // rotation tick, or a zoom the clamps collapsed to a no-op
+                // leaves the tick to an enclosing viewer; the interaction
+                // callbacks above still observed it.
+                if controller_pinch.value().m == value_before_zoom.m {
+                    EventPropagation::Continue
+                } else {
+                    EventPropagation::Stop
+                }
             };
 
             Listener::new()
                 .on_scroll_claim(scroll_claim)
-                .on_pointer_pan_zoom_update(pan_zoom)
+                .on_pointer_pan_zoom_claim(pan_zoom)
                 .child(recognized)
         })
     }

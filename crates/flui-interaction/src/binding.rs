@@ -1143,10 +1143,33 @@ impl GestureBinding {
                 }
             }
             PointerEvent::Gesture(gesture) => {
-                if self.hit_tests.contains_key(&pointer_id) {
+                // Two channels, the same observe-then-arbitrate shape the
+                // Scroll arm below uses: every pointer target on the path
+                // observes the raw tick, then the leaf-first claim walk over
+                // the path's pan-zoom targets lets exactly one of them act.
+                // Without the second channel a pinch over nested consumers
+                // (two enabled `InteractiveViewer`s, say) transforms both.
+                let path = if self.hit_tests.contains_key(&pointer_id) {
+                    // Snapshot the cached path BEFORE dispatching, and only
+                    // when it actually carries a claimant: a handler must
+                    // never run while this map reference is alive (the same
+                    // reason `dispatch_on_cached_route` reads out the token
+                    // and drops its reference before delivering).
+                    let cached = {
+                        let cached = self.hit_tests.get(&pointer_id);
+                        cached.and_then(|cached| {
+                            cached
+                                .result
+                                .entries_with_pan_zoom_targets()
+                                .next()
+                                .is_some()
+                                .then(|| cached.result.clone())
+                        })
+                    };
                     if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
                         panic.resume();
                     }
+                    cached
                 } else {
                     // `ui_events::PointerEvent::Gesture` is a complete
                     // high-level gesture tick, not Flutter's explicit
@@ -1161,6 +1184,17 @@ impl GestureBinding {
                     if let Some(panic) = self.dispatch_ephemeral(event, &result) {
                         panic.resume();
                     }
+                    Some(result)
+                };
+                if let Some(path) = path
+                    && let Some(pan_zoom) = crate::pan_zoom::from_w3c_event(event)
+                {
+                    let claimed = path.dispatch_pan_zoom(&pan_zoom);
+                    tracing::trace!(
+                        claimed,
+                        pan_zoom_targets = path.entries_with_pan_zoom_targets().count(),
+                        "pan-zoom arbitration"
+                    );
                 }
             }
             PointerEvent::Scroll(scroll) => {

@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use flui_interaction::events::ScrollEventData;
-use flui_interaction::routing::{EventPropagation, ScrollTarget};
+use flui_interaction::routing::{EventPropagation, PanZoomTarget, ScrollTarget};
 use flui_interaction::{PointerPanZoomEvent, PointerTarget, from_w3c_event};
 use flui_objects::RenderListener;
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
@@ -21,6 +21,10 @@ type PointerPanZoomCallback = Rc<dyn Fn(&PointerPanZoomEvent)>;
 /// An arbitrated scroll-signal handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
 type ScrollClaimCallback = Rc<dyn Fn(&ScrollEventData) -> EventPropagation>;
+
+/// An arbitrated trackpad pan-zoom handler: returns
+/// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
+type PanZoomClaimCallback = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation>;
 
 /// Calls callbacks in response to raw pointer events on its child.
 ///
@@ -40,6 +44,7 @@ pub struct Listener {
     on_pointer_signal: Option<PointerCallback>,
     on_scroll_claim: Option<ScrollClaimCallback>,
     on_pointer_pan_zoom_update: Option<PointerPanZoomCallback>,
+    on_pointer_pan_zoom_claim: Option<PanZoomClaimCallback>,
     behavior: HitTestBehavior,
     child: Child,
 }
@@ -55,6 +60,7 @@ impl Default for Listener {
             on_pointer_signal: None,
             on_scroll_claim: None,
             on_pointer_pan_zoom_update: None,
+            on_pointer_pan_zoom_claim: None,
             // Flutter's `Listener` default.
             behavior: HitTestBehavior::DeferToChild,
             child: Child::empty(),
@@ -75,6 +81,10 @@ impl std::fmt::Debug for Listener {
             .field(
                 "on_pointer_pan_zoom_update",
                 &self.on_pointer_pan_zoom_update.is_some(),
+            )
+            .field(
+                "on_pointer_pan_zoom_claim",
+                &self.on_pointer_pan_zoom_claim.is_some(),
             )
             .field("behavior", &self.behavior)
             .finish_non_exhaustive()
@@ -178,12 +188,41 @@ impl Listener {
     /// Flutter-shaped [`PointerPanZoomEvent::Update`]. Start/end callbacks are
     /// intentionally not exposed until the platform layer can provide reliable
     /// gesture-boundary events.
+    ///
+    /// This channel *observes*: every listener on the hit path sees the tick.
+    /// A widget that should *act* on it only when it is the leaf-most
+    /// interested party registers with
+    /// [`on_pointer_pan_zoom_claim`](Self::on_pointer_pan_zoom_claim)
+    /// instead.
     #[must_use]
     pub fn on_pointer_pan_zoom_update(
         mut self,
         callback: impl Fn(&PointerPanZoomEvent) + 'static,
     ) -> Self {
         self.on_pointer_pan_zoom_update = Some(Rc::new(callback));
+        self
+    }
+
+    /// Register this listener in the arbitrated trackpad pan-zoom walk.
+    ///
+    /// The pan-zoom counterpart of
+    /// [`on_scroll_claim`](Self::on_scroll_claim). After the whole hit path
+    /// has observed a gesture tick, the leaf-first claim walk invokes each
+    /// registered handler until one returns [`EventPropagation::Stop`]; later
+    /// (outer) handlers then never act. Return `Stop` only when this widget
+    /// will actually consume the tick — a viewer that will really zoom — and
+    /// [`EventPropagation::Continue`] otherwise, so a viewer pinned at its
+    /// scale extent hands the pinch to the one enclosing it.
+    ///
+    /// Flutter arbitrates the same contention through the scale gesture
+    /// arena (`gestures/scale.dart`) rather than a signal-style claim; this
+    /// surface is the interim arbitration until that recognizer lands.
+    #[must_use]
+    pub fn on_pointer_pan_zoom_claim(
+        mut self,
+        callback: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
+    ) -> Self {
+        self.on_pointer_pan_zoom_claim = Some(Rc::new(callback));
         self
     }
 
@@ -308,6 +347,55 @@ impl Listener {
             (None, None) => {}
         }
     }
+
+    /// Register the pan-zoom claim handler in the active owner lane,
+    /// returning its data-only identity for render storage — `None` when no
+    /// claim callback is configured or no owner lane is active.
+    fn register_pan_zoom_claim(&self, ctx: &RenderObjectContext<'_>) -> Option<PanZoomTarget> {
+        let claim = self.on_pointer_pan_zoom_claim.clone()?;
+        match ctx.register_pan_zoom(move |event| claim(event)) {
+            Ok(target) => Some(target),
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "Listener mounted without an active interaction lane; \
+                     pan-zoom ticks will not be arbitrated"
+                );
+                None
+            }
+        }
+    }
+
+    /// Reconcile the render object's pan-zoom-claim registration with this
+    /// widget configuration, the way
+    /// [`sync_scroll_claim`](Self::sync_scroll_claim) does for scroll.
+    fn sync_pan_zoom_claim(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+        render_object: &mut RenderListener,
+    ) {
+        match (
+            render_object.claimed_pan_zoom_target(),
+            &self.on_pointer_pan_zoom_claim,
+        ) {
+            (Some(target), Some(claim)) => {
+                let claim = claim.clone();
+                if let Err(error) = ctx.replace_pan_zoom(target, move |event| claim(event)) {
+                    tracing::warn!(?error, "Listener pan-zoom-claim replacement failed");
+                }
+            }
+            (Some(target), None) => {
+                if let Err(error) = ctx.unregister_pan_zoom(target) {
+                    tracing::debug!(?error, "Listener pan-zoom-claim unregistration failed");
+                }
+                render_object.set_pan_zoom_target(None);
+            }
+            (None, Some(_)) => {
+                render_object.set_pan_zoom_target(self.register_pan_zoom_claim(ctx));
+            }
+            (None, None) => {}
+        }
+    }
 }
 
 impl RenderView for Listener {
@@ -317,6 +405,7 @@ impl RenderView for Listener {
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         let mut render_object = RenderListener::new(self.register(ctx), self.behavior);
         render_object.set_scroll_target(self.register_scroll_claim(ctx));
+        render_object.set_pan_zoom_target(self.register_pan_zoom_claim(ctx));
         render_object
     }
 
@@ -336,6 +425,7 @@ impl RenderView for Listener {
             None => render_object.set_target(self.register(ctx)),
         }
         self.sync_scroll_claim(ctx, render_object);
+        self.sync_pan_zoom_claim(ctx, render_object);
         render_object.set_behavior(self.behavior);
         flui_rendering::RenderUpdateImpact::NONE
     }
@@ -352,6 +442,12 @@ impl RenderView for Listener {
                 tracing::debug!(?error, "Listener target unregistration failed");
             }
             render_object.set_target(None);
+        }
+        if let Some(target) = render_object.claimed_pan_zoom_target() {
+            if let Err(error) = ctx.unregister_pan_zoom(target) {
+                tracing::debug!(?error, "Listener pan-zoom-claim unregistration failed");
+            }
+            render_object.set_pan_zoom_target(None);
         }
         if let Some(target) = render_object.claimed_scroll_target() {
             if let Err(error) = ctx.unregister_scroll(target) {
