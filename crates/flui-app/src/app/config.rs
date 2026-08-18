@@ -7,6 +7,7 @@ use flui_log::AppIdentity;
 use flui_types::{Size, geometry::px};
 
 use super::execution::HostExecutors;
+use super::frame_failure::FrameFailureHandler;
 #[cfg(not(target_os = "ios"))]
 use super::runtime::ExitPolicy;
 
@@ -158,6 +159,13 @@ pub struct AppConfig {
     /// thread pool avoids oversubscribing the machine. See
     /// [`HostExecutors`]'s own doc for the contract layered on top.
     pub executors: Option<HostExecutors>,
+
+    /// Optional embedder callback receiving every contained frame failure
+    /// (issue #561's typed error route). `None` (the default): failures
+    /// are still contained and surfaced through `tracing`; only the typed
+    /// delivery is skipped. See [`FrameFailureHandler`]'s own doc for the
+    /// re-entrancy contract the callback must honor.
+    pub frame_failure_handler: Option<FrameFailureHandler>,
 }
 
 impl Default for AppConfig {
@@ -180,6 +188,7 @@ impl Default for AppConfig {
             #[cfg(not(target_os = "ios"))]
             exit_policy: ExitPolicy::default(),
             executors: None,
+            frame_failure_handler: None,
         }
     }
 }
@@ -275,6 +284,14 @@ impl AppConfig {
     /// [`Self::executors`]'s doc for what this changes.
     pub fn with_executors(mut self, executors: HostExecutors) -> Self {
         self.executors = Some(executors);
+        self
+    }
+
+    /// Register a typed frame-failure callback. See
+    /// [`Self::frame_failure_handler`]'s doc and
+    /// [`FrameFailureHandler`]'s re-entrancy contract.
+    pub fn with_frame_failure_handler(mut self, handler: FrameFailureHandler) -> Self {
+        self.frame_failure_handler = Some(handler);
         self
     }
 }

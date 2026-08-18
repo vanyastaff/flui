@@ -1104,7 +1104,7 @@ impl WidgetsBinding {
         let mut inner = self.inner.write();
 
         #[cfg(debug_assertions)]
-        {
+        let _building_guard = {
             assert!(
                 !self.debug_building_dirty_elements.load(Ordering::Relaxed),
                 "draw_frame called while already building dirty elements; \
@@ -1113,9 +1113,25 @@ impl WidgetsBinding {
             // Set before build_scope so that any on_build_scheduled callback
             // fired from within build_scope sees building=true and panics with
             // the Flutter-parity message rather than enqueuing a second frame.
+            //
+            // Cleared by RAII rather than a store at the end of this
+            // function: a panic that unwinds out of `build_scope` or
+            // `finalize_tree` (e.g. a panicking `ViewState::dispose`) is
+            // caught at the app runtime's per-presentation frame boundary
+            // and the frame is retried on a later pump — a flag latched
+            // `true` across that unwind would turn every retry into this
+            // assert's false positive ("recursive draw_frame") instead of
+            // re-running the frame.
+            struct BuildingFlagReset<'a>(&'a AtomicBool);
+            impl Drop for BuildingFlagReset<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::Relaxed);
+                }
+            }
             self.debug_building_dirty_elements
                 .store(true, Ordering::Relaxed);
-        }
+            BuildingFlagReset(&self.debug_building_dirty_elements)
+        };
 
         inner.build_scheduled = false;
 
@@ -1151,11 +1167,8 @@ impl WidgetsBinding {
             build_owner.finalize_tree(element_tree);
         }
 
-        #[cfg(debug_assertions)]
-        {
-            self.debug_building_dirty_elements
-                .store(false, Ordering::Relaxed);
-        }
+        // `debug_building_dirty_elements` resets when `_building_guard`
+        // drops at the end of this function (and equally during an unwind).
 
         // Report first frame if needed
         if inner.need_to_report_first_frame {

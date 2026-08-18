@@ -22,7 +22,7 @@
 //! gets a fresh generational [`RealmId`], so results stamped for a dead
 //! runtime are droppable by identity, not by convention.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
@@ -54,6 +54,7 @@ use flui_widgets::{FocusRoot, GestureArenaScope, NavigatorCommand, VsyncScope};
 #[cfg(test)]
 use parking_lot::RwLock;
 
+use super::frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};
 use super::presentation::{PresentationState, RealmCapabilities};
 use super::presentation_forest::PresentationForest;
 use super::runtime::RealmServices;
@@ -518,6 +519,12 @@ pub(crate) struct UiRealm {
     /// [`Self::drain_commands`] and vended to `runner.rs`'s lifecycle sites
     /// via [`Self::scheduler`].
     scheduler: UpdateScheduler,
+    /// The embedder's typed frame-failure callback, if one was registered
+    /// (`AppConfig::with_frame_failure_handler`, wired by each backend's
+    /// bootstrap via [`Self::set_frame_failure_handler`]). Realm-scoped,
+    /// never process-global; cloned out of the cell before every delivery
+    /// so the callback runs with no realm borrow held.
+    frame_failure_handler: RefCell<Option<FrameFailureHandler>>,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
     /// so at zero cost (thread-affinity marker).
     _owner_affine: PhantomData<*const ()>,
@@ -839,6 +846,7 @@ impl UiRealm {
             },
             redraw_pending,
             scheduler,
+            frame_failure_handler: RefCell::new(None),
             _owner_affine: PhantomData,
         })
     }
@@ -889,6 +897,107 @@ impl UiRealm {
     #[must_use]
     pub fn realm_id(&self) -> RealmId {
         self.realm_id
+    }
+
+    /// Install (or clear) the embedder's typed frame-failure callback.
+    /// Called by each backend's bootstrap with
+    /// `AppConfig::frame_failure_handler` right after realm construction.
+    pub(crate) fn set_frame_failure_handler(&self, handler: Option<FrameFailureHandler>) {
+        *self.frame_failure_handler.borrow_mut() = handler;
+    }
+
+    /// Surface one contained frame failure for `presentation`: bump its
+    /// consecutive-failure streak, emit the structured `tracing` record,
+    /// and deliver the typed [`FrameFailureReport`] to the registered
+    /// handler (if any).
+    ///
+    /// The `panic_message` field is a plain string field on purpose:
+    /// FLUI's device sinks classify string fields private-by-default (see
+    /// `flui-log`), so a panic message that interpolated user data does
+    /// not reach OS log stores unredacted, while the developer console
+    /// still shows it. The handler receives the full report verbatim —
+    /// registering one is the embedder's opt-in.
+    ///
+    /// The handler is cloned out of its cell before the call so no realm
+    /// borrow is held while embedder code runs; see
+    /// [`FrameFailureHandler`]'s doc for the re-entrancy contract it must
+    /// still honor (it runs mid-frame, inside the pump).
+    fn report_frame_failure(&self, presentation: &PresentationState, kind: FrameFailureKind) {
+        let consecutive_failures = presentation.note_frame_failure();
+        let report = FrameFailureReport {
+            address: flui_foundation::PresentationAddress {
+                realm_id: self.realm_id,
+                presentation_id: presentation.id(),
+            },
+            kind,
+            consecutive_failures,
+        };
+        match &report.kind {
+            FrameFailureKind::SegmentPanic {
+                message,
+                internal_invariant,
+            } => {
+                tracing::error!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } =
+                        report.address.presentation_id.as_u64(),
+                    realm_id = report.address.realm_id.as_u64(),
+                    consecutive_failures,
+                    internal_invariant,
+                    panic_message = message.as_deref().unwrap_or("<non-string panic payload>"),
+                    "frame segment panicked; frame dropped for this presentation only — \
+                     siblings keep framing, last presented frame is retained"
+                );
+            }
+            FrameFailureKind::Pipeline { error } => {
+                tracing::error!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } =
+                        report.address.presentation_id.as_u64(),
+                    realm_id = report.address.realm_id.as_u64(),
+                    consecutive_failures,
+                    error = %error,
+                    "frame pipeline failed; frame dropped for this presentation only — \
+                     siblings keep framing, last presented frame is retained"
+                );
+            }
+        }
+        let handler = self.frame_failure_handler.borrow().clone();
+        if let Some(handler) = handler {
+            // The handler is embedder code running INSIDE the frame pump —
+            // for a segment-panic report, OUTSIDE the per-presentation
+            // `catch_unwind` (the boundary's `Err` arm already returned
+            // from it). An uncontained handler panic would therefore
+            // reopen exactly the process-fatal path this boundary exists
+            // to close: unwind through the remaining siblings' segments
+            // and into the runner's `resume_unwind`. On the
+            // pipeline-error path (reported from inside the segment) it
+            // was subtly worse: the boundary caught the HANDLER's panic
+            // as a segment panic and re-reported it — invoking the same
+            // panicking handler a second time, now uncontained.
+            //
+            // So the delivery itself is contained. A panicking handler is
+            // an EMBEDDER bug: it is logged at error level (no `BUG:`
+            // classification — that prefix asserts a FLUI invariant) and
+            // the report it was given is already fully traced above, so
+            // no diagnostics are lost. The handler stays registered — each
+            // future delivery is individually contained (one call per
+            // report, never a retry loop), and a transiently-broken
+            // handler keeps receiving reports once it stops panicking.
+            // Automatic disarming after repeated handler panics was
+            // considered and rejected for this slice: it would silently
+            // cut off the embedder's failure feed on the strength of a
+            // heuristic, which is the "silent skip" shape this route
+            // exists to avoid.
+            if catch_unwind(AssertUnwindSafe(|| handler.call(&report))).is_err() {
+                tracing::error!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } =
+                        report.address.presentation_id.as_u64(),
+                    realm_id = report.address.realm_id.as_u64(),
+                    "the registered FrameFailureHandler panicked while receiving this \
+                     report — embedder bug; the panic was contained and the report was \
+                     already traced above"
+                );
+            }
+        }
     }
 
     /// Current presentation incarnation.
@@ -2102,6 +2211,9 @@ impl UiRealm {
     #[cfg(test)]
     pub(crate) fn draw_frame(&self, constraints: BoxConstraints) -> Option<Scene> {
         match self.enter(|realm| realm.draw_frame_entered(constraints)).1 {
+            // (the third tuple element, `any_failed`, is a retry-arming
+            // concern for `render_frame_entered`; this test helper only
+            // reports what was painted)
             FramePaintOutcome::Painted(scene) => Some(scene),
             FramePaintOutcome::Idle | FramePaintOutcome::Errored => None,
         }
@@ -2148,7 +2260,7 @@ impl UiRealm {
     fn draw_frame_entered(
         &self,
         constraints: BoxConstraints,
-    ) -> (PresentationId, FramePaintOutcome) {
+    ) -> (PresentationId, FramePaintOutcome, bool) {
         // Vsync tick + gesture-deadline tick — MUST precede every
         // presentation's build phase. See the retired `AppBinding::
         // draw_frame_entered`'s doc for the full disjoint-controller-set
@@ -2213,6 +2325,15 @@ impl UiRealm {
 
         let mut last_outcome = FramePaintOutcome::Idle;
         let mut producer = self.presentations.primary().id();
+        // Whether ANY presentation's segment failed THIS pump (a pipeline
+        // error or a boundary-caught panic) — returned separately from
+        // `last_outcome`, which only ever describes the LAST segment that
+        // ran: with more than one presentation mounted, an earlier
+        // presentation's failure followed by a sibling's clean `Painted`
+        // must still arm the caller's retry instead of letting the pump
+        // settle as rendered (`mark_rendered()` would clear the wake the
+        // failure needs).
+        let mut any_failed = false;
         for presentation in self.presentations.iter() {
             // Platform-driven semantics enablement lands here, BEFORE dirty
             // sampling: the activation listener could only flip the host
@@ -2247,7 +2368,66 @@ impl UiRealm {
                 continue;
             }
 
-            let result = Self::draw_frame_for_presentation(presentation, constraints);
+            // The presentation-frame transaction boundary (ADR-0048): a
+            // panic that escaped every inner recovery layer (per-element
+            // build recovery substitutes an `ErrorView`; the pipeline's own
+            // `catch_unwind` surfaces layout/paint panics as
+            // `RenderError::Poisoned`) is caught HERE, per presentation, so
+            // it poisons at most this presentation's own frame. Without
+            // this seam the unwind aborts every later sibling's segment in
+            // this same loop and then kills the process through the
+            // runner's `resume_unwind` — frame failure would be
+            // process-global, not presentation-local. `AssertUnwindSafe`
+            // follows the same reasoning as every inner boundary in this
+            // workspace: the tree types are lock-free interior-mutability
+            // structures whose guards release during unwind (parking_lot
+            // does not poison), and the pipeline retains NEEDS_LAYOUT/dirty
+            // marks on failure, so the next pump re-attempts from retained
+            // premises rather than trusting partially-updated ones. What is
+            // NOT re-established by unwinding is named honestly in
+            // ADR-0048's consistency audit; nothing here claims full
+            // transactionality of mid-segment mutations.
+            let result = match catch_unwind(AssertUnwindSafe(|| {
+                self.draw_frame_for_presentation(presentation, constraints)
+            })) {
+                Ok(outcome) => {
+                    if !matches!(outcome, FramePaintOutcome::Errored) {
+                        // The segment completed without failing (Painted or
+                        // a clean Idle): the next failure starts a fresh
+                        // streak. An Errored outcome already bumped the
+                        // streak inside `draw_frame_for_presentation`.
+                        presentation.reset_frame_failure_streak();
+                    }
+                    outcome
+                }
+                Err(payload) => {
+                    let message: Option<Box<str>> = payload
+                        .downcast_ref::<&'static str>()
+                        .copied()
+                        .map(Box::<str>::from)
+                        .or_else(|| {
+                            payload
+                                .downcast_ref::<String>()
+                                .map(|s| Box::<str>::from(s.as_str()))
+                        });
+                    // `docs/PANIC-POLICY.md`'s convention: a `BUG:`-prefixed
+                    // payload asserts a violated FRAMEWORK invariant.
+                    // Contained all the same (siblings must keep framing),
+                    // but reported as what it is instead of being blended
+                    // into application-code failures.
+                    let internal_invariant = message
+                        .as_deref()
+                        .is_some_and(|message| message.starts_with("BUG:"));
+                    self.report_frame_failure(
+                        presentation,
+                        FrameFailureKind::SegmentPanic {
+                            message,
+                            internal_invariant,
+                        },
+                    );
+                    FramePaintOutcome::Errored
+                }
+            };
             // Telemetry: remember this segment's span so `render_frame_entered`
             // (this method's own caller, which decides whether/how to submit)
             // can attach it to a `FrameSnapshot` at its own submit point --
@@ -2271,10 +2451,13 @@ impl UiRealm {
             if decision.is_produce() && !matches!(result, FramePaintOutcome::Errored) {
                 presentation.clock().mark_first_frame_sent();
             }
+            if matches!(result, FramePaintOutcome::Errored) {
+                any_failed = true;
+            }
             last_outcome = result;
             producer = presentation.id();
         }
-        (producer, last_outcome)
+        (producer, last_outcome, any_failed)
     }
 
     /// One presentation's build+layout+paint segment — moves VERBATIM from
@@ -2293,11 +2476,16 @@ impl UiRealm {
     /// (skip here, `Idle` there — same outcome, cheaper), or either finds
     /// real work and the segment runs exactly as it always did.
     fn draw_frame_for_presentation(
+        &self,
         presentation: &PresentationState,
         constraints: BoxConstraints,
     ) -> FramePaintOutcome {
         #[cfg(test)]
         presentation.record_flush();
+        // Test-only fault injection for the frame-transaction boundary —
+        // see `PresentationState::segment_probe`'s field doc.
+        #[cfg(test)]
+        presentation.run_segment_probe();
 
         // Phase 1: Build (WidgetsBinding)
         {
@@ -2325,7 +2513,13 @@ impl UiRealm {
             match result {
                 Ok(layer_tree) => (layer_tree, link_registry),
                 Err(e) => {
-                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                    // Streak bump + error-level tracing + typed embedder
+                    // delivery in one place — the same route a caught
+                    // segment panic takes at the boundary above.
+                    self.report_frame_failure(
+                        presentation,
+                        FrameFailureKind::Pipeline { error: e },
+                    );
                     pipeline_errored = true;
                     (None, link_registry)
                 }
@@ -2410,7 +2604,7 @@ impl UiRealm {
             .with(PipelineOwner::device_pixel_ratio);
         let constraints =
             BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
-        let (producer_id, outcome) = self.draw_frame_entered(constraints);
+        let (producer_id, outcome, any_failed) = self.draw_frame_entered(constraints);
         // The presentation whose segment actually produced `outcome` above —
         // NEVER assumed to be `primary()`. On a pump where the primary
         // skips (nothing dirty) and a secondary presentation produces (both
@@ -2426,18 +2620,34 @@ impl UiRealm {
             .get(producer_id)
             .unwrap_or_else(|| self.presentations.primary());
 
-        self.gestures()
-            .mouse_tracker()
-            .update_all_devices(|position| {
-                let mut result = flui_interaction::routing::HitTestResult::new();
-                self.presentations
-                    .primary()
-                    .renderer()
-                    .hit_test_in_view(&mut result, position, 0);
-                result
-            });
-
-        let errored = matches!(outcome, FramePaintOutcome::Errored);
+        // Stationary-device re-hit-test — gated on NO segment having
+        // failed this pump (`any_failed` covers every presentation, not
+        // just the last producer: the probe below hit-tests the PRIMARY's
+        // tree, which may be exactly the presentation that failed while a
+        // sibling produced cleanly). This ambient re-probe exists to
+        // re-read hover targets against the freshly laid-out tree; a
+        // failed frame's tree is not that — it can mix freshly committed
+        // subtree geometry with retained pre-failure geometry (the failed
+        // node keeps its old geometry and its NEEDS_LAYOUT mark). Skipping
+        // keeps the mouse tracker on the last cleanly committed version
+        // instead of actively probing a known-inconsistent one; the armed
+        // retry's next successful frame re-probes as usual. (Pointer
+        // EVENTS that arrive before that retry still hit-test the live
+        // tree — that residual gap is named in ADR-0048's consistency
+        // audit, not silently claimed closed here.)
+        if !any_failed {
+            self.gestures()
+                .mouse_tracker()
+                .update_all_devices(|position| {
+                    let mut result = flui_interaction::routing::HitTestResult::new();
+                    self.presentations.primary().renderer().hit_test_in_view(
+                        &mut result,
+                        position,
+                        0,
+                    );
+                    result
+                });
+        }
         // The submit gate: withheld while the PRODUCER's own first frame is
         // deferred -- see this method's own doc for why this is a SEPARATE
         // check from `draw_frame_entered`'s segment gate, not a redundant
@@ -2445,7 +2655,14 @@ impl UiRealm {
         let should_send = !producer.clock().is_deferred();
 
         let mut presented = false;
-        let mut retry_needed = errored;
+        // `any_failed`, not "the producer's outcome was Errored": with more
+        // than one presentation mounted, an earlier presentation's failed
+        // segment followed by a clean sibling `Painted` must still arm the
+        // retry — keying this off the LAST outcome alone would end such a
+        // pump in `mark_rendered()`, clearing the very wake the failed
+        // presentation's retry needs (and on a pump whose failure consumed
+        // its build-dirty state, nothing else would ever reopen the gate).
+        let mut retry_needed = any_failed;
         // Tracks a NARROWER condition than `retry_needed`: whether the
         // eventual retry also needs [`Self::mark_needs_full_repaint_for`]
         // to have something to redo. Only the three submit-failure arms
@@ -8023,7 +8240,7 @@ mod tests {
             let constraints = BoxConstraints::tight(flui_types::Size::new(px(50.0), px(50.0)));
             let b_layer_tree_before = realm.enter(|realm| {
                 let b = realm.presentations.get(b_id).expect("B installed");
-                match UiRealm::draw_frame_for_presentation(b, constraints) {
+                match realm.draw_frame_for_presentation(b, constraints) {
                     FramePaintOutcome::Painted(scene) => format!("{:?}", scene.layer_tree()),
                     FramePaintOutcome::Idle => panic!("B's first frame must paint, got Idle"),
                     FramePaintOutcome::Errored => {
@@ -8053,7 +8270,7 @@ mod tests {
                         owner.mark_needs_paint(root_id);
                     }
                 });
-                match UiRealm::draw_frame_for_presentation(b, constraints) {
+                match realm.draw_frame_for_presentation(b, constraints) {
                     FramePaintOutcome::Painted(scene) => format!("{:?}", scene.layer_tree()),
                     FramePaintOutcome::Idle => {
                         panic!("B's post-A-close frame must still paint, got Idle")
@@ -8119,6 +8336,876 @@ mod tests {
     /// `frame_pipeline_and_vsync` (which pins the PRE-EXISTING deferral/vsync
     /// behavior unedited) — these are the NEW clock-level guarantees this
     /// slice adds.
+    // ========================================================================
+    // Presentation-frame transaction boundary (ADR-0048, issue #561):
+    // a frame failure — a structured pipeline error or a panic that escaped
+    // every inner recovery layer — is contained to the one presentation
+    // whose frame it was. Siblings keep framing, the process survives, the
+    // last presented frame is retained (no zero/blank scene is submitted in
+    // its place), and the failure surfaces through the typed
+    // `FrameFailureReport` route instead of a silent skip.
+    // ========================================================================
+    mod frame_failure_containment {
+        use std::cell::RefCell;
+        use std::sync::Mutex as StdMutex;
+
+        use flui_widgets::SizedBox;
+
+        use super::*;
+        use crate::app::frame_failure::{FrameFailureHandler, FrameFailureKind};
+
+        /// This module's own minimal raster double: counts `render_scene`
+        /// calls, records whether each submitted scene carried content, and
+        /// always reports a successful present. Sibling test modules'
+        /// backends are private to them.
+        struct RecordingBackend {
+            render_scene_calls: u32,
+            submitted_scene_had_content: Vec<bool>,
+        }
+
+        impl RecordingBackend {
+            fn new() -> Self {
+                Self {
+                    render_scene_calls: 0,
+                    submitted_scene_had_content: Vec::new(),
+                }
+            }
+        }
+
+        impl RasterBackend for RecordingBackend {
+            fn render_scene(&mut self, scene: &Scene) -> Result<bool, EngineError> {
+                self.render_scene_calls += 1;
+                self.submitted_scene_had_content.push(scene.has_content());
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        /// Failure reports collected through the real registered-handler
+        /// route — the same `FrameFailureHandler` an embedder registers via
+        /// `AppConfig::with_frame_failure_handler`. Flattened to owned
+        /// fields because `FrameFailureReport` itself is delivered by
+        /// reference and deliberately not `Clone`.
+        #[derive(Debug, Clone, PartialEq)]
+        struct SeenFailure {
+            presentation: PresentationId,
+            realm: RealmId,
+            consecutive: u32,
+            kind: SeenKind,
+        }
+
+        #[derive(Debug, Clone, PartialEq)]
+        enum SeenKind {
+            SegmentPanic {
+                message: Option<String>,
+                internal_invariant: bool,
+            },
+            Pipeline {
+                error: String,
+            },
+        }
+
+        fn install_collecting_handler(realm: &UiRealm) -> Arc<StdMutex<Vec<SeenFailure>>> {
+            let seen = Arc::new(StdMutex::new(Vec::new()));
+            let sink = Arc::clone(&seen);
+            realm.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+                let kind = match &report.kind {
+                    FrameFailureKind::SegmentPanic {
+                        message,
+                        internal_invariant,
+                    } => SeenKind::SegmentPanic {
+                        message: message.as_deref().map(str::to_owned),
+                        internal_invariant: *internal_invariant,
+                    },
+                    FrameFailureKind::Pipeline { error } => SeenKind::Pipeline {
+                        error: error.to_string(),
+                    },
+                };
+                sink.lock().expect("handler mutex").push(SeenFailure {
+                    presentation: report.address.presentation_id,
+                    realm: report.address.realm_id,
+                    consecutive: report.consecutive_failures,
+                    kind,
+                });
+            })));
+            seen
+        }
+
+        /// Silence the default panic hook for the duration of `f` so the
+        /// intentional panics these tests throw do not spam captured
+        /// output; the panics themselves still unwind normally.
+        fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
+            // RAII, not a trailing `set_hook`: the panic hook is
+            // process-global, so if `f` itself panics out of this helper
+            // (an assertion failure inside the closure), a non-guarded
+            // restore would be skipped and every LATER test in the same
+            // process would run with silenced panic diagnostics. nextest
+            // is process-per-test, but plain `cargo test` shares one
+            // process — restore must survive the unwind.
+            type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync>;
+            struct HookRestore(Option<PanicHook>);
+            impl Drop for HookRestore {
+                fn drop(&mut self) {
+                    if let Some(hook) = self.0.take() {
+                        std::panic::set_hook(hook);
+                    }
+                }
+            }
+            let _restore = HookRestore(Some(std::panic::take_hook()));
+            std::panic::set_hook(Box::new(|_| {}));
+            f()
+        }
+
+        // ====================================================================
+        // The real escape path: a `ViewState::dispose` panic during tree
+        // finalization. Build-phase panics are already substituted with an
+        // `ErrorView` per element, and layout/paint panics surface as
+        // `RenderError::Poisoned` from the pipeline's own catch_unwind —
+        // dispose runs in `finalize_tree`, under neither, so before the
+        // boundary existed it unwound straight through the realm's
+        // per-presentation loop and killed the process via the runner's
+        // `resume_unwind`.
+        // ====================================================================
+
+        /// Child whose state panics on dispose — ONE-SHOT, via the shared
+        /// `armed` flag: the tree's own teardown at the end of the test
+        /// (and the half-unmounted element's eventual re-dispose during
+        /// realm drop) runs `dispose` again, and a panic from inside that
+        /// destructor-driven path would be a double panic that aborts the
+        /// whole test process instead of failing one assertion.
+        #[derive(Clone)]
+        struct PanicOnDisposeView {
+            armed: Rc<Cell<bool>>,
+        }
+
+        struct PanicOnDisposeState {
+            armed: Rc<Cell<bool>>,
+        }
+
+        impl StatefulView for PanicOnDisposeView {
+            type State = PanicOnDisposeState;
+
+            fn create_state(&self) -> Self::State {
+                PanicOnDisposeState {
+                    armed: Rc::clone(&self.armed),
+                }
+            }
+        }
+
+        impl ViewState<PanicOnDisposeView> for PanicOnDisposeState {
+            fn build(
+                &self,
+                _view: &PanicOnDisposeView,
+                _ctx: &dyn flui_view::BuildContext,
+            ) -> impl IntoView {
+                SizedBox::new(5.0, 5.0)
+            }
+
+            fn dispose(&mut self) {
+                if self.armed.get() {
+                    self.armed.set(false);
+                    panic!("PanicOnDisposeState::dispose — intentional test panic");
+                }
+            }
+        }
+
+        impl flui_view::View for PanicOnDisposeView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateful(self)
+            }
+        }
+
+        /// Root that conditionally includes the panicking child and hands
+        /// the test its `RebuildHandle` so the test can force rebuilds.
+        #[derive(Clone)]
+        struct HostView {
+            include_child: Rc<Cell<bool>>,
+            dispose_armed: Rc<Cell<bool>>,
+            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+        }
+
+        struct HostState {
+            include_child: Rc<Cell<bool>>,
+            dispose_armed: Rc<Cell<bool>>,
+            handle_slot: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+        }
+
+        impl StatefulView for HostView {
+            type State = HostState;
+
+            fn create_state(&self) -> Self::State {
+                HostState {
+                    include_child: Rc::clone(&self.include_child),
+                    dispose_armed: Rc::clone(&self.dispose_armed),
+                    handle_slot: Rc::clone(&self.handle_slot),
+                }
+            }
+        }
+
+        impl ViewState<HostView> for HostState {
+            fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+                *self.handle_slot.borrow_mut() = Some(ctx.rebuild_handle());
+            }
+
+            fn build(&self, _view: &HostView, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+                if self.include_child.get() {
+                    flui_view::view::ViewExt::boxed(PanicOnDisposeView {
+                        armed: Rc::clone(&self.dispose_armed),
+                    })
+                } else {
+                    flui_view::view::ViewExt::boxed(SizedBox::new(10.0, 10.0))
+                }
+            }
+        }
+
+        impl flui_view::View for HostView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::stateful(self)
+            }
+        }
+
+        /// The headline containment claim, driven through the REAL escape
+        /// path (a dispose panic during finalization, not an injected
+        /// probe): the panic is contained to presentation A's own frame —
+        /// the pump call returns instead of unwinding, sibling B's segment
+        /// still runs and presents in the SAME pump, the typed report names
+        /// A with causal detail, a retry is armed, and the pump after that
+        /// recovers A cleanly (which also pins the `WidgetsBinding`
+        /// building-flag reset on unwind: a flag wedged `true` would turn
+        /// the recovery pump's `draw_frame` into a bogus recursion assert,
+        /// i.e. a second report instead of a clean frame).
+        #[test]
+        fn a_dispose_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames() {
+            let mut realm = UiRealm::for_test();
+            let a_id = realm.presentation_id();
+            let b_id = realm.install_second_presentation_for_test();
+            let seen = install_collecting_handler(&realm);
+
+            let include_child = Rc::new(Cell::new(true));
+            let dispose_armed = Rc::new(Cell::new(true));
+            let handle_slot = Rc::new(RefCell::new(None));
+            realm
+                .attach_root_widget(&HostView {
+                    include_child: Rc::clone(&include_child),
+                    dispose_armed: Rc::clone(&dispose_armed),
+                    handle_slot: Rc::clone(&handle_slot),
+                })
+                .expect("A attaches");
+            realm
+                .attach_root_widget_to_for_test(b_id, &SizedBox::new(20.0, 20.0))
+                .expect("B attaches");
+
+            let mut backend = RecordingBackend::new();
+
+            // Pump 1: both presentations mount and frame cleanly.
+            assert!(
+                realm.render_frame_entered(&mut backend),
+                "pump 1: a clean two-presentation frame must present"
+            );
+            assert!(seen.lock().expect("mutex").is_empty(), "no failures yet");
+            let b_flushes_after_pump_1 = realm
+                .presentations
+                .get(b_id)
+                .expect("B installed")
+                .flush_count();
+
+            // Remove the child: the next build deactivates it and
+            // finalization runs its panicking dispose.
+            include_child.set(false);
+            handle_slot
+                .borrow()
+                .as_ref()
+                .expect("init_state captured the rebuild handle")
+                .schedule(flui_foundation::RebuildReason::StateChange);
+            assert!(
+                realm.presentations.primary().widgets().has_pending_builds(),
+                "precondition: the scheduled rebuild is visible as pending build work"
+            );
+            // Give B real work too, so this same pump proves B's segment
+            // still runs AFTER A's failure (A is primary and iterates
+            // first).
+            realm.enter(|realm| {
+                let b = realm.presentations.get(b_id).expect("B installed");
+                b.pipeline().with_mut(|owner| {
+                    if let Some(root_id) = owner.root_id() {
+                        owner.mark_needs_paint(root_id);
+                    }
+                });
+            });
+            realm.mark_rendered();
+
+            // Pump 2: A's dispose panics mid-segment. The claim under test:
+            // the pump RETURNS (no unwind out of render_frame_entered) and
+            // B still framed.
+            let outcome = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            });
+            let presented = outcome.expect(
+                "a dispose panic in one presentation's segment must be contained at the \
+                 frame-transaction boundary, not unwind out of the realm pump",
+            );
+            assert!(
+                presented,
+                "sibling B's own segment must still produce and present in the same pump"
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .flush_count(),
+                b_flushes_after_pump_1 + 1,
+                "B's segment must run despite A's earlier failure in the same loop"
+            );
+            assert!(
+                realm.needs_redraw(),
+                "a contained frame failure must arm a retry, not settle as rendered"
+            );
+            {
+                let seen = seen.lock().expect("mutex");
+                assert_eq!(seen.len(), 1, "exactly one failure report: {seen:?}");
+                assert_eq!(seen[0].presentation, a_id, "the report must name A");
+                assert_eq!(seen[0].realm, realm.realm_id());
+                assert_eq!(seen[0].consecutive, 1);
+                match &seen[0].kind {
+                    SeenKind::SegmentPanic {
+                        message,
+                        internal_invariant,
+                    } => {
+                        assert!(
+                            message
+                                .as_deref()
+                                .is_some_and(|m| m.contains("intentional test panic")),
+                            "causal detail (the panic message) must reach the report; got \
+                             {message:?}"
+                        );
+                        assert!(
+                            !internal_invariant,
+                            "an application panic carries no BUG: prefix"
+                        );
+                    }
+                    other @ SeenKind::Pipeline { .. } => {
+                        panic!("expected SegmentPanic, got {other:?}")
+                    }
+                }
+            }
+
+            // Pump 3: A recovers — a fresh rebuild (child re-added) builds,
+            // lays out, paints, and presents cleanly, proving the failed
+            // pump did not wedge the widgets binding (building flag) or
+            // leave the realm unable to frame.
+            include_child.set(true);
+            handle_slot
+                .borrow()
+                .as_ref()
+                .expect("handle still captured")
+                .schedule(flui_foundation::RebuildReason::StateChange);
+            let presented = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("the recovery pump must not panic");
+            assert!(presented, "the recovery pump must present");
+            assert_eq!(
+                seen.lock().expect("mutex").len(),
+                1,
+                "the recovery pump must not produce a second failure report (a wedged \
+                 building flag would panic draw_frame again and produce one)"
+            );
+        }
+
+        /// Last-good retention, distinguished from zero-value fake
+        /// recovery: a failed frame submits NOTHING — `render_scene` is
+        /// never called with a blank/empty stand-in scene — so whatever the
+        /// surface last presented stays on screen. (Issue #561's "tests
+        /// distinguish last-good retention from zero-value fake recovery".)
+        #[test]
+        fn a_failed_frame_submits_nothing_rather_than_a_blank_scene() {
+            let realm = UiRealm::for_test();
+            realm
+                .attach_root_widget(&SizedBox::new(10.0, 10.0))
+                .expect("attaches");
+            let mut backend = RecordingBackend::new();
+
+            assert!(
+                realm.render_frame_entered(&mut backend),
+                "pump 1 presents real content"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+            assert_eq!(
+                backend.submitted_scene_had_content,
+                vec![true],
+                "the one submitted scene carried real content"
+            );
+
+            // Inject a segment failure and give the presentation demand so
+            // its segment genuinely runs (a skipped segment would prove
+            // nothing).
+            realm
+                .presentations
+                .primary()
+                .set_segment_probe(Some(Box::new(|| {
+                    panic!("segment probe — intentional test panic");
+                })));
+            realm.request_redraw();
+            realm.mark_rendered();
+
+            let presented = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("the failure must be contained");
+            assert!(!presented, "a failed frame must never present");
+            assert_eq!(
+                backend.render_scene_calls, 1,
+                "the failed frame must not reach render_scene at all — retention means \
+                 the previous submission stands, not that a zero/blank scene replaced it"
+            );
+        }
+
+        /// The consecutive-failure streak counts uninterrupted failures and
+        /// resets on the next cleanly completed segment — the field an
+        /// embedder keys escalation off.
+        #[test]
+        fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
+            let realm = UiRealm::for_test();
+            realm
+                .attach_root_widget(&SizedBox::new(10.0, 10.0))
+                .expect("attaches");
+            let seen = install_collecting_handler(&realm);
+            let mut backend = RecordingBackend::new();
+
+            let probe_armed = Rc::new(Cell::new(true));
+            let armed = Rc::clone(&probe_armed);
+            realm
+                .presentations
+                .primary()
+                .set_segment_probe(Some(Box::new(move || {
+                    assert!(!armed.get(), "segment probe — intentional test panic");
+                })));
+
+            let pump = |realm: &UiRealm, backend: &mut RecordingBackend| {
+                realm.request_redraw();
+                realm.mark_rendered();
+                with_quiet_panics(|| {
+                    catch_unwind(AssertUnwindSafe(|| realm.render_frame_entered(backend)))
+                })
+                .expect("every failure must be contained")
+            };
+
+            pump(&realm, &mut backend); // fails: streak 1
+            pump(&realm, &mut backend); // fails: streak 2
+            probe_armed.set(false);
+            pump(&realm, &mut backend); // clean: streak resets
+            probe_armed.set(true);
+            pump(&realm, &mut backend); // fails: streak restarts at 1
+
+            let consecutive: Vec<u32> = seen
+                .lock()
+                .expect("mutex")
+                .iter()
+                .map(|failure| failure.consecutive)
+                .collect();
+            assert_eq!(
+                consecutive,
+                vec![1, 2, 1],
+                "two uninterrupted failures count 1,2; a clean segment resets; the next \
+                 failure restarts at 1"
+            );
+        }
+
+        /// A structured pipeline error (here: a root render object whose
+        /// layout panics, surfaced by the pipeline as
+        /// `RenderError::Poisoned`) travels the SAME typed report route as
+        /// a boundary-caught panic — not only `tracing`.
+        #[test]
+        fn a_pipeline_error_reaches_the_typed_report_route() {
+            let realm = UiRealm::for_test();
+            let seen = install_collecting_handler(&realm);
+            realm.pipeline_for_test().with_mut(|owner| {
+                let root_id = owner.insert(Box::new(PanicOnLayoutForReportBox)
+                    as Box<
+                        dyn flui_rendering::traits::RenderObject<
+                                flui_rendering::protocol::BoxProtocol,
+                            >,
+                    >);
+                owner.set_root_id(Some(root_id));
+            });
+
+            let mut backend = RecordingBackend::new();
+            let presented = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("a pipeline error is contained (pre-existing) and reported (this test)");
+            assert!(!presented);
+
+            let seen = seen.lock().expect("mutex");
+            assert_eq!(seen.len(), 1, "one pipeline failure report: {seen:?}");
+            assert_eq!(seen[0].presentation, realm.presentation_id());
+            assert_eq!(seen[0].consecutive, 1);
+            match &seen[0].kind {
+                SeenKind::Pipeline { error } => {
+                    assert!(
+                        error.contains("panicked during layout"),
+                        "the typed report must carry the pipeline's own error; got {error:?}"
+                    );
+                }
+                other @ SeenKind::SegmentPanic { .. } => panic!("expected Pipeline, got {other:?}"),
+            }
+        }
+
+        /// Root render box whose layout panics — local twin of the sibling
+        /// module's private helper, for the pipeline-error report test.
+        #[derive(Debug)]
+        struct PanicOnLayoutForReportBox;
+
+        impl flui_foundation::Diagnosticable for PanicOnLayoutForReportBox {}
+
+        impl flui_rendering::traits::RenderBox for PanicOnLayoutForReportBox {
+            type Arity = flui_rendering::prelude::Leaf;
+            type ParentData = flui_rendering::prelude::BoxParentData;
+
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut flui_rendering::context::BoxLayoutContext<
+                    '_,
+                    Self::Arity,
+                    Self::ParentData,
+                >,
+            ) -> flui_types::Size {
+                panic!("PanicOnLayoutForReportBox::perform_layout -- intentional test panic");
+            }
+        }
+
+        /// A failed pump must not actively re-probe the tree either: the
+        /// stationary-device re-hit-test that normally follows a frame
+        /// (mouse-tracker hover maintenance) reads whatever geometry the
+        /// failed segment left mid-commit, so it is skipped for that pump —
+        /// hover state holds the last cleanly committed version. (Pointer
+        /// EVENTS arriving before the retry still hit-test the live tree;
+        /// that residual gap is named in ADR-0048, not claimed closed.)
+        #[test]
+        fn a_failed_pump_skips_the_stationary_device_re_hit_test() {
+            use std::sync::atomic::AtomicU32;
+
+            use flui_rendering::prelude::{
+                BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox,
+            };
+
+            #[derive(Debug)]
+            struct HitCountingBox {
+                hits: Arc<AtomicU32>,
+            }
+            impl flui_foundation::Diagnosticable for HitCountingBox {}
+            impl RenderBox for HitCountingBox {
+                type Arity = Leaf;
+                type ParentData = BoxParentData;
+                fn perform_layout(
+                    &mut self,
+                    _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+                ) -> flui_types::Size {
+                    flui_types::Size::new(px(100.0), px(100.0))
+                }
+                fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+                fn hit_test(
+                    &self,
+                    ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Leaf, BoxParentData>,
+                ) -> bool {
+                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    ctx.is_within_own_size()
+                }
+            }
+
+            /// Mounts `HitCountingBox` through the real attach path so the
+            /// production `RootRenderView` wiring (which `hit_test_in_view`
+            /// resolves through) is present.
+            #[derive(Clone)]
+            struct HitCountingView {
+                hits: Arc<AtomicU32>,
+            }
+
+            impl flui_view::RenderView for HitCountingView {
+                type Protocol = flui_rendering::protocol::BoxProtocol;
+                type RenderObject = HitCountingBox;
+
+                fn create_render_object(
+                    &self,
+                    _ctx: &flui_view::RenderObjectContext<'_>,
+                ) -> Self::RenderObject {
+                    HitCountingBox {
+                        hits: Arc::clone(&self.hits),
+                    }
+                }
+
+                fn update_render_object(
+                    &self,
+                    _ctx: &flui_view::RenderObjectContext<'_>,
+                    _render_object: &mut Self::RenderObject,
+                ) -> flui_rendering::RenderUpdateImpact {
+                    flui_rendering::RenderUpdateImpact::NONE
+                }
+            }
+
+            impl flui_view::View for HitCountingView {
+                fn create_element(&self) -> flui_view::element::ElementKind {
+                    flui_view::element::ElementKind::render_variable(self)
+                }
+            }
+
+            let realm = UiRealm::for_test();
+            let hits = Arc::new(AtomicU32::new(0));
+            realm
+                .attach_root_widget(&HitCountingView {
+                    hits: Arc::clone(&hits),
+                })
+                .expect("attaches");
+            // A tracked stationary mouse inside the root's bounds — the
+            // device the post-frame re-probe iterates.
+            realm.gestures().mouse_tracker().add_device(
+                0,
+                flui_interaction::events::PointerType::Mouse,
+                flui_types::geometry::Offset::new(px(10.0), px(10.0)),
+            );
+
+            let mut backend = RecordingBackend::new();
+            let _ = realm.render_frame_entered(&mut backend);
+            let hits_after_clean_pump = hits.load(Ordering::Relaxed);
+            assert!(
+                hits_after_clean_pump > 0,
+                "precondition: a clean pump re-hit-tests the tracked stationary device"
+            );
+
+            realm
+                .presentations
+                .primary()
+                .set_segment_probe(Some(Box::new(|| {
+                    panic!("segment probe — intentional test panic");
+                })));
+            realm.request_redraw();
+            let _ = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("contained");
+            assert_eq!(
+                hits.load(Ordering::Relaxed),
+                hits_after_clean_pump,
+                "a failed pump must not re-hit-test stationary devices against the \
+                 mid-commit tree"
+            );
+        }
+
+        /// `docs/PANIC-POLICY.md`'s `BUG:` convention is classified, not
+        /// blended into application failures: a `BUG:`-prefixed payload
+        /// reports `internal_invariant = true`.
+        #[test]
+        fn a_bug_prefixed_panic_is_reported_as_an_internal_invariant() {
+            let realm = UiRealm::for_test();
+            realm
+                .attach_root_widget(&SizedBox::new(10.0, 10.0))
+                .expect("attaches");
+            let seen = install_collecting_handler(&realm);
+            realm
+                .presentations
+                .primary()
+                .set_segment_probe(Some(Box::new(|| {
+                    panic!("BUG: intentional invariant-violation payload for this test");
+                })));
+            realm.request_redraw();
+
+            let mut backend = RecordingBackend::new();
+            let _ = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("contained");
+
+            let seen = seen.lock().expect("mutex");
+            assert_eq!(seen.len(), 1);
+            match &seen[0].kind {
+                SeenKind::SegmentPanic {
+                    internal_invariant, ..
+                } => {
+                    assert!(
+                        internal_invariant,
+                        "a BUG:-prefixed payload must be classified as an internal invariant"
+                    );
+                }
+                other @ SeenKind::Pipeline { .. } => panic!("expected SegmentPanic, got {other:?}"),
+            }
+        }
+
+        /// The boundary's own blind spot, closed: the registered handler is
+        /// EMBEDDER code invoked outside the per-presentation
+        /// `catch_unwind` (a segment-panic report is delivered from the
+        /// boundary's `Err` arm, after it returned) — an uncontained
+        /// handler panic reopened the exact process-fatal path this
+        /// boundary exists to close. The delivery is now contained
+        /// per call: siblings keep framing in the same pump, and the
+        /// handler stays registered for later reports.
+        #[test]
+        fn a_panicking_failure_handler_does_not_escape_the_frame_boundary() {
+            use std::sync::atomic::AtomicU32;
+
+            let mut realm = UiRealm::for_test();
+            let b_id = realm.install_second_presentation_for_test();
+            realm
+                .attach_root_widget(&SizedBox::new(10.0, 10.0))
+                .expect("A attaches");
+            realm
+                .attach_root_widget_to_for_test(b_id, &SizedBox::new(20.0, 20.0))
+                .expect("B attaches");
+
+            let handler_calls = Arc::new(AtomicU32::new(0));
+            let calls = Arc::clone(&handler_calls);
+            realm.set_frame_failure_handler(Some(FrameFailureHandler::new(move |_report| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                panic!("FrameFailureHandler — intentional embedder-bug test panic");
+            })));
+
+            let mut backend = RecordingBackend::new();
+            assert!(
+                realm.render_frame_entered(&mut backend),
+                "pump 1: both presentations frame cleanly"
+            );
+            let b_flushes_after_pump_1 = realm
+                .presentations
+                .get(b_id)
+                .expect("B installed")
+                .flush_count();
+
+            // A (primary, iterated FIRST) fails; B has real work, so this
+            // same pump proves B's segment still ran after both A's
+            // failure AND the handler's own panic during its delivery.
+            realm
+                .presentations
+                .primary()
+                .set_segment_probe(Some(Box::new(|| {
+                    panic!("segment probe — intentional test panic");
+                })));
+            realm.request_redraw();
+            realm.enter(|realm| {
+                let b = realm.presentations.get(b_id).expect("B installed");
+                b.pipeline().with_mut(|owner| {
+                    if let Some(root_id) = owner.root_id() {
+                        owner.mark_needs_paint(root_id);
+                    }
+                });
+            });
+
+            let outcome = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            });
+            let presented = outcome.expect(
+                "a panicking FrameFailureHandler must be contained at its delivery site, \
+                 not unwind out of the realm pump",
+            );
+            assert!(
+                presented,
+                "sibling B must still produce and present despite the handler's panic"
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .flush_count(),
+                b_flushes_after_pump_1 + 1,
+                "B's segment must run despite A's failure and the handler panic"
+            );
+            assert_eq!(
+                handler_calls.load(Ordering::Relaxed),
+                1,
+                "exactly one delivery for one failure — never a retry loop"
+            );
+
+            // The handler stays registered: the next failure is delivered
+            // (and contained) again.
+            realm.request_redraw();
+            let _ = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("second failing pump must also be contained");
+            assert_eq!(
+                handler_calls.load(Ordering::Relaxed),
+                2,
+                "a panicking handler stays registered and receives later reports"
+            );
+        }
+
+        /// The pipeline-report variant of the handler blind spot: that
+        /// delivery happens INSIDE the segment (from
+        /// `draw_frame_for_presentation`'s `Err` arm), so before the fix
+        /// the boundary caught the HANDLER's panic as a segment panic and
+        /// re-reported it — invoking the same panicking handler a second
+        /// time, now outside any catch. Containment at the delivery site
+        /// means exactly one delivery, of the Pipeline kind, per failure.
+        #[test]
+        fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported() {
+            let realm = UiRealm::for_test();
+            let delivered = Arc::new(StdMutex::new(Vec::new()));
+            let sink = Arc::clone(&delivered);
+            realm.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+                sink.lock().expect("mutex").push(match &report.kind {
+                    FrameFailureKind::SegmentPanic { .. } => "segment_panic",
+                    FrameFailureKind::Pipeline { .. } => "pipeline",
+                });
+                panic!("FrameFailureHandler — intentional embedder-bug test panic");
+            })));
+            realm.pipeline_for_test().with_mut(|owner| {
+                let root_id = owner.insert(Box::new(PanicOnLayoutForReportBox)
+                    as Box<
+                        dyn flui_rendering::traits::RenderObject<
+                                flui_rendering::protocol::BoxProtocol,
+                            >,
+                    >);
+                owner.set_root_id(Some(root_id));
+            });
+
+            let mut backend = RecordingBackend::new();
+            let presented = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("a handler panic during a pipeline report must be contained");
+            assert!(!presented);
+            assert_eq!(
+                delivered.lock().expect("mutex").as_slice(),
+                ["pipeline"],
+                "one failure, one delivery, of the pipeline kind — the handler's own \
+                 panic must not be re-reported as a segment panic (which would invoke \
+                 the panicking handler a second time)"
+            );
+        }
+    }
+
     mod frame_clock_segment_gate {
         use std::sync::Mutex as StdMutex;
 
@@ -8684,7 +9771,7 @@ mod tests {
 
             for pump in 0..50 {
                 realm.set_now_secs_for_test(f64::from(pump) * 0.016);
-                let (_, outcome) =
+                let (_, outcome, _) =
                     realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
                 assert!(
                     matches!(outcome, FramePaintOutcome::Idle),
@@ -8727,7 +9814,7 @@ mod tests {
                 realm.set_now_secs_for_test(f64::from(pump) * 0.016);
                 now += std::time::Duration::from_millis(16);
                 realm.record_compositor_tick(now);
-                let (_, outcome) =
+                let (_, outcome, _) =
                     realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
                 assert!(
                     matches!(outcome, FramePaintOutcome::Idle),
@@ -8779,7 +9866,8 @@ mod tests {
                     owner.mark_needs_paint(root_id);
                 }
             });
-            let (_, outcome) = realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
+            let (_, outcome, _) =
+                realm.enter(|realm| realm.draw_frame_entered(table_constraints()));
 
             assert!(
                 matches!(outcome, FramePaintOutcome::Painted(_)),

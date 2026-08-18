@@ -55,6 +55,11 @@ pub use app::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
     SpawnError,
 };
+// Typed frame-failure route (issue #561): the embedder-visible half of the
+// presentation-frame transaction boundary (ADR-0048). A failed frame is
+// contained to its own presentation; these types are how the embedder hears
+// about it.
+pub use app::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
 // available on iOS, where `AppRuntime`/`UiRealm`'s realm-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).

@@ -13,6 +13,7 @@
 mod config;
 pub mod direct;
 pub(crate) mod execution;
+mod frame_failure;
 pub(crate) mod hot_reload;
 pub(crate) mod logging;
 pub(crate) mod media_query_root;
@@ -30,6 +31,7 @@ pub use execution::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
     SpawnError,
 };
+pub use frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
