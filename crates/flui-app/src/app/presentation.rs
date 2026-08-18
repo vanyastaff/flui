@@ -292,6 +292,24 @@ pub(crate) struct PresentationState {
     /// `None` here, never a stale span latched by an earlier pump this
     /// presentation was the one to produce.
     last_segment_span: Cell<Option<(Instant, Instant)>>,
+    /// How many frames IN A ROW have failed for this presentation — the
+    /// `consecutive_failures` field of every
+    /// [`FrameFailureReport`](super::frame_failure::FrameFailureReport)
+    /// this presentation's failures produce. Incremented by `UiRealm::
+    /// report_frame_failure` (both the structured-pipeline-error and the
+    /// caught-segment-panic routes), reset by the next segment that
+    /// completes without failing. Presentation-local on purpose: one
+    /// window's failure streak must never color a sibling's reports.
+    frame_failure_streak: Cell<u32>,
+    /// Test-only fault injection: when set, runs at the top of this
+    /// presentation's build+layout+paint segment (`UiRealm::
+    /// draw_frame_for_presentation`), where a panic it raises escapes
+    /// every inner recovery layer and reaches the realm's per-presentation
+    /// `catch_unwind` boundary — the controllable stand-in for real
+    /// escape paths (e.g. a panicking `ViewState::dispose` during tree
+    /// finalization) that are hard to re-trigger repeatedly.
+    #[cfg(test)]
+    segment_probe: RefCell<Option<Box<dyn Fn()>>>,
     /// Test-only oracle: how many times this presentation's own
     /// build+layout+paint segment actually ran (`UiRealm::
     /// draw_frame_for_presentation`), regardless of whether anything was
@@ -559,6 +577,9 @@ impl PresentationState {
             vsync: RefCell::new(Vsync::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
+            frame_failure_streak: Cell::new(0),
+            #[cfg(test)]
+            segment_probe: RefCell::new(None),
             #[cfg(test)]
             flush_count: Cell::new(0),
         };
@@ -614,6 +635,9 @@ impl PresentationState {
             vsync: RefCell::new(Vsync::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
+            frame_failure_streak: Cell::new(0),
+            #[cfg(test)]
+            segment_probe: RefCell::new(None),
             #[cfg(test)]
             flush_count: Cell::new(0),
         };
@@ -958,6 +982,40 @@ impl PresentationState {
     )]
     fn has_pending_layout_builder_work(&self) -> bool {
         false
+    }
+
+    /// Record one more consecutive frame failure and return the new streak
+    /// length. See [`Self::frame_failure_streak`]'s field doc.
+    pub(crate) fn note_frame_failure(&self) -> u32 {
+        let streak = self.frame_failure_streak.get().saturating_add(1);
+        self.frame_failure_streak.set(streak);
+        streak
+    }
+
+    /// A segment completed without failing; the next failure starts a
+    /// fresh streak. See [`Self::frame_failure_streak`]'s field doc.
+    pub(crate) fn reset_frame_failure_streak(&self) {
+        self.frame_failure_streak.set(0);
+    }
+
+    /// Install (or clear) the segment fault-injection probe. See
+    /// [`Self::segment_probe`]'s field doc.
+    #[cfg(test)]
+    pub(crate) fn set_segment_probe(&self, probe: Option<Box<dyn Fn()>>) {
+        *self.segment_probe.borrow_mut() = probe;
+    }
+
+    /// Run the installed segment probe, if any. Called from the top of
+    /// `UiRealm::draw_frame_for_presentation`, under a short immutable
+    /// borrow of the probe slot — a probe must not call
+    /// [`Self::set_segment_probe`] from inside itself. A panicking probe
+    /// releases the borrow during unwind, so the boundary's retry pump can
+    /// run (and re-panic) it again.
+    #[cfg(test)]
+    pub(crate) fn run_segment_probe(&self) {
+        if let Some(probe) = self.segment_probe.borrow().as_ref() {
+            probe();
+        }
     }
 
     /// Record that this presentation's build+layout+paint segment ran. See
