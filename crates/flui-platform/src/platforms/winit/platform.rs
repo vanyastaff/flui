@@ -1612,6 +1612,25 @@ impl WinitApp {
 
         if self.control.take_quit_requested() {
             self.request_exit(event_loop);
+            return;
+        }
+
+        // Exit-policy re-evaluation (issue #558): a keep-alive application
+        // service completed on a worker thread AFTER the last window's
+        // close was vetoed — with no window left to produce events,
+        // this coalesced request is the only path that ever re-asks the
+        // hook, so a stale veto cannot hold the process open forever. Same
+        // gate shape as the `CloseRequested` arm: only when this backend's
+        // own window map is empty, hook leased and consulted OUTSIDE the
+        // state lock (ADR-0039). Checked AFTER the drain above so a window
+        // opened by a command in this same wake (a service asking for a
+        // notification window while another service completes) is already
+        // in the map and vetoes the re-check by count alone.
+        if self.control.take_exit_reevaluation_requested() {
+            let windows_empty = self.platform.with_state(|state| state.windows.is_empty());
+            if windows_empty && self.platform.lease_exit_policy_hook().invoke() {
+                self.request_exit(event_loop);
+            }
         }
     }
 
@@ -1790,6 +1809,22 @@ impl Platform for WinitPlatform {
         self.with_state(|state| {
             state.handlers.exit_policy = Some(hook);
         });
+    }
+
+    fn request_exit_policy_reevaluation(&self) {
+        // Same run-state walk as `quit` above, minus the `New` arm: before
+        // the loop starts there is no hook installed and no service
+        // running, so a pre-run request has nothing to re-evaluate and is
+        // deliberately dropped rather than parked.
+        let control = self.with_state(|state| match &state.run_state {
+            WinitRunState::Starting { control, .. } | WinitRunState::Running { control, .. } => {
+                Some(control.clone())
+            }
+            WinitRunState::New { .. } | WinitRunState::Stopped => None,
+        });
+        if let Some(control) = control {
+            control.request_exit_reevaluation();
+        }
     }
 
     fn set_wake_deadline_hook(

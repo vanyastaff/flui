@@ -51,19 +51,21 @@
 //! the deterministic implementation, so an injected executor observes the
 //! same contract.
 
-// The spawn/admission machinery has no shipped consumer yet by design: the
-// background lanes' production callers are issue #558's task/worker/service
-// lifecycles (and #559's raster lane), the next items on the same critical
-// path. Until those land, this module's own tests are the executable
-// coverage. `expect`, not `allow`: the moment #558 wires a production
-// caller, the unfulfilled expectation errors and this attribute must go.
+// On native targets the spawn lanes now have their production consumer: the
+// task/worker/service lifecycle layer (`app/lifecycle.rs`, issue #558) spawns
+// through them and the bootstrap/teardown drive it end to end. The wasm32
+// build still has none — the lifecycle layer is native-only until the web
+// runner grows its own slice — so the ratchet survives there, narrowed to
+// exactly that target. `expect`, not `allow`: the moment a wasm consumer
+// lands, the unfulfilled expectation errors and this attribute must go.
 #![cfg_attr(
-    not(test),
+    all(target_arch = "wasm32", not(test)),
     expect(
         dead_code,
-        reason = "background-lane spawn consumers arrive with the task/worker/service \
-                  lifecycle work (issue #558); until then this machinery is exercised \
-                  by this module's own tests"
+        reason = "the task/worker/service lifecycle layer (this module's production \
+                  consumer, issue #558) is native-only; the wasm32 build keeps the \
+                  sequential spawn lanes compiled for API parity but nothing drives \
+                  them until the web runner's own lifecycle slice"
     )
 )]
 
@@ -240,6 +242,8 @@ impl Admission {
         }
     }
 
+    /// Test-only like [`ExecutionServices::in_flight`], its one caller.
+    #[cfg(test)]
     fn in_flight(&self) -> usize {
         self.in_flight.load(Ordering::Acquire)
     }
@@ -416,6 +420,16 @@ impl ExecutionServices {
             #[cfg(not(target_arch = "wasm32"))]
             cancel: tokio_util::sync::CancellationToken::new(),
         }
+    }
+
+    /// The root of this loop's cancellation tree. The lifecycle layer
+    /// (`app/lifecycle.rs`) derives every task's, worker's, and service's
+    /// own signal as a child of this token, so [`Self::shutdown`]'s cancel
+    /// stage reaches every outstanding unit of work without a registry
+    /// walk.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn cancellation_root(&self) -> &tokio_util::sync::CancellationToken {
+        &self.cancel
     }
 
     /// Whether this instance executes background work on FLUI's own backend

@@ -71,6 +71,11 @@ pub(super) struct ControlSender {
     wake_owner: WakeOwner,
     wake_pending: Arc<AtomicBool>,
     quit_requested: Arc<AtomicBool>,
+    /// Coalesced "re-consult the exit-policy hook" flag — the same
+    /// bypass-the-queue shape as `quit_requested`, for the same reason: a
+    /// keep-alive service completing must be able to end a lingering
+    /// zero-window loop even if the command lane is saturated.
+    exit_reevaluation_requested: Arc<AtomicBool>,
     // Serializes the accepting check with the non-blocking enqueue. Shutdown
     // takes the same short gate before its final queue snapshot.
     admission: Arc<Mutex<bool>>,
@@ -94,6 +99,7 @@ pub(super) struct ControlReceiver {
     commands: Receiver<ControlCommand>,
     wake_pending: Arc<AtomicBool>,
     quit_requested: Arc<AtomicBool>,
+    exit_reevaluation_requested: Arc<AtomicBool>,
     admission: Arc<Mutex<bool>>,
     owner_affinity: PhantomData<Rc<()>>,
 }
@@ -102,6 +108,7 @@ pub(super) fn control_lane(wake_owner: WakeOwner) -> (ControlSender, ControlRece
     let (commands, receiver) = bounded(CONTROL_CAPACITY);
     let wake_pending = Arc::new(AtomicBool::new(false));
     let quit_requested = Arc::new(AtomicBool::new(false));
+    let exit_reevaluation_requested = Arc::new(AtomicBool::new(false));
     let admission = Arc::new(Mutex::new(true));
 
     (
@@ -110,12 +117,14 @@ pub(super) fn control_lane(wake_owner: WakeOwner) -> (ControlSender, ControlRece
             wake_owner,
             wake_pending: Arc::clone(&wake_pending),
             quit_requested: Arc::clone(&quit_requested),
+            exit_reevaluation_requested: Arc::clone(&exit_reevaluation_requested),
             admission: Arc::clone(&admission),
         },
         ControlReceiver {
             commands: receiver,
             wake_pending,
             quit_requested,
+            exit_reevaluation_requested,
             admission,
             owner_affinity: PhantomData,
         },
@@ -206,6 +215,23 @@ impl ControlSender {
         }
     }
 
+    /// Coalesced exit-policy re-evaluation request — `request_quit`'s
+    /// twin, except the owner responds by re-CONSULTING the exit-policy
+    /// hook (only if its window map is empty) rather than by exiting
+    /// unconditionally. See `Platform::request_exit_policy_reevaluation`.
+    pub(super) fn request_exit_reevaluation(&self) {
+        let should_wake = {
+            let admission = self.admission.lock();
+            *admission
+                && !self
+                    .exit_reevaluation_requested
+                    .swap(true, Ordering::AcqRel)
+        };
+        if should_wake {
+            self.wake_owner();
+        }
+    }
+
     fn wake_owner(&self) {
         // Successful enqueue always happens before this release/coalescing
         // transition, so observing the wake implies work is already visible.
@@ -256,6 +282,13 @@ impl ControlReceiver {
 
     pub(super) fn take_quit_requested(&self) -> bool {
         self.quit_requested.swap(false, Ordering::AcqRel)
+    }
+
+    /// Consumes one exit-policy re-evaluation transition, exactly once —
+    /// same consume-on-read shape as [`Self::take_quit_requested`].
+    pub(super) fn take_exit_reevaluation_requested(&self) -> bool {
+        self.exit_reevaluation_requested
+            .swap(false, Ordering::AcqRel)
     }
 
     pub(super) fn stop_accepting(&self) {
@@ -608,6 +641,47 @@ mod tests {
         assert!(
             !receiver.take_quit_requested(),
             "the owner consumes one quit transition exactly once"
+        );
+    }
+
+    /// `request_quit`'s twin flag: an exit-policy re-evaluation request
+    /// bypasses queue capacity (a keep-alive service completing must be
+    /// able to end a lingering zero-window loop even with the command lane
+    /// saturated), coalesces a burst into one wake + one owner-visible
+    /// transition, and is consumed exactly once.
+    #[test]
+    fn winit_control_exit_reevaluation_is_nonstarvable_coalesced_and_consumed_once() {
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let wake_count_for_callback = Arc::clone(&wake_count);
+        let wake = Arc::new(move || {
+            wake_count_for_callback.fetch_add(1, Ordering::Relaxed);
+        });
+        let (sender, receiver) = control_lane(wake);
+
+        for index in 0..CONTROL_CAPACITY {
+            let _reply = sender
+                .request_open_window(options(format!("queued-{index}")))
+                .expect("fill the bounded window lane");
+        }
+        sender.request_exit_reevaluation();
+        sender.request_exit_reevaluation();
+
+        assert_eq!(
+            wake_count.load(Ordering::Relaxed),
+            1,
+            "a burst of re-evaluation requests coalesces into the already-pending wake"
+        );
+        assert!(
+            receiver.take_exit_reevaluation_requested(),
+            "the re-evaluation flag bypasses queue capacity"
+        );
+        assert!(
+            !receiver.take_exit_reevaluation_requested(),
+            "the owner consumes one re-evaluation transition exactly once"
+        );
+        assert!(
+            !receiver.take_quit_requested(),
+            "a re-evaluation request must not masquerade as an unconditional quit"
         );
     }
 
