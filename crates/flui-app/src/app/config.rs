@@ -175,10 +175,15 @@ pub struct AppConfig {
     /// last window closing stop the app, or does the service keep it
     /// alive?) and a graceful-shutdown contract: at loop exit each service
     /// is cancelled cooperatively, given a bounded flush window, and
-    /// joined with evidence. Started by the desktop bootstrap after the
-    /// realm install resolves the loop's execution services; a start
-    /// failure fails the bootstrap. Native-only today — the lifecycle
-    /// layer has no wasm32 slice yet.
+    /// joined with evidence. Started by the desktop and Android bootstraps
+    /// after the realm install resolves the loop's execution services; a
+    /// start failure fails the bootstrap. On Android the platform installs
+    /// no exit-policy hook, so [`ServiceLifetime`](super::lifecycle::ServiceLifetime)
+    /// has no observable effect on process lifetime there yet — the
+    /// services themselves still run and get the staged teardown.
+    /// Native-only today — the lifecycle layer has no wasm32 slice yet,
+    /// and the iOS entry point is a stub that reads no config field at all
+    /// (see `run_ios`'s own doc).
     #[cfg(not(target_arch = "wasm32"))]
     pub services: Vec<ServiceDefinition>,
 }

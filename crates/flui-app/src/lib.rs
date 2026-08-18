@@ -63,8 +63,9 @@ pub use app::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use app::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
-    ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle,
-    TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events,
+    ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError,
+    TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle,
+    service_events,
 };
 // Typed frame-failure route (issue #561): the embedder-visible half of the
 // presentation-frame transaction boundary (ADR-0048). A failed frame is

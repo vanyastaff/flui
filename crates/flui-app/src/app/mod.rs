@@ -37,8 +37,9 @@ pub use frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureRepor
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
-    ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle,
-    TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events,
+    ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError,
+    TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle,
+    service_events,
 };
 #[cfg(all(
     not(target_os = "android"),

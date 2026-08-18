@@ -68,10 +68,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, TrySendError};
 use std::sync::{Arc, Weak};
 use std::task::Poll;
-use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
-use web_time::Instant;
+// The workspace's single monotonic-time source (root `Cargo.toml`'s TIME
+// entry): `web_time::Duration` is std's `Duration` re-exported on every
+// target, imported from here so this module's time vocabulary stays one
+// crate even though the module itself is native-only today.
+use web_time::{Duration, Instant};
 
 use super::execution::{ExecutionServices, SpawnError};
 
@@ -929,6 +932,22 @@ impl fmt::Debug for ServiceDefinition {
     }
 }
 
+/// Why a service could not be started.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum ServiceStartError {
+    /// The service's factory (the closure given to
+    /// [`ServiceDefinition::new`]) panicked while constructing the
+    /// service's future. Contained at the lifecycle boundary like every
+    /// other panic here — the panic message reaches the log through the
+    /// panic hook at the panic site; the service is not registered.
+    #[error("the service's factory panicked while constructing its future")]
+    FactoryPanicked,
+    /// The execution lane refused the service's future.
+    #[error(transparent)]
+    Spawn(#[from] SpawnError),
+}
+
 /// How one service ended, as observed by the staged shutdown — the join
 /// evidence the teardown log carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1016,13 +1035,31 @@ impl ServiceSlot {
 pub(crate) struct ServiceRegistry {
     accepting: bool,
     services: Vec<ServiceSlot>,
+    /// Fired (from whatever worker thread the service ran on) when a
+    /// `KeepsAppAlive` service reports its exit — the runner wires this to
+    /// the platform's coalesced exit-policy re-evaluation request
+    /// (`SharedPlatform::request_exit_policy_reevaluation`). Without it, a
+    /// last-window close vetoed by a running keep-alive service would
+    /// never be re-decided once that service completes: no window remains
+    /// to produce the close event that consults the policy, so the veto
+    /// would be permanent and the process would linger forever.
+    ///
+    /// A shared slot (not a value captured at `start`) so installation
+    /// order cannot silently disarm the mechanism: a service started
+    /// before the notifier is installed still fires it at completion.
+    /// Read-and-clone at fire time, lock never held across the call.
+    exit_notifier: ExitNotifierSlot,
 }
+
+/// The shared exit-notifier slot — see [`ServiceRegistry::exit_notifier`].
+type ExitNotifierSlot = Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 
 impl fmt::Debug for ServiceRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServiceRegistry")
             .field("accepting", &self.accepting)
             .field("services", &self.services.len())
+            .field("exit_notifier", &self.exit_notifier.lock().is_some())
             .finish()
     }
 }
@@ -1032,7 +1069,17 @@ impl ServiceRegistry {
         Self {
             accepting: true,
             services: Vec::new(),
+            exit_notifier: Arc::new(parking_lot::Mutex::new(None)),
         }
+    }
+
+    /// Install the keep-alive completion notifier — see the
+    /// `exit_notifier` field's doc. Installed once by the bootstrap,
+    /// alongside the exit-policy hook itself; a later install replaces the
+    /// earlier one (the platform request it wraps is idempotent and
+    /// coalesced, so which instance fires is immaterial).
+    pub(crate) fn set_exit_notifier(&mut self, notifier: Arc<dyn Fn() + Send + Sync>) {
+        *self.exit_notifier.lock() = Some(notifier);
     }
 
     /// Start `definition`'s future on the IO lane and take ownership of
@@ -1043,9 +1090,9 @@ impl ServiceRegistry {
         &mut self,
         definition: &ServiceDefinition,
         services: &Arc<ExecutionServices>,
-    ) -> Result<(), SpawnError> {
+    ) -> Result<(), ServiceStartError> {
         if !self.accepting {
-            return Err(SpawnError::ShuttingDown);
+            return Err(ServiceStartError::Spawn(SpawnError::ShuttingDown));
         }
         let signal = CancellationSignal::child_of(services.cancellation_root());
         let (report, completion) = mpsc::sync_channel(1);
@@ -1053,8 +1100,30 @@ impl ServiceRegistry {
             signal: signal.clone(),
             spawner: TaskSpawner::new(services),
         };
-        let future = (definition.run)(context);
+        // The factory is application code and gets the same panic
+        // containment as every body this module runs: a panic here must
+        // become a typed start failure, never an unwind through the
+        // bootstrap (or through whatever non-bootstrap caller starts a
+        // service later).
+        let future = match std::panic::catch_unwind(AssertUnwindSafe(|| (definition.run)(context)))
+        {
+            Ok(future) => future,
+            Err(_panic) => {
+                tracing::error!(
+                    service = definition.name,
+                    "service factory panicked while constructing its future; \
+                         the service is not registered"
+                );
+                return Err(ServiceStartError::FactoryPanicked);
+            }
+        };
         let name = definition.name;
+        // Only a keep-alive service's exit can change the answer to "may
+        // the zero-window loop end now?", so only those completions fire
+        // the exit notifier — an editor-like service completing never
+        // needs a re-check.
+        let exit_notifier = matches!(definition.lifetime, ServiceLifetime::KeepsAppAlive)
+            .then(|| Arc::clone(&self.exit_notifier));
         // Deliberately NOT raced against the service's own token here: the
         // service observes cancellation itself and uses the window between
         // cancel and the registry's deadline to flush. The hard stop is the
@@ -1078,6 +1147,16 @@ impl ServiceRegistry {
                         service = name,
                         "BUG: service completion channel full on its single send"
                     );
+                }
+            }
+            // AFTER the completion send above: the owner-thread re-check
+            // this wakes reads the registry through `keeps_app_alive`,
+            // which must be able to observe this very exit. Clone out of
+            // the shared slot, lock released before the call.
+            if let Some(notifier) = exit_notifier {
+                let notify = notifier.lock().clone();
+                if let Some(notify) = notify {
+                    notify();
                 }
             }
         }))?;
@@ -1822,15 +1901,52 @@ mod tests {
         let (services, _deterministic) = deterministic_services();
         let mut registry = ServiceRegistry::new();
         registry.shutdown(Duration::from_millis(10));
-        assert_eq!(
-            registry
-                .start(
-                    &immediate_service("late", ServiceLifetime::StopsWithLastWindow),
-                    &services,
-                )
-                .err(),
-            Some(SpawnError::ShuttingDown)
+        let refused = registry.start(
+            &immediate_service("late", ServiceLifetime::StopsWithLastWindow),
+            &services,
         );
+        assert!(
+            matches!(
+                refused,
+                Err(ServiceStartError::Spawn(SpawnError::ShuttingDown))
+            ),
+            "a start after shutdown must be refused as ShuttingDown: {refused:?}"
+        );
+    }
+
+    /// The factory itself is application code: a panic while CONSTRUCTING
+    /// the service's future is contained into a typed start failure — it
+    /// must not unwind through the caller (the bootstrap), and the failed
+    /// service must not be registered. Fails (by unwinding) without the
+    /// factory catch_unwind.
+    #[test]
+    fn service_factory_panic_is_contained_into_a_start_error() {
+        let (services, _deterministic) = deterministic_services();
+        let mut registry = ServiceRegistry::new();
+        let result = registry.start(
+            &ServiceDefinition::new(
+                "panicking-factory",
+                ServiceLifetime::KeepsAppAlive,
+                |_context| -> ServiceFuture { panic!("factory panic (expected by this test)") },
+            ),
+            &services,
+        );
+        assert!(
+            matches!(result, Err(ServiceStartError::FactoryPanicked)),
+            "a panicking factory must become a typed start failure: {result:?}"
+        );
+        assert!(
+            !registry.keeps_app_alive(),
+            "a service whose factory panicked must not be registered (it could \
+             never complete, so it would hold the app open forever)"
+        );
+        // The registry stays fully usable for the next, well-behaved start.
+        registry
+            .start(
+                &immediate_service("after-the-panic", ServiceLifetime::StopsWithLastWindow),
+                &services,
+            )
+            .expect("a factory panic must not poison the registry");
     }
 
     /// A panicking service is contained and reported as `Panicked` in the

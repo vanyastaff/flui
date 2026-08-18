@@ -269,6 +269,17 @@ impl SharedPlatform {
         self.platform.set_exit_policy_hook(hook);
     }
 
+    /// Requests an owner-thread re-consultation of the exit-policy hook —
+    /// see [`Platform::request_exit_policy_reevaluation`]'s doc for the
+    /// full contract. On this fence deliberately: it is the one exit-path
+    /// operation a *worker* thread legitimately needs (a keep-alive
+    /// application service completing is what makes a prior last-window
+    /// veto stale), it is coalesced and enqueue-and-wake only — the hook
+    /// itself always runs on the owner thread, never here.
+    pub fn request_exit_policy_reevaluation(&self) {
+        self.platform.request_exit_policy_reevaluation();
+    }
+
     /// Installs the hook this platform consults, once per idle iteration,
     /// for the earliest wall-clock instant it should wake at instead of
     /// blocking forever — see [`Platform::set_wake_deadline_hook`]'s doc for

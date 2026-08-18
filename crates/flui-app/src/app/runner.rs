@@ -189,14 +189,42 @@ pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
     )
 )]
 fn install_exit_policy_hook(policy: ExitPolicy) {
-    with_owner_platform(|owner| {
+    let shared = with_owner_platform(|owner| {
         owner.shared().set_exit_policy_hook(Box::new(move || {
             let (should_exit, removed) =
                 APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
             drop(removed);
             should_exit
         }));
+        owner.shared()
     });
+
+    // The hook above is otherwise only consulted when a window closes, so
+    // a veto owed to a running keep-alive service (issue #558) would be
+    // PERMANENT once the last window is gone — nothing left to close,
+    // nothing to re-ask, and the process would linger forever. Close that
+    // loop: when a keep-alive service reports its exit (on whatever worker
+    // thread it ran on), request the platform's coalesced, owner-thread
+    // re-consultation of the same hook. Spurious fires are harmless by
+    // contract (windows still open, or the hook still vetoing, are
+    // no-ops), and backends without the mechanism default it to inert.
+    // Registered outside the `with_owner_platform` borrow: the notifier
+    // installation touches `APP_RUNTIME`, which must never run while the
+    // owner-platform host is checked out. `None` (no owner platform on
+    // this thread) means the hook install above was a no-op too — nothing
+    // to wire. Not compiled on wasm32, where the lifecycle layer (and so
+    // the notifier seam) does not exist.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(shared) = shared {
+        APP_RUNTIME.with(|slot| {
+            slot.borrow_mut()
+                .set_lifecycle_exit_notifier(std::sync::Arc::new(move || {
+                    shared.request_exit_policy_reevaluation();
+                }));
+        });
+    }
+    #[cfg(target_arch = "wasm32")]
+    drop(shared);
 }
 
 /// Installs the wall-clock-wake hook this thread's platform
@@ -2847,6 +2875,147 @@ mod realm_dispatch_tests {
                 "a service start after loop-exit teardown must be refused"
             );
         });
+    }
+
+    /// The messenger scenario end to end (issue #558): the last window's
+    /// close is VETOED by a running keep-alive service — and when that
+    /// service later completes on a worker-pool thread, its completion
+    /// must re-open the exit question and end the loop, with no window
+    /// left to produce any event. Drives the full production chain: the
+    /// real exit-policy hook (vetoing through `AppRuntime::should_exit`),
+    /// the registry's keep-alive completion notifier, the platform's
+    /// parked re-evaluation request, and the owner-thread re-check that
+    /// finally quits.
+    ///
+    /// If reverted: remove the notifier fire from `ServiceRegistry::start`'s
+    /// completion wrapper (or the notifier installation from
+    /// `install_exit_policy_hook`) and the bounded wait for the parked
+    /// request fails — the veto is permanent and the app would linger
+    /// forever, which is exactly the production bug this pins.
+    #[test]
+    fn keep_alive_completion_reopens_the_exit_question_after_the_last_window_closed() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let reevaluation = platform.exit_reevaluation();
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+
+        let quit_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let quit_calls_for_on_ready = Arc::clone(&quit_calls);
+        type Installed = (
+            RealmDispatcher,
+            std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+        );
+        let installed_slot: Rc<RefCell<Option<Installed>>> = Rc::new(RefCell::new(None));
+        let installed_slot_for_on_ready = Rc::clone(&installed_slot);
+        platform
+            .run(Box::new(move |owner| {
+                install_owner_platform(owner);
+                // Installs BOTH halves of the production wiring: the
+                // exit-policy hook and the keep-alive completion notifier.
+                install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
+
+                let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
+                with_owner_platform(|owner| {
+                    owner.shared().on_quit(Box::new(move || {
+                        quit_calls_for_handler.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }));
+                });
+
+                let window = with_owner_platform(|owner| {
+                    owner.open_window(flui_platform::WindowOptions::default())
+                })
+                .expect("owner installed above")
+                .and_then(flui_platform::WindowOpen::try_ready)
+                .expect("headless open_window is always Ready");
+                let dispatcher =
+                    install_platform_realm(super::super::ui_realm::UiRealm::for_test(), &window);
+                window.on_close(Box::new(move || {
+                    close_this_window(dispatcher);
+                }));
+                *installed_slot_for_on_ready.borrow_mut() = Some((dispatcher, window));
+                Ok(())
+            }))
+            .expect("headless run must not fail");
+        let (_dispatcher, window) = installed_slot
+            .borrow_mut()
+            .take()
+            .expect("set inside on_ready above");
+
+        // The messenger's background service: parked on the REAL IO pool
+        // until the test releases it, then completes.
+        let release = Arc::new(AtomicBool::new(false));
+        let waker_slot: Arc<parking_lot::Mutex<Option<std::task::Waker>>> =
+            Arc::new(parking_lot::Mutex::new(None));
+        {
+            use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
+            let release_in_service = Arc::clone(&release);
+            let waker_in_service = Arc::clone(&waker_slot);
+            APP_RUNTIME.with(|slot| {
+                slot.borrow_mut()
+                    .start_service(&ServiceDefinition::new(
+                        "messenger-sync",
+                        ServiceLifetime::KeepsAppAlive,
+                        move |_context| {
+                            let release = Arc::clone(&release_in_service);
+                            let waker_slot = Arc::clone(&waker_in_service);
+                            Box::pin(async move {
+                                std::future::poll_fn(move |context| {
+                                    if release.load(Ordering::Acquire) {
+                                        std::task::Poll::Ready(())
+                                    } else {
+                                        *waker_slot.lock() = Some(context.waker().clone());
+                                        std::task::Poll::Pending
+                                    }
+                                })
+                                .await;
+                            })
+                        },
+                    ))
+                    .expect("service must start on the loop's real IO pool");
+            });
+        }
+
+        // Last window closes: the keep-alive service vetoes the exit.
+        window.close();
+        assert_eq!(
+            quit_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a running keep-alive service must veto exit at the last window's close"
+        );
+
+        // The service completes on its worker thread; its completion must
+        // request the platform's exit re-evaluation. Bounded wait: this is
+        // the only path that can ever end this app now.
+        release.store(true, Ordering::Release);
+        if let Some(waker) = waker_slot.lock().take() {
+            waker.wake();
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !reevaluation.requested() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the keep-alive service's completion must request an exit re-evaluation \
+                 within 10s -- without it the veto is permanent and the app lingers forever"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        // The owner-thread half (winit: the process_control arm; here: the
+        // headless drive): re-consult the hook — realms empty, no running
+        // keep-alive service left — and exit.
+        assert!(
+            reevaluation.drive(),
+            "the re-check must pass once the vetoing service has completed"
+        );
+        assert_eq!(
+            quit_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the re-check must end the loop through the platform's quit path"
+        );
+
+        teardown_platform_realm();
     }
 
     /// A second realm installed on the same thread (hot-restart; sequential
@@ -10355,6 +10524,26 @@ where
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
         let realm_dispatch = install_platform_realm(ui_realm, &window);
+
+        // 3b. Start config-declared application services (issue #558) —
+        // same wiring and same failure contract as the desktop bootstrap:
+        // the realm install above resolved the loop's execution services,
+        // and a declared service failing to start fails the bootstrap
+        // rather than being silently ignored. Exit-policy consultation is
+        // NOT wired on this backend (its platform installs no exit-policy
+        // hook — see `install_exit_policy_hook`'s doc), so
+        // `ServiceLifetime` currently has no observable effect on Android
+        // process lifetime; the services themselves still run, spawn, and
+        // get the staged cancel-then-join teardown.
+        for service in &config.services {
+            if let Err(error) = APP_RUNTIME.with(|slot| slot.borrow_mut().start_service(service)) {
+                tracing::error!(service = service.name(), %error, "service start failed");
+                return Err(anyhow::Error::from(error).context(format!(
+                    "failed to start application service `{}`",
+                    service.name()
+                )));
+            }
+        }
 
         // 4. Wrap renderer for callback sharing
         let renderer = Arc::new(Mutex::new(renderer));

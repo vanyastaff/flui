@@ -198,7 +198,8 @@ pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
 pub use platforms::{
-    FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform,
+    FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
+    HeadlessExitReevaluation, HeadlessPlatform,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]

@@ -95,7 +95,7 @@ declarations = [
     "pub mod embedder;",
     "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, run_direct, };",
     "pub use app::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
-    "pub use app::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
+    "pub use app::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use app::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};",
     "pub use app::{ExitPolicy, WindowPolicy};",
     "pub use app::open_secondary_window;",
@@ -115,7 +115,7 @@ declarations = [
     "pub use direct::run_direct;",
     "pub use execution::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
     "pub use frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};",
-    "pub use lifecycle::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
+    "pub use lifecycle::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use runner::{run_app_android, run_app_android_with_config};",
     "pub use runner::open_secondary_window;",
     "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
@@ -142,7 +142,7 @@ declarations = [
     "pub use platforms::IOSPlatform;",
     "pub use platforms::LinuxPlatform;",
     "pub use platforms::MacOSPlatform;",
-    "pub use platforms::{ FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform, };",
+    "pub use platforms::{ FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessPlatform, };",
     "pub use platforms::WebPlatform;",
     "pub use platforms::WindowsPlatform;",
     "pub use platforms::WinitPlatform;",
@@ -1113,7 +1113,22 @@ drop structurally, results are pull-only). **Services** are owned by \
 install resolves execution services, start failure fails the bootstrap) \
 and declare a `ServiceLifetime`: a running `KeepsAppAlive` service vetoes \
 `should_exit` after the last window closes (messenger-like), \
-`StopsWithLastWindow` never does (editor-like). Loop-exit teardown is \
+`StopsWithLastWindow` never does (editor-like). The veto is NOT permanent: \
+a keep-alive service's exit (on whatever worker thread it ran on) fires \
+the registry's exit notifier, which requests the platform's coalesced, \
+owner-thread re-consultation of the exit-policy hook \
+(`Platform::request_exit_policy_reevaluation`; winit re-checks in its \
+control-lane drain when its window map is empty, headless parks the \
+request for `HeadlessExitReevaluation::drive`) — without this chain a \
+zero-window loop whose vetoing service later completed would linger \
+forever, since window close is otherwise the hook's only consult site. \
+The service FACTORY gets the same panic containment as service bodies: a \
+panic while constructing the future becomes \
+`ServiceStartError::FactoryPanicked` (bootstrap failure), never an \
+unwind. Config-declared services are started by the desktop AND Android \
+bootstraps (Android runs them without exit-policy wiring — its platform \
+installs no exit hook; stated on `AppConfig::services`, not silently \
+ignored). Loop-exit teardown is \
 STAGED in a load-bearing order: cancel every service first, join each \
 against ONE shared deadline with per-service evidence, and only then shut \
 the pools down -- the pools' root-token cancellation hard-drops any \
@@ -1161,6 +1176,10 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn publish_after_the_receiver_dies_is_owner_gone" },
     { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn keep_alive_service_vetoes_exit_until_it_completes" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn teardown_gives_services_their_flush_window_before_the_pools_close" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn keep_alive_completion_reopens_the_exit_question_after_the_last_window_closed" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn service_factory_panic_is_contained_into_a_start_error" },
+    { kind = "test", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn exit_reevaluation_parks_from_any_thread_and_drives_through_the_hook" },
+    { kind = "test", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "fn winit_control_exit_reevaluation_is_nonstarvable_coalesced_and_consumed_once" },
 ]
 
 [[contract]]
@@ -2462,7 +2481,7 @@ consumers = ["execution conformance tests", "runtime wiring tests"]
 owner_issue = 557
 
 [[surface]]
-path = "flui_app::{TaskHandle, TaskOutcome, JoinTimeout, TaskContext, TaskSpawner, WorkerHandle, WorkerGeneration, ServiceDefinition, ServiceLifetime, ServiceContext, ServiceFuture, ServicePublisher, ServiceEvents, PublishError, CancellationSignal, service_events}"
+path = "flui_app::{TaskHandle, TaskOutcome, JoinTimeout, TaskContext, TaskSpawner, WorkerHandle, WorkerGeneration, ServiceDefinition, ServiceLifetime, ServiceContext, ServiceFuture, ServiceStartError, ServicePublisher, ServiceEvents, PublishError, CancellationSignal, service_events}"
 crate = "flui-app"
 kind = "type"
 declared_in = "crates/flui-app/src/app/lifecycle.rs"
@@ -2616,7 +2635,7 @@ path = "flui_platform backend types (WinitPlatform, WindowsPlatform, MacOSPlatfo
 crate = "flui-platform"
 kind = "type"
 declared_in = "crates/flui-platform/src/lib.rs"
-contains = "FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessPlatform,"
+contains = "FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,"
 classification = "transitional"
 thread_affinity = "construct and run on the thread that owns (or will own) the event loop; MacOSPlatform carries unsafe impl Send/Sync by AppKit convention"
 owner = "per-OS event-loop backends"

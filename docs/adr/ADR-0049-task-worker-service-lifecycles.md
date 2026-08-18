@@ -73,12 +73,30 @@ nothing.
 ### Services: declared lifetime, registry ownership, typed events
 
 `AppConfig::with_service(ServiceDefinition::new(name, lifetime, factory))` declares a service;
-the desktop bootstrap starts each one once the realm install has resolved the loop's execution
-services, and a start failure fails the bootstrap (a declared service is load-bearing, not
-optional). `ServiceLifetime` is the editor/messenger split: `StopsWithLastWindow` services
-never hold the loop; a running `KeepsAppAlive` service vetoes `AppRuntime::should_exit` after
-the last window closes, and the veto lifts when the service completes — after which the loop
-exits on the next exit-policy consult, or the embedder calls `Platform::quit` explicitly.
+the desktop and Android bootstraps start each one once the realm install has resolved the
+loop's execution services, and a start failure fails the bootstrap (a declared service is
+load-bearing, not optional). The factory gets the same panic containment as every body this
+layer runs: a panic while constructing the future becomes `ServiceStartError::FactoryPanicked`,
+never an unwind through the bootstrap. On Android the platform installs no exit-policy hook,
+so `ServiceLifetime` has no observable effect on process lifetime there yet (stated on
+`AppConfig::services`); the services themselves still run and get the staged teardown.
+
+`ServiceLifetime` is the editor/messenger split: `StopsWithLastWindow` services never hold the
+loop; a running `KeepsAppAlive` service vetoes `AppRuntime::should_exit` after the last window
+closes. **The veto is not permanent.** Window close is otherwise the exit-policy hook's only
+consult site, so with zero windows left nothing would ever re-ask it — the process would linger
+forever once the vetoing service completed. The release chain closes that hole: a keep-alive
+service's exit (observed on whatever worker thread ran it, after its completion send) fires the
+registry's exit notifier, which the bootstrap wires to
+`SharedPlatform::request_exit_policy_reevaluation` — a new any-thread, coalesced `Platform`
+request (default no-op; on the `SharedPlatform` fence because it is enqueue-and-wake only). The
+winit backend carries it on the control lane's non-starvable flag (the `request_quit` twin) and,
+in its owner-thread drain, re-consults the hook exactly as the `CloseRequested` arm does — only
+when its own window map is empty — exiting if the hook now allows. The headless mock parks the
+request (running the hook on the requesting thread would consult the wrong thread-local runtime
+state) and the embedding test drives the owner-thread half via
+`HeadlessExitReevaluation::drive`. Spurious requests are harmless by contract; an explicit
+`Platform::quit` remains available regardless.
 
 Services publish through `service_events`: a typed, bounded, latest-relevant ring —
 `publish` never blocks (oldest events drop under pressure) and the receiver is pull-only, so a

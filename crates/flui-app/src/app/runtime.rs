@@ -74,7 +74,9 @@ use super::execution::SpawnError;
 #[cfg(not(target_os = "ios"))]
 use super::execution::{ExecutionServices, HostExecutors};
 #[cfg(not(target_arch = "wasm32"))]
-use super::lifecycle::{ServiceDefinition, ServiceRegistry, ServiceShutdownReport};
+use super::lifecycle::{
+    ServiceDefinition, ServiceRegistry, ServiceShutdownReport, ServiceStartError,
+};
 #[cfg(not(target_os = "ios"))]
 use super::runner::{RealmTask, SurfaceApplier};
 #[cfg(not(target_os = "ios"))]
@@ -872,21 +874,33 @@ impl AppRuntime {
     ///
     /// # Errors
     ///
-    /// [`SpawnError`] when the IO lane refuses the service's future or the
-    /// registry has already begun shutting down.
+    /// [`ServiceStartError`]: the IO lane refused the service's future,
+    /// the registry has already begun shutting down, or the service's own
+    /// factory panicked (contained, not unwound).
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn start_service(
         &mut self,
         definition: &ServiceDefinition,
-    ) -> Result<(), SpawnError> {
+    ) -> Result<(), ServiceStartError> {
         // Admission first: a refused late start (after loop-exit teardown,
         // before any next install) must not resurrect execution services
         // as a side effect of the check.
         if !self.service_registry.is_accepting() {
-            return Err(SpawnError::ShuttingDown);
+            return Err(ServiceStartError::Spawn(SpawnError::ShuttingDown));
         }
         let services = Arc::clone(self.ensure_execution());
         self.service_registry.start(definition, &services)
+    }
+
+    /// Install the notifier fired when a `KeepsAppAlive` service reports
+    /// its exit (issue #558) — the runner wires this to the platform's
+    /// coalesced exit-policy re-evaluation request, closing the loop that
+    /// [`Self::should_exit`]'s service veto opens: without it, a veto
+    /// taken at the last window's close would never be re-decided once
+    /// the vetoing service completes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn set_lifecycle_exit_notifier(&mut self, notifier: Arc<dyn Fn() + Send + Sync>) {
+        self.service_registry.set_exit_notifier(notifier);
     }
 
     /// Reopen service admission for a loop that is (re)installing a realm
