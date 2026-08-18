@@ -82,16 +82,32 @@ Rust targets to categories at all: the application subsystem and the stable
 `flui` category are fixed for the sink, while `log.target` remains part of the
 rendered fields.
 
-### Apple privacy
+### Privacy on device sinks
 
-`tracing-oslog` renders each event into one already-formatted string, so every
-field FLUI emits is **public** in the unified log — `%{private}` redaction
-applies to interpolated arguments and there are none. Keep secrets and personal
-data out of tracing fields on Apple platforms.
+Logcat and the Apple unified log are archives readable outside the application,
+so both device sinks sit behind a redaction stage and **fields are private by
+default**: a dynamic value (string, `Debug`/`Display` rendering, error) is
+replaced by `<private>` unless its field name ends in `.public`; a scalar is
+published unless its name ends in `.private`; the message always publishes.
 
-This is a convention today, not a contract enforced by the type system. Making
-it one — private by default, backend-redacted — is tracked in
-[#572](https://github.com/vanyastaff/flui/issues/572).
+```rust,ignore
+tracing::info!(
+    frame = 7_u64,             // scalar: published
+    path = %path.display(),    // dynamic: `<private>` in the device log
+    phase.public = "commit",   // dynamic, opted in: published
+    "frame committed",         // message: published
+);
+```
+
+The model is Apple's own — the unified log redacts dynamic strings and objects
+by default and publishes scalars, overridable per value with
+`%{public}`/`%{private}` — applied uniformly to Android, which has no native
+equivalent. Redaction happens in-process before the value reaches the sink, so
+on Apple a private value is never stored at all (stronger than the OS default,
+at the cost of the "Enable-Private-Data" reveal workflow). The full contract,
+including what it deliberately does not cover, lives in
+`flui_log::backend::privacy`. Desktop and web-console sinks are
+developer-facing and publish fields verbatim.
 
 ## Filtering
 

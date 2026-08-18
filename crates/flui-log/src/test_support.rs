@@ -45,3 +45,20 @@ pub(crate) fn capture_rendered_events(emit: impl FnOnce()) -> Vec<String> {
         .expect("BUG: capture mutex is only locked by this test's own thread")
         .clone()
 }
+
+/// Like [`capture_rendered_events`], but with the renderer sitting behind the
+/// privacy [`RedactLayer`](crate::backend::redact::RedactLayer) — the exact
+/// composition the Android sink ships with, minus the FFI write.
+pub(crate) fn capture_rendered_events_behind_redaction(emit: impl FnOnce()) -> Vec<String> {
+    let capture = RenderCapture::default();
+    let subscriber =
+        Registry::default().with(crate::backend::redact::RedactLayer::new(capture.clone()));
+
+    tracing::subscriber::with_default(subscriber, emit);
+
+    capture
+        .0
+        .lock()
+        .expect("BUG: capture mutex is only locked by this test's own thread")
+        .clone()
+}

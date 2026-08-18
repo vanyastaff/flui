@@ -7,6 +7,10 @@
 //! lived inside a `cfg(target_os = "android")` module, which meant its tests
 //! never compiled anywhere (they called a `tracing::field::Field::new` that no
 //! released `tracing-core` exposes).
+//!
+//! This renderer holds no privacy opinion: field classification happens
+//! upstream in [`super::redact`], which the shipped Android sink sits behind,
+//! so a private value arrives here already replaced by the placeholder.
 
 // Only the Android sink renders fields this way in a shipped build; the unit
 // tests exercise it on every target. Same reasoning as `logcat.rs`.
