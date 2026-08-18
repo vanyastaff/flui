@@ -433,7 +433,8 @@ fn inaccurate_scroll_offset_self_corrects_but_settles_two_items_off_the_oracle_w
     assert!(!is_onstage_text(&laid, "item9", CASE1_VIEWPORT_HEIGHT));
 }
 
-/// Pins the oracle's LITERAL expectation for the same case
+/// Pins the oracle's LITERAL expectation for `'SliverList can handle
+/// inaccurate scroll offset due to changes in children list'` — the same case
 /// [`inaccurate_scroll_offset_self_corrects_but_settles_two_items_off_the_oracle_window`]
 /// ported above — every assertion here is the oracle's own window,
 /// unmodified. `#[ignore]`d because it currently fails on the exact,

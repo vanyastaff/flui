@@ -1065,9 +1065,10 @@ fn grid_view_in_unbounded_context_shrink_wrap_collapses_to_zero_height() {
     assert!(laid.find_text("19").is_some(), "item 19 must be found");
 }
 
-/// The oracle's actual expectation for the case above: a shrink-wrapped
-/// 4-column, 20-item grid in an unbounded context sizes its viewport to
-/// its content — 200px square cells, 5 rows, 800x1000.
+/// The oracle's actual expectation for the case above — `'GridView in
+/// unbounded context'` (`grid_view_test.dart`, tag `3.44.0`): a
+/// shrink-wrapped 4-column, 20-item grid in an unbounded context sizes its
+/// viewport to its content — 200px square cells, 5 rows, 800x1000.
 #[test]
 #[ignore = "known gap: a shrink-wrapped grid in an unbounded context collapses to \
             zero height (delegate cell arithmetic overflows on the unbounded \

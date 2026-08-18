@@ -21,6 +21,10 @@
 //! - every claimed oracle case is cited (backtick-quoted) in the claiming
 //!   file's doc comments — the manifest cannot claim a case the code does not
 //!   cite;
+//! - diverged cases (those evidenced only by an `#[ignore]`d pin) live in the
+//!   pin's `cases` and are counted in a separate `diverged` bucket — never in
+//!   `claimed`, and a file with any diverged case can never read as `ported`;
+//!   an ignored test citing a case the target claims fails outright;
 //! - no two targets claim the same (oracle, case) unless the upstream file
 //!   genuinely contains that name more than once and the pair is declared
 //!   under `[[shared_cases]]`;
@@ -121,6 +125,15 @@ struct Pin {
     test: String,
     capability: String,
     issue: u64,
+    /// The oracle file whose case(s) this pin diverges from. Required when
+    /// `cases` is non-empty.
+    oracle: Option<String>,
+    /// Oracle case names whose upstream behavior FLUI currently diverges
+    /// from, evidenced by this `#[ignore]`d pin. A diverged case is counted
+    /// in the `diverged` bucket, never in `claimed` — a divergence must not
+    /// inflate the parity number.
+    #[serde(default)]
+    cases: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -128,6 +141,10 @@ struct Pin {
 struct OracleFile {
     cases: usize,
     claimed: usize,
+    /// Cases with an `#[ignore]`d divergence pin — tracked separately from
+    /// `claimed` so a divergence can never read as parity.
+    #[serde(default)]
+    diverged: usize,
     status: String,
 }
 
@@ -140,9 +157,11 @@ struct Summary {
     oracle_files: usize,
     oracle_cases: usize,
     cases_claimed: usize,
+    cases_diverged: usize,
     universe_files: usize,
     universe_cases: usize,
     universe_cases_claimed: usize,
+    universe_cases_diverged: usize,
     universe_pending_files: usize,
     families: BTreeMap<String, FamilySummary>,
 }
@@ -153,6 +172,7 @@ struct FamilySummary {
     targets: usize,
     rust_tests: usize,
     cases_claimed: usize,
+    cases_diverged: usize,
     pins: usize,
 }
 
@@ -189,12 +209,21 @@ fn load_manifest() -> Manifest {
 struct RustTest {
     name: String,
     ignored: bool,
+    /// This test's own `///` doc comment, line-trimmed and joined with single
+    /// spaces.
+    doc: String,
 }
 
 struct RustFile {
     tests: Vec<RustTest>,
     /// All `///` doc-comment content in the file, line-trimmed and joined with
     /// single spaces — the text pool oracle-case citations are checked in.
+    ///
+    /// Deliberately `///` only, never `//!`: module docs enumerate
+    /// out-of-scope and blocked cases with the same backtick-quoted names, so
+    /// admitting them would let a case the file explicitly declines to port
+    /// satisfy the citation check. A claim must be evidenced by an item doc
+    /// comment sitting on actual test code.
     doc_joined: String,
 }
 
@@ -213,10 +242,14 @@ fn scan_rust_file(path: &Path) -> RustFile {
     let mut attr_depth: i32 = 0;
     let mut in_ignore_attr = false;
     let mut in_attr_string = false;
+    // doc lines of the item currently being accumulated (reset on any code line)
+    let mut current_doc: Vec<String> = Vec::new();
     for line in text.lines() {
         let s = line.trim();
         if let Some(doc) = s.strip_prefix("///") {
-            docs.push(doc.trim().to_owned());
+            let doc = doc.trim().to_owned();
+            docs.push(doc.clone());
+            current_doc.push(doc);
             continue;
         }
         if attr_depth > 0 {
@@ -252,12 +285,15 @@ fn scan_rust_file(path: &Path) -> RustFile {
                 tests.push(RustTest {
                     name,
                     ignored: pending_ignore,
+                    doc: current_doc.join(" "),
                 });
             }
+            current_doc.clear();
             pending_test = false;
             pending_ignore = false;
         } else if !s.is_empty() && !s.starts_with("//") {
             // a non-attribute, non-comment, non-fn line resets attribute state
+            current_doc.clear();
             pending_test = false;
             pending_ignore = false;
         }
@@ -451,11 +487,21 @@ fn parity_files_and_manifest_rows_correspond_exactly() {
     );
 
     let main_rs = fs::read_to_string(parity_dir().join("main.rs")).expect("read parity main.rs");
+    // Active `mod x;` declarations only: line-anchored after trimming, so a
+    // commented-out `// mod x;` cannot satisfy the check (its whole point is
+    // detecting parity files that exist but are not compiled).
+    let declared: BTreeSet<&str> = main_rs
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')))
+        .map(str::trim)
+        .collect();
     for t in &manifest.targets {
         assert!(
-            main_rs.contains(&format!("mod {};", t.rust)),
-            "target `{}` is not declared in tests/parity/main.rs — the file exists but is \
-             not compiled, so its tests never run",
+            declared.contains(t.rust.as_str()),
+            "target `{}` has no active `mod {};` in tests/parity/main.rs — the file \
+             exists but is not compiled, so its tests never run",
+            t.rust,
             t.rust
         );
     }
@@ -494,6 +540,7 @@ fn targets_match_the_tree_and_pins_are_owned() {
              attribute and the row)",
             t.rust
         );
+        let oracle_set: BTreeSet<&str> = t.oracles.iter().map(String::as_str).collect();
         for p in &t.pins {
             assert!(
                 p.issue > 0 && !p.capability.trim().is_empty(),
@@ -501,15 +548,59 @@ fn targets_match_the_tree_and_pins_are_owned() {
                 t.rust,
                 p.test
             );
+            match (&p.oracle, p.cases.is_empty()) {
+                (None, true) => {}
+                (None, false) => panic!(
+                    "target `{}`: pin `{}` lists diverged cases but no `oracle`",
+                    t.rust, p.test
+                ),
+                (Some(oracle), _) => {
+                    assert!(
+                        oracle_set.contains(oracle.as_str()),
+                        "target `{}`: pin `{}` names oracle `{oracle}`, which is not in \
+                         the target's `oracles` list",
+                        t.rust,
+                        p.test
+                    );
+                    assert!(
+                        !p.cases.is_empty(),
+                        "target `{}`: pin `{}` names an oracle but no diverged cases",
+                        t.rust,
+                        p.test
+                    );
+                    let pin_doc = scanned
+                        .tests
+                        .iter()
+                        .find(|x| x.name == p.test)
+                        .map(|x| x.doc.as_str())
+                        .unwrap_or_default();
+                    for case in &p.cases {
+                        let citation = format!("`'{case}'`");
+                        assert!(
+                            pin_doc.contains(&citation),
+                            "target `{}`: pin `{}` records diverged case `{case}` but \
+                             the pinned test's own doc comment does not cite it as \
+                             {citation} — the divergence claim needs the same citation \
+                             evidence as a parity claim",
+                            t.rust,
+                            p.test
+                        );
+                    }
+                }
+            }
         }
     }
 }
 
 /// Claims are structurally sound: claimed oracles are declared on the target,
 /// no within-target duplicate case names, every claimed case is cited
-/// (backtick-quoted) in the claiming file's doc comments, and no cross-target
+/// (backtick-quoted) in the claiming file's doc comments, no cross-target
 /// duplicate (oracle, case) claim exists without a `[[shared_cases]]`
-/// declaration.
+/// declaration — and no diverged case is counted as claimed. A case whose
+/// oracle behavior FLUI diverges from (evidenced by an `#[ignore]`d pin) must
+/// live in the pin's `cases`, never in `claims`: a divergence counted as a
+/// claim is exactly the "partial reported as parity" failure this inventory
+/// exists to kill.
 #[test]
 fn claims_are_cited_and_unique() {
     let manifest = load_manifest();
@@ -518,10 +609,45 @@ fn claims_are_cited_and_unique() {
         .iter()
         .map(|s| ((s.oracle.as_str(), s.case.as_str()), s.occurrences))
         .collect();
+    // (oracle, case) → diverged-pin owners, across all targets.
+    let mut diverged: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
+    for t in &manifest.targets {
+        for p in &t.pins {
+            if let Some(oracle) = &p.oracle {
+                for case in &p.cases {
+                    diverged
+                        .entry((oracle.as_str(), case.as_str()))
+                        .or_default()
+                        .push(t.rust.as_str());
+                }
+            }
+        }
+    }
     let mut claim_counts: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
     for t in &manifest.targets {
         let oracle_set: BTreeSet<&str> = t.oracles.iter().map(String::as_str).collect();
         let scanned = scan_rust_file(&parity_dir().join(format!("{}.rs", t.rust)));
+        // An #[ignore]d test's doc citing a case this target claims means the
+        // claim rests (at least partly) on non-passing evidence — the case
+        // must be reclassified as diverged via the pin row.
+        let claimed_here: BTreeSet<&str> = t
+            .claims
+            .iter()
+            .flat_map(|c| c.cases.iter().map(String::as_str))
+            .collect();
+        for test in scanned.tests.iter().filter(|x| x.ignored) {
+            for case in &claimed_here {
+                let citation = format!("`'{case}'`");
+                assert!(
+                    !test.doc.contains(&citation),
+                    "target `{}`: ignored test `{}` cites `{case}`, which the target \
+                     also lists under `claims` — a case with a pinned divergence must \
+                     be recorded in the pin's `cases` (diverged), not in `claims`",
+                    t.rust,
+                    test.name
+                );
+            }
+        }
         for claim in &t.claims {
             assert!(
                 oracle_set.contains(claim.oracle.as_str()),
@@ -553,6 +679,24 @@ fn claims_are_cited_and_unique() {
             }
         }
     }
+    // One classification per case name: diverged beats claimed. (Even for a
+    // [[shared_cases]] name with two upstream occurrences, a split
+    // claimed/diverged classification is not representable — the conservative
+    // reading, diverged, wins for the whole name.)
+    for ((oracle, case), pinners) in &diverged {
+        assert!(
+            !claim_counts.contains_key(&(*oracle, *case)),
+            "oracle case (`{oracle}`, `{case}`) is recorded as diverged by {pinners:?} \
+             but also appears in `claims` — a diverged case must never inflate the \
+             claimed/ported number"
+        );
+        let allowed = shared.get(&(*oracle, *case)).copied().unwrap_or(1);
+        assert!(
+            pinners.len() <= allowed,
+            "oracle case (`{oracle}`, `{case}`) is recorded as diverged by {pinners:?} \
+             but the upstream file has only {allowed} occurrence(s) of that name"
+        );
+    }
     for ((oracle, case), claimants) in &claim_counts {
         let allowed = shared.get(&(*oracle, *case)).copied().unwrap_or(1);
         assert!(
@@ -581,11 +725,17 @@ fn oracle_rows_and_summary_recompute() {
     let manifest = load_manifest();
     let universe_prefix = format!("{}/", manifest.source.universe);
 
-    // claimed instances per oracle file
+    // claimed / diverged instances per oracle file
     let mut claimed: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut diverged: BTreeMap<&str, usize> = BTreeMap::new();
     for t in &manifest.targets {
         for claim in &t.claims {
             *claimed.entry(claim.oracle.as_str()).or_default() += claim.cases.len();
+        }
+        for pin in &t.pins {
+            if let Some(oracle) = &pin.oracle {
+                *diverged.entry(oracle.as_str()).or_default() += pin.cases.len();
+            }
         }
         for oracle in &t.oracles {
             assert!(
@@ -607,8 +757,10 @@ fn oracle_rows_and_summary_recompute() {
             row.claimed
         );
     }
-    let mut totals = (0usize, 0usize, 0usize); // files, cases, claimed
-    let mut uni = (0usize, 0usize, 0usize, 0usize); // files, cases, claimed, pending
+    // files, cases, claimed, diverged
+    let mut totals = (0usize, 0usize, 0usize, 0usize);
+    // files, cases, claimed, diverged, pending
+    let mut uni = (0usize, 0usize, 0usize, 0usize, 0usize);
     for (file, row) in &manifest.oracle_files {
         let n = claimed.get(file.as_str()).copied().unwrap_or(0);
         assert_eq!(
@@ -616,13 +768,22 @@ fn oracle_rows_and_summary_recompute() {
             "[oracle_files] `{file}`: claimed = {} but targets claim {n}",
             row.claimed
         );
+        let d = diverged.get(file.as_str()).copied().unwrap_or(0);
+        assert_eq!(
+            row.diverged, d,
+            "[oracle_files] `{file}`: diverged = {} but pins record {d}",
+            row.diverged
+        );
         assert!(
-            row.claimed <= row.cases,
-            "[oracle_files] `{file}`: claimed {} exceeds its {} cases",
+            row.claimed + row.diverged <= row.cases,
+            "[oracle_files] `{file}`: claimed {} + diverged {} exceeds its {} cases",
             row.claimed,
+            row.diverged,
             row.cases
         );
-        let status = if row.claimed == 0 {
+        // `ported` requires every case claimed by passing, cited tests — a
+        // file with any diverged case can never read as ported.
+        let status = if row.claimed == 0 && row.diverged == 0 {
             "pending"
         } else if row.claimed >= row.cases {
             "ported"
@@ -632,18 +793,20 @@ fn oracle_rows_and_summary_recompute() {
         assert_eq!(
             row.status, status,
             "[oracle_files] `{file}`: status should be `{status}` \
-             ({} of {} cases claimed)",
-            row.claimed, row.cases
+             ({} of {} cases claimed, {} diverged)",
+            row.claimed, row.cases, row.diverged
         );
         totals.0 += 1;
         totals.1 += row.cases;
         totals.2 += row.claimed;
+        totals.3 += row.diverged;
         if file.starts_with(&universe_prefix) {
             uni.0 += 1;
             uni.1 += row.cases;
             uni.2 += row.claimed;
-            if row.claimed == 0 {
-                uni.3 += 1;
+            uni.3 += row.diverged;
+            if row.claimed == 0 && row.diverged == 0 {
+                uni.4 += 1;
             }
         }
     }
@@ -659,10 +822,12 @@ fn oracle_rows_and_summary_recompute() {
         ("oracle_files", totals.0, s.oracle_files),
         ("oracle_cases", totals.1, s.oracle_cases),
         ("cases_claimed", cases_claimed, s.cases_claimed),
+        ("cases_diverged", totals.3, s.cases_diverged),
         ("universe_files", uni.0, s.universe_files),
         ("universe_cases", uni.1, s.universe_cases),
         ("universe_cases_claimed", uni.2, s.universe_cases_claimed),
-        ("universe_pending_files", uni.3, s.universe_pending_files),
+        ("universe_cases_diverged", uni.3, s.universe_cases_diverged),
+        ("universe_pending_files", uni.4, s.universe_pending_files),
     ];
     for (name, computed, stored) in expected {
         assert_eq!(
@@ -672,13 +837,14 @@ fn oracle_rows_and_summary_recompute() {
     }
 
     // per-family recompute
-    let mut fams: BTreeMap<&str, (usize, usize, usize, usize)> = BTreeMap::new();
+    let mut fams: BTreeMap<&str, (usize, usize, usize, usize, usize)> = BTreeMap::new();
     for t in &manifest.targets {
         let e = fams.entry(t.family.as_str()).or_default();
         e.0 += 1;
         e.1 += t.tests;
         e.2 += t.claims.iter().map(|c| c.cases.len()).sum::<usize>();
-        e.3 += t.pins.len();
+        e.3 += t.pins.iter().map(|p| p.cases.len()).sum::<usize>();
+        e.4 += t.pins.len();
     }
     let stored_fams: BTreeSet<&str> = s.families.keys().map(String::as_str).collect();
     let computed_fams: BTreeSet<&str> = fams.keys().copied().collect();
@@ -686,14 +852,20 @@ fn oracle_rows_and_summary_recompute() {
         stored_fams, computed_fams,
         "[summary.families] keys disagree with target families"
     );
-    for (family, (targets, tests, cases, pins)) in fams {
+    for (family, (targets, tests, cases, diverged, pins)) in fams {
         let f = &s.families[family];
         assert_eq!(
-            (f.targets, f.rust_tests, f.cases_claimed, f.pins),
-            (targets, tests, cases, pins),
+            (
+                f.targets,
+                f.rust_tests,
+                f.cases_claimed,
+                f.cases_diverged,
+                f.pins
+            ),
+            (targets, tests, cases, diverged, pins),
             "[summary.families.\"{family}\"] is stale; recomputed \
-             (targets, rust_tests, cases_claimed, pins) = \
-             ({targets}, {tests}, {cases}, {pins})"
+             (targets, rust_tests, cases_claimed, cases_diverged, pins) = \
+             ({targets}, {tests}, {cases}, {diverged}, {pins})"
         );
     }
 }
@@ -771,7 +943,7 @@ fn manifest_matches_pinned_reference() {
         case_lists.insert(file.as_str(), cases);
     }
 
-    // Every claimed case name resolves, with multiplicity respected.
+    // Every claimed and diverged case name resolves against the reference.
     for t in &manifest.targets {
         for claim in &t.claims {
             let names = &case_lists[claim.oracle.as_str()];
@@ -782,6 +954,20 @@ fn manifest_matches_pinned_reference() {
                      `{}` at tag {}",
                     t.rust,
                     claim.oracle,
+                    manifest.source.tag
+                );
+            }
+        }
+        for pin in &t.pins {
+            let Some(oracle) = &pin.oracle else { continue };
+            let names = &case_lists[oracle.as_str()];
+            for case in &pin.cases {
+                assert!(
+                    names.iter().any(|n| n == case),
+                    "target `{}`: pin `{}` records diverged case `{case}` which does \
+                     not exist in `{oracle}` at tag {}",
+                    t.rust,
+                    pin.test,
                     manifest.source.tag
                 );
             }

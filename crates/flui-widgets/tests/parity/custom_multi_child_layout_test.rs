@@ -964,7 +964,7 @@ fn a_child_never_laid_out_names_it_in_the_captured_log() {
 
 /// **Divergence pin, asserting the oracle.**
 ///
-/// Port of 'performLayout did not layout multiple child': four children
+/// Port of `'performLayout did not layout multiple child'`: four children
 /// (`"0"`..`"3"`), the same delegate lays out only `"0"` and `"1"`, leaving
 /// BOTH `"2"` and `"3"` forgotten. The oracle's message enumerates every
 /// forgotten child; see "Divergence found by this port" above for why FLUI's

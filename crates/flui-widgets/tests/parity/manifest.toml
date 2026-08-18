@@ -6,7 +6,9 @@
 # case name in backtick-quoted form and the citation resolves against the
 # pinned reference. Uncited tests keep their oracle cases classified as
 # pending, so these counts under-claim rather than over-claim (issue #546
-# converts pending cases family by family).
+# converts pending cases family by family). Cases held by an #[ignore]d
+# divergence pin are counted in a separate `diverged` bucket, never in
+# `claimed` — a divergence must not read as parity.
 
 schema = 1
 
@@ -219,6 +221,8 @@ tests = 13
 test = "multiple_children_never_laid_out_are_all_named_in_the_panic_pin"
 capability = "complete unlaid-child enumeration in DelegateLayoutContext::finish diagnostics"
 issue = 786
+oracle = "widgets/custom_multi_child_layout_test.dart"
+cases = ["performLayout did not layout multiple child"]
 
 [[targets]]
 rust = "custom_paint_test"
@@ -416,7 +420,6 @@ cases = [
     "GridView - change maxChildCrossAxisExtent",
     "One-line GridView paints",
     "GridView in zero context",
-    "GridView in unbounded context",
     "GridView.builder control test",
     "GridView.builder with undefined itemCount",
     "GridView cross axis layout",
@@ -435,6 +438,8 @@ cases = [
 test = "grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content"
 capability = "shrink-wrap content sizing under an unbounded main axis"
 issue = 537
+oracle = "widgets/grid_view_test.dart"
+cases = ["GridView in unbounded context"]
 
 [[targets]]
 rust = "grid_view_test"
@@ -859,7 +864,6 @@ tests = 3
 oracle = "widgets/slivers_test.dart"
 cases = [
     "SliverFixedExtentList Correctly layout children after rearranging",
-    "SliverFixedExtentList handles underflow when its children changes",
     "SliverList.list can build children",
 ]
 
@@ -867,6 +871,8 @@ cases = [
 test = "sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window_pin"
 capability = "lazy sliver child manager that builds only the visible window"
 issue = 530
+oracle = "widgets/slivers_test.dart"
+cases = ["SliverFixedExtentList handles underflow when its children changes"]
 
 [[targets]]
 rust = "sliver_grid_test"
@@ -917,15 +923,14 @@ tests = 3
 
 [[targets.claims]]
 oracle = "widgets/slivers_test.dart"
-cases = [
-    "SliverList can handle inaccurate scroll offset due to changes in children list",
-    "SliverList handles 0 scrollOffsetCorrection",
-]
+cases = ["SliverList handles 0 scrollOffsetCorrection"]
 
 [[targets.pins]]
 test = "inaccurate_scroll_offset_converges_to_the_oracles_exact_windows_over_multiple_drags"
 capability = "viewport-applied scroll-offset correction instead of eager per-item pixel shifts"
 issue = 530
+oracle = "widgets/slivers_test.dart"
+cases = ["SliverList can handle inaccurate scroll offset due to changes in children list"]
 
 [[targets]]
 rust = "sliver_list_test"
@@ -1039,7 +1044,6 @@ cases = [
     "Table widget - control test",
     "Table widget - column offset (LTR)",
     "Table border - smoke test",
-    "Table widget - changing table dimensions",
     "Really small deficit double precision error",
     "Calculating flex columns with small width deficit",
     "Table widget - repump test",
@@ -1056,6 +1060,8 @@ cases = [
 test = "changing_row_and_column_count_reuses_and_discards_cells_by_flat_position"
 capability = "row-scoped keyed Table reconciliation"
 issue = 544
+oracle = "widgets/table_test.dart"
+cases = ["Table widget - changing table dimensions"]
 
 [[targets]]
 rust = "text_editing_controller_test"
@@ -1146,14 +1152,12 @@ family = "painting"
 oracles = ["widgets/visibility_test.dart"]
 tests = 12
 
-[[targets.claims]]
-oracle = "widgets/visibility_test.dart"
-cases = ["Visibility"]
-
 [[targets.pins]]
 test = "visibility_maintain_interactivity_with_maintain_size_would_let_hidden_taps_through"
 capability = "Visibility maintain-size / maintain-interactivity composition"
 issue = 543
+oracle = "widgets/visibility_test.dart"
+cases = ["Visibility"]
 
 [[targets]]
 rust = "wrap_test"
@@ -1180,8 +1184,9 @@ cases = [
 # One row per oracle file: every *_test.dart under <test_root>/widgets at the
 # pinned tag (the universe), plus files outside the universe that a target
 # claims. `cases` is the number of testWidgets(/test( occurrences at the tag;
-# `claimed` counts cases cited as ported by targets above; `status` is
-# "ported" (all cases claimed), "partial", or "pending" (none).
+# `claimed` counts cases cited as ported by targets above; `diverged` counts
+# cases held by an #[ignore]d divergence pin (never part of `claimed`);
+# `status` is "ported" (all cases claimed), "partial", or "pending".
 [oracle_files]
 "gestures/arena_test.dart" = { cases = 9, claimed = 0, status = "pending" }
 "gestures/double_tap_test.dart" = { cases = 0, claimed = 0, status = "pending" }
@@ -1245,7 +1250,7 @@ cases = [
 "widgets/container_test.dart" = { cases = 18, claimed = 6, status = "partial" }
 "widgets/context_menu_controller_test.dart" = { cases = 4, claimed = 0, status = "pending" }
 "widgets/coordinates_test.dart" = { cases = 1, claimed = 0, status = "pending" }
-"widgets/custom_multi_child_layout_test.dart" = { cases = 12, claimed = 0, status = "pending" }
+"widgets/custom_multi_child_layout_test.dart" = { cases = 12, claimed = 0, diverged = 1, status = "partial" }
 "widgets/custom_paint_test.dart" = { cases = 7, claimed = 0, status = "pending" }
 "widgets/custom_painter_test.dart" = { cases = 14, claimed = 0, status = "pending" }
 "widgets/custom_scroll_view_test.dart" = { cases = 5, claimed = 0, status = "pending" }
@@ -1298,7 +1303,7 @@ cases = [
 "widgets/global_keys_moving_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/grid_paper_test.dart" = { cases = 2, claimed = 0, status = "pending" }
 "widgets/grid_view_layout_test.dart" = { cases = 1, claimed = 1, status = "ported" }
-"widgets/grid_view_test.dart" = { cases = 29, claimed = 21, status = "partial" }
+"widgets/grid_view_test.dart" = { cases = 29, claimed = 20, diverged = 1, status = "partial" }
 "widgets/heroes_test.dart" = { cases = 56, claimed = 6, status = "partial" }
 "widgets/hit_testing_test.dart" = { cases = 3, claimed = 0, status = "pending" }
 "widgets/html_element_view_test.dart" = { cases = 13, claimed = 0, status = "pending" }
@@ -1522,7 +1527,7 @@ cases = [
 "widgets/slivers_keepalive_test.dart" = { cases = 12, claimed = 0, status = "pending" }
 "widgets/slivers_padding_test.dart" = { cases = 16, claimed = 9, status = "partial" }
 "widgets/slivers_protocol_test.dart" = { cases = 1, claimed = 0, status = "pending" }
-"widgets/slivers_test.dart" = { cases = 38, claimed = 21, status = "partial" }
+"widgets/slivers_test.dart" = { cases = 38, claimed = 19, diverged = 2, status = "partial" }
 "widgets/sliversemantics_test.dart" = { cases = 41, claimed = 0, status = "pending" }
 "widgets/slotted_render_object_widget_test.dart" = { cases = 5, claimed = 0, status = "pending" }
 "widgets/snapshot_widget_test.dart" = { cases = 11, claimed = 0, status = "pending" }
@@ -1536,7 +1541,7 @@ cases = [
 "widgets/stretch_effect_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/syncing_test.dart" = { cases = 3, claimed = 0, status = "pending" }
 "widgets/system_context_menu_test.dart" = { cases = 30, claimed = 0, status = "pending" }
-"widgets/table_test.dart" = { cases = 27, claimed = 14, status = "partial" }
+"widgets/table_test.dart" = { cases = 27, claimed = 13, diverged = 1, status = "partial" }
 "widgets/tap_region_test.dart" = { cases = 16, claimed = 0, status = "pending" }
 "widgets/test_page_tester_test.dart" = { cases = 2, claimed = 0, status = "pending" }
 "widgets/text_golden_test.dart" = { cases = 21, claimed = 0, status = "pending" }
@@ -1562,7 +1567,7 @@ cases = [
 "widgets/unique_widget_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/value_listenable_builder_test.dart" = { cases = 6, claimed = 6, status = "ported" }
 "widgets/view_test.dart" = { cases = 22, claimed = 0, status = "pending" }
-"widgets/visibility_test.dart" = { cases = 9, claimed = 1, status = "partial" }
+"widgets/visibility_test.dart" = { cases = 9, claimed = 0, diverged = 1, status = "partial" }
 "widgets/widget_inspector_structure_error_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/widget_inspector_test.dart" = { cases = 128, claimed = 0, status = "pending" }
 "widgets/widget_span_test.dart" = { cases = 2, claimed = 0, status = "pending" }
@@ -1581,98 +1586,115 @@ rust_tests = 645
 pins = 6
 oracle_files = 389
 oracle_cases = 5696
-cases_claimed = 298
+cases_claimed = 293
+cases_diverged = 6
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 290
-universe_pending_files = 332
+universe_cases_claimed = 285
+universe_cases_diverged = 6
+universe_pending_files = 331
 
 [summary.families."animation"]
 targets = 7
 rust_tests = 37
 cases_claimed = 15
+cases_diverged = 0
 pins = 0
 
 [summary.families."flex"]
 targets = 5
 rust_tests = 35
 cases_claimed = 21
+cases_diverged = 0
 pins = 0
 
 [summary.families."focus"]
 targets = 2
 rust_tests = 26
 cases_claimed = 7
+cases_diverged = 0
 pins = 0
 
 [summary.families."framework"]
 targets = 6
 rust_tests = 27
 cases_claimed = 13
+cases_diverged = 0
 pins = 0
 
 [summary.families."gesture"]
 targets = 5
 rust_tests = 68
 cases_claimed = 17
+cases_diverged = 0
 pins = 0
 
 [summary.families."layout"]
 targets = 22
 rust_tests = 131
 cases_claimed = 75
+cases_diverged = 1
 pins = 1
 
 [summary.families."navigation"]
 targets = 4
 rust_tests = 26
 cases_claimed = 17
+cases_diverged = 0
 pins = 0
 
 [summary.families."painting"]
 targets = 6
 rust_tests = 56
-cases_claimed = 17
+cases_claimed = 16
+cases_diverged = 1
 pins = 1
 
 [summary.families."pointer"]
 targets = 3
 rust_tests = 44
 cases_claimed = 19
+cases_diverged = 0
 pins = 0
 
 [summary.families."scroll"]
 targets = 8
 rust_tests = 73
-cases_claimed = 36
+cases_claimed = 35
+cases_diverged = 1
 pins = 1
 
 [summary.families."sliver"]
 targets = 15
 rust_tests = 82
-cases_claimed = 36
+cases_claimed = 34
+cases_diverged = 2
 pins = 2
 
 [summary.families."stack"]
 targets = 1
 rust_tests = 7
 cases_claimed = 5
+cases_diverged = 0
 pins = 0
 
 [summary.families."table"]
 targets = 1
 rust_tests = 16
-cases_claimed = 15
+cases_claimed = 14
+cases_diverged = 1
 pins = 1
 
 [summary.families."text"]
 targets = 3
 rust_tests = 12
 cases_claimed = 0
+cases_diverged = 0
 pins = 0
 
 [summary.families."text-input"]
 targets = 2
 rust_tests = 5
 cases_claimed = 5
+cases_diverged = 0
 pins = 0
