@@ -63,7 +63,15 @@
 //!   `WidgetsApp` is not supported: the mount-time handle stays active until
 //!   the element remounts (the oracle recreates the `Navigator` when
 //!   `navigatorKey` changes).
+//! - A rebuilt `WidgetsApp` refreshes the home route's content **one frame
+//!   later**: the refresh is scheduled through the route entry's rebuild
+//!   handle, and a channel-scheduled mark is processed on the next frame
+//!   pump. The oracle's `Route.changedExternalState` rebuilds the page in
+//!   the same frame; FLUI's one-frame propagation matches every other
+//!   channel-scheduled republish in this workspace (the realm's root
+//!   `MediaQuery` included).
 
+use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -78,7 +86,7 @@ use crate::localization::{
     BoxedLocalizationsDelegate, DefaultWidgetsLocalizationsDelegate, Localizations,
     basic_locale_list_resolution,
 };
-use crate::navigator::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
+use crate::navigator::{Navigator, NavigatorHandle, NavigatorObserver, RouteId, SimpleRoute};
 use crate::text::DefaultTextStyle;
 
 /// The app-level wrapping hook — the oracle's `TransitionBuilder`
@@ -303,21 +311,77 @@ impl WidgetsApp {
     }
 }
 
-/// Persistent state for [`WidgetsApp`]: owns the [`NavigatorHandle`] and
-/// seeds the home route exactly once, in `create_state` — re-seeding on
-/// every `build` would re-push the home route on every rebuild.
+/// Persistent state for [`WidgetsApp`]: owns the [`NavigatorHandle`], seeds
+/// the home route exactly once (re-seeding on every `build` would re-push
+/// the home route on every rebuild), keeps that route's content in sync
+/// with the current view configuration, and reconciles the observer
+/// registrations it made against the handle across updates and disposal.
 pub struct WidgetsAppState {
     /// `None` in the builder-only form (no navigator at all — the oracle
     /// builds no `Navigator` when `home`, `routes`, `onGenerateRoute`, and
-    /// `onUnknownRoute` are all absent).
+    /// `onUnknownRoute` are all absent) until an update introduces routing.
     navigator: Option<NavigatorHandle>,
+    /// The seeded home route and the live cell its content builder reads —
+    /// `did_update_view` writes the current view's `home` into the cell and
+    /// marks the route, so a rebuilt `WidgetsApp` shows the new home (the
+    /// oracle's builder reads `widget.home` live and
+    /// `Route.changedExternalState` rebuilds the page). `None` when home
+    /// was not seeded (builder-only, or a pre-seeded handle won).
+    home_route: Option<(RouteId, Rc<RefCell<BoxedView>>)>,
+    /// Exactly the observers THIS shell registered on the handle, so update
+    /// reconciliation and `dispose` remove only its own registrations —
+    /// a caller-retained handle must not accumulate stale shell
+    /// registrations across remounts (the oracle's `NavigatorState`
+    /// detaches its observers in `didUpdateWidget`/`dispose`).
+    registered_observers: Vec<Arc<dyn NavigatorObserver>>,
 }
 
 impl fmt::Debug for WidgetsAppState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WidgetsAppState")
             .field("has_navigator", &self.navigator.is_some())
+            .field("has_home_route", &self.home_route.is_some())
+            .field("registered_observers", &self.registered_observers.len())
             .finish()
+    }
+}
+
+impl WidgetsAppState {
+    /// Adopt a navigator for `view`: choose the handle, seed home into an
+    /// empty one, and register the configured observers. Shared by
+    /// `create_state` (mount) and `did_update_view` (a builder-only element
+    /// updated to a routed configuration — the oracle's `_updateRouting`).
+    fn install_navigator(view: &WidgetsApp) -> Self {
+        let handle = view.navigator.clone().unwrap_or_default();
+        let mut home_route = None;
+        if let Some(home) = &view.home {
+            if handle.route_ids().is_empty() {
+                let cell = Rc::new(RefCell::new(home.clone()));
+                let reader = Rc::clone(&cell);
+                handle.seed_initial(
+                    SimpleRoute::<()>::new(move |_ctx| reader.borrow().clone()).named("/"),
+                );
+                let id = handle
+                    .current()
+                    .expect("BUG: seed_initial must leave the home route current");
+                home_route = Some((id, cell));
+            } else {
+                tracing::debug!(
+                    "WidgetsApp: navigator handle already seeded; home not mounted \
+                     (the caller-built initial stack wins)"
+                );
+            }
+        }
+        let mut registered_observers = Vec::with_capacity(view.observers.len());
+        for observer in &view.observers {
+            handle.add_observer(Arc::clone(observer));
+            registered_observers.push(Arc::clone(observer));
+        }
+        WidgetsAppState {
+            navigator: Some(handle),
+            home_route,
+            registered_observers,
+        }
     }
 }
 
@@ -325,24 +389,8 @@ impl StatefulView for WidgetsApp {
     type State = WidgetsAppState;
 
     fn create_state(&self) -> Self::State {
-        let navigator = if self.home.is_some() || self.navigator.is_some() {
-            let handle = self.navigator.clone().unwrap_or_default();
-            if let Some(home) = &self.home {
-                if handle.route_ids().is_empty() {
-                    let home = home.clone();
-                    handle
-                        .seed_initial(SimpleRoute::<()>::new(move |_ctx| home.clone()).named("/"));
-                } else {
-                    tracing::debug!(
-                        "WidgetsApp: navigator handle already seeded; home not mounted \
-                         (the caller-built initial stack wins)"
-                    );
-                }
-            }
-            for observer in &self.observers {
-                handle.add_observer(Arc::clone(observer));
-            }
-            Some(handle)
+        if self.home.is_some() || self.navigator.is_some() {
+            WidgetsAppState::install_navigator(self)
         } else {
             debug_assert!(
                 self.observers.is_empty(),
@@ -350,26 +398,87 @@ impl StatefulView for WidgetsApp {
                  navigator handle (the oracle asserts navigatorObservers is empty in the \
                  builder-only form)"
             );
-            None
-        };
-        WidgetsAppState { navigator }
+            WidgetsAppState {
+                navigator: None,
+                home_route: None,
+                registered_observers: Vec::new(),
+            }
+        }
     }
 }
 
 impl ViewState<WidgetsApp> for WidgetsAppState {
     fn did_update_view(&mut self, _old_view: &WidgetsApp, new_view: &WidgetsApp) {
-        // Documented divergence (module docs): the mount-time handle stays
-        // active; the oracle recreates the Navigator on a navigatorKey swap.
-        let handle_swapped = match (&self.navigator, &new_view.navigator) {
-            (Some(current), Some(incoming)) => !current.is_same(incoming),
-            (None, Some(_)) => true,
-            _ => false,
-        };
-        if handle_swapped {
-            tracing::warn!(
-                "WidgetsApp: navigator handle changed after mount; the mount-time handle \
-                 stays active — remount the WidgetsApp to swap navigators"
-            );
+        match (&self.navigator, &new_view.navigator) {
+            // Documented divergence (module docs): the mount-time handle
+            // stays active; the oracle recreates the Navigator on a
+            // navigatorKey swap.
+            (Some(current), Some(incoming)) if !current.is_same(incoming) => {
+                tracing::warn!(
+                    "WidgetsApp: navigator handle changed after mount; the mount-time handle \
+                     stays active — remount the WidgetsApp to swap navigators"
+                );
+            }
+            // A builder-only element updated to a routed configuration
+            // gains its navigator now — the oracle's `_updateRouting` runs
+            // from `didUpdateWidget` and builds the Navigator on the next
+            // build.
+            (None, _) if new_view.home.is_some() || new_view.navigator.is_some() => {
+                *self = WidgetsAppState::install_navigator(new_view);
+                return;
+            }
+            _ => {}
+        }
+
+        // Home refresh — the oracle's builder reads `widget.home` at build
+        // time and `NavigatorState.didUpdateWidget` runs
+        // `Route.changedExternalState` over every live route
+        // unconditionally, so the home route re-renders from the CURRENT
+        // view configuration on every update.
+        if let (Some((route, cell)), Some(home)) = (&self.home_route, &new_view.home) {
+            *cell.borrow_mut() = home.clone();
+            if let Some(handle) = &self.navigator {
+                handle.mark_route_needs_build(*route);
+            }
+        }
+
+        // Observer reconciliation, by `Arc` identity — the oracle swaps its
+        // effective-observer list in `didUpdateWidget`. Only registrations
+        // this shell made are touched; observers the caller attached to the
+        // handle directly are not this widget's to remove.
+        if let Some(handle) = &self.navigator {
+            self.registered_observers.retain(|registered| {
+                let keep = new_view
+                    .observers
+                    .iter()
+                    .any(|observer| Arc::ptr_eq(observer, registered));
+                if !keep {
+                    handle.remove_observer(registered);
+                }
+                keep
+            });
+            for observer in &new_view.observers {
+                if !self
+                    .registered_observers
+                    .iter()
+                    .any(|registered| Arc::ptr_eq(registered, observer))
+                {
+                    handle.add_observer(Arc::clone(observer));
+                    self.registered_observers.push(Arc::clone(observer));
+                }
+            }
+        }
+    }
+
+    fn dispose(&mut self) {
+        // Deregister exactly what this shell registered, so a
+        // caller-retained handle sees no duplicate attachments (and no
+        // stale callbacks) when a later WidgetsApp mounts over it — the
+        // oracle's `NavigatorState.dispose` detaches its observers.
+        if let Some(handle) = &self.navigator {
+            for observer in self.registered_observers.drain(..) {
+                handle.remove_observer(&observer);
+            }
         }
     }
 
@@ -824,19 +933,34 @@ mod tests {
     }
 
     /// Records the observer lifecycle a [`WidgetsApp`]-registered observer
-    /// sees at mount.
+    /// sees across mounts, updates, and unmounts.
     #[derive(Debug, Default)]
     struct RecordingObserver {
-        attached: Mutex<bool>,
-        pushes: Mutex<Vec<crate::RouteId>>,
+        attaches: Mutex<u32>,
+        detaches: Mutex<u32>,
+        pushes: Mutex<Vec<RouteId>>,
+    }
+
+    impl RecordingObserver {
+        fn attaches(&self) -> u32 {
+            *self.attaches.lock().expect("test mutex poisoned")
+        }
+
+        fn detaches(&self) -> u32 {
+            *self.detaches.lock().expect("test mutex poisoned")
+        }
     }
 
     impl NavigatorObserver for RecordingObserver {
         fn did_attach(&self, _navigator: NavigatorHandle) {
-            *self.attached.lock().expect("test mutex poisoned") = true;
+            *self.attaches.lock().expect("test mutex poisoned") += 1;
         }
 
-        fn did_push(&self, route: crate::RouteId, _previous: Option<crate::RouteId>) {
+        fn did_detach(&self) {
+            *self.detaches.lock().expect("test mutex poisoned") += 1;
+        }
+
+        fn did_push(&self, route: RouteId, _previous: Option<RouteId>) {
             self.pushes.lock().expect("test mutex poisoned").push(route);
         }
     }
@@ -845,14 +969,153 @@ mod tests {
     fn observers_attach_at_mount_and_see_the_home_route() {
         let observer = Arc::new(RecordingObserver::default());
         mount(WidgetsApp::new(SizedBox::shrink()).observer(observer.clone()));
-        assert!(
-            *observer.attached.lock().expect("test mutex poisoned"),
-            "the observer must be attached when the navigator mounts"
+        assert_eq!(
+            observer.attaches(),
+            1,
+            "the observer must be attached exactly once when the navigator mounts"
         );
         assert_eq!(
             observer.pushes.lock().expect("test mutex poisoned").len(),
             1,
             "the observer must see the seeded home route arrive"
+        );
+    }
+
+    /// Mounts `child` when `show`, an empty box otherwise — the harness's
+    /// documented way to unmount a subtree (`swap_root` is keyed by the
+    /// root's `TypeId`, so the root type must stay fixed while a field
+    /// toggle unmounts what is below it).
+    #[derive(Clone, StatelessView)]
+    struct Toggle {
+        show: bool,
+        child: BoxedView,
+    }
+
+    impl fmt::Debug for Toggle {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Toggle")
+                .field("show", &self.show)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl StatelessView for Toggle {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            if self.show {
+                self.child.clone()
+            } else {
+                SizedBox::shrink().boxed()
+            }
+        }
+    }
+
+    #[test]
+    fn rebuilding_with_a_new_home_shows_the_new_home_content() {
+        // The oracle's home route builder reads `widget.home` at build time,
+        // and `NavigatorState.didUpdateWidget` runs
+        // `Route.changedExternalState` over live routes — so rebuilding the
+        // app with a different home re-renders the route with the NEW home.
+        let handle = NavigatorHandle::new();
+        let (probe_a, captured_a) = capture(|_ctx| true);
+        let (probe_b, captured_b) = capture(|_ctx| true);
+        let mut harness = mount(WidgetsApp::new(probe_a).navigator(handle.clone()));
+        assert!(captured_value(&captured_a).is_some(), "first home builds");
+        assert!(captured_value(&captured_b).is_none());
+
+        harness.swap_root(WidgetsApp::new(probe_b).navigator(handle.clone()));
+        // One extra pump: the refresh is scheduled through the entry's
+        // `RebuildHandle` from `did_update_view`, and a channel-scheduled
+        // mark lands on the next frame pump — the module-docs divergence
+        // from the oracle's same-frame `changedExternalState` rebuild, and
+        // the same one-frame propagation every channel-scheduled republish
+        // in this crate has (e.g. the realm's root `MediaQuery`).
+        harness.tick();
+        assert!(
+            captured_value(&captured_b).is_some(),
+            "the updated home must build on the frame after the app rebuilds"
+        );
+        assert_eq!(
+            handle.route_ids().len(),
+            1,
+            "refreshing home must rebuild the existing route, not push a new one"
+        );
+    }
+
+    #[test]
+    fn unmount_and_remount_over_a_retained_handle_does_not_duplicate_observers() {
+        // A caller-retained handle outlives the shell. Each mount registers
+        // the configured observers; dispose must deregister them, or the
+        // handle accumulates stale registrations and the observer hears
+        // every event N times after N remounts (the oracle's NavigatorState
+        // detaches its observers in dispose).
+        let handle = NavigatorHandle::new();
+        let observer = Arc::new(RecordingObserver::default());
+        let app = |handle: &NavigatorHandle, observer: &Arc<RecordingObserver>| {
+            WidgetsApp::new(SizedBox::shrink())
+                .navigator(handle.clone())
+                .observer(observer.clone())
+        };
+
+        let mut harness = mount(Toggle {
+            show: true,
+            child: app(&handle, &observer).boxed(),
+        });
+        assert_eq!(observer.attaches(), 1, "first mount attaches once");
+
+        harness.swap_root(Toggle {
+            show: false,
+            child: SizedBox::shrink().boxed(),
+        });
+        harness.swap_root(Toggle {
+            show: true,
+            child: app(&handle, &observer).boxed(),
+        });
+        assert_eq!(
+            observer.attaches(),
+            2,
+            "the remount must attach the observer exactly once more — a duplicate \
+             registration left behind by the first mount would attach it twice"
+        );
+    }
+
+    #[test]
+    fn updating_away_an_observer_detaches_it() {
+        // The oracle reconciles `navigatorObservers` in `didUpdateWidget`;
+        // an observer no longer configured must stop receiving callbacks.
+        let handle = NavigatorHandle::new();
+        let observer = Arc::new(RecordingObserver::default());
+        let mut harness = mount(
+            WidgetsApp::new(SizedBox::shrink())
+                .navigator(handle.clone())
+                .observer(observer.clone()),
+        );
+        assert_eq!(observer.attaches(), 1);
+        assert_eq!(observer.detaches(), 0);
+
+        harness.swap_root(WidgetsApp::new(SizedBox::shrink()).navigator(handle.clone()));
+        assert_eq!(
+            observer.detaches(),
+            1,
+            "an observer dropped from the configuration must be detached on update"
+        );
+    }
+
+    #[test]
+    fn a_builder_only_app_updated_to_a_home_configuration_gains_routing() {
+        // `with_builder`'s doc promises a navigator can be attached later;
+        // the oracle's `_updateRouting` handles the same transition from
+        // `didUpdateWidget`. Without the adoption path this update would
+        // panic in `build` (no navigator, no builder).
+        let (probe, captured) = capture(|_ctx| true);
+        let mut harness = mount(WidgetsApp::with_builder(|_ctx, _child| {
+            SizedBox::shrink().boxed()
+        }));
+        assert!(captured_value(&captured).is_none());
+
+        harness.swap_root(WidgetsApp::new(probe));
+        assert!(
+            captured_value(&captured).is_some(),
+            "the routed configuration must mount a navigator and build home"
         );
     }
 

@@ -22,7 +22,7 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_types::geometry::{Bounds, Pixels, px};
 use flui_types::{Offset, Size};
-use flui_view::View;
+use flui_view::{ElementNode, View};
 
 /// A mounted, laid-out widget tree.
 pub(crate) struct Harness {
@@ -427,9 +427,8 @@ impl Harness {
     pub(crate) fn view_type_of(&mut self, id: ElementId) -> TypeId {
         self.binding
             .tree_mut()
-            .iter_nodes()
-            .find(|(node_id, _)| *node_id == id)
-            .map(|(_, node)| node.element().view_type_id())
+            .get(id)
+            .map(|node| node.element().view_type_id())
             .expect("the probed element must be mounted")
     }
 
@@ -437,9 +436,8 @@ impl Harness {
     pub(crate) fn parent_of(&mut self, id: ElementId) -> Option<ElementId> {
         self.binding
             .tree_mut()
-            .iter_nodes()
-            .find(|(node_id, _)| *node_id == id)
-            .and_then(|(_, node)| node.parent())
+            .get(id)
+            .and_then(ElementNode::parent)
     }
 
     /// Every mounted element whose view is of type `ty`, in arbitrary order.
