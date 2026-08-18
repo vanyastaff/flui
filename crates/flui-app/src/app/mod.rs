@@ -13,6 +13,7 @@
 mod config;
 pub mod direct;
 pub(crate) mod execution;
+mod frame_failure;
 pub(crate) mod hot_reload;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod lifecycle;
@@ -32,6 +33,7 @@ pub use execution::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
     SpawnError,
 };
+pub use frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,

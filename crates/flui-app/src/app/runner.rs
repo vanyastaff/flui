@@ -9075,6 +9075,11 @@ where
         // single point that turns the frame path's overlay work on.
         ui_realm.set_performance_overlay(config.show_performance_overlay);
 
+        // Typed frame-failure route (issue #561): failures are contained
+        // per presentation either way; this only adds the embedder's
+        // delivery.
+        ui_realm.set_frame_failure_handler(config.frame_failure_handler.clone());
+
         let logical = window.logical_size();
         let attach = ui_realm.enter(|realm| {
             realm.attach_root_widget_with_size(&root, logical.width.0, logical.height.0)
@@ -10071,6 +10076,11 @@ fn finish_open_secondary_window(
             .map_err(|error| {
                 anyhow::anyhow!(error).context("secondary UiRealm construction failed")
             })?;
+            // NOT wired to a frame-failure handler: `finish_open_secondary_window`
+            // never sees the primary `AppConfig` (its `config` parameter
+            // upstream carries only window shape), so this secondary
+            // realm's failures surface through `tracing` alone. Part of
+            // issue #561's remaining work, named in ADR-0048.
             install_realm_alongside(ui_realm, &window).map_err(|error| {
                 anyhow::anyhow!(error).context("installing the secondary realm failed")
             })?
@@ -10327,6 +10337,10 @@ where
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.
         ui_realm.set_performance_overlay(config.show_performance_overlay);
+
+        // Typed frame-failure route (issue #561) — same wiring as the
+        // desktop bootstrap.
+        ui_realm.set_frame_failure_handler(config.frame_failure_handler.clone());
 
         let logical = window.logical_size();
         let attach = ui_realm.enter(|realm| {
@@ -10743,6 +10757,10 @@ where
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.
         ui_realm.set_performance_overlay(config.show_performance_overlay);
+
+        // Typed frame-failure route (issue #561) — same wiring as the
+        // desktop bootstrap.
+        ui_realm.set_frame_failure_handler(config.frame_failure_handler.clone());
 
         let logical = window.logical_size();
         let attach = ui_realm.enter(|realm| {

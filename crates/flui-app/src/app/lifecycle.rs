@@ -1,5 +1,5 @@
 //! Task, worker, and service lifecycles over the unified execution services
-//! (issue #558, ADR-0048).
+//! (issue #558, ADR-0049).
 //!
 //! # Lifecycle taxonomy
 //!

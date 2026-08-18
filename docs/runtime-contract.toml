@@ -96,6 +96,7 @@ declarations = [
     "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, run_direct, };",
     "pub use app::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
     "pub use app::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
+    "pub use app::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};",
     "pub use app::{ExitPolicy, WindowPolicy};",
     "pub use app::open_secondary_window;",
     "pub use app::{run_app_android, run_app_android_with_config};",
@@ -113,6 +114,7 @@ declarations = [
     "pub use config::{AppConfig, DiagnosticsProfile};",
     "pub use direct::run_direct;",
     "pub use execution::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
+    "pub use frame_failure::{FrameFailureHandler, FrameFailureKind, FrameFailureReport};",
     "pub use lifecycle::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use runner::{run_app_android, run_app_android_with_config};",
     "pub use runner::open_secondary_window;",
@@ -1052,7 +1054,7 @@ with sequential execution (compute inline at the spawn site, IO via \
 \
 **Named gaps, stated not silently assumed:** (1) RETIRED on native by \
 issue #558: the task/worker/service lifecycle layer (`app/lifecycle.rs`, \
-ADR-0048) is the lanes' shipped production consumer -- \
+ADR-0049) is the lanes' shipped production consumer -- \
 `AppConfig::with_service` -> bootstrap -> `AppRuntime::start_service` -> \
 `spawn_io`, with tasks/workers reaching `spawn_compute`/`spawn_io` through \
 `ServiceContext::spawner()`; the `expect(dead_code)` ratchet in \
@@ -1095,7 +1097,7 @@ evidence = [
 key = "task-worker-service-lifecycles"
 statement = """
 Background work above the execution lanes is classified by lifetime, and \
-every unit has a named owner and an explicit end (issue #558, ADR-0048). \
+every unit has a named owner and an explicit end (issue #558, ADR-0049). \
 One-shot **tasks** and recurring **workers** are owned by `#[must_use]` \
 handles with an explicit cancel-on-drop contract (no detach; work that \
 must outlive its owner is a named service, never an orphan); join evidence \
@@ -2467,7 +2469,7 @@ declared_in = "crates/flui-app/src/app/lifecycle.rs"
 contains = "pub struct TaskSpawner"
 classification = "experimental"
 thread_affinity = "TaskSpawner/ServicePublisher/CancellationSignal are Clone + Send + Sync; TaskHandle/WorkerHandle are Send owning handles (single consumer); ServiceEvents is the pull-only receiving half owned by the consumer"
-owner = "the lifecycle layer over the execution lanes (issue #558, ADR-0048): every unit of background work has a named owner — tasks/workers are owned by #[must_use] cancel-on-drop handles (no detach; work that must outlive its owner is a named Service), services are owned by AppRuntime's registry, started from AppConfig::with_service and shut down cancel-first with a shared deadline BEFORE the pools close"
+owner = "the lifecycle layer over the execution lanes (issue #558, ADR-0049): every unit of background work has a named owner — tasks/workers are owned by #[must_use] cancel-on-drop handles (no detach; work that must outlive its owner is a named Service), services are owned by AppRuntime's registry, started from AppConfig::with_service and shut down cancel-first with a shared deadline BEFORE the pools close"
 failure_semantics = "spawns return Result<_, SpawnError>; join evidence is TaskOutcome (Completed | Cancelled | Panicked) on a dedicated capacity-one channel per unit, joins are deadline-bounded (join_within returns the still-owning handle on timeout); publishing into a dead receiver is PublishError::OwnerGone (late results are inert, never a wake); panics are contained at the lifecycle boundary and reported as evidence"
 consumers = [
     "AppConfig::with_service -> bootstrap_desktop -> AppRuntime::start_service (production wiring)",

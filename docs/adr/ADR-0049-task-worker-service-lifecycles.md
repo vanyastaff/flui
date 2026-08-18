@@ -1,4 +1,4 @@
-# ADR-0048: Task, worker, and service lifecycles
+# ADR-0049: Task, worker, and service lifecycles
 
 *Background work is classified by lifetime, and every unit has a named owner and an explicit end: one-shot **tasks** and recurring **workers** are owned by `#[must_use]`, cancel-on-drop handles with deadline-bounded join evidence; application-lifetime **services** are owned by the runtime's registry, declare whether the last window closing stops the app, and are shut down by a staged cancel → bounded-join → evidence pass that runs before the execution pools close. There is no fire-and-forget spawn and no `detach()`.*
 
