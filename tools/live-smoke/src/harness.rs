@@ -385,7 +385,38 @@ fn check_occlusion_gating(
     conn.xtest_fake_input(BUTTON_RELEASE, 1, 0, root, 0, 0, 0)?;
     conn.sync()?;
 
-    // 4. Cover the app mid-fling.
+    // 4. Cover the app mid-fling — DEMAND-gated, never time-gated: a fixed
+    //    gap between drag and cover is runner-speed-dependent (a slow CI
+    //    software raster presents a handful of frames where a dev machine
+    //    presents dozens), so instead poll until the ballistic animation
+    //    has demonstrably presented >= 3 frames beyond the quiesced
+    //    baseline AND is still producing (the count grew within the latest
+    //    sample window — the gate must close on a LIVE animation, not one
+    //    that just died), then map immediately. Only a bound expiring
+    //    without that evidence is a failure: a genuinely dead fling.
+    let fling_deadline = Instant::now() + Duration::from_secs(10);
+    let mut previous = count(&read_log()?, GPU_PRESENT_MARKER);
+    let fling_frames;
+    loop {
+        std::thread::sleep(Duration::from_millis(150));
+        let sample = count(&read_log()?, GPU_PRESENT_MARKER);
+        let frames = sample.saturating_sub(gpu_armed_base);
+        if frames >= 3 && sample > previous {
+            fling_frames = frames;
+            break;
+        }
+        if Instant::now() > fling_deadline {
+            bail!(
+                "occlusion check FAILED (premise): the drag-fling presented only \
+                 {frames} frame(s) beyond the quiesced post-arming baseline (or \
+                 stopped producing) within 10s of the drag — no live animation \
+                 exists for the gate to stop, so the zero-submissions assertion \
+                 would be vacuous"
+            );
+        }
+        previous = sample;
+    }
+    eprintln!("live-smoke: drag-fling live with {fling_frames} presented frames — covering now");
     conn.map_window(cover)?;
     conn.sync()?;
 
@@ -420,26 +451,11 @@ fn check_occlusion_gating(
     let scroll_hidden_base = count(&hidden_snapshot, SCROLL_TICK_LINE);
     let wheel_hidden_base = count(&hidden_snapshot, MOUSE_WHEEL_LINE);
 
-    // Fling premise, measured against the QUIESCED post-arming baseline so
-    // the arming ticks' own submissions cannot satisfy it: the drag/fling
-    // must have presented several frames of its own before the cover
-    // mapped, or no live animation existed for the gate to stop and the
-    // zero-submissions assertion below would be vacuous. The count is
-    // printed for CI triage either way. (`gpu_visible_base`, before
+    // The fling premise was already established BEFORE the cover mapped
+    // (the demand-gated poll above): a live animation with >= 3 presented
+    // frames existed at cover time, so the zero-submissions assertion
+    // below is non-vacuous by construction. (`gpu_visible_base`, before
     // arming, only feeds the arming loop above.)
-    let fling_frames = gpu_hidden_base.saturating_sub(gpu_armed_base);
-    eprintln!(
-        "live-smoke: drag-fling presented {fling_frames} frames between the quiesced \
-         baseline and the cover"
-    );
-    if fling_frames < 3 {
-        bail!(
-            "occlusion check FAILED (premise): the drag-fling presented only \
-             {fling_frames} frame(s) beyond the quiesced post-arming baseline before \
-             the cover mapped — no live animation existed for the gate to stop, so \
-             the zero-submissions assertion would be vacuous"
-        );
-    }
 
     // 6. Covered-phase probes: two wheel ticks pass through the cover's
     //    empty input region.
