@@ -94,6 +94,7 @@ declarations = [
     "pub mod bindings;",
     "pub mod embedder;",
     "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, run_direct, };",
+    "pub use app::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
     "pub use app::{ExitPolicy, WindowPolicy};",
     "pub use app::open_secondary_window;",
     "pub use app::{run_app_android, run_app_android_with_config};",
@@ -110,6 +111,7 @@ declarations = [
     "pub mod runner;",
     "pub use config::{AppConfig, DiagnosticsProfile};",
     "pub use direct::run_direct;",
+    "pub use execution::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
     "pub use runner::{run_app_android, run_app_android_with_config};",
     "pub use runner::open_secondary_window;",
     "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
@@ -1015,6 +1017,70 @@ state = "planned"
 domain = "shared-engine"
 owner_issue = 557
 mechanical = false
+
+[[contract]]
+key = "execution-services-owned-by-app-runtime"
+statement = """
+Background execution is owned by the loop-scoped `AppRuntime`, never \
+ambient (ADR-0047): one `ExecutionServices` value per loop carries the two \
+background work-class lanes -- asynchronous compute (bounded worker pool, \
+sized to leave the owner thread a hardware thread: \
+`default_compute_worker_count`) and IO (small fixed async runtime) -- with \
+bounded admission (`SpawnError::Saturated`), a shutdown protocol \
+(stop admission -> cancel via `CancellationToken` -> join running work \
+bounded by a grace deadline, run at full loop-exit teardown), and host \
+injection (`AppConfig::with_executors` / `HostExecutors`): with an injected \
+host the default pools are NEVER constructed, and cancellation still \
+reaches work handed to pools FLUI does not own (the wrapper's cancellation \
+point, pinned by `shutdown_cancels_work_handed_to_host_pools`). \
+Frame-required compute is not a lane here by design -- it is the owner \
+thread plus `AsyncDriver`'s mid-frame poll, structurally independent of \
+these pools (pinned by \
+`frame_lane_makes_progress_while_background_lanes_are_saturated`). The \
+per-platform `BackgroundExecutor` no longer claims a full-core pool per \
+platform instance: it is lazy (zero threads until first use -- \
+FLUI-managed runs never use it) and small, pending its removal under this \
+issue's follow-up slice. `DeterministicExecutors` is the single-threaded \
+FIFO reference implementation of the injection seam; the admission/shutdown \
+conformance tests run against both backends. Wasm32 keeps the same API \
+with sequential execution (compute inline at the spawn site, IO via \
+`spawn_local`; shutdown stops admission only). \
+\
+**Named gaps, stated not silently assumed:** (1) the spawn lanes have no \
+shipped production caller yet -- the consumers are issue #558's \
+task/worker/service lifecycles and #559's raster lane, the next items on \
+this same critical path; an `expect(dead_code)` in `app/execution.rs` \
+errors the moment #558 wires one, forcing the attribute's removal. \
+(2) `flui_platform::Priority` remains public and informational -- its \
+"tested behavior or not public" criterion is deferred to the follow-up \
+slice that retires the `BackgroundExecutor`/`Task`/`Priority` surfaces \
+(already classified removal-target below). (3) flui-assets' bridged decode \
+path still starts its own single-worker runtime when no handle is \
+injected -- a 1-thread residual, not a full-core pool; wiring it to the \
+unified IO lane needs a flui-app -> flui-assets edge decision and is \
+deferred to the same follow-up. (4) per-task cancellation handles and \
+versioned results are #558's Task surface, deliberately not frozen here.\
+"""
+state = "partial"
+domain = "application"
+owner_issue = 557
+mechanical = false
+evidence = [
+    { kind = "symbol", file = "crates/flui-app/src/app/execution.rs", contains = "pub(crate) struct ExecutionServices" },
+    { kind = "symbol", file = "crates/flui-app/src/app/execution.rs", contains = "pub(crate) fn default_compute_worker_count" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(super) fn ensure_execution" },
+    { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn compute_pool_sizing_leaves_owner_thread_headroom" },
+    { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn conformance_no_admission_after_shutdown" },
+    { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn conformance_admission_is_bounded_and_released" },
+    { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn shutdown_joins_running_compute_work" },
+    { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn shutdown_cancels_work_handed_to_host_pools" },
+    { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn host_injection_routes_work_and_never_starts_default_pools" },
+    { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn default_pools_start_lazily_on_first_spawn" },
+    { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn frame_lane_makes_progress_while_background_lanes_are_saturated" },
+    { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn stashed_host_executors_win_over_default_pools" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_resolves_execution_services_and_teardown_shuts_them_down" },
+    { kind = "test", file = "crates/flui-platform/src/executor.rs", contains = "fn test_background_executor_starts_lazily_on_first_use" },
+]
 
 [[contract]]
 key = "channel-identity-lifetime-boundary"
@@ -2285,6 +2351,36 @@ consumers = ["flui-app prelude", "flui facade via app module"]
 owner_issue = 553
 
 [[surface]]
+path = "flui_app::{HostExecutors, HostComputePool, HostIoPool, ComputeJob, IoFuture, SpawnError}"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/lib.rs"
+contains = "ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,"
+classification = "experimental"
+thread_affinity = "HostExecutors is Clone + Send + Sync (Arc-bundled trait objects); pool implementations run work on any thread; FLUI's cancellation/admission wrappers travel with the work"
+owner = "the host-injection seam for background execution (issue #557, ADR-0047) — consumed at bootstrap via AppConfig::with_executors, resolved once per loop into AppRuntime's ExecutionServices"
+failure_semantics = "spawns return Result<(), SpawnError> (Saturated | ShuttingDown, #[non_exhaustive] thiserror); refused work is dropped, destructors run"
+consumers = [
+    "AppRuntime (resolution + shutdown)",
+    "embedded hosts (none in-tree yet — the host-driven runtime entry point is later Runtime.1 work)",
+]
+owner_issue = 557
+notes = "Experimental until the host-driven runtime surface exists and the two-consumer rule is met; a breaking reshape when #558's task/worker/service lifecycles land is expected and preferred over shims."
+
+[[surface]]
+path = "flui_app::DeterministicExecutors"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/execution.rs"
+contains = "pub struct DeterministicExecutors"
+classification = "experimental"
+thread_affinity = "Clone + Send + Sync queues; work executes only inside run_until_idle, on the calling thread, FIFO"
+owner = "single-threaded deterministic reference implementation of the host-injection seam — the 'injected deterministic executor passes the same tests' acceptance evidence, and the reproducible-execution option for host tests"
+failure_semantics = "spawns are unbounded and infallible at this layer; FLUI's ExecutionServices admission bounds still apply above it"
+consumers = ["execution conformance tests", "runtime wiring tests"]
+owner_issue = 557
+
+[[surface]]
 path = "flui_app::embedder"
 crate = "flui-app"
 kind = "module"
@@ -2441,7 +2537,7 @@ owner = "per-platform executor construction — moves to host-injected runtime e
 failure_semantics = "spawn-shaped; no admission control or cancellation contract"
 consumers = ["flui-assets decode path", "prompt marshaling (Windows)"]
 owner_issue = 557
-notes = "workspace-layers.toml disposition 'narrow' for flui-platform names exactly this loss."
+notes = "workspace-layers.toml disposition 'narrow' for flui-platform names exactly this loss. Defanged by #557's first slice ahead of removal: construction is lazy (zero threads until first use — FLUI-managed runs never call it, so they never start it) and the pool shrank from num_cpus workers to a small fixed count; AppRuntime's ExecutionServices (ADR-0047) now owns the process's real worker pools."
 
 [[surface]]
 path = "flui_platform::Task"

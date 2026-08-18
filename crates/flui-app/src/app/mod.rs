@@ -12,6 +12,7 @@
 
 mod config;
 pub mod direct;
+pub(crate) mod execution;
 pub(crate) mod hot_reload;
 pub(crate) mod logging;
 pub(crate) mod media_query_root;
@@ -25,6 +26,10 @@ pub(crate) mod window_registry;
 
 pub use config::{AppConfig, DiagnosticsProfile};
 pub use direct::run_direct;
+pub use execution::{
+    ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
+    SpawnError,
+};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),

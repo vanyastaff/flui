@@ -1707,6 +1707,12 @@ fn install_platform_realm(
         // it does not matter whether a prior realm on this thread already
         // triggered it.
         let _ = state.ensure_services();
+        // Same known-point discipline for the loop-scoped execution
+        // services (issue #557): resolved here (host-injected if the
+        // bootstrap stashed `AppConfig::executors`, default pools
+        // otherwise), never ambiently. Cheap — default pools start worker
+        // threads on first background spawn, not here.
+        let _ = state.ensure_execution();
         displaced
     });
     // Destructors may re-enter platform/framework code (the same invariant
@@ -2536,6 +2542,13 @@ fn drain_owner_inbox(realm: &super::ui_realm::UiRealm) -> bool {
     realm.take_redraw_request()
 }
 
+/// Per-pool grace deadline for joining running background work at full
+/// loop-exit teardown. Bounds a hung compute job's ability to wedge process
+/// exit; running work that finishes sooner ends shutdown sooner (the
+/// deadline is a cap, not a sleep).
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+const EXECUTION_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 fn teardown_platform_realm() {
     let realms = APP_RUNTIME.with(|slot| {
@@ -2576,6 +2589,17 @@ fn teardown_platform_realm() {
     // Destructors may re-enter platform/framework code. Drop only after the
     // TLS borrow and incarnation identity have been released.
     drop(realms);
+
+    // Execution-services shutdown (issue #557): the whole loop is exiting,
+    // so stop background admission, cancel outstanding work, and join
+    // running work bounded by a per-pool grace deadline. Loop-scoped like
+    // the clipboard below — hot-restart never reaches this function, so a
+    // reinstalled realm keeps its pools. A teardown path that skips this
+    // (panic mid-teardown) still tears the pools down non-blockingly via
+    // `ExecutionServices`' own `Drop`.
+    APP_RUNTIME.with(|slot| {
+        slot.borrow().shutdown_execution(EXECUTION_SHUTDOWN_GRACE);
+    });
 
     // ADR-0034's install/teardown symmetry: the event loop has exited (this
     // runs from both `run_desktop` and `run_android`, after their respective
@@ -2636,6 +2660,58 @@ mod realm_dispatch_tests {
 
     fn install_test_realm() -> RealmDispatcher {
         install_platform_realm(super::super::ui_realm::UiRealm::for_test(), &test_window())
+    }
+
+    /// Installing a realm resolves the loop-scoped execution services
+    /// (issue #557) at the same known point as `SharedEngineServices` — and
+    /// full loop-exit teardown shuts them down: afterwards the services are
+    /// still resolved (nothing can silently rebuild pools on an exiting
+    /// loop) but refuse every spawn.
+    ///
+    /// If reverted: remove the `ensure_execution` call from
+    /// `install_platform_realm` and the first assertion fails; remove the
+    /// `shutdown_execution` call from `teardown_platform_realm` and the
+    /// refusal assertion fails.
+    #[test]
+    fn install_resolves_execution_services_and_teardown_shuts_them_down() {
+        use crate::app::execution::SpawnError;
+
+        APP_RUNTIME.with(|slot| {
+            assert!(
+                slot.borrow().execution().is_none(),
+                "no execution services before any realm is installed"
+            );
+        });
+
+        install_test_realm();
+        APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            let services = state
+                .execution()
+                .expect("install_platform_realm must resolve execution services");
+            assert!(services.owns_default_pools());
+            assert!(
+                !services.default_pools_started(),
+                "resolution must not start worker threads; pools start on first spawn"
+            );
+        });
+
+        teardown_platform_realm();
+        APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            let services = state
+                .execution()
+                .expect("teardown leaves the shut-down services in place");
+            assert_eq!(
+                services.spawn_compute(Box::new(|| {})),
+                Err(SpawnError::ShuttingDown),
+                "background admission must be closed after full loop-exit teardown"
+            );
+            assert_eq!(
+                services.spawn_io(Box::pin(async {})),
+                Err(SpawnError::ShuttingDown)
+            );
+        });
     }
 
     /// A second realm installed on the same thread (hot-restart; sequential
@@ -8791,6 +8867,14 @@ where
         // `AppRuntime`, invisible to the platform layer) can veto an exit
         // the backend would otherwise take unconditionally.
         install_exit_policy_hook(config.exit_policy);
+
+        // 0b2. Stash host-injected executors (issue #557) BEFORE the realm
+        // install below resolves the loop's execution services — the order
+        // that makes `ensure_execution` route background work to the host's
+        // pools instead of constructing the default ones.
+        if let Some(host) = config.executors.clone() {
+            APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(host));
+        }
 
         // 0c. This window's device-recovery backoff, constructed here (not
         // down at step 6 alongside the renderer it paces) so the
