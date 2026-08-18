@@ -52,9 +52,18 @@ use crate::traits::{
 struct Shared {
     /// Whether assistive technology is currently attached.
     active: AtomicBool,
-    /// The most recent tree, kept so a late activation can be answered
-    /// immediately rather than showing an empty application until the next
-    /// frame happens to dirty something.
+    /// The most recent **self-contained** update (one carrying
+    /// [`TreeUpdate::tree`] metadata — the producer's promise that it stands
+    /// alone), kept so a late activation can be answered immediately rather
+    /// than showing an empty application until the next frame happens to
+    /// dirty something.
+    ///
+    /// Incremental updates (`tree: None`) are deliberately not retained:
+    /// applied in isolation they describe a handful of changed nodes, and
+    /// answering a fresh screen reader with one would present a fragment as
+    /// the whole interface. The composition root re-publishes a full tree on
+    /// every activation, so this retained answer is at worst one full
+    /// publish behind and is corrected within a frame.
     latest: Mutex<Option<TreeUpdate>>,
     activation_listener: Mutex<Option<AccessibilityActivationListener>>,
     action_listener: Mutex<Option<AccessibilityActionListener>>,
@@ -158,15 +167,20 @@ impl std::fmt::Debug for UnixAccessibility {
 
 impl PlatformAccessibility for UnixAccessibility {
     fn publish(&self, update: TreeUpdate) {
-        // Retained even while inactive: a screen reader started later asks for
-        // an initial tree, and answering it from here shows the real interface
-        // immediately instead of an empty window until something next changes.
+        // Self-contained updates are retained even while inactive: a screen
+        // reader started later asks for an initial tree, and answering it
+        // from here shows the real interface immediately instead of an empty
+        // window until something next changes. Incremental updates are not
+        // retained — see the field doc for why a fragment must never answer
+        // an activation.
         //
         // Exactly one clone, and it buys that retention. `update_if_active`
         // takes a factory, so the owned value moves into the adapter only when
         // something is attached; with nobody listening the closure never runs
         // and the value is simply dropped.
-        *self.shared.latest.lock() = Some(update.clone());
+        if update.tree.is_some() {
+            *self.shared.latest.lock() = Some(update.clone());
+        }
         self.adapter.lock().update_if_active(move || update);
     }
 
@@ -227,6 +241,29 @@ mod tests {
         let retained = retained.expect("the tree is kept for a late activation");
         let (_, node) = retained.nodes.first().expect("one node");
         assert_eq!(node.label(), Some("Submit"));
+    }
+
+    /// An incremental update — no tree metadata, a fragment of changed
+    /// nodes — must never become the answer to a fresh activation: applied
+    /// in isolation it would present a handful of nodes as the whole
+    /// interface. Only self-contained updates are retained.
+    #[test]
+    fn an_incremental_update_is_not_retained_for_activation() {
+        let accessibility = UnixAccessibility::new();
+        accessibility.publish(tree_update("Submit"));
+
+        let mut fragment = tree_update("Changed");
+        fragment.tree = None;
+        accessibility.publish(fragment);
+
+        let retained = accessibility.shared.latest.lock().clone();
+        let retained = retained.expect("the earlier full update stays retained");
+        let (_, node) = retained.nodes.first().expect("one node");
+        assert_eq!(
+            node.label(),
+            Some("Submit"),
+            "the retained answer is the last self-contained update, not the fragment"
+        );
     }
 
     /// The activation handler answers with the retained tree, which is the

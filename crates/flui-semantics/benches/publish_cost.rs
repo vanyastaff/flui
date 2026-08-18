@@ -12,14 +12,17 @@
 //! # The three scenarios
 //!
 //! - **idle** — a clean tree, the common case while a screen reader is
-//!   attached but nothing is changing. This is the one whose cost is
-//!   counter-intuitive: `has_dirty_nodes` short-circuits on the *first dirty*
-//!   node, so a clean tree is scanned to the end. Idle is the worst case, not
-//!   the cheap one.
-//! - **one_dirty** — a single changed node, the shape of a checkbox toggling.
-//!   Measures what one small change costs: today, a full-tree translation.
-//! - **all_dirty** — every node changed, the shape of a route transition, and
-//!   the ceiling `one_dirty` should be far below but currently approaches.
+//!   attached but nothing is changing. The dirty check is counter-backed
+//!   O(1); before that counter it was an `any()` scan whose worst case was
+//!   exactly this scenario (a clean tree was scanned to the end), so idle
+//!   was the most expensive check of the three.
+//! - **one_dirty** — a single genuinely changed node, the shape of a
+//!   checkbox toggling. The incremental flush translates the one dirty node
+//!   and publishes the one changed node; before the diff this scenario
+//!   translated and published the whole tree, tracking `all_dirty`.
+//! - **all_dirty** — every node changed, the shape of a route transition,
+//!   and the full-republish path (`send_full_tree`) by construction: the
+//!   ceiling `one_dirty` must stay far below.
 //!
 //! Sizes span 16..1024 nodes. A real application's semantics tree holds
 //! *boundaries*, not widgets, so 1024 is a large app rather than an absurd one.
@@ -69,9 +72,9 @@ fn publish_cost(c: &mut Criterion) {
     let mut group = c.benchmark_group("semantics_publish");
 
     for count in [16u32, 64, 256, 1024] {
-        // A clean tree publishes nothing. What it still pays is the dirty
-        // check — and that check scans furthest precisely when there is
-        // nothing to do.
+        // A clean tree publishes nothing. What it pays is the dirty check
+        // alone — counter-backed O(1) now; it used to be a scan that walked
+        // furthest precisely when there was nothing to do.
         group.bench_with_input(BenchmarkId::new("idle", count), &count, |b, &count| {
             let mut owner = owner_with(count);
             b.iter(|| {
@@ -80,14 +83,22 @@ fn publish_cost(c: &mut Criterion) {
             });
         });
 
-        // One changed node. Today this translates and publishes the whole
-        // tree, so it should track `all_dirty` rather than staying flat —
-        // that gap is the thing worth closing.
+        // One genuinely changed node — the shape of a checkbox toggling.
+        // The label alternates so every iteration publishes a real
+        // single-node diff; a no-op re-mark would measure only the
+        // empty-diff path. This is the scenario the incremental flush
+        // exists for: translate the one dirty node, publish the one
+        // changed node, never the tree.
         group.bench_with_input(BenchmarkId::new("one_dirty", count), &count, |b, &count| {
             let mut owner = owner_with(count);
             let target = owner.root().expect("the tree is rooted");
+            let mut flip = false;
             b.iter(|| {
-                owner.mark_dirty(target);
+                flip = !flip;
+                if let Some(node) = owner.get_mut(target) {
+                    node.config_mut()
+                        .set_label(if flip { "toggled on" } else { "toggled off" });
+                }
                 owner.flush();
             });
         });

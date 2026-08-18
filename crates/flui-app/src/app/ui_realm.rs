@@ -3814,6 +3814,50 @@ mod tests {
         );
     }
 
+    /// Assistive technology attaching must also request a self-contained
+    /// full republish (the adapter's state is unknown, and flushes publish
+    /// incrementally — the next diff would answer a fresh screen reader
+    /// with a fragment). The listener may only set the flag; the frame
+    /// reconcile consumes it on the owner thread and routes it to
+    /// `PipelineOwner::request_semantics_full_publish`.
+    #[test]
+    fn at_activation_requests_a_full_republish_and_the_reconcile_consumes_it() {
+        let fake = Arc::new(flui_platform::FakeAccessibility::new());
+        let window =
+            crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+        let realm = UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false)))
+            .expect("realm");
+        let host_flag = realm
+            .presentations
+            .primary()
+            .semantics_host()
+            .full_republish_handle();
+        let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+
+        fake.set_active(true);
+        assert!(
+            host_flag.load(Ordering::Relaxed),
+            "activation must record that the adapter needs a full tree"
+        );
+
+        realm.enter(|_| {
+            let _ = realm.draw_frame_entered(constraints);
+        });
+        assert!(
+            !host_flag.load(Ordering::Relaxed),
+            "the frame reconcile consumes the request exactly once"
+        );
+
+        fake.set_active(false);
+        realm.enter(|_| {
+            let _ = realm.draw_frame_entered(constraints);
+        });
+        assert!(
+            !host_flag.load(Ordering::Relaxed),
+            "deactivation must not request a republish nobody will hear"
+        );
+    }
+
     /// Teardown withdraws from the platform bridge: after the presentation
     /// closes, an activation flip delivered by the (longer-lived) adapter
     /// must not reach the dead presentation's enablement flag — `close()`
