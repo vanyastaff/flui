@@ -266,6 +266,119 @@ fn a_focus_change_is_published_even_when_no_node_payload_changed() {
     );
 }
 
+/// Focus ambiguity counts EVERY claimant, publishable or not — exactly as
+/// the full-publish path does (`tree_to_update` warns and falls back to the
+/// root when two nodes claim focus, regardless of addressability). An
+/// unrelated incremental flush must not "resolve" the ambiguity toward the
+/// one claimant that happens to be publishable.
+#[test]
+fn an_unaddressable_claimant_keeps_focus_ambiguous_across_incremental_flushes() {
+    let (mut owner, received) = recording_owner();
+
+    let root = owner.insert(node(0, "root"));
+    let mut focused = node(1, "focused");
+    focused.config_mut().set_focused(true);
+    let focused = owner.insert(focused);
+    // A second claimant with no render identity: never publishable, but a
+    // claimant all the same.
+    let mut phantom = SemanticsNode::new();
+    phantom.config_mut().set_label("phantom");
+    phantom.config_mut().set_focused(true);
+    let phantom = owner.insert(phantom);
+    owner.add_child(root, focused);
+    owner.add_child(root, phantom);
+    owner.set_root(Some(root));
+
+    owner.flush();
+    let root_focus = {
+        let updates = received.lock();
+        assert_eq!(
+            updates[0].focus,
+            updates[0]
+                .tree
+                .as_ref()
+                .expect("initializing update carries tree metadata")
+                .root,
+            "two claimants are ambiguous; the full publish focuses the root"
+        );
+        updates[0].focus
+    };
+
+    // An unrelated content change; both focus claims still stand.
+    owner
+        .get_mut(root)
+        .expect("root is live")
+        .config_mut()
+        .set_label("root renamed");
+    owner.flush();
+
+    let updates = received.lock();
+    assert_eq!(updates.len(), 2);
+    assert_eq!(
+        updates[1].focus, root_focus,
+        "the ambiguity did not go away, so neither may the root fallback"
+    );
+}
+
+/// A focus flag toggled on an unpublishable node still changes what the
+/// tree as a whole claims: a second claimant appearing means ambiguity, and
+/// the published focus must retreat to the root — the same answer a full
+/// republish of this tree would give.
+#[test]
+fn toggling_an_unaddressable_nodes_focus_is_observed() {
+    let (mut owner, received) = recording_owner();
+
+    let root = owner.insert(node(0, "root"));
+    let mut focused = node(1, "focused");
+    focused.config_mut().set_focused(true);
+    let focused_sid = owner.insert(focused);
+    let mut phantom = SemanticsNode::new();
+    phantom.config_mut().set_label("phantom");
+    let phantom = owner.insert(phantom);
+    owner.add_child(root, focused_sid);
+    owner.add_child(root, phantom);
+    owner.set_root(Some(root));
+
+    owner.flush();
+    {
+        let updates = received.lock();
+        let focused_identity = updates[0]
+            .nodes
+            .iter()
+            .find(|(_, n)| n.label() == Some("focused"))
+            .map(|(id, _)| *id)
+            .expect("the focused node is published");
+        assert_eq!(
+            updates[0].focus, focused_identity,
+            "a single publishable claimant is the focus"
+        );
+    }
+
+    // The unpublishable node now claims focus too.
+    owner
+        .get_mut(phantom)
+        .expect("phantom is live")
+        .config_mut()
+        .set_focused(true);
+    owner.flush();
+
+    let updates = received.lock();
+    assert_eq!(
+        updates.len(),
+        2,
+        "the focus retreat must be delivered even though no payload changed"
+    );
+    assert_eq!(
+        updates[1].focus,
+        updates[0]
+            .tree
+            .as_ref()
+            .expect("initializing update carries tree metadata")
+            .root,
+        "two claimants are ambiguous; focus falls back to the root"
+    );
+}
+
 /// Re-pointing the root at an already-published, otherwise-untouched node
 /// is a root-identity change with zero dirty content — `set_root` itself
 /// must count as a change, or the flush gate returns before the

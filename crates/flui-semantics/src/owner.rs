@@ -210,26 +210,44 @@ pub struct SemanticsOwner {
     /// the dirty bits it travels with).
     full_publish_pending: bool,
 
-    /// Stable ids of the addressable nodes currently claiming
+    /// Arena ids of the nodes currently claiming
     /// [`SemanticsFlag::IsFocused`](crate::SemanticsFlag), maintained
     /// incrementally so a flush derives focus in O(dirty) instead of
     /// re-scanning every node:
     ///
     /// - a dirty node examined during an incremental flush is inserted or
     ///   removed by what its config now says;
-    /// - a removed node is dropped when the removal log is drained;
     /// - every full publish rebuilds the set from a whole-tree scan (the
-    ///   full path is O(tree) anyway).
+    ///   full path is O(tree) anyway);
+    /// - dead entries are dropped at resolution time by a liveness check
+    ///   over the (tiny) set itself.
     ///
-    /// A node whose focus flag changes without its dirty bit is invisible
-    /// here — the identical staleness contract the payload diff itself has.
-    /// Exactly one member ⇒ that member is the published focus; zero or
-    /// several ⇒ the root (several also warns, matching `tree_to_update`).
-    focus_claimants: FxHashSet<accesskit::NodeId>,
+    /// Keyed by **arena id, not stable id**, so an unpublishable claimant
+    /// still counts: ambiguity must match what the full path
+    /// (`tree_to_update`'s `focused_node`) would derive — two claimants
+    /// mean the root, even when only one of them could ever be published.
+    /// Addressability is resolved at publish time instead: a single
+    /// claimant with no stable identity also falls back to the root,
+    /// exactly like the full path's failed `stable_id` lookup.
+    ///
+    /// Arena-id keying survives slot reuse because a recycled slot is a
+    /// fresh insert, fresh inserts are dirty, and dirty nodes are always
+    /// re-examined before resolution — a stale entry can only refer to a
+    /// vacant slot, which the liveness check drops. A node whose focus
+    /// flag changes without its dirty bit is invisible here — the
+    /// identical staleness contract the payload diff itself has.
+    focus_claimants: FxHashSet<SemanticsId>,
 
-    /// How many nodes the last flush actually examined (translated or
-    /// focus-checked). The oracle for the O(dirty) claim: a single-node
-    /// change must examine one node, not the arena.
+    /// How many arena entries the last flush inspected as publish/diff
+    /// candidates — the scaling oracle for the O(dirty) claim: a
+    /// single-node change must inspect one entry, not the arena.
+    ///
+    /// One definition on both paths: a full publish inspects every arena
+    /// entry (`tree_to_update` iterates the whole slab and pays each
+    /// node's translation before the addressability check discards an
+    /// unpublishable one), so it reports `tree.len()`; an incremental
+    /// flush reports the dirty set's live, still-dirty survivors —
+    /// including unpublishable ones, whose focus claims it must examine.
     #[cfg(any(test, feature = "testing"))]
     examined_last_flush: usize,
 }
@@ -707,14 +725,13 @@ impl SemanticsOwner {
         self.tree.mark_all_clean();
     }
 
-    /// Every addressable node currently claiming the focused flag — the
-    /// full-scan seed for the incrementally-maintained
-    /// [`Self::focus_claimants`] set.
-    fn scan_focus_claimants(tree: &SemanticsTree) -> FxHashSet<accesskit::NodeId> {
+    /// Every node currently claiming the focused flag — publishable or not,
+    /// because ambiguity counts all claimants — the full-scan seed for the
+    /// incrementally-maintained [`Self::focus_claimants`] set.
+    fn scan_focus_claimants(tree: &SemanticsTree) -> FxHashSet<SemanticsId> {
         tree.iter()
             .filter(|(_, node)| node.config().is_focused())
-            .filter_map(|(_, node)| node.accessibility_id())
-            .map(|identity| accesskit::NodeId(identity.as_u64()))
+            .map(|(sid, _)| sid)
             .collect()
     }
 
@@ -742,9 +759,7 @@ impl SemanticsOwner {
         // node: its removal notice is stale, not its entry.
         for raw in self.tree.take_removed_accessibility_ids() {
             if !self.tree.is_accessibility_id_live(raw) {
-                let id = accesskit::NodeId(raw);
-                state.nodes.remove(&id);
-                self.focus_claimants.remove(&id);
+                state.nodes.remove(&accesskit::NodeId(raw));
             }
         }
 
@@ -762,23 +777,25 @@ impl SemanticsOwner {
             if !node.is_dirty() {
                 continue;
             }
+            #[cfg(any(test, feature = "testing"))]
+            {
+                examined += 1;
+            }
+
+            // Focus bookkeeping counts every claimant, publishable or not
+            // — ambiguity must match the full path, which counts them all.
+            if node.config().is_focused() {
+                self.focus_claimants.insert(sid);
+            } else {
+                self.focus_claimants.remove(&sid);
+            }
+
             let Some(identity) = node.accessibility_id() else {
                 // Unaddressable: never published, nothing to diff. Same
                 // skip rule as `tree_to_update`.
                 continue;
             };
             let id = accesskit::NodeId(identity.as_u64());
-            #[cfg(any(test, feature = "testing"))]
-            {
-                examined += 1;
-            }
-
-            if node.config().is_focused() {
-                self.focus_claimants.insert(id);
-            } else {
-                self.focus_claimants.remove(&id);
-            }
-
             let Some(data) = self.tree.node_data_of(node) else {
                 continue;
             };
@@ -793,11 +810,19 @@ impl SemanticsOwner {
             self.examined_last_flush = examined;
         }
 
-        // Exactly one claimant wins; ambiguity falls back to the root
-        // (matching `tree_to_update`, which warns for the same reason).
+        // Resolution mirrors `tree_to_update`'s `focused_node` + stable-id
+        // lookup exactly: dead claimants are dropped (the set is tiny, so
+        // the liveness sweep is O(claimants)); one survivor wins if it is
+        // publishable and falls back to the root if not; several warn and
+        // fall back to the root.
+        let tree = &self.tree;
+        self.focus_claimants.retain(|&sid| tree.contains(sid));
         let mut claimants = self.focus_claimants.iter();
         let focus = match (claimants.next(), claimants.next()) {
-            (Some(&single), None) => single,
+            (Some(&single), None) => tree
+                .get(single)
+                .and_then(SemanticsNode::accessibility_id)
+                .map_or(state.root, |identity| accesskit::NodeId(identity.as_u64())),
             (Some(_), Some(_)) => {
                 tracing::warn!(
                     "semantics tree has more than one focused node; publishing the root"
@@ -835,9 +860,11 @@ impl SemanticsOwner {
         self.tree.mark_all_clean();
     }
 
-    /// How many nodes the last flush examined — the oracle for the
-    /// O(dirty) publish claim (a full publish examines every node, an
-    /// incremental one only the dirty set's survivors).
+    /// How many arena entries the last flush inspected — the scaling
+    /// oracle for the O(dirty) publish claim. A full publish inspects
+    /// every arena entry; an incremental one only the dirty set's live
+    /// survivors. See the field doc for why "inspected" is the honest
+    /// unit on both paths.
     #[cfg(any(test, feature = "testing"))]
     pub fn examined_last_flush(&self) -> usize {
         self.examined_last_flush
