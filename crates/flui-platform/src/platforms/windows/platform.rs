@@ -44,7 +44,7 @@ use crate::{
     config::WindowConfiguration,
     data_transfer::{DataTransferSource, NullDataTransferSource},
     executor::BackgroundExecutor,
-    shared::{PlatformHandlers, WindowCallbacks},
+    shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::ContextLedger},
     traits::{
         Clipboard, DesktopCapabilities, OwnerPlatform, Platform, PlatformCapabilities,
         PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowAppearance,
@@ -97,6 +97,14 @@ pub(super) struct WindowContext {
     /// path in `window_proc` uses this; the `WM_KEYDOWN` drain sees a whole
     /// burst at once and never needs cross-message state.
     pub pending_high_surrogate: std::cell::Cell<Option<u16>>,
+    /// Borrow ledger deferring this context's free past every live borrow
+    /// on the owner thread — see [`ContextLedger`] for the reentrancy
+    /// hazard (a framework callback closing the window from inside a
+    /// dispatch) this exists to survive, and [`ContextGuard`] for the RAII
+    /// half. `RefCell`, not a lock: only the owning thread ever touches it
+    /// (the affinity gates enforce that), and every borrow is a short
+    /// non-reentrant method call.
+    pub ledger: std::cell::RefCell<ContextLedger>,
 }
 
 impl WindowContext {
@@ -105,6 +113,12 @@ impl WindowContext {
     /// This method extracts the handler, releases the lock, calls the handler,
     /// then re-acquires the lock to restore it. This prevents deadlocks when
     /// the handler tries to acquire the same lock.
+    ///
+    /// The restore touches `self` AFTER the handler returns, and the handler
+    /// may have closed this very window — that is sound only because every
+    /// caller holds a [`ContextGuard`] over `self`, which defers the
+    /// context's free past the borrow even when the handler's close runs a
+    /// nested `WM_DESTROY` (which merely retires it).
     #[inline]
     pub(super) fn dispatch_event(&self, event: WindowEvent) {
         // Take the handler out of the lock
@@ -129,16 +143,69 @@ fn hwnd_names_flui_class(hwnd: HWND) -> bool {
     let mut name = [0_u16; 256];
     // SAFETY: `GetClassNameW` writes at most `name.len()` UTF-16 units
     // (including the terminator) into the live stack buffer the slice
-    // points at, and returns the count written (0 on failure — a dead or
-    // foreign handle simply reports "not our class" here).
-    // `WINDOW_CLASS_NAME.as_wide()` walks our own `w!(..)` static literal,
-    // which is NUL-terminated by construction.
-    unsafe {
-        let len = GetClassNameW(hwnd, &mut name);
-        if len <= 0 {
-            return false;
+    // points at, and returns the count copied EXCLUDING the terminator (0
+    // on failure — a dead or foreign handle simply reports "not our class"
+    // here). `WINDOW_CLASS_NAME.as_wide()` walks our own `w!(..)` static
+    // literal, which is NUL-terminated by construction, and measures it
+    // with `wcslen` — so it also EXCLUDES the terminator, matching the
+    // length convention `class_name_matches` documents and its Linux tests
+    // pin.
+    let (copied, expected) =
+        unsafe { (GetClassNameW(hwnd, &mut name), WINDOW_CLASS_NAME.as_wide()) };
+    crate::shared::hwnd_affinity::class_name_matches(&name, copied, expected)
+}
+
+/// RAII borrow of a [`WindowContext`]: counts itself in the context's
+/// [`ContextLedger`] on acquisition and, on release, frees the allocation
+/// iff it was the outermost borrow of a retired context. This is what makes
+/// holding `&WindowContext` across reentrant message dispatch sound — a
+/// nested `WM_DESTROY` (a framework callback closing the window from inside
+/// a dispatch) only *retires* the context; the memory outlives every frame
+/// still borrowing it.
+struct ContextGuard {
+    context: *mut WindowContext,
+}
+
+impl ContextGuard {
+    /// Registers a borrow of `context`.
+    ///
+    /// # Safety
+    ///
+    /// `context` must be the live (not yet freed) allocation installed in a
+    /// FLUI window's `GWLP_USERDATA` slot, and the caller must be on that
+    /// window's owning thread — both established by the gate or dispatch
+    /// provenance at every call site. Single-threadedness is what makes the
+    /// non-atomic ledger sound.
+    unsafe fn acquire(context: *mut WindowContext) -> Self {
+        // SAFETY: `context` is valid per the contract above.
+        unsafe { (*context).ledger.borrow_mut().acquire() };
+        Self { context }
+    }
+
+    /// The borrowed context, lifetime-bound to this guard.
+    fn context(&self) -> &WindowContext {
+        // SAFETY: `acquire`'s contract established validity, and the ledger
+        // defers the only free (a retired context's outermost release) past
+        // this guard's own `Drop` — so the allocation outlives `&self`.
+        unsafe { &*self.context }
+    }
+}
+
+impl Drop for ContextGuard {
+    fn drop(&mut self) {
+        // The allocation is still live here — it is freed only by the
+        // outermost release of a retired context, which is at the earliest
+        // THIS statement (`Self::context` carries that argument). The
+        // `RefCell` borrow is a temporary that ends before the free below.
+        let must_free = self.context().ledger.borrow_mut().release();
+        if must_free {
+            // SAFETY: this was the outermost borrow of a retired context:
+            // the slot was cleared before retirement (no new borrow can be
+            // minted), no other guard exists, and the pointer is the
+            // `Box::into_raw` allocation `WindowsWindow::new` installed —
+            // reclaiming it here is the unique free.
+            drop(unsafe { Box::from_raw(self.context) });
         }
-        name[..len as usize] == *WINDOW_CLASS_NAME.as_wide()
     }
 }
 
@@ -156,14 +223,15 @@ fn hwnd_names_flui_class(hwnd: HWND) -> bool {
 /// Linux-tested rules in [`crate::shared::hwnd_affinity`]; this shell only
 /// performs the OS queries.
 ///
-/// `f` must not retrieve queued messages, and must not reach
-/// `DestroyWindow` for this same window — directly or through a dispatched
-/// callback — while the reference is live: `WM_DESTROY` dispatched inside
-/// `f` would free the context under it. This is the same discipline
-/// `window_proc`'s own arms already rely on when they hold the context
-/// across callback dispatch; a callback that closes its own window
-/// mid-dispatch is the documented residual (same-thread reentrancy)
-/// exposure, unchanged by this gate, which closes the *cross-thread* race.
+/// The borrow is guarded, not fragile: `f` may make calls that re-enter
+/// `window_proc` on this same thread (an `SetWindowPos` inside the
+/// fullscreen toggle, a dispatched framework callback that closes the
+/// window). If such reentrancy reaches `WM_DESTROY`, the context is only
+/// *retired* — its free is deferred, via the [`ContextLedger`], to the
+/// outermost [`ContextGuard`] release — so the reference stays valid for
+/// the whole closure; post-retirement it merely describes a window that is
+/// already gone, and the remaining Win32 calls against the dead `hwnd`
+/// fail cleanly instead of dangling.
 pub(super) fn with_window_context<R>(
     hwnd: HWND,
     op: &'static str,
@@ -196,14 +264,14 @@ pub(super) fn with_window_context<R>(
             // class (so the non-null slot value is the `Box::into_raw`
             // pointer `WindowsWindow::new` installed, not a foreign
             // protocol's), and the slot is non-null (so `WM_DESTROY` has
-            // not cleared+freed it). The only path that frees the box is
-            // `WM_DESTROY`, dispatched on this same thread — and neither
-            // the queries above nor `f` (per this function's contract)
-            // dispatch messages, so the free cannot interleave between the
-            // slot read and the last use of the reference, which is
-            // confined to the closure call below.
-            let context = unsafe { &*(slot as *mut WindowContext) };
-            Some(f(context))
+            // not retired it). Between the slot read above and this
+            // acquisition no message dispatch happens on this thread, so
+            // the context cannot have been retired-and-freed in between;
+            // once the guard is held, any reentrant `WM_DESTROY` inside
+            // `f` defers the free past the guard's drop (see
+            // `ContextGuard`).
+            let guard = unsafe { ContextGuard::acquire(slot as *mut WindowContext) };
+            Some(f(guard.context()))
         }
         UserDataVerdict::Refuse(reason) => {
             tracing::debug!(
@@ -218,17 +286,37 @@ pub(super) fn with_window_context<R>(
 }
 
 /// Routes a teardown request (`close()`, last `Drop`) for `hwnd` by thread
-/// identity: `DestroyWindow` directly on the owning thread, `PostMessageW
+/// identity — `DestroyWindow` directly on the owning thread, `PostMessageW
 /// (WM_CLOSE)` from any other ("a thread cannot use `DestroyWindow` to
-/// destroy a window created by a different thread" — MSDN), nothing at all
-/// for a dead handle. Pure rule in [`crate::shared::hwnd_affinity`]; this
-/// shell only queries the two thread ids.
-pub(super) fn teardown_route(hwnd: HWND) -> crate::shared::hwnd_affinity::TeardownRoute {
+/// destroy a window created by a different thread" — MSDN), nothing for a
+/// dead handle — **and by window identity**: `expected_context` is the
+/// context pointer the calling wrapper installed at creation, compared (as
+/// a value, never dereferenced, hence safe from any thread) against the
+/// window's current class + `GWLP_USERDATA` slot, so a wrapper that
+/// outlived its native window can never destroy or close whatever
+/// unrelated window the OS recycled the handle value for. Pure rule in
+/// [`crate::shared::hwnd_affinity::route_teardown`], which also states the
+/// pointer-ABA residual; this shell only performs the OS queries.
+pub(super) fn teardown_route(
+    hwnd: HWND,
+    expected_context: *const WindowContext,
+) -> crate::shared::hwnd_affinity::TeardownRoute {
     // SAFETY: see the identical queries in `with_window_context` — no
     // pointers dereferenced, no messages pumped.
-    let (owner_thread, current_thread) =
-        unsafe { (GetWindowThreadProcessId(hwnd, None), GetCurrentThreadId()) };
-    crate::shared::hwnd_affinity::route_teardown(owner_thread, current_thread)
+    let (owner_thread, current_thread, slot) = unsafe {
+        (
+            GetWindowThreadProcessId(hwnd, None),
+            GetCurrentThreadId(),
+            GetWindowLongPtrW(hwnd, GWLP_USERDATA),
+        )
+    };
+    crate::shared::hwnd_affinity::route_teardown(
+        owner_thread,
+        current_thread,
+        hwnd_names_flui_class(hwnd),
+        slot,
+        expected_context as isize,
+    )
 }
 
 /// Windows platform state
@@ -481,12 +569,13 @@ impl WindowsPlatform {
     /// The body dispatches framework-supplied callbacks (`ctx.callbacks.*`,
     /// `ctx.dispatch_event`) that can panic. A panic must not unwind across
     /// this `extern "system"` frame: unwinding across a non-unwind ABI
-    /// boundary aborts the process (Rust Reference, *Panic* chapter,
-    /// "unwinding across FFI boundaries"; undefined behavior before Rust
-    /// 1.81 made the abort guaranteed) — and that language-imposed abort
+    /// boundary is a guaranteed process abort since Rust 1.81, and was
+    /// undefined behavior before that (Rust Reference, *Panic* chapter,
+    /// "unwinding across FFI boundaries") — and that language-imposed abort
     /// reports nothing through this framework's diagnostics. So the panic
     /// is caught here, its payload logged via `tracing`, and the process
-    /// terminated deliberately with the same outcome. Deliberately NOT
+    /// terminated deliberately — the same outcome, made deterministic and
+    /// observable on every toolchain. Deliberately NOT
     /// swallowed-and-continued (`DefWindowProcW` as a fallback answer): a
     /// panic mid-`WM_DESTROY` or mid-dispatch leaves framework state torn,
     /// and pumping further messages over torn state converts one crash into
@@ -548,18 +637,28 @@ impl WindowsPlatform {
         // `TrackMouseEvent` (`WM_MOUSEMOVE`) and `BeginPaint`/`EndPaint`
         // (`WM_PAINT`, its own SAFETY note below) take `&raw` pointers to
         // stack-local, correctly-sized structs; `DestroyWindow` calls are
-        // individually commented where they appear; `Box::from_raw(ctx_ptr)`
-        // (`WM_DESTROY`) has its own SAFETY note where it appears;
-        // `DefWindowProcW` forwards unhandled messages verbatim with no
-        // pointer arguments of its own.
+        // individually commented where they appear; `DefWindowProcW`
+        // forwards unhandled messages verbatim with no pointer arguments of
+        // its own.
         unsafe {
-            // Get window context from GWLP_USERDATA
+            // Get window context from GWLP_USERDATA. The guard makes `ctx`
+            // survive reentrant dispatch: arms below hold it across
+            // framework callbacks, and a callback may close this window —
+            // running a nested `WM_DESTROY` frame on this same thread that
+            // RETIRES the context (clears the slot, marks the ledger)
+            // without freeing it; the free happens when the outermost
+            // guard, possibly this frame's, releases (see `ContextGuard`).
+            //
+            // SAFETY(acquire): this frame is Win32's dispatch for `hwnd` on
+            // its owning thread, and a non-null slot means the context is
+            // not yet retired — exactly `ContextGuard::acquire`'s contract.
             let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowContext;
-            let ctx = if ctx_ptr.is_null() {
+            let guard = if ctx_ptr.is_null() {
                 None
             } else {
-                Some(&*ctx_ptr)
+                Some(ContextGuard::acquire(ctx_ptr))
             };
+            let ctx = guard.as_ref().map(ContextGuard::context);
 
             match msg {
                 WM_CREATE => {
@@ -605,24 +704,24 @@ impl WindowsPlatform {
                         // Dispatch Closed event to global handlers
                         ctx.dispatch_event(WindowEvent::Closed(ctx.window_id));
 
-                        // Clean up context - IMPORTANT: Clear pointer BEFORE dropping to avoid
-                        // dangling pointer
-                        //
-                        // SAFETY: `ctx_ptr` is the same pointer `WindowsWindow::new`
-                        // produced via `Box::into_raw` and stored in this HWND's
-                        // `GWLP_USERDATA` — `ctx` (the shared reference used just
-                        // above) is derived from that same allocation, and its
-                        // last use is the `dispatch_event` call above, so no
-                        // reference into the box outlives this reclaim. The slot
-                        // is zeroed with `SetWindowLongPtrW` *before* `Box::from_raw`
-                        // runs, so if `dispatch_close`/`dispatch_event` above had
-                        // re-entrantly queried `GWLP_USERDATA` (they don't), they
-                        // would see null rather than a pointer about to be freed.
-                        // `window_proc` never runs concurrently with itself for
-                        // the same `hwnd` (Win32 serializes message dispatch per
-                        // queue), so this is the only path that can free `ctx_ptr`.
+                        // Retire the context: clear the slot FIRST, so no
+                        // new borrow can be minted (`with_window_context`
+                        // and this function's own entry both refuse a null
+                        // slot), then mark the ledger. The allocation is
+                        // NOT freed here — this frame's own `guard` still
+                        // borrows it, and so may outer frames when this
+                        // `WM_DESTROY` arrived reentrantly (a framework
+                        // callback closing the window from inside another
+                        // arm's dispatch). The free happens exactly once,
+                        // at the outermost `ContextGuard` release — in the
+                        // common case, this frame's own guard dropping at
+                        // the end of this function (see `ContextGuard`).
+                        // `window_proc` never runs concurrently with itself
+                        // for the same `hwnd` (Win32 dispatches on the one
+                        // owning thread), so slot clear + retire need no
+                        // further ordering.
                         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                        drop(Box::from_raw(ctx_ptr));
+                        ctx.ledger.borrow_mut().retire();
                     }
 
                     LRESULT(0)

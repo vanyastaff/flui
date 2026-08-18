@@ -72,6 +72,28 @@ pub enum UserDataRefusal {
     EmptySlot,
 }
 
+/// Whether a class-name buffer as filled by `GetClassNameW` names the same
+/// class as `expected`.
+///
+/// Length conventions, pinned by the tests below because both sides are
+/// subtle: `copied` is `GetClassNameW`'s return value — the number of UTF-16
+/// units copied **excluding** the terminating NUL (`0` or negative means the
+/// call failed); `expected` must likewise carry **no** terminating NUL (a
+/// `w!(..)` literal read back through `PCWSTR::as_wide`, which measures with
+/// `wcslen`, satisfies this). An `expected` that still carries its NUL can
+/// never match anything `GetClassNameW` reports.
+#[must_use]
+pub fn class_name_matches(buffer: &[u16], copied: i32, expected: &[u16]) -> bool {
+    if copied <= 0 {
+        return false;
+    }
+    let copied = copied as usize;
+    if copied > buffer.len() {
+        return false;
+    }
+    buffer[..copied] == *expected
+}
+
 /// Classifies one attempted dereference of the context pointer stored in a
 /// window's `GWLP_USERDATA` slot.
 ///
@@ -111,6 +133,13 @@ pub enum TeardownRoute {
     /// The HWND no longer names a live window; there is nothing to destroy
     /// and nothing to post to.
     AlreadyGone,
+    /// The HWND names a live window that is not the one this wrapper
+    /// created — the OS recycled the handle value (foreign class, or a
+    /// user-data identity different from the context this wrapper
+    /// installed). Destroying or posting `WM_CLOSE` would target an
+    /// innocent window, so teardown must not touch the HWND at all;
+    /// wrapper-side cleanup still proceeds.
+    StaleHandle,
     /// The caller is on the owning thread: `DestroyWindow` may run directly
     /// (Win32 dispatches the resulting `WM_DESTROY` synchronously on this
     /// same thread before it returns).
@@ -123,16 +152,112 @@ pub enum TeardownRoute {
     PostClose,
 }
 
-/// Routes a teardown request by thread identity. Same input convention as
-/// [`classify_user_data_access`].
+/// Routes a teardown request by thread identity **and window identity**.
+///
+/// Thread inputs follow [`classify_user_data_access`]'s convention. The
+/// identity inputs guard against OS handle recycling — without them a
+/// wrapper that outlived its native window would destroy (owner thread) or
+/// politely close (foreign thread) whatever unrelated window the recycled
+/// handle now names:
+///
+/// - `is_own_class` — whether the live window's class is this backend's
+///   registered class.
+/// - `slot` — the raw `GWLP_USERDATA` value currently stored in the window
+///   (read without dereferencing, so it is safe to query from any thread).
+/// - `expected_slot` — the context pointer this wrapper's constructor
+///   installed (never `0`, since it came from `Box::into_raw`). A live
+///   window is "ours" only while `slot == expected_slot`; a cleared slot
+///   (`0`, mid-`WM_DESTROY`) or a recycled window's foreign value both
+///   route [`TeardownRoute::StaleHandle`].
+///
+/// Residual, stated rather than claimed closed: pointer-value ABA — the
+/// freed context allocation's address being reused for a *new* FLUI
+/// window's context while the OS also recycles the same numeric HWND —
+/// would pass this check. Both reuses must collide at once; the
+/// consequence is bounded to closing a window this same process owns.
 #[must_use]
-pub fn route_teardown(owner_thread: u32, current_thread: u32) -> TeardownRoute {
+pub fn route_teardown(
+    owner_thread: u32,
+    current_thread: u32,
+    is_own_class: bool,
+    slot: isize,
+    expected_slot: isize,
+) -> TeardownRoute {
     if owner_thread == OWNER_GONE {
         TeardownRoute::AlreadyGone
+    } else if !is_own_class || slot != expected_slot {
+        TeardownRoute::StaleHandle
     } else if owner_thread == current_thread {
         TeardownRoute::DestroyDirect
     } else {
         TeardownRoute::PostClose
+    }
+}
+
+/// A single-threaded borrow ledger deciding when a retired window context
+/// may be freed.
+///
+/// Win32 message dispatch re-enters: an outbound call made while a context
+/// borrow is live (`SetWindowPos` inside the fullscreen toggle, a callback
+/// dispatched from a `window_proc` arm) can synchronously run more
+/// `window_proc` frames — including `WM_DESTROY`, if a framework callback
+/// closes the window from inside the dispatch. Freeing the context in the
+/// `WM_DESTROY` arm would therefore free it *under* the borrowing frames
+/// further up the same stack. Instead, every borrow holds a guard counted
+/// here, `WM_DESTROY` only [`retire`]s the context after clearing the slot,
+/// and the free happens when the **outermost** guard releases — the same
+/// recursion-deferred user-data reclaim the winit backend's wndproc uses.
+///
+/// Single-threaded by contract: every acquire/release/retire happens on the
+/// window's owning thread (enforced by the affinity gates), which is what
+/// makes a plain counter — no atomics — correct.
+///
+/// [`retire`]: Self::retire
+#[derive(Debug)]
+pub struct ContextLedger {
+    guards: u32,
+    retired: bool,
+}
+
+impl ContextLedger {
+    /// A fresh ledger: no live borrows, not retired.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            guards: 0,
+            retired: false,
+        }
+    }
+
+    /// Records one live borrow of the context.
+    pub fn acquire(&mut self) {
+        self.guards += 1;
+    }
+
+    /// Releases one borrow. Returns `true` when the caller must now free
+    /// the context allocation: this was the outermost borrow and the
+    /// context has been retired.
+    #[must_use]
+    pub fn release(&mut self) -> bool {
+        self.guards = self
+            .guards
+            .checked_sub(1)
+            .expect("BUG: ContextLedger released more guards than were acquired");
+        self.retired && self.guards == 0
+    }
+
+    /// Marks the context retired: the `GWLP_USERDATA` slot has been cleared
+    /// and no new borrow can be minted. The caller is itself a live
+    /// borrower (the `WM_DESTROY` frame), so the free always happens in a
+    /// later [`release`](Self::release), never here.
+    pub fn retire(&mut self) {
+        self.retired = true;
+    }
+}
+
+impl Default for ContextLedger {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -207,13 +332,108 @@ mod tests {
         );
     }
 
+    const OUR_SLOT: isize = 0x1000;
+
     #[test]
     fn teardown_routes_direct_on_owner_posted_on_foreign_skipped_when_gone() {
-        assert_eq!(route_teardown(OWNER, OWNER), TeardownRoute::DestroyDirect);
-        assert_eq!(route_teardown(OWNER, FOREIGN), TeardownRoute::PostClose);
         assert_eq!(
-            route_teardown(OWNER_GONE, FOREIGN),
+            route_teardown(OWNER, OWNER, true, OUR_SLOT, OUR_SLOT),
+            TeardownRoute::DestroyDirect
+        );
+        assert_eq!(
+            route_teardown(OWNER, FOREIGN, true, OUR_SLOT, OUR_SLOT),
+            TeardownRoute::PostClose
+        );
+        assert_eq!(
+            route_teardown(OWNER_GONE, FOREIGN, true, OUR_SLOT, OUR_SLOT),
             TeardownRoute::AlreadyGone
         );
+    }
+
+    #[test]
+    fn teardown_refuses_a_recycled_handle_on_every_identity_mismatch() {
+        // A live window of a foreign class is never ours, no matter whose
+        // thread asks.
+        assert_eq!(
+            route_teardown(OWNER, OWNER, false, OUR_SLOT, OUR_SLOT),
+            TeardownRoute::StaleHandle
+        );
+        // Our class, but a different context identity: the handle was
+        // recycled for another FLUI window.
+        assert_eq!(
+            route_teardown(OWNER, OWNER, true, 0x2000, OUR_SLOT),
+            TeardownRoute::StaleHandle
+        );
+        // A cleared slot (mid-WM_DESTROY, or never installed) is not ours
+        // to destroy either — and identity must also protect the posted
+        // cross-thread route, not just the direct one.
+        assert_eq!(
+            route_teardown(OWNER, FOREIGN, true, 0, OUR_SLOT),
+            TeardownRoute::StaleHandle
+        );
+    }
+
+    #[test]
+    fn class_name_match_pins_the_nul_exclusion_convention_on_both_sides() {
+        // "Flui" as GetClassNameW leaves it: buffer holds the name, then
+        // trailing NULs; the returned count EXCLUDES the terminator.
+        let mut buffer = [0_u16; 8];
+        buffer[..4].copy_from_slice(&[0x46, 0x6C, 0x75, 0x69]);
+        let expected: &[u16] = &[0x46, 0x6C, 0x75, 0x69];
+
+        assert!(class_name_matches(&buffer, 4, expected));
+
+        // An `expected` that still carries its terminating NUL can never
+        // match — this is the exact bug a `w!(..)` literal read back WITH
+        // its terminator would cause, refusing every valid window.
+        let expected_with_nul: &[u16] = &[0x46, 0x6C, 0x75, 0x69, 0x0000];
+        assert!(!class_name_matches(&buffer, 4, expected_with_nul));
+
+        // Failed call (0 or negative), prefixes, and overlong counts all
+        // refuse rather than match or panic.
+        assert!(!class_name_matches(&buffer, 0, expected));
+        assert!(!class_name_matches(&buffer, -1, expected));
+        assert!(!class_name_matches(&buffer, 3, expected));
+        assert!(!class_name_matches(&buffer, 5, expected));
+        assert!(!class_name_matches(&buffer, 9, expected));
+    }
+
+    #[test]
+    fn ledger_frees_exactly_once_at_the_outermost_release_after_retire() {
+        // Reentrant dispatch: an outer borrow (a window_proc frame or a
+        // with_window_context closure) is live when a nested WM_DESTROY
+        // frame retires the context. The free must wait for the OUTERMOST
+        // release.
+        let mut ledger = ContextLedger::new();
+        ledger.acquire(); // outer frame
+        ledger.acquire(); // nested WM_DESTROY frame
+        ledger.retire();
+        assert!(
+            !ledger.release(),
+            "the retiring frame's own release must not free under the outer borrow"
+        );
+        assert!(
+            ledger.release(),
+            "the outermost release after retirement must free"
+        );
+    }
+
+    #[test]
+    fn ledger_frees_at_the_single_frame_release_in_the_plain_destroy_case() {
+        // The common, non-reentrant teardown: one WM_DESTROY frame, no
+        // borrower above it.
+        let mut ledger = ContextLedger::new();
+        ledger.acquire();
+        ledger.retire();
+        assert!(ledger.release());
+    }
+
+    #[test]
+    fn ledger_never_frees_while_the_context_is_not_retired() {
+        let mut ledger = ContextLedger::new();
+        ledger.acquire();
+        ledger.acquire();
+        assert!(!ledger.release());
+        assert!(!ledger.release());
     }
 }

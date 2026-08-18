@@ -61,6 +61,17 @@ pub struct WindowsWindow {
     /// Reference to platform's window map (for cleanup)
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
 
+    /// The context allocation this wrapper installed in `hwnd`'s
+    /// `GWLP_USERDATA` slot at creation, kept ONLY as an identity token:
+    /// teardown compares it (as a value, never dereferencing through this
+    /// field) against the window's current slot so a wrapper that outlived
+    /// its native window cannot destroy or close whatever unrelated window
+    /// the OS recycled the handle value for — see
+    /// [`teardown_route`](super::platform::teardown_route). Dangling as a
+    /// VALUE once `WM_DESTROY` has run; that is fine for comparison and
+    /// exactly why it must never be dereferenced here.
+    context: *const super::platform::WindowContext,
+
     /// This window's UIA bridge, subclassed onto `hwnd` at construction so
     /// a UI Automation client that asks at any later point is answered.
     /// Inert until one does — see
@@ -71,13 +82,16 @@ pub struct WindowsWindow {
 
 // SAFETY, per field: `state` and `callbacks` are `Arc<Mutex<..>>`/`Arc<..>`
 // with their own synchronization; `windows_map` is likewise an
-// `Arc<Mutex<..>>`. The only non-`Sync` member is `hwnd: HWND`, a bare
-// address — sending or sharing the address itself aliases nothing, so `Send`
-// and `Sync` are sound for the struct.
+// `Arc<Mutex<..>>`. The non-`Sync`/non-`Send` members are `hwnd: HWND` and
+// `context: *const WindowContext`, both bare addresses that this type never
+// dereferences through these fields (`context` is an identity token for
+// value comparison only — see its field doc) — sending or sharing an
+// address itself aliases nothing, so `Send` and `Sync` are sound for the
+// struct.
 //
 // The HWND behind that address is thread-AFFINE, not "thread-safe by
 // design": its message queue belongs to the thread that created it, Win32
-// dispatches `window_proc` (including the `WM_DESTROY` arm that frees the
+// dispatches `window_proc` (including the `WM_DESTROY` arm that retires the
 // `WindowContext` stored in `GWLP_USERDATA`) on that thread, and
 // `DestroyWindow` refuses to run anywhere else. That obligation is
 // DISCHARGED — not merely documented — by routing every affine touch on
@@ -87,12 +101,16 @@ pub struct WindowsWindow {
 //   `with_window_context`, which refuses (safe fallback, traced) unless the
 //   calling thread is the window's owning thread and the window is live, of
 //   our class, with a non-null slot — on the owning thread the deref cannot
-//   race the free, because the only freeing path (`WM_DESTROY`) is
-//   dispatched on that same thread;
+//   race the free: the only retiring path (`WM_DESTROY`) is dispatched on
+//   that same thread, and the borrow-ledger (`ContextGuard`/`ContextLedger`)
+//   defers the actual free past every live borrow, including across
+//   reentrant dispatch;
 // - every teardown (`close()`, the last wrapper `Drop`) goes through
-//   `teardown_route`, which calls `DestroyWindow` only on the owning thread
-//   and otherwise posts `WM_CLOSE` to the owner's queue (`PostMessageW`,
-//   the documented cross-thread mechanism).
+//   `teardown_route`, which verifies the handle still names THIS wrapper's
+//   window (class + context identity, guarding against OS handle
+//   recycling), calls `DestroyWindow` only on the owning thread, and
+//   otherwise posts `WM_CLOSE` to the owner's queue (`PostMessageW`, the
+//   documented cross-thread mechanism).
 //
 // The decision rules are pure and Linux-tested (`shared::hwnd_affinity`);
 // the remaining Win32 calls on `&self` (`ShowWindow`, `SetWindowPos`,
@@ -233,18 +251,9 @@ impl WindowsWindow {
                 title: options.title.clone(),
             }));
 
-            let window = Arc::new(Self {
-                hwnd,
-                state,
-                callbacks: Arc::clone(&callbacks),
-                windows_map,
-                // On the creating (owning) thread, as Win32 subclassing
-                // requires; `hwnd` was validated just above.
-                #[cfg(feature = "a11y")]
-                accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
-            });
-
-            // Create and store WindowContext for event dispatch
+            // Create and install the WindowContext for event dispatch
+            // BEFORE building the wrapper: the wrapper keeps the pointer as
+            // its teardown identity token (see the `context` field doc).
             use flui_types::geometry::{DevicePixels, Size};
 
             use super::platform::WindowContext;
@@ -256,7 +265,7 @@ impl WindowsWindow {
             let context = Box::new(WindowContext {
                 window_id,
                 handlers: handlers.clone(),
-                callbacks,
+                callbacks: Arc::clone(&callbacks),
                 scale_factor: std::cell::Cell::new(scale_factor),
                 mode: std::cell::Cell::new(WindowMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
@@ -266,9 +275,22 @@ impl WindowsWindow {
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
                 pending_high_surrogate: std::cell::Cell::new(None),
+                ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
+
+            let window = Arc::new(Self {
+                hwnd,
+                state,
+                callbacks,
+                windows_map,
+                context: context_ptr,
+                // On the creating (owning) thread, as Win32 subclassing
+                // requires; `hwnd` was validated just above.
+                #[cfg(feature = "a11y")]
+                accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
+            });
 
             // Show window if requested
             if options.visible {
@@ -428,12 +450,18 @@ impl WindowsWindow {
             // `SetWindowPos`/`MonitorFromWindow`/`GetMonitorInfoW` below all
             // take `hwnd` or a `&raw mut` to a stack-local out-parameter
             // whose size matches what each call expects, and are otherwise
-            // ordinary Win32 calls with no invariant beyond `hwnd` naming a
-            // live window — which `with_window_context` just established,
-            // and which cannot lapse mid-closure on the owning thread (the
-            // only destroy path, `WM_DESTROY`, dispatches here; nothing in
-            // this closure reaches `DestroyWindow` or retrieves queued
-            // messages, per the gate's contract).
+            // ordinary Win32 calls whose failure mode against a dead `hwnd`
+            // is an error return, not UB. The window CAN die mid-closure:
+            // `SetWindowPos` synchronously re-enters `window_proc`
+            // (`WM_SIZE`/`WM_MOVE`), whose arms dispatch framework
+            // callbacks, and `ctx.dispatch_event` below does so directly —
+            // a callback may close this window, running a nested
+            // `WM_DESTROY` right here. What stays valid regardless is
+            // `ctx` itself: the gate's `ContextGuard` defers the context
+            // free past this closure (`WM_DESTROY` only retires it — see
+            // `ContextLedger`), so post-destruction the remaining `Cell`
+            // reads/writes and dead-`hwnd` Win32 calls are sound no-ops,
+            // never dangling.
             unsafe {
                 if let WindowMode::Fullscreen { restore_bounds } = current_mode {
                     // Exit fullscreen - restore previous style and bounds
@@ -943,7 +971,7 @@ impl PlatformWindow for WindowsWindow {
 
     fn close(&self) {
         use crate::shared::hwnd_affinity::TeardownRoute;
-        match super::platform::teardown_route(self.hwnd) {
+        match super::platform::teardown_route(self.hwnd, self.context) {
             TeardownRoute::DestroyDirect => {
                 // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
                 // route just established this is the owning thread, the only
@@ -979,6 +1007,13 @@ impl PlatformWindow for WindowsWindow {
             }
             TeardownRoute::AlreadyGone => {
                 tracing::debug!(hwnd = ?self.hwnd, "close: the native window is already gone");
+            }
+            TeardownRoute::StaleHandle => {
+                tracing::debug!(
+                    hwnd = ?self.hwnd,
+                    "close: the handle no longer names this wrapper's window \
+                     (recycled by the OS); leaving its new owner untouched"
+                );
             }
         }
     }
@@ -1139,6 +1174,8 @@ impl Clone for WindowsWindow {
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
             windows_map: Arc::clone(&self.windows_map),
+            // Same window, same identity token.
+            context: self.context,
             // The clone shares the same window, so it shares the same UIA
             // bridge — one subclass hook per HWND, never two.
             #[cfg(feature = "a11y")]
@@ -1841,7 +1878,7 @@ impl Drop for WindowsWindow {
             tracing::debug!("Destroying window HWND {:?}", self.hwnd);
 
             use crate::shared::hwnd_affinity::TeardownRoute;
-            match super::platform::teardown_route(self.hwnd) {
+            match super::platform::teardown_route(self.hwnd, self.context) {
                 TeardownRoute::DestroyDirect => {
                     // Unhook the UIA subclass BEFORE destroying the window —
                     // Win32 wants subclasses removed while the window still
@@ -1853,10 +1890,13 @@ impl Drop for WindowsWindow {
 
                     // SAFETY: `DestroyWindow` takes `self.hwnd` by value;
                     // the route just established this is the owning thread
-                    // (a handle that was never created routes `AlreadyGone`
-                    // instead), where `WM_DESTROY` (handled in
-                    // `platform.rs`) reclaims the `GWLP_USERDATA`
-                    // allocation synchronously within this call.
+                    // and that the handle still names THIS wrapper's window
+                    // (a never-created or already-destroyed handle routes
+                    // `AlreadyGone`, a recycled one `StaleHandle`), where
+                    // `WM_DESTROY` (handled in `platform.rs`) retires the
+                    // `GWLP_USERDATA` allocation synchronously within this
+                    // call, the ledger freeing it at the outermost borrow
+                    // release.
                     unsafe {
                         if let Err(error) = DestroyWindow(self.hwnd) {
                             tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow failed in Drop");
@@ -1884,6 +1924,13 @@ impl Drop for WindowsWindow {
                 }
                 TeardownRoute::AlreadyGone => {
                     tracing::debug!(hwnd = ?self.hwnd, "Drop: the native window is already gone");
+                }
+                TeardownRoute::StaleHandle => {
+                    tracing::debug!(
+                        hwnd = ?self.hwnd,
+                        "Drop: the handle no longer names this wrapper's window \
+                         (recycled by the OS); leaving its new owner untouched"
+                    );
                 }
             }
 
