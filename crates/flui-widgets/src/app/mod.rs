@@ -1,5 +1,5 @@
-//! Application-scoped inherited widgets: [`MediaQuery`] and the
-//! [`InheritedTheme`] trait.
+//! Application-scoped widgets: the [`WidgetsApp`] shell, [`MediaQuery`], and
+//! the [`InheritedTheme`] trait.
 //!
 //! These are the closest Flutter-equivalent infrastructure widgets — they sit
 //! near the root of the widget tree and provide ambient data every descendant
@@ -17,7 +17,9 @@
 mod inherited_theme;
 mod media_query;
 mod safe_area;
+mod widgets_app;
 
 pub use inherited_theme::InheritedTheme;
 pub use media_query::{MediaQuery, MediaQueryData};
 pub use safe_area::SafeArea;
+pub use widgets_app::{AppBuilder, WidgetsApp, WidgetsAppState};

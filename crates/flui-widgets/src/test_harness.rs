@@ -423,6 +423,35 @@ impl Harness {
         })
     }
 
+    /// The concrete view type behind element `id`.
+    pub(crate) fn view_type_of(&mut self, id: ElementId) -> TypeId {
+        self.binding
+            .tree_mut()
+            .iter_nodes()
+            .find(|(node_id, _)| *node_id == id)
+            .map(|(_, node)| node.element().view_type_id())
+            .expect("the probed element must be mounted")
+    }
+
+    /// The parent of element `id`, if any.
+    pub(crate) fn parent_of(&mut self, id: ElementId) -> Option<ElementId> {
+        self.binding
+            .tree_mut()
+            .iter_nodes()
+            .find(|(node_id, _)| *node_id == id)
+            .and_then(|(_, node)| node.parent())
+    }
+
+    /// Every mounted element whose view is of type `ty`, in arbitrary order.
+    pub(crate) fn elements_of_type(&mut self, ty: TypeId) -> Vec<ElementId> {
+        self.binding
+            .tree_mut()
+            .iter_nodes()
+            .filter(|(_, node)| node.element().view_type_id() == ty)
+            .map(|(id, _)| id)
+            .collect()
+    }
+
     /// The only child of `parent`.
     pub(crate) fn only_child(&mut self, parent: ElementId) -> ElementId {
         let kids = self.children_of(parent);
