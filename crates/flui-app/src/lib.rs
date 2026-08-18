@@ -55,6 +55,18 @@ pub use app::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
     SpawnError,
 };
+// Task/worker/service lifecycles over those lanes (issue #558, ADR-0049):
+// owned, cancel-on-drop task and worker handles; application services with
+// declared lifetimes and a staged, deadline-bounded graceful shutdown; and
+// pull-only typed service events. Native-only — the web runner has no
+// lifecycle slice yet.
+#[cfg(not(target_arch = "wasm32"))]
+pub use app::{
+    CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
+    ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError,
+    TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle,
+    service_events,
+};
 // Typed frame-failure route (issue #561): the embedder-visible half of the
 // presentation-frame transaction boundary (ADR-0048). A failed frame is
 // contained to its own presentation; these types are how the embedder hears

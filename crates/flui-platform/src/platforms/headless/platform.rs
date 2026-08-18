@@ -92,6 +92,13 @@ struct HeadlessState {
     /// `HeadlessDeferredWindowOpens::resolve_next` call. FIFO order: the
     /// oldest request resolves first.
     pending_opens: Vec<(ClaimSlot<OpenWindowResult>, WindowOptions)>,
+    /// Parked `Platform::request_exit_policy_reevaluation` request (any
+    /// thread may set it; coalesced). This mock has no event loop of its
+    /// own, so the embedder drives the actual owner-thread re-check via
+    /// [`HeadlessExitReevaluation::drive`] — running the
+    /// hook on the requesting thread instead would consult the WRONG
+    /// thread-local runtime state.
+    exit_reevaluation_requested: bool,
 }
 
 impl HeadlessPlatform {
@@ -109,11 +116,24 @@ impl HeadlessPlatform {
             opened_urls: Vec::new(),
             deferred_window_open: false,
             pending_opens: Vec::new(),
+            exit_reevaluation_requested: false,
         };
 
         Self {
             capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(state)),
+        }
+    }
+
+    /// A probe/drive handle for `Platform::request_exit_policy_reevaluation`
+    /// requests, valid across `Platform::run` (which consumes the boxed
+    /// platform) — the same take-a-handle-before-run shape as
+    /// [`Self::enable_deferred_window_open`]. See
+    /// [`HeadlessExitReevaluation`].
+    #[must_use]
+    pub fn exit_reevaluation(&self) -> HeadlessExitReevaluation {
+        HeadlessExitReevaluation {
+            state: Arc::downgrade(&self.state),
         }
     }
 
@@ -215,6 +235,13 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| {
             state.handlers.exit_policy = Some(hook);
         });
+    }
+
+    fn request_exit_policy_reevaluation(&self) {
+        // Park only (coalesced): this mock has no event loop, so the
+        // owner-thread half runs when the embedder calls
+        // `HeadlessExitReevaluation::drive` — see that method's doc.
+        self.with_state(|state| state.exit_reevaluation_requested = true);
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
@@ -371,6 +398,99 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
         // cross-thread request lane, so `PlatformProxy` stays permanently
         // unsupported here exactly as it is under `DirectOwnerHooks`.
         Arc::new(ClosedTransport::new(self.owner_thread))
+    }
+}
+
+/// Probe/drive handle for parked
+/// `Platform::request_exit_policy_reevaluation` requests on the headless
+/// mock — obtained via [`HeadlessPlatform::exit_reevaluation`] BEFORE
+/// `Platform::run` consumes the platform. The mock has no event loop of
+/// its own, so the owner-thread half of a re-evaluation request (the
+/// winit backend's `process_control` arm) is driven explicitly by the
+/// embedding test through [`drive`](Self::drive).
+pub struct HeadlessExitReevaluation {
+    state: Weak<Mutex<HeadlessState>>,
+}
+
+impl std::fmt::Debug for HeadlessExitReevaluation {
+    // Manual impl: `HeadlessState` carries no blanket `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessExitReevaluation")
+            .field("platform_alive", &(self.state.upgrade().is_some()))
+            .finish()
+    }
+}
+
+impl HeadlessExitReevaluation {
+    /// Whether a re-evaluation request is parked, awaiting
+    /// [`drive`](Self::drive) — the bounded-wait probe for tests
+    /// observing a request that originated on a worker thread. `false`
+    /// once the platform is gone.
+    #[must_use]
+    pub fn requested(&self) -> bool {
+        let Some(state) = self.state.upgrade() else {
+            return false;
+        };
+        let requested = state.lock().exit_reevaluation_requested;
+        drop(state);
+        requested
+    }
+
+    /// Runs the owner-thread half of a parked re-evaluation request: if
+    /// one is parked AND no window is tracked, consult the exit-policy
+    /// hook exactly as the window-close path does
+    /// (`MockWindow::notify_closed`, including its "no hook -> never
+    /// quit" headless default and its take/consult-outside-the-lock/
+    /// restore discipline) and quit if the hook now allows it. Returns
+    /// `true` iff a quit was actually issued.
+    ///
+    /// Call on the thread that owns the platform's runtime state (in a
+    /// test: the test thread) — the whole reason requests park instead of
+    /// running inline is that the requesting worker thread's own
+    /// thread-local runtime state is the WRONG state for the hook to
+    /// consult.
+    pub fn drive(&self) -> bool {
+        let Some(platform_state) = self.state.upgrade() else {
+            return false;
+        };
+        let hook = {
+            let mut state = platform_state.lock();
+            if !state.exit_reevaluation_requested {
+                return false;
+            }
+            state.exit_reevaluation_requested = false;
+            if !state.windows.is_empty() {
+                return false;
+            }
+            state.handlers.exit_policy.take()
+        };
+
+        // Consult OUTSIDE the state lock: the hook re-enters the
+        // embedder's runtime (dropping removed realm state whose
+        // destructors may call back into this platform).
+        let should_quit = hook.as_ref().is_some_and(|hook| hook());
+        // Restore only if nothing fresher was installed meanwhile — the
+        // hook is not one-shot; a veto leaves it in place for the next
+        // consult (same rule as `MockWindow::notify_closed`).
+        if let Some(hook) = hook {
+            let mut state = platform_state.lock();
+            if state.handlers.exit_policy.is_none() {
+                state.handlers.exit_policy = Some(hook);
+            }
+        }
+        if !should_quit {
+            return false;
+        }
+
+        let quit_callback = {
+            let mut state = platform_state.lock();
+            state.is_running = false;
+            state.handlers.quit.take()
+        };
+        if let Some(mut callback) = quit_callback {
+            callback();
+        }
+        true
     }
 }
 
@@ -1694,5 +1814,84 @@ mod tests {
         });
 
         assert!(called.load(Ordering::SeqCst));
+    }
+
+    /// The park/probe/drive contract behind
+    /// `Platform::request_exit_policy_reevaluation` on this mock: a request
+    /// from a worker thread parks (coalesced); the owner-thread drive
+    /// consumes it and is gated first on the window map being empty, then
+    /// on the exit-policy hook's answer — a veto leaves the hook installed
+    /// for the next consult (not one-shot), and an allow quits exactly
+    /// once through the registered `on_quit`.
+    #[test]
+    fn exit_reevaluation_parks_from_any_thread_and_drives_through_the_hook() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let platform = HeadlessPlatform::new();
+        let reevaluation = platform.exit_reevaluation();
+
+        let allow_exit = Arc::new(AtomicBool::new(false));
+        let allow_for_hook = Arc::clone(&allow_exit);
+        platform.set_exit_policy_hook(Box::new(move || allow_for_hook.load(Ordering::SeqCst)));
+        let quit_calls = Arc::new(AtomicUsize::new(0));
+        let quit_for_handler = Arc::clone(&quit_calls);
+        platform.on_quit(Box::new(move || {
+            quit_for_handler.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let window = platform
+            .open_window(WindowOptions::default())
+            .expect("mock window opens");
+
+        // Requests park from ANY thread — the production caller is a
+        // worker-pool thread observing a keep-alive service's exit.
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                platform.request_exit_policy_reevaluation();
+                platform.request_exit_policy_reevaluation();
+            });
+        });
+        assert!(
+            reevaluation.requested(),
+            "the request must park (coalesced)"
+        );
+
+        // A window is still tracked: the drive consumes the request and
+        // must NOT consult its way to a quit.
+        assert!(!reevaluation.drive());
+        assert_eq!(quit_calls.load(Ordering::SeqCst), 0);
+        assert!(
+            !reevaluation.requested(),
+            "the drive consumes the parked request even when windows remain"
+        );
+
+        // Close the only window (the real trait close, which unregisters
+        // it and consults the hook); the hook still vetoes, so no quit.
+        window.close();
+        assert_eq!(
+            quit_calls.load(Ordering::SeqCst),
+            0,
+            "hook vetoes the close"
+        );
+
+        // Re-evaluation while the hook still vetoes: no quit, and the hook
+        // must be restored (not consumed) for the next consult.
+        platform.request_exit_policy_reevaluation();
+        assert!(!reevaluation.drive());
+        assert_eq!(quit_calls.load(Ordering::SeqCst), 0);
+
+        // The holder releases: the next re-evaluation quits, exactly once.
+        allow_exit.store(true, Ordering::SeqCst);
+        platform.request_exit_policy_reevaluation();
+        assert!(
+            reevaluation.drive(),
+            "with zero windows and the hook allowing, the drive must quit"
+        );
+        assert_eq!(quit_calls.load(Ordering::SeqCst), 1);
+        assert!(
+            !reevaluation.drive(),
+            "no parked request remains; the drive is idempotent"
+        );
+        assert_eq!(quit_calls.load(Ordering::SeqCst), 1);
     }
 }

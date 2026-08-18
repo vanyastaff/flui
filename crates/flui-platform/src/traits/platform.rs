@@ -271,6 +271,38 @@ pub trait Platform: Send + Sync + 'static {
         let _ = hook;
     }
 
+    /// Request that the exit-policy hook
+    /// ([`set_exit_policy_hook`](Self::set_exit_policy_hook)) be
+    /// re-consulted on the event-loop owner thread, even though no window
+    /// is closing right now.
+    ///
+    /// Exists because that hook is otherwise only consulted when a window
+    /// closes: an application whose *last window is already gone* can be
+    /// held open by something the platform cannot see (issue #558's
+    /// keep-alive application services), and when that holder releases —
+    /// on a worker thread, with no window left to produce events — nothing
+    /// would ever re-ask the hook, so the veto would be permanent and the
+    /// process would linger forever. Backends that support this wake the
+    /// owner loop; the owner then re-consults the hook exactly as the
+    /// window-close path does (only when its window bookkeeping is empty)
+    /// and exits if the hook now allows it.
+    ///
+    /// Callable from **any thread**; coalesced (a burst of requests costs
+    /// one re-check); always safe to over-call — a re-check while windows
+    /// are still open, or while the hook still vetoes, is a no-op.
+    ///
+    /// Default no-op: a backend that never overrides this (every backend
+    /// except `winit` and `headless` today — Win32/AppKit/Android/Web/iOS
+    /// remain cross-typecheck-only for this mechanism, stated honestly
+    /// rather than silently assumed) simply never re-evaluates: on those
+    /// backends a keep-alive holder's release does not end the process
+    /// until an explicit [`quit`](Self::quit). The headless backend parks
+    /// the request; its embedder drives the actual re-check on the owner
+    /// thread (`HeadlessExitReevaluation::drive`) — consulting the hook on
+    /// the *calling* thread would run it against the wrong thread-local
+    /// runtime state.
+    fn request_exit_policy_reevaluation(&self) {}
+
     /// Install the hook this platform consults, once per idle iteration,
     /// for the earliest wall-clock instant something upstream needs the
     /// loop to wake at — a wired-through
