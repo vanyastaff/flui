@@ -190,10 +190,10 @@ pub mod prelude {
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,
         Dialog, Divider, Drawer, ElevatedButton, FilledButton, FilterChip, FloatingActionButton,
-        IconButton, InkWell, ListTile, Material, NavigationBar, NavigationDestination,
+        IconButton, InkWell, ListTile, Material, MaterialApp, NavigationBar, NavigationDestination,
         OutlinedButton, Radio, Scaffold, ScaffoldMessenger, ScaffoldMessengerHandle,
         ScaffoldMessengerScope, SnackBar, Switch, Tab, TabBar, TabBarView, TabController,
-        TextButton, TextTheme, Theme, ThemeData, VerticalDivider, show_dialog,
+        TextButton, TextTheme, Theme, ThemeData, ThemeMode, VerticalDivider, show_dialog,
     };
     pub use flui_widgets::prelude::*;
 }

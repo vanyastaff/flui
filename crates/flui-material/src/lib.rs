@@ -66,6 +66,7 @@
 
 #![deny(missing_docs)]
 
+pub mod app;
 pub mod app_bar;
 pub mod back_button;
 pub mod button_style;
@@ -107,6 +108,7 @@ pub mod theme;
 pub mod theme_data;
 pub mod typography;
 
+pub use app::{MaterialApp, ThemeMode};
 pub use app_bar::AppBar;
 pub use back_button::BackButton;
 pub use button_style::ButtonStyle;

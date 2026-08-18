@@ -94,6 +94,7 @@
 
 #![deny(missing_docs)]
 
+pub mod app;
 pub mod bottom_tab_bar;
 pub mod button;
 pub mod colors;
@@ -104,6 +105,7 @@ pub mod tab_scaffold;
 pub mod text_theme;
 pub mod theme;
 
+pub use app::CupertinoApp;
 pub use bottom_tab_bar::{CupertinoTabBar, CupertinoTabBarItem};
 pub use button::{CupertinoButton, CupertinoButtonSize, CupertinoButtonState};
 pub use colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};

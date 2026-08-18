@@ -9,6 +9,7 @@ Material Design theming foundation: `ColorScheme`, the M3 2021 type scale (`Typo
 - **`TextTheme`** — the 15 type-scale roles as `Option<TextStyle>`. `merge` composes a base theme with a patch (patch's non-`None` fields win, per role, via `flui_types::TextStyle::merge`). `black_mountain_view()`/`white_mountain_view()` are the oracle's color-only overlay tables; `apply_color` sets a single uniform color across every present role (the simplification M3's `Typography.material2021` factory reduces to — see `theme_data.rs`'s `default_text_theme` doc comment).
 - **`ThemeData`** — `color_scheme` + `text_theme`, `#[non_exhaustive]` (component-theme slots land with their owning widgets). `light()`/`dark()` compose `ColorScheme::light()`/`dark()` with the derived default `TextTheme` (`englishLike2021` geometry recolored to `on_surface`). `brightness()` reads `color_scheme.brightness`.
 - **`Theme`** — the `InheritedView` widget that publishes `ThemeData` to a subtree (`Theme::of`/`maybe_of`). Implements `flui-widgets`' `InheritedTheme` trait.
+- **`MaterialApp` / `ThemeMode`** (`app.rs`) — the Material application shell (ADR-0042): composes `flui-widgets`' design-neutral `WidgetsApp`, resolves `theme`/`dark_theme`/`theme_mode` against the ambient `MediaQueryData::platform_brightness` (the oracle's `_themeBuilder`), and publishes the result through `Theme` with a `ScaffoldMessenger` band, per presentation. The caller's `builder` hook runs from its own child element below the published `Theme` (the oracle's double-`Builder`). Named deferrals (high-contrast themes, `AnimatedTheme`, `DefaultSelectionStyle`, scroll behavior, Material hero arc motion, `MaterialLocalizations`) are in the module docs.
 
 ## Key constraints
 
@@ -18,7 +19,7 @@ Material Design theming foundation: `ColorScheme`, the M3 2021 type scale (`Typo
 - **No dense/tall type-scale geometries** — only `englishLike2021`. Both are identical to `englishLike2021` in the M3 spec itself (per the oracle's own doc comment) and have no localization consumer yet to resolve `ScriptCategory` against.
 - **The default `TextTheme` is baked once, at `ThemeData::light`/`dark` construction** — the oracle recomputes it lazily per `Theme.of` read, keyed on the ambient locale's script category (`Theme.build`'s `ThemeData.localize` step). FLUI has no script-category-resolving localization consumer yet, so this is a documented, named simplification, not a silent gap.
 - **`AnimatedTheme` / `ColorScheme`/`TextTheme` lerp are deferred** — no component consumes an interpolated theme yet.
-- **No `MaterialApp`** — this crate is the theming substrate an app root (`Theme` wrapping the tree, or a future `MaterialApp`) builds on.
+- **`MaterialApp` composes downward only** — it builds on `flui-widgets`' `WidgetsApp` (ADR-0028/ADR-0042: the design-neutral shell never learns about this crate). Theme *selection* (`ThemeMode`) lives here, next to the tokens it selects between — never in `flui-app` (ADR-0042 §2/§6).
 
 ## Related crates
 
