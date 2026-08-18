@@ -535,7 +535,7 @@ impl GpuReplay {
                     //    dst_rect = Rect(fb_origin, fb_far); src_uv = [0, 0, 1, 1].
                     //
                     //    `filtered_tex` is fb_dim-sized with content at pixel (0,0).
-                    //    src_uv=[0,1] maps the full fb texture onto dst_rect — a
+                    //    src_uv = [0, 0, 1, 1] maps the full fb texture onto dst_rect — a
                     //    pixel-aligned 1:1 blit via the bilinear composite sampler.
                     //
                     //    Using fractional grown_bounds as dst_rect over an integer-

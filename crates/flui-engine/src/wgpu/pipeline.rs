@@ -480,7 +480,9 @@ pub fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
         // Non-tessellated callers (gradients, images) that reach
         // `flush_tessellated_geometry` with an advanced key would hit a pipeline-cache
         // miss or produce incorrect output; they are guarded by their own routing —
-        // `dispatch_shader_rect` diverts advanced gradient/image draws into isolated
+        // `dispatch_shader_rect` (batches/gradients.rs) diverts advanced shader/gradient
+        // rects, and the `is_advanced()` branches in the image/atlas draw entry points
+        // (batches/images.rs) divert advanced image draws — each into isolated
         // `DrawItem::AdvancedShape` segments before the key reaches the cache.
         PipelineKey::with_blend(mode)
     }

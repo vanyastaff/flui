@@ -765,7 +765,7 @@ impl GpuReplay {
                 // input segment is rendered to an isolated grown-bounds offscreen
                 // (`fb_dim` sized, not full-viewport), the pass chain is folded,
                 // and the result is composited onto the layer's offscreen_view at the
-                // integer-grid dst_rect with src_uv=[0,1].
+                // integer-grid dst_rect with full-texture src_uv = [0, 0, 1, 1].
                 //
                 // Deliberately no `_` arm: a new `Slice` variant must fail to
                 // compile here rather than be silently skipped during folding.
@@ -800,11 +800,11 @@ impl GpuReplay {
                     //    dst_rect = Rect(fb_origin, fb_far); src_uv = [0, 0, 1, 1].
                     //
                     //    The intermediate is `fb_dim`-sized with the content starting
-                    //    at pixel (0,0) of the texture.  src_uv=[0,1] maps the whole
-                    //    fb texture onto dst_rect — a pixel-aligned 1:1 blit.
+                    //    at pixel (0,0) of the texture.  src_uv = [0, 0, 1, 1] maps the
+                    //    whole fb texture onto dst_rect — a pixel-aligned 1:1 blit.
                     //    Using the fractional `grown_bounds` as dst_rect over an
                     //    integer-origin texture would shift every pixel by
-                    //    frac(grown_left) (the composite-grid shift, risk #1).
+                    //    frac(grown_left) (the composite-grid shift).
                     let (fb_origin_x, fb_origin_y) = op.fb_origin;
                     let (fb_w, fb_h) = op.fb_dim;
                     #[allow(
