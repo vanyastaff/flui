@@ -200,7 +200,10 @@ impl MacOSWindow {
                 let bridge = super::accessibility::MacosAccessibility::new(
                     content_view.cast::<std::ffi::c_void>(),
                 );
-                let _ = window.accessibility.set(Arc::new(bridge));
+                window
+                    .accessibility
+                    .set(Arc::new(bridge))
+                    .expect("BUG: the accessibility slot was created empty in this constructor and nothing else can fill it");
             }
 
             // Enable mouse tracking for mouse moved events
