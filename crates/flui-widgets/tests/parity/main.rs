@@ -7,6 +7,12 @@
 //!
 //! Phase covered: C1.13 (Core.1 exit gate) — geometry assertions only.
 //! Paint, semantics, and the wider ~150-test corpus are Phase 3 (deferred).
+//!
+//! The suite is inventoried executably by `manifest.toml` in this directory,
+//! validated by the sibling `parity_inventory` test target (see its module
+//! doc for every checked invariant and the pinned-reference refresh
+//! workflow). Adding a module here means adding a manifest row — the
+//! inventory test fails until the new file is classified.
 
 #[path = "../common/mod.rs"]
 mod common;
