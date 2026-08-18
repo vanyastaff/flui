@@ -9,8 +9,11 @@ use flui_tree::{
     TreeNav, TreeRead, TreeWrite,
     iter::{Ancestors, DescendantsWithDepth},
 };
+use rustc_hash::{FxHashMap, FxHashSet};
 use slab::Slab;
+use smallvec::SmallVec;
 
+use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
 
 // ============================================================================
@@ -61,26 +64,41 @@ pub struct SemanticsTree {
     /// Root SemanticsNode ID (None if tree is empty)
     root: Option<SemanticsId>,
 
-    /// Upper bound on the number of dirty nodes, maintained at every seam
-    /// that can flip a node's dirty bit ([`Self::insert`], [`Self::get_mut`],
+    /// The (superset of) dirty node ids, maintained at every seam that can
+    /// flip a node's dirty bit ([`Self::insert`], [`Self::get_mut`],
     /// [`Self::iter_mut`], [`Self::remove_shallow`], [`Self::clear`],
     /// [`Self::mark_all_dirty`], [`Self::mark_all_clean`]).
     ///
-    /// This is what makes [`Self::has_dirty_nodes`] O(1): the previous
-    /// implementation scanned with `any()`, which short-circuits on a dirty
-    /// tree but walks the whole arena on a clean one — the *idle* frame was
-    /// the worst case. Flutter maintains the same information as
-    /// `SemanticsOwner._dirtyNodes` (a set filled by `_markDirty`), so its
-    /// `sendSemanticsUpdate` early-out is O(1); this counter is the
-    /// arena-storage port of that.
+    /// This is what makes [`Self::has_dirty_nodes`] O(1) — and, as a set
+    /// rather than the earlier plain counter, what makes *iterating* the
+    /// dirty nodes ([`Self::dirty_ids`]) O(dirty) instead of an O(arena)
+    /// filter scan. Flutter maintains the same information as
+    /// `SemanticsOwner._dirtyNodes` (a set filled by `_markDirty`); this is
+    /// the arena-storage port of that.
     ///
-    /// Deliberately an upper bound, not an exact count: handing out
+    /// Deliberately a superset, not an exact set: handing out
     /// `&mut SemanticsNode` (via [`Self::get_mut`] / [`Self::iter_mut`])
     /// counts the node as dirty *at the borrow*, so nothing the caller does
     /// through the borrow can under-count. Over-counting is self-healing —
-    /// a flush that finds no dirty bits publishes nothing and resets the
-    /// counter via [`Self::mark_all_clean`].
-    dirty_count: usize,
+    /// a member whose bit turns out clean is skipped by consumers and the
+    /// set resets via [`Self::mark_all_clean`].
+    dirty: FxHashSet<SemanticsId>,
+
+    /// Arena ids per stable [`AccessibilityNodeId`] value, for O(1)
+    /// stable-identity lookups ([`Self::find_by_accessibility_id`],
+    /// [`Self::is_accessibility_id_live`]). Almost always one entry per id;
+    /// a hand-built tree can alias two nodes onto one render identity, so
+    /// the value is a list and the unique-lookup reports the ambiguity by
+    /// returning `None`.
+    stable_index: FxHashMap<u64, SmallVec<[SemanticsId; 1]>>,
+
+    /// Stable identities removed from the arena since the last
+    /// [`Self::take_removed_accessibility_ids`] drain — how the publish
+    /// path prunes its adapter mirror in O(removed) instead of sweeping
+    /// every live node per flush. Drained (and thus bounded) by every
+    /// publish; grows only while no publisher is attached, in which case
+    /// the arena itself is the caller's to manage.
+    removed_stable: Vec<u64>,
 }
 
 impl SemanticsTree {
@@ -89,7 +107,9 @@ impl SemanticsTree {
         Self {
             nodes: Slab::new(),
             root: None,
-            dirty_count: 0,
+            dirty: FxHashSet::default(),
+            stable_index: FxHashMap::default(),
+            removed_stable: Vec::new(),
         }
     }
 
@@ -98,7 +118,9 @@ impl SemanticsTree {
         Self {
             nodes: Slab::with_capacity(capacity),
             root: None,
-            dirty_count: 0,
+            dirty: FxHashSet::default(),
+            stable_index: FxHashMap::default(),
+            removed_stable: Vec::new(),
         }
     }
 
@@ -165,11 +187,20 @@ impl SemanticsTree {
     /// let id = tree.insert(node);
     /// ```
     pub fn insert(&mut self, node: SemanticsNode) -> SemanticsId {
-        if node.is_dirty() {
-            self.dirty_count += 1;
-        }
+        let is_dirty = node.is_dirty();
+        let stable = node.accessibility_id();
         let slab_index = self.nodes.insert(node);
-        SemanticsId::new(slab_index + 1) // +1 offset
+        let id = SemanticsId::new(slab_index + 1); // +1 offset
+        if is_dirty {
+            self.dirty.insert(id);
+        }
+        if let Some(stable) = stable {
+            self.stable_index
+                .entry(stable.as_u64())
+                .or_default()
+                .push(id);
+        }
+        id
     }
 
     /// Inserts a SemanticsNode with an associated ElementId.
@@ -204,8 +235,8 @@ impl SemanticsTree {
         let node = self.nodes.get_mut(id.get() - 1)?;
         if !node.is_dirty() {
             node.mark_dirty();
-            self.dirty_count += 1;
         }
+        self.dirty.insert(id);
         Some(node)
     }
 
@@ -255,17 +286,40 @@ impl SemanticsTree {
             self.root = None;
         }
         let removed = self.nodes.try_remove(id.get() - 1);
-        if removed.as_ref().is_some_and(SemanticsNode::is_dirty) {
-            self.dirty_count = self.dirty_count.saturating_sub(1);
+        self.dirty.remove(&id);
+        if let Some(stable) = removed.as_ref().and_then(SemanticsNode::accessibility_id) {
+            self.forget_stable(stable.as_u64(), id);
         }
         removed
     }
 
+    /// Drops one arena id from the stable index and records the removal for
+    /// the publish path's mirror prune.
+    fn forget_stable(&mut self, raw: u64, id: SemanticsId) {
+        if let Some(entries) = self.stable_index.get_mut(&raw) {
+            entries.retain(|&mut entry| entry != id);
+            if entries.is_empty() {
+                self.stable_index.remove(&raw);
+            }
+        }
+        self.removed_stable.push(raw);
+    }
+
     /// Clears all nodes from the tree.
+    ///
+    /// Every addressable node's stable identity is recorded as removed (the
+    /// same bookkeeping as [`Self::remove_shallow`]), so a publisher
+    /// diffing against its last delivered update learns about the wipe.
     pub fn clear(&mut self) {
+        for (_, node) in &self.nodes {
+            if let Some(stable) = node.accessibility_id() {
+                self.removed_stable.push(stable.as_u64());
+            }
+        }
         self.nodes.clear();
         self.root = None;
-        self.dirty_count = 0;
+        self.dirty.clear();
+        self.stable_index.clear();
     }
 
     // ========== Tree Operations ==========
@@ -442,29 +496,107 @@ impl SemanticsTree {
     /// The full-republish primitive (`SemanticsOwner::send_full_tree`):
     /// after this, a flush re-examines every node.
     pub fn mark_all_dirty(&mut self) {
-        for (_, node) in &mut self.nodes {
+        for (index, node) in &mut self.nodes {
             node.mark_dirty();
+            self.dirty.insert(SemanticsId::new(index + 1));
         }
-        self.dirty_count = self.nodes.len();
     }
 
     /// Marks all nodes as clean.
     pub fn mark_all_clean(&mut self) {
-        for (_, node) in &mut self.nodes {
-            node.mark_clean();
+        // Bits are cleared through the set, not a full-arena sweep: only
+        // members can have a set bit (every bit-setting seam also inserts),
+        // so this is O(dirty).
+        for id in std::mem::take(&mut self.dirty) {
+            if let Some(node) = self.nodes.get_mut(id.get() - 1) {
+                node.mark_clean();
+            }
         }
-        self.dirty_count = 0;
     }
 
     /// Returns true if any node may be dirty — O(1).
     ///
-    /// Backed by the maintained counter rather than a scan; see the
-    /// `dirty_count` field doc for why the scan was the wrong shape (it
-    /// walked the entire arena precisely on the idle frame) and for the
-    /// conservative-upper-bound contract (`true` can be spurious after a
+    /// Backed by the maintained dirty set rather than a scan; see the
+    /// `dirty` field doc for why the scan was the wrong shape (it walked
+    /// the entire arena precisely on the idle frame) and for the
+    /// conservative-superset contract (`true` can be spurious after a
     /// read-only `&mut` borrow; `false` is always exact).
     pub fn has_dirty_nodes(&self) -> bool {
-        self.dirty_count > 0
+        !self.dirty.is_empty()
+    }
+
+    /// The maintained dirty-id set — O(dirty) to iterate, unordered.
+    ///
+    /// A superset of the truly-dirty nodes (see the `dirty` field doc):
+    /// consumers re-check [`SemanticsNode::is_dirty`] per member and skip
+    /// ids that died since marking.
+    pub fn dirty_ids(&self) -> impl Iterator<Item = SemanticsId> + '_ {
+        self.dirty.iter().copied()
+    }
+
+    // ========== Stable-Identity Lookup ==========
+
+    /// Resolves a stable [`AccessibilityNodeId`] to its arena id — `None`
+    /// when the identity is not in the arena **or is ambiguous** (aliased
+    /// by more than one node, possible only in hand-built trees; callers
+    /// treat ambiguity as "cannot address" exactly like
+    /// [`SemanticsOwner::resolve_action`](crate::SemanticsOwner)).
+    pub fn find_by_accessibility_id(&self, id: AccessibilityNodeId) -> Option<SemanticsId> {
+        match self.stable_index.get(&id.as_u64())?.as_slice() {
+            &[single] => Some(single),
+            _ => None,
+        }
+    }
+
+    /// Whether any live arena node publishes under this raw stable id.
+    pub(crate) fn is_accessibility_id_live(&self, raw: u64) -> bool {
+        self.stable_index.contains_key(&raw)
+    }
+
+    /// Drains the stable identities removed since the last drain.
+    ///
+    /// The publish path's O(removed) prune feed — see the `removed_stable`
+    /// field doc. May contain duplicates and identities that have since
+    /// been re-inserted; consumers re-check liveness per entry.
+    pub(crate) fn take_removed_accessibility_ids(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.removed_stable)
+    }
+
+    /// Replaces the node stored at `id` in place, preserving the arena id
+    /// and the parent link (so the parent's children vector stays valid
+    /// without re-linking).
+    ///
+    /// The subtree-graft primitive: re-assembly replaces a boundary node's
+    /// content while every reference to it — its parent's children list,
+    /// its published stable identity — survives. The caller owns the
+    /// children: the OLD node's children must already have been removed (or
+    /// be about to be re-attached), and the NEW node starts with whatever
+    /// children the caller attaches afterwards. Returns `false` (and
+    /// changes nothing) if `id` is not live.
+    pub fn replace_node(&mut self, id: SemanticsId, mut node: SemanticsNode) -> bool {
+        let Some(slot) = self.nodes.get_mut(id.get() - 1) else {
+            return false;
+        };
+        node.set_parent(slot.parent());
+        let old = std::mem::replace(slot, node);
+
+        let old_stable = old.accessibility_id();
+        let new_stable = self.nodes[id.get() - 1].accessibility_id();
+        if old_stable != new_stable {
+            if let Some(stable) = old_stable {
+                self.forget_stable(stable.as_u64(), id);
+            }
+            if let Some(stable) = new_stable {
+                self.stable_index
+                    .entry(stable.as_u64())
+                    .or_default()
+                    .push(id);
+            }
+        }
+
+        // Replacement is a mutation: the slot's published payload changed.
+        self.mark_dirty(id);
+        true
     }
 
     // ========== Iteration ==========

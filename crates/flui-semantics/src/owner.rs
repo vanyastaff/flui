@@ -209,6 +209,29 @@ pub struct SemanticsOwner {
     /// actually delivered (an unrooted tree leaves it pending, exactly like
     /// the dirty bits it travels with).
     full_publish_pending: bool,
+
+    /// Stable ids of the addressable nodes currently claiming
+    /// [`SemanticsFlag::IsFocused`](crate::SemanticsFlag), maintained
+    /// incrementally so a flush derives focus in O(dirty) instead of
+    /// re-scanning every node:
+    ///
+    /// - a dirty node examined during an incremental flush is inserted or
+    ///   removed by what its config now says;
+    /// - a removed node is dropped when the removal log is drained;
+    /// - every full publish rebuilds the set from a whole-tree scan (the
+    ///   full path is O(tree) anyway).
+    ///
+    /// A node whose focus flag changes without its dirty bit is invisible
+    /// here — the identical staleness contract the payload diff itself has.
+    /// Exactly one member ⇒ that member is the published focus; zero or
+    /// several ⇒ the root (several also warns, matching `tree_to_update`).
+    focus_claimants: FxHashSet<accesskit::NodeId>,
+
+    /// How many nodes the last flush actually examined (translated or
+    /// focus-checked). The oracle for the O(dirty) claim: a single-node
+    /// change must examine one node, not the arena.
+    #[cfg(any(test, feature = "testing"))]
+    examined_last_flush: usize,
 }
 
 /// Mirror of the adapter-visible tree as of the last delivered update.
@@ -255,7 +278,8 @@ impl std::fmt::Debug for SemanticsOwner {
                 &self.published.as_ref().map(|state| state.nodes.len()),
             )
             .field("full_publish_pending", &self.full_publish_pending)
-            .finish()
+            .field("focus_claimants", &self.focus_claimants.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -268,6 +292,9 @@ impl SemanticsOwner {
             enabled: true,
             published: None,
             full_publish_pending: false,
+            focus_claimants: FxHashSet::default(),
+            #[cfg(any(test, feature = "testing"))]
+            examined_last_flush: 0,
         }
     }
 
@@ -285,6 +312,9 @@ impl SemanticsOwner {
             enabled: true,
             published: None,
             full_publish_pending: false,
+            focus_claimants: FxHashSet::default(),
+            #[cfg(any(test, feature = "testing"))]
+            examined_last_flush: 0,
         }
     }
 
@@ -296,6 +326,9 @@ impl SemanticsOwner {
             enabled: true,
             published: None,
             full_publish_pending: false,
+            focus_claimants: FxHashSet::default(),
+            #[cfg(any(test, feature = "testing"))]
+            examined_last_flush: 0,
         }
     }
 
@@ -323,6 +356,10 @@ impl SemanticsOwner {
         {
             callback(&update);
             self.published = Some(PublishedState::mirror_of(update));
+            // Same wholesale reset a full publish performs: claimants
+            // re-seeded from the tree, stale removal notices discarded.
+            self.focus_claimants = Self::scan_focus_claimants(&self.tree);
+            let _ = self.tree.take_removed_accessibility_ids();
         }
         self.callback = Some(callback);
     }
@@ -529,6 +566,7 @@ impl SemanticsOwner {
         self.enabled = false;
         self.published = None;
         self.full_publish_pending = false;
+        self.focus_claimants.clear();
     }
 
     // ========== Tree Operations ==========
@@ -658,52 +696,89 @@ impl SemanticsOwner {
 
         self.published = Some(PublishedState::mirror_of(update));
         self.full_publish_pending = false;
+        self.focus_claimants = Self::scan_focus_claimants(&self.tree);
+        // The mirror was rebuilt wholesale; pending removal notices predate
+        // it and would only prune entries the rebuild already resolved.
+        let _ = self.tree.take_removed_accessibility_ids();
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.examined_last_flush = self.tree.len();
+        }
         self.tree.mark_all_clean();
+    }
+
+    /// Every addressable node currently claiming the focused flag — the
+    /// full-scan seed for the incrementally-maintained
+    /// [`Self::focus_claimants`] set.
+    fn scan_focus_claimants(tree: &SemanticsTree) -> FxHashSet<accesskit::NodeId> {
+        tree.iter()
+            .filter(|(_, node)| node.config().is_focused())
+            .filter_map(|(_, node)| node.accessibility_id())
+            .map(|identity| accesskit::NodeId(identity.as_u64()))
+            .collect()
     }
 
     /// Diffs dirty nodes against the mirror and publishes only the changes.
     ///
-    /// One pass over the arena does all four jobs: collect the live id set
-    /// (to prune mirror entries for removed nodes), re-translate dirty nodes
-    /// (clean ones are unchanged by the dirty-bit contract and are skipped),
-    /// compare against the mirror, and derive focus. The pass is O(arena)
-    /// with translation cost O(dirty) — the arena walk itself is the same
-    /// order as the assembly pass that produced the dirt.
+    /// Cost is O(dirty + removed), not O(arena): the tree's maintained
+    /// dirty set bounds what is re-translated, its removal log bounds the
+    /// mirror prune, and focus comes from the incrementally-maintained
+    /// claimant set — no step sweeps every live node. (An earlier shape of
+    /// this method walked the whole arena per flush to collect a live-id
+    /// set and derive focus; that walk was the last O(tree) cost on the
+    /// publish path.)
     fn publish_incremental(&mut self) {
         let state = self
             .published
             .as_mut()
             .expect("BUG: incremental publish requires a prior published state");
 
-        let mut live: FxHashSet<accesskit::NodeId> =
-            FxHashSet::with_capacity_and_hasher(self.tree.len(), rustc_hash::FxBuildHasher);
-        let mut changed: Vec<(accesskit::NodeId, accesskit::Node)> = Vec::new();
-        // Focus derivation, folded into the same pass `focused_node` would
-        // otherwise repeat: exactly one claimant wins, ambiguity falls back
-        // to the root (matching `tree_to_update`).
-        let mut focus_claimant: Option<accesskit::NodeId> = None;
-        let mut focus_ambiguous = false;
+        // Prune mirror entries whose nodes left the arena, from the tree's
+        // removal log. Without this, a node that is removed and later
+        // returns with identical content would diff as "unchanged" against
+        // a mirror the adapter no longer agrees with — the adapter dropped
+        // it when its parent was republished without it — and never be
+        // re-sent. The liveness re-check protects exactly that returned
+        // node: its removal notice is stale, not its entry.
+        for raw in self.tree.take_removed_accessibility_ids() {
+            if !self.tree.is_accessibility_id_live(raw) {
+                let id = accesskit::NodeId(raw);
+                state.nodes.remove(&id);
+                self.focus_claimants.remove(&id);
+            }
+        }
 
-        for (_, node) in self.tree.iter() {
+        #[cfg(any(test, feature = "testing"))]
+        let mut examined = 0_usize;
+
+        let dirty: SmallVec<[SemanticsId; 16]> = self.tree.dirty_ids().collect();
+        let mut changed: Vec<(accesskit::NodeId, accesskit::Node)> = Vec::new();
+        for sid in dirty {
+            // The set is a conservative superset: skip members that died
+            // since marking or whose bit a caller cleaned through a borrow.
+            let Some(node) = self.tree.get(sid) else {
+                continue;
+            };
+            if !node.is_dirty() {
+                continue;
+            }
             let Some(identity) = node.accessibility_id() else {
                 // Unaddressable: never published, nothing to diff. Same
                 // skip rule as `tree_to_update`.
                 continue;
             };
             let id = accesskit::NodeId(identity.as_u64());
-            live.insert(id);
+            #[cfg(any(test, feature = "testing"))]
+            {
+                examined += 1;
+            }
 
             if node.config().is_focused() {
-                if focus_claimant.is_some() {
-                    focus_ambiguous = true;
-                } else {
-                    focus_claimant = Some(id);
-                }
+                self.focus_claimants.insert(id);
+            } else {
+                self.focus_claimants.remove(&id);
             }
 
-            if !node.is_dirty() {
-                continue;
-            }
             let Some(data) = self.tree.node_data_of(node) else {
                 continue;
             };
@@ -713,20 +788,24 @@ impl SemanticsOwner {
             }
         }
 
-        // Prune mirror entries whose nodes left the arena. Without this, a
-        // node that is removed and later returns with identical content
-        // would diff as "unchanged" against a mirror the adapter no longer
-        // agrees with — the adapter dropped it when its parent was
-        // republished without it — and never be re-sent.
-        state.nodes.retain(|id, _| live.contains(id));
-
-        if focus_ambiguous {
-            tracing::warn!("semantics tree has more than one focused node; publishing the root");
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.examined_last_flush = examined;
         }
-        let focus = focus_claimant
-            .filter(|_| !focus_ambiguous)
-            .filter(|claimant| live.contains(claimant))
-            .unwrap_or(state.root);
+
+        // Exactly one claimant wins; ambiguity falls back to the root
+        // (matching `tree_to_update`, which warns for the same reason).
+        let mut claimants = self.focus_claimants.iter();
+        let focus = match (claimants.next(), claimants.next()) {
+            (Some(&single), None) => single,
+            (Some(_), Some(_)) => {
+                tracing::warn!(
+                    "semantics tree has more than one focused node; publishing the root"
+                );
+                state.root
+            }
+            (None, _) => state.root,
+        };
 
         if changed.is_empty() && focus == state.focus {
             // Everything the dirty bits pointed at translated identically —
@@ -754,6 +833,14 @@ impl SemanticsOwner {
         }
 
         self.tree.mark_all_clean();
+    }
+
+    /// How many nodes the last flush examined — the oracle for the
+    /// O(dirty) publish claim (a full publish examines every node, an
+    /// incremental one only the dirty set's survivors).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn examined_last_flush(&self) -> usize {
+        self.examined_last_flush
     }
 
     /// Forces the next flush to publish a self-contained full update, even
@@ -1097,6 +1184,39 @@ mod tests {
         // Mark dirty again
         owner.mark_dirty(id);
         assert!(owner.get(id).unwrap().is_dirty());
+    }
+
+    /// The O(dirty) publish claim, pinned on the examination counter: an
+    /// incremental flush after a single-node change examines that one node
+    /// — never the arena. (The full publish before it examines everything;
+    /// that contrast is what makes the oracle meaningful.)
+    #[test]
+    fn a_single_change_flush_examines_one_node_not_the_arena() {
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(addressable(1));
+        for index in 2..=16 {
+            let child = owner.insert(addressable(index));
+            owner.add_child(root, child);
+        }
+        owner.set_root(Some(root));
+        owner.flush();
+        assert_eq!(
+            owner.examined_last_flush(),
+            16,
+            "the initializing full publish examines every node"
+        );
+
+        owner
+            .get_mut(root)
+            .expect("root is live")
+            .config_mut()
+            .set_label("changed");
+        owner.flush();
+        assert_eq!(
+            owner.examined_last_flush(),
+            1,
+            "one changed node must cost one examination, not an arena sweep"
+        );
     }
 
     #[test]
