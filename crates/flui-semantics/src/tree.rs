@@ -433,7 +433,7 @@ impl SemanticsTree {
     /// and `children` — which a node alone cannot resolve, since it stores its
     /// children as arena [`SemanticsId`]s — is filled here with each
     /// addressable child's stable
-    /// [`AccessibilityNodeId`](crate::AccessibilityNodeId), in child order. An
+    /// [`AccessibilityNodeId`], in child order. An
     /// unaddressable child is likewise omitted, so the payload never
     /// references a node the platform was not given.
     pub fn node_data(&self, id: SemanticsId) -> Option<crate::update::SemanticsNodeData> {
