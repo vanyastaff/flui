@@ -33,4 +33,10 @@ anyhow = "1.0"
 # Windows/macOS workspace build — should either rejoin CI's test matrix —
 # never compiles rustix/x11 code it cannot use.
 [target.'cfg(target_os = "linux")'.dependencies]
-x11rb = { version = "0.13", features = ["xtest"] }
+# `shape` powers the occlusion check's cover window: an override-redirect
+# window with an EMPTY input region obscures the app visually (the X server
+# computes visibility from output geometry, so the app receives
+# VisibilityFullyObscured — the exact event winit's X11 backend translates
+# to `WindowEvent::Occluded(true)`) while wheel input passes straight
+# through to the app beneath, keeping frame demand alive while hidden.
+x11rb = { version = "0.13", features = ["xtest", "shape"] }

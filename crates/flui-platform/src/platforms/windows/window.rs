@@ -274,6 +274,7 @@ impl WindowsWindow {
                 modifiers: std::cell::Cell::new(keyboard_types::Modifiers::empty()),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
+                last_visibility_dispatched: std::cell::Cell::new(false),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
             });

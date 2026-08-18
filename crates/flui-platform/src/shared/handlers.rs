@@ -254,9 +254,13 @@ pub struct WindowCallbacks {
     /// `VisibilityFullyObscured` — full obscuration only), macOS, iOS, and
     /// Web — winit 0.30 has no Wayland emitter for this event at all
     /// ("Android / Wayland / Windows / Orbital: Unsupported", per winit's
-    /// own `WindowEvent::Occluded` doc). Where it is never delivered, this
-    /// callback simply never fires — the window is treated as always
-    /// visible (the same behavior as before this callback existed).
+    /// own `WindowEvent::Occluded` doc). The native Win32 backend derives
+    /// its own signal from `WM_SIZE` minimize/restore plus `WM_SHOWWINDOW`
+    /// hide/show, and the native AppKit backend from
+    /// `windowDidChangeOcclusionState:` — rules in `shared::visibility`.
+    /// Where no signal is ever delivered, this callback simply never fires
+    /// — the window is treated as always visible (the same behavior as
+    /// before this callback existed).
     pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the mouse enters or leaves the window. Parameter:

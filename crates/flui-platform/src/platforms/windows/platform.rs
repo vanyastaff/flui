@@ -28,7 +28,8 @@ use windows::{
                 WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
                 WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
                 WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
-                WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
+                WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP,
+                WNDCLASSW,
             },
         },
     },
@@ -91,6 +92,17 @@ pub(super) struct WindowContext {
     /// Stored here instead of in `WindowMode` to keep the cross-platform enum
     /// free of platform-specific fields.
     pub restore_style: std::cell::Cell<u32>,
+    /// Last surface-visibility value dispatched through
+    /// `WindowCallbacks::dispatch_visibility_status_change` (hidden-surface
+    /// gating). Two message families feed it — `WM_SIZE`
+    /// (minimize/restore) and `WM_SHOWWINDOW` (hide/show) — via the pure
+    /// rules in `crate::shared::visibility`; this cell is the shared edge
+    /// filter that keeps the two from double-dispatching the same state.
+    /// Starts `false`: windows are created hidden and shown afterwards
+    /// (`WindowsWindow::new`'s `ShowWindow` runs after the context is
+    /// installed), so the creation-time `WM_SHOWWINDOW` dispatches the
+    /// initial `true` through the same wire as every later change.
+    pub last_visibility_dispatched: std::cell::Cell<bool>,
     /// High half of a UTF-16 surrogate pair from an out-of-band `WM_CHAR`,
     /// held until its low half arrives in the next message (Windows splits
     /// astral-plane characters across two `WM_CHAR`s). Only the stray-char
@@ -885,6 +897,31 @@ impl WindowsPlatform {
                         // Update state
                         ctx.mode.set(new_mode);
 
+                        // Hidden-surface gating: minimize/restore is the
+                        // visibility signal Win32 actually delivers (no
+                        // occlusion events exist here), so it must reach
+                        // `dispatch_visibility_status_change` — the wire the
+                        // runtime's `FrameClock` gate and `AppLifecycleState`
+                        // derivation hang off. Decided by the pure rule in
+                        // `shared::visibility` (host-tested); the cell is the
+                        // edge filter shared with the WM_SHOWWINDOW arm.
+                        if let Some(visible) = crate::shared::visibility::win32_size_visibility(
+                            size_type,
+                            prev_mode.is_minimized(),
+                        ) && crate::shared::visibility::visibility_edge(
+                            ctx.last_visibility_dispatched.get(),
+                            visible,
+                        )
+                        .is_some()
+                        {
+                            ctx.last_visibility_dispatched.set(visible);
+                            tracing::debug!(
+                                ?visible,
+                                "Window surface visibility changed (WM_SIZE)"
+                            );
+                            ctx.callbacks.dispatch_visibility_status_change(visible);
+                        }
+
                         // Fire per-window on_resize callback (for all size changes except minimize)
                         if size_type != SIZE_MINIMIZED {
                             let logical_size = Size::new(
@@ -927,6 +964,47 @@ impl WindowsPlatform {
                     }
 
                     LRESULT(0)
+                }
+
+                WM_SHOWWINDOW => {
+                    // Hidden-surface gating, hide/show half (the
+                    // minimize/restore half lives in the WM_SIZE arm above;
+                    // both share `last_visibility_dispatched` as the edge
+                    // filter). Only `lParam == 0` — a genuine
+                    // `ShowWindow`-driven `WS_VISIBLE` change — is handled:
+                    // the nonzero status values (`SW_PARENTCLOSING`,
+                    // `SW_OTHERZOOM`, …) describe sibling/parent effects
+                    // whose surface impact Win32 reports elsewhere, and
+                    // treating them as show/hide would mis-gate a window
+                    // that is still composed.
+                    if lparam.0 == 0
+                        && let Some(ctx) = ctx
+                    {
+                        let shown = wparam.0 != 0;
+                        if let Some(visible) =
+                            crate::shared::visibility::win32_show_window_visibility(
+                                shown,
+                                ctx.mode.get().is_minimized(),
+                            )
+                            && crate::shared::visibility::visibility_edge(
+                                ctx.last_visibility_dispatched.get(),
+                                visible,
+                            )
+                            .is_some()
+                        {
+                            ctx.last_visibility_dispatched.set(visible);
+                            tracing::debug!(
+                                ?visible,
+                                "Window surface visibility changed (WM_SHOWWINDOW)"
+                            );
+                            ctx.callbacks.dispatch_visibility_status_change(visible);
+                        }
+                    }
+                    // DefWindowProc continues the ordinary show/hide
+                    // processing this message announces. (Already inside
+                    // this function's one big SAFETY block, like the other
+                    // pass-through arms.)
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
                 WM_MOVE => {

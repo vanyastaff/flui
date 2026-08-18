@@ -77,6 +77,16 @@ struct MacOSWindowState {
 
     /// Cursor selected by this exact window's presentation.
     cursor: CursorIcon,
+
+    /// Last surface-visibility value dispatched through
+    /// `WindowCallbacks::dispatch_visibility_status_change` (hidden-surface
+    /// gating), fed by `windowDidChangeOcclusionState:`. Edge filter:
+    /// AppKit documents that the notification may fire for reasons other
+    /// than the visible bit flipping, so an unchanged value is never
+    /// re-dispatched (`shared::visibility::visibility_edge`). Starts
+    /// `true` — a freshly created window is treated as visible until AppKit
+    /// says otherwise, matching every other backend's initial state.
+    occlusion_visible: bool,
 }
 
 impl std::fmt::Debug for MacOSWindow {
@@ -176,6 +186,7 @@ impl MacOSWindow {
                     },
                     scale_factor: scale,
                     cursor: CursorIcon::default(),
+                    occlusion_visible: true,
                 })),
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
@@ -1220,6 +1231,21 @@ fn get_or_create_delegate_class() -> &'static Class {
             }
         }
 
+        // windowDidChangeOcclusionState: (hidden-surface gating — fires on
+        // full occlusion by other windows, miniaturization, hide/unhide,
+        // and space switches; the visible bit is the surface-composed
+        // claim the runtime's FrameClock gate consumes)
+        extern "C" fn window_did_change_occlusion_state(
+            this: &Object,
+            _sel: Sel,
+            _notification: id,
+        ) {
+            // SAFETY: AppKit invokes delegate methods on live delegate objects.
+            if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                window.handle_occlusion_state_changed();
+            }
+        }
+
         // dealloc — reclaim the boxed Weak<MacOSWindow>
         extern "C" fn delegate_dealloc(this: &Object, _sel: Sel) {
             // SAFETY: the ivar holds either null or a Box<Weak<MacOSWindow>>
@@ -1272,6 +1298,10 @@ fn get_or_create_delegate_class() -> &'static Class {
             decl.add_method(
                 sel!(windowDidChangeScreen:),
                 window_did_change_screen as extern "C" fn(&Object, Sel, id),
+            );
+            decl.add_method(
+                sel!(windowDidChangeOcclusionState:),
+                window_did_change_occlusion_state as extern "C" fn(&Object, Sel, id),
             );
             decl.add_method(
                 sel!(dealloc),
@@ -1383,6 +1413,37 @@ impl MacOSWindow {
             bridge.update_view_focus_state(false);
         }
         tracing::debug!("Window lost focus");
+    }
+
+    /// Handle occlusion state change (hidden-surface gating).
+    ///
+    /// Reads the window's current `occlusionState` and forwards the visible
+    /// bit through `dispatch_visibility_status_change` — the wire the
+    /// runtime's per-presentation `FrameClock` gate and `AppLifecycleState`
+    /// derivation hang off. The decidable half (bit test, polarity, edge
+    /// filter) lives in `crate::shared::visibility`, host-tested; only the
+    /// `occlusionState` read is AppKit-bound.
+    fn handle_occlusion_state_changed(&self) {
+        // SAFETY: `ns_window` is alive for the lifetime of `self`;
+        // `occlusionState` returns a plain NSUInteger bitmask.
+        let raw: u64 = unsafe {
+            let state: usize = msg_send![self.ns_window, occlusionState];
+            state as u64
+        };
+        let visible = crate::shared::visibility::appkit_occlusion_state_is_visible(raw);
+        let edge = {
+            let mut state = self.state.lock();
+            let edge = crate::shared::visibility::visibility_edge(state.occlusion_visible, visible);
+            if edge.is_some() {
+                state.occlusion_visible = visible;
+            }
+            edge
+        };
+        // Dispatch outside the state lock, like every other handler here.
+        if let Some(visible) = edge {
+            tracing::debug!(?visible, "Window occlusion state changed");
+            self.callbacks.dispatch_visibility_status_change(visible);
+        }
     }
 
     /// Handle close request event
