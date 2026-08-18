@@ -179,10 +179,18 @@ impl CupertinoApp {
     ///
     /// # Panics
     ///
-    /// Debug builds panic on an empty list (via `WidgetsApp`'s own guard at
-    /// build time).
+    /// An empty list always fails: debug builds panic here, at
+    /// construction; release builds panic later, during build, when locale
+    /// resolution reads the first supported locale (the oracle's own
+    /// split — `assert(supportedLocales.isNotEmpty)` in debug, a
+    /// `StateError` from `supportedLocales.first` in release).
     #[must_use]
     pub fn supported_locales(mut self, locales: Vec<Locale>) -> Self {
+        debug_assert!(
+            !locales.is_empty(),
+            "BUG: supported_locales requires at least one locale \
+             (the oracle asserts supportedLocales.isNotEmpty)"
+        );
         self.supported_locales = locales;
         self
     }

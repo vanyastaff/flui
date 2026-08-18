@@ -305,10 +305,18 @@ impl MaterialApp {
     ///
     /// # Panics
     ///
-    /// Debug builds panic on an empty list (via `WidgetsApp`'s own guard at
-    /// build time).
+    /// An empty list always fails: debug builds panic here, at
+    /// construction; release builds panic later, during build, when locale
+    /// resolution reads the first supported locale (the oracle's own
+    /// split — `assert(supportedLocales.isNotEmpty)` in debug, a
+    /// `StateError` from `supportedLocales.first` in release).
     #[must_use]
     pub fn supported_locales(mut self, locales: Vec<Locale>) -> Self {
+        debug_assert!(
+            !locales.is_empty(),
+            "BUG: supported_locales requires at least one locale \
+             (the oracle asserts supportedLocales.isNotEmpty)"
+        );
         self.supported_locales = locales;
         self
     }
@@ -418,6 +426,16 @@ mod tests {
         assert!(!ThemeMode::Light.is_dark());
         assert!(ThemeMode::Dark.is_dark());
         assert!(!ThemeMode::Dark.is_system());
+    }
+
+    #[test]
+    // Debug-only: the guard compiles out in release, where `#[should_panic]`
+    // would otherwise report "did not panic as expected" (release still
+    // panics, but later, during build — see the setter's doc).
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "requires at least one locale")]
+    fn empty_supported_locales_panics_at_construction() {
+        let _ = MaterialApp::new(SizedBox::shrink()).supported_locales(Vec::new());
     }
 
     #[test]

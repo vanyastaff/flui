@@ -258,8 +258,11 @@ impl WidgetsApp {
     ///
     /// # Panics
     ///
-    /// Debug builds panic on an empty list — the oracle's
-    /// `assert(supportedLocales.isNotEmpty)`.
+    /// An empty list always fails: debug builds panic here, at
+    /// construction (the oracle's `assert(supportedLocales.isNotEmpty)`);
+    /// release builds panic later, during build, when
+    /// [`basic_locale_list_resolution`] reads the first supported locale
+    /// (the oracle's `StateError` from `supportedLocales.first`).
     #[must_use]
     pub fn supported_locales(mut self, locales: Vec<Locale>) -> Self {
         debug_assert!(

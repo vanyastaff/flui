@@ -278,6 +278,16 @@ fn a_live_brightness_republish_re_resolves_the_theme() {
 }
 
 #[test]
+// Debug-only: the guard compiles out in release, where `#[should_panic]`
+// would otherwise report "did not panic as expected" (release still panics,
+// but later, during build — see the setter's doc).
+#[cfg(debug_assertions)]
+#[should_panic(expected = "requires at least one locale")]
+fn empty_supported_locales_panics_at_construction() {
+    let _ = CupertinoApp::new(SizedBox::shrink()).supported_locales(Vec::new());
+}
+
+#[test]
 fn the_builder_hook_resolves_the_published_theme() {
     // The oracle publishes CupertinoTheme ABOVE the WidgetsApp, so the
     // caller's builder — passed straight through — resolves it with no
