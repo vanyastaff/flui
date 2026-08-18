@@ -2591,14 +2591,19 @@ fn teardown_platform_realm() {
     drop(realms);
 
     // Execution-services shutdown (issue #557): the whole loop is exiting,
-    // so stop background admission, cancel outstanding work, and join
-    // running work bounded by a per-pool grace deadline. Loop-scoped like
-    // the clipboard below — hot-restart never reaches this function, so a
-    // reinstalled realm keeps its pools. A teardown path that skips this
-    // (panic mid-teardown) still tears the pools down non-blockingly via
+    // so stop background admission, cancel outstanding work, join running
+    // work bounded by a per-pool grace deadline, and CLEAR the slot — a
+    // second platform loop hosted on this same thread later (an embedder
+    // running `run_app` twice in one process) must re-resolve fresh
+    // services at its own realm install, not inherit an instance whose
+    // admission is permanently closed. Loop-scoped like the clipboard
+    // below — hot-restart never reaches this function, so a reinstalled
+    // realm keeps its pools. A teardown path that skips this (panic
+    // mid-teardown) still tears the pools down non-blockingly via
     // `ExecutionServices`' own `Drop`.
     APP_RUNTIME.with(|slot| {
-        slot.borrow().shutdown_execution(EXECUTION_SHUTDOWN_GRACE);
+        slot.borrow_mut()
+            .shutdown_execution(EXECUTION_SHUTDOWN_GRACE);
     });
 
     // ADR-0034's install/teardown symmetry: the event loop has exited (this
@@ -2664,17 +2669,20 @@ mod realm_dispatch_tests {
 
     /// Installing a realm resolves the loop-scoped execution services
     /// (issue #557) at the same known point as `SharedEngineServices` — and
-    /// full loop-exit teardown shuts them down: afterwards the services are
-    /// still resolved (nothing can silently rebuild pools on an exiting
-    /// loop) but refuse every spawn.
+    /// full loop-exit teardown shuts them down AND clears the slot, so a
+    /// SECOND platform loop hosted on this same thread (an embedder running
+    /// `run_app` twice in one process; a headless-restart harness) gets
+    /// fresh, working services that honor its own injected executors
+    /// instead of inheriting an instance whose admission is permanently
+    /// closed.
     ///
     /// If reverted: remove the `ensure_execution` call from
     /// `install_platform_realm` and the first assertion fails; remove the
-    /// `shutdown_execution` call from `teardown_platform_realm` and the
-    /// refusal assertion fails.
+    /// `shutdown_execution` call from `teardown_platform_realm` (or make it
+    /// leave the slot filled) and the second loop's assertions fail.
     #[test]
     fn install_resolves_execution_services_and_teardown_shuts_them_down() {
-        use crate::app::execution::SpawnError;
+        use crate::app::execution::DeterministicExecutors;
 
         APP_RUNTIME.with(|slot| {
             assert!(
@@ -2683,6 +2691,7 @@ mod realm_dispatch_tests {
             );
         });
 
+        // ── first loop: default pools ───────────────────────────────────
         install_test_realm();
         APP_RUNTIME.with(|slot| {
             let state = slot.borrow();
@@ -2698,20 +2707,40 @@ mod realm_dispatch_tests {
 
         teardown_platform_realm();
         APP_RUNTIME.with(|slot| {
+            assert!(
+                slot.borrow().execution().is_none(),
+                "full loop-exit teardown must clear the slot, not leave a dead instance"
+            );
+        });
+
+        // ── second loop on the same thread: its own injected executors ──
+        let deterministic = DeterministicExecutors::new();
+        APP_RUNTIME.with(|slot| {
+            slot.borrow_mut()
+                .install_host_executors(deterministic.host_executors());
+        });
+        install_test_realm();
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        APP_RUNTIME.with(|slot| {
             let state = slot.borrow();
             let services = state
                 .execution()
-                .expect("teardown leaves the shut-down services in place");
-            assert_eq!(
-                services.spawn_compute(Box::new(|| {})),
-                Err(SpawnError::ShuttingDown),
-                "background admission must be closed after full loop-exit teardown"
+                .expect("the second loop's install must re-resolve execution services");
+            assert!(
+                !services.owns_default_pools(),
+                "the second loop's injected executors must be honored, not ignored as late"
             );
-            assert_eq!(
-                services.spawn_io(Box::pin(async {})),
-                Err(SpawnError::ShuttingDown)
-            );
+            let ran_for_job = std::sync::Arc::clone(&ran);
+            services
+                .spawn_compute(Box::new(move || {
+                    ran_for_job.store(true, std::sync::atomic::Ordering::Release);
+                }))
+                .expect("the second loop's admission must be open");
         });
+        deterministic.run_until_idle();
+        assert!(ran.load(std::sync::atomic::Ordering::Acquire));
+
+        teardown_platform_realm();
     }
 
     /// A second realm installed on the same thread (hot-restart; sequential

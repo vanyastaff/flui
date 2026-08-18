@@ -680,7 +680,10 @@ pub(crate) struct AppRuntime {
     /// lazily-started default pools. Loop-scoped like `owner_platform`:
     /// hot-restart hosts a fresh realm on the same loop and must not
     /// rebuild pools, so realm teardown never touches this — only full
-    /// loop-exit teardown shuts it down ([`Self::shutdown_execution`]).
+    /// loop-exit teardown shuts it down AND clears this slot
+    /// ([`Self::shutdown_execution`]), so a later second loop on this same
+    /// thread re-resolves fresh services instead of inheriting a dead
+    /// instance.
     execution: OnceCell<ExecutionServices>,
     /// Host executors received from `AppConfig` before the first realm
     /// install resolves `execution`. Taken by [`Self::ensure_execution`];
@@ -856,14 +859,25 @@ impl AppRuntime {
         self.execution.get()
     }
 
-    /// Shut down the execution services: stop admission, cancel outstanding
-    /// work, join running work bounded by `grace` per pool. Runs at full
-    /// loop-exit teardown (`teardown_platform_realm`), never at per-realm
-    /// teardown — see the `execution` field's doc. After this, background
-    /// spawns refuse with `SpawnError::ShuttingDown`; the `OnceCell` stays
-    /// filled so nothing can silently rebuild pools on a loop that is
-    /// exiting. A drop without this explicit call still tears the pools
-    /// down non-blockingly (`ExecutionServices`' own `Drop`).
+    /// Shut down the execution services and **reset the slot**: stop
+    /// admission, cancel outstanding work, join running work bounded by
+    /// `grace` per pool, then take the shut-down instance out of the
+    /// `OnceCell` (dropping it — its pools are already closed, so the drop
+    /// is a no-op) and discard any never-resolved host-executor stash. Runs
+    /// at full loop-exit teardown (`teardown_platform_realm`), never at
+    /// per-realm teardown — see the `execution` field's doc.
+    ///
+    /// Resetting the slot (rather than leaving the dead instance in place)
+    /// is load-bearing for a SECOND platform loop hosted on this same
+    /// thread later — an embedder running `run_app` twice in one process,
+    /// or a headless-restart harness: the next loop's realm install must
+    /// re-resolve a fresh, working `ExecutionServices` (honoring any newly
+    /// stashed `HostExecutors`), not inherit an instance whose admission is
+    /// permanently closed. Nothing rebuilds pools on the loop that is
+    /// exiting either way: `ensure_execution` (the only resolver) runs only
+    /// from a realm install, and this loop is past its last one. A teardown
+    /// path that skips this call still tears pools down non-blockingly
+    /// (`ExecutionServices`' own `Drop`).
     // Its production caller (teardown_platform_realm) is not compiled on
     // wasm32, where shutdown is a no-op by construction (sequential
     // execution; nothing to join).
@@ -875,8 +889,12 @@ impl AppRuntime {
                       the wasm backend has nothing to cancel or join"
         )
     )]
-    pub(super) fn shutdown_execution(&self, grace: std::time::Duration) {
-        if let Some(services) = self.execution.get() {
+    pub(super) fn shutdown_execution(&mut self, grace: std::time::Duration) {
+        // A stash the exiting loop never resolved must not leak into the
+        // next loop's resolution: injection is per-run configuration, and
+        // the next `run_*` stashes its own config's bundle if it has one.
+        self.pending_host_executors = None;
+        if let Some(services) = self.execution.take() {
             services.shutdown(grace);
         }
     }
@@ -1922,19 +1940,53 @@ mod execution_wiring_tests {
         );
     }
 
-    /// `shutdown_execution` leaves the resolved services in place but
-    /// refusing: nothing can silently rebuild pools on an exiting loop.
+    /// `shutdown_execution` shuts the services down AND clears the slot,
+    /// so the next loop on this thread re-resolves fresh, working services
+    /// — including honoring a host bundle stashed for that next loop. A
+    /// shutdown that left the dead instance in place would refuse every
+    /// spawn of the second loop and silently ignore its injected
+    /// executors.
     #[test]
-    fn shutdown_execution_refuses_later_spawns() {
+    fn shutdown_execution_resets_the_slot_for_a_later_loop() {
         let mut runtime = AppRuntime::new();
         let _ = runtime.ensure_execution();
         runtime.shutdown_execution(std::time::Duration::from_secs(5));
-        let services = runtime
-            .execution()
-            .expect("shutdown must not clear the resolved slot");
-        assert_eq!(
-            services.spawn_compute(Box::new(|| {})),
-            Err(crate::app::execution::SpawnError::ShuttingDown)
+        assert!(
+            runtime.execution().is_none(),
+            "loop-exit shutdown must clear the slot, not leave a dead instance"
+        );
+
+        // "Second loop": a fresh install with its own injected executors.
+        let deterministic = DeterministicExecutors::new();
+        runtime.install_host_executors(deterministic.host_executors());
+        let services = runtime.ensure_execution();
+        assert!(
+            !services.owns_default_pools(),
+            "the second loop's host bundle must be honored, not ignored as late"
+        );
+        let ran = std::sync::Arc::new(AtomicBool::new(false));
+        let ran_for_job = std::sync::Arc::clone(&ran);
+        services
+            .spawn_compute(Box::new(move || {
+                ran_for_job.store(true, Ordering::Release);
+            }))
+            .expect("the second loop's admission must be open");
+        deterministic.run_until_idle();
+        assert!(ran.load(Ordering::Acquire));
+    }
+
+    /// A host stash the exiting loop never resolved is discarded at
+    /// shutdown: injection is per-run configuration, and the next run
+    /// stashes its own.
+    #[test]
+    fn shutdown_execution_discards_an_unresolved_stash() {
+        let mut runtime = AppRuntime::new();
+        runtime.install_host_executors(DeterministicExecutors::new().host_executors());
+        runtime.shutdown_execution(std::time::Duration::from_secs(5));
+        let services = runtime.ensure_execution();
+        assert!(
+            services.owns_default_pools(),
+            "a stash for a torn-down loop must not leak into the next loop's resolution"
         );
     }
 }

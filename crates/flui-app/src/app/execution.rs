@@ -96,6 +96,15 @@ pub enum SpawnError {
     /// work is admitted.
     #[error("execution services are shutting down; new work is refused")]
     ShuttingDown,
+    /// The lane's worker pool could not be started — the OS refused thread
+    /// creation (resource exhaustion). An environment failure, not a bug
+    /// (see `docs/PANIC-POLICY.md`): the pool slot stays unstarted, so a
+    /// later spawn retries once resources free up.
+    #[error(
+        "the executor lane's worker pool could not be started (OS thread/resource \
+         exhaustion); a later spawn may succeed"
+    )]
+    Unavailable,
 }
 
 /// Host-provided worker pool for the **asynchronous compute** work class.
@@ -308,9 +317,8 @@ impl DefaultPools {
         }
     }
 
-    /// Handle to the IO runtime, starting it on first use. `None` once the
-    /// slot is closed by shutdown.
-    fn io_handle(&self) -> Option<tokio::runtime::Handle> {
+    /// Handle to the IO runtime, starting it on first use.
+    fn io_handle(&self) -> Result<tokio::runtime::Handle, SpawnError> {
         Self::handle_of(&self.io, || {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(IO_WORKER_THREADS)
@@ -320,9 +328,8 @@ impl DefaultPools {
         })
     }
 
-    /// Handle to the compute runtime, starting it on first use. `None` once
-    /// the slot is closed by shutdown.
-    fn compute_handle(&self) -> Option<tokio::runtime::Handle> {
+    /// Handle to the compute runtime, starting it on first use.
+    fn compute_handle(&self) -> Result<tokio::runtime::Handle, SpawnError> {
         Self::handle_of(&self.compute, || {
             let workers = default_compute_worker_count(
                 std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
@@ -336,23 +343,34 @@ impl DefaultPools {
         })
     }
 
+    /// `Err(ShuttingDown)` once the slot is closed by shutdown;
+    /// `Err(Unavailable)` when the OS refuses to start the pool — an
+    /// environment failure, not an invariant, so no panic
+    /// (`docs/PANIC-POLICY.md`): the slot stays `NotStarted` and a later
+    /// spawn retries.
     fn handle_of(
         slot: &parking_lot::Mutex<PoolSlot>,
         build: impl FnOnce() -> std::io::Result<tokio::runtime::Runtime>,
-    ) -> Option<tokio::runtime::Handle> {
+    ) -> Result<tokio::runtime::Handle, SpawnError> {
         let mut slot = slot.lock();
         match &*slot {
-            PoolSlot::Running(runtime) => Some(runtime.handle().clone()),
-            PoolSlot::Closed => None,
-            PoolSlot::NotStarted => {
-                let runtime = build().expect(
-                    "BUG: building a tokio runtime must succeed on any platform \
-                     this crate targets short of OS thread exhaustion",
-                );
-                let handle = runtime.handle().clone();
-                *slot = PoolSlot::Running(runtime);
-                Some(handle)
-            }
+            PoolSlot::Running(runtime) => Ok(runtime.handle().clone()),
+            PoolSlot::Closed => Err(SpawnError::ShuttingDown),
+            PoolSlot::NotStarted => match build() {
+                Ok(runtime) => {
+                    let handle = runtime.handle().clone();
+                    *slot = PoolSlot::Running(runtime);
+                    Ok(handle)
+                }
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        "failed to start a background worker pool; refusing the spawn \
+                         (the slot stays unstarted, a later spawn retries)"
+                    );
+                    Err(SpawnError::Unavailable)
+                }
+            },
         }
     }
 
@@ -400,8 +418,10 @@ impl ExecutionServices {
         }
     }
 
-    /// Whether this instance routes to host-injected pools (`false`) or owns
-    /// the default pools (`true`).
+    /// Whether this instance executes background work on FLUI's own backend
+    /// (`true` — the lazily-started default pools on native targets,
+    /// sequential in-place execution on wasm32) rather than routing it to
+    /// host-injected pools (`false`).
     pub(crate) fn owns_default_pools(&self) -> bool {
         !matches!(self.backend, Backend::Host(_))
     }
@@ -430,9 +450,9 @@ impl ExecutionServices {
             match &self.backend {
                 Backend::Host(host) => host.compute.spawn_job(wrapped),
                 Backend::Default(pools) => {
-                    let Some(handle) = pools.compute_handle() else {
-                        return Err(SpawnError::ShuttingDown);
-                    };
+                    // On `Err`, dropping `wrapped` drops the admission
+                    // guard captured inside it — the slot is released.
+                    let handle = pools.compute_handle()?;
                     handle.spawn(async move { wrapped() });
                     Ok(())
                 }
@@ -481,9 +501,9 @@ impl ExecutionServices {
             match &self.backend {
                 Backend::Host(host) => host.io.spawn_future(wrapped),
                 Backend::Default(pools) => {
-                    let Some(handle) = pools.io_handle() else {
-                        return Err(SpawnError::ShuttingDown);
-                    };
+                    // On `Err`, dropping `wrapped` drops the admission
+                    // guard captured inside it — the slot is released.
+                    let handle = pools.io_handle()?;
                     handle.spawn(wrapped);
                     Ok(())
                 }
@@ -616,6 +636,16 @@ impl Drop for ExecutionServices {
 /// each pass). Doubles as the reference implementation proving the
 /// [`HostComputePool`]/[`HostIoPool`] contract is implementable outside
 /// FLUI.
+///
+/// # Single-driver contract
+///
+/// Clones share one queue set: spawning from any thread — including from
+/// inside driven work — is always fine. **Driving** is exclusive: at most
+/// one [`run_until_idle`](Self::run_until_idle) may be in flight at a time,
+/// and a second concurrent or reentrant call panics (`BUG:`) rather than
+/// risk silently cancelling the first driver's in-flight task. Two
+/// interleaved drivers would also not be *deterministic*, which is this
+/// type's entire point.
 #[derive(Clone, Default)]
 pub struct DeterministicExecutors {
     inner: Arc<DeterministicShared>,
@@ -625,6 +655,9 @@ pub struct DeterministicExecutors {
 struct DeterministicShared {
     jobs: parking_lot::Mutex<std::collections::VecDeque<ComputeJob>>,
     tasks: parking_lot::Mutex<Vec<DeterministicTask>>,
+    /// Exclusivity latch for [`DeterministicExecutors::run_until_idle`] —
+    /// see the type's "Single-driver contract" doc section.
+    driving: AtomicBool,
 }
 
 struct DeterministicTask {
@@ -670,13 +703,44 @@ impl DeterministicExecutors {
     /// repeating until a full pass makes no progress. Futures that returned
     /// `Pending` without an intervening wake stay parked (they are not spun
     /// on). Returns the number of jobs run plus polls made.
+    ///
+    /// # Panics
+    ///
+    /// Panics (`BUG:`) if a drive is already in flight — from another
+    /// thread, or reentrantly from inside driven work. See the type's
+    /// "Single-driver contract" doc section: a second driver could observe
+    /// the first's checked-out task slot and silently cancel it, and
+    /// interleaved drivers are not deterministic. Spawning during a drive
+    /// is always fine; driving is what must be exclusive.
     pub fn run_until_idle(&self) -> usize {
+        assert!(
+            !self.inner.driving.swap(true, Ordering::AcqRel),
+            "BUG: DeterministicExecutors::run_until_idle called while a drive is \
+             already in flight -- this executor has a single-driver contract: one \
+             drive at a time, never from inside driven work"
+        );
+        /// Clears the latch on every exit path, including an unwind out of
+        /// a driven job's own panic.
+        struct DriveGuard<'latch>(&'latch AtomicBool);
+        impl Drop for DriveGuard<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _driving = DriveGuard(&self.inner.driving);
+
         let mut steps = 0;
         loop {
             let mut progressed = false;
 
-            // Compute jobs first, FIFO.
-            while let Some(job) = self.inner.jobs.lock().pop_front() {
+            // Compute jobs first, FIFO. The pop is its own statement so the
+            // lock guard drops BEFORE the job runs — a `while let` scrutinee
+            // temporary would live across the loop body, and a job that
+            // spawns (same lock) would then deadlock on this non-reentrant
+            // mutex. Pinned by `deterministic_job_may_spawn_during_drive`.
+            loop {
+                let job = self.inner.jobs.lock().pop_front();
+                let Some(job) = job else { break };
                 job();
                 steps += 1;
                 progressed = true;
@@ -1223,6 +1287,116 @@ mod tests {
         deterministic.run_until_idle();
         assert_eq!(polls.load(Ordering::Relaxed), 2);
         assert_eq!(deterministic.pending(), (0, 0));
+    }
+
+    /// The single-driver contract is loud: a reentrant drive (here from
+    /// inside a driven compute job) panics with a `BUG:` message instead of
+    /// silently cancelling the outer drive's in-flight work. Fails without
+    /// the `driving` latch — the nested call would simply run.
+    #[test]
+    #[should_panic(expected = "single-driver contract")]
+    fn deterministic_reentrant_drive_panics_instead_of_corrupting() {
+        let deterministic = DeterministicExecutors::new();
+        let inner = deterministic.clone();
+        deterministic
+            .spawn_job(Box::new(move || {
+                let _ = inner.run_until_idle();
+            }))
+            .expect("deterministic spawn is unbounded");
+        deterministic.run_until_idle();
+    }
+
+    /// Spawning from inside driven work is explicitly allowed (only
+    /// *driving* is exclusive): a job that spawns a follow-up job must not
+    /// deadlock on the queue lock, and the follow-up runs within the same
+    /// drive. Fails (by deadlock-timeout) if the job queue's lock guard is
+    /// held across the job call.
+    #[test]
+    fn deterministic_job_may_spawn_during_drive() {
+        let deterministic = DeterministicExecutors::new();
+        let inner = deterministic.clone();
+        let child_ran = Arc::new(AtomicBool::new(false));
+        let child_flag = Arc::clone(&child_ran);
+        deterministic
+            .spawn_job(Box::new(move || {
+                let child_flag = Arc::clone(&child_flag);
+                inner
+                    .spawn_job(Box::new(move || {
+                        child_flag.store(true, Ordering::Release);
+                    }))
+                    .expect("deterministic spawn is unbounded");
+            }))
+            .expect("deterministic spawn is unbounded");
+
+        deterministic.run_until_idle();
+        assert!(
+            child_ran.load(Ordering::Acquire),
+            "a job spawned during the drive runs within that same drive"
+        );
+        assert_eq!(deterministic.pending(), (0, 0));
+    }
+
+    /// The latch clears on unwind: after a driven job panics, a later
+    /// drive on the same executor works instead of tripping the guard.
+    #[test]
+    fn deterministic_drive_recovers_after_a_panicking_job() {
+        let deterministic = DeterministicExecutors::new();
+        deterministic
+            .spawn_job(Box::new(|| panic!("job panic (expected by this test)")))
+            .expect("deterministic spawn is unbounded");
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            deterministic.run_until_idle();
+        }));
+        assert!(unwound.is_err(), "the driven job's panic propagates");
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_for_job = Arc::clone(&ran);
+        deterministic
+            .spawn_job(Box::new(move || ran_for_job.store(true, Ordering::Release)))
+            .expect("deterministic spawn is unbounded");
+        deterministic.run_until_idle();
+        assert!(
+            ran.load(Ordering::Acquire),
+            "the latch must clear on unwind"
+        );
+    }
+
+    /// Pool-start failure is an environment error, not a panic
+    /// (`docs/PANIC-POLICY.md`): the spawn is refused with `Unavailable`,
+    /// the slot stays unstarted, and a later attempt (resources freed)
+    /// succeeds. Driven through `handle_of`'s injected builder because a
+    /// REAL tokio build failure needs OS thread/resource exhaustion, which
+    /// no test can produce deterministically without destabilizing the
+    /// process it runs in.
+    #[test]
+    fn pool_start_failure_refuses_the_spawn_and_recovers() {
+        let slot = parking_lot::Mutex::new(PoolSlot::NotStarted);
+
+        let result = DefaultPools::handle_of(&slot, || {
+            Err(std::io::Error::other(
+                "simulated: OS refused thread creation",
+            ))
+        });
+        assert_eq!(result.err(), Some(SpawnError::Unavailable));
+        assert!(
+            matches!(&*slot.lock(), PoolSlot::NotStarted),
+            "a failed start must leave the slot unstarted for a later retry"
+        );
+
+        let recovered = DefaultPools::handle_of(&slot, || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name("flui-test-recovery")
+                .build()
+        });
+        assert!(
+            recovered.is_ok(),
+            "once the environment recovers, the same slot must start normally"
+        );
+        // Tear the started runtime down non-blockingly.
+        if let Some(runtime) = slot.lock().take_runtime() {
+            runtime.shutdown_background();
+        }
     }
 
     /// Bounded wait for cross-thread effects (default pools run on worker

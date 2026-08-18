@@ -125,7 +125,10 @@ tokio = { version = "1.43" }
 # Structured cancellation for the runtime-owned execution services
 # (`CancellationToken`; adoption sanctioned by
 # docs/research/2026-08-01-runtime-dependency-adoption-guide.md with the
-# unified-executor work, issue #557). Default features only — no `rt`
+# unified-executor work, issue #557). `default-features = false` and no
+# optional features requested: `CancellationToken` lives in the
+# always-compiled `sync` module, and the explicit opt-out keeps a future
+# tokio-util default from arriving silently. In particular no `rt`
 # (`TaskTracker`) until the task/service lifecycle work (#558) needs it.
 tokio-util = { version = "0.7", default-features = false }
 

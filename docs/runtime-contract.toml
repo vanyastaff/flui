@@ -1028,7 +1028,9 @@ sized to leave the owner thread a hardware thread: \
 `default_compute_worker_count`) and IO (small fixed async runtime) -- with \
 bounded admission (`SpawnError::Saturated`), a shutdown protocol \
 (stop admission -> cancel via `CancellationToken` -> join running work \
-bounded by a grace deadline, run at full loop-exit teardown), and host \
+bounded by a grace deadline, run at full loop-exit teardown, which also \
+CLEARS the slot so a second loop hosted later on the same thread \
+re-resolves fresh services honoring its own injected executors), and host \
 injection (`AppConfig::with_executors` / `HostExecutors`): with an injected \
 host the default pools are NEVER constructed, and cancellation still \
 reaches work handed to pools FLUI does not own (the wrapper's cancellation \
@@ -2359,7 +2361,7 @@ contains = "ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, 
 classification = "experimental"
 thread_affinity = "HostExecutors is Clone + Send + Sync (Arc-bundled trait objects); pool implementations run work on any thread; FLUI's cancellation/admission wrappers travel with the work"
 owner = "the host-injection seam for background execution (issue #557, ADR-0047) — consumed at bootstrap via AppConfig::with_executors, resolved once per loop into AppRuntime's ExecutionServices"
-failure_semantics = "spawns return Result<(), SpawnError> (Saturated | ShuttingDown, #[non_exhaustive] thiserror); refused work is dropped, destructors run"
+failure_semantics = "spawns return Result<(), SpawnError> (Saturated | ShuttingDown | Unavailable, #[non_exhaustive] thiserror); refused work is dropped, destructors run; Unavailable = the OS refused pool-thread creation (environment error per docs/PANIC-POLICY.md, never a panic) and the unstarted slot is preserved so a later spawn retries"
 consumers = [
     "AppRuntime (resolution + shutdown)",
     "embedded hosts (none in-tree yet — the host-driven runtime entry point is later Runtime.1 work)",
