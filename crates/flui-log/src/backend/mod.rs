@@ -32,7 +32,9 @@
 //! value (string, `Debug` or `Display` rendering, error) is replaced by
 //! [`privacy::REDACTED_VALUE`]
 //! unless its field name ends in `.public`; a scalar is published unless its
-//! name ends in `.private`; the message is always published. The contract, the
+//! name ends in `.private`; a native `tracing` message is published, while a
+//! message bridged from the `log` facade is third-party interpolated text and
+//! is redacted. The contract, the
 //! Apple model it is ported from, and its residual holes live in [`privacy`].
 //! The desktop and web-console sinks write to the developer's own terminal or
 //! `DevTools` and publish fields verbatim.

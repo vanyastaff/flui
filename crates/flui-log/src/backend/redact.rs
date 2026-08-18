@@ -38,15 +38,17 @@
 )]
 
 use core::fmt;
+use std::borrow::Cow;
 
 use tracing::field::{DebugValue, Field, Value, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::subscriber::Interest;
 use tracing::{Event, Metadata, Subscriber};
+use tracing_log::NormalizeEvent as _;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
-use super::privacy::{FieldKind, FieldPrivacy, REDACTED_VALUE};
+use super::privacy::{EventOrigin, FieldKind, FieldPrivacy, REDACTED_VALUE};
 
 /// Capacity of the synthesized value set.
 ///
@@ -88,8 +90,10 @@ impl<L> fmt::Debug for RedactLayer<L> {
 /// Public dynamic values that originally arrived through `record_debug` are
 /// replayed through `record_debug` again via this adapter, so a sink cannot
 /// tell redaction was in the path; replaying them as strings would change the
-/// sink's quoting.
-struct PreRendered(String);
+/// sink's quoting. `Cow` so the redaction placeholder — the common case on a
+/// private-by-default sink — borrows the static literal instead of allocating
+/// per redacted field.
+struct PreRendered(Cow<'static, str>);
 
 impl fmt::Debug for PreRendered {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -115,9 +119,9 @@ enum Recorded {
 
 impl Recorded {
     fn redacted() -> Self {
-        Self::Debugged(tracing::field::debug(PreRendered(
-            REDACTED_VALUE.to_owned(),
-        )))
+        Self::Debugged(tracing::field::debug(PreRendered(Cow::Borrowed(
+            REDACTED_VALUE,
+        ))))
     }
 
     fn as_value(&self) -> &dyn Value {
@@ -135,15 +139,23 @@ impl Recorded {
 }
 
 /// Visits a payload once, classifying every field.
-#[derive(Default)]
 struct ClassifyingVisitor {
+    origin: EventOrigin,
     entries: Vec<(Field, Recorded)>,
     redacted_any: bool,
 }
 
 impl ClassifyingVisitor {
+    fn for_origin(origin: EventOrigin) -> Self {
+        Self {
+            origin,
+            entries: Vec::new(),
+            redacted_any: false,
+        }
+    }
+
     fn scalar(&mut self, field: &Field, value: Recorded) {
-        let recorded = match FieldPrivacy::classify(field.name(), FieldKind::Scalar) {
+        let recorded = match FieldPrivacy::classify(field.name(), FieldKind::Scalar, self.origin) {
             FieldPrivacy::Public => value,
             FieldPrivacy::Private => {
                 self.redacted_any = true;
@@ -155,7 +167,7 @@ impl ClassifyingVisitor {
 
     /// `render` is deferred so a redacted value is never even formatted.
     fn dynamic(&mut self, field: &Field, render: impl FnOnce() -> Recorded) {
-        let recorded = match FieldPrivacy::classify(field.name(), FieldKind::Dynamic) {
+        let recorded = match FieldPrivacy::classify(field.name(), FieldKind::Dynamic, self.origin) {
             FieldPrivacy::Public => render(),
             FieldPrivacy::Private => {
                 self.redacted_any = true;
@@ -199,7 +211,9 @@ impl Visit for ClassifyingVisitor {
     // methods, so every free-form representation lands in the dynamic bucket.
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         self.dynamic(field, || {
-            Recorded::Debugged(tracing::field::debug(PreRendered(format!("{value:?}"))))
+            Recorded::Debugged(tracing::field::debug(PreRendered(Cow::Owned(format!(
+                "{value:?}"
+            )))))
         });
     }
 }
@@ -254,7 +268,9 @@ where
     }
 
     fn on_new_span(&self, attributes: &Attributes<'_>, id: &Id, context: Context<'_, S>) {
-        let mut visitor = ClassifyingVisitor::default();
+        // Spans cannot arrive through the `log` bridge — `log` has no spans —
+        // so span payloads are always first-party.
+        let mut visitor = ClassifyingVisitor::for_origin(EventOrigin::Native);
         attributes.record(&mut visitor);
 
         if !visitor.redacted_any {
@@ -275,7 +291,7 @@ where
     }
 
     fn on_record(&self, span: &Id, values: &Record<'_>, context: Context<'_, S>) {
-        let mut visitor = ClassifyingVisitor::default();
+        let mut visitor = ClassifyingVisitor::for_origin(EventOrigin::Native);
         values.record(&mut visitor);
 
         if !visitor.redacted_any {
@@ -306,7 +322,14 @@ where
     }
 
     fn on_event(&self, event: &Event<'_>, context: Context<'_, S>) {
-        let mut visitor = ClassifyingVisitor::default();
+        // `is_log` matches on the bridge's callsite identity, so a first-party
+        // event cannot impersonate its way to a different message default.
+        let origin = if event.is_log() {
+            EventOrigin::LogBridge
+        } else {
+            EventOrigin::Native
+        };
+        let mut visitor = ClassifyingVisitor::for_origin(origin);
         event.record(&mut visitor);
 
         if !visitor.redacted_any {
@@ -732,6 +755,44 @@ mod tests {
         assert!(
             event.is_contextual,
             "the original contextual event passes through"
+        );
+    }
+
+    #[test]
+    fn a_bridged_log_message_is_redacted_by_default() {
+        // Writes the process-global `log` logger slot — the only unit test in
+        // this crate that touches it (the `tests/` bridge scenarios each own a
+        // separate process, per the one-slot-scenario-per-binary rule).
+        tracing_log::log::set_boxed_logger(Box::new(tracing_log::LogTracer::new()))
+            .expect("BUG: no other unit test may claim the `log` logger slot");
+        tracing_log::log::set_max_level(tracing_log::log::LevelFilter::Info);
+
+        let capture = behind_redaction(|| {
+            tracing_log::log::info!(
+                target: "third_party_dep",
+                "loading {}",
+                "/home/user/secret.txt"
+            );
+        });
+
+        let events = capture.events();
+        assert_eq!(
+            events.len(),
+            1,
+            "the bridged record must arrive: {events:?}"
+        );
+        let event = &events[0];
+        assert_eq!(
+            *field(event, "message"),
+            redacted(),
+            "a bridged message is third-party interpolated text; STYLE.md's \
+             fields-not-messages rule does not bind a dependency, so the \
+             message is the leak channel and must not publish"
+        );
+        assert_eq!(
+            *field(event, "log.target"),
+            Seen::Str("third_party_dep".to_owned()),
+            "the normalization fields must keep passing so the logcat tag survives"
         );
     }
 

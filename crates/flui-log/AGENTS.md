@@ -70,8 +70,10 @@ responsibility, not a wider one.
   logcat and Apple sinks only exist wrapped in `backend::redact::RedactLayer`,
   which replaces every dynamic value (string, `Debug`/`Display` rendering,
   error) with `<private>` unless the field name ends in `.public`, and every
-  scalar whose name ends in `.private`. The message always publishes, so user
-  content stays in fields, never interpolated into the sentence. The
+  scalar whose name ends in `.private`. A native `tracing` message publishes —
+  so user content stays in fields, never interpolated into the sentence — but a
+  message bridged from the `log` facade redacts: it is a third party's fully
+  interpolated string, and no marker can vouch for it. The
   classification (`backend::privacy`) is Apple's own `%{public}`/`%{private}`
   default ported to both platforms; it and the redaction stage are compiled and
   unit-tested on every target. A new device sink joins the contract by being

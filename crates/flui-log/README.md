@@ -88,7 +88,9 @@ Logcat and the Apple unified log are archives readable outside the application,
 so both device sinks sit behind a redaction stage and **fields are private by
 default**: a dynamic value (string, `Debug`/`Display` rendering, error) is
 replaced by `<private>` unless its field name ends in `.public`; a scalar is
-published unless its name ends in `.private`; the message always publishes.
+published unless its name ends in `.private`; a native `tracing` message
+publishes, while a message bridged from the `log` facade (a third party's fully
+interpolated string) is redacted.
 
 ```rust,ignore
 tracing::info!(

@@ -25,7 +25,8 @@
 //! |---|---|---|
 //! | scalar (`i64`, `u64`, `i128`, `u128`, `f64`, `bool`) | published | `.private` suffix redacts |
 //! | dynamic (`&str`, `Debug`, `Display`, errors, bytes) | redacted to [`REDACTED_VALUE`] | `.public` suffix publishes |
-//! | the `message` field | published | — |
+//! | `message`, [native](EventOrigin::Native) `tracing` event | published | — |
+//! | `message`, [bridged](EventOrigin::LogBridge) from the `log` facade | redacted | — (deliberately none) |
 //!
 //! ```rust
 //! tracing::info!(
@@ -37,16 +38,32 @@
 //! );
 //! ```
 //!
-//! # The message is the format string
+//! # The message is the format string — for first-party events only
 //!
 //! Apple redacts interpolated values but always publishes the compile-time
 //! format string around them. `tracing` pre-formats the message at the
-//! callsite, so the two cannot be separated here; the message is treated as
-//! the format-string analogue and published verbatim. That leaves one residual
-//! hole this module cannot close: interpolating a user-provided value *into
-//! the message* (`info!("loading {path}")`) publishes it. STYLE.md §17 already
-//! requires machine-readable values to be structured fields rather than message
-//! interpolations, which is exactly what keeps this hole theoretical.
+//! callsite, so the two cannot be separated here; a **native** `tracing`
+//! message is treated as the format-string analogue and published verbatim.
+//! That leaves one residual hole this module cannot close: first-party code
+//! interpolating a user-provided value *into the message*
+//! (`info!("loading {path}")`) publishes it. STYLE.md §17 already requires
+//! machine-readable values to be structured fields rather than message
+//! interpolations, which is what keeps this hole theoretical *for code this
+//! workspace reviews*.
+//!
+//! No such rule binds a dependency. A record arriving through the `log`
+//! compatibility bridge is a third party's `log::info!("loading {}", path)`
+//! with the interpolation already flattened into `message` — free-form text
+//! from code that cannot carry a marker and was never reviewed against
+//! STYLE.md. Native `os_log` would have redacted exactly that dynamic string,
+//! so a bridged message is classified [`Private`](FieldPrivacy::Private), with
+//! deliberately no opt-out: the third party cannot classify its own text, and
+//! the embedding application should not vouch for text it does not produce.
+//! The record itself still ships — its level, its `log.*` provenance fields,
+//! and therefore its logcat tag / target grouping all publish — so a device
+//! log still shows *that* `wgpu` warned, just not the un-reviewable sentence.
+//! A developer who needs the sentences has the desktop sinks, which do not
+//! redact.
 //!
 //! # Marker mechanics
 //!
@@ -97,6 +114,26 @@ pub enum FieldKind {
     Dynamic,
 }
 
+/// Where an event entered `tracing`.
+///
+/// The axis decides only the `message` field's default: a native message is
+/// the compile-time sentence a reviewed callsite wrote; a bridged message is a
+/// third party's fully interpolated string. Named fields classify identically
+/// under both origins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EventOrigin {
+    /// Emitted through `tracing`'s own macros. The callsite can carry field
+    /// markers and is subject to this workspace's fields-not-messages rule, so
+    /// its message publishes.
+    Native,
+    /// Forwarded from the `log` facade by the compatibility bridge
+    /// (`tracing_log::LogTracer`). The message is un-reviewable third-party
+    /// text with its interpolations already flattened in, so it redacts —
+    /// with no marker escape, because the third party cannot classify its own
+    /// text and the embedder should not vouch for text it does not produce.
+    LogBridge,
+}
+
 /// Trailing field-name marker that publishes a dynamic value.
 pub const PUBLIC_FIELD_SUFFIX: &str = ".public";
 
@@ -119,14 +156,22 @@ pub(crate) const MESSAGE_FIELD: &str = "message";
 const LOG_BRIDGE_FIELDS: [&str; 4] = ["log.target", "log.module_path", "log.file", "log.line"];
 
 impl FieldPrivacy {
-    /// Classify one field by its name and the kind of value recorded for it.
+    /// Classify one field by its name, the kind of value recorded for it, and
+    /// the origin of the event carrying it.
     ///
     /// An explicit marker wins over the kind default, `.private` over
-    /// `.public`; the `message` field and the `log.*` bridge fields are always
+    /// `.public`. The `message` field publishes for a native event and
+    /// redacts for a bridged one; the `log.*` bridge fields are always
     /// published (see the module docs for why).
     #[must_use]
-    pub fn classify(name: &str, kind: FieldKind) -> Self {
-        if name == MESSAGE_FIELD || LOG_BRIDGE_FIELDS.contains(&name) {
+    pub fn classify(name: &str, kind: FieldKind, origin: EventOrigin) -> Self {
+        if name == MESSAGE_FIELD {
+            return match origin {
+                EventOrigin::Native => Self::Public,
+                EventOrigin::LogBridge => Self::Private,
+            };
+        }
+        if LOG_BRIDGE_FIELDS.contains(&name) {
             return Self::Public;
         }
         if name.ends_with(PRIVATE_FIELD_SUFFIX) {
@@ -149,7 +194,7 @@ mod tests {
     #[test]
     fn dynamic_values_are_private_by_default() {
         assert_eq!(
-            FieldPrivacy::classify("path", FieldKind::Dynamic),
+            FieldPrivacy::classify("path", FieldKind::Dynamic, EventOrigin::Native),
             FieldPrivacy::Private
         );
     }
@@ -157,7 +202,7 @@ mod tests {
     #[test]
     fn scalar_values_are_public_by_default() {
         assert_eq!(
-            FieldPrivacy::classify("frame", FieldKind::Scalar),
+            FieldPrivacy::classify("frame", FieldKind::Scalar, EventOrigin::Native),
             FieldPrivacy::Public
         );
     }
@@ -165,7 +210,7 @@ mod tests {
     #[test]
     fn a_public_marker_publishes_a_dynamic_value() {
         assert_eq!(
-            FieldPrivacy::classify("phase.public", FieldKind::Dynamic),
+            FieldPrivacy::classify("phase.public", FieldKind::Dynamic, EventOrigin::Native),
             FieldPrivacy::Public
         );
     }
@@ -173,7 +218,7 @@ mod tests {
     #[test]
     fn a_private_marker_redacts_a_scalar() {
         assert_eq!(
-            FieldPrivacy::classify("latitude.private", FieldKind::Scalar),
+            FieldPrivacy::classify("latitude.private", FieldKind::Scalar, EventOrigin::Native),
             FieldPrivacy::Private
         );
     }
@@ -183,17 +228,45 @@ mod tests {
         // `a.public.private` ends with `.private`, and only the trailing
         // segment is the marker; deny beats allow when both could match.
         assert_eq!(
-            FieldPrivacy::classify("a.public.private", FieldKind::Scalar),
+            FieldPrivacy::classify("a.public.private", FieldKind::Scalar, EventOrigin::Native),
             FieldPrivacy::Private
         );
     }
 
     #[test]
-    fn the_message_field_is_always_public() {
+    fn a_native_message_is_public() {
         assert_eq!(
-            FieldPrivacy::classify(MESSAGE_FIELD, FieldKind::Dynamic),
+            FieldPrivacy::classify(MESSAGE_FIELD, FieldKind::Dynamic, EventOrigin::Native),
             FieldPrivacy::Public
         );
+    }
+
+    #[test]
+    fn a_bridged_message_is_private() {
+        // A `log`-bridge message is a third party's fully interpolated string;
+        // the fields-not-messages rule does not bind a dependency.
+        assert_eq!(
+            FieldPrivacy::classify(MESSAGE_FIELD, FieldKind::Dynamic, EventOrigin::LogBridge),
+            FieldPrivacy::Private
+        );
+    }
+
+    #[test]
+    fn named_fields_classify_identically_under_both_origins() {
+        for origin in [EventOrigin::Native, EventOrigin::LogBridge] {
+            assert_eq!(
+                FieldPrivacy::classify("frame", FieldKind::Scalar, origin),
+                FieldPrivacy::Public
+            );
+            assert_eq!(
+                FieldPrivacy::classify("path", FieldKind::Dynamic, origin),
+                FieldPrivacy::Private
+            );
+            assert_eq!(
+                FieldPrivacy::classify("log.target", FieldKind::Dynamic, origin),
+                FieldPrivacy::Public
+            );
+        }
     }
 
     #[test]
@@ -201,11 +274,11 @@ mod tests {
         // The marker is the *dotted suffix*; a bare name is just a name, and a
         // dynamic value under it stays private.
         assert_eq!(
-            FieldPrivacy::classify("public", FieldKind::Dynamic),
+            FieldPrivacy::classify("public", FieldKind::Dynamic, EventOrigin::Native),
             FieldPrivacy::Private
         );
         assert_eq!(
-            FieldPrivacy::classify("private", FieldKind::Scalar),
+            FieldPrivacy::classify("private", FieldKind::Scalar, EventOrigin::Native),
             FieldPrivacy::Public
         );
     }
@@ -214,7 +287,7 @@ mod tests {
     fn log_bridge_normalization_fields_are_published() {
         for name in ["log.target", "log.module_path", "log.file", "log.line"] {
             assert_eq!(
-                FieldPrivacy::classify(name, FieldKind::Dynamic),
+                FieldPrivacy::classify(name, FieldKind::Dynamic, EventOrigin::Native),
                 FieldPrivacy::Public,
                 "bridge field `{name}` must stay publishable or bridged records lose grouping"
             );
@@ -224,7 +297,7 @@ mod tests {
     #[test]
     fn a_dotted_field_that_is_not_a_marker_keeps_the_kind_default() {
         assert_eq!(
-            FieldPrivacy::classify("log.password", FieldKind::Dynamic),
+            FieldPrivacy::classify("log.password", FieldKind::Dynamic, EventOrigin::Native),
             FieldPrivacy::Private,
             "only the four exact bridge names are exempt, not the `log.` prefix"
         );
