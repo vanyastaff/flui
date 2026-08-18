@@ -95,6 +95,7 @@ declarations = [
     "pub mod embedder;",
     "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, run_direct, };",
     "pub use app::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
+    "pub use app::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use app::{ExitPolicy, WindowPolicy};",
     "pub use app::open_secondary_window;",
     "pub use app::{run_app_android, run_app_android_with_config};",
@@ -112,6 +113,7 @@ declarations = [
     "pub use config::{AppConfig, DiagnosticsProfile};",
     "pub use direct::run_direct;",
     "pub use execution::{ ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError, };",
+    "pub use lifecycle::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use runner::{run_app_android, run_app_android_with_config};",
     "pub use runner::open_secondary_window;",
     "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
@@ -1048,11 +1050,14 @@ conformance tests run against both backends. Wasm32 keeps the same API \
 with sequential execution (compute inline at the spawn site, IO via \
 `spawn_local`; shutdown stops admission only). \
 \
-**Named gaps, stated not silently assumed:** (1) the spawn lanes have no \
-shipped production caller yet -- the consumers are issue #558's \
-task/worker/service lifecycles and #559's raster lane, the next items on \
-this same critical path; an `expect(dead_code)` in `app/execution.rs` \
-errors the moment #558 wires one, forcing the attribute's removal. \
+**Named gaps, stated not silently assumed:** (1) RETIRED on native by \
+issue #558: the task/worker/service lifecycle layer (`app/lifecycle.rs`, \
+ADR-0048) is the lanes' shipped production consumer -- \
+`AppConfig::with_service` -> bootstrap -> `AppRuntime::start_service` -> \
+`spawn_io`, with tasks/workers reaching `spawn_compute`/`spawn_io` through \
+`ServiceContext::spawner()`; the `expect(dead_code)` ratchet in \
+`app/execution.rs` is narrowed to wasm32, where the lifecycle layer does \
+not exist yet and errors the moment a wasm consumer lands. \
 (2) `flui_platform::Priority` remains public and informational -- its \
 "tested behavior or not public" criterion is deferred to the follow-up \
 slice that retires the `BackgroundExecutor`/`Task`/`Priority` surfaces \
@@ -1060,8 +1065,10 @@ slice that retires the `BackgroundExecutor`/`Task`/`Priority` surfaces \
 path still starts its own single-worker runtime when no handle is \
 injected -- a 1-thread residual, not a full-core pool; wiring it to the \
 unified IO lane needs a flui-app -> flui-assets edge decision and is \
-deferred to the same follow-up. (4) per-task cancellation handles and \
-versioned results are #558's Task surface, deliberately not frozen here.\
+deferred to the same follow-up. (4) delivered by #558: per-task \
+cancellation handles (`TaskHandle`, cancel-on-drop) and generation-stamped \
+worker results (`WorkerGeneration`) -- see the \
+`task-worker-service-lifecycles` contract below.\
 """
 state = "partial"
 domain = "application"
@@ -1082,6 +1089,76 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn stashed_host_executors_win_over_default_pools" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_resolves_execution_services_and_teardown_shuts_them_down" },
     { kind = "test", file = "crates/flui-platform/src/executor.rs", contains = "fn test_background_executor_starts_lazily_on_first_use" },
+]
+
+[[contract]]
+key = "task-worker-service-lifecycles"
+statement = """
+Background work above the execution lanes is classified by lifetime, and \
+every unit has a named owner and an explicit end (issue #558, ADR-0048). \
+One-shot **tasks** and recurring **workers** are owned by `#[must_use]` \
+handles with an explicit cancel-on-drop contract (no detach; work that \
+must outlive its owner is a named service, never an orphan); join evidence \
+(`TaskOutcome`: Completed | Cancelled | Panicked, panics contained at the \
+lifecycle boundary) travels on a DEDICATED capacity-one channel per unit \
+-- never a shared inbox -- and every join is deadline-bounded \
+(`join_within` returns the still-owning handle on timeout). Workers \
+coalesce (capacity-one latest-wins input and result slots, strictly \
+increasing `WorkerGeneration` stamps, submit never blocks, stale results \
+drop structurally, results are pull-only). **Services** are owned by \
+`AppRuntime`'s loop-scoped `ServiceRegistry` (declared via \
+`AppConfig::with_service`, started by the bootstrap after the realm \
+install resolves execution services, start failure fails the bootstrap) \
+and declare a `ServiceLifetime`: a running `KeepsAppAlive` service vetoes \
+`should_exit` after the last window closes (messenger-like), \
+`StopsWithLastWindow` never does (editor-like). Loop-exit teardown is \
+STAGED in a load-bearing order: cancel every service first, join each \
+against ONE shared deadline with per-service evidence, and only then shut \
+the pools down -- the pools' root-token cancellation hard-drops any \
+still-running future, so the cooperative flush window exists only because \
+services are joined first (pinned by the teardown ordering test; a \
+deadline-ignoring service costs at most the shared deadline and is \
+reported, never waited on unboundedly). Service events \
+(`service_events`) are typed, bounded, latest-relevant and PULL-ONLY: \
+publish never blocks (oldest drop) and a publish after the receiver died \
+is `PublishError::OwnerGone` -- a late service result after teardown is \
+structurally inert, with no path that could wake or revive a closed \
+realm. `TaskSpawner` holds the services weakly (a spawner outliving its \
+loop refuses with `ShuttingDown`) and reaches application code through \
+`ServiceContext` only -- never ambient. \
+\
+**Named gaps, stated not silently assumed:** (1) ProcessWorker is not \
+implemented -- FLUI has no process-spawning plumbing to build it on. \
+(2) Close-request veto/defer for unsaved work and (3) journaled \
+recoverable state are #558's remaining criteria, deliberately separate \
+slices (the close path needs a CloseRequested interception seam in \
+flui-platform first). (4) The widget-tier spawning capability (a \
+BuildContext-acquired handle per the ADR-0018/0021 discipline plus its \
+frame-capability-scope token) is deferred to its own slice. (5) wasm32 \
+has no lifecycle layer; the narrowed `expect(dead_code)` ratchet in \
+`app/execution.rs` errors the moment a wasm consumer lands.\
+"""
+state = "partial"
+domain = "application"
+owner_issue = 558
+mechanical = false
+evidence = [
+    { kind = "symbol", file = "crates/flui-app/src/app/lifecycle.rs", contains = "pub struct TaskHandle" },
+    { kind = "symbol", file = "crates/flui-app/src/app/lifecycle.rs", contains = "pub struct WorkerHandle" },
+    { kind = "symbol", file = "crates/flui-app/src/app/lifecycle.rs", contains = "pub(crate) struct ServiceRegistry" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(super) fn start_service" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn task_cancel_on_drop_skips_a_queued_compute_job" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn task_cancel_on_drop_drops_a_parked_io_future" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn task_join_deadline_returns_the_handle_instead_of_hanging" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn task_panic_is_contained_and_reported" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn worker_coalesces_pending_inputs_to_the_newest" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn worker_cancel_on_drop_stops_processing" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn shutdown_cancels_then_joins_and_the_flush_window_is_real" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn shutdown_deadline_bounds_a_service_that_ignores_cancellation" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn shutdown_deadline_is_shared_not_per_service" },
+    { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn publish_after_the_receiver_dies_is_owner_gone" },
+    { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn keep_alive_service_vetoes_exit_until_it_completes" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn teardown_gives_services_their_flush_window_before_the_pools_close" },
 ]
 
 [[contract]]
@@ -2381,6 +2458,24 @@ owner = "single-threaded deterministic reference implementation of the host-inje
 failure_semantics = "spawns are unbounded and infallible at this layer; FLUI's ExecutionServices admission bounds still apply above it"
 consumers = ["execution conformance tests", "runtime wiring tests"]
 owner_issue = 557
+
+[[surface]]
+path = "flui_app::{TaskHandle, TaskOutcome, JoinTimeout, TaskContext, TaskSpawner, WorkerHandle, WorkerGeneration, ServiceDefinition, ServiceLifetime, ServiceContext, ServiceFuture, ServicePublisher, ServiceEvents, PublishError, CancellationSignal, service_events}"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/lifecycle.rs"
+contains = "pub struct TaskSpawner"
+classification = "experimental"
+thread_affinity = "TaskSpawner/ServicePublisher/CancellationSignal are Clone + Send + Sync; TaskHandle/WorkerHandle are Send owning handles (single consumer); ServiceEvents is the pull-only receiving half owned by the consumer"
+owner = "the lifecycle layer over the execution lanes (issue #558, ADR-0048): every unit of background work has a named owner — tasks/workers are owned by #[must_use] cancel-on-drop handles (no detach; work that must outlive its owner is a named Service), services are owned by AppRuntime's registry, started from AppConfig::with_service and shut down cancel-first with a shared deadline BEFORE the pools close"
+failure_semantics = "spawns return Result<_, SpawnError>; join evidence is TaskOutcome (Completed | Cancelled | Panicked) on a dedicated capacity-one channel per unit, joins are deadline-bounded (join_within returns the still-owning handle on timeout); publishing into a dead receiver is PublishError::OwnerGone (late results are inert, never a wake); panics are contained at the lifecycle boundary and reported as evidence"
+consumers = [
+    "AppConfig::with_service -> bootstrap_desktop -> AppRuntime::start_service (production wiring)",
+    "teardown_platform_realm (staged shutdown before pool shutdown)",
+    "AppRuntime::should_exit (KeepsAppAlive veto)",
+]
+owner_issue = 558
+notes = "Native-only: the lifecycle module does not exist on wasm32 (the web runner's lifecycle slice is deferred under #558, with the narrowed expect(dead_code) ratchet in app/execution.rs standing guard). ProcessWorker, close-request veto/defer, journaled recoverable state, and a widget-tier BuildContext capability are the named deferred slices; a breaking reshape when they land is expected."
 
 [[surface]]
 path = "flui_app::embedder"

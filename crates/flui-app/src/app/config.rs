@@ -7,6 +7,8 @@ use flui_log::AppIdentity;
 use flui_types::{Size, geometry::px};
 
 use super::execution::HostExecutors;
+#[cfg(not(target_arch = "wasm32"))]
+use super::lifecycle::ServiceDefinition;
 #[cfg(not(target_os = "ios"))]
 use super::runtime::ExitPolicy;
 
@@ -158,6 +160,19 @@ pub struct AppConfig {
     /// thread pool avoids oversubscribing the machine. See
     /// [`HostExecutors`]'s own doc for the contract layered on top.
     pub executors: Option<HostExecutors>,
+
+    /// Application services to start at bootstrap (issue #558) — durable,
+    /// app-lifetime background work with a declared
+    /// [`ServiceLifetime`](super::lifecycle::ServiceLifetime) (does the
+    /// last window closing stop the app, or does the service keep it
+    /// alive?) and a graceful-shutdown contract: at loop exit each service
+    /// is cancelled cooperatively, given a bounded flush window, and
+    /// joined with evidence. Started by the desktop bootstrap after the
+    /// realm install resolves the loop's execution services; a start
+    /// failure fails the bootstrap. Native-only today — the lifecycle
+    /// layer has no wasm32 slice yet.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub services: Vec<ServiceDefinition>,
 }
 
 impl Default for AppConfig {
@@ -180,6 +195,8 @@ impl Default for AppConfig {
             #[cfg(not(target_os = "ios"))]
             exit_policy: ExitPolicy::default(),
             executors: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            services: Vec::new(),
         }
     }
 }
@@ -277,6 +294,14 @@ impl AppConfig {
         self.executors = Some(executors);
         self
     }
+
+    /// Register an application service to start at bootstrap. See
+    /// [`Self::services`]'s doc for the lifetime and shutdown contract.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_service(mut self, service: ServiceDefinition) -> Self {
+        self.services.push(service);
+        self
+    }
 }
 
 impl From<&AppConfig> for flui_platform::WindowOptions {
@@ -318,6 +343,36 @@ mod tests {
         assert_eq!(config.size.width, px(1024.0));
         assert_eq!(config.size.height, px(768.0));
         assert!(!config.resizable);
+    }
+
+    /// `with_service` appends in declaration order — the order the
+    /// bootstrap starts them in.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn with_service_registers_in_declaration_order() {
+        use super::super::lifecycle::ServiceLifetime;
+
+        let config = AppConfig::new()
+            .with_service(ServiceDefinition::new(
+                "first",
+                ServiceLifetime::StopsWithLastWindow,
+                |_context| Box::pin(async {}),
+            ))
+            .with_service(ServiceDefinition::new(
+                "second",
+                ServiceLifetime::KeepsAppAlive,
+                |_context| Box::pin(async {}),
+            ));
+        let names: Vec<&str> = config
+            .services
+            .iter()
+            .map(ServiceDefinition::name)
+            .collect();
+        assert_eq!(names, ["first", "second"]);
+        assert_eq!(
+            config.services[1].lifetime(),
+            ServiceLifetime::KeepsAppAlive
+        );
     }
 
     #[test]

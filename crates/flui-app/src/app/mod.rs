@@ -14,6 +14,8 @@ mod config;
 pub mod direct;
 pub(crate) mod execution;
 pub(crate) mod hot_reload;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod lifecycle;
 pub(crate) mod logging;
 pub(crate) mod media_query_root;
 pub(crate) mod presentation;
@@ -29,6 +31,12 @@ pub use direct::run_direct;
 pub use execution::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
     SpawnError,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use lifecycle::{
+    CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
+    ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle,
+    TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events,
 };
 #[cfg(all(
     not(target_os = "android"),

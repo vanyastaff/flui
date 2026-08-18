@@ -55,6 +55,17 @@ pub use app::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
     SpawnError,
 };
+// Task/worker/service lifecycles over those lanes (issue #558, ADR-0048):
+// owned, cancel-on-drop task and worker handles; application services with
+// declared lifetimes and a staged, deadline-bounded graceful shutdown; and
+// pull-only typed service events. Native-only — the web runner has no
+// lifecycle slice yet.
+#[cfg(not(target_arch = "wasm32"))]
+pub use app::{
+    CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
+    ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, TaskContext, TaskHandle,
+    TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events,
+};
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
 // available on iOS, where `AppRuntime`/`UiRealm`'s realm-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).

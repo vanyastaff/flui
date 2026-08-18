@@ -1713,6 +1713,13 @@ fn install_platform_realm(
         // otherwise), never ambiently. Cheap — default pools start worker
         // threads on first background spawn, not here.
         let _ = state.ensure_execution();
+        // And for the service registry (issue #558): a PRIOR loop's
+        // teardown closed its admission; this loop hosting a realm reopens
+        // it so config-declared services can start. Running services are
+        // untouched — mid-loop reinstalls (hot-restart, panic recovery)
+        // find admission already open and their services still owned.
+        #[cfg(not(target_arch = "wasm32"))]
+        state.reopen_lifecycles();
         displaced
     });
     // Destructors may re-enter platform/framework code (the same invariant
@@ -2549,6 +2556,16 @@ fn drain_owner_inbox(realm: &super::ui_realm::UiRealm) -> bool {
 #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 const EXECUTION_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Deadline for the staged SERVICE shutdown (issue #558) that runs just
+/// before the pools close: every service is cancelled first, then joined
+/// against this one shared deadline — the bounded flush window in which a
+/// service writes its final state. A service that ignores cancellation is
+/// reported (`DeadlineExceeded`) and force-abandoned by the pool shutdown
+/// that follows; it cannot wedge process exit past this deadline plus the
+/// per-pool grace above.
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 fn teardown_platform_realm() {
     let realms = APP_RUNTIME.with(|slot| {
@@ -2589,6 +2606,37 @@ fn teardown_platform_realm() {
     // Destructors may re-enter platform/framework code. Drop only after the
     // TLS borrow and incarnation identity have been released.
     drop(realms);
+
+    // Service-lifecycle shutdown (issue #558) BEFORE the pools close: the
+    // registry cancels every application service cooperatively and joins
+    // each against one shared deadline — the flush window in which a
+    // service persists its final state. Ordering is load-bearing: the
+    // execution shutdown below cancels the pools' root token and
+    // hard-drops any future still running at its next await point, so a
+    // service joined AFTER that would lose its flush window every time —
+    // pinned by `teardown_gives_services_their_flush_window_before_the_pools_close`.
+    let report = APP_RUNTIME.with(|slot| {
+        slot.borrow_mut()
+            .shutdown_lifecycles(SERVICE_SHUTDOWN_DEADLINE)
+    });
+    let incomplete: Vec<&'static str> = report
+        .entries
+        .iter()
+        .filter(|entry| entry.outcome != super::lifecycle::ServiceShutdownOutcome::Completed)
+        .map(|entry| entry.name)
+        .collect();
+    if incomplete.is_empty() {
+        tracing::debug!(
+            services = report.entries.len(),
+            "application services shut down cleanly"
+        );
+    } else {
+        tracing::warn!(
+            services = report.entries.len(),
+            ?incomplete,
+            "some application services did not complete by the shutdown deadline"
+        );
+    }
 
     // Execution-services shutdown (issue #557): the whole loop is exiting,
     // so stop background admission, cancel outstanding work, join running
@@ -2741,6 +2789,64 @@ mod realm_dispatch_tests {
         assert!(ran.load(std::sync::atomic::Ordering::Acquire));
 
         teardown_platform_realm();
+    }
+
+    /// The teardown STAGING between the two shutdown families (issue
+    /// #558): services get their cooperative flush window BEFORE the
+    /// execution pools close. The probe service only writes its flush flag
+    /// AFTER observing ITS OWN cancellation — exactly what a real service
+    /// does with final state.
+    ///
+    /// If reverted: move `shutdown_lifecycles` after `shutdown_execution`
+    /// in `teardown_platform_realm` and this fails — the pools' root-token
+    /// cancellation hard-drops the service future at its await point
+    /// before it can flush, so the flag stays false. Removing the
+    /// registry's cancel stage fails it too (the service never wakes; the
+    /// join times out with the flag unset).
+    #[test]
+    fn teardown_gives_services_their_flush_window_before_the_pools_close() {
+        use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
+
+        install_test_realm();
+        let flushed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flushed_in_service = std::sync::Arc::clone(&flushed);
+        APP_RUNTIME.with(|slot| {
+            slot.borrow_mut()
+                .start_service(&ServiceDefinition::new(
+                    "flush-probe",
+                    ServiceLifetime::StopsWithLastWindow,
+                    move |context| {
+                        let signal = context.cancellation().clone();
+                        let flushed = std::sync::Arc::clone(&flushed_in_service);
+                        Box::pin(async move {
+                            signal.cancelled().await;
+                            flushed.store(true, std::sync::atomic::Ordering::Release);
+                        })
+                    },
+                ))
+                .expect("service must start on the loop's real IO pool");
+        });
+
+        teardown_platform_realm();
+        assert!(
+            flushed.load(std::sync::atomic::Ordering::Acquire),
+            "the service must observe cancellation and flush BEFORE the pools close; \
+             a false flag means the pool shutdown dropped the future unflushed"
+        );
+
+        // Post-teardown admission is closed end to end: a late service
+        // start is refused instead of spawning work nothing will join.
+        APP_RUNTIME.with(|slot| {
+            let result = slot.borrow_mut().start_service(&ServiceDefinition::new(
+                "late",
+                ServiceLifetime::StopsWithLastWindow,
+                |_context| Box::pin(async {}),
+            ));
+            assert!(
+                result.is_err(),
+                "a service start after loop-exit teardown must be refused"
+            );
+        });
     }
 
     /// A second realm installed on the same thread (hot-restart; sequential
@@ -9031,6 +9137,23 @@ where
         let realm_dispatch = install_platform_realm(ui_realm, &window);
         *rebuild_registration_slot.borrow_mut() =
             Some(worker_reload.register_rebuild_hook(hot_reload_sender));
+
+        // 3c1. Start config-declared application services (issue #558) now
+        // that the realm install above has resolved the loop's execution
+        // services. Started here — not before the install — so a service's
+        // spawned tasks land on the same pools (host-injected or default)
+        // the rest of the loop uses. A start failure is a bootstrap
+        // failure: a declared service is a load-bearing part of the
+        // application, not an optional extra to drop silently.
+        for service in &config.services {
+            if let Err(error) = APP_RUNTIME.with(|slot| slot.borrow_mut().start_service(service)) {
+                tracing::error!(service = service.name(), %error, "service start failed");
+                return Err(anyhow::Error::from(error).context(format!(
+                    "failed to start application service `{}`",
+                    service.name()
+                )));
+            }
+        }
 
         // 3d. Wire the wall-clock-wake hook, now that `realm_dispatch`
         // exists — the winit backend's `about_to_wait` consults this every

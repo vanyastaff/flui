@@ -69,8 +69,12 @@ use flui_semantics::AccessibilityFeatures;
 #[cfg(not(target_os = "ios"))]
 use parking_lot::{Mutex, RwLock};
 
+#[cfg(not(target_arch = "wasm32"))]
+use super::execution::SpawnError;
 #[cfg(not(target_os = "ios"))]
 use super::execution::{ExecutionServices, HostExecutors};
+#[cfg(not(target_arch = "wasm32"))]
+use super::lifecycle::{ServiceDefinition, ServiceRegistry, ServiceShutdownReport};
 #[cfg(not(target_os = "ios"))]
 use super::runner::{RealmTask, SurfaceApplier};
 #[cfg(not(target_os = "ios"))]
@@ -684,7 +688,20 @@ pub(crate) struct AppRuntime {
     /// ([`Self::shutdown_execution`]), so a later second loop on this same
     /// thread re-resolves fresh services instead of inheriting a dead
     /// instance.
-    execution: OnceCell<ExecutionServices>,
+    /// `Arc`ed (issue #558) so the lifecycle layer can hold the services
+    /// weakly: a `TaskSpawner` that outlives this loop refuses with
+    /// `SpawnError::ShuttingDown` when its upgrade fails, instead of
+    /// keeping dead pools alive or reaching ambient state.
+    execution: OnceCell<Arc<ExecutionServices>>,
+    /// The running application services (issue #558): the named owner of
+    /// every application-lifetime unit of background work. Loop-scoped for
+    /// the same hot-restart reason as `execution` above; consulted by
+    /// [`Self::should_exit`] (a running keep-alive service vetoes exit)
+    /// and shut down — cancel, then deadline-bounded join — by
+    /// [`Self::shutdown_lifecycles`] at full loop-exit teardown, BEFORE
+    /// the pools close.
+    #[cfg(not(target_arch = "wasm32"))]
+    service_registry: ServiceRegistry,
     /// Host executors received from `AppConfig` before the first realm
     /// install resolves `execution`. Taken by [`Self::ensure_execution`];
     /// ignored (with a warning) if execution services already exist.
@@ -753,6 +770,8 @@ impl AppRuntime {
             pending_realm_mutations: Vec::new(),
             services: OnceCell::new(),
             execution: OnceCell::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            service_registry: ServiceRegistry::new(),
             pending_host_executors: None,
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Arc::new(Mutex::new(None)),
@@ -835,12 +854,63 @@ impl AppRuntime {
     /// this loop genuinely hosts application work. Cheap either way: the
     /// default pools start worker threads lazily, on first background
     /// spawn, never here.
-    pub(super) fn ensure_execution(&mut self) -> &ExecutionServices {
+    pub(super) fn ensure_execution(&mut self) -> &Arc<ExecutionServices> {
         let host = self.pending_host_executors.take();
-        self.execution.get_or_init(|| match host {
-            Some(host) => ExecutionServices::with_host(host),
-            None => ExecutionServices::with_defaults(),
+        self.execution.get_or_init(|| {
+            Arc::new(match host {
+                Some(host) => ExecutionServices::with_host(host),
+                None => ExecutionServices::with_defaults(),
+            })
         })
+    }
+
+    /// Start an application service (issue #558): resolve the loop's
+    /// execution services if needed, hand the service its context, and
+    /// register it with this runtime's [`ServiceRegistry`] — the named
+    /// owner that will cancel and join it at loop-exit teardown, and whose
+    /// running keep-alive services [`Self::should_exit`] consults.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError`] when the IO lane refuses the service's future or the
+    /// registry has already begun shutting down.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn start_service(
+        &mut self,
+        definition: &ServiceDefinition,
+    ) -> Result<(), SpawnError> {
+        // Admission first: a refused late start (after loop-exit teardown,
+        // before any next install) must not resurrect execution services
+        // as a side effect of the check.
+        if !self.service_registry.is_accepting() {
+            return Err(SpawnError::ShuttingDown);
+        }
+        let services = Arc::clone(self.ensure_execution());
+        self.service_registry.start(definition, &services)
+    }
+
+    /// Reopen service admission for a loop that is (re)installing a realm
+    /// — the registry counterpart of the `execution` slot's second-loop
+    /// reset. Running services are untouched: a mid-loop reinstall
+    /// (hot-restart, panic recovery) finds admission already open and its
+    /// services still owned; only a registry closed by a PRIOR loop's
+    /// teardown observably changes state here.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn reopen_lifecycles(&mut self) {
+        self.service_registry.reopen();
+    }
+
+    /// The staged service shutdown (issue #558): stop admission, cancel
+    /// every running service, then join each against `deadline` — run at
+    /// full loop-exit teardown BEFORE [`Self::shutdown_execution`], so
+    /// services get their cooperative flush window before the pools
+    /// hard-drop whatever is left. Returns the per-service join evidence.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn shutdown_lifecycles(
+        &mut self,
+        deadline: std::time::Duration,
+    ) -> ServiceShutdownReport {
+        self.service_registry.shutdown(deadline)
     }
 
     /// The resolved execution services, if any. `None` before the first
@@ -850,13 +920,12 @@ impl AppRuntime {
         not(test),
         expect(
             dead_code,
-            reason = "the background lanes' production callers are issue #558's \
-                      task/worker/service lifecycles; until then only tests read \
-                      the resolved services back"
+            reason = "production paths resolve through ensure_execution/start_service; \
+                      only tests read the resolved services back through this accessor"
         )
     )]
     pub(super) fn execution(&self) -> Option<&ExecutionServices> {
-        self.execution.get()
+        self.execution.get().map(Arc::as_ref)
     }
 
     /// Shut down the execution services and **reset the slot**: stop
@@ -1220,6 +1289,18 @@ impl AppRuntime {
     pub(super) fn should_exit(&mut self, policy: ExitPolicy) -> (bool, Vec<RealmSlot>) {
         let removed = self.drain_pending_realm_mutations();
         let exit = match policy {
+            // A running service that declared `ServiceLifetime::KeepsAppAlive`
+            // (issue #558) vetoes exit the same way a queued install does:
+            // messenger-like applications survive their last window closing
+            // and end when the service completes or the embedder calls
+            // `Platform::quit` explicitly. Not compiled on wasm32 — the
+            // lifecycle layer is native-only there and the web loop never
+            // exits anyway.
+            #[cfg(not(target_arch = "wasm32"))]
+            ExitPolicy::OnLastWindowClosed => {
+                self.realms.is_empty() && !self.service_registry.keeps_app_alive()
+            }
+            #[cfg(target_arch = "wasm32")]
             ExitPolicy::OnLastWindowClosed => self.realms.is_empty(),
         };
         (exit, removed)
@@ -1988,5 +2069,130 @@ mod execution_wiring_tests {
             services.owns_default_pools(),
             "a stash for a torn-down loop must not leak into the next loop's resolution"
         );
+    }
+}
+
+#[cfg(test)]
+mod service_lifecycle_wiring_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use super::*;
+    use crate::app::execution::DeterministicExecutors;
+    use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
+
+    /// The editor/messenger acceptance split at the runtime seam: with no
+    /// realms hosted, `should_exit(OnLastWindowClosed)` says exit — unless
+    /// a running `KeepsAppAlive` service vetoes it; once that service
+    /// completes, the veto lifts. `StopsWithLastWindow` services never
+    /// veto. Fails without `should_exit`'s registry consult.
+    #[test]
+    fn keep_alive_service_vetoes_exit_until_it_completes() {
+        let deterministic = DeterministicExecutors::new();
+        let mut runtime = AppRuntime::new();
+        runtime.install_host_executors(deterministic.host_executors());
+
+        // Editor-like: a StopsWithLastWindow service does not hold exit.
+        runtime
+            .start_service(&ServiceDefinition::new(
+                "editor-autosave",
+                ServiceLifetime::StopsWithLastWindow,
+                |context| {
+                    let signal = context.cancellation().clone();
+                    Box::pin(async move { signal.cancelled().await })
+                },
+            ))
+            .expect("service must start");
+        let (exit, removed) = runtime.should_exit(ExitPolicy::OnLastWindowClosed);
+        drop(removed);
+        assert!(
+            exit,
+            "no realms + only editor-like services: the loop must exit"
+        );
+
+        // Messenger-like: a running KeepsAppAlive service vetoes exit. The
+        // service parks (storing its waker) until the test releases it —
+        // the same park/wake discipline the deterministic executor's own
+        // tests use.
+        let release = Arc::new(AtomicBool::new(false));
+        let waker_slot: Arc<parking_lot::Mutex<Option<std::task::Waker>>> =
+            Arc::new(parking_lot::Mutex::new(None));
+        let release_in_service = Arc::clone(&release);
+        let waker_in_service = Arc::clone(&waker_slot);
+        runtime
+            .start_service(&ServiceDefinition::new(
+                "messenger-sync",
+                ServiceLifetime::KeepsAppAlive,
+                move |_context| {
+                    let release = Arc::clone(&release_in_service);
+                    let waker_slot = Arc::clone(&waker_in_service);
+                    Box::pin(async move {
+                        std::future::poll_fn(move |context| {
+                            if release.load(Ordering::Acquire) {
+                                std::task::Poll::Ready(())
+                            } else {
+                                *waker_slot.lock() = Some(context.waker().clone());
+                                std::task::Poll::Pending
+                            }
+                        })
+                        .await;
+                    })
+                },
+            ))
+            .expect("service must start");
+        deterministic.run_until_idle();
+        let (exit, removed) = runtime.should_exit(ExitPolicy::OnLastWindowClosed);
+        drop(removed);
+        assert!(
+            !exit,
+            "a running keep-alive service must veto exit after the last window closes"
+        );
+
+        // The service completing lifts the veto with no other change.
+        release.store(true, Ordering::Release);
+        waker_slot
+            .lock()
+            .take()
+            .expect("the parked service stored its waker")
+            .wake();
+        deterministic.run_until_idle();
+        let (exit, removed) = runtime.should_exit(ExitPolicy::OnLastWindowClosed);
+        drop(removed);
+        assert!(
+            exit,
+            "a completed keep-alive service must not hold the loop"
+        );
+    }
+
+    /// `shutdown_lifecycles` delivers the staged shutdown through the
+    /// runtime seam: the service observes cancellation, flushes, and the
+    /// evidence says every service completed.
+    #[test]
+    fn shutdown_lifecycles_cancels_and_joins_registered_services() {
+        let mut runtime = AppRuntime::new();
+        let flushed = Arc::new(AtomicBool::new(false));
+        let flushed_in_service = Arc::clone(&flushed);
+        runtime
+            .start_service(&ServiceDefinition::new(
+                "flushing",
+                ServiceLifetime::KeepsAppAlive,
+                move |context| {
+                    let signal = context.cancellation().clone();
+                    let flushed = Arc::clone(&flushed_in_service);
+                    Box::pin(async move {
+                        signal.cancelled().await;
+                        flushed.store(true, Ordering::Release);
+                    })
+                },
+            ))
+            .expect("service must start");
+
+        let report = runtime.shutdown_lifecycles(std::time::Duration::from_secs(10));
+        assert!(report.all_completed(), "report: {report:?}");
+        assert!(
+            flushed.load(Ordering::Acquire),
+            "the service must get its flush window before shutdown_lifecycles returns"
+        );
+        runtime.shutdown_execution(std::time::Duration::from_secs(5));
     }
 }
