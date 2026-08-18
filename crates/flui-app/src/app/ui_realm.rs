@@ -33,9 +33,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_animation::Vsync;
-use flui_engine::RasterBackend;
 #[cfg(test)]
 use flui_engine::EngineError;
+use flui_engine::RasterBackend;
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::{FocusManager, GestureBinding, InteractionLane};
 use flui_layer::Scene;
@@ -554,18 +554,17 @@ impl std::fmt::Debug for UiRealm {
 /// Moved here from the retired `AppBinding`.
 enum FramePaintOutcome {
     /// A fresh layer tree was painted and turned into a `Scene`. Holds
-    /// `Scene` by value, not `Arc<Scene>`: the sole reader
-    /// (`render_frame_entered`, immediately below) borrows it and both are
-    /// dropped in the same call stack — nothing shares this value or
-    /// crosses a thread with it, so an `Arc` bought nothing here. `Scene`
-    /// is not `Sync` (`CompositionCallback` is `FnOnce + Send`, never
-    /// `Sync`), which is why wrapping it in `Arc` used to need a
+    /// `Scene` by value, not `Arc<Scene>`: the sole reader (the frame
+    /// transaction immediately below) MOVES it into the submit sink —
+    /// on the raster-lane path it crosses the raster boundary as an owned
+    /// `SceneSnapshot` (that type's own "never `Arc<Scene>`" contract in
+    /// `scene_snapshot.rs`), on the direct path it is borrowed internally
+    /// and dropped when the render returns. Nothing shares this value, so
+    /// an `Arc` bought nothing here. `Scene` is not `Sync`
+    /// (`CompositionCallback` is `FnOnce + Send`, never `Sync`), which is
+    /// why wrapping it in `Arc` used to need a
     /// `#[expect(clippy::arc_with_non_send_sync)]` at the construction
-    /// site below — removed along with the `Arc`. (`SceneSnapshot`'s own
-    /// "never `Arc<Scene>`" contract in `scene_snapshot.rs` is a related
-    /// but separate rule for the raster-mailbox seam; `SceneSnapshot` is
-    /// not on this call path at all — production has no consumer of it
-    /// yet.)
+    /// site below — removed along with the `Arc`.
     Painted(Scene),
     /// Nothing was dirty this frame; no new content to composite.
     Idle,
@@ -580,13 +579,16 @@ enum FramePaintOutcome {
 /// records, or merely reads them without consuming them.
 ///
 /// `Retain` exists for exactly one shape: a submit failure whose own caller
-/// has already armed a retry. **Three** arms in
-/// [`UiRealm::render_frame_entered`] are that shape — `SurfaceLost`,
-/// `DeviceLost` and `SurfaceValidation`. The latter two joined when device
-/// loss gained a retry at all; before that they drained, and this sentence
-/// named only `SurfaceLost`. Each is pinned by its own
+/// has already armed a retry. **Two** verdict arms in the frame transaction
+/// behind [`UiRealm::render_frame_entered`] are that shape —
+/// `SurfaceStale` (covering a lost surface, a validation failure, and a
+/// stale surface-generation stamp, which used to be two separate
+/// `SurfaceLost`/`SurfaceValidation` arms) and `DeviceLost`. `DeviceLost`
+/// and the validation flavor joined when device loss gained a retry at all;
+/// before that they drained, and this sentence named only `SurfaceLost`.
+/// Each underlying failure flavor is pinned by its own
 /// `*_retry_preserves_the_original_input_epoch_for_the_presented_frame`
-/// test, so flipping any of the three back to `Drain` turns one red — the
+/// test, so flipping either arm back to `Drain` turns one red — the
 /// invariant used to be documentation alone. Draining on such an arm
 /// leaves the
 /// eventual retry's own real submit with nothing pending to attribute to

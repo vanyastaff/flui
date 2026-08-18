@@ -8267,9 +8267,14 @@ mod device_recovery_tests {
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert!(outcome.presented, "Ok(true) reaches present()");
-        assert_eq!(lane.with_backend(|b| b.render_calls), 1, "the scene reached render_scene");
         assert_eq!(
-            lane.with_backend(|b| b.recover_attempts), 0,
+            lane.with_backend(|b| b.render_calls),
+            1,
+            "the scene reached render_scene"
+        );
+        assert_eq!(
+            lane.with_backend(|b| b.recover_attempts),
+            0,
             "no recovery on a healthy device"
         );
         assert!(
@@ -8300,7 +8305,8 @@ mod device_recovery_tests {
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            lane.with_backend(|b| b.recover_attempts), 1,
+            lane.with_backend(|b| b.recover_attempts),
+            1,
             "the pre-frame loss is recovered"
         );
         assert!(
@@ -8308,7 +8314,8 @@ mod device_recovery_tests {
             "the scripted successful recovery cleared the lost flag"
         );
         assert_eq!(
-            lane.with_backend(|b| b.render_calls), 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "after a successful recovery the SAME frame renders — no extra wake needed"
         );
         assert!(outcome.presented, "the recovered frame reaches present()");
@@ -8376,7 +8383,8 @@ mod device_recovery_tests {
         // full repaint for whatever gets submitted next, but nothing
         // submits at all without this).
         assert_eq!(
-            lane.with_backend(|b| b.render_calls), 2,
+            lane.with_backend(|b| b.render_calls),
+            2,
             "a successful recovery must force the recovered device's next frame to reach \
              render_scene, not silently stay Idle"
         );
@@ -8407,7 +8415,11 @@ mod device_recovery_tests {
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert!(!outcome.presented, "a still-lost device presents nothing");
-        assert_eq!(lane.with_backend(|b| b.recover_attempts), 1, "the recovery was attempted");
+        assert_eq!(
+            lane.with_backend(|b| b.recover_attempts),
+            1,
+            "the recovery was attempted"
+        );
         // The fix this test exists to pin: the earlier version of this
         // function returned `false` here WITHOUT calling
         // `render_frame_entered` at all on a still-lost device, so
@@ -8416,7 +8428,8 @@ mod device_recovery_tests {
         // deadlines, coalesced pointer moves, and every Vsync ticker all
         // depend on it).
         assert_eq!(
-            lane.with_backend(|b| b.render_calls), 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "render_frame_entered must run even when the pre-frame recovery attempt \
              failed — a dead device must not stop the non-GPU half of the frame"
         );
@@ -8466,7 +8479,8 @@ mod device_recovery_tests {
         let second = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            lane.with_backend(|b| b.recover_attempts), 1,
+            lane.with_backend(|b| b.recover_attempts),
+            1,
             "a wake before the backoff's deadline must not touch the renderer at all — the \
              whole point of a deadline CHECK over a sleep is that a still-too-early wake \
              costs nothing"
@@ -8560,12 +8574,14 @@ mod device_recovery_tests {
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            lane.with_backend(|b| b.recover_attempts), 2,
+            lane.with_backend(|b| b.recover_attempts),
+            2,
             "the device recovered pre-frame, died again mid-frame, and must be attempted \
              a SECOND time in the same call"
         );
         assert_eq!(
-            lane.with_backend(|b| b.render_calls), 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "the frame still rendered exactly once"
         );
         assert!(
@@ -8598,7 +8614,8 @@ mod device_recovery_tests {
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            lane.with_backend(|b| b.render_calls), 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "the frame rendered before the loss landed"
         );
         assert!(
@@ -8606,7 +8623,8 @@ mod device_recovery_tests {
             "the frame that rendered still reaches present()"
         );
         assert_eq!(
-            lane.with_backend(|b| b.recover_attempts), 1,
+            lane.with_backend(|b| b.recover_attempts),
+            1,
             "the mid-frame loss is recovered after the render"
         );
         assert!(
@@ -8647,7 +8665,8 @@ mod device_recovery_tests {
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            lane.with_backend(|b| b.render_calls), 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "the frame rendered before the loss landed"
         );
         assert!(
@@ -8655,7 +8674,8 @@ mod device_recovery_tests {
             "the frame that rendered still reaches present()"
         );
         assert_eq!(
-            lane.with_backend(|b| b.recover_attempts), 1,
+            lane.with_backend(|b| b.recover_attempts),
+            1,
             "the mid-frame loss is recovered after the render"
         );
         assert!(

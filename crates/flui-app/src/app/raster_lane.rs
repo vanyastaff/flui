@@ -50,9 +50,9 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crossbeam_channel::Receiver;
+use flui_engine::{EngineError, RasterBackend};
 #[cfg(not(target_arch = "wasm32"))]
 use flui_engine::{FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner};
-use flui_engine::{EngineError, RasterBackend};
 #[cfg(not(target_arch = "wasm32"))]
 use flui_foundation::{FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress};
 use flui_layer::Scene;
