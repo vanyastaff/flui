@@ -107,6 +107,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # pipeline before it ever reaches the test, so the original message is only
 # observable through the diagnostic log, not a propagated panic or Result.
 tracing-subscriber = { workspace = true }
+# Parity-inventory manifest (tests/parity/manifest.toml) parsing for the
+# `parity_inventory` guard test.
+serde = { workspace = true }
+toml = { workspace = true }
 
 # All root tests/*.rs files, consolidated into one binary via `#[path]` module
 # declarations in tests/main.rs (autotests = false above disables the per-file
@@ -138,6 +142,14 @@ harness = true
 [[test]]
 name = "parity"
 path = "tests/parity/main.rs"
+
+# Executable Flutter-parity inventory: validates tests/parity/manifest.toml
+# against the parity tree (and, when a pinned .flutter checkout is present,
+# against the Flutter reference itself). Deliberately a separate target so it
+# links without the wgpu stack.
+[[test]]
+name = "parity_inventory"
+path = "tests/parity_inventory.rs"
 
 [features]
 default = []

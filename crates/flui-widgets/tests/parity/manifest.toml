@@ -1,0 +1,1678 @@
+# Executable Flutter-parity inventory for the flui-widgets parity suite.
+# Validated by `cargo test -p flui-widgets --test parity_inventory` (runs under
+# `just ci`). Structure and every checked invariant are documented in that
+# test's module doc. Claimed-case counting is citation-based: a case is
+# inventoried as ported only when a Rust test's doc comment cites the oracle
+# case name in backtick-quoted form and the citation resolves against the
+# pinned reference. Uncited tests keep their oracle cases classified as
+# pending, so these counts under-claim rather than over-claim (issue #546
+# converts pending cases family by family).
+
+schema = 1
+
+# Rust files in tests/parity/ that are harness plumbing, not parity targets.
+infrastructure = ["main.rs", "harness.rs", "harness_self_test.rs"]
+
+[source]
+repo = "https://github.com/flutter/flutter"
+# The pinned reference tag. Refreshing it is deliberate: bump the tag, re-run
+# the inventory test with a .flutter checkout at the new tag, and re-classify
+# whatever it rejects.
+tag = "3.44.0"
+test_root = "packages/flutter/test"
+# The directory (under test_root) this inventory classifies exhaustively.
+universe = "widgets"
+
+# Upstream case names that appear more than once inside one oracle file
+# (Flutter names are unique per group, not per file). A (oracle, case) pair
+# may be claimed by at most one target unless listed here with its upstream
+# occurrence count; the reference-gated check verifies that count.
+[[shared_cases]]
+oracle = "widgets/slivers_test.dart"
+case = "SliverList.list can build children"
+occurrences = 2
+
+[[targets]]
+rust = "align_test"
+family = "layout"
+oracles = ["widgets/align_test.dart"]
+tests = 6
+
+[[targets.claims]]
+oracle = "widgets/align_test.dart"
+cases = [
+    "Align smoke test",
+    "Align control test (LTR)",
+    "Align widthFactor",
+    "Align heightFactor",
+    "Align control test (RTL)",
+]
+
+[[targets]]
+rust = "animated_align_test"
+family = "animation"
+oracles = ["widgets/animated_align_test.dart"]
+tests = 6
+
+[[targets.claims]]
+oracle = "widgets/animated_align_test.dart"
+cases = [
+    "AnimatedAlign does not crash at zero area",
+    "AnimatedAlign widthFactor",
+    "AnimatedAlign heightFactor",
+    "AnimatedAlign null height factor",
+    "AnimatedAlign null widthFactor",
+]
+
+[[targets]]
+rust = "animated_container_test"
+family = "animation"
+oracles = ["widgets/animated_container_test.dart"]
+tests = 2
+
+[[targets.claims]]
+oracle = "widgets/animated_container_test.dart"
+cases = ["AnimatedContainer does not crash at zero area", "Animation rerun"]
+
+[[targets]]
+rust = "animated_padding_test"
+family = "animation"
+oracles = ["widgets/animated_padding_test.dart"]
+tests = 2
+
+[[targets.claims]]
+oracle = "widgets/animated_padding_test.dart"
+cases = [
+    "AnimatedPadding does not crash at zero area",
+    "AnimatedPadding animated padding clamped to positive values",
+]
+
+[[targets]]
+rust = "animated_size_test"
+family = "animation"
+oracles = ["widgets/animated_size_test.dart"]
+tests = 7
+
+[[targets.claims]]
+oracle = "widgets/animated_size_test.dart"
+cases = [
+    "animates forwards then backwards with stable-sized children",
+    "calls onEnd when animation is completed",
+    "clamps animated size to constraints",
+    "does not run animation unnecessarily",
+    "can set and update clipBehavior",
+    "AnimatedSize does not crash at zero size",
+]
+
+[[targets]]
+rust = "animated_switcher_test"
+family = "animation"
+oracles = ["widgets/animated_switcher_test.dart"]
+tests = 14
+
+[[targets]]
+rust = "aspect_ratio_test"
+family = "layout"
+oracles = ["widgets/aspect_ratio_test.dart"]
+tests = 2
+
+[[targets.claims]]
+oracle = "widgets/aspect_ratio_test.dart"
+cases = ["Aspect ratio control test", "Aspect ratio infinite width"]
+
+[[targets]]
+rust = "center_test"
+family = "layout"
+oracles = ["widgets/center_test.dart"]
+tests = 2
+
+[[targets]]
+rust = "clip_test"
+family = "painting"
+oracles = ["widgets/clip_test.dart"]
+tests = 11
+
+[[targets.claims]]
+oracle = "widgets/clip_test.dart"
+cases = [
+    "ClipRect updates clipBehavior in updateRenderObject",
+    "ClipRRect updates clipBehavior in updateRenderObject",
+    "ClipPath",
+    "ClipOval",
+    "Transparent ClipOval hit test",
+]
+
+[[targets]]
+rust = "colored_box_test"
+family = "layout"
+oracles = ["widgets/basic_test.dart"]
+tests = 5
+
+[[targets.claims]]
+oracle = "widgets/basic_test.dart"
+cases = [
+    "ColoredBox - no size, no child",
+    "ColoredBox - no size, child",
+    "ColoredBox - size, no child",
+    "ColoredBox - size, child",
+]
+
+[[targets]]
+rust = "column_no_overflow_fp_test"
+family = "flex"
+oracles = ["widgets/flex_test.dart"]
+tests = 2
+
+[[targets]]
+rust = "column_test"
+family = "flex"
+oracles = ["rendering/flex_test.dart"]
+tests = 5
+
+[[targets.claims]]
+oracle = "rendering/flex_test.dart"
+cases = ["Flex RTL"]
+
+[[targets]]
+rust = "constrained_box_test"
+family = "layout"
+oracles = ["widgets/constrained_box_test.dart"]
+tests = 9
+
+[[targets.claims]]
+oracle = "widgets/constrained_box_test.dart"
+cases = [
+    "ConstrainedBox intrinsics - minHeight",
+    "ConstrainedBox intrinsics - minWidth",
+    "ConstrainedBox intrinsics - maxHeight",
+    "ConstrainedBox intrinsics - maxWidth",
+    "ConstrainedBox intrinsics - tight",
+    "ConstrainedBox intrinsics - minHeight - with infinite width",
+    "ConstrainedBox intrinsics - minWidth - with infinite height",
+    "ConstrainedBox intrinsics - infinite",
+]
+
+[[targets]]
+rust = "container_test"
+family = "layout"
+oracles = ["widgets/container_test.dart"]
+tests = 11
+
+[[targets.claims]]
+oracle = "widgets/container_test.dart"
+cases = [
+    "paints as expected",
+    "Can be placed in an infinite box",
+    "Container transformAlignment",
+    "Container is hittable only when having decorations",
+    "Container discards alignment when the child parameter is null and constraints is not Tight",
+    "Container does not crash at zero area",
+]
+
+[[targets]]
+rust = "custom_multi_child_layout_test"
+family = "layout"
+oracles = ["widgets/custom_multi_child_layout_test.dart"]
+tests = 13
+
+[[targets.pins]]
+test = "multiple_children_never_laid_out_are_all_named_in_the_panic_pin"
+capability = "complete unlaid-child enumeration in DelegateLayoutContext::finish diagnostics"
+issue = 786
+
+[[targets]]
+rust = "custom_paint_test"
+family = "painting"
+oracles = ["widgets/custom_paint_test.dart"]
+tests = 1
+
+[[targets]]
+rust = "custom_scroll_view_test"
+family = "sliver"
+oracles = ["widgets/custom_scroll_view_test.dart"]
+tests = 4
+
+[[targets]]
+rust = "custom_single_child_layout_test"
+family = "layout"
+oracles = ["widgets/custom_single_child_layout_test.dart"]
+tests = 5
+
+[[targets]]
+rust = "default_text_style_test"
+family = "text"
+oracles = ["widgets/default_text_style_test.dart"]
+tests = 1
+
+[[targets]]
+rust = "directionality_test"
+family = "framework"
+oracles = ["widgets/directionality_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/directionality_test.dart"
+cases = ["Directionality", "Directionality default", "Directionality.maybeOf", "Directionality.of"]
+
+[[targets]]
+rust = "dismissible_test"
+family = "gesture"
+oracles = ["widgets/dismissible_test.dart"]
+tests = 16
+
+[[targets.claims]]
+oracle = "widgets/dismissible_test.dart"
+cases = [
+    "drag-left with DismissDirection.endToStart triggers dismiss (LTR)",
+    "drag-right with DismissDirection.startToEnd triggers dismiss (LTR)",
+    "drag-up with DismissDirection.up triggers dismiss",
+    "DismissDirection.none does not trigger dismiss",
+    "drag-right with DismissDirection.endToStart triggers dismiss (RTL)",
+    "Dismissible.behavior should behave correctly during hit testing",
+    "drag-left has no effect on dismissible with a high dismiss threshold",
+    "onUpdate",
+    "Dismissible starts from the full size when collapsing",
+    "Dismissible with null resizeDuration calls onDismissed immediately",
+]
+
+[[targets]]
+rust = "draggable_test"
+family = "gesture"
+oracles = ["widgets/draggable_test.dart"]
+tests = 23
+
+[[targets]]
+rust = "editable_text_test"
+family = "text-input"
+oracles = ["widgets/editable_text_test.dart"]
+tests = 1
+
+[[targets.claims]]
+oracle = "widgets/editable_text_test.dart"
+cases = ["Composing text is underlined and underline is cleared when losing focus"]
+
+[[targets]]
+rust = "error_widget_test"
+family = "framework"
+oracles = ["widgets/slivers_test.dart"]
+tests = 2
+
+[[targets.claims]]
+oracle = "widgets/slivers_test.dart"
+cases = ["Can override ErrorWidget.build"]
+
+[[targets]]
+rust = "fade_transition_test"
+family = "animation"
+oracles = ["widgets/fade_transition_test.dart"]
+tests = 2
+
+[[targets]]
+rust = "fitted_box_test"
+family = "layout"
+oracles = ["widgets/fitted_box_test.dart"]
+tests = 15
+
+[[targets.claims]]
+oracle = "widgets/fitted_box_test.dart"
+cases = [
+    "Can size according to aspect ratio",
+    "Can contain child",
+    "Child can cover",
+    "FittedBox with no child",
+    "Child can be aligned multiple ways in a row",
+    "Big child into small fitted box - hit testing",
+    "Can set and update clipBehavior",
+    "BoxFit.scaleDown matches size of child",
+    "Switching to and from BoxFit.scaleDown causes relayout",
+    "FittedBox without child does not throw",
+    "FittedBox with zero size child does not throw",
+    "FittedBox layers - cover - horizontal",
+    "FittedBox layers - contain",
+]
+
+[[targets]]
+rust = "flex_test"
+family = "flex"
+oracles = ["widgets/flex_test.dart", "rendering/flex_test.dart"]
+tests = 8
+
+[[targets.claims]]
+oracle = "rendering/flex_test.dart"
+cases = ["Space evenly", "Stretch", "Vertical Flex Baseline", "Flexible with MainAxisSize.min"]
+
+[[targets]]
+rust = "flow_test"
+family = "layout"
+oracles = ["widgets/flow_test.dart"]
+tests = 7
+
+[[targets.claims]]
+oracle = "widgets/flow_test.dart"
+cases = ["Flow control test"]
+
+[[targets]]
+rust = "focus_test"
+family = "focus"
+oracles = ["widgets/focus_manager_test.dart"]
+tests = 18
+
+[[targets.claims]]
+oracle = "widgets/focus_manager_test.dart"
+cases = [
+    "Can add children to scope and focus",
+    "Focus changes notify listeners.",
+    "FocusManager notifies listeners when a widget loses focus because it was removed.",
+]
+
+[[targets]]
+rust = "fractionally_sized_box_test"
+family = "layout"
+oracles = ["widgets/fractionally_sized_box_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/fractionally_sized_box_test.dart"
+cases = [
+    "FractionallySizedBox alignment",
+    "FractionallySizedBox alignment (direction-sensitive)",
+    "OverflowBox alignment with FractionallySizedBox",
+]
+
+[[targets]]
+rust = "gesture_detector_test"
+family = "gesture"
+oracles = ["widgets/gesture_detector_test.dart"]
+tests = 3
+
+[[targets.claims]]
+oracle = "widgets/gesture_detector_test.dart"
+cases = ["Translucent"]
+
+[[targets]]
+rust = "gesture_timing_test"
+family = "gesture"
+oracles = [
+    "gestures/long_press_test.dart",
+    "gestures/double_tap_test.dart",
+    "gestures/arena_test.dart",
+]
+tests = 8
+
+[[targets]]
+rust = "grid_view_interaction_test"
+family = "scroll"
+oracles = ["widgets/grid_view_test.dart"]
+tests = 23
+
+[[targets.claims]]
+oracle = "widgets/grid_view_test.dart"
+cases = [
+    "GridView.count control test",
+    "GridView.extent control test",
+    "GridView large scroll jump",
+    "GridView - change crossAxisCount",
+    "SliverGridRegularTileLayout - can handle close to zero mainAxisStride",
+    "GridView - change maxChildCrossAxisExtent",
+    "One-line GridView paints",
+    "GridView in zero context",
+    "GridView in unbounded context",
+    "GridView.builder control test",
+    "GridView.builder with undefined itemCount",
+    "GridView cross axis layout",
+    "GridView crossAxisSpacing",
+    "GridView does not cache itemBuilder calls",
+    "GridView.count respects mainAxisExtent",
+    "GridView.extent respects mainAxisExtent",
+    "SliverGridDelegateWithFixedCrossAxisCount mainAxisExtent works as expected",
+    "SliverGridDelegateWithMaxCrossAxisExtent mainAxisExtent works as expected",
+    "SliverGridDelegateWithMaxCrossAxisExtent throws assertion error when maxCrossAxisExtent is 0",
+    "SliverGridDelegate mainAxisExtent add assert",
+    "SliverGrid sets correct extent for null returning builder delegate",
+]
+
+[[targets.pins]]
+test = "grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content"
+capability = "shrink-wrap content sizing under an unbounded main axis"
+issue = 537
+
+[[targets]]
+rust = "grid_view_test"
+family = "scroll"
+oracles = ["widgets/grid_view_layout_test.dart"]
+tests = 3
+
+[[targets.claims]]
+oracle = "widgets/grid_view_layout_test.dart"
+cases = ["Empty GridView"]
+
+[[targets]]
+rust = "heroes_test"
+family = "navigation"
+oracles = ["widgets/heroes_test.dart"]
+tests = 6
+
+[[targets.claims]]
+oracle = "widgets/heroes_test.dart"
+cases = [
+    "Heroes animate",
+    "Hero push transition interrupted by a pop",
+    "One route, two heroes, same tag, throws",
+    "Heroes can transition on gesture in one frame",
+    "Heroes do not transition on back gestures by default",
+    "Heroes fly on pushReplacement",
+]
+
+[[targets]]
+rust = "icon_test"
+family = "framework"
+# Derived target: assertions come from the widget's library source; no
+# upstream test file exists for this subject at the pinned tag.
+oracles = []
+tests = 4
+
+[[targets]]
+rust = "implicit_animations_test"
+family = "animation"
+# Derived target: assertions come from the widget's library source; no
+# upstream test file exists for this subject at the pinned tag.
+oracles = []
+tests = 4
+
+[[targets]]
+rust = "interactive_viewer_test"
+family = "gesture"
+oracles = ["widgets/interactive_viewer_test.dart"]
+tests = 18
+
+[[targets.claims]]
+oracle = "widgets/interactive_viewer_test.dart"
+cases = [
+    "boundary slightly bigger than child",
+    "no boundary",
+    "Can scale with mouse",
+    "Cannot scale with mouse when scale is disabled",
+    "Scaling amount is equal forth and back with a mouse scroll",
+    "onInteraction can be used to get scene point",
+]
+
+[[targets]]
+rust = "layout_builder_test"
+family = "layout"
+oracles = ["widgets/layout_builder_test.dart"]
+tests = 7
+
+[[targets.claims]]
+oracle = "widgets/layout_builder_test.dart"
+cases = [
+    "LayoutBuilder stateful child",
+    "LayoutBuilder stateful parent",
+    "LayoutBuilder and Inherited -- do not rebuild when not using inherited",
+    "LayoutBuilder and Inherited -- do rebuild when using inherited",
+    "LayoutBuilder rebuilds once in the same frame",
+    "LayoutBuilder does not call builder when layout happens but layout constraints do not change",
+]
+
+[[targets]]
+rust = "list_body_test"
+family = "layout"
+oracles = ["widgets/list_body_test.dart"]
+tests = 6
+
+[[targets.claims]]
+oracle = "widgets/list_body_test.dart"
+cases = [
+    "ListBody down",
+    "ListBody up",
+    "ListBody right",
+    "ListBody left",
+    "Limited space along main axis error",
+    "Nested ListBody unbounded cross axis error",
+]
+
+[[targets]]
+rust = "list_view_test"
+family = "scroll"
+oracles = ["widgets/list_view_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/list_view_test.dart"
+cases = ["Updates viewport dimensions when scroll direction changes", "ListView large scroll jump"]
+
+[[targets]]
+rust = "localizations_test"
+family = "framework"
+oracles = ["widgets/localizations_test.dart", "widgets/app_test.dart"]
+tests = 9
+
+[[targets.claims]]
+oracle = "widgets/localizations_test.dart"
+cases = [
+    "English translations exist for all WidgetsLocalizations properties",
+    "Localizations.maybeLocaleOf returns null when no localizations exist",
+]
+
+[[targets]]
+rust = "mouse_region_test"
+family = "pointer"
+oracles = ["widgets/mouse_region_test.dart"]
+tests = 24
+
+[[targets.claims]]
+oracle = "widgets/mouse_region_test.dart"
+cases = [
+    "hitTestBehavior test - HitTestBehavior.deferToChild/opaque",
+    "hitTestBehavior test - HitTestBehavior.deferToChild and non-opaque",
+    "hitTestBehavior test - HitTestBehavior.translucent",
+    "onEnter and onExit can be triggered with mouse buttons pressed",
+    "detects pointer enter",
+    "detects pointer exiting",
+    "Hover works with nested listeners",
+    "Hover transfers between two listeners",
+    "MouseRegion uses updated callbacks",
+    "works with transform",
+    "opaque should default to true",
+    "an empty opaque MouseRegion is effective",
+    "triggers pointer enter when widget appears",
+    "triggers pointer enter when widget moves in",
+    "triggers pointer exit when widget moves out",
+    "stylus input works",
+]
+
+[[targets]]
+rust = "navigator_test"
+family = "navigation"
+oracles = ["widgets/navigator_test.dart"]
+tests = 15
+
+[[targets.claims]]
+oracle = "widgets/navigator_test.dart"
+cases = [
+    "pushReplacement correctly reports didReplace to the observer",
+    "pushAndRemoveUntil triggers secondaryAnimation",
+    "pushAndRemoveUntil does not remove routes below the first route that pass the predicate",
+    "Able to pop all routes",
+    "remove route below an other one whose value is awaited",
+    "initial route trigger observer in the right order",
+    "Push and pop should trigger the observers",
+]
+
+[[targets]]
+rust = "offstage_test"
+family = "layout"
+oracles = ["rendering/offstage_test.dart", "widgets/semantics_keep_alive_offstage_test.dart"]
+tests = 6
+
+[[targets.claims]]
+oracle = "rendering/offstage_test.dart"
+cases = ["offstage"]
+
+[[targets]]
+rust = "opacity_test"
+family = "painting"
+oracles = ["widgets/opacity_test.dart"]
+tests = 8
+
+[[targets.claims]]
+oracle = "widgets/opacity_test.dart"
+cases = ["Opacity", "offset is correctly handled in Opacity"]
+
+[[targets]]
+rust = "overflow_box_test"
+family = "layout"
+oracles = ["widgets/overflow_box_test.dart"]
+tests = 5
+
+[[targets.claims]]
+oracle = "widgets/overflow_box_test.dart"
+cases = [
+    "OverflowBox control test",
+    "no child",
+    "SizedOverflowBox alignment",
+    "SizedOverflowBox alignment (direction-sensitive)",
+]
+
+[[targets]]
+rust = "overlay_test"
+family = "navigation"
+oracles = ["widgets/overlay_test.dart"]
+tests = 1
+
+[[targets.claims]]
+oracle = "widgets/overlay_test.dart"
+cases = ["OverlayState.maybeOf() works when an Overlay does and doesn't exist"]
+
+[[targets]]
+rust = "padding_test"
+family = "layout"
+oracles = ["rendering/box_test.dart"]
+tests = 2
+
+[[targets.claims]]
+oracle = "rendering/box_test.dart"
+cases = ["addWithPaintOffset"]
+
+[[targets]]
+rust = "page_view_test"
+family = "scroll"
+oracles = ["widgets/page_view_test.dart"]
+tests = 18
+
+[[targets.claims]]
+oracle = "widgets/page_view_test.dart"
+cases = [
+    "Page changes at halfway point",
+    "PageView viewportFraction",
+    "PageMetrics",
+    "PageController control test",
+    "Change the page through the controller when zero-size viewport",
+]
+
+[[targets]]
+rust = "physical_model_test"
+family = "painting"
+oracles = ["widgets/physical_model_test.dart"]
+tests = 5
+
+[[targets]]
+rust = "pointer_hit_test_test"
+family = "pointer"
+oracles = ["widgets/absorb_pointer_test.dart", "widgets/listener_test.dart"]
+tests = 13
+
+[[targets.claims]]
+oracle = "widgets/absorb_pointer_test.dart"
+cases = ["AbsorbPointers do not block siblings"]
+
+[[targets.claims]]
+oracle = "widgets/listener_test.dart"
+cases = ["Events bubble up the tree"]
+
+[[targets]]
+rust = "pointer_local_position_test"
+family = "pointer"
+oracles = ["widgets/listener_test.dart"]
+tests = 7
+
+[[targets.claims]]
+oracle = "widgets/listener_test.dart"
+cases = ["simple offset for touch/signal"]
+
+[[targets]]
+rust = "pop_scope_test"
+family = "navigation"
+oracles = ["widgets/pop_scope_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/pop_scope_test.dart"
+cases = [
+    "toggling canPop on root route allows/prevents backs",
+    "toggling canPop on secondary route allows/prevents backs",
+    "removing PopScope from the tree removes its effect on navigation",
+]
+
+[[targets]]
+rust = "rich_text_test"
+family = "text"
+oracles = ["widgets/rich_text_test.dart"]
+tests = 1
+
+[[targets]]
+rust = "rotated_box_test"
+family = "layout"
+oracles = ["widgets/rotated_box_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/rotated_box_test.dart"
+cases = ["Rotated box control test"]
+
+[[targets]]
+rust = "row_baseline_test"
+family = "flex"
+oracles = ["widgets/basic_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/basic_test.dart"
+cases = [
+    "Row and IgnoreBaseline (control -- with baseline)",
+    "Row and IgnoreBaseline (with ignored baseline)",
+]
+
+[[targets]]
+rust = "row_test"
+family = "flex"
+oracles = ["widgets/row_test.dart"]
+tests = 16
+
+[[targets.claims]]
+oracle = "widgets/row_test.dart"
+cases = [
+    "Row with default main axis parameters - LTR",
+    "Row with MainAxisAlignment.center - LTR",
+    "Row with MainAxisAlignment.end - LTR",
+    "Row with MainAxisAlignment.spaceBetween - LTR",
+    "Row with MainAxisAlignment.spaceAround - LTR",
+    "Row MainAxisSize.min layout at zero size - LTR",
+    "Row with one Flexible child - RTL",
+    "Row with default main axis parameters - RTL",
+    "Row with MainAxisAlignment.center - RTL",
+    "Row with MainAxisAlignment.end - RTL",
+    "Row with MainAxisAlignment.spaceBetween - RTL",
+    "Row with MainAxisAlignment.spaceEvenly - RTL",
+    "Row and MainAxisSize.min - RTL",
+    "Default Row.spacing value",
+]
+
+[[targets]]
+rust = "safe_area_test"
+family = "layout"
+oracles = ["widgets/safe_area_test.dart"]
+tests = 3
+
+[[targets.claims]]
+oracle = "widgets/safe_area_test.dart"
+cases = ["SafeArea - basic", "SafeArea - with minimums"]
+
+[[targets]]
+rust = "scroll_controller_test"
+family = "scroll"
+oracles = ["widgets/scroll_controller_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/scroll_controller_test.dart"
+cases = ["ScrollController control test"]
+
+[[targets]]
+rust = "scrollable_test"
+family = "scroll"
+oracles = ["widgets/scrollable_test.dart"]
+tests = 6
+
+[[targets]]
+rust = "scrollbar_test"
+family = "scroll"
+oracles = ["widgets/scrollbar_test.dart"]
+tests = 9
+
+[[targets.claims]]
+oracle = "widgets/scrollbar_test.dart"
+cases = [
+    "When scrolling normally (no overscrolling), the size of the scrollbar stays the same, and it scrolls evenly",
+    "minThumbLength property of RawScrollbar is respected",
+    "Scrollbar gestures disabled when maxScrollExtent == minScrollExtent",
+    "Scrollbar gestures enabled when maxScrollExtent > minScrollExtent by any amount",
+    "hit test",
+    "Do not crash when resize from scrollable to non-scrollable.",
+]
+
+[[targets]]
+rust = "shortcuts_test"
+family = "focus"
+oracles = ["widgets/shortcuts_test.dart"]
+tests = 8
+
+[[targets.claims]]
+oracle = "widgets/shortcuts_test.dart"
+cases = [
+    "trigger on key events",
+    "nested CallbackShortcuts stop propagation",
+    "non-overlapping nested CallbackShortcuts fire appropriately",
+    "Works correctly with Shortcuts too",
+]
+
+[[targets]]
+rust = "single_child_scroll_view_test"
+family = "scroll"
+oracles = ["widgets/single_child_scroll_view_test.dart"]
+tests = 6
+
+[[targets]]
+rust = "sized_box_test"
+family = "layout"
+oracles = ["widgets/sized_box_test.dart"]
+tests = 2
+
+[[targets]]
+rust = "sliver_fill_remaining_test"
+family = "sliver"
+oracles = ["widgets/sliver_fill_remaining_test.dart"]
+tests = 4
+
+[[targets]]
+rust = "sliver_fill_viewport_test"
+family = "sliver"
+oracles = ["widgets/sliver_fill_viewport_test.dart"]
+tests = 3
+
+[[targets]]
+rust = "sliver_fixed_extent_list_test"
+family = "sliver"
+oracles = ["widgets/slivers_test.dart"]
+tests = 3
+
+[[targets.claims]]
+oracle = "widgets/slivers_test.dart"
+cases = [
+    "SliverFixedExtentList Correctly layout children after rearranging",
+    "SliverFixedExtentList handles underflow when its children changes",
+    "SliverList.list can build children",
+]
+
+[[targets.pins]]
+test = "sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window_pin"
+capability = "lazy sliver child manager that builds only the visible window"
+issue = 530
+
+[[targets]]
+rust = "sliver_grid_test"
+family = "sliver"
+oracles = ["widgets/slivers_test.dart"]
+tests = 7
+
+[[targets.claims]]
+oracle = "widgets/slivers_test.dart"
+cases = [
+    "SliverGrid Correctly layout children after rearranging",
+    "SliverGrid negative usableCrossAxisExtent",
+    "SliverGrid.builder can build children",
+    "SliverGrid.list can display children",
+    "SliverGridRegularTileLayout.computeMaxScrollOffset handles 0 children",
+]
+
+[[targets]]
+rust = "sliver_ignore_pointer_test"
+family = "sliver"
+oracles = ["widgets/slivers_test.dart"]
+tests = 5
+
+[[targets.claims]]
+oracle = "widgets/slivers_test.dart"
+cases = ["ignores pointer events", "ignores pointer events & semantics", "ignores nothing"]
+
+[[targets]]
+rust = "sliver_list_constructors_test"
+family = "sliver"
+oracles = ["widgets/slivers_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/slivers_test.dart"
+cases = [
+    "SliverList.builder can build children",
+    "SliverList.separated can build children",
+    "SliverList.separated has correct number of children",
+    "SliverList.list can build children",
+]
+
+[[targets]]
+rust = "sliver_list_correction_test"
+family = "sliver"
+oracles = ["widgets/slivers_test.dart"]
+tests = 3
+
+[[targets.claims]]
+oracle = "widgets/slivers_test.dart"
+cases = [
+    "SliverList can handle inaccurate scroll offset due to changes in children list",
+    "SliverList handles 0 scrollOffsetCorrection",
+]
+
+[[targets.pins]]
+test = "inaccurate_scroll_offset_converges_to_the_oracles_exact_windows_over_multiple_drags"
+capability = "viewport-applied scroll-offset correction instead of eager per-item pixel shifts"
+issue = 530
+
+[[targets]]
+rust = "sliver_list_test"
+family = "sliver"
+oracles = ["widgets/sliver_list_test.dart"]
+tests = 7
+
+[[targets.claims]]
+oracle = "widgets/sliver_list_test.dart"
+cases = [
+    "SliverList reverse children (with keys)",
+    "SliverList replace children (with keys)",
+    "SliverList replace with shorter children list (with keys)",
+    "SliverList should layout first child in case of child reordering",
+    "SliverList should recalculate inaccurate layout offset case 1",
+    "SliverList should recalculate inaccurate layout offset case 2",
+    "SliverList should start to perform layout from the initial child when there is no valid offset",
+]
+
+[[targets]]
+rust = "sliver_main_axis_group_test"
+family = "sliver"
+oracles = ["widgets/sliver_main_axis_group_test.dart"]
+tests = 10
+
+[[targets]]
+rust = "sliver_offstage_test"
+family = "sliver"
+oracles = ["widgets/slivers_test.dart"]
+tests = 3
+
+[[targets]]
+rust = "sliver_opacity_test"
+family = "sliver"
+oracles = ["widgets/slivers_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/slivers_test.dart"
+cases = ["painting & semantics"]
+
+[[targets]]
+rust = "sliver_padding_test"
+family = "sliver"
+oracles = ["widgets/slivers_padding_test.dart"]
+tests = 9
+
+[[targets.claims]]
+oracle = "widgets/slivers_padding_test.dart"
+cases = [
+    "Viewport+SliverPadding basic test (VISUAL)",
+    "Viewport+SliverPadding hit testing",
+    "Viewport+SliverPadding hit testing up",
+    "Viewport+SliverPadding hit testing left",
+    "Viewport+SliverPadding hit testing right",
+    "Viewport+SliverPadding no child",
+    "SliverPadding with no child reports correct geometry as scroll offset changes",
+    "Viewport+SliverPadding changing padding",
+    "SliverPadding includes preceding padding in the precedingScrollExtent provided to child",
+]
+
+[[targets]]
+rust = "sliver_persistent_header_test"
+family = "sliver"
+oracles = ["widgets/sliver_persistent_header_test.dart"]
+tests = 14
+
+[[targets]]
+rust = "spacer_test"
+family = "layout"
+oracles = ["widgets/spacer_test.dart"]
+tests = 2
+
+[[targets]]
+rust = "stack_test"
+family = "stack"
+oracles = ["widgets/stack_test.dart"]
+tests = 7
+
+[[targets.claims]]
+oracle = "widgets/stack_test.dart"
+cases = [
+    "Can align non-positioned children (LTR)",
+    "Stack sizing: default",
+    "Stack sizing: explicit",
+    "Alignment with partially-positioned children",
+    "Stack clip test",
+]
+
+[[targets]]
+rust = "stateful_test"
+family = "framework"
+# Derived target: assertions come from the widget's library source; no
+# upstream test file exists for this subject at the pinned tag.
+oracles = []
+tests = 2
+
+[[targets]]
+rust = "table_test"
+family = "table"
+oracles = ["rendering/table_test.dart", "widgets/table_test.dart"]
+tests = 16
+
+[[targets.claims]]
+oracle = "rendering/table_test.dart"
+cases = ["Table control test; loose"]
+
+[[targets.claims]]
+oracle = "widgets/table_test.dart"
+cases = [
+    "Table widget - control test",
+    "Table widget - column offset (LTR)",
+    "Table border - smoke test",
+    "Table widget - changing table dimensions",
+    "Really small deficit double precision error",
+    "Calculating flex columns with small width deficit",
+    "Table widget - repump test",
+    "Table widget - intrinsic sizing test",
+    "Table widget - intrinsic sizing test, resizing",
+    "Table widget - intrinsic sizing test, changing column widths",
+    "Table widget - Default textBaseline is null",
+    "Table widget requires all TableRows to have same number of children",
+    "Does not crash if a child RenderObject is replaced by another RenderObject of a different type",
+    "Can replace child with a different RenderObject type",
+]
+
+[[targets.pins]]
+test = "changing_row_and_column_count_reuses_and_discards_cells_by_flat_position"
+capability = "row-scoped keyed Table reconciliation"
+issue = 544
+
+[[targets]]
+rust = "text_editing_controller_test"
+family = "text-input"
+oracles = ["widgets/editable_text_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/editable_text_test.dart"
+cases = [
+    "Asserts if composing text is not valid",
+    "Preserves composing range if cursor moves within that range",
+    "Clears composing range if cursor moves outside that range",
+    "Can access characters on editing string",
+]
+
+[[targets]]
+rust = "text_test"
+family = "text"
+oracles = ["widgets/text_test.dart"]
+tests = 10
+
+[[targets]]
+rust = "transform_test"
+family = "painting"
+oracles = ["widgets/transform_test.dart", "widgets/basic_test.dart"]
+tests = 19
+
+[[targets.claims]]
+oracle = "widgets/transform_test.dart"
+cases = [
+    "Transform alignment",
+    "Transform offset + alignment",
+    "Translated child into translated box - hit test",
+    "Transform.scale with 0.0 does not paint child layers",
+    "Transform.translate",
+    "Composited transform offset",
+]
+
+[[targets.claims]]
+oracle = "widgets/basic_test.dart"
+cases = [
+    "hit test - entirely inside the bounding box",
+    "hit test - partially inside the bounding box",
+    "hit test - completely outside the bounding box",
+]
+
+[[targets]]
+rust = "unconstrained_box_test"
+family = "layout"
+oracles = ["widgets/basic_test.dart"]
+tests = 4
+
+[[targets.claims]]
+oracle = "widgets/basic_test.dart"
+cases = ["UnconstrainedBox warns only when clipBehavior is Clip.none"]
+
+[[targets]]
+rust = "value_listenable_builder_test"
+family = "framework"
+oracles = ["widgets/value_listenable_builder_test.dart"]
+tests = 6
+
+[[targets.claims]]
+oracle = "widgets/value_listenable_builder_test.dart"
+cases = [
+    "Null value is ok",
+    "Widget builds with initial value",
+    "Widget updates when value changes",
+    "Can change listenable",
+    "Stops listening to old listenable after changing listenable",
+    "Self-cleans when removed",
+]
+
+[[targets]]
+rust = "viewport_test"
+family = "sliver"
+oracles = ["widgets/slivers_test.dart"]
+tests = 2
+
+[[targets.claims]]
+oracle = "widgets/slivers_test.dart"
+cases = ["Viewport basic test", "Multiple grids and lists"]
+
+[[targets]]
+rust = "visibility_test"
+family = "painting"
+oracles = ["widgets/visibility_test.dart"]
+tests = 12
+
+[[targets.claims]]
+oracle = "widgets/visibility_test.dart"
+cases = ["Visibility"]
+
+[[targets.pins]]
+test = "visibility_maintain_interactivity_with_maintain_size_would_let_hidden_taps_through"
+capability = "Visibility maintain-size / maintain-interactivity composition"
+issue = 543
+
+[[targets]]
+rust = "wrap_test"
+family = "layout"
+oracles = ["widgets/wrap_test.dart"]
+tests = 11
+
+[[targets.claims]]
+oracle = "widgets/wrap_test.dart"
+cases = [
+    "Basic Wrap test (LTR)",
+    "Empty wrap",
+    "Wrap alignment (LTR)",
+    "Wrap runAlignment (DOWN)",
+    "Shrink-wrapping Wrap test",
+    "Wrap spacing test",
+    "Vertical Wrap test with spacing",
+    "Hit test children in wrap",
+    "RenderWrap toString control test",
+    "Spacing with slight overflow",
+    "Object exactly matches container width",
+]
+
+# One row per oracle file: every *_test.dart under <test_root>/widgets at the
+# pinned tag (the universe), plus files outside the universe that a target
+# claims. `cases` is the number of testWidgets(/test( occurrences at the tag;
+# `claimed` counts cases cited as ported by targets above; `status` is
+# "ported" (all cases claimed), "partial", or "pending" (none).
+[oracle_files]
+"gestures/arena_test.dart" = { cases = 9, claimed = 0, status = "pending" }
+"gestures/double_tap_test.dart" = { cases = 0, claimed = 0, status = "pending" }
+"gestures/long_press_test.dart" = { cases = 0, claimed = 0, status = "pending" }
+"rendering/box_test.dart" = { cases = 32, claimed = 1, status = "partial" }
+"rendering/flex_test.dart" = { cases = 37, claimed = 5, status = "partial" }
+"rendering/offstage_test.dart" = { cases = 1, claimed = 1, status = "ported" }
+"rendering/table_test.dart" = { cases = 13, claimed = 1, status = "partial" }
+"widgets/absorb_pointer_test.dart" = { cases = 4, claimed = 1, status = "partial" }
+"widgets/accessibility_evaluations_service_extension_test.dart" = { cases = 11, claimed = 0, status = "pending" }
+"widgets/accessibility_evaluations_test.dart" = { cases = 29, claimed = 0, status = "pending" }
+"widgets/actions_test.dart" = { cases = 39, claimed = 0, status = "pending" }
+"widgets/align_test.dart" = { cases = 6, claimed = 5, status = "partial" }
+"widgets/animated_align_test.dart" = { cases = 7, claimed = 5, status = "partial" }
+"widgets/animated_container_test.dart" = { cases = 9, claimed = 2, status = "partial" }
+"widgets/animated_cross_fade_test.dart" = { cases = 15, claimed = 0, status = "pending" }
+"widgets/animated_grid_test.dart" = { cases = 15, claimed = 0, status = "pending" }
+"widgets/animated_image_filtered_repaint_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/animated_list_test.dart" = { cases = 18, claimed = 0, status = "pending" }
+"widgets/animated_opacity_repaint_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/animated_padding_test.dart" = { cases = 4, claimed = 2, status = "partial" }
+"widgets/animated_positioned_test.dart" = { cases = 11, claimed = 0, status = "pending" }
+"widgets/animated_size_test.dart" = { cases = 11, claimed = 6, status = "partial" }
+"widgets/animated_switcher_test.dart" = { cases = 12, claimed = 0, status = "pending" }
+"widgets/annotated_region_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/app_lifecycle_listener_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/app_navigator_key_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/app_overrides_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/app_test.dart" = { cases = 21, claimed = 0, status = "pending" }
+"widgets/app_title_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/aspect_ratio_test.dart" = { cases = 2, claimed = 2, status = "ported" }
+"widgets/async_lifecycle_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/async_test.dart" = { cases = 34, claimed = 0, status = "pending" }
+"widgets/autocomplete_test.dart" = { cases = 51, claimed = 0, status = "pending" }
+"widgets/autofill_group_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/automatic_keep_alive_test.dart" = { cases = 9, claimed = 0, status = "pending" }
+"widgets/backdrop_filter_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/banner_test.dart" = { cases = 14, claimed = 0, status = "pending" }
+"widgets/baseline_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/basic_test.dart" = { cases = 56, claimed = 10, status = "partial" }
+"widgets/binding_attach_root_widget_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/binding_cannot_schedule_frame_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/binding_deferred_first_frame_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/binding_first_frame_developer_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/binding_first_frame_rasterized_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/binding_frame_scheduling_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/binding_live_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/binding_test.dart" = { cases = 33, claimed = 0, status = "pending" }
+"widgets/box_decoration_test.dart" = { cases = 14, claimed = 0, status = "pending" }
+"widgets/box_sliver_mismatch_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/build_context_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/build_fail_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/build_scope_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/center_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/clamp_overscrolls_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/clip_test.dart" = { cases = 28, claimed = 5, status = "partial" }
+"widgets/color_filter_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/column_test.dart" = { cases = 20, claimed = 0, status = "pending" }
+"widgets/composited_transform_test.dart" = { cases = 14, claimed = 0, status = "pending" }
+"widgets/constrained_box_test.dart" = { cases = 9, claimed = 8, status = "partial" }
+"widgets/container_test.dart" = { cases = 18, claimed = 6, status = "partial" }
+"widgets/context_menu_controller_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/coordinates_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/custom_multi_child_layout_test.dart" = { cases = 12, claimed = 0, status = "pending" }
+"widgets/custom_paint_test.dart" = { cases = 7, claimed = 0, status = "pending" }
+"widgets/custom_painter_test.dart" = { cases = 14, claimed = 0, status = "pending" }
+"widgets/custom_scroll_view_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/custom_single_child_layout_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/debug_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/decorated_sliver_test.dart" = { cases = 13, claimed = 0, status = "pending" }
+"widgets/default_colors_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/default_text_editing_shortcuts_test.dart" = { cases = 22, claimed = 0, status = "pending" }
+"widgets/default_text_height_behavior_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/default_text_style_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/did_update_widget_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/directionality_test.dart" = { cases = 4, claimed = 4, status = "ported" }
+"widgets/dismissible_test.dart" = { cases = 36, claimed = 10, status = "partial" }
+"widgets/display_feature_sub_screen_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/disposable_build_context_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/dispose_ancestor_lookup_test.dart" = { cases = 7, claimed = 0, status = "pending" }
+"widgets/drag_boundary_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/draggable_scrollable_sheet_test.dart" = { cases = 51, claimed = 0, status = "pending" }
+"widgets/draggable_test.dart" = { cases = 71, claimed = 0, status = "pending" }
+"widgets/drawer_test.dart" = { cases = 9, claimed = 0, status = "pending" }
+"widgets/dual_transition_builder_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/editable_text_cursor_test.dart" = { cases = 26, claimed = 0, status = "pending" }
+"widgets/editable_text_scribble_test.dart" = { cases = 10, claimed = 0, status = "pending" }
+"widgets/editable_text_scribe_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/editable_text_shortcuts_test.dart" = { cases = 120, claimed = 0, status = "pending" }
+"widgets/editable_text_show_on_screen_test.dart" = { cases = 14, claimed = 0, status = "pending" }
+"widgets/editable_text_styles_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/editable_text_test.dart" = { cases = 324, claimed = 5, status = "partial" }
+"widgets/ensure_visible_test.dart" = { cases = 23, claimed = 0, status = "pending" }
+"widgets/error_widget_builder_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/error_widget_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/expansible_test.dart" = { cases = 13, claimed = 0, status = "pending" }
+"widgets/fade_in_image_test.dart" = { cases = 20, claimed = 0, status = "pending" }
+"widgets/fade_transition_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/feedback_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/fitted_box_test.dart" = { cases = 15, claimed = 13, status = "partial" }
+"widgets/flex_test.dart" = { cases = 14, claimed = 0, status = "pending" }
+"widgets/flow_test.dart" = { cases = 5, claimed = 1, status = "partial" }
+"widgets/flutter_logo_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/focus_manager_test.dart" = { cases = 53, claimed = 3, status = "partial" }
+"widgets/focus_scope_test.dart" = { cases = 46, claimed = 0, status = "pending" }
+"widgets/focus_traversal_test.dart" = { cases = 62, claimed = 0, status = "pending" }
+"widgets/form_test.dart" = { cases = 46, claimed = 0, status = "pending" }
+"widgets/fractionally_sized_box_test.dart" = { cases = 4, claimed = 3, status = "partial" }
+"widgets/framework_test.dart" = { cases = 64, claimed = 0, status = "pending" }
+"widgets/gesture_detector_semantics_test.dart" = { cases = 21, claimed = 0, status = "pending" }
+"widgets/gesture_detector_test.dart" = { cases = 29, claimed = 1, status = "partial" }
+"widgets/gesture_disambiguation_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/global_keys_duplicated_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/global_keys_moving_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/grid_paper_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/grid_view_layout_test.dart" = { cases = 1, claimed = 1, status = "ported" }
+"widgets/grid_view_test.dart" = { cases = 29, claimed = 21, status = "partial" }
+"widgets/heroes_test.dart" = { cases = 56, claimed = 6, status = "partial" }
+"widgets/hit_testing_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/html_element_view_test.dart" = { cases = 13, claimed = 0, status = "pending" }
+"widgets/hyperlink_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/icon_data_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/icon_test.dart" = { cases = 25, claimed = 0, status = "pending" }
+"widgets/icon_theme_data_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/image_filter_quality_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/image_filter_test.dart" = { cases = 9, claimed = 0, status = "pending" }
+"widgets/image_headers_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/image_icon_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/image_package_asset_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/image_resolution_test.dart" = { cases = 12, claimed = 0, status = "pending" }
+"widgets/image_rtl_test.dart" = { cases = 17, claimed = 0, status = "pending" }
+"widgets/image_test.dart" = { cases = 68, claimed = 0, status = "pending" }
+"widgets/implicit_animations_test.dart" = { cases = 33, claimed = 0, status = "pending" }
+"widgets/implicit_semantics_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/independent_widget_layout_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/inherited_dependencies_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/inherited_model_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/inherited_test.dart" = { cases = 13, claimed = 0, status = "pending" }
+"widgets/inherited_theme_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/init_state_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/interactive_viewer_test.dart" = { cases = 56, claimed = 6, status = "partial" }
+"widgets/intrinsic_width_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/invert_colors_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/keep_alive_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/key_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/keyboard_listener_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/layout_builder_and_global_keys_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/layout_builder_and_parent_data_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/layout_builder_and_state_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/layout_builder_mutations_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/layout_builder_test.dart" = { cases = 23, claimed = 6, status = "partial" }
+"widgets/linked_scroll_view_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/list_body_test.dart" = { cases = 6, claimed = 6, status = "ported" }
+"widgets/list_view_builder_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/list_view_correction_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/list_view_fling_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/list_view_horizontal_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/list_view_misc_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/list_view_relayout_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/list_view_semantics_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/list_view_test.dart" = { cases = 29, claimed = 2, status = "partial" }
+"widgets/list_view_vertical_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/list_view_viewporting_test.dart" = { cases = 10, claimed = 0, status = "pending" }
+"widgets/list_view_with_inherited_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/list_wheel_scroll_view_test.dart" = { cases = 49, claimed = 0, status = "pending" }
+"widgets/listener_test.dart" = { cases = 8, claimed = 2, status = "partial" }
+"widgets/listview_end_append_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/localizations_test.dart" = { cases = 10, claimed = 2, status = "partial" }
+"widgets/lookup_boundary_test.dart" = { cases = 42, claimed = 0, status = "pending" }
+"widgets/magnifier_test.dart" = { cases = 7, claimed = 0, status = "pending" }
+"widgets/mark_needs_build_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/media_query_test.dart" = { cases = 39, claimed = 0, status = "pending" }
+"widgets/memory_allocations_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/modal_barrier_test.dart" = { cases = 35, claimed = 0, status = "pending" }
+"widgets/mouse_region_test.dart" = { cases = 43, claimed = 16, status = "partial" }
+"widgets/multi_view_binding_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/multi_view_no_implicit_view_binding_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/multi_view_parent_data_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/multi_view_tree_updates_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/multichild_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/multichildobject_with_keys_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/navigator_and_layers_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/navigator_on_did_remove_page_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/navigator_replacement_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/navigator_restoration_test.dart" = { cases = 30, claimed = 0, status = "pending" }
+"widgets/navigator_test.dart" = { cases = 117, claimed = 7, status = "partial" }
+"widgets/nested_scroll_view_test.dart" = { cases = 61, claimed = 0, status = "pending" }
+"widgets/notification_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/obscured_animated_image_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/opacity_repaint_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/opacity_test.dart" = { cases = 4, claimed = 2, status = "partial" }
+"widgets/orientation_builder_test.dart" = { cases = 9, claimed = 0, status = "pending" }
+"widgets/overflow_bar_test.dart" = { cases = 9, claimed = 0, status = "pending" }
+"widgets/overflow_box_test.dart" = { cases = 6, claimed = 4, status = "partial" }
+"widgets/overlay_layout_builder_test.dart" = { cases = 7, claimed = 0, status = "pending" }
+"widgets/overlay_portal_test.dart" = { cases = 52, claimed = 0, status = "pending" }
+"widgets/overlay_test.dart" = { cases = 43, claimed = 1, status = "partial" }
+"widgets/overscroll_indicator_test.dart" = { cases = 19, claimed = 0, status = "pending" }
+"widgets/overscroll_stretch_indicator_test.dart" = { cases = 22, claimed = 0, status = "pending" }
+"widgets/page_forward_transitions_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/page_route_builder_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/page_storage_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/page_transitions_builder_test.dart" = { cases = 7, claimed = 0, status = "pending" }
+"widgets/page_transitions_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/page_view_test.dart" = { cases = 50, claimed = 5, status = "partial" }
+"widgets/pageable_list_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/parent_data_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/performance_overlay_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/physical_model_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/pinned_header_sliver_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/placeholder_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/platform_menu_bar_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/platform_view_test.dart" = { cases = 109, claimed = 0, status = "pending" }
+"widgets/pop_scope_test.dart" = { cases = 6, claimed = 3, status = "partial" }
+"widgets/positioned_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/radio_group_test.dart" = { cases = 10, claimed = 0, status = "pending" }
+"widgets/range_maintaining_scroll_physics_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/raw_keyboard_listener_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/raw_menu_anchor_test.dart" = { cases = 67, claimed = 0, status = "pending" }
+"widgets/raw_radio_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/raw_tooltip_test.dart" = { cases = 58, claimed = 0, status = "pending" }
+"widgets/reassemble_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/render_object_element_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/render_object_widget_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/reorderable_list_test.dart" = { cases = 49, claimed = 0, status = "pending" }
+"widgets/reparent_state_harder_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/reparent_state_test.dart" = { cases = 7, claimed = 0, status = "pending" }
+"widgets/reparent_state_with_layout_builder_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/repeating_animation_builder_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/restorable_property_test.dart" = { cases = 11, claimed = 0, status = "pending" }
+"widgets/restoration_mixin_test.dart" = { cases = 18, claimed = 0, status = "pending" }
+"widgets/restoration_scope_test.dart" = { cases = 11, claimed = 0, status = "pending" }
+"widgets/restoration_scopes_moving_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/rich_text_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/root_restoration_scope_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/rotated_box_test.dart" = { cases = 1, claimed = 1, status = "ported" }
+"widgets/route_notification_messages_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/router_restoration_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/router_test.dart" = { cases = 34, claimed = 0, status = "pending" }
+"widgets/routes_test.dart" = { cases = 59, claimed = 0, status = "pending" }
+"widgets/routes_transition_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/row_test.dart" = { cases = 29, claimed = 14, status = "partial" }
+"widgets/rtl_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/run_app_async_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/run_app_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/safe_area_test.dart" = { cases = 14, claimed = 2, status = "partial" }
+"widgets/scroll_activity_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/scroll_aware_image_provider_test.dart" = { cases = 11, claimed = 0, status = "pending" }
+"widgets/scroll_behavior_test.dart" = { cases = 12, claimed = 0, status = "pending" }
+"widgets/scroll_cache_extent_test.dart" = { cases = 15, claimed = 0, status = "pending" }
+"widgets/scroll_controller_test.dart" = { cases = 11, claimed = 1, status = "partial" }
+"widgets/scroll_delegate_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/scroll_events_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/scroll_interaction_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/scroll_notification_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/scroll_physics_test.dart" = { cases = 12, claimed = 0, status = "pending" }
+"widgets/scroll_position_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/scroll_simulation_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/scroll_view_test.dart" = { cases = 70, claimed = 0, status = "pending" }
+"widgets/scrollable_animations_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/scrollable_dispose_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/scrollable_fling_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/scrollable_grid_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/scrollable_helpers_test.dart" = { cases = 13, claimed = 0, status = "pending" }
+"widgets/scrollable_in_overlay_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/scrollable_list_hit_testing_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/scrollable_of_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/scrollable_restoration_test.dart" = { cases = 18, claimed = 0, status = "pending" }
+"widgets/scrollable_selection_test.dart" = { cases = 25, claimed = 0, status = "pending" }
+"widgets/scrollable_semantics_test.dart" = { cases = 19, claimed = 0, status = "pending" }
+"widgets/scrollable_semantics_traversal_order_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/scrollable_test.dart" = { cases = 48, claimed = 0, status = "pending" }
+"widgets/scrollbar_test.dart" = { cases = 72, claimed = 6, status = "partial" }
+"widgets/selectable_region_context_menu_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/selectable_region_test.dart" = { cases = 104, claimed = 0, status = "pending" }
+"widgets/selection_container_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/semantics_10_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_11_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_1_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_2_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_3_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_4_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_5_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_6_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_7_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_8_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_9_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/semantics_checks_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/semantics_child_configs_delegate_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/semantics_clipping_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/semantics_debugger_test.dart" = { cases = 16, claimed = 0, status = "pending" }
+"widgets/semantics_event_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/semantics_keep_alive_offstage_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_merge_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/semantics_refactor_regression_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/semantics_role_checks_test.dart" = { cases = 63, claimed = 0, status = "pending" }
+"widgets/semantics_test.dart" = { cases = 47, claimed = 0, status = "pending" }
+"widgets/semantics_tester_generate_test_semantics_expression_for_current_semantics_tree_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/semantics_tester_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/semantics_traversal_test.dart" = { cases = 0, claimed = 0, status = "pending" }
+"widgets/semantics_zero_surface_size_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/sensitive_content_error_handling_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/sensitive_content_host_test.dart" = { cases = 68, claimed = 0, status = "pending" }
+"widgets/sensitive_content_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/sensitive_content_unknown_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/set_state_1_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/set_state_2_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/set_state_3_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/set_state_4_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/set_state_5_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/shader_mask_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/shadow_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/shape_decoration_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/shared_app_data_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/shortcuts_test.dart" = { cases = 62, claimed = 4, status = "partial" }
+"widgets/shrink_wrapping_viewport_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/simple_semantics_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/single_child_scroll_view_test.dart" = { cases = 27, claimed = 0, status = "pending" }
+"widgets/size_changed_layout_notification_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/sized_box_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/sliver_constrained_cross_axis_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/sliver_constraints_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/sliver_cross_axis_group_test.dart" = { cases = 24, claimed = 0, status = "pending" }
+"widgets/sliver_fill_remaining_test.dart" = { cases = 27, claimed = 0, status = "pending" }
+"widgets/sliver_fill_viewport_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/sliver_floating_header_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/sliver_list_test.dart" = { cases = 8, claimed = 7, status = "partial" }
+"widgets/sliver_main_axis_group_test.dart" = { cases = 33, claimed = 0, status = "pending" }
+"widgets/sliver_persistent_header_test.dart" = { cases = 22, claimed = 0, status = "pending" }
+"widgets/sliver_prototype_item_extent_test.dart" = { cases = 7, claimed = 0, status = "pending" }
+"widgets/sliver_resizing_header_test.dart" = { cases = 7, claimed = 0, status = "pending" }
+"widgets/sliver_semantics_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/sliver_tree_test.dart" = { cases = 20, claimed = 0, status = "pending" }
+"widgets/sliver_visibility_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/slivers_block_global_key_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/slivers_block_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/slivers_evil_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/slivers_keepalive_test.dart" = { cases = 12, claimed = 0, status = "pending" }
+"widgets/slivers_padding_test.dart" = { cases = 16, claimed = 9, status = "partial" }
+"widgets/slivers_protocol_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/slivers_test.dart" = { cases = 38, claimed = 21, status = "partial" }
+"widgets/sliversemantics_test.dart" = { cases = 41, claimed = 0, status = "pending" }
+"widgets/slotted_render_object_widget_test.dart" = { cases = 5, claimed = 0, status = "pending" }
+"widgets/snapshot_widget_test.dart" = { cases = 11, claimed = 0, status = "pending" }
+"widgets/spacer_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/spell_check_test.dart" = { cases = 13, claimed = 0, status = "pending" }
+"widgets/stack_test.dart" = { cases = 32, claimed = 5, status = "partial" }
+"widgets/state_setting_in_scrollables_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/stateful_component_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/stateful_components_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/status_transitions_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/stretch_effect_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/syncing_test.dart" = { cases = 3, claimed = 0, status = "pending" }
+"widgets/system_context_menu_test.dart" = { cases = 30, claimed = 0, status = "pending" }
+"widgets/table_test.dart" = { cases = 27, claimed = 14, status = "partial" }
+"widgets/tap_region_test.dart" = { cases = 16, claimed = 0, status = "pending" }
+"widgets/test_page_tester_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/text_golden_test.dart" = { cases = 21, claimed = 0, status = "pending" }
+"widgets/text_scaler_backward_compatibility_test.dart" = { cases = 12, claimed = 0, status = "pending" }
+"widgets/text_selection_test.dart" = { cases = 47, claimed = 0, status = "pending" }
+"widgets/text_selection_toolbar_layout_delegate_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/text_semantics_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/text_test.dart" = { cases = 50, claimed = 0, status = "pending" }
+"widgets/texture_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/ticker_mode_test.dart" = { cases = 19, claimed = 0, status = "pending" }
+"widgets/ticker_provider_test.dart" = { cases = 9, claimed = 0, status = "pending" }
+"widgets/title_test.dart" = { cases = 6, claimed = 0, status = "pending" }
+"widgets/toggleable_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/tracking_scroll_controller_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/transform_test.dart" = { cases = 28, claimed = 6, status = "partial" }
+"widgets/transformed_scrollable_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/transitions_test.dart" = { cases = 24, claimed = 0, status = "pending" }
+"widgets/tree_shape_test.dart" = { cases = 28, claimed = 0, status = "pending" }
+"widgets/tween_animation_builder_test.dart" = { cases = 14, claimed = 0, status = "pending" }
+"widgets/two_dimensional_scroll_view_test.dart" = { cases = 15, claimed = 0, status = "pending" }
+"widgets/two_dimensional_viewport_test.dart" = { cases = 57, claimed = 0, status = "pending" }
+"widgets/undo_history_test.dart" = { cases = 12, claimed = 0, status = "pending" }
+"widgets/unique_widget_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/value_listenable_builder_test.dart" = { cases = 6, claimed = 6, status = "ported" }
+"widgets/view_test.dart" = { cases = 22, claimed = 0, status = "pending" }
+"widgets/visibility_test.dart" = { cases = 9, claimed = 1, status = "partial" }
+"widgets/widget_inspector_structure_error_test.dart" = { cases = 1, claimed = 0, status = "pending" }
+"widgets/widget_inspector_test.dart" = { cases = 128, claimed = 0, status = "pending" }
+"widgets/widget_span_test.dart" = { cases = 2, claimed = 0, status = "pending" }
+"widgets/widget_state_property_test.dart" = { cases = 8, claimed = 0, status = "pending" }
+"widgets/widget_states_controller_test.dart" = { cases = 4, claimed = 0, status = "pending" }
+"widgets/widgets_app_tester_test.dart" = { cases = 35, claimed = 0, status = "pending" }
+"widgets/window_positioner_test.dart" = { cases = 20, claimed = 0, status = "pending" }
+"widgets/windowing_test.dart" = { cases = 79, claimed = 0, status = "pending" }
+"widgets/wrap_test.dart" = { cases = 21, claimed = 11, status = "partial" }
+
+# Derived counts. The inventory test recomputes every number here and fails
+# on drift; ROADMAP.md cites these values.
+[summary]
+targets = 90
+rust_tests = 645
+pins = 6
+oracle_files = 389
+oracle_cases = 5696
+cases_claimed = 298
+universe_files = 382
+universe_cases = 5604
+universe_cases_claimed = 290
+universe_pending_files = 332
+
+[summary.families."animation"]
+targets = 7
+rust_tests = 37
+cases_claimed = 15
+pins = 0
+
+[summary.families."flex"]
+targets = 5
+rust_tests = 35
+cases_claimed = 21
+pins = 0
+
+[summary.families."focus"]
+targets = 2
+rust_tests = 26
+cases_claimed = 7
+pins = 0
+
+[summary.families."framework"]
+targets = 6
+rust_tests = 27
+cases_claimed = 13
+pins = 0
+
+[summary.families."gesture"]
+targets = 5
+rust_tests = 68
+cases_claimed = 17
+pins = 0
+
+[summary.families."layout"]
+targets = 22
+rust_tests = 131
+cases_claimed = 75
+pins = 1
+
+[summary.families."navigation"]
+targets = 4
+rust_tests = 26
+cases_claimed = 17
+pins = 0
+
+[summary.families."painting"]
+targets = 6
+rust_tests = 56
+cases_claimed = 17
+pins = 1
+
+[summary.families."pointer"]
+targets = 3
+rust_tests = 44
+cases_claimed = 19
+pins = 0
+
+[summary.families."scroll"]
+targets = 8
+rust_tests = 73
+cases_claimed = 36
+pins = 1
+
+[summary.families."sliver"]
+targets = 15
+rust_tests = 82
+cases_claimed = 36
+pins = 2
+
+[summary.families."stack"]
+targets = 1
+rust_tests = 7
+cases_claimed = 5
+pins = 0
+
+[summary.families."table"]
+targets = 1
+rust_tests = 16
+cases_claimed = 15
+pins = 1
+
+[summary.families."text"]
+targets = 3
+rust_tests = 12
+cases_claimed = 0
+pins = 0
+
+[summary.families."text-input"]
+targets = 2
+rust_tests = 5
+cases_claimed = 5
+pins = 0

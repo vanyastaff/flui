@@ -2266,9 +2266,11 @@ dependencies = [
  "insta",
  "lru 0.18.1",
  "parking_lot",
+ "serde",
  "static_assertions",
  "thiserror 2.0.19",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]
