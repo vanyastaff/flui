@@ -48,6 +48,14 @@ pub struct MacOSWindow {
 
     /// Window configuration
     config: WindowConfiguration,
+
+    /// This window's NSAccessibility bridge, subclassed onto the content
+    /// view. A `OnceLock` slot rather than a plain field because the window
+    /// value is constructed *before* its content view exists (the view
+    /// holds a `Weak` back-reference to the window's callbacks); the
+    /// constructor fills it immediately after installing the view.
+    #[cfg(feature = "a11y")]
+    accessibility: std::sync::OnceLock<Arc<super::accessibility::MacosAccessibility>>,
 }
 
 // SAFETY: the NSWindow pointer is only messaged from the main thread (AppKit
@@ -172,12 +180,31 @@ impl MacOSWindow {
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
                 config,
+                #[cfg(feature = "a11y")]
+                accessibility: std::sync::OnceLock::new(),
             });
 
             // Create content view for input events
             let content_view =
                 view::create_content_view(frame, scale, Arc::downgrade(&window.callbacks));
             let _: () = msg_send![ns_window, setContentView: content_view];
+
+            // Subclass the freshly installed content view for VoiceOver.
+            // SAFETY: `content_view` is the live NSView this window just
+            // created and installed; the window owns the capability, so the
+            // adapter cannot outlive the view; and window construction runs
+            // on the main thread (AppKit affinity, asserted by this whole
+            // `unsafe` block's contract).
+            #[cfg(feature = "a11y")]
+            {
+                let bridge = super::accessibility::MacosAccessibility::new(
+                    content_view.cast::<std::ffi::c_void>(),
+                );
+                window
+                    .accessibility
+                    .set(Arc::new(bridge))
+                    .expect("BUG: the accessibility slot was created empty in this constructor and nothing else can fill it");
+            }
 
             // Enable mouse tracking for mouse moved events
             view::enable_mouse_tracking(content_view);
@@ -219,6 +246,17 @@ impl MacOSWindow {
 impl PlatformWindow for MacOSWindow {
     fn id(&self) -> WindowId {
         WindowId(self.ns_window as u64)
+    }
+
+    /// The window's own NSAccessibility bridge — the capability the
+    /// composition root's accessibility wire discovers. Without this
+    /// override the trait default (`None`) leaves every real macOS window
+    /// silently invisible to VoiceOver.
+    #[cfg(feature = "a11y")]
+    fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
+        self.accessibility
+            .get()
+            .map(|bridge| Arc::clone(bridge) as _)
     }
 
     fn physical_size(&self) -> Size<DevicePixels> {
@@ -536,6 +574,11 @@ impl Clone for MacOSWindow {
             windows_map: Arc::clone(&self.windows_map),
             callbacks: Arc::clone(&self.callbacks),
             config: self.config.clone(),
+            // The clone shares the same window, so it shares the same
+            // NSAccessibility bridge — one subclass per content view,
+            // never two (`OnceLock<Arc<_>>` clones the shared handle).
+            #[cfg(feature = "a11y")]
+            accessibility: self.accessibility.clone(),
         }
     }
 }
@@ -545,6 +588,17 @@ impl Drop for MacOSWindow {
         // Only cleanup if this is the last reference
         if Arc::strong_count(&self.state) == 1 {
             tracing::debug!("Closing NSWindow {:p}", self.ns_window);
+
+            // Unhook the NSAccessibility subclass BEFORE releasing the
+            // window: unhooking dereferences the content view, which dies
+            // with the window's last retain below. This runs on the main
+            // thread (AppKit teardown); any capability `Arc` still held
+            // elsewhere degrades to a no-op afterwards, and the wrapper's
+            // own later drop finds nothing left to unhook.
+            #[cfg(feature = "a11y")]
+            if let Some(bridge) = self.accessibility.get() {
+                bridge.shutdown();
+            }
 
             // Remove from windows map
             let window_id = self.ns_window as u64;
@@ -1312,12 +1366,22 @@ impl MacOSWindow {
     /// Handle focus gained event
     fn handle_focus_gained(&self) {
         self.callbacks.dispatch_active_status_change(true);
+        // Key-window status is what VoiceOver treats as view focus; the
+        // delegate delivers this on the main thread.
+        #[cfg(feature = "a11y")]
+        if let Some(bridge) = self.accessibility.get() {
+            bridge.update_view_focus_state(true);
+        }
         tracing::debug!("Window gained focus");
     }
 
     /// Handle focus lost event
     fn handle_focus_lost(&self) {
         self.callbacks.dispatch_active_status_change(false);
+        #[cfg(feature = "a11y")]
+        if let Some(bridge) = self.accessibility.get() {
+            bridge.update_view_focus_state(false);
+        }
         tracing::debug!("Window lost focus");
     }
 

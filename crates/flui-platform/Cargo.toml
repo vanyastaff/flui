@@ -153,15 +153,33 @@ console_error_panic_hook = "0.1"
 [target.'cfg(target_os = "linux")'.dependencies]
 accesskit_unix = { version = "0.22", optional = true }
 
+# UIA bridge for Windows, same `a11y` feature. Version cohort must match the
+# workspace `accesskit` (0.24) -- 0.34 is that cohort -- and its `windows`
+# dependency (0.62) matches the backend's own, so no duplicate windows-rs
+# stack is linked.
+[target.'cfg(target_os = "windows")'.dependencies.accesskit_windows]
+version = "0.34"
+optional = true
+
+# NSAccessibility bridge for macOS, same `a11y` feature and the same 0.24
+# accesskit cohort. Uses objc2 internally; independent of the backend's
+# `cocoa`/`objc` stack.
+[target.'cfg(target_os = "macos")'.dependencies.accesskit_macos]
+version = "0.26"
+optional = true
+
 [features]
 default = ["desktop"]
 
 # Platform features
 desktop = ["dep:winit"]
 
-# AT-SPI accessibility bridge (Linux). Off by default: see the dependency note
-# above for why ~66 crates should be an opt-in rather than a default.
-a11y = ["dep:accesskit_unix"]
+# Per-OS accessibility bridges (AT-SPI on Linux, UIA on Windows,
+# NSAccessibility on macOS) -- one feature, target-gated dependencies, so a
+# build only ever links its own OS's stack. Off by default: see the Linux
+# dependency note above for why ~66 crates should be an opt-in rather than a
+# default.
+a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
 
 # winit fallback backend — primary on Linux until native Wayland/X11 lands
 # (roadmap Cross.P); optional on Windows/macOS.

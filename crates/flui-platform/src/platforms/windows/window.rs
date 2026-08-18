@@ -60,6 +60,13 @@ pub struct WindowsWindow {
 
     /// Reference to platform's window map (for cleanup)
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+
+    /// This window's UIA bridge, subclassed onto `hwnd` at construction so
+    /// a UI Automation client that asks at any later point is answered.
+    /// Inert until one does — see
+    /// [`WindowsAccessibility::new`](super::accessibility::WindowsAccessibility::new).
+    #[cfg(feature = "a11y")]
+    accessibility: Arc<super::accessibility::WindowsAccessibility>,
 }
 
 // SAFETY, per field: `state` and `callbacks` are `Arc<Mutex<..>>`/`Arc<..>`
@@ -216,6 +223,10 @@ impl WindowsWindow {
                 state,
                 callbacks: Arc::clone(&callbacks),
                 windows_map,
+                // On the creating (owning) thread, as Win32 subclassing
+                // requires; `hwnd` was validated just above.
+                #[cfg(feature = "a11y")]
+                accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
             });
 
             // Create and store WindowContext for event dispatch
@@ -652,6 +663,15 @@ impl WindowsWindow {
 impl PlatformWindow for WindowsWindow {
     fn id(&self) -> WindowId {
         WindowId(self.hwnd.0 as u64)
+    }
+
+    /// The window's own UIA bridge — the capability the composition root's
+    /// accessibility wire discovers. Without this override the trait
+    /// default (`None`) leaves every real Windows window silently invisible
+    /// to UI Automation clients.
+    #[cfg(feature = "a11y")]
+    fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
+        Some(Arc::clone(&self.accessibility) as _)
     }
 
     fn physical_size(&self) -> Size<DevicePixels> {
@@ -1128,6 +1148,10 @@ impl Clone for WindowsWindow {
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
             windows_map: Arc::clone(&self.windows_map),
+            // The clone shares the same window, so it shares the same UIA
+            // bridge — one subclass hook per HWND, never two.
+            #[cfg(feature = "a11y")]
+            accessibility: Arc::clone(&self.accessibility),
         }
     }
 }
@@ -1824,6 +1848,13 @@ impl Drop for WindowsWindow {
         // Only destroy if this is the last reference
         if Arc::strong_count(&self.state) == 1 {
             tracing::debug!("Destroying window HWND {:?}", self.hwnd);
+
+            // Unhook the UIA subclass BEFORE destroying the window — Win32
+            // wants subclasses removed while the window still exists, and
+            // this wrapper's drop is the owner-thread teardown path. Any
+            // capability `Arc` still held elsewhere degrades to a no-op.
+            #[cfg(feature = "a11y")]
+            self.accessibility.shutdown();
 
             // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
             // `is_invalid()` guard skips the call for a handle that was

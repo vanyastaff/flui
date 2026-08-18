@@ -125,9 +125,13 @@ wasm-link-check:
 [group("build")]
 [doc("Clippy flui-platform's Windows, macOS, and Android backends from this host (mirrors the CI cross-typecheck job)")]
 cross-typecheck:
-    cargo clippy -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
-    cargo clippy -p flui-platform --locked --all-targets --target aarch64-apple-darwin -- -D warnings
-    cargo clippy -p flui-platform --locked --all-targets --target aarch64-linux-android -- -D warnings
+    # `--features a11y` on every line: the UIA/NSAccessibility bridges are
+    # feature-gated and this job is the ONLY gate that compiles them at all
+    # (the a11y-off configuration is a strict subset — no cfg(not(a11y))
+    # code exists — so checking with the feature supersedes checking without).
+    cargo clippy -p flui-platform --locked --all-targets --features a11y --target x86_64-pc-windows-msvc -- -D warnings
+    cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-darwin -- -D warnings
+    cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-linux-android -- -D warnings
 
 # =============================================================================
 # Testing

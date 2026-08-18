@@ -895,14 +895,19 @@ jobs:
       - name: Add cross targets to the pinned toolchain
         run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android
 
+      # `--features a11y` on every line: the UIA/NSAccessibility bridges are
+      # feature-gated and this job is the ONLY gate that compiles them at all
+      # (the a11y-off configuration is a strict subset — no cfg(not(a11y))
+      # code exists — so checking with the feature supersedes checking
+      # without; on Android the feature enables nothing target-gated).
       - name: cargo clippy (windows backend)
-        run: cargo clippy -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+        run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target x86_64-pc-windows-msvc -- -D warnings
 
       - name: cargo clippy (macos backend)
-        run: cargo clippy -p flui-platform --locked --all-targets --target aarch64-apple-darwin -- -D warnings
+        run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-darwin -- -D warnings
 
       - name: cargo clippy (android backend)
-        run: cargo clippy -p flui-platform --locked --all-targets --target aarch64-linux-android -- -D warnings
+        run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-linux-android -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern). Branch protection
