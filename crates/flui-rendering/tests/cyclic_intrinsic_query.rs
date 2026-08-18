@@ -1,4 +1,4 @@
-//! U21b — soundness of the borrowed intrinsic walk under a cyclic edge.
+//! Soundness of the borrowed intrinsic walk under a cyclic edge.
 //!
 //! Regression guard for the SAFETY-GATE finding on
 //! `build_intrinsic_child_parent_data` (`subtree_arena.rs`): when a widget

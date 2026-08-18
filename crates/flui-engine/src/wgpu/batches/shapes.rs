@@ -44,7 +44,7 @@ impl DrawBatcher {
         paint: &Paint,
     ) {
         // Shader/gradient fill — dispatch before any opacity or color work.
-        // Advanced blend modes are handled inside dispatch_shader_rect (PR-5):
+        // Advanced blend modes are handled inside dispatch_shader_rect:
         // an isolated DrawSegment is pushed as DrawItem::AdvancedShape so the
         // replay loop can dst-read blend without coupling the gradient path to
         // the tessellator funnel (add_tessellated_with_key).
@@ -208,7 +208,7 @@ impl DrawBatcher {
         paint: &Paint,
     ) {
         // Shader/gradient fill — dispatch before any opacity or color work.
-        // Advanced blend modes are handled inside dispatch_shader_rect (PR-5).
+        // Advanced blend modes are handled inside dispatch_shader_rect.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
             let corner_radii = [
                 rrect.top_left.x.0.max(rrect.top_left.y.0),
@@ -396,7 +396,7 @@ impl DrawBatcher {
         paint: &Paint,
     ) {
         // Shader/gradient fill — dispatch before any opacity or color work.
-        // Advanced blend modes are handled inside dispatch_shader_rect (PR-5).
+        // Advanced blend modes are handled inside dispatch_shader_rect.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
             let bounds = Rect::from_xywh(
                 center.x - px(radius),

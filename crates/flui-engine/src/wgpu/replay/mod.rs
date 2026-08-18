@@ -500,7 +500,7 @@ impl GpuReplay {
                     //    sized to fb_dim instead of the full viewport.
                     //    Vertex positions are pre-transformed to fb-local NDC so that
                     //    dividing by the unchanged viewport uniform yields correct NDC
-                    //    inside the smaller render target (non-negotiable #2).
+                    //    inside the smaller render target.
                     let content_tex = self.render_segment_to_grown_offscreen(
                         &mut op.input,
                         op.fb_origin,
@@ -517,7 +517,7 @@ impl GpuReplay {
                     // 2. Fold the pass chain over the grown-bounds intermediate.
                     //    Identity returns content_tex unchanged.
                     //    Blur/Morph: each sub-pass acquires a fb_dim texture and uses
-                    //    fb-local UV for the content_rect decal (non-negotiable #3).
+                    //    fb-local UV for the content_rect decal.
                     let filtered_tex = apply_image_filter_passes(
                         &op.passes,
                         content_tex,
@@ -531,7 +531,7 @@ impl GpuReplay {
                         encoder,
                     );
 
-                    // 3. Integer-grid composite (non-negotiable #1):
+                    // 3. Integer-grid composite:
                     //    dst_rect = Rect(fb_origin, fb_far); src_uv = [0, 0, 1, 1].
                     //
                     //    `filtered_tex` is fb_dim-sized with content at pixel (0,0).

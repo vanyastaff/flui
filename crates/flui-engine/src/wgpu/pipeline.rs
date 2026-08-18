@@ -477,10 +477,11 @@ pub fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
         // diversion in `add_tessellated_with_key` fires unconditionally for
         // `is_advanced()` keys, so the cache never sees them for tessellated shapes.
         //
-        // Non-tessellated callers (gradients, images — PR-5) that reach
-        // `flush_tessellated_geometry` with an advanced key will hit a pipeline-cache
-        // miss or produce incorrect output; they are guarded by their own Phase-B
-        // routing (to be added in PR-5).
+        // Non-tessellated callers (gradients, images) that reach
+        // `flush_tessellated_geometry` with an advanced key would hit a pipeline-cache
+        // miss or produce incorrect output; they are guarded by their own routing —
+        // `dispatch_shader_rect` diverts advanced gradient/image draws into isolated
+        // `DrawItem::AdvancedShape` segments before the key reaches the cache.
         PipelineKey::with_blend(mode)
     }
 }

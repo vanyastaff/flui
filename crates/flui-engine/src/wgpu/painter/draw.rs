@@ -408,7 +408,8 @@ impl super::WgpuPainter {
     /// Draw an image with an explicit blend mode.
     ///
     /// Pass `BlendMode::SrcOver` for the default compositing behaviour (byte-identical
-    /// to pre-PR-5).  When `blend_mode.is_advanced()` the draw is isolated into a
+    /// to the path before advanced-blend support).  When `blend_mode.is_advanced()`
+    /// the draw is isolated into a
     /// `DrawItem::AdvancedShape` so `flush_advanced_layer` can dst-read the backdrop.
     pub fn draw_image(
         &mut self,

@@ -681,7 +681,7 @@ impl CommandRenderer for Backend<'_> {
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
-        // Thread paint.blend_mode to the GPU-level composite (PR-5).
+        // Thread paint.blend_mode to the GPU-level composite.
         // SrcOver is the correct default when no Paint is supplied.
         let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
@@ -700,7 +700,7 @@ impl CommandRenderer for Backend<'_> {
         transform: &Matrix4,
     ) {
         // Thread blend_mode to the painter so advanced modes divert to
-        // DrawItem::AdvancedShape (PR-5, condition 3). SrcOver takes the
+        // DrawItem::AdvancedShape. SrcOver takes the
         // per-sprite cached_images path unchanged.
         self.with_transform(transform, |painter| {
             painter.draw_atlas(image, sprites, transforms, colors, blend_mode);
@@ -743,7 +743,7 @@ impl CommandRenderer for Backend<'_> {
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
-        // Thread paint.blend_mode as the GPU-level composite mode (PR-5).
+        // Thread paint.blend_mode as the GPU-level composite mode.
         // ColorFilter bakes pixels CPU-side; paint.blend_mode composites the
         // result GPU-side against the framebuffer. These two modes are independent.
         // See DrawBatcher::draw_image_filtered for the boundary contract.
@@ -1166,8 +1166,9 @@ impl CommandRenderer for Backend<'_> {
         transform: &Matrix4,
     ) {
         // `_blend_mode` is intentionally dropped here. Advanced blend on a
-        // BackdropFilter is a separate future Path-A backdrop-compositor seam,
-        // out of PR-5 scope. PR-5 covers shape/gradient/image producers only.
+        // BackdropFilter is a separate future backdrop-compositor seam, out of
+        // scope for advanced (dst-read) blend support, which covers
+        // shape/gradient/image producers only.
         use flui_painting::display_list::ImageFilter;
 
         // Dispatch the child display list (or no-op when None). Used both as the

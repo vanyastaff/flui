@@ -502,7 +502,7 @@ mod unit_tests {
     };
     use super::{DrawBatcher, PipelineKey, Vertex, vertices_aabb};
 
-    /// All 15 W3C advanced blend modes — used by gradient diversion tests G1-G3.
+    /// All 15 W3C advanced blend modes — used by the gradient diversion tests.
     const ALL_ADVANCED_MODES: [BlendMode; 15] = [
         BlendMode::Multiply,
         BlendMode::Screen,
@@ -1062,9 +1062,9 @@ mod unit_tests {
         );
     }
 
-    // ── G1: linear gradient advanced mode → AdvancedShape ───────────────────
+    // ── linear gradient advanced mode → AdvancedShape ───────────────────────
 
-    /// G1: `dispatch_shader_rect` with a linear gradient and an advanced blend mode
+    /// `dispatch_shader_rect` with a linear gradient and an advanced blend mode
     /// must push `DrawItem::AdvancedShape` to `draw_order` and NOT accumulate
     /// gradient instances in the main segment.
     ///
@@ -1134,10 +1134,11 @@ mod unit_tests {
         }
     }
 
-    // ── G2: radial gradient advanced mode → AdvancedShape ────────────────────
+    // ── radial gradient advanced mode → AdvancedShape ────────────────────────
 
-    /// G2: `dispatch_shader_rect` with a radial gradient and an advanced blend
-    /// mode must push `DrawItem::AdvancedShape`.  Mirror of G1 for the radial path.
+    /// `dispatch_shader_rect` with a radial gradient and an advanced blend
+    /// mode must push `DrawItem::AdvancedShape`.  Mirror of the linear-gradient
+    /// case for the radial path.
     #[test]
     fn radial_gradient_advanced_mode_diverts_to_advanced_shape() {
         use flui_painting::Paint;
@@ -1196,10 +1197,11 @@ mod unit_tests {
         }
     }
 
-    // ── G3: sweep gradient advanced mode → AdvancedShape ─────────────────────
+    // ── sweep gradient advanced mode → AdvancedShape ─────────────────────────
 
-    /// G3: `dispatch_shader_rect` with a sweep gradient and an advanced blend
-    /// mode must push `DrawItem::AdvancedShape`.  Mirror of G1/G2 for sweep.
+    /// `dispatch_shader_rect` with a sweep gradient and an advanced blend
+    /// mode must push `DrawItem::AdvancedShape`.  Mirror of the linear/radial
+    /// cases for sweep.
     #[test]
     fn sweep_gradient_advanced_mode_diverts_to_advanced_shape() {
         use flui_painting::Paint;
@@ -1257,11 +1259,11 @@ mod unit_tests {
         }
     }
 
-    // ── G4: SrcOver gradient stays in main segment ────────────────────────────
+    // ── SrcOver gradient stays in main segment ────────────────────────────────
 
-    /// G4: `dispatch_shader_rect` with a linear gradient and `SrcOver` must NOT
+    /// `dispatch_shader_rect` with a linear gradient and `SrcOver` must NOT
     /// produce `DrawItem::AdvancedShape`.  The SrcOver path is byte-identical to
-    /// pre-PR-5.
+    /// what it was before advanced-blend support existed.
     ///
     /// **Proves:** the advanced diversion gate (`is_advanced()`) correctly rejects
     /// SrcOver, leaving the gradient in the main segment's gradient batch.
@@ -1320,9 +1322,9 @@ mod unit_tests {
         );
     }
 
-    // ── G5: isolated segment stop_offset is 0 ────────────────────────────────
+    // ── isolated segment stop_offset is 0 ────────────────────────────────────
 
-    /// G5: The gradient instance inside an `AdvancedShapeOp` must use
+    /// The gradient instance inside an `AdvancedShapeOp` must use
     /// `stop_offset = 0`, relative to the isolated segment's own stop buffer.
     ///
     /// **Proves:** the isolated segment starts from zero prior stops, not from the
@@ -1376,7 +1378,7 @@ mod unit_tests {
         );
 
         let DrawItem::AdvancedShape(ref isolated_op) = draw_order[draw_order.len() - 1] else {
-            panic!("last draw_order item must be AdvancedShape (G5)");
+            panic!("last draw_order item must be AdvancedShape (isolated gradient segment)");
         };
 
         // The isolated segment must hold exactly the gradient's 2 stops — NOT the
@@ -1397,12 +1399,13 @@ mod unit_tests {
         );
     }
 
-    // ── G6: Z-seal fires for gradient advanced mode ───────────────────────────
+    // ── Z-seal fires for gradient advanced mode ───────────────────────────────
 
-    /// G6: Prior SrcOver content in the main segment must be sealed into
+    /// Prior SrcOver content in the main segment must be sealed into
     /// `draw_order` BEFORE the `DrawItem::AdvancedShape` is pushed.
     ///
-    /// Mirror of S4g for the gradient path: verifies `finish_current_segment`
+    /// Mirror of `prior_srcover_content_sealed_before_advanced_shape` for the
+    /// gradient path: verifies `finish_current_segment`
     /// fires at the top of the advanced branch in `dispatch_shader_rect`.
     #[test]
     fn prior_content_sealed_before_gradient_advanced_shape() {

@@ -504,7 +504,7 @@ impl DrawBatcher {
             return true;
         }
 
-        // ── SrcOver path (byte-identical to pre-PR-5) ─────────────────────────
+        // ── SrcOver path (unchanged by advanced-blend support) ────────────────
 
         match shader {
             Shader::LinearGradient { from, to, .. } => {
