@@ -962,7 +962,41 @@ impl UiRealm {
         }
         let handler = self.frame_failure_handler.borrow().clone();
         if let Some(handler) = handler {
-            handler.call(&report);
+            // The handler is embedder code running INSIDE the frame pump —
+            // for a segment-panic report, OUTSIDE the per-presentation
+            // `catch_unwind` (the boundary's `Err` arm already returned
+            // from it). An uncontained handler panic would therefore
+            // reopen exactly the process-fatal path this boundary exists
+            // to close: unwind through the remaining siblings' segments
+            // and into the runner's `resume_unwind`. On the
+            // pipeline-error path (reported from inside the segment) it
+            // was subtly worse: the boundary caught the HANDLER's panic
+            // as a segment panic and re-reported it — invoking the same
+            // panicking handler a second time, now uncontained.
+            //
+            // So the delivery itself is contained. A panicking handler is
+            // an EMBEDDER bug: it is logged at error level (no `BUG:`
+            // classification — that prefix asserts a FLUI invariant) and
+            // the report it was given is already fully traced above, so
+            // no diagnostics are lost. The handler stays registered — each
+            // future delivery is individually contained (one call per
+            // report, never a retry loop), and a transiently-broken
+            // handler keeps receiving reports once it stops panicking.
+            // Automatic disarming after repeated handler panics was
+            // considered and rejected for this slice: it would silently
+            // cut off the embedder's failure feed on the strength of a
+            // heuristic, which is the "silent skip" shape this route
+            // exists to avoid.
+            if catch_unwind(AssertUnwindSafe(|| handler.call(&report))).is_err() {
+                tracing::error!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } =
+                        report.address.presentation_id.as_u64(),
+                    realm_id = report.address.realm_id.as_u64(),
+                    "the registered FrameFailureHandler panicked while receiving this \
+                     report — embedder bug; the panic was contained and the report was \
+                     already traced above"
+                );
+            }
         }
     }
 
@@ -8415,11 +8449,25 @@ mod tests {
         /// intentional panics these tests throw do not spam captured
         /// output; the panics themselves still unwind normally.
         fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
-            let prev_hook = std::panic::take_hook();
+            // RAII, not a trailing `set_hook`: the panic hook is
+            // process-global, so if `f` itself panics out of this helper
+            // (an assertion failure inside the closure), a non-guarded
+            // restore would be skipped and every LATER test in the same
+            // process would run with silenced panic diagnostics. nextest
+            // is process-per-test, but plain `cargo test` shares one
+            // process — restore must survive the unwind.
+            type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync>;
+            struct HookRestore(Option<PanicHook>);
+            impl Drop for HookRestore {
+                fn drop(&mut self) {
+                    if let Some(hook) = self.0.take() {
+                        std::panic::set_hook(hook);
+                    }
+                }
+            }
+            let _restore = HookRestore(Some(std::panic::take_hook()));
             std::panic::set_hook(Box::new(|_| {}));
-            let result = f();
-            std::panic::set_hook(prev_hook);
-            result
+            f()
         }
 
         // ====================================================================
@@ -9007,6 +9055,154 @@ mod tests {
                 }
                 other @ SeenKind::Pipeline { .. } => panic!("expected SegmentPanic, got {other:?}"),
             }
+        }
+
+        /// The boundary's own blind spot, closed: the registered handler is
+        /// EMBEDDER code invoked outside the per-presentation
+        /// `catch_unwind` (a segment-panic report is delivered from the
+        /// boundary's `Err` arm, after it returned) — an uncontained
+        /// handler panic reopened the exact process-fatal path this
+        /// boundary exists to close. The delivery is now contained
+        /// per call: siblings keep framing in the same pump, and the
+        /// handler stays registered for later reports.
+        #[test]
+        fn a_panicking_failure_handler_does_not_escape_the_frame_boundary() {
+            use std::sync::atomic::AtomicU32;
+
+            let mut realm = UiRealm::for_test();
+            let b_id = realm.install_second_presentation_for_test();
+            realm
+                .attach_root_widget(&SizedBox::new(10.0, 10.0))
+                .expect("A attaches");
+            realm
+                .attach_root_widget_to_for_test(b_id, &SizedBox::new(20.0, 20.0))
+                .expect("B attaches");
+
+            let handler_calls = Arc::new(AtomicU32::new(0));
+            let calls = Arc::clone(&handler_calls);
+            realm.set_frame_failure_handler(Some(FrameFailureHandler::new(move |_report| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                panic!("FrameFailureHandler — intentional embedder-bug test panic");
+            })));
+
+            let mut backend = RecordingBackend::new();
+            assert!(
+                realm.render_frame_entered(&mut backend),
+                "pump 1: both presentations frame cleanly"
+            );
+            let b_flushes_after_pump_1 = realm
+                .presentations
+                .get(b_id)
+                .expect("B installed")
+                .flush_count();
+
+            // A (primary, iterated FIRST) fails; B has real work, so this
+            // same pump proves B's segment still ran after both A's
+            // failure AND the handler's own panic during its delivery.
+            realm
+                .presentations
+                .primary()
+                .set_segment_probe(Some(Box::new(|| {
+                    panic!("segment probe — intentional test panic");
+                })));
+            realm.request_redraw();
+            realm.enter(|realm| {
+                let b = realm.presentations.get(b_id).expect("B installed");
+                b.pipeline().with_mut(|owner| {
+                    if let Some(root_id) = owner.root_id() {
+                        owner.mark_needs_paint(root_id);
+                    }
+                });
+            });
+
+            let outcome = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            });
+            let presented = outcome.expect(
+                "a panicking FrameFailureHandler must be contained at its delivery site, \
+                 not unwind out of the realm pump",
+            );
+            assert!(
+                presented,
+                "sibling B must still produce and present despite the handler's panic"
+            );
+            assert_eq!(
+                realm
+                    .presentations
+                    .get(b_id)
+                    .expect("B installed")
+                    .flush_count(),
+                b_flushes_after_pump_1 + 1,
+                "B's segment must run despite A's failure and the handler panic"
+            );
+            assert_eq!(
+                handler_calls.load(Ordering::Relaxed),
+                1,
+                "exactly one delivery for one failure — never a retry loop"
+            );
+
+            // The handler stays registered: the next failure is delivered
+            // (and contained) again.
+            realm.request_redraw();
+            let _ = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("second failing pump must also be contained");
+            assert_eq!(
+                handler_calls.load(Ordering::Relaxed),
+                2,
+                "a panicking handler stays registered and receives later reports"
+            );
+        }
+
+        /// The pipeline-report variant of the handler blind spot: that
+        /// delivery happens INSIDE the segment (from
+        /// `draw_frame_for_presentation`'s `Err` arm), so before the fix
+        /// the boundary caught the HANDLER's panic as a segment panic and
+        /// re-reported it — invoking the same panicking handler a second
+        /// time, now outside any catch. Containment at the delivery site
+        /// means exactly one delivery, of the Pipeline kind, per failure.
+        #[test]
+        fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported() {
+            let realm = UiRealm::for_test();
+            let delivered = Arc::new(StdMutex::new(Vec::new()));
+            let sink = Arc::clone(&delivered);
+            realm.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+                sink.lock().expect("mutex").push(match &report.kind {
+                    FrameFailureKind::SegmentPanic { .. } => "segment_panic",
+                    FrameFailureKind::Pipeline { .. } => "pipeline",
+                });
+                panic!("FrameFailureHandler — intentional embedder-bug test panic");
+            })));
+            realm.pipeline_for_test().with_mut(|owner| {
+                let root_id = owner.insert(Box::new(PanicOnLayoutForReportBox)
+                    as Box<
+                        dyn flui_rendering::traits::RenderObject<
+                                flui_rendering::protocol::BoxProtocol,
+                            >,
+                    >);
+                owner.set_root_id(Some(root_id));
+            });
+
+            let mut backend = RecordingBackend::new();
+            let presented = with_quiet_panics(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    realm.render_frame_entered(&mut backend)
+                }))
+            })
+            .expect("a handler panic during a pipeline report must be contained");
+            assert!(!presented);
+            assert_eq!(
+                delivered.lock().expect("mutex").as_slice(),
+                ["pipeline"],
+                "one failure, one delivery, of the pipeline kind — the handler's own \
+                 panic must not be re-reported as a segment panic (which would invoke \
+                 the panicking handler a second time)"
+            );
         }
     }
 

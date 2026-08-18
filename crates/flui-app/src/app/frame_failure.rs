@@ -99,6 +99,14 @@ pub struct FrameFailureReport {
 /// re-entrancy-free: record/forward the report and return — do not call
 /// back into FLUI APIs (opening windows, attaching widgets) from inside
 /// the handler; the realm that produced the report is mid-frame.
+///
+/// A handler that itself panics is contained at the delivery site (its
+/// panic cannot re-enter the frame boundary or take down sibling
+/// presentations), logged at error level as an embedder bug, and — since
+/// the report was already fully traced before delivery — loses no
+/// diagnostics. Delivery is one call per report, never a retry loop, and
+/// the handler stays registered: a transiently-broken handler resumes
+/// receiving reports once it stops panicking.
 #[derive(Clone)]
 pub struct FrameFailureHandler(std::sync::Arc<dyn Fn(&FrameFailureReport) + Send + Sync>);
 
