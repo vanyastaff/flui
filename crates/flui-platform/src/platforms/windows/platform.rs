@@ -10,22 +10,25 @@ use windows::{
     Win32::{
         Foundation::{ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{BeginPaint, EndPaint, HBRUSH, PAINTSTRUCT},
-        System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
+        System::{
+            LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
+            Threading::GetCurrentThreadId,
+        },
         UI::{
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
                 CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-                DispatchMessageW, GWLP_USERDATA, GetForegroundWindow, GetMessageW,
-                GetWindowLongPtrW, HICON, HTCLIENT, HWND_MESSAGE, IDC_ARROW, MSG, PM_REMOVE,
-                PeekMessageW, PostQuitMessage, RegisterClassW, SW_SHOWNORMAL, SWP_NOACTIVATE,
-                SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_CREATE,
-                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP,
-                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-                WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONDOWN,
-                WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN,
-                WM_SYSKEYUP, WNDCLASSW,
+                DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetForegroundWindow, GetMessageW,
+                GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE,
+                IDC_ARROW, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassW,
+                SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+                SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+                WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+                WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -117,6 +120,117 @@ impl WindowContext {
     }
 }
 
+/// Whether the live window behind `hwnd` is of this backend's registered
+/// window class — the only class whose `GWLP_USERDATA` slot holds a
+/// [`WindowContext`] pointer. Guards against OS handle recycling: a dead
+/// handle value can be reissued for an unrelated window whose user-data
+/// slot follows someone else's protocol entirely.
+fn hwnd_names_flui_class(hwnd: HWND) -> bool {
+    let mut name = [0_u16; 256];
+    // SAFETY: `GetClassNameW` writes at most `name.len()` UTF-16 units
+    // (including the terminator) into the live stack buffer the slice
+    // points at, and returns the count written (0 on failure — a dead or
+    // foreign handle simply reports "not our class" here).
+    // `WINDOW_CLASS_NAME.as_wide()` walks our own `w!(..)` static literal,
+    // which is NUL-terminated by construction.
+    unsafe {
+        let len = GetClassNameW(hwnd, &mut name);
+        if len <= 0 {
+            return false;
+        }
+        name[..len as usize] == *WINDOW_CLASS_NAME.as_wide()
+    }
+}
+
+/// Runs `f` against the [`WindowContext`] stored in `hwnd`'s `GWLP_USERDATA`
+/// slot — if, and only if, dereferencing it is sound for the calling thread.
+/// Returns `None` (after tracing why) whenever it is not; callers fall back
+/// to a safe default instead of touching the slot.
+///
+/// This is the gate that discharges the HWND thread-affinity obligation on
+/// `WindowsWindow`'s `Send`/`Sync` impls: the context box is freed exactly
+/// once, by `WM_DESTROY` on the window's owning thread, so a dereference is
+/// sound only when made **on that same thread** (where it is serialized with
+/// the free by same-thread message dispatch) against a live window of our
+/// own class with a non-null slot. Every decision is delegated to the pure,
+/// Linux-tested rules in [`crate::shared::hwnd_affinity`]; this shell only
+/// performs the OS queries.
+///
+/// `f` must not retrieve queued messages, and must not reach
+/// `DestroyWindow` for this same window — directly or through a dispatched
+/// callback — while the reference is live: `WM_DESTROY` dispatched inside
+/// `f` would free the context under it. This is the same discipline
+/// `window_proc`'s own arms already rely on when they hold the context
+/// across callback dispatch; a callback that closes its own window
+/// mid-dispatch is the documented residual (same-thread reentrancy)
+/// exposure, unchanged by this gate, which closes the *cross-thread* race.
+pub(super) fn with_window_context<R>(
+    hwnd: HWND,
+    op: &'static str,
+    f: impl FnOnce(&WindowContext) -> R,
+) -> Option<R> {
+    use crate::shared::hwnd_affinity::{UserDataVerdict, classify_user_data_access};
+
+    // SAFETY: `GetWindowThreadProcessId(hwnd, None)` takes an optional out
+    // pointer (`None` — the process id is not needed) and returns 0 for a
+    // dead handle; `GetCurrentThreadId` takes no arguments;
+    // `GetWindowLongPtrW` reads a pointer-sized value with no dereference.
+    // None of these calls pump this thread's message queue.
+    let (owner_thread, current_thread, slot) = unsafe {
+        (
+            GetWindowThreadProcessId(hwnd, None),
+            GetCurrentThreadId(),
+            GetWindowLongPtrW(hwnd, GWLP_USERDATA),
+        )
+    };
+
+    match classify_user_data_access(
+        owner_thread,
+        current_thread,
+        hwnd_names_flui_class(hwnd),
+        slot,
+    ) {
+        UserDataVerdict::Deref => {
+            // SAFETY: the verdict established that this thread owns the
+            // window (owner == current, both live), the window is of our
+            // class (so the non-null slot value is the `Box::into_raw`
+            // pointer `WindowsWindow::new` installed, not a foreign
+            // protocol's), and the slot is non-null (so `WM_DESTROY` has
+            // not cleared+freed it). The only path that frees the box is
+            // `WM_DESTROY`, dispatched on this same thread — and neither
+            // the queries above nor `f` (per this function's contract)
+            // dispatch messages, so the free cannot interleave between the
+            // slot read and the last use of the reference, which is
+            // confined to the closure call below.
+            let context = unsafe { &*(slot as *mut WindowContext) };
+            Some(f(context))
+        }
+        UserDataVerdict::Refuse(reason) => {
+            tracing::debug!(
+                op,
+                hwnd = ?hwnd,
+                ?reason,
+                "refusing to touch this window's native context"
+            );
+            None
+        }
+    }
+}
+
+/// Routes a teardown request (`close()`, last `Drop`) for `hwnd` by thread
+/// identity: `DestroyWindow` directly on the owning thread, `PostMessageW
+/// (WM_CLOSE)` from any other ("a thread cannot use `DestroyWindow` to
+/// destroy a window created by a different thread" — MSDN), nothing at all
+/// for a dead handle. Pure rule in [`crate::shared::hwnd_affinity`]; this
+/// shell only queries the two thread ids.
+pub(super) fn teardown_route(hwnd: HWND) -> crate::shared::hwnd_affinity::TeardownRoute {
+    // SAFETY: see the identical queries in `with_window_context` — no
+    // pointers dereferenced, no messages pumped.
+    let (owner_thread, current_thread) =
+        unsafe { (GetWindowThreadProcessId(hwnd, None), GetCurrentThreadId()) };
+    crate::shared::hwnd_affinity::route_teardown(owner_thread, current_thread)
+}
+
 /// Windows platform state
 pub struct WindowsPlatform {
     /// Message-only window for platform messages
@@ -152,8 +266,14 @@ pub struct WindowsPlatform {
 // belongs to the creating thread, and `DestroyWindow` must run there), and that
 // the struct is itself just a handle. Sending the struct is sound because the
 // address alone aliases nothing; any Win32 call made through it still owes the
-// thread-affinity obligation, which these impls do not discharge. See the
-// event-loop affinity gap in `docs/audits/2026-07-25-upgrade-pack-audit.md`.
+// thread-affinity obligation. The soundness-relevant slice of that obligation
+// — dereferencing per-window `GWLP_USERDATA` contexts, and `DestroyWindow` —
+// is discharged by the `with_window_context`/`teardown_route` gates above
+// (see `WindowsWindow`'s `Send`/`Sync` docs); the remaining affine calls here
+// (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
+// rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
+// — see the event-loop affinity gap in
+// `docs/audits/2026-07-25-upgrade-pack-audit.md`.
 unsafe impl Send for WindowsPlatform {}
 // SAFETY: as for `Send` — `&WindowsPlatform` grants no more than shared access
 // to already-synchronized members plus a never-dereferenced address.
@@ -355,33 +475,72 @@ impl WindowsPlatform {
         }
     }
 
-    /// Main window procedure for all FLUI windows
+    /// Main window procedure for all FLUI windows: a panic boundary around
+    /// [`Self::window_proc_body`], which holds the actual message handling.
+    ///
+    /// The body dispatches framework-supplied callbacks (`ctx.callbacks.*`,
+    /// `ctx.dispatch_event`) that can panic. A panic must not unwind across
+    /// this `extern "system"` frame: unwinding across a non-unwind ABI
+    /// boundary aborts the process (Rust Reference, *Panic* chapter,
+    /// "unwinding across FFI boundaries"; undefined behavior before Rust
+    /// 1.81 made the abort guaranteed) — and that language-imposed abort
+    /// reports nothing through this framework's diagnostics. So the panic
+    /// is caught here, its payload logged via `tracing`, and the process
+    /// terminated deliberately with the same outcome. Deliberately NOT
+    /// swallowed-and-continued (`DefWindowProcW` as a fallback answer): a
+    /// panic mid-`WM_DESTROY` or mid-dispatch leaves framework state torn,
+    /// and pumping further messages over torn state converts one crash into
+    /// arbitrary later misbehavior — per `docs/PANIC-POLICY.md`, a panic is
+    /// a bug report, never control flow.
     ///
     /// # Safety
     ///
     /// Called by Win32 as a `WNDPROC` for windows of `WINDOW_CLASS_NAME`,
-    /// registered as this exact function in `register_window_class`. Win32
-    /// guarantees `hwnd`/`msg`/`wparam`/`lparam` are well-formed for the
-    /// message being delivered, and always dispatches on the thread that
-    /// owns the window's message queue — the `GWLP_USERDATA` read below does
-    /// not race `WM_DESTROY`'s clear+free precisely because both run here,
-    /// serialized by that same-thread dispatch guarantee.
-    ///
-    /// Known gap (not fixed by this comment, not UB — flagged for the
-    /// audit): none of the callback dispatches below (`ctx.callbacks.*`,
-    /// `ctx.dispatch_event`) are wrapped in `catch_unwind`. A panic inside a
-    /// framework-supplied callback unwinds into this `extern "system"`
-    /// frame; stable Rust aborts the process rather than invoking UB when
-    /// that happens (FFI boundaries are implicitly `nounwind`), but that is
-    /// still whole-process termination from a single window's callback,
-    /// unlike the `winit` backend's `window_proc`-equivalent path, which
-    /// does guard its callback boundary with `catch_unwind`.
+    /// registered as this exact function in `register_window_class`; that
+    /// provenance is exactly what [`Self::window_proc_body`]'s own `# Safety`
+    /// contract requires, so forwarding the arguments verbatim discharges it.
     unsafe extern "system" fn window_proc(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        // `AssertUnwindSafe` is sound here: on `Err` the process aborts
+        // before any code can observe whatever state the unwind tore.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: arguments forwarded verbatim from Win32's dispatch of
+            // this registered `WNDPROC` — see `# Safety` above.
+            unsafe { Self::window_proc_body(hwnd, msg, wparam, lparam) }
+        }));
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => {
+                tracing::error!(
+                    msg,
+                    hwnd = ?hwnd,
+                    panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+                    "panic in a window-procedure callback; aborting — it must not \
+                     unwind across the extern \"system\" boundary, and the framework \
+                     state behind this message may be torn"
+                );
+                std::process::abort();
+            }
+        }
+    }
+
+    /// The message handling behind [`Self::window_proc`]. Every dispatch of
+    /// user callbacks stays inside that caller's panic boundary.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called with arguments Win32 delivered to this class's
+    /// `WNDPROC` for the message being handled — Win32 guarantees
+    /// `hwnd`/`msg`/`wparam`/`lparam` are well-formed for that message, and
+    /// always dispatches on the thread that owns the window's message queue,
+    /// so the `GWLP_USERDATA` read below does not race `WM_DESTROY`'s
+    /// clear+free precisely because both run here, serialized by that
+    /// same-thread dispatch guarantee.
+    unsafe fn window_proc_body(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         // SAFETY: see the `# Safety` section above for the `GWLP_USERDATA`
         // contract this read relies on. The rest of this single `unsafe`
         // block covers every Win32 call in the `match` below: `GetWindowLongPtrW`/

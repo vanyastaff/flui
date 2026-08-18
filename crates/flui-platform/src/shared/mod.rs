@@ -13,8 +13,10 @@
 pub(crate) mod accessibility_bridge;
 pub mod gestures;
 mod handlers;
+pub mod hwnd_affinity;
 pub mod keys;
 pub mod keys_macos;
+pub mod panic_boundary;
 pub mod scroll;
 
 pub use handlers::{PlatformHandlers, WindowCallbacks};
