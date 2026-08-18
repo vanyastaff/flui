@@ -15,14 +15,13 @@
 //! assembly stays enabled for the window's lifetime — the platform's shape,
 //! not an oversight.
 //!
-//! # Known gap: view focus state
+//! # View focus state
 //!
-//! [`MacosAccessibility::update_view_focus_state`] exists and forwards to
-//! the adapter, but no backend seam calls it yet — the AppKit backend has
-//! no per-window key-state delegate wired through to this capability.
-//! VoiceOver still queries the tree; what suffers until it is wired is
-//! focus-follows announcement fidelity when the window gains or loses key
-//! status.
+//! [`MacosAccessibility::update_view_focus_state`] is wired from the
+//! window's key-status delegate path (`handle_focus_gained` /
+//! `handle_focus_lost` in `window.rs`), so VoiceOver's notion of the
+//! focused view tracks the key window — load-bearing in any multi-window
+//! application.
 //!
 //! # Honesty note: type-checked, never executed
 //!
@@ -68,29 +67,63 @@ pub struct MacosAccessibility {
     shared: Arc<BridgeShared>,
     /// The adapter needs `&mut` to publish, and the capability is shared
     /// behind an `Arc`, so the mutability lives here rather than in the
-    /// trait.
-    adapter: Mutex<SubclassingAdapter>,
+    /// trait. `Option` because the adapter's lifetime is deliberately
+    /// shorter than the capability's: [`Self::shutdown`] (window teardown,
+    /// **before** the content view is released) or a same-thread [`Drop`]
+    /// takes it out, and every later call through a still-live `Arc` clone
+    /// is a guarded no-op instead of a dereference of a dead view.
+    adapter: Mutex<Option<SubclassingAdapter>>,
+    /// The thread that owns the subclass (the main thread, where the window
+    /// constructor runs) — the only thread allowed to run the adapter's
+    /// destructor, since unhooking dereferences the view.
+    owner_thread: std::thread::ThreadId,
 }
 
 // SAFETY, per field: `shared` is `Arc<BridgeShared>`, `Send + Sync` by
-// construction. The `Mutex<SubclassingAdapter>` serializes every touch of
-// the adapter, whose auto-trait opt-outs come from (a) the type-erased
-// handler boxes, filled here only with `Activation`/`Action` over
+// construction; `owner_thread` is a plain `ThreadId`. The
+// `Mutex<Option<SubclassingAdapter>>` serializes every touch of the
+// adapter, whose auto-trait opt-outs come from (a) the type-erased handler
+// boxes, filled here only with `Activation`/`Action` over
 // `Arc<BridgeShared>` — concrete `Send + Sync` types — and (b) the raw
-// NSView-adjacent subclass state, which is main-thread-AFFINE AppKit state
-// the same way `MacOSWindow`'s own `unsafe impl`s document: the
-// accessibility-protocol overrides run where AppKit delivers them (the
-// main thread), and `update_if_active` hands the update to AccessKit's
-// adapter, which serializes internally.
+// NSView-adjacent subclass state, which is main-thread-AFFINE AppKit
+// state: the accessibility-protocol overrides run where AppKit delivers
+// them (the main thread), and `update_if_active` hands the update to
+// AccessKit's adapter, which serializes internally.
 //
-// NOT claimed — the same gap `MacOSWindow` documents: dropping this value
-// unhooks the dynamic subclass, which AppKit wants done on the main
-// thread. The window owns this capability, so drop follows window
-// teardown; a teardown path that drops the last `Arc` elsewhere inherits
-// the identical, already-documented affinity obligation.
+// The remaining affinity + lifetime obligations — the destructor unhooks
+// the dynamic subclass, which dereferences the view and must happen on the
+// main thread while the view is alive — are ENFORCED, not merely
+// documented: the window's own teardown calls [`MacosAccessibility::shutdown`]
+// before releasing the view, and `Self::drop` runs the destructor only on
+// `owner_thread`, otherwise leaking (with a warning) rather than touching
+// AppKit state cross-thread. Safe code can therefore move or drop the last
+// `Arc` anywhere without reaching an unsound path.
 unsafe impl Send for MacosAccessibility {}
 // SAFETY: see `Send` above — all interior mutability is `Mutex`-guarded.
 unsafe impl Sync for MacosAccessibility {}
+
+impl Drop for MacosAccessibility {
+    fn drop(&mut self) {
+        let Some(adapter) = self.adapter.get_mut().take() else {
+            return;
+        };
+        if std::thread::current().id() == self.owner_thread {
+            drop(adapter);
+        } else {
+            // Unhooking the dynamic subclass dereferences the view and
+            // must happen on the main thread; leaking the hook is safe
+            // (the view is on its way down with its window) and sound, so
+            // it is the only acceptable fallback. Reaching here at all
+            // means the window's own teardown (which calls `shutdown`
+            // first) was bypassed.
+            tracing::warn!(
+                "leaking an NSAccessibility subclass adapter dropped off the \
+                 main thread (unhooking would touch AppKit state cross-thread)"
+            );
+            std::mem::forget(adapter);
+        }
+    }
+}
 
 impl MacosAccessibility {
     /// Subclass `view` (a live `NSView*`) and answer VoiceOver for it.
@@ -118,18 +151,32 @@ impl MacosAccessibility {
 
         Self {
             shared,
-            adapter: Mutex::new(adapter),
+            adapter: Mutex::new(Some(adapter)),
+            owner_thread: std::thread::current().id(),
         }
+    }
+
+    /// Unhook and drop the adapter now, on the caller's (main) thread —
+    /// the deterministic half of teardown, called by the window's own
+    /// `Drop` **before** it releases the window (and with it the content
+    /// view the subclass dereferences on unhook). Every later call through
+    /// a still-live capability `Arc` is a no-op. Idempotent.
+    pub(crate) fn shutdown(&self) {
+        let adapter = self.adapter.lock().take();
+        drop(adapter);
     }
 
     /// Tell VoiceOver whether the subclassed view is in the key window.
     ///
-    /// Not yet called from any backend seam — see the module's known-gap
-    /// note. Kept public so the wiring lands as a one-line delegate call.
+    /// Called from the window's `windowDidBecomeKey:` /
+    /// `windowDidResignKey:` delegate path (`handle_focus_gained` /
+    /// `handle_focus_lost`), on the main thread.
     pub fn update_view_focus_state(&self, is_focused: bool) {
         let events = {
             let mut adapter = self.adapter.lock();
-            adapter.update_view_focus_state(is_focused)
+            adapter
+                .as_mut()
+                .and_then(|adapter| adapter.update_view_focus_state(is_focused))
         };
         if let Some(events) = events {
             events.raise();
@@ -152,10 +199,13 @@ impl PlatformAccessibility for MacosAccessibility {
         self.shared.retain_if_self_contained(&update);
         // AccessKit's contract: `QueuedEvents` are raised OUTSIDE the
         // adapter lock, because NSAccessibility notification handlers can
-        // re-enter.
+        // re-enter. A shut-down capability (adapter taken by teardown)
+        // drops the update instead — see the `adapter` field doc.
         let events = {
             let mut adapter = self.adapter.lock();
-            adapter.update_if_active(move || update)
+            adapter
+                .as_mut()
+                .and_then(|adapter| adapter.update_if_active(move || update))
         };
         if let Some(events) = events {
             events.raise();

@@ -1849,6 +1849,13 @@ impl Drop for WindowsWindow {
         if Arc::strong_count(&self.state) == 1 {
             tracing::debug!("Destroying window HWND {:?}", self.hwnd);
 
+            // Unhook the UIA subclass BEFORE destroying the window — Win32
+            // wants subclasses removed while the window still exists, and
+            // this wrapper's drop is the owner-thread teardown path. Any
+            // capability `Arc` still held elsewhere degrades to a no-op.
+            #[cfg(feature = "a11y")]
+            self.accessibility.shutdown();
+
             // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
             // `is_invalid()` guard skips the call for a handle that was
             // never successfully created, and `WM_DESTROY` (handled in

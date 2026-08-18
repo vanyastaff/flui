@@ -589,6 +589,17 @@ impl Drop for MacOSWindow {
         if Arc::strong_count(&self.state) == 1 {
             tracing::debug!("Closing NSWindow {:p}", self.ns_window);
 
+            // Unhook the NSAccessibility subclass BEFORE releasing the
+            // window: unhooking dereferences the content view, which dies
+            // with the window's last retain below. This runs on the main
+            // thread (AppKit teardown); any capability `Arc` still held
+            // elsewhere degrades to a no-op afterwards, and the wrapper's
+            // own later drop finds nothing left to unhook.
+            #[cfg(feature = "a11y")]
+            if let Some(bridge) = self.accessibility.get() {
+                bridge.shutdown();
+            }
+
             // Remove from windows map
             let window_id = self.ns_window as u64;
             self.windows_map.lock().remove(&window_id);
@@ -1355,12 +1366,22 @@ impl MacOSWindow {
     /// Handle focus gained event
     fn handle_focus_gained(&self) {
         self.callbacks.dispatch_active_status_change(true);
+        // Key-window status is what VoiceOver treats as view focus; the
+        // delegate delivers this on the main thread.
+        #[cfg(feature = "a11y")]
+        if let Some(bridge) = self.accessibility.get() {
+            bridge.update_view_focus_state(true);
+        }
         tracing::debug!("Window gained focus");
     }
 
     /// Handle focus lost event
     fn handle_focus_lost(&self) {
         self.callbacks.dispatch_active_status_change(false);
+        #[cfg(feature = "a11y")]
+        if let Some(bridge) = self.accessibility.get() {
+            bridge.update_view_focus_state(false);
+        }
         tracing::debug!("Window lost focus");
     }
 

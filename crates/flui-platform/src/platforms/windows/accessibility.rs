@@ -64,30 +64,59 @@ pub struct WindowsAccessibility {
     shared: Arc<BridgeShared>,
     /// The adapter needs `&mut` to publish, and the capability is shared
     /// behind an `Arc`, so the mutability lives here rather than in the
-    /// trait.
-    adapter: Mutex<SubclassingAdapter>,
+    /// trait. `Option` because the adapter's lifetime is deliberately
+    /// shorter than the capability's: [`Self::shutdown`] (window teardown)
+    /// or a same-thread [`Drop`] takes it out, and every later call through
+    /// a still-live `Arc` clone is a guarded no-op instead of a touch of
+    /// torn-down subclass state.
+    adapter: Mutex<Option<SubclassingAdapter>>,
+    /// The thread that owns the subclass hook (the window's creating
+    /// thread) — the only thread allowed to run the adapter's destructor.
+    owner_thread: std::thread::ThreadId,
 }
 
 // SAFETY, per field: `shared` is `Arc<BridgeShared>`, itself `Send + Sync`
-// by construction (atomics + `Mutex`es over `Send + Sync` payloads). The
-// `Mutex<SubclassingAdapter>` serializes every touch of the adapter, whose
-// auto-trait opt-outs come from (a) the type-erased handler boxes, which
-// this module only ever fills with `Activation`/`Action` over
-// `Arc<BridgeShared>` — concrete `Send + Sync` types — and (b) the raw
-// HWND-adjacent subclass state, which is thread-AFFINE Win32 state the
-// same way `WindowsWindow`'s own `unsafe impl`s document: the subclass
-// hook itself only runs on the window's owning thread (inside its message
-// loop), and `update_if_active` delegates to the inner UIA adapter, which
-// AccessKit documents as callable from any thread.
+// by construction (atomics + `Mutex`es over `Send + Sync` payloads);
+// `owner_thread` is a plain `ThreadId`. The `Mutex<Option<SubclassingAdapter>>`
+// serializes every touch of the adapter, whose auto-trait opt-outs come
+// from (a) the type-erased handler boxes, which this module only ever
+// fills with `Activation`/`Action` over `Arc<BridgeShared>` — concrete
+// `Send + Sync` types — and (b) the raw HWND-adjacent subclass state,
+// which is thread-AFFINE Win32 state: the hook itself only runs on the
+// window's owning thread (inside its message loop), and `update_if_active`
+// delegates to the inner UIA adapter, which AccessKit documents as
+// callable from any thread.
 //
-// NOT claimed — the same gap `WindowsWindow` documents: dropping this
-// value unhooks the subclass, which Win32 wants done on the owning
-// thread. The window owns this capability, so drop follows window
-// teardown; a teardown path that drops the last `Arc` on a foreign thread
-// inherits the identical, already-documented affinity obligation.
+// The remaining affinity obligation — the destructor unhooks the subclass,
+// which Win32 requires on the owning thread — is ENFORCED, not merely
+// documented: `Self::drop` runs the adapter's destructor only when the
+// current thread is `owner_thread`, and otherwise leaks it (with a warning)
+// rather than unhooking cross-thread. Safe code can therefore move or drop
+// the last `Arc` anywhere without reaching an unsound path.
 unsafe impl Send for WindowsAccessibility {}
 // SAFETY: see `Send` above — all interior mutability is `Mutex`-guarded.
 unsafe impl Sync for WindowsAccessibility {}
+
+impl Drop for WindowsAccessibility {
+    fn drop(&mut self) {
+        let Some(adapter) = self.adapter.get_mut().take() else {
+            return;
+        };
+        if std::thread::current().id() == self.owner_thread {
+            drop(adapter);
+        } else {
+            // Unhooking a Win32 subclass from a foreign thread races the
+            // owner thread's message dispatch; leaking the hook is safe
+            // (the window is on its way down with it) and sound, so it is
+            // the only acceptable fallback.
+            tracing::warn!(
+                "leaking a UIA subclass adapter dropped off its owner thread \
+                 (unhooking cross-thread would race message dispatch)"
+            );
+            std::mem::forget(adapter);
+        }
+    }
+}
 
 impl WindowsAccessibility {
     /// Subclass `hwnd` and answer UIA clients for it.
@@ -107,8 +136,19 @@ impl WindowsAccessibility {
 
         Self {
             shared,
-            adapter: Mutex::new(adapter),
+            adapter: Mutex::new(Some(adapter)),
+            owner_thread: std::thread::current().id(),
         }
+    }
+
+    /// Unhook and drop the adapter now, on the caller's (owner) thread —
+    /// the deterministic half of teardown, called by the window's own
+    /// `Drop` **before** it destroys the HWND, so the subclass is removed
+    /// while the window still exists. Every later call through a still-live
+    /// capability `Arc` is a no-op. Idempotent.
+    pub(crate) fn shutdown(&self) {
+        let adapter = self.adapter.lock().take();
+        drop(adapter);
     }
 }
 
@@ -127,10 +167,14 @@ impl PlatformAccessibility for WindowsAccessibility {
         self.shared.retain_if_self_contained(&update);
         // AccessKit's contract: `QueuedEvents` must be raised OUTSIDE any
         // lock the tree state lives behind, because UIA event handlers can
-        // re-enter. Hence the explicit guard drop before `raise`.
+        // re-enter. Hence the explicit guard drop before `raise`. A
+        // shut-down capability (adapter taken by teardown) drops the update
+        // instead — see the `adapter` field doc.
         let events = {
             let mut adapter = self.adapter.lock();
-            adapter.update_if_active(move || update)
+            adapter
+                .as_mut()
+                .and_then(|adapter| adapter.update_if_active(move || update))
         };
         if let Some(events) = events {
             events.raise();
