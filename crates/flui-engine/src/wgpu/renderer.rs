@@ -1662,6 +1662,21 @@ impl Renderer {
 
         output.present();
 
+        // Dedicated target so a harness can count REAL per-frame GPU work
+        // from the log (`RUST_LOG` filter: `flui.gpu=trace`): this line is
+        // reached only after the frame's encoders were submitted to the
+        // queue and the swapchain texture presented — the live oracle for
+        // hidden-surface gating ("an occluded window issues zero GPU
+        // submissions"), which `tools/live-smoke`'s occlusion check counts.
+        // The `event` field is the machine-oriented marker that check
+        // matches on — keep it stable; the message text is for humans and
+        // may be reworded freely.
+        tracing::trace!(
+            target: "flui.gpu",
+            event = "present_submitted",
+            "surface frame submitted and presented"
+        );
+
         // Signal end of frame to the profiler and harvest the oldest completed
         // result (if the pipeline has warmed up). Both calls are no-ops when
         // `gpu_profiler` is `None`.

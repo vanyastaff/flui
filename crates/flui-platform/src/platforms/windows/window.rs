@@ -262,6 +262,14 @@ impl WindowsWindow {
             let device_width = logical_to_device(width as f32, scale_factor);
             let device_height = logical_to_device(height as f32, scale_factor);
             let initial_size = Size::new(DevicePixels(device_width), DevicePixels(device_height));
+            // Seed the visibility edge filter from the window's ACTUAL
+            // style, not a default: an undecorated window is created
+            // `WS_POPUP | WS_VISIBLE` (already visible before this context
+            // installs), so the creation-time `ShowWindow(SW_SHOW)` below
+            // never delivers a `WM_SHOWWINDOW` edge for it — a `false`
+            // seed would swallow that window's first minimize. See
+            // `shared::visibility::win32_initial_visibility`'s doc.
+            let created_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
             let context = Box::new(WindowContext {
                 window_id,
                 handlers: handlers.clone(),
@@ -274,6 +282,9 @@ impl WindowsWindow {
                 modifiers: std::cell::Cell::new(keyboard_types::Modifiers::empty()),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
+                last_visibility_dispatched: std::cell::Cell::new(
+                    crate::shared::visibility::win32_initial_visibility(created_style),
+                ),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
             });
