@@ -58,10 +58,10 @@ use generated::morphology;
 /// - `content_bounds` — the AABB of the actual content in **full-frame** physical pixels;
 ///   rebased to fb-local UV by subtracting `fb_origin` before dividing by `fb_dim`.
 /// - `fb_origin` — integer-aligned top-left of the offscreen frame in device pixels.
-///   Used to rebase `content_bounds` to fb-local UV (non-negotiable #3).
+///   Used to rebase `content_bounds` to fb-local UV.
 /// - `fb_dim` — integer dimensions `(width, height)` of the source texture and all
 ///   intermediate textures. The shader's `texture_size` uniform is set to `fb_dim`
-///   (non-negotiable #2: denominator is integer fb_dim, not viewport_size).
+///   (the denominator is integer fb_dim, not viewport_size).
 /// - `surface_format` — texture format of the render target.
 /// - `pipeline` — the morphology pipeline (render pipeline + generated bind-group helpers).
 /// - `resources` — mutable GPU resource manager (texture pool).
@@ -93,7 +93,7 @@ pub(crate) fn apply_morphology(
     let (fb_w, fb_h) = fb_dim;
     let (fb_origin_x, fb_origin_y) = fb_origin;
 
-    // Rebase the content AABB to fb-local UV coordinates (non-negotiable #3).
+    // Rebase the content AABB to fb-local UV coordinates.
     //
     // The source texture is fb_dim-sized with pixel (0,0) = fb_origin in device space.
     // The H-pass decal guard compares sample UV against content_rect_uv; without
@@ -124,7 +124,7 @@ pub(crate) fn apply_morphology(
 
     // ── H pass: source_tex → h_tex ──────────────────────────────────────────
     //
-    // texture_size = fb_dim (non-negotiable #2): the shader uses texture_size to
+    // texture_size = fb_dim: the shader uses texture_size to
     // convert kernel offsets to UV deltas. Using viewport_size for a smaller
     // fb_dim texture over-shrinks the UV step → effectively widens the kernel.
     #[allow(

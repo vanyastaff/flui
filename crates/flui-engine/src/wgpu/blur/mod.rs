@@ -73,11 +73,11 @@ use generated::blur;
 ///   to fb-local UV by subtracting `fb_origin` before dividing by `fb_dim`.
 /// - `fb_origin` — integer-aligned top-left of the offscreen frame in device pixels
 ///   (computed in `painter::layer`). Used to rebase `content_bounds` to fb-local UV
-///   (non-negotiable #3: `content_rect_uv = (content_bounds - fb_origin) / fb_dim`).
+///   (`content_rect_uv = (content_bounds - fb_origin) / fb_dim`).
 /// - `fb_dim` — integer dimensions `(width, height)` of the source texture and all
 ///   intermediate textures acquired here. The blur shader's `texture_size` uniform
-///   MUST be `fb_dim`, not `viewport_size` (non-negotiable #2: denominator is integer
-///   fb_dim to avoid the SSAA-tile-denominator bug class).
+///   MUST be `fb_dim`, not `viewport_size` (the denominator is integer fb_dim,
+///   avoiding the SSAA-tile-denominator bug class).
 /// - `surface_format` — texture format of the render target.
 /// - `pipeline` — the blur pipeline (render pipeline + generated bind-group helpers).
 /// - `resources` — mutable GPU resource manager (texture pool).
@@ -109,7 +109,7 @@ pub(crate) fn apply_blur(
     let (fb_w, fb_h) = fb_dim;
     let (fb_origin_x, fb_origin_y) = fb_origin;
 
-    // Rebase the content AABB to fb-local UV coordinates (non-negotiable #3).
+    // Rebase the content AABB to fb-local UV coordinates.
     //
     // The source texture is fb_dim-sized, with pixel (0,0) = fb_origin in device
     // space. The H-pass decal guard compares sample UV against content_rect_uv;
@@ -137,7 +137,7 @@ pub(crate) fn apply_blur(
 
     // ── H pass: source_tex → h_tex ──────────────────────────────────────────
     //
-    // texture_size = fb_dim, NOT viewport_size (non-negotiable #2):
+    // texture_size = fb_dim, NOT viewport_size:
     // The blur shader divides sample offsets by texture_size to get UV steps.
     // Using the full viewport size for a fb_dim-sized texture scales the kernel
     // offsets down by (fb/vp), effectively widening the blur to (sigma * vp/fb)

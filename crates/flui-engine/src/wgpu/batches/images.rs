@@ -15,7 +15,7 @@
 //! | `draw_image_repeat`, `draw_image_nine_slice` | `&mut TextureCache` (delegate to `draw_image`)    |
 //! | `draw_image_filtered`                        | `&mut TextureCache` (all branches CPU-recolor then delegate to `draw_image`) |
 //!
-//! # Advanced (dst-read) blend support (PR-5)
+//! # Advanced (dst-read) blend support
 //!
 //! `draw_image`, `draw_image_repeat`, `draw_image_nine_slice`, and
 //! `draw_image_filtered` accept a `blend_mode: flui_painting::BlendMode`
@@ -146,7 +146,7 @@ impl DrawBatcher {
     /// When `blend_mode.is_advanced()`, the current segment is sealed and the
     /// image is isolated into a `DrawItem::AdvancedShape` — `flush_advanced_layer`
     /// dst-reads the backdrop at replay time.  The SrcOver path is byte-identical
-    /// to pre-PR-5.
+    /// to what it was before advanced-blend support existed.
     ///
     /// Keys the cache on the image's `Arc` pointer identity (O(1), no hashing).
     /// This is safe for real images, whose allocation is content-stable for the
@@ -257,7 +257,7 @@ impl DrawBatcher {
                     return;
                 }
 
-                // ── SrcOver path (byte-identical to pre-PR-5) ─────────────────
+                // ── SrcOver path (unchanged by advanced-blend support) ────────
 
                 // Keep cached image draws in segment order for correct layer compositing.
                 // Capture the active scissor so flush_segment_cached_images can clip
@@ -315,13 +315,14 @@ impl DrawBatcher {
 
     /// Record a tiled image draw by delegating to `draw_image` for each tile.
     ///
-    /// **Advanced blend mode handling (PR-5):** when `blend_mode.is_advanced()`,
+    /// **Advanced blend mode handling:** when `blend_mode.is_advanced()`,
     /// ALL tiles are collected into ONE isolated `DrawSegment` and a single
     /// `DrawItem::AdvancedShape` is pushed.  Per-tile `AdvancedShape` would be
     /// incorrect: tile N would dst-read tile N−1's already-blended pixels instead
     /// of the original backdrop, producing wrong output for non-commutative modes.
     ///
-    /// The SrcOver delegation path is byte-identical to pre-PR-5.
+    /// The SrcOver delegation path is byte-identical to what it was before
+    /// advanced-blend support existed.
     #[allow(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
@@ -478,7 +479,7 @@ impl DrawBatcher {
             return;
         }
 
-        // ── SrcOver path (byte-identical to pre-PR-5) ─────────────────────────
+        // ── SrcOver path (unchanged by advanced-blend support) ────────────────
 
         match repeat {
             ImageRepeat::NoRepeat => {
@@ -560,7 +561,7 @@ impl DrawBatcher {
     /// Record a nine-slice image draw by extracting and delegating each of the
     /// nine sub-image regions to `draw_image`.
     ///
-    /// **Advanced blend mode handling (PR-5):** when `blend_mode.is_advanced()`,
+    /// **Advanced blend mode handling:** when `blend_mode.is_advanced()`,
     /// ALL nine regions are collected into ONE isolated `DrawSegment` and a
     /// single `DrawItem::AdvancedShape` is pushed — same rationale as
     /// `draw_image_repeat` (per-region AdvancedShapes would read back the
@@ -838,7 +839,7 @@ impl DrawBatcher {
             return;
         }
 
-        // ── SrcOver path (byte-identical to pre-PR-5) ─────────────────────────
+        // ── SrcOver path (unchanged by advanced-blend support) ────────────────
 
         for (sx, sy, sw, sh, dx, dy, dw, dh) in slices {
             if dw <= 0.0 || dh <= 0.0 || sw <= 0.0 || sh <= 0.0 {
@@ -866,7 +867,7 @@ impl DrawBatcher {
     /// same `cached_images` flush bucket as a plain image draw — correct
     /// z-order, scissor, and opacity for free.
     ///
-    /// # ColorFilter vs. Paint.blend_mode boundary (PR-5, condition 5)
+    /// # ColorFilter vs. Paint.blend_mode boundary
     ///
     /// These two blend modes are at different levels of the pipeline and must
     /// NOT be confused:
@@ -1097,7 +1098,7 @@ impl DrawBatcher {
     /// already extracted from any transform matrices at the trait-boundary caller.
     /// The batcher is glam-only; `Matrix4` must not appear on this side of the seam.
     ///
-    /// # Advanced (dst-read) blend handling (PR-5, condition 3)
+    /// # Advanced (dst-read) blend handling
     ///
     /// When `blend_mode.is_advanced()`, ALL sprites are collected into ONE isolated
     /// `DrawSegment` and a single `DrawItem::AdvancedShape` is pushed — the same
@@ -1108,7 +1109,8 @@ impl DrawBatcher {
     ///
     /// `device_bounds` for the `AdvancedShapeOp` is the union AABB of all
     /// sprite destination rects in device space.  The SrcOver path is the
-    /// existing per-sprite `cached_images` push (byte-identical to pre-PR-5).
+    /// existing per-sprite `cached_images` push (byte-identical to what it was
+    /// before advanced-blend support existed).
     #[allow(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \

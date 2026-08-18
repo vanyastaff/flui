@@ -362,7 +362,7 @@ impl WgpuPainter {
     /// Returns `(bounds, texture_width, texture_height)`.
     /// Return all `DrawItem::AdvancedShape` operations in the current draw order.
     ///
-    /// Used by routing unit tests (I1-I5, GI8) to assert that image/atlas advanced
+    /// Used by the image/atlas routing unit tests to assert that advanced
     /// blend draws produce exactly one `AdvancedShape` per call rather than zero
     /// (silent SrcOver fall-through) or more than one (per-tile leak).
     ///

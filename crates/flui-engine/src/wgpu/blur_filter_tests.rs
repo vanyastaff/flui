@@ -1001,7 +1001,7 @@ mod gpu_tests {
     /// With the pre-Task-6 full-viewport intermediate the pixel values are correct:
     /// the texel grid aligns with the device-pixel grid regardless of content position.
     /// The intermediate is `fb_dim`-sized and the content is rendered at
-    /// pixel `(0,0)` of the intermediate via a vertex pre-transform (non-negotiable #2).
+    /// pixel `(0,0)` of the intermediate via a vertex pre-transform.
     ///
     /// A wrong implementation that uses:
     /// - `grown.width()` (fractional float) as the vertex remap denominator instead of

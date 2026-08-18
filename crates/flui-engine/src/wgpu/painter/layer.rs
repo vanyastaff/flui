@@ -616,7 +616,7 @@ impl WgpuPainter {
 
                         // Compute the integer-aligned offscreen frame rectangle so BOTH
                         // composite arms (replay.rs + opacity_layer.rs nested Filter arm)
-                        // share one authoritative value and cannot drift (non-negotiable #4).
+                        // share one authoritative value and cannot drift.
                         let (fb_origin, fb_dim) = self.filter_fb_rect(grown_bounds);
 
                         tracing::trace!(

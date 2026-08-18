@@ -16,6 +16,16 @@
 //! | GI6 | SrcOver image byte-identity: advanced branch NOT taken; output deterministic |
 //! | GI7 | All 15 advanced modes × gradient + image: no-panic + non-zero-output witness |
 //! | GI8 | Atlas draw with Multiply: diverts to one AdvancedShape, GPU output non-zero and changed vs backdrop |
+//!
+//! ## Routing test inventory (device required, no pixel oracle — asserts draw-order routing)
+//!
+//! | # | Requirement |
+//! |---|-------------|
+//! | I1 | `draw_image_repeat` advanced: EXACTLY ONE `AdvancedShape` holding all tiles |
+//! | I2 | `draw_image_nine_slice` advanced: EXACTLY ONE `AdvancedShape` holding all nine regions |
+//! | I3 | `draw_atlas` advanced: EXACTLY ONE `AdvancedShape` holding all sprites |
+//! | I4 | `draw_image_repeat` SrcOver: no `AdvancedShape` produced |
+//! | I5 | `draw_atlas` SrcOver: no `AdvancedShape` produced |
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gpu_tests {
@@ -672,8 +682,8 @@ mod gpu_tests {
     ///   Tile-2 blends against X (the already-blended surface) → produces Y ≠ X.
     ///   The two halves of the surface would have different colors.
     ///
-    /// **Proves:** the single-`AdvancedShape` approach in `draw_image_repeat` (PR-5,
-    /// condition 3) is correct; per-tile AdvancedShapes have been rejected.
+    /// **Proves:** the single-`AdvancedShape` approach in `draw_image_repeat`
+    /// is correct; per-tile AdvancedShapes have been rejected.
     #[test]
     fn two_tile_repeat_both_tiles_blend_against_original_backdrop() {
         let (device, queue) = acquire_test_device_and_queue();
@@ -800,7 +810,7 @@ mod gpu_tests {
     /// Wrong (filter skipped): Screen(red, blue) — wrong.
     /// Wrong (GPU-blend skipped): SrcOver(green, blue) — wrong.
     ///
-    /// **Proves:** condition 5 (PR-5): filter bakes first (CPU), then `paint.blend_mode`
+    /// **Proves:** filter bakes first (CPU), then `paint.blend_mode`
     /// composites (GPU) — two independent operations, not entangled.
     #[test]
     fn color_filter_mode_then_paint_blend_mode_no_double_apply() {
@@ -903,12 +913,14 @@ mod gpu_tests {
 
     // ── GI5: SrcOver gradient byte-identity ──────────────────────────────────
 
-    /// GI5: A SrcOver gradient renders deterministically and is unperturbed by PR-5.
+    /// GI5: A SrcOver gradient renders deterministically and is unperturbed by
+    /// advanced-blend support.
     ///
     /// Two identical gradient draws on separate surfaces must produce identical
     /// pixel output.  The routing guarantee (SrcOver stays in the segment, does NOT
-    /// divert to AdvancedShape) is proven by unit tests G4.  Together they show
-    /// the SrcOver gradient path is byte-identical to pre-PR-5.
+    /// divert to AdvancedShape) is proven by the
+    /// `srcover_gradient_stays_in_main_segment` unit test.  Together they show
+    /// the SrcOver gradient path is unchanged by advanced-blend support.
     #[test]
     fn srcover_gradient_is_byte_identical_across_two_independent_draws() {
         use flui_painting::Shader;
@@ -964,14 +976,16 @@ mod gpu_tests {
             assert_eq!(
                 pixel_a, pixel_b,
                 "GI5: SrcOver gradient pixel {pixel_index}: {pixel_a:?} vs {pixel_b:?} — \
-                 must be byte-identical (PR-5 must not perturb SrcOver gradient path)"
+                 must be byte-identical (advanced-blend support must not perturb \
+                 the SrcOver gradient path)"
             );
         }
     }
 
     // ── GI6: SrcOver image byte-identity ─────────────────────────────────────
 
-    /// GI6: A SrcOver image draw renders deterministically and is unperturbed by PR-5.
+    /// GI6: A SrcOver image draw renders deterministically and is unperturbed by
+    /// advanced-blend support.
     ///
     /// Two identical image draws on separate surfaces must produce identical
     /// pixel output.  The routing guarantee (SrcOver goes to `cached_images` segment,
@@ -1012,7 +1026,8 @@ mod gpu_tests {
             assert_eq!(
                 pixel_a, pixel_b,
                 "GI6: SrcOver image pixel {pixel_index}: {pixel_a:?} vs {pixel_b:?} — \
-                 must be byte-identical (PR-5 must not perturb SrcOver image path)"
+                 must be byte-identical (advanced-blend support must not perturb \
+                 the SrcOver image path)"
             );
         }
     }
@@ -1128,8 +1143,8 @@ mod gpu_tests {
     /// `DrawItem::AdvancedShape` whose `segment.cached_images.len()` equals the tile
     /// count.  No sprites must appear in the main draw order as plain segments.
     ///
-    /// **Proves:** the single-AdvancedShape invariant for tiled images (PR-5,
-    /// condition 3) — the primary CI-runnable routing witness for the repeat path,
+    /// **Proves:** the single-AdvancedShape invariant for tiled images —
+    /// the primary CI-runnable routing witness for the repeat path,
     /// complementing the pixel-equality GPU test GI3.
     #[test]
     fn draw_image_repeat_advanced_produces_one_advanced_shape_with_all_tiles() {
@@ -1207,8 +1222,8 @@ mod gpu_tests {
     /// `DrawItem::AdvancedShape` whose `segment.cached_images.len()` equals the
     /// sprite count.
     ///
-    /// **Proves:** the single-AdvancedShape invariant for atlas draws (PR-5,
-    /// condition 3 — atlas was a silent MVP hole before this fix).
+    /// **Proves:** the single-AdvancedShape invariant for atlas draws
+    /// (atlas was a silent MVP hole before this fix).
     #[test]
     fn draw_atlas_advanced_produces_one_advanced_shape_with_all_sprites() {
         let (device, queue) = acquire_test_device_and_queue();
@@ -1252,7 +1267,8 @@ mod gpu_tests {
     // ── I4: draw_image_repeat SrcOver stays in normal segment ────────────────
 
     /// I4: `draw_image_repeat` with `SrcOver` must NOT produce any
-    /// `DrawItem::AdvancedShape`. The SrcOver path is unperturbed by PR-5.
+    /// `DrawItem::AdvancedShape`. The SrcOver path is unperturbed by
+    /// advanced-blend support.
     #[test]
     fn draw_image_repeat_srcover_produces_no_advanced_shape() {
         let (device, queue) = acquire_test_device_and_queue();
@@ -1283,7 +1299,7 @@ mod gpu_tests {
     // ── I5: draw_atlas SrcOver stays in normal segment ────────────────────────
 
     /// I5: `draw_atlas` with `SrcOver` must NOT produce any `DrawItem::AdvancedShape`.
-    /// The SrcOver atlas path is unperturbed by PR-5.
+    /// The SrcOver atlas path is unperturbed by advanced-blend support.
     #[test]
     fn draw_atlas_srcover_produces_no_advanced_shape() {
         let (device, queue) = acquire_test_device_and_queue();

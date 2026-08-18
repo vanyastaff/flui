@@ -146,7 +146,7 @@ impl GpuReplay {
     /// method rather than a parameterised version (rule-of-three: only 2 callers,
     /// scale-1 vs scale-2 diverge in the scissor factor).
     ///
-    /// ## Vertex pre-transform (non-negotiable #2)
+    /// ## Vertex pre-transform
     ///
     /// The shape shader computes `clip_x = (pos.x / vp_w) * 2 - 1` against the
     /// UNCHANGED shared viewport uniform `(vp_w, vp_h)`. We cannot hot-patch that
@@ -161,7 +161,7 @@ impl GpuReplay {
     /// Denominator MUST be integer `fb_dim`, NOT float `grown.width()` (SSAA-tile
     /// bug class: they differ by one floor/ceil ulp on fractional regions).
     ///
-    /// ## Scissor remap (non-negotiable #6, mirrors ssaa.rs:483-512 without ×2)
+    /// ## Scissor remap (mirrors ssaa.rs:483-512 without ×2)
     ///
     /// Full-frame scissors are rebased to `fb_origin` and clamped to `[0, fb_dim]`.
     /// Empty-intersection uses the sentinel `(fb_dim.x, fb_dim.y, 1, 1)` (wgpu
@@ -330,7 +330,7 @@ impl GpuReplay {
             // Pass dropped immediately — just clearing.
         }
 
-        // ── Vertex pre-transform (non-negotiable #2) ──────────────────────────
+        // ── Vertex pre-transform ──────────────────────────────────────────────
         //
         // Mirror ssaa.rs:443-461 with scale = vp / fb_dim (not vp / (tile * 2)):
         //   new_pos = (old_pos - fb_origin) * (vp / fb_dim_f32)
@@ -441,7 +441,7 @@ impl GpuReplay {
             (scale_x, scale_y),
         );
 
-        // ── Scissor remap: full-frame → fb-local (non-negotiable #6) ─────────
+        // ── Scissor remap: full-frame → fb-local ─────────────────────────────
         //
         // Mirror ssaa.rs:483-512 without the ×2 supersampling factor:
         //   1. Intersect full-frame scissor with [fb_origin, fb_origin+fb_dim].
@@ -765,7 +765,7 @@ impl GpuReplay {
                 // input segment is rendered to an isolated grown-bounds offscreen
                 // (`fb_dim` sized, not full-viewport), the pass chain is folded,
                 // and the result is composited onto the layer's offscreen_view at the
-                // integer-grid dst_rect with src_uv=[0,1] (non-negotiable #1).
+                // integer-grid dst_rect with full-texture src_uv = [0, 0, 1, 1].
                 //
                 // Deliberately no `_` arm: a new `Slice` variant must fail to
                 // compile here rather than be silently skipped during folding.
@@ -796,15 +796,15 @@ impl GpuReplay {
                         device,
                         encoder,
                     );
-                    // 3. Integer-grid composite (non-negotiable #1):
+                    // 3. Integer-grid composite:
                     //    dst_rect = Rect(fb_origin, fb_far); src_uv = [0, 0, 1, 1].
                     //
                     //    The intermediate is `fb_dim`-sized with the content starting
-                    //    at pixel (0,0) of the texture.  src_uv=[0,1] maps the whole
-                    //    fb texture onto dst_rect — a pixel-aligned 1:1 blit.
+                    //    at pixel (0,0) of the texture.  src_uv = [0, 0, 1, 1] maps the
+                    //    whole fb texture onto dst_rect — a pixel-aligned 1:1 blit.
                     //    Using the fractional `grown_bounds` as dst_rect over an
                     //    integer-origin texture would shift every pixel by
-                    //    frac(grown_left) (the composite-grid shift, risk #1).
+                    //    frac(grown_left) (the composite-grid shift).
                     let (fb_origin_x, fb_origin_y) = op.fb_origin;
                     let (fb_w, fb_h) = op.fb_dim;
                     #[allow(
@@ -1264,10 +1264,10 @@ fn fold_layer_filter_chain(
 ///   `content_bounds` return the neutral element rather than the clamped edge texel).
 /// - `fb_origin` — integer-aligned top-left of the offscreen frame in device pixels.
 ///   Used by blur/morph to rebase `content_bounds` into `fb`-local UV coordinates
-///   (non-negotiable #3: `content_rect_uv = (content_bounds - fb_origin) / fb_dim`).
+///   (`content_rect_uv = (content_bounds - fb_origin) / fb_dim`).
 /// - `fb_dim` — integer dimensions of the intermediate textures; all pool acquires
 ///   use this size, and the `texture_size` uniform in blur/morph shaders is set to
-///   `fb_dim` (non-negotiable #2: denominator must be integer fb_dim, not float
+///   `fb_dim` (the denominator must be integer fb_dim, not float
 ///   `grown.width()`).
 /// - `viewport_size`, `surface_format`, `pipelines`, `resources`, `device`,
 ///   `encoder` — GPU context forwarded unchanged to every GPU pass arm.
@@ -1317,7 +1317,7 @@ pub(in crate::wgpu) fn apply_image_filter_passes(
             ImageFilterPass::Blur { sigma_x, sigma_y } => {
                 // Two separable sub-passes (H then V) inside apply_blur.
                 // The H pass decals at `content_bounds` rebased to fb-local UV
-                // (non-negotiable #3): samples outside contribute transparent black.
+                // (fb-local, not full-frame): samples outside contribute transparent black.
                 // The V pass decals at the texture edge [0,1] to read the full H halo.
                 apply_blur(
                     *sigma_x,
