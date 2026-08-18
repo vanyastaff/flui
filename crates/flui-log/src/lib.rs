@@ -72,8 +72,20 @@
 //! | iOS | Apple unified logging | Console.app, Xcode, `log stream` |
 //! | wasm32 | browser console + performance timeline | `DevTools` |
 //!
-//! See [`backend`] for what each one does and does not guarantee, including the
-//! Apple privacy contract.
+//! See [`backend`] for what each one does and does not guarantee.
+//!
+//! # Privacy on device sinks
+//!
+//! Logcat and the Apple unified log are archives readable outside the
+//! application, so on those two sinks **fields are private by default**:
+//! dynamic values (strings, `Debug`/`Display` renderings, errors) are redacted
+//! to `<private>` unless the field name ends in `.public`, scalars are
+//! published unless the name ends in `.private`, a native `tracing` message is
+//! published, and a message bridged from the `log` facade — a third party's
+//! fully interpolated string — is redacted.
+//! The model is Apple's `%{public}`/`%{private}` contract, applied
+//! uniformly to both platforms; [`backend::privacy`] is the full contract,
+//! including what it deliberately does not cover.
 //!
 //! # Filtering
 //!
@@ -100,6 +112,9 @@ pub mod ownership;
 #[cfg(test)]
 mod test_support;
 
+pub use backend::privacy::{
+    EventOrigin, FieldKind, FieldPrivacy, PRIVATE_FIELD_SUFFIX, PUBLIC_FIELD_SUFFIX, REDACTED_VALUE,
+};
 pub use backend::{LogcatPriority, PlatformLayer};
 pub use config::{DesktopFormat, LogConfig, LogConfigBuilder};
 pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, FilterConfig, FilterError};

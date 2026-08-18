@@ -66,13 +66,20 @@ responsibility, not a wider one.
   scoped subscriber anywhere in the process would convince `Auto` that the global
   slot was taken forever. `set_global_default`'s own `Result` is the exact
   signal, with no window between the question and the answer.
-- **A tracing field is world-readable on a device.** Apple's unified log and
-  logcat publish every field verbatim; `os_log`'s `%{private}` has nothing to
-  redact because `tracing-oslog` pre-formats. Log a length, a count, an
-  identifier, or a discriminant — never a rendered string, a user-chosen path,
-  or an announcement. Enforcing this in the type system is
-  [#572](https://github.com/vanyastaff/flui/issues/572); until then it is a
-  convention a reviewer has to hold.
+- **Device sinks are private by default — do not construct one bare.** The
+  logcat and Apple sinks only exist wrapped in `backend::redact::RedactLayer`,
+  which replaces every dynamic value (string, `Debug`/`Display` rendering,
+  error) with `<private>` unless the field name ends in `.public`, and every
+  scalar whose name ends in `.private`. A native `tracing` message publishes —
+  so user content stays in fields, never interpolated into the sentence — but a
+  message bridged from the `log` facade redacts: it is a third party's fully
+  interpolated string, and no marker can vouch for it. The
+  classification (`backend::privacy`) is Apple's own `%{public}`/`%{private}`
+  default ported to both platforms; it and the redaction stage are compiled and
+  unit-tested on every target. A new device sink joins the contract by being
+  constructed wrapped — adding one bare reopens the leak #571/#572 closed.
+  Desktop and web-console sinks are developer-facing and deliberately publish
+  verbatim.
 - **macOS is a desktop.** It keeps the `fmt` backend; unified logging there
   would make `cargo run` print nothing. `os_log` on macOS is opt-in through the
   `apple-unified-logging` feature.

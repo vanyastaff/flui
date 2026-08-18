@@ -505,6 +505,15 @@ Correctness comes first, followed by measurement, then optimization.
   - `trace`: high-volume per-event or per-frame detail.
 - Do not log secrets, clipboard contents, text input, file contents, access
   tokens, or precise location by default.
+- On device sinks (logcat, Apple unified logging) fields are private by
+  default: `flui-log` redacts dynamic values — strings, `Debug`/`Display`
+  renderings, errors — to `<private>` unless the field name ends in `.public`;
+  a name ending in `.private` redacts a scalar (for example a precise
+  coordinate). Scalars and a native `tracing` message publish by default, so a
+  machine-readable or user-provided value belongs in a field — interpolating it
+  into the message bypasses classification. A message bridged from the `log`
+  facade is third-party text and redacts unconditionally. See
+  `flui_log::backend::privacy` for the full contract.
 - Native logging backends MUST document privacy and field mapping.
 - Correlation fields name the real owner or operation an event belongs to, and
   MUST NOT encode the runtime's internal topology. A field name is read by log

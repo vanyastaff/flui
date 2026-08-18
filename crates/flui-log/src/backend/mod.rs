@@ -23,9 +23,26 @@
 //! decided by the [`EnvFilter`](crate::filter) alone. A backend that also
 //! filtered would be a second, invisible ceiling that no `RUST_LOG` directive
 //! could raise — see [`crate::filter`] for the regression this prevents.
+//!
+//! # Privacy: device sinks are private by default
+//!
+//! Logcat and the Apple unified log are device archives readable outside the
+//! application, so those two sinks — and only those two — are constructed
+//! behind a redaction stage (the crate-private `redact` module): a dynamic
+//! value (string, `Debug` or `Display` rendering, error) is replaced by
+//! [`privacy::REDACTED_VALUE`]
+//! unless its field name ends in `.public`; a scalar is published unless its
+//! name ends in `.private`; a native `tracing` message is published, while a
+//! message bridged from the `log` facade is third-party interpolated text and
+//! is redacted. The contract, the
+//! Apple model it is ported from, and its residual holes live in [`privacy`].
+//! The desktop and web-console sinks write to the developer's own terminal or
+//! `DevTools` and publish fields verbatim.
 
 pub(crate) mod logcat;
+pub mod privacy;
 pub(crate) mod record;
+pub(crate) mod redact;
 
 use core::marker::PhantomData;
 
@@ -60,13 +77,13 @@ enum Sink<S> {
     ),
 
     #[cfg(target_os = "android")]
-    Logcat(logcat::LogcatLayer),
+    Logcat(redact::RedactLayer<logcat::LogcatLayer>),
 
     #[cfg(any(
         target_os = "ios",
         all(target_os = "macos", feature = "apple-unified-logging")
     ))]
-    AppleUnified(tracing_oslog::OsLogger),
+    AppleUnified(redact::RedactLayer<tracing_oslog::OsLogger>),
 
     #[cfg(target_arch = "wasm32")]
     WebConsole(tracing_wasm::WASMLayer),
@@ -196,11 +213,21 @@ where
 
     /// Android logcat, tagged with the event target and falling back to the
     /// identity's display name.
+    ///
+    /// # Privacy
+    ///
+    /// Constructed behind the redaction stage: fields are private by default
+    /// and publish only under the rules in [`privacy`]. Android itself has no
+    /// `os_log`-style redaction knob — logcat is a plain line transport — so
+    /// the classification is applied before the line is rendered, and a
+    /// redacted value never leaves the process.
     #[cfg(target_os = "android")]
     #[must_use]
     pub fn logcat(identity: &crate::AppIdentity) -> Self {
         Self {
-            sink: Sink::Logcat(logcat::LogcatLayer::new(identity.display_name())),
+            sink: Sink::Logcat(redact::RedactLayer::new(logcat::LogcatLayer::new(
+                identity.display_name(),
+            ))),
         }
     }
 
@@ -209,20 +236,25 @@ where
     ///
     /// # Privacy
     ///
-    /// `tracing-oslog` renders each event into one already-formatted string and
-    /// hands that to `os_log_with_type`, so **every field FLUI emits is public
-    /// in the unified log**: `os_log`'s `%{private}` redaction applies to
-    /// interpolated arguments, and there are none. Treat a tracing field on an
-    /// Apple platform as readable by anyone holding the device's log archive,
-    /// and keep secrets and personal data out of them.
+    /// Constructed behind the redaction stage: fields are **private by
+    /// default** and publish only under the rules in [`privacy`] — a scalar
+    /// or a field whose name ends in `.public` is published, everything else
+    /// reaches the unified log as `<private>`. The classification is enforced
+    /// per event, in-process, before `tracing-oslog` renders; a producer does
+    /// not have to know this sink is installed, and nothing a producer forgets
+    /// to mark can land in the log archive verbatim.
     ///
-    /// This is a convention, not yet a contract: nothing fails to build when a
-    /// producer records a rendered string or a user-chosen path. Making the
-    /// distinction typed — private by default, with the backend redacting
-    /// rather than publishing what it was not told about — is tracked in
-    /// <https://github.com/vanyastaff/flui/issues/572>, which also records why
-    /// it likely means leaving `tracing-oslog` behind. Until that lands, the
-    /// value must not be recorded in the first place.
+    /// One deliberate divergence from native `os_log` redaction: the OS
+    /// substitutes `<private>` at *display* time and can reveal the stored
+    /// value under the "Enable-Private-Data" developer profile, whereas this
+    /// stage redacts before the value ever reaches `os_log_with_type`
+    /// (`tracing-oslog` collapses each event into one pre-formatted
+    /// `%{public}s` argument, which forecloses per-value `%{private}`
+    /// specifiers). The value is therefore never stored — strictly stronger
+    /// privacy, at the cost of that reveal workflow. Reclaiming it would take
+    /// a FLUI-owned `os_log` shim that keeps public and private renderings as
+    /// separate format arguments; the classification layer here is
+    /// transport-agnostic on purpose so such a sink could adopt it unchanged.
     ///
     /// # Grouping
     ///
@@ -245,10 +277,10 @@ where
     #[must_use]
     pub fn apple_unified_logging(identity: &crate::AppIdentity) -> Self {
         Self {
-            sink: Sink::AppleUnified(tracing_oslog::OsLogger::new(
+            sink: Sink::AppleUnified(redact::RedactLayer::new(tracing_oslog::OsLogger::new(
                 identity.apple_subsystem(),
                 crate::identity::APPLE_CATEGORY,
-            )),
+            ))),
         }
     }
 
@@ -281,15 +313,17 @@ fn default_sink<S>(config: &crate::LogConfig) -> Sink<S> {
 
 #[cfg(target_os = "android")]
 fn default_sink<S>(config: &crate::LogConfig) -> Sink<S> {
-    Sink::Logcat(logcat::LogcatLayer::new(config.identity().display_name()))
+    Sink::Logcat(redact::RedactLayer::new(logcat::LogcatLayer::new(
+        config.identity().display_name(),
+    )))
 }
 
 #[cfg(target_os = "ios")]
 fn default_sink<S>(config: &crate::LogConfig) -> Sink<S> {
-    Sink::AppleUnified(tracing_oslog::OsLogger::new(
+    Sink::AppleUnified(redact::RedactLayer::new(tracing_oslog::OsLogger::new(
         config.identity().apple_subsystem(),
         crate::identity::APPLE_CATEGORY,
-    ))
+    )))
 }
 
 #[cfg(target_arch = "wasm32")]
