@@ -704,6 +704,56 @@ impl NavigatorHandle {
         }
     }
 
+    /// Deregister one previous [`add_observer`](Self::add_observer)
+    /// registration of `observer` (matched by `Arc` identity), notifying it
+    /// with [`NavigatorObserver::did_detach`] if the navigator is currently
+    /// mounted — the deregistration half of the oracle's observer
+    /// reconciliation (`NavigatorState.didUpdateWidget` /
+    /// `NavigatorState.dispose` clear `NavigatorObserver._navigators`,
+    /// `navigator.dart:4034`, `:4056`, `:4108`, oracle tag `3.44.0`).
+    ///
+    /// Crate-internal: `WidgetsApp` uses it to keep a caller-retained handle
+    /// free of stale shell registrations across unmount/remount and
+    /// configuration updates. A no-op when `observer` is not registered.
+    ///
+    /// Removing a hero-flight observer does **not** resurrect the automatic
+    /// default hero controller its registration suppressed — re-add one
+    /// explicitly instead (the auto-default is created only at navigator
+    /// mount).
+    pub(crate) fn remove_observer(&self, observer: &Arc<dyn NavigatorObserver>) {
+        let removed = {
+            let mut observers = self.shared.observers.lock();
+            observers
+                .iter()
+                .position(|registered| Arc::ptr_eq(registered, observer))
+                .map(|position| observers.remove(position))
+        };
+        // Notify outside the lock, mirroring add_observer's no-lock-held
+        // attach notification.
+        if let Some(removed) = removed
+            && self.shared.observers_attached.load(Ordering::Relaxed)
+        {
+            removed.did_detach();
+        }
+    }
+
+    /// Rebuild `route`'s content subtree on the next frame — the rebuild
+    /// half of the oracle's `Route.changedExternalState` sweep, which
+    /// `NavigatorState.didUpdateWidget` / `didChangeDependencies` run over
+    /// every live route so a route whose builder reads the navigator
+    /// widget's configuration re-reads it (`navigator.dart:3931-3937`,
+    /// `:4055-4059`, oracle tag `3.44.0`; `ModalRoute.changedExternalState`
+    /// marks the route's scope needs-build).
+    ///
+    /// Crate-internal: `WidgetsApp` marks its seeded home route after
+    /// writing an updated `home` into the shared cell that route's builder
+    /// reads. Inert before mount, after unmount, and for an unknown id.
+    pub(crate) fn mark_route_needs_build(&self, route: RouteId) {
+        if let Some(entry) = self.shared.registries.entries.lock().get(&route) {
+            entry.mark_needs_build();
+        }
+    }
+
     /// Whether the navigator is mounted. Flutter's `State.mounted`, consulted by
     /// `maybePop` (`navigator.dart:5595`).
     ///

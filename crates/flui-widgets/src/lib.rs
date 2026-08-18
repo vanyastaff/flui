@@ -118,7 +118,9 @@ pub mod wrap;
 // `InheritedTheme` trait a theme widget (e.g. `flui_material::Theme`)
 // implements. The Material `Theme`/`ThemeData` widget itself lives in
 // `flui-material` — see `app` module docs.
-pub use app::{InheritedTheme, MediaQuery, MediaQueryData, SafeArea};
+pub use app::{
+    AppBuilder, InheritedTheme, MediaQuery, MediaQueryData, SafeArea, WidgetsApp, WidgetsAppState,
+};
 // `Brightness` is the value type `MediaQueryData` (and any theme's
 // brightness field) uses; re-exported here so callers need only
 // `use flui_widgets::Brightness`.
@@ -320,7 +322,8 @@ pub mod prelude {
         SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table, TableCell, TableRow, Text,
         TextEditingController, TextField, TextFieldState, TickerMode, Transform, UnconstrainedBox,
         ValueListenableBuilder, Viewport, Visibility, WidgetState, WidgetStateConstraint,
-        WidgetStateProperty, WidgetStates, WidgetStatesController, WidgetsLocalizations, Wrap,
+        WidgetStateProperty, WidgetStates, WidgetStatesController, WidgetsApp,
+        WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

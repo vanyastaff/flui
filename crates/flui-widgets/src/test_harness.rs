@@ -22,7 +22,7 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_types::geometry::{Bounds, Pixels, px};
 use flui_types::{Offset, Size};
-use flui_view::View;
+use flui_view::{ElementNode, View};
 
 /// A mounted, laid-out widget tree.
 pub(crate) struct Harness {
@@ -421,6 +421,33 @@ impl Harness {
                 .map(|(_, node)| node.debug_name())
                 .collect()
         })
+    }
+
+    /// The concrete view type behind element `id`.
+    pub(crate) fn view_type_of(&mut self, id: ElementId) -> TypeId {
+        self.binding
+            .tree_mut()
+            .get(id)
+            .map(|node| node.element().view_type_id())
+            .expect("the probed element must be mounted")
+    }
+
+    /// The parent of element `id`, if any.
+    pub(crate) fn parent_of(&mut self, id: ElementId) -> Option<ElementId> {
+        self.binding
+            .tree_mut()
+            .get(id)
+            .and_then(ElementNode::parent)
+    }
+
+    /// Every mounted element whose view is of type `ty`, in arbitrary order.
+    pub(crate) fn elements_of_type(&mut self, ty: TypeId) -> Vec<ElementId> {
+        self.binding
+            .tree_mut()
+            .iter_nodes()
+            .filter(|(_, node)| node.element().view_type_id() == ty)
+            .map(|(id, _)| id)
+            .collect()
     }
 
     /// The only child of `parent`.
