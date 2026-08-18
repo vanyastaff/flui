@@ -7,7 +7,7 @@
 //! upstream `wgpu-hal` constraint (issue #653). Every production frame the
 //! desktop and Android runners submit now crosses the raster boundary as an
 //! owned [`SceneSnapshot`] stamped with a [`FrameStamp`], is checked against
-//! the lane's single [`SurfaceGeneration`] counter, and is rendered by
+//! the lane's single [`flui_foundation::SurfaceGeneration`] counter, and is rendered by
 //! [`RasterOwner::pump`] — the same protocol a dedicated raster thread will
 //! drive via `run_until_shutdown`, so threading the lane later changes who
 //! calls `pump`, not what a frame is.
@@ -25,7 +25,7 @@
 //!
 //! # Generation discipline
 //!
-//! Every [`SurfaceGeneration`] mint routes through the mailbox's one
+//! Every [`flui_foundation::SurfaceGeneration`] mint routes through the mailbox's one
 //! counter (ADR-0045 decision 4):
 //!
 //! - a platform resize mints eagerly via [`RasterHandle::resize`] and the
@@ -34,7 +34,7 @@
 //!   the resize (generation-forward, no handshake);
 //! - a mid-render surface loss mints inside the pump's render-failure path;
 //!   the lane observes the rejection ([`PumpOutcome::SurfaceOutdated`]) and
-//!   re-adopts [`SurfaceState::required_generation`] before the retry;
+//!   re-adopts [`flui_engine::SurfaceState::required_generation`] before the retry;
 //! - device-loss recovery recreates the surface, so
 //!   [`RasterLane::note_surface_recreated`] mints through the same resize
 //!   entry point at the platform's latest known size.
