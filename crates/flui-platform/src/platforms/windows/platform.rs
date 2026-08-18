@@ -98,10 +98,14 @@ pub(super) struct WindowContext {
     /// (minimize/restore) and `WM_SHOWWINDOW` (hide/show) — via the pure
     /// rules in `crate::shared::visibility`; this cell is the shared edge
     /// filter that keeps the two from double-dispatching the same state.
-    /// Starts `false`: windows are created hidden and shown afterwards
-    /// (`WindowsWindow::new`'s `ShowWindow` runs after the context is
-    /// installed), so the creation-time `WM_SHOWWINDOW` dispatches the
-    /// initial `true` through the same wire as every later change.
+    /// Seeded from the window's ACTUAL creation style
+    /// (`win32_initial_visibility(GWL_STYLE)`, see its doc) — a decorated
+    /// window is created hidden (`false`, and the creation-time
+    /// `ShowWindow`'s `WM_SHOWWINDOW` edge flips it), while an undecorated
+    /// window is created `WS_POPUP | WS_VISIBLE` (`true`, and no
+    /// creation-time edge ever fires). A constant seed would desync the
+    /// filter for one of the two and swallow that window's first real
+    /// transition.
     pub last_visibility_dispatched: std::cell::Cell<bool>,
     /// High half of a UTF-16 surrogate pair from an out-of-band `WM_CHAR`,
     /// held until its low half arrives in the next message (Windows splits

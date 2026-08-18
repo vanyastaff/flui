@@ -209,13 +209,15 @@ fn run_checks(app: &mut Child, app_log: &std::path::Path) -> Result<()> {
     }
 }
 
-/// One presented frame's marker in the app log — emitted by `flui-engine`'s
-/// `render_scene` immediately after the frame's encoders were submitted to
-/// the wgpu queue and the swapchain texture presented. Counting occurrences
-/// counts REAL GPU submissions, which is the hidden-surface criterion ("an
-/// occluded window issues zero GPU submissions"), not merely "no frame
-/// produced".
-const GPU_FRAME_LINE: &str = "surface frame submitted and presented";
+/// One presented frame's marker in the app log — the machine-oriented
+/// `event` field of the `flui.gpu` trace `flui-engine`'s `render_scene`
+/// emits immediately after the frame's encoders were submitted to the wgpu
+/// queue and the swapchain texture presented (matched on the field, not the
+/// human-readable message, so message rewording cannot silently break the
+/// oracle). Counting occurrences counts REAL GPU submissions, which is the
+/// hidden-surface criterion ("an occluded window issues zero GPU
+/// submissions"), not merely "no frame produced".
+const GPU_PRESENT_MARKER: &str = "event=\"present_submitted\"";
 /// One pointer-scroll delivery in the app log (`flui_widgets::scroll`'s own
 /// trace) — used while covered to pin the *designed* input drop: a hidden
 /// presentation refuses pointer input (`Suspended` lifecycle), so wheel
@@ -289,22 +291,41 @@ fn check_occlusion_gating(
     //    be live BEFORE anything is asserted about its absence — a filter
     //    typo or a renamed message must fail here, loudly, not let the
     //    covered-window assertion pass vacuously.
-    let gpu_visible_base = count(&read_log()?, GPU_FRAME_LINE);
+    let gpu_visible_base = count(&read_log()?, GPU_PRESENT_MARKER);
     wheel_up_tick()?;
     wheel_up_tick()?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if count(&read_log()?, GPU_FRAME_LINE) > gpu_visible_base {
+        if count(&read_log()?, GPU_PRESENT_MARKER) > gpu_visible_base {
             break;
         }
         if Instant::now() > deadline {
             bail!(
-                "occlusion check FAILED (oracle arming): no '{GPU_FRAME_LINE}' log line \
+                "occlusion check FAILED (oracle arming): no '{GPU_PRESENT_MARKER}' log line \
                  after wheel input on a visible window — the flui.gpu trace target is \
                  not reaching the log, so nothing below could have been asserted"
             );
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // Post-arming baseline, taken only once presents have QUIESCED: the
+    // arming ticks above produce submissions of their own, so a baseline
+    // captured before them would let those ticks satisfy the fling premise
+    // below even if the drag never started a fling — a vacuous pass.
+    // Growth beyond THIS baseline is attributable to the drag/fling alone.
+    // Quiescence is best-effort (bounded): a stuck-animating app weakens
+    // attribution but cannot weaken the gate assertion itself.
+    let mut gpu_armed_base = count(&read_log()?, GPU_PRESENT_MARKER);
+    let quiesce_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        let sample = count(&read_log()?, GPU_PRESENT_MARKER);
+        let stable = sample == gpu_armed_base;
+        gpu_armed_base = sample;
+        if stable || Instant::now() > quiesce_deadline {
+            break;
+        }
     }
 
     // 2. Prepare (but do not yet map) the cover: an input-transparent
@@ -395,19 +416,28 @@ fn check_occlusion_gating(
     //    occluded.
     std::thread::sleep(Duration::from_millis(500));
     let hidden_snapshot = read_log()?;
-    let gpu_hidden_base = count(&hidden_snapshot, GPU_FRAME_LINE);
+    let gpu_hidden_base = count(&hidden_snapshot, GPU_PRESENT_MARKER);
     let scroll_hidden_base = count(&hidden_snapshot, SCROLL_TICK_LINE);
     let wheel_hidden_base = count(&hidden_snapshot, MOUSE_WHEEL_LINE);
 
-    // Fling premise: between the oracle-arming frames and the cover, the
-    // ballistic animation must have presented additional frames — a fling
-    // that never took would leave the gate assertion below without demand
-    // to gate.
-    if gpu_hidden_base <= gpu_visible_base + 1 {
+    // Fling premise, measured against the QUIESCED post-arming baseline so
+    // the arming ticks' own submissions cannot satisfy it: the drag/fling
+    // must have presented several frames of its own before the cover
+    // mapped, or no live animation existed for the gate to stop and the
+    // zero-submissions assertion below would be vacuous. The count is
+    // printed for CI triage either way. (`gpu_visible_base`, before
+    // arming, only feeds the arming loop above.)
+    let fling_frames = gpu_hidden_base.saturating_sub(gpu_armed_base);
+    eprintln!(
+        "live-smoke: drag-fling presented {fling_frames} frames between the quiesced \
+         baseline and the cover"
+    );
+    if fling_frames < 3 {
         bail!(
-            "occlusion check FAILED (premise): the drag-fling produced no frames \
-             before the cover mapped — no live animation existed for the gate to \
-             stop, so the zero-submissions assertion would be vacuous"
+            "occlusion check FAILED (premise): the drag-fling presented only \
+             {fling_frames} frame(s) beyond the quiesced post-arming baseline before \
+             the cover mapped — no live animation existed for the gate to stop, so \
+             the zero-submissions assertion would be vacuous"
         );
     }
 
@@ -443,7 +473,7 @@ fn check_occlusion_gating(
 
     // THE assertion: zero GPU submissions while the surface was hidden,
     // with a live fling as demand.
-    let gpu_covered = count(&covered_log, GPU_FRAME_LINE);
+    let gpu_covered = count(&covered_log, GPU_PRESENT_MARKER);
     if gpu_covered != gpu_hidden_base {
         bail!(
             "occlusion check FAILED: {} GPU submission(s) while the window was fully \
@@ -466,7 +496,7 @@ fn check_occlusion_gating(
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let log = read_log()?;
-        if unoccluded_line(&log) && count(&log, GPU_FRAME_LINE) > gpu_hidden_base {
+        if unoccluded_line(&log) && count(&log, GPU_PRESENT_MARKER) > gpu_hidden_base {
             break;
         }
         if Instant::now() > deadline {

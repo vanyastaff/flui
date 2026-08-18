@@ -31,6 +31,30 @@ pub const SIZE_MAXSHOW: u32 = 3;
 /// See [`SIZE_RESTORED`].
 pub const SIZE_MAXHIDE: u32 = 4;
 
+/// `WS_VISIBLE` (`winuser.h`: `0x1000_0000`) — defined here, like the
+/// `SIZE_*` values above, so the seed rule below is host-testable.
+pub const WS_VISIBLE_STYLE_BIT: u32 = 0x1000_0000;
+
+/// The initial value for the Win32 backend's visibility edge filter,
+/// derived from the window's ACTUAL style at context-install time — never
+/// a constant default.
+///
+/// Why a default is wrong: creation style depends on decoration. A
+/// decorated window is created without `WS_VISIBLE` and shown afterwards,
+/// so the creation-time `ShowWindow(SW_SHOW)` flips the bit and delivers
+/// the `WM_SHOWWINDOW` edge that brings the filter to `true`. An
+/// UNdecorated window is created `WS_POPUP | WS_VISIBLE` — already visible
+/// before the context installs — and that same `ShowWindow(SW_SHOW)` is a
+/// no-op on the bit, so no edge ever fires; a seed of `false` would then
+/// swallow the window's FIRST minimize (the edge filter would see
+/// false→false and dispatch nothing, leaving the runtime pumping frames
+/// for a hidden surface). Seeding from the style is correct for every
+/// creation-style combination.
+#[must_use]
+pub fn win32_initial_visibility(style: u32) -> bool {
+    style & WS_VISIBLE_STYLE_BIT != 0
+}
+
 /// The visibility transition (if any) a Win32 `WM_SIZE` message implies.
 ///
 /// Win32 delivers no occlusion events at all; what it does deliver is
@@ -135,6 +159,20 @@ mod tests {
         assert_eq!(win32_size_visibility(SIZE_MAXHIDE, false), None);
         assert_eq!(win32_size_visibility(SIZE_MAXSHOW, true), None);
         assert_eq!(win32_size_visibility(SIZE_MAXHIDE, true), None);
+    }
+
+    #[test]
+    fn initial_visibility_follows_the_ws_visible_bit() {
+        // The bit itself is pinned (winuser.h WS_VISIBLE).
+        assert_eq!(WS_VISIBLE_STYLE_BIT, 0x1000_0000);
+        // Undecorated creation style: WS_POPUP (0x8000_0000) | WS_VISIBLE —
+        // visible from birth, must seed true.
+        assert!(win32_initial_visibility(0x8000_0000 | WS_VISIBLE_STYLE_BIT));
+        // Decorated creation style: WS_OVERLAPPEDWINDOW (0x00CF_0000) has
+        // no WS_VISIBLE — created hidden, shown later, must seed false so
+        // the creation-time WM_SHOWWINDOW edge is the one that flips it.
+        assert!(!win32_initial_visibility(0x00CF_0000));
+        assert!(!win32_initial_visibility(0));
     }
 
     #[test]
