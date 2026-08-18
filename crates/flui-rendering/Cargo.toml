@@ -75,6 +75,13 @@ harness = false
 name = "intrinsic_parent_data"
 harness = false
 
+# run_semantics end to end as a function of render-tree size: one marked
+# leaf (mark-scoped graft) vs a marked root (the full-rebuild ceiling).
+# Companion to flui-semantics' publish_cost bench, one layer up.
+[[bench]]
+name = "semantics_assembly"
+harness = false
+
 # Headless render-object inspection runner. Gated on `testing` so the
 # example only builds when the harness module is compiled in. Run with
 # `cargo run -p flui-rendering --example render_inspector --features testing`.

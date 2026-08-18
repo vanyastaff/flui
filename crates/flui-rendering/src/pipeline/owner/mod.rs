@@ -504,6 +504,66 @@ mod tests {
 
     impl flui_foundation::Diagnosticable for SemanticLeaf {}
 
+    /// A leaf whose label can change between passes — what a live widget
+    /// does. `SemanticLeaf`'s `&'static str` label is frozen at insertion,
+    /// so it can prove structure but never "the published content follows
+    /// the render object's current state through a mark-scoped pass".
+    #[derive(Debug)]
+    struct MutableLeaf {
+        label: std::sync::Arc<std::sync::Mutex<String>>,
+        boundary: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl MutableLeaf {
+        fn labeled(text: &str) -> (Self, std::sync::Arc<std::sync::Mutex<String>>) {
+            let label = std::sync::Arc::new(std::sync::Mutex::new(text.to_owned()));
+            (
+                Self {
+                    label: std::sync::Arc::clone(&label),
+                    boundary: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                },
+                label,
+            )
+        }
+
+        /// A leaf that starts as its own semantics boundary and can stop
+        /// being one — the shape of a widget toggling `Semantics(container:)`.
+        fn boundary_toggle(text: &str) -> (Self, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+            let boundary = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            (
+                Self {
+                    label: std::sync::Arc::new(std::sync::Mutex::new(text.to_owned())),
+                    boundary: std::sync::Arc::clone(&boundary),
+                },
+                boundary,
+            )
+        }
+    }
+
+    impl flui_foundation::Diagnosticable for MutableLeaf {}
+
+    impl RenderBox for MutableLeaf {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            ctx.constraints().constrain(Size::new(px(10.0), px(10.0)))
+        }
+
+        fn describe_semantics_configuration(
+            &self,
+            config: &mut crate::semantics::SemanticsConfiguration,
+        ) {
+            config.set_semantics_boundary(self.boundary.load(std::sync::atomic::Ordering::Relaxed));
+            config.set_label(
+                self.label
+                    .lock()
+                    .expect("BUG: label mutex is uncontended in single-threaded tests")
+                    .as_str(),
+            );
+        }
+    }
+
     impl RenderBox for SemanticLeaf {
         type Arity = Leaf;
         type ParentData = BoxParentData;
@@ -814,6 +874,349 @@ mod tests {
             published[1].nodes.len(),
             published[0].nodes.len(),
             "carrying every node, not a diff"
+        );
+    }
+
+    /// A pass with an empty semantics queue must do no assembly work at
+    /// all: no fragment walk, no publish. This is the idle frame's cost
+    /// contract on the assembly side (the flush side's O(1) gate is pinned
+    /// in flui-semantics).
+    #[test]
+    fn an_idle_pass_performs_no_assembly_work() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+        let mut owner = PipelineOwner::new();
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                    .push(update.clone());
+            },
+        ));
+        let _ = owner.set_root_render_object(Box::new(SemanticLeaf::labeled("Submit")));
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("first semantics pass");
+        let owner = owner.finish();
+
+        super::semantics::reset_assembly_visits();
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("idle semantics pass");
+
+        assert_eq!(
+            super::semantics::assembly_visits(),
+            0,
+            "an idle pass must not visit a single render node"
+        );
+        assert_eq!(
+            captured
+                .lock()
+                .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                .len(),
+            1,
+            "and it publishes nothing beyond the initializing update"
+        );
+    }
+
+    /// The mark-scoped assembly contract: a change under one boundary
+    /// re-assembles that boundary's subtree — counted in render-node visits
+    /// — and republishes only the node whose payload changed. The sibling
+    /// branch is neither re-visited nor republished.
+    #[test]
+    fn a_local_change_reassembles_only_the_affected_subtree() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+        let mut owner = PipelineOwner::new();
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                    .push(update.clone());
+            },
+        ));
+        let root = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        let branch_a = owner
+            .insert_child_render_object(root, Box::new(SemanticLeaf::boundary_labeled("A")))
+            .expect("branch A inserted");
+        let (leaf, label) = MutableLeaf::labeled("original");
+        let a_leaf = owner
+            .insert_child_render_object(branch_a, Box::new(leaf))
+            .expect("A's leaf inserted");
+        let branch_b = owner
+            .insert_child_render_object(root, Box::new(SemanticLeaf::boundary_labeled("B")))
+            .expect("branch B inserted");
+        for _ in 0..8 {
+            owner
+                .insert_child_render_object(branch_b, Box::new(SemanticLeaf::labeled("filler")))
+                .expect("B filler inserted");
+        }
+        owner.set_semantics_enabled(true);
+
+        super::semantics::reset_assembly_visits();
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("first semantics pass");
+        let mut owner = owner.finish();
+        let full_visits = super::semantics::assembly_visits();
+        assert_eq!(full_visits, 12, "the initializing pass walks all 12 nodes");
+
+        *label
+            .lock()
+            .expect("BUG: label mutex is uncontended in this single-threaded test") =
+            "changed".to_owned();
+        owner.mark_needs_semantics(a_leaf);
+
+        super::semantics::reset_assembly_visits();
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("mark-scoped semantics pass");
+
+        assert_eq!(
+            super::semantics::assembly_visits(),
+            2,
+            "only the anchoring boundary A and its leaf are re-assembled — \
+             never the root or the 9-node B branch"
+        );
+
+        let updates = captured
+            .lock()
+            .expect("BUG: capture mutex is uncontended in this single-threaded test");
+        assert_eq!(updates.len(), 2, "the change itself is delivered");
+        let diff = &updates[1];
+        assert_eq!(
+            diff.nodes.len(),
+            1,
+            "exactly the changed boundary is republished"
+        );
+        let published = diff.nodes[0].1.label().expect("the boundary has a label");
+        assert!(
+            published.contains("changed") && !published.contains("original"),
+            "and it carries the render object's current content: {published:?}"
+        );
+        assert!(
+            !diff.nodes.iter().any(|(_, node)| node.label() == Some("B")),
+            "the untouched sibling branch must not ride along"
+        );
+    }
+
+    /// Merge folding under the mark-scoped pass: a changed leaf that is
+    /// absorbed into a merging ancestor re-publishes that ancestor with the
+    /// freshly absorbed content. The visit count proves this went through
+    /// the graft (a fallback full rebuild would visit every node), so merge
+    /// correctness is being exercised on the new path, not the old one.
+    #[test]
+    fn a_change_under_a_merging_ancestor_updates_the_absorbed_label() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+        let mut owner = PipelineOwner::new();
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                    .push(update.clone());
+            },
+        ));
+        let root = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        let group = owner
+            .insert_child_render_object(root, Box::new(SemanticLeaf::merge_labeled("Group")))
+            .expect("merging group inserted");
+        let (leaf, label) = MutableLeaf::labeled("Child");
+        let child = owner
+            .insert_child_render_object(group, Box::new(leaf))
+            .expect("merged child inserted");
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("first semantics pass");
+        let mut owner = owner.finish();
+
+        *label
+            .lock()
+            .expect("BUG: label mutex is uncontended in this single-threaded test") =
+            "Renamed".to_owned();
+        owner.mark_needs_semantics(child);
+
+        super::semantics::reset_assembly_visits();
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("mark-scoped semantics pass");
+
+        assert_eq!(
+            super::semantics::assembly_visits(),
+            2,
+            "the merging group is the anchor; only it and the child re-assemble"
+        );
+        let updates = captured
+            .lock()
+            .expect("BUG: capture mutex is uncontended in this single-threaded test");
+        assert_eq!(updates.len(), 2);
+        let labels: Vec<_> = updates[1]
+            .nodes
+            .iter()
+            .filter_map(|(_, node)| node.label())
+            .collect();
+        assert_eq!(
+            labels,
+            vec!["Group Renamed"],
+            "the absorbed content follows the child's current state"
+        );
+    }
+
+    /// Structural removal under the mark-scoped pass: removing a render
+    /// object marks its parent (membership change), the parent's boundary
+    /// anchor re-assembles, and the published diff drops the removed
+    /// content without touching the sibling branch.
+    #[test]
+    fn a_subtree_removal_regrafts_only_the_membership_parent() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+        let mut owner = PipelineOwner::new();
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                    .push(update.clone());
+            },
+        ));
+        let root = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        // The membership change marks branch A itself, and a marked node's
+        // own forming could change — so its PARENT is the anchor. Give it a
+        // boundary parent (`section`) so the re-assembly scope is that
+        // section, not the whole tree.
+        let section = owner
+            .insert_child_render_object(root, Box::new(SemanticLeaf::boundary_labeled("Section")))
+            .expect("section inserted");
+        let branch_a = owner
+            .insert_child_render_object(section, Box::new(SemanticLeaf::boundary_labeled("A")))
+            .expect("branch A inserted");
+        owner
+            .insert_child_render_object(branch_a, Box::new(SemanticLeaf::labeled("keep")))
+            .expect("kept leaf inserted");
+        let doomed = owner
+            .insert_child_render_object(branch_a, Box::new(SemanticLeaf::labeled("doomed")))
+            .expect("doomed leaf inserted");
+        let branch_b = owner
+            .insert_child_render_object(root, Box::new(SemanticLeaf::boundary_labeled("B")))
+            .expect("branch B inserted");
+        owner
+            .insert_child_render_object(branch_b, Box::new(SemanticLeaf::labeled("filler")))
+            .expect("B filler inserted");
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("first semantics pass");
+        let mut owner = owner.finish();
+
+        // Removal marks the membership parent (branch A) for semantics.
+        assert_eq!(owner.remove_render_object(doomed), 1);
+
+        super::semantics::reset_assembly_visits();
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("mark-scoped semantics pass");
+
+        assert_eq!(
+            super::semantics::assembly_visits(),
+            3,
+            "the section anchors: it, branch A, and the surviving leaf \
+             re-assemble — never the root or branch B"
+        );
+        let updates = captured
+            .lock()
+            .expect("BUG: capture mutex is uncontended in this single-threaded test");
+        assert_eq!(updates.len(), 2);
+        let diff = &updates[1];
+        let labels: Vec<_> = diff
+            .nodes
+            .iter()
+            .filter_map(|(_, node)| node.label())
+            .collect();
+        assert_eq!(
+            labels,
+            vec!["A keep"],
+            "the boundary republishes without the removed content, alone"
+        );
+    }
+
+    /// The hardest mark-scoping case: the MARKED node's own forming flips
+    /// (a boundary stops being one), so its previously-published node must
+    /// vanish and its content fold into the enclosing boundary. This is
+    /// exactly why a marked node can never anchor its own graft — its
+    /// forming decision is the thing in question — and whichever path the
+    /// pass takes (graft from the parent, or fragment-shape fallback to the
+    /// full rebuild), the published end state must be this one.
+    #[test]
+    fn a_marked_node_that_stops_forming_folds_into_its_boundary() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+        let mut owner = PipelineOwner::new();
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("BUG: capture mutex is uncontended in this single-threaded test")
+                    .push(update.clone());
+            },
+        ));
+        let root = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        let section = owner
+            .insert_child_render_object(root, Box::new(SemanticLeaf::boundary_labeled("Section")))
+            .expect("section inserted");
+        let (toggle_leaf, boundary) = MutableLeaf::boundary_toggle("Toggle");
+        let toggle = owner
+            .insert_child_render_object(section, Box::new(toggle_leaf))
+            .expect("toggle inserted");
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("first semantics pass");
+        let mut owner = owner.finish();
+        {
+            let updates = captured
+                .lock()
+                .expect("BUG: capture mutex is uncontended in this single-threaded test");
+            assert!(
+                updates[0]
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some("Toggle")),
+                "while a boundary, the toggle publishes its own node"
+            );
+        }
+
+        boundary.store(false, std::sync::atomic::Ordering::Relaxed);
+        owner.mark_needs_semantics(toggle);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("boundary-flip semantics pass");
+
+        let updates = captured
+            .lock()
+            .expect("BUG: capture mutex is uncontended in this single-threaded test");
+        assert_eq!(updates.len(), 2, "the flip must be delivered");
+        let diff = &updates[1];
+        assert!(
+            !diff
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Toggle")),
+            "the no-longer-forming node must not be republished as its own node"
+        );
+        assert!(
+            diff.nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Section Toggle")),
+            "its content folds into the enclosing boundary: {:?}",
+            diff.nodes
+                .iter()
+                .map(|(_, node)| node.label().map(str::to_owned))
+                .collect::<Vec<_>>()
         );
     }
 
