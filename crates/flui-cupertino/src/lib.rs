@@ -4,7 +4,10 @@
 //! [`CupertinoColors`] and [`CupertinoDynamicColor`] (the
 //! brightness/contrast/elevation-adaptive color system),
 //! [`CupertinoTextThemeData`], [`CupertinoThemeData`], the [`CupertinoTheme`]
-//! inherited widget that publishes it to a subtree, [`CupertinoButton`],
+//! inherited widget that publishes it to a subtree, the [`CupertinoApp`]
+//! application shell (ADR-0042 — brightness via Apple's optional-override
+//! model over `flui-widgets`' design-neutral `WidgetsApp`, no `ThemeMode`),
+//! [`CupertinoButton`],
 //! [`cupertino_page_route`] (the iOS slide-in page transition with
 //! edge-swipe-back), [`CupertinoNavigationBar`], [`CupertinoPageScaffold`],
 //! and [`CupertinoTabScaffold`]/[`CupertinoTabBar`] (the lazy-build,
@@ -76,9 +79,6 @@
 //!   outline — `flui-painting` has the primitive, this crate does not draw
 //!   it yet), `WidgetState`-resolved mouse cursor, and
 //!   `onFocusChange`/`autofocus` wiring. See [`button`] module docs.
-//! - A `CupertinoApp` widget — this crate is the theming substrate a future
-//!   `CupertinoApp` (or a plain `CupertinoTheme` at the app root) builds on,
-//!   not the app scaffold itself.
 //!
 //! Each deferral is named, not silently dropped — see the owning module's
 //! docs for the tracking rationale.
@@ -94,6 +94,7 @@
 
 #![deny(missing_docs)]
 
+pub mod app;
 pub mod bottom_tab_bar;
 pub mod button;
 pub mod colors;
@@ -104,6 +105,7 @@ pub mod tab_scaffold;
 pub mod text_theme;
 pub mod theme;
 
+pub use app::CupertinoApp;
 pub use bottom_tab_bar::{CupertinoTabBar, CupertinoTabBarItem};
 pub use button::{CupertinoButton, CupertinoButtonSize, CupertinoButtonState};
 pub use colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};

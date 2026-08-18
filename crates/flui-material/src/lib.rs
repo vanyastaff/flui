@@ -3,7 +3,9 @@
 //! Material Design theming foundation for FLUI: [`ColorScheme`], the M3 2021
 //! type scale ([`typography`]) and [`TextTheme`], [`ThemeData`], the
 //! [`Theme`] inherited widget that publishes it to a subtree, the
-//! [`Material`]/[`InkWell`] surface primitives, the M3 button family
+//! [`MaterialApp`] application shell with its [`ThemeMode`] selection
+//! (ADR-0042 — composed over `flui-widgets`' design-neutral `WidgetsApp`),
+//! the [`Material`]/[`InkWell`] surface primitives, the M3 button family
 //! ([`ButtonStyle`], [`ElevatedButton`], [`FilledButton`], [`OutlinedButton`],
 //! [`TextButton`], [`IconButton`], [`FloatingActionButton`], [`BackButton`]),
 //! [`Scaffold`]/[`AppBar`], [`Card`], [`Dialog`]/[`AlertDialog`]/
@@ -48,9 +50,6 @@
 //!   an interpolated theme yet.
 //! - Dense/tall type-scale geometries (CJK / Farsi-Hindi-Thai) — only
 //!   `englishLike2021` is ported; see [`typography`] module docs.
-//! - A `MaterialApp` widget — this crate is the theming substrate a future
-//!   `MaterialApp` (or a plain `Theme` at the app root) builds on, not the
-//!   app scaffold itself.
 //!
 //! Each deferral is named, not silently dropped — see the owning module's
 //! docs for the tracking rationale.
@@ -66,6 +65,7 @@
 
 #![deny(missing_docs)]
 
+pub mod app;
 pub mod app_bar;
 pub mod back_button;
 pub mod button_style;
@@ -107,6 +107,7 @@ pub mod theme;
 pub mod theme_data;
 pub mod typography;
 
+pub use app::{MaterialApp, ThemeMode};
 pub use app_bar::AppBar;
 pub use back_button::BackButton;
 pub use button_style::ButtonStyle;

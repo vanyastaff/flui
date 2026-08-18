@@ -147,3 +147,42 @@ fn prelude_carries_the_material_half_when_the_feature_is_on() {
     let theme: ThemeData = ThemeData::light();
     assert_eq!(theme.brightness(), Brightness::Light);
 }
+
+/// The design-neutral app shell needs no catalog feature at all: `WidgetsApp`
+/// is reachable (and constructible) through the always-on `flui::widgets`
+/// surface and the prelude glob — the `--no-default-features` half of the
+/// app-shell acceptance criteria.
+#[test]
+fn widgets_app_is_offered_without_any_catalog_feature() {
+    let _app = flui::widgets::WidgetsApp::new(SizedBox::shrink());
+    // Also via the prelude glob (`WidgetsApp` is part of
+    // `flui_widgets::prelude`).
+    let _from_prelude = WidgetsApp::new(SizedBox::shrink());
+}
+
+/// The Material shell rides the existing `material` catalog feature —
+/// `MaterialApp` and its `ThemeMode` resolve through both `flui::material`
+/// and the feature-gated prelude half.
+#[cfg(feature = "material")]
+#[test]
+fn material_app_shell_resolves_through_the_facade() {
+    let _app = flui::material::MaterialApp::new(SizedBox::shrink())
+        .theme(flui::material::ThemeData::light())
+        .dark_theme(flui::material::ThemeData::dark())
+        .theme_mode(flui::material::ThemeMode::System);
+    assert_eq!(
+        flui::material::ThemeMode::default(),
+        flui::material::ThemeMode::System
+    );
+    // And via the prelude's Material half.
+    let _from_prelude = MaterialApp::new(SizedBox::shrink()).theme_mode(ThemeMode::Dark);
+}
+
+/// The Cupertino shell rides the existing `cupertino` catalog feature.
+#[cfg(feature = "cupertino")]
+#[test]
+fn cupertino_app_shell_resolves_through_the_facade() {
+    let theme = flui::cupertino::CupertinoThemeData::new()
+        .with_brightness(flui::types::platform::Brightness::Dark);
+    let _app = flui::cupertino::CupertinoApp::new(SizedBox::shrink()).theme(theme);
+}
