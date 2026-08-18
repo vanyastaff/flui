@@ -5,8 +5,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use x11rb::connection::Connection;
+use x11rb::protocol::shape::{self, ConnectionExt as ShapeConnectionExt};
 use x11rb::protocol::xproto::{
-    AtomEnum, ClientMessageEvent, ConnectionExt, EventMask, ImageFormat, Window,
+    AtomEnum, ClientMessageEvent, ClipOrdering, ConnectionExt, CreateWindowAux, EventMask,
+    ImageFormat, Window, WindowClass,
 };
 use x11rb::protocol::xtest::ConnectionExt as XTestConnectionExt;
 use x11rb::rust_connection::RustConnection;
@@ -52,7 +54,11 @@ pub(crate) fn run(app_path: &str) -> Result<()> {
         // logs next to nothing.
         .env(
             "RUST_LOG",
-            "warn,flui_widgets::scroll=trace,flui_platform=debug",
+            // `flui.gpu=trace` powers the occlusion check's oracle: one
+            // trace line per REAL GPU submit+present (emitted by
+            // `flui-engine`'s `render_scene` after `present()`), counted
+            // from this captured log.
+            "warn,flui_widgets::scroll=trace,flui_platform=debug,flui.gpu=trace",
         )
         // BOTH streams: the app's subscriber writes to stdout — a
         // null'd stdout was why CI failures reported "stderr (last 0
@@ -66,7 +72,7 @@ pub(crate) fn run(app_path: &str) -> Result<()> {
     // silently: the app's own stderr is the first thing a diagnosis needs
     // (a CI runner without a Vulkan adapter panics before any window
     // exists, and a nulled stderr turned that into a bare "no window").
-    let result = run_checks(&mut app);
+    let result = run_checks(&mut app, &log_path);
     if result.is_err() {
         let _ = app.kill();
         let _ = app.wait();
@@ -82,7 +88,7 @@ pub(crate) fn run(app_path: &str) -> Result<()> {
     result
 }
 
-fn run_checks(app: &mut Child) -> Result<()> {
+fn run_checks(app: &mut Child, app_log: &std::path::Path) -> Result<()> {
     let (conn, screen_num) = x11rb::connect(None).context("connecting to the X display")?;
     let root = conn.setup().roots[screen_num].root;
 
@@ -180,7 +186,10 @@ fn run_checks(app: &mut Child) -> Result<()> {
     })?;
     eprintln!("live-smoke: wheel scrolls OK (pixels changed)");
 
-    // Check 3: a real window close exits cleanly.
+    // Check: hidden-surface gating under a REAL X11 occlusion signal.
+    check_occlusion_gating(&conn, screen_num, root, window, app_log)?;
+
+    // Check: a real window close exits cleanly.
     send_wm_delete(&conn, window)?;
     let status = wait_for_exit(app, EXIT_TIMEOUT)?;
     match status {
@@ -198,6 +207,354 @@ fn run_checks(app: &mut Child) -> Result<()> {
             EXIT_TIMEOUT.as_secs()
         ),
     }
+}
+
+/// One presented frame's marker in the app log — the machine-oriented
+/// `event` field of the `flui.gpu` trace `flui-engine`'s `render_scene`
+/// emits immediately after the frame's encoders were submitted to the wgpu
+/// queue and the swapchain texture presented (matched on the field, not the
+/// human-readable message, so message rewording cannot silently break the
+/// oracle). Counting occurrences counts REAL GPU submissions, which is the
+/// hidden-surface criterion ("an occluded window issues zero GPU
+/// submissions"), not merely "no frame produced".
+const GPU_PRESENT_MARKER: &str = "event=\"present_submitted\"";
+/// One pointer-scroll delivery in the app log (`flui_widgets::scroll`'s own
+/// trace) — used while covered to pin the *designed* input drop: a hidden
+/// presentation refuses pointer input (`Suspended` lifecycle), so wheel
+/// ticks that demonstrably arrive at the translation layer must produce
+/// zero of these.
+const SCROLL_TICK_LINE: &str = "pointer-scroll tick";
+/// One wheel delivery at the winit translation layer — proof the event loop
+/// and platform translation keep running while frames are gated (the
+/// "without stopping wall-clock services" half of the criterion).
+const MOUSE_WHEEL_LINE: &str = "MouseWheel";
+
+/// Hidden-surface gating, driven by a REAL platform visibility signal.
+///
+/// X11 delivers `VisibilityNotify(FullyObscured)` when another window fully
+/// covers the app's window — winit's X11 backend translates exactly that
+/// into `WindowEvent::Occluded(true)` (and any other visibility state into
+/// `Occluded(false)`). Under bare Xvfb there is no compositor, so full
+/// obscuration is genuinely producible — unlike a live compositing desktop,
+/// where this event never fires. The cover window is override-redirect
+/// (no window manager involved) with an EMPTY input region (SHAPE
+/// extension): it obscures the app visually — the X server computes
+/// visibility from output geometry alone — while wheel input passes
+/// straight through to the app beneath, which the covered-phase probes rely
+/// on.
+///
+/// Frame demand while hidden cannot be injected from outside: a hidden
+/// presentation drops pointer input BY DESIGN (`Suspended` lifecycle —
+/// asserted below as its own check), so the demand must already be in
+/// flight when the surface goes hidden. A vigorous fling provides it: the
+/// ballistic scroll animation is presenting frames continuously at the
+/// moment the cover maps, and a broken gate would keep presenting them.
+///
+/// Sequence, with the wire under test spelled out:
+/// `VisibilityNotify` → winit `Occluded` → flui-platform's
+/// `dispatch_visibility_status_change` → `PlatformToUi::WindowVisibility` →
+/// `UiRealm::set_presentation_hidden` (per-presentation `FrameClock` gate)
+/// plus the `AppLifecycleState` derivation (`frames_enabled`) → the frame
+/// pump stops reaching the renderer: **zero GPU submissions while covered
+/// (the fling freezes), prompt resumption on uncover with no input needed**
+/// (the frames-reenable redirty plus retained animation demand).
+fn check_occlusion_gating(
+    conn: &RustConnection,
+    screen_num: usize,
+    root: Window,
+    window: Window,
+    app_log: &std::path::Path,
+) -> Result<()> {
+    // X11 core button 4: wheel-up. Up, not down: every prior check scrolled
+    // the list DOWN, so up-room is guaranteed while down-room may be
+    // exhausted at the list's end (a clamped no-op tick creates no frame
+    // demand and would starve the oracle).
+    let wheel_up_tick = || -> Result<()> {
+        const WHEEL_UP: u8 = 4;
+        conn.xtest_fake_input(BUTTON_PRESS, WHEEL_UP, 0, root, 0, 0, 0)?;
+        conn.xtest_fake_input(BUTTON_RELEASE, WHEEL_UP, 0, root, 0, 0, 0)?;
+        conn.sync()?;
+        Ok(())
+    };
+    // Stripped of ANSI escapes: the app's compact formatter colors its
+    // output even into a redirected file, splitting `field=value` text
+    // (`occluded` … `=` … `true` each get their own escape-wrapped span),
+    // so raw substring matching silently never fires.
+    let read_log = || -> Result<String> {
+        Ok(strip_ansi(
+            &std::fs::read_to_string(app_log).context("reading the app log")?,
+        ))
+    };
+    let count = |hay: &str, needle: &str| hay.matches(needle).count();
+
+    // 1. Arm the GPU oracle: the per-present trace line must demonstrably
+    //    be live BEFORE anything is asserted about its absence — a filter
+    //    typo or a renamed message must fail here, loudly, not let the
+    //    covered-window assertion pass vacuously.
+    let gpu_visible_base = count(&read_log()?, GPU_PRESENT_MARKER);
+    wheel_up_tick()?;
+    wheel_up_tick()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if count(&read_log()?, GPU_PRESENT_MARKER) > gpu_visible_base {
+            break;
+        }
+        if Instant::now() > deadline {
+            bail!(
+                "occlusion check FAILED (oracle arming): no '{GPU_PRESENT_MARKER}' log line \
+                 after wheel input on a visible window — the flui.gpu trace target is \
+                 not reaching the log, so nothing below could have been asserted"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // Post-arming baseline, taken only once presents have QUIESCED: the
+    // arming ticks above produce submissions of their own, so a baseline
+    // captured before them would let those ticks satisfy the fling premise
+    // below even if the drag never started a fling — a vacuous pass.
+    // Growth beyond THIS baseline is attributable to the drag/fling alone.
+    // Quiescence is best-effort (bounded): a stuck-animating app weakens
+    // attribution but cannot weaken the gate assertion itself.
+    let mut gpu_armed_base = count(&read_log()?, GPU_PRESENT_MARKER);
+    let quiesce_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        let sample = count(&read_log()?, GPU_PRESENT_MARKER);
+        let stable = sample == gpu_armed_base;
+        gpu_armed_base = sample;
+        if stable || Instant::now() > quiesce_deadline {
+            break;
+        }
+    }
+
+    // 2. Prepare (but do not yet map) the cover: an input-transparent
+    //    override-redirect window spanning the whole screen. Created ahead
+    //    of the fling so mapping it later is a single round-trip.
+    let screen = &conn.setup().roots[screen_num];
+    let cover = conn.generate_id()?;
+    conn.create_window(
+        x11rb::COPY_DEPTH_FROM_PARENT,
+        cover,
+        root,
+        0,
+        0,
+        screen.width_in_pixels,
+        screen.height_in_pixels,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0, // CopyFromParent visual
+        &CreateWindowAux::new()
+            .override_redirect(1)
+            .background_pixel(screen.black_pixel),
+    )?;
+    // EMPTY input region: zero rectangles. Visual obscuration (and thus
+    // VisibilityNotify) is unaffected — the server derives it from output
+    // geometry — but pointer events fall through to the app beneath.
+    conn.shape_rectangles(
+        shape::SO::SET,
+        shape::SK::INPUT,
+        ClipOrdering::UNSORTED,
+        cover,
+        0,
+        0,
+        &[],
+    )?;
+
+    // 3. Launch a vigorous downward drag-fling (content scrolls back up —
+    //    room is guaranteed, every prior check scrolled down) so a live
+    //    ballistic animation is presenting frames at the moment the cover
+    //    maps.
+    let geometry = conn.get_geometry(window)?.reply()?;
+    let coords = conn
+        .translate_coordinates(window, root, 0, 0)?
+        .reply()
+        .context("window position on the root")?;
+    let center_x = (i32::from(coords.dst_x) + i32::from(geometry.width) / 2) as i16;
+    let fling_start_y = (i32::from(coords.dst_y) + i32::from(geometry.height) / 4) as i16;
+    fake_motion(conn, root, center_x, fling_start_y)?;
+    conn.sync()?;
+    std::thread::sleep(Duration::from_millis(100));
+    conn.xtest_fake_input(BUTTON_PRESS, 1, 0, root, 0, 0, 0)?;
+    conn.sync()?;
+    for step in 1..=6i16 {
+        fake_motion(conn, root, center_x, fling_start_y + step * 40)?;
+        conn.sync()?;
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    conn.xtest_fake_input(BUTTON_RELEASE, 1, 0, root, 0, 0, 0)?;
+    conn.sync()?;
+
+    // 4. Cover the app mid-fling — DEMAND-gated, never time-gated: a fixed
+    //    gap between drag and cover is runner-speed-dependent (a slow CI
+    //    software raster presents a handful of frames where a dev machine
+    //    presents dozens), so instead poll until the ballistic animation
+    //    has demonstrably presented >= 3 frames beyond the quiesced
+    //    baseline AND is still producing (the count grew within the latest
+    //    sample window — the gate must close on a LIVE animation, not one
+    //    that just died), then map immediately. Only a bound expiring
+    //    without that evidence is a failure: a genuinely dead fling.
+    let fling_deadline = Instant::now() + Duration::from_secs(10);
+    let mut previous = count(&read_log()?, GPU_PRESENT_MARKER);
+    let fling_frames;
+    loop {
+        std::thread::sleep(Duration::from_millis(150));
+        let sample = count(&read_log()?, GPU_PRESENT_MARKER);
+        let frames = sample.saturating_sub(gpu_armed_base);
+        if frames >= 3 && sample > previous {
+            fling_frames = frames;
+            break;
+        }
+        if Instant::now() > fling_deadline {
+            bail!(
+                "occlusion check FAILED (premise): the drag-fling presented only \
+                 {frames} frame(s) beyond the quiesced post-arming baseline (or \
+                 stopped producing) within 10s of the drag — no live animation \
+                 exists for the gate to stop, so the zero-submissions assertion \
+                 would be vacuous"
+            );
+        }
+        previous = sample;
+    }
+    eprintln!("live-smoke: drag-fling live with {fling_frames} presented frames — covering now");
+    conn.map_window(cover)?;
+    conn.sync()?;
+
+    // The app must OBSERVE the occlusion: winit's translation logs
+    // "Window occlusion changed … occluded=true" at debug level. A timeout
+    // here means the platform wire is dead (or this X server did not
+    // deliver VisibilityNotify — bare Xvfb always does).
+    let occluded_line =
+        |log: &str| log.contains("Window occlusion changed") && log.contains("occluded=true");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if occluded_line(&read_log()?) {
+            break;
+        }
+        if Instant::now() > deadline {
+            bail!(
+                "occlusion check FAILED: the app never observed Occluded(true) within 10s \
+                 of being fully covered — the platform visibility wire is dead (or \
+                 VisibilityNotify was not delivered, which bare Xvfb always does)"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    eprintln!("live-smoke: occlusion signal observed by the app (Occluded=true)");
+
+    // 5. Let the in-flight frame (if any) drain, then snapshot. Everything
+    //    in the log AFTER this point happened while the app knew it was
+    //    occluded.
+    std::thread::sleep(Duration::from_millis(500));
+    let hidden_snapshot = read_log()?;
+    let gpu_hidden_base = count(&hidden_snapshot, GPU_PRESENT_MARKER);
+    let scroll_hidden_base = count(&hidden_snapshot, SCROLL_TICK_LINE);
+    let wheel_hidden_base = count(&hidden_snapshot, MOUSE_WHEEL_LINE);
+
+    // The fling premise was already established BEFORE the cover mapped
+    // (the demand-gated poll above): a live animation with >= 3 presented
+    // frames existed at cover time, so the zero-submissions assertion
+    // below is non-vacuous by construction. (`gpu_visible_base`, before
+    // arming, only feeds the arming loop above.)
+
+    // 6. Covered-phase probes: two wheel ticks pass through the cover's
+    //    empty input region.
+    for _ in 0..2 {
+        wheel_up_tick()?;
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    std::thread::sleep(Duration::from_millis(600));
+    let covered_log = read_log()?;
+
+    // Wall-clock half of the criterion: the event loop and platform
+    // translation must still be running while frames are gated — the ticks
+    // must show up at the translation layer.
+    if count(&covered_log, MOUSE_WHEEL_LINE) <= wheel_hidden_base {
+        bail!(
+            "occlusion check FAILED: no '{MOUSE_WHEEL_LINE}' translation lines while \
+             covered — the event loop stopped servicing platform events entirely \
+             while hidden (gating must stop FRAMES, not wall-clock services)"
+        );
+    }
+    // Designed input drop: a hidden presentation refuses pointer input
+    // (`Suspended` lifecycle), so those delivered ticks must produce ZERO
+    // scrollable dispatches.
+    if count(&covered_log, SCROLL_TICK_LINE) > scroll_hidden_base {
+        bail!(
+            "occlusion check FAILED: pointer-scroll dispatches reached the scrollable \
+             while the presentation was hidden — the Suspended-lifecycle input drop \
+             is not being applied"
+        );
+    }
+
+    // THE assertion: zero GPU submissions while the surface was hidden,
+    // with a live fling as demand.
+    let gpu_covered = count(&covered_log, GPU_PRESENT_MARKER);
+    if gpu_covered != gpu_hidden_base {
+        bail!(
+            "occlusion check FAILED: {} GPU submission(s) while the window was fully \
+             occluded — the hidden-surface gate is not stopping the frame pump \
+             (Occluded(true) was observed, so the signal arrived; the gate did not act)",
+            gpu_covered - gpu_hidden_base
+        );
+    }
+    eprintln!("live-smoke: hidden-surface gating OK (zero GPU submissions while covered)");
+
+    // 7. Uncover. Visibility must be re-observed AND frames must resume
+    //    WITHOUT any further input: the frames-reenable redirty repaints
+    //    unconditionally on the disabled→enabled edge, and the frozen
+    //    fling's retained demand rides the same wake. (Nudging the app
+    //    here would mask a broken resume wake.)
+    conn.destroy_window(cover)?;
+    conn.sync()?;
+    let unoccluded_line =
+        |log: &str| log.contains("Window occlusion changed") && log.contains("occluded=false");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let log = read_log()?;
+        if unoccluded_line(&log) && count(&log, GPU_PRESENT_MARKER) > gpu_hidden_base {
+            break;
+        }
+        if Instant::now() > deadline {
+            let log = read_log()?;
+            if !unoccluded_line(&log) {
+                bail!(
+                    "occlusion check FAILED: the app never observed Occluded(false) \
+                     within 10s of the cover being destroyed"
+                );
+            }
+            bail!(
+                "occlusion check FAILED: Occluded(false) was observed but no GPU \
+                 submission followed within 10s — the unhide wake / frames-reenable \
+                 redirty is not resuming the frame pump"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    eprintln!("live-smoke: unhide resume OK (frames resumed with no further input)");
+    Ok(())
+}
+
+/// Remove ANSI CSI escape sequences (`ESC [ … <final byte in @..=~>`) —
+/// everything the tracing compact formatter emits for color.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c2 in chars.by_ref() {
+                    if ('@'..='~').contains(&c2) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Poll the window tree for a window whose `WM_NAME` contains "FLUI",

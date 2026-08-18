@@ -32,11 +32,19 @@
 //! 3. **wheel scrolls** — three XTEST wheel ticks move the content (the
 //!    whole pointer-scroll wire: platform translation → hit-tested signal
 //!    → the scrollable's immediate scroll).
-//! 4. **clean close** — a `WM_DELETE_WINDOW` client message (a real window
+//! 4. **hidden-surface gating** — a REAL X11 occlusion signal (an
+//!    input-transparent override-redirect window fully covers the app →
+//!    `VisibilityFullyObscured` → winit `Occluded(true)`) must stop GPU
+//!    submissions mid-fling while the event loop keeps servicing input,
+//!    and uncovering must resume frames with no further input. Oracle:
+//!    per-present `flui.gpu` trace lines in the captured log — GPU
+//!    submissions, not merely "no frame produced". See
+//!    `harness::check_occlusion_gating` for the full wire.
+//! 5. **clean close** — a `WM_DELETE_WINDOW` client message (a real window
 //!    close, no window manager required) makes the process exit `0` within
 //!    the timeout: no hang, no post-teardown crash.
 //!
-//! The wayland mode runs check 4's equivalent only (launch + clean close,
+//! The wayland mode runs check 5's equivalent only (launch + clean close,
 //! several cycles) — the band where the X11-green/Wayland-segfault teardown
 //! ordering bug of issue #713 lived.
 

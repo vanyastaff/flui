@@ -114,12 +114,12 @@ pub unsafe fn is_key_pressed(vkey: i32) -> bool {
 /// DPI constants
 pub const USER_DEFAULT_SCREEN_DPI: u32 = 96;
 
-/// WM_SIZE wParam values
-pub const SIZE_RESTORED: u32 = 0;
-pub const SIZE_MINIMIZED: u32 = 1;
-pub const SIZE_MAXIMIZED: u32 = 2;
-pub const SIZE_MAXSHOW: u32 = 3;
-pub const SIZE_MAXHIDE: u32 = 4;
+/// WM_SIZE wParam values — single source of truth in the cfg-free (and
+/// host-tested) `shared::visibility` rule module; re-exported here so the
+/// backend keeps its historical import path.
+/// (Only the three the backend consumes are re-exported; `SIZE_MAXSHOW`/
+/// `SIZE_MAXHIDE` stay reachable at their defining path.)
+pub use crate::shared::visibility::{SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED};
 
 #[cfg(test)]
 mod tests {

@@ -338,6 +338,14 @@ pub trait PlatformWindow: Send + Sync {
     /// never fires and the window is always treated as visible; on X11 it
     /// only fires when a window is fully covered, which a compositing
     /// window manager may rarely or never produce.
+    ///
+    /// The native backends derive their own signal (rules in
+    /// `shared::visibility`, host-tested): **Win32** from
+    /// `WM_SIZE`-minimize/restore plus `WM_SHOWWINDOW` hide/show (Windows
+    /// has no occlusion events at all), **AppKit** from
+    /// `windowDidChangeOcclusionState:`'s visible bit (fires on full
+    /// occlusion, miniaturization, hide, and space switches). The headless
+    /// backend's `simulate_visibility` drives the same wire for tests.
     fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         let _ = callback;
     }
