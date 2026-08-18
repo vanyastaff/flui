@@ -70,6 +70,8 @@ use flui_semantics::AccessibilityFeatures;
 use parking_lot::{Mutex, RwLock};
 
 #[cfg(not(target_os = "ios"))]
+use super::execution::{ExecutionServices, HostExecutors};
+#[cfg(not(target_os = "ios"))]
 use super::runner::{RealmTask, SurfaceApplier};
 #[cfg(not(target_os = "ios"))]
 use super::ui_realm::UiRealm;
@@ -670,6 +672,23 @@ pub(crate) struct AppRuntime {
     /// Process-level engine services. Deliberately **not** resolved in
     /// [`AppRuntime::new`] -- see [`AppRuntime::ensure_services`] for why.
     services: OnceCell<SharedEngineServices>,
+    /// The loop-scoped background execution services (issue #557): both
+    /// background work-class lanes, their bounded admission, and the
+    /// shutdown protocol. Built at realm install
+    /// ([`Self::ensure_execution`]) from either the host-injected
+    /// [`HostExecutors`] stashed by [`Self::install_host_executors`] or the
+    /// lazily-started default pools. Loop-scoped like `owner_platform`:
+    /// hot-restart hosts a fresh realm on the same loop and must not
+    /// rebuild pools, so realm teardown never touches this — only full
+    /// loop-exit teardown shuts it down AND clears this slot
+    /// ([`Self::shutdown_execution`]), so a later second loop on this same
+    /// thread re-resolves fresh services instead of inheriting a dead
+    /// instance.
+    execution: OnceCell<ExecutionServices>,
+    /// Host executors received from `AppConfig` before the first realm
+    /// install resolves `execution`. Taken by [`Self::ensure_execution`];
+    /// ignored (with a warning) if execution services already exist.
+    pending_host_executors: Option<HostExecutors>,
     /// Whether a redraw has been requested since the last
     /// [`Self::mark_rendered`] — the loop-scoped half of the retired
     /// `AppBinding.needs_redraw` flag, re-homed here as part of `AppBinding`'s
@@ -733,6 +752,8 @@ impl AppRuntime {
             iterating_all_realms: false,
             pending_realm_mutations: Vec::new(),
             services: OnceCell::new(),
+            execution: OnceCell::new(),
+            pending_host_executors: None,
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Arc::new(Mutex::new(None)),
             platform_clipboard: Arc::new(Mutex::new(None)),
@@ -773,6 +794,109 @@ impl AppRuntime {
     #[cfg(test)]
     pub(super) fn services_resolved(&self) -> bool {
         self.services.get().is_some()
+    }
+
+    /// Stash the host's executors ahead of the first realm install (the
+    /// bootstrap step that resolves [`Self::ensure_execution`]). Called by
+    /// the runner when `AppConfig::executors` is `Some` — before
+    /// `install_platform_realm`, so the resolved services route to the host
+    /// instead of constructing the default pools.
+    ///
+    /// A stash arriving after execution services already exist is ignored
+    /// with a warning rather than rebuilt: pools may already be running
+    /// work, and silently swapping executors mid-run would strand it.
+    // Its one production caller (bootstrap_desktop's config wiring) is
+    // desktop-only; android/wasm have no host-injection entry point yet.
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "host executors are injected via AppConfig on the desktop bootstrap \
+                      only; android/web bootstraps gain the wiring with their own \
+                      host-injection slice"
+        )
+    )]
+    pub(super) fn install_host_executors(&mut self, host: HostExecutors) {
+        if self.execution.get().is_some() {
+            tracing::warn!(
+                "install_host_executors called after execution services were \
+                 already resolved; the injected executors are ignored"
+            );
+            return;
+        }
+        self.pending_host_executors = Some(host);
+    }
+
+    /// Resolves and caches the loop-scoped [`ExecutionServices`] on first
+    /// call (host-injected if [`Self::install_host_executors`] stashed a
+    /// bundle, default pools otherwise); returns the cached value on every
+    /// later call. Called from `install_platform_realm` alongside
+    /// [`Self::ensure_services`] — a realm is actually being installed, so
+    /// this loop genuinely hosts application work. Cheap either way: the
+    /// default pools start worker threads lazily, on first background
+    /// spawn, never here.
+    pub(super) fn ensure_execution(&mut self) -> &ExecutionServices {
+        let host = self.pending_host_executors.take();
+        self.execution.get_or_init(|| match host {
+            Some(host) => ExecutionServices::with_host(host),
+            None => ExecutionServices::with_defaults(),
+        })
+    }
+
+    /// The resolved execution services, if any. `None` before the first
+    /// realm install and on a loop (like `run_direct`'s) that never installs
+    /// a realm.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the background lanes' production callers are issue #558's \
+                      task/worker/service lifecycles; until then only tests read \
+                      the resolved services back"
+        )
+    )]
+    pub(super) fn execution(&self) -> Option<&ExecutionServices> {
+        self.execution.get()
+    }
+
+    /// Shut down the execution services and **reset the slot**: stop
+    /// admission, cancel outstanding work, join running work bounded by
+    /// `grace` per pool, then take the shut-down instance out of the
+    /// `OnceCell` (dropping it — its pools are already closed, so the drop
+    /// is a no-op) and discard any never-resolved host-executor stash. Runs
+    /// at full loop-exit teardown (`teardown_platform_realm`), never at
+    /// per-realm teardown — see the `execution` field's doc.
+    ///
+    /// Resetting the slot (rather than leaving the dead instance in place)
+    /// is load-bearing for a SECOND platform loop hosted on this same
+    /// thread later — an embedder running `run_app` twice in one process,
+    /// or a headless-restart harness: the next loop's realm install must
+    /// re-resolve a fresh, working `ExecutionServices` (honoring any newly
+    /// stashed `HostExecutors`), not inherit an instance whose admission is
+    /// permanently closed. Nothing rebuilds pools on the loop that is
+    /// exiting either way: `ensure_execution` (the only resolver) runs only
+    /// from a realm install, and this loop is past its last one. A teardown
+    /// path that skips this call still tears pools down non-blockingly
+    /// (`ExecutionServices`' own `Drop`).
+    // Its production caller (teardown_platform_realm) is not compiled on
+    // wasm32, where shutdown is a no-op by construction (sequential
+    // execution; nothing to join).
+    #[cfg_attr(
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "full loop-exit teardown (the caller) does not exist on wasm32; \
+                      the wasm backend has nothing to cancel or join"
+        )
+    )]
+    pub(super) fn shutdown_execution(&mut self, grace: std::time::Duration) {
+        // A stash the exiting loop never resolved must not leak into the
+        // next loop's resolution: injection is per-run configuration, and
+        // the next `run_*` stashes its own config's bundle if it has one.
+        self.pending_host_executors = None;
+        if let Some(services) = self.execution.take() {
+            services.shutdown(grace);
+        }
     }
 
     /// True if `phase` is one of the phases `with_owner_platform`'s fence (c)
@@ -1750,6 +1874,119 @@ mod identity_tests {
         assert_ne!(
             realm_a, realm_b,
             "every mint must produce a fresh generation, never repeating"
+        );
+    }
+}
+
+#[cfg(test)]
+mod execution_wiring_tests {
+    use super::*;
+    use crate::app::execution::DeterministicExecutors;
+
+    #[test]
+    fn ensure_execution_defaults_to_owned_pools() {
+        let mut runtime = AppRuntime::new();
+        assert!(
+            runtime.execution().is_none(),
+            "nothing resolved before ensure"
+        );
+        let services = runtime.ensure_execution();
+        assert!(
+            services.owns_default_pools(),
+            "with no stashed host executors, the runtime owns the default pools"
+        );
+    }
+
+    /// The injection order the bootstrap relies on: a host bundle stashed
+    /// BEFORE the first `ensure_execution` makes the resolved services route
+    /// to the host — the default pools are never constructed.
+    #[test]
+    fn stashed_host_executors_win_over_default_pools() {
+        let deterministic = DeterministicExecutors::new();
+        let mut runtime = AppRuntime::new();
+        runtime.install_host_executors(deterministic.host_executors());
+        let services = runtime.ensure_execution();
+        assert!(
+            !services.owns_default_pools(),
+            "a stashed host bundle must be the resolved backend"
+        );
+        assert!(!services.default_pools_started());
+
+        // Round-trip: work spawned through the resolved services runs on
+        // the injected executor, when IT is driven.
+        let ran = std::sync::Arc::new(AtomicBool::new(false));
+        let ran_for_job = std::sync::Arc::clone(&ran);
+        services
+            .spawn_compute(Box::new(move || {
+                ran_for_job.store(true, Ordering::Release);
+            }))
+            .expect("spawn must be admitted");
+        assert!(!ran.load(Ordering::Acquire));
+        deterministic.run_until_idle();
+        assert!(ran.load(Ordering::Acquire));
+    }
+
+    /// A bundle arriving after resolution is ignored, never a silent rebuild
+    /// that would strand running pools.
+    #[test]
+    fn late_host_executors_are_ignored() {
+        let mut runtime = AppRuntime::new();
+        let _ = runtime.ensure_execution();
+        runtime.install_host_executors(DeterministicExecutors::new().host_executors());
+        let services = runtime.ensure_execution();
+        assert!(
+            services.owns_default_pools(),
+            "executors injected after resolution must not replace the live backend"
+        );
+    }
+
+    /// `shutdown_execution` shuts the services down AND clears the slot,
+    /// so the next loop on this thread re-resolves fresh, working services
+    /// — including honoring a host bundle stashed for that next loop. A
+    /// shutdown that left the dead instance in place would refuse every
+    /// spawn of the second loop and silently ignore its injected
+    /// executors.
+    #[test]
+    fn shutdown_execution_resets_the_slot_for_a_later_loop() {
+        let mut runtime = AppRuntime::new();
+        let _ = runtime.ensure_execution();
+        runtime.shutdown_execution(std::time::Duration::from_secs(5));
+        assert!(
+            runtime.execution().is_none(),
+            "loop-exit shutdown must clear the slot, not leave a dead instance"
+        );
+
+        // "Second loop": a fresh install with its own injected executors.
+        let deterministic = DeterministicExecutors::new();
+        runtime.install_host_executors(deterministic.host_executors());
+        let services = runtime.ensure_execution();
+        assert!(
+            !services.owns_default_pools(),
+            "the second loop's host bundle must be honored, not ignored as late"
+        );
+        let ran = std::sync::Arc::new(AtomicBool::new(false));
+        let ran_for_job = std::sync::Arc::clone(&ran);
+        services
+            .spawn_compute(Box::new(move || {
+                ran_for_job.store(true, Ordering::Release);
+            }))
+            .expect("the second loop's admission must be open");
+        deterministic.run_until_idle();
+        assert!(ran.load(Ordering::Acquire));
+    }
+
+    /// A host stash the exiting loop never resolved is discarded at
+    /// shutdown: injection is per-run configuration, and the next run
+    /// stashes its own.
+    #[test]
+    fn shutdown_execution_discards_an_unresolved_stash() {
+        let mut runtime = AppRuntime::new();
+        runtime.install_host_executors(DeterministicExecutors::new().host_executors());
+        runtime.shutdown_execution(std::time::Duration::from_secs(5));
+        let services = runtime.ensure_execution();
+        assert!(
+            services.owns_default_pools(),
+            "a stash for a torn-down loop must not leak into the next loop's resolution"
         );
     }
 }

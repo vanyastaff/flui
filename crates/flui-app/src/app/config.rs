@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use flui_log::AppIdentity;
 use flui_types::{Size, geometry::px};
 
+use super::execution::HostExecutors;
 #[cfg(not(target_os = "ios"))]
 use super::runtime::ExitPolicy;
 
@@ -147,6 +148,16 @@ pub struct AppConfig {
     /// entirely — see that function's own doc).
     #[cfg(not(target_os = "ios"))]
     pub exit_policy: ExitPolicy,
+
+    /// Host-injected background executors (issue #557).
+    ///
+    /// `None` (the default): the runtime constructs its own worker pools,
+    /// lazily, on first background spawn. `Some`: all background work routes
+    /// to the host's pools and the default pools are **never** constructed —
+    /// the seam by which FLUI embedded next to an engine that already owns a
+    /// thread pool avoids oversubscribing the machine. See
+    /// [`HostExecutors`]'s own doc for the contract layered on top.
+    pub executors: Option<HostExecutors>,
 }
 
 impl Default for AppConfig {
@@ -168,6 +179,7 @@ impl Default for AppConfig {
             worker_plugin_path: None,
             #[cfg(not(target_os = "ios"))]
             exit_policy: ExitPolicy::default(),
+            executors: None,
         }
     }
 }
@@ -256,6 +268,13 @@ impl AppConfig {
     #[cfg(feature = "hot-reload")]
     pub fn with_worker_plugin_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.worker_plugin_path = Some(path.into());
+        self
+    }
+
+    /// Inject the host's own background executors. See
+    /// [`Self::executors`]'s doc for what this changes.
+    pub fn with_executors(mut self, executors: HostExecutors) -> Self {
+        self.executors = Some(executors);
         self
     }
 }

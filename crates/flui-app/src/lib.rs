@@ -47,6 +47,14 @@ pub use app::{
     AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config,
     run_direct,
 };
+// Host-injected execution seam (issue #557): an embedded host provides its
+// own worker pools via `AppConfig::with_executors`, and the runtime's
+// default pools are then never constructed. `DeterministicExecutors` is the
+// single-threaded reference implementation for tests and reproducible hosts.
+pub use app::{
+    ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
+    SpawnError,
+};
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
 // available on iOS, where `AppRuntime`/`UiRealm`'s realm-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).

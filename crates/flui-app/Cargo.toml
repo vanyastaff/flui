@@ -95,6 +95,15 @@ raw-window-handle.workspace = true
 pollster = "0.4"
 web-time = { workspace = true }
 
+# Default execution services (issue #557): the loop-scoped `AppRuntime` owns
+# the process's background worker pools (an IO runtime and a bounded compute
+# pool), replacing the per-platform full-core `BackgroundExecutor`s. Native
+# only — the wasm32 build of `app::execution` is the sequential variant and
+# needs neither crate.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+tokio-util = { workspace = true }
+
 # Web/WASM platform (runner spawns the frame loop via spawn_local)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
