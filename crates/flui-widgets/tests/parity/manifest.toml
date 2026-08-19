@@ -221,7 +221,6 @@ tests = 13
 oracle = "widgets/custom_multi_child_layout_test.dart"
 cases = ["performLayout did not layout multiple child"]
 
-
 [[targets]]
 rust = "custom_paint_test"
 family = "painting"

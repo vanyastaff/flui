@@ -697,6 +697,7 @@ impl Drop for InteractionLane {
         let targets = self.inner.targets.take();
         let mouse_targets = self.inner.mouse_targets.take();
         let scroll_targets = self.inner.scroll_targets.take();
+        let pan_zoom_targets = self.inner.pan_zoom_targets.take();
         let path_clip_targets = self.inner.path_clip_targets.take();
         let shader_mask_targets = self.inner.shader_mask_targets.take();
 
@@ -715,6 +716,10 @@ impl Drop for InteractionLane {
         let mut scroll_targets: Vec<_> = scroll_targets.into_iter().collect();
         scroll_targets.sort_unstable_by_key(|(id, _)| *id);
         drop(scroll_targets);
+
+        let mut pan_zoom_targets: Vec<_> = pan_zoom_targets.into_iter().collect();
+        pan_zoom_targets.sort_unstable_by_key(|(id, _)| *id);
+        drop(pan_zoom_targets);
 
         let mut path_clip_targets: Vec<_> = path_clip_targets.into_iter().collect();
         path_clip_targets.sort_unstable_by_key(|(id, _)| *id);

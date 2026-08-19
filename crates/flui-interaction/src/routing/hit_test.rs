@@ -896,59 +896,78 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
     }
 }
 
-/// Re-express a pan-zoom event's focal point in an entry's local space.
+/// Re-express a pan-zoom event in an entry's local space.
 ///
-/// Only the focal position localizes: `pan`/`pan_delta` are offsets in the
-/// same space the position came from and the entry transforms this walk sees
-/// are translations plus the viewer's own scale, while `scale` and `rotation`
-/// are dimensionless. Localizing them here would double-apply the very
-/// transform the consumer is about to update.
+/// Ported from Flutter's `_TransformedPointerPanZoomUpdateEvent`
+/// (`gestures/events.dart`), which is the oracle for exactly this
+/// localization and treats each field differently:
+///
+/// - `position` and `pan` are **positions**: `transformPosition`.
+/// - `pan_delta` is a **delta anchored at `pan`**: the oracle's
+///   `transformDeltaViaPositions` transforms the delta's start and end points
+///   separately and subtracts, rather than mapping the offset directly —
+///   mathematically equivalent for an affine matrix, but it also stays
+///   correct under perspective and, as the oracle's own comment records,
+///   carries less precision error.
+/// - `scale` and `rotation` are dimensionless and pass through untouched.
+///
+/// Localizing `pan`/`pan_delta` matters even though today's W3C adapter
+/// synthesizes both as zero (`convert_gesture` has no upstream pan field to
+/// read): `PointerPanZoomEvent` is public and `dispatch_pan_zoom` accepts a
+/// fully populated one, so a richer producer must not silently observe
+/// global-space offsets inside a scaled or rotated subtree.
 fn transform_pan_zoom_event(
     event: &PointerPanZoomEvent,
     transform: &Matrix4,
 ) -> PointerPanZoomEvent {
-    let position = event.position();
-    let (x, y) = transform.transform_point(position.dx, position.dy);
-    let local = Offset::new(x, y);
+    let localize = |point: Offset<Pixels>| {
+        let (x, y) = transform.transform_point(point.dx, point.dy);
+        Offset::new(x, y)
+    };
     match *event {
         PointerPanZoomEvent::Start {
             pointer_id,
+            position,
             timestamp_nanos,
             device_kind,
-            ..
         } => PointerPanZoomEvent::Start {
             pointer_id,
-            position: local,
+            position: localize(position),
             timestamp_nanos,
             device_kind,
         },
         PointerPanZoomEvent::Update {
             pointer_id,
+            position,
             pan,
             pan_delta,
             scale,
             rotation,
             timestamp_nanos,
             device_kind,
-            ..
-        } => PointerPanZoomEvent::Update {
-            pointer_id,
-            position: local,
-            pan,
-            pan_delta,
-            scale,
-            rotation,
-            timestamp_nanos,
-            device_kind,
-        },
+        } => {
+            let local_pan = localize(pan);
+            PointerPanZoomEvent::Update {
+                pointer_id,
+                position: localize(position),
+                pan: local_pan,
+                // `transformDeltaViaPositions`: end minus start, both mapped
+                // as positions, with `pan` as the delta's end point.
+                pan_delta: local_pan - localize(pan - pan_delta),
+                scale,
+                rotation,
+                timestamp_nanos,
+                device_kind,
+            }
+        }
         PointerPanZoomEvent::End {
             pointer_id,
+            position,
             timestamp_nanos,
             device_kind,
-            ..
         } => PointerPanZoomEvent::End {
             pointer_id,
-            position: local,
+            position: localize(position),
             timestamp_nanos,
             device_kind,
         },
@@ -1333,6 +1352,83 @@ mod tests {
             assert!(result.dispatch_pan_zoom(&pan_zoom));
         });
         assert_eq!(&*order.borrow(), &["leaf", "root"]);
+    }
+
+    #[test]
+    fn dispatch_pan_zoom_localizes_pan_as_a_position_and_pan_delta_as_a_delta() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use crate::events::make_pinch_gesture_event;
+        use crate::pan_zoom::from_w3c_event;
+        use crate::routing::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let observed = Rc::new(Cell::new(None));
+        lane.enter(|| {
+            let probe = Rc::clone(&observed);
+            let target = handle
+                .register_pan_zoom(move |event| {
+                    if let PointerPanZoomEvent::Update { pan, pan_delta, .. } = *event {
+                        probe.set(Some((pan, pan_delta)));
+                    }
+                    EventPropagation::Stop
+                })
+                .expect("register");
+
+            let mut result = HitTestResult::new();
+            // A subtree scaled 2x in paint: its global-to-local transform
+            // halves. `pan` is a POSITION and `pan_delta` a DELTA anchored at
+            // it, so both must halve here — the oracle's
+            // `_TransformedPointerPanZoomUpdateEvent` maps `pan` through
+            // `transformPosition` and `panDelta` through
+            // `transformDeltaViaPositions` (`gestures/events.dart`).
+            let mut forward = Matrix4::identity();
+            forward.scale(2.0, 2.0, 1.0);
+            result.with_paint_transform(forward, |result| {
+                result.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(target));
+            });
+
+            // Build on a real converted tick so pointer identity and device
+            // kind come from the production adapter, then supply the nonzero
+            // pan payload that adapter cannot yet produce.
+            let converted = from_w3c_event(&make_pinch_gesture_event(
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                0.0,
+            ))
+            .expect("gesture converts");
+            let PointerPanZoomEvent::Update {
+                pointer_id,
+                scale,
+                rotation,
+                timestamp_nanos,
+                device_kind,
+                ..
+            } = converted
+            else {
+                panic!("convert_gesture yields an Update");
+            };
+            let event = PointerPanZoomEvent::Update {
+                pointer_id,
+                position: Offset::new(Pixels(50.0), Pixels(50.0)),
+                pan: Offset::new(Pixels(40.0), Pixels(20.0)),
+                pan_delta: Offset::new(Pixels(10.0), Pixels(4.0)),
+                scale,
+                rotation,
+                timestamp_nanos,
+                device_kind,
+            };
+            assert!(result.dispatch_pan_zoom(&event));
+        });
+
+        let (pan, pan_delta) = observed.get().expect("an Update reached the target");
+        assert_eq!(pan, Offset::new(Pixels(20.0), Pixels(10.0)), "pan halves");
+        assert_eq!(
+            pan_delta,
+            Offset::new(Pixels(5.0), Pixels(2.0)),
+            "pan_delta halves with the subtree, not passed through in global space"
+        );
     }
 
     #[test]
