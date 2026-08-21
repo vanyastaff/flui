@@ -319,9 +319,10 @@ impl Path {
     /// Uses a ray-casting algorithm for even-odd fill and a winding-number
     /// algorithm for non-zero fill.
     ///
-    /// Note: `AddArc` commands are currently ignored (conservative miss);
-    /// only line/quadratic/cubic segments, rects, circles, and ovals are
-    /// evaluated.
+    /// Arcs are flattened into chords at the same ellipse parametrization
+    /// the tessellator rasterizes them with, so a shape built from corner
+    /// arcs (`from_rrect`, a circular `CircleBorder`) is contained as the
+    /// curve it draws rather than as the polygon through its arc endpoints.
     #[must_use]
     #[inline]
     pub fn contains(&self, point: Point<Pixels>) -> bool {
@@ -556,6 +557,11 @@ impl Path {
         let mut crossings = 0;
         let mut current_pos = Point::new(px(0.0), px(0.0));
         let mut subpath_start = Point::new(px(0.0), px(0.0));
+        // Whether a contour is currently open. Only the arc arms read it:
+        // `add_arc` continues an open contour but starts a fresh one when
+        // nothing is open, and the two cases seed `subpath_start`
+        // differently.
+        let mut subpath_open = false;
 
         for cmd in &self.commands {
             match cmd {
@@ -571,29 +577,34 @@ impl Path {
                     }
                     current_pos = *p;
                     subpath_start = *p;
+                    subpath_open = true;
                 }
                 PathCommand::LineTo(p) => {
                     if Self::ray_intersects_segment(point, current_pos, *p) {
                         crossings += 1;
                     }
                     current_pos = *p;
+                    subpath_open = true;
                 }
                 PathCommand::Close => {
                     if Self::ray_intersects_segment(point, current_pos, subpath_start) {
                         crossings += 1;
                     }
                     current_pos = subpath_start;
+                    subpath_open = false;
                 }
                 PathCommand::QuadraticTo(c, e) => {
                     // Approximate with line segments
                     crossings += Self::count_curve_crossings_quad(point, current_pos, *c, *e);
                     current_pos = *e;
+                    subpath_open = true;
                 }
                 PathCommand::CubicTo(c1, c2, e) => {
                     // Approximate with line segments
                     crossings +=
                         Self::count_curve_crossings_cubic(point, current_pos, *c1, *c2, *e);
                     current_pos = *e;
+                    subpath_open = true;
                 }
                 PathCommand::AddRect(rect) => {
                     // Simple rectangle test
@@ -621,9 +632,21 @@ impl Path {
                         crossings += 1;
                     }
                 }
-                PathCommand::AddArc(..) => {
-                    // TODO: Implement arc containment
-                    // For now, skip arcs (conservative - may miss some points)
+                PathCommand::AddArc(rect, start, sweep) => {
+                    let arc_start = Self::eval_arc(*rect, *start);
+                    if subpath_open {
+                        // An arc appended to an open contour continues it,
+                        // chord-connected — the same shape the tessellator
+                        // draws (see `add_arc`'s divergence note).
+                        if Self::ray_intersects_segment(point, current_pos, arc_start) {
+                            crossings += 1;
+                        }
+                    } else {
+                        subpath_start = arc_start;
+                        subpath_open = true;
+                    }
+                    crossings += Self::count_arc_crossings(point, *rect, *start, *sweep);
+                    current_pos = Self::eval_arc(*rect, *start + *sweep);
                 }
             }
         }
@@ -642,6 +665,11 @@ impl Path {
         let mut winding = 0;
         let mut current_pos = Point::new(px(0.0), px(0.0));
         let mut subpath_start = Point::new(px(0.0), px(0.0));
+        // Whether a contour is currently open. Only the arc arms read it:
+        // `add_arc` continues an open contour but starts a fresh one when
+        // nothing is open, and the two cases seed `subpath_start`
+        // differently.
+        let mut subpath_open = false;
 
         for cmd in &self.commands {
             match cmd {
@@ -652,22 +680,27 @@ impl Path {
                     winding += Self::segment_winding(point, current_pos, subpath_start);
                     current_pos = *p;
                     subpath_start = *p;
+                    subpath_open = true;
                 }
                 PathCommand::LineTo(p) => {
                     winding += Self::segment_winding(point, current_pos, *p);
                     current_pos = *p;
+                    subpath_open = true;
                 }
                 PathCommand::Close => {
                     winding += Self::segment_winding(point, current_pos, subpath_start);
                     current_pos = subpath_start;
+                    subpath_open = false;
                 }
                 PathCommand::QuadraticTo(c, e) => {
                     winding += Self::curve_winding_quad(point, current_pos, *c, *e);
                     current_pos = *e;
+                    subpath_open = true;
                 }
                 PathCommand::CubicTo(c1, c2, e) => {
                     winding += Self::curve_winding_cubic(point, current_pos, *c1, *c2, *e);
                     current_pos = *e;
+                    subpath_open = true;
                 }
                 PathCommand::AddRect(rect) => {
                     if rect.contains(point) {
@@ -692,8 +725,18 @@ impl Path {
                         winding += 1;
                     }
                 }
-                PathCommand::AddArc(..) => {
-                    // TODO: Implement arc winding
+                PathCommand::AddArc(rect, start, sweep) => {
+                    let arc_start = Self::eval_arc(*rect, *start);
+                    if subpath_open {
+                        // See the even-odd arm: an arc continues an open
+                        // contour through a chord, it does not restart one.
+                        winding += Self::segment_winding(point, current_pos, arc_start);
+                    } else {
+                        subpath_start = arc_start;
+                        subpath_open = true;
+                    }
+                    winding += Self::arc_winding(point, *rect, *start, *sweep);
+                    current_pos = Self::eval_arc(*rect, *start + *sweep);
                 }
             }
         }
@@ -741,6 +784,91 @@ impl Path {
     #[inline]
     fn is_left(p1: Point<Pixels>, p2: Point<Pixels>, point: Point<Pixels>) -> f32 {
         (p2.x - p1.x).get() * (point.y - p1.y).get() - (point.x - p1.x).get() * (p2.y - p1.y).get()
+    }
+
+    /// Samples the ellipse inscribed in `rect` at `angle` radians.
+    ///
+    /// Deliberately the same parametrization the tessellator rasterizes an
+    /// arc with (`lyon::geom::Arc` at zero x-rotation: `center + (rx·cosθ,
+    /// ry·sinθ)`), so containment and the drawn pixels agree on where the
+    /// curve is. Angles are y-down, matching the rest of the geometry
+    /// vocabulary.
+    #[inline]
+    fn eval_arc(rect: Rect<Pixels>, angle: f32) -> Point<Pixels> {
+        let cx = (rect.left() + rect.right()) * 0.5;
+        let cy = (rect.top() + rect.bottom()) * 0.5;
+        let rx = rect.width() * 0.5;
+        let ry = rect.height() * 0.5;
+        Point::new(cx + rx * angle.cos(), cy + ry * angle.sin())
+    }
+
+    /// How many chords to flatten an arc of `sweep` radians into.
+    ///
+    /// One chord per 11.25° keeps a quarter-turn at eight chords (a full
+    /// turn at 32), so the worst-case gap between the chord and the true
+    /// curve is `r · (1 - cos(5.625°))` ≈ `r / 200` — well under a pixel
+    /// for the button-sized radii this gate actually decides. Clamped so a
+    /// degenerate or absurd sweep still costs a bounded walk.
+    #[inline]
+    fn arc_chord_count(sweep: f32) -> usize {
+        const RADIANS_PER_CHORD: f32 = core::f32::consts::PI / 16.0;
+        let wanted = (sweep.abs() / RADIANS_PER_CHORD).ceil();
+        if wanted.is_finite() {
+            (wanted as usize).clamp(1, 64)
+        } else {
+            1
+        }
+    }
+
+    /// Count ray crossings for an arc, flattened into chords. The chord from
+    /// the contour's current position to the arc's start is the caller's to
+    /// count — whether one exists depends on if a contour is open.
+    #[inline]
+    fn count_arc_crossings(
+        point: Point<Pixels>,
+        rect: Rect<Pixels>,
+        start_angle: f32,
+        sweep_angle: f32,
+    ) -> usize {
+        let chords = Self::arc_chord_count(sweep_angle);
+        let mut crossings = 0;
+        let mut from = Self::eval_arc(rect, start_angle);
+
+        for i in 1..=chords {
+            #[allow(clippy::cast_precision_loss)]
+            let t = i as f32 / chords as f32;
+            let to = Self::eval_arc(rect, start_angle + sweep_angle * t);
+            if Self::ray_intersects_segment(point, from, to) {
+                crossings += 1;
+            }
+            from = to;
+        }
+
+        crossings
+    }
+
+    /// Winding-number contribution of an arc, flattened into chords — the
+    /// non-zero counterpart of [`Self::count_arc_crossings`].
+    #[inline]
+    fn arc_winding(
+        point: Point<Pixels>,
+        rect: Rect<Pixels>,
+        start_angle: f32,
+        sweep_angle: f32,
+    ) -> i32 {
+        let chords = Self::arc_chord_count(sweep_angle);
+        let mut winding = 0;
+        let mut from = Self::eval_arc(rect, start_angle);
+
+        for i in 1..=chords {
+            #[allow(clippy::cast_precision_loss)]
+            let t = i as f32 / chords as f32;
+            let to = Self::eval_arc(rect, start_angle + sweep_angle * t);
+            winding += Self::segment_winding(point, from, to);
+            from = to;
+        }
+
+        winding
     }
 
     /// Count crossings for quadratic bezier curve (approximated).
@@ -988,5 +1116,105 @@ mod tests {
 
         let path = Path::rectangle(Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)));
         assert!(path.rrect_hint().is_none());
+    }
+
+    /// The command shape a circular Material surface (`CircleBorder`, and
+    /// `from_rrect` for a fully-rounded box) actually produces: four
+    /// quadrant arcs over the same bounding rect, each preceded by a
+    /// degenerate `LineTo` to the arc's start.
+    fn quadrant_arc_circle(diameter: f32) -> Path {
+        use core::f32::consts::FRAC_PI_2;
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(diameter), px(diameter));
+        let mid = px(diameter / 2.0);
+        let end = px(diameter);
+
+        let mut path = Path::new();
+        path.move_to(Point::new(mid, px(0.0)));
+        path.line_to(Point::new(mid, px(0.0)));
+        path.add_arc(rect, -FRAC_PI_2, FRAC_PI_2);
+        path.line_to(Point::new(end, mid));
+        path.add_arc(rect, 0.0, FRAC_PI_2);
+        path.line_to(Point::new(mid, end));
+        path.add_arc(rect, FRAC_PI_2, FRAC_PI_2);
+        path.line_to(Point::new(px(0.0), mid));
+        path.add_arc(rect, core::f32::consts::PI, FRAC_PI_2);
+        path.close();
+        path
+    }
+
+    /// A circle assembled from quadrant arcs must contain the whole disc,
+    /// not just the diamond through the arc endpoints.
+    ///
+    /// `(9, 9)` on a 40px circle is the case that matters in practice: it is
+    /// 15.6px from the centre so it is comfortably inside the 20px radius,
+    /// but `|9-20| + |9-20| = 22 > 20` puts it outside the inscribed
+    /// diamond. Skipping the arcs left exactly that diamond — roughly 64% of
+    /// the disc — so the corner of every circular `IconButton` stopped
+    /// hit-testing.
+    #[test]
+    fn a_circle_built_from_quadrant_arcs_contains_its_whole_disc() {
+        for fill_type in [PathFillType::NonZero, PathFillType::EvenOdd] {
+            let mut path = quadrant_arc_circle(40.0);
+            path.set_fill_type(fill_type);
+
+            assert!(
+                path.contains(Point::new(px(9.0), px(9.0))),
+                "{fill_type:?}: (9,9) is 15.6px from the centre of a 20px \
+                 radius, inside the disc but outside the endpoint diamond"
+            );
+            assert!(
+                path.contains(Point::new(px(20.0), px(20.0))),
+                "{fill_type:?}: the centre is inside"
+            );
+            assert!(
+                path.contains(Point::new(px(38.0), px(20.0))),
+                "{fill_type:?}: a point just inside the right extreme"
+            );
+        }
+    }
+
+    /// The flattening must not over-claim either: a corner of the bounding
+    /// box is outside the disc and stays outside.
+    #[test]
+    fn a_circle_built_from_quadrant_arcs_rejects_its_bounding_box_corners() {
+        for fill_type in [PathFillType::NonZero, PathFillType::EvenOdd] {
+            let mut path = quadrant_arc_circle(40.0);
+            path.set_fill_type(fill_type);
+
+            for corner in [
+                Point::new(px(1.0), px(1.0)),
+                Point::new(px(39.0), px(1.0)),
+                Point::new(px(1.0), px(39.0)),
+                Point::new(px(39.0), px(39.0)),
+            ] {
+                assert!(
+                    !path.contains(corner),
+                    "{fill_type:?}: {corner:?} is 26.9px from the centre, \
+                     outside the 20px radius"
+                );
+            }
+        }
+    }
+
+    /// An arc that opens its own contour seeds that contour at the arc's
+    /// start rather than chording back to the origin.
+    #[test]
+    fn a_leading_arc_starts_its_own_contour() {
+        use core::f32::consts::TAU;
+        let rect = Rect::from_xywh(px(100.0), px(100.0), px(40.0), px(40.0));
+
+        let mut path = Path::new();
+        path.add_arc(rect, 0.0, TAU);
+        path.close();
+
+        assert!(
+            path.contains(Point::new(px(120.0), px(120.0))),
+            "the arc's own centre is inside"
+        );
+        assert!(
+            !path.contains(Point::new(px(50.0), px(50.0))),
+            "a point back toward the origin is outside — a leading arc must \
+             not chord to (0, 0)"
+        );
     }
 }
