@@ -106,7 +106,9 @@ Started → Ready (pointer_up → success)
 ```rust
 // Call periodically in event loop
 if recognizer.check_timer() {
-    // Timer elapsed, long press started
+    // Timer elapsed, long press started — and the arena is already
+    // resolved in this recognizer's favour, so competing members (a tap
+    // on the same region) have been rejected. Do not resolve it again.
 }
 ```
 
