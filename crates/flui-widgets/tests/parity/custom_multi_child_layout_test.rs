@@ -67,9 +67,11 @@
 //!   inside `subtree_arena.rs`. A capturing `tracing::Subscriber` (installed
 //!   thread-locally for the one call via `tracing::subscriber::with_default`,
 //!   never process-global) is therefore the only way to make that divergence
-//!   falsifiable at all — confirmed by capturing the real log line first:
-//!   `panic_msg="Each child of RenderCustomMultiChildLayoutBox must be laid
-//!   out exactly once; missing id \"2\""`, with `"3"` nowhere in it.
+//!   falsifiable at all — confirmed by capturing the real log line first,
+//!   which at the time read `panic_msg="Each child of
+//!   RenderCustomMultiChildLayoutBox must be laid out exactly once; missing
+//!   id \"2\""` with `"3"` nowhere in it. That truncation is now fixed and
+//!   the line enumerates both.
 //!
 //! This is not itself a bug: a render object whose delegate misbehaves being
 //! isolated (no committed geometry, no crash) while the rest of the frame
@@ -137,9 +139,10 @@
 //!     `id: None`) far more directly.
 //! 11. `'performLayout did not layout a child'` — ported, real green:
 //!     [`a_child_never_laid_out_names_it_in_the_captured_log`].
-//! 12. `'performLayout did not layout multiple child'` — **divergence pin**:
+//! 12. `'performLayout did not layout multiple child'` — ported, real green:
 //!     [`multiple_children_never_laid_out_are_all_named_in_the_panic_pin`].
-//!     See "Divergence found by this port" below.
+//!     Green because this port's own finding was fixed — see "Divergence
+//!     found by this port" below.
 //!
 //! ## Divergence found by this port
 //!
@@ -157,9 +160,10 @@
 //! delegate answered. Not re-explained in full here — see that file's module
 //! doc for the two-part fix this needs.
 //!
-//! **Case 12 is a second, independent finding, specific to the multi-child
-//! delegate:** `DelegateLayoutContext::finish`
-//! (`crates/flui-objects/src/layout/custom_multi_child_layout.rs`) is
+//! **Case 12 was a second, independent finding, specific to the multi-child
+//! delegate — found by this port and FIXED in the same change that un-pinned
+//! it.** `DelegateLayoutContext::finish`
+//! (`crates/flui-objects/src/layout/custom_multi_child_layout.rs`) used to be
 //!
 //! ```ignore
 //! fn finish(self) {
@@ -173,28 +177,26 @@
 //! ```
 //!
 //! `Iterator::position` stops at the **first** match, so when two or more
-//! children are left unlaid the panic names only the first of them — the
+//! children were left unlaid the panic named only the first of them — the
 //! oracle's own two "did not lay out a child" cases exist specifically to
 //! distinguish this (case 11's oracle message says "the following **child**"
 //! naming one id; case 12's says "the following **children**" and enumerates
 //! all of them, `2:` and `3:` on their own lines via `DiagnosticsBlock`).
-//! Captured directly from a real run (see `debug_probe_captured_log_text`,
-//! since deleted after confirming the exact text — the diagnostic line was):
+//! Captured directly from a real run at the time (see
+//! `debug_probe_captured_log_text`, since deleted after confirming the exact
+//! text — the diagnostic line was):
 //!
 //! ```text
 //! panic_msg="Each child of RenderCustomMultiChildLayoutBox must be laid out
 //! exactly once; missing id \"2\""
 //! ```
 //!
-//! `"3"` never appears anywhere in it. Case 11 (exactly one forgotten child)
-//! is therefore a faithful, real-green port; case 12 (two forgotten) is
-//! pinned against the oracle's completeness contract, `#[ignore]`d rather
-//! than asserted-as-is, because asserting today's truncated message would
-//! lock in the information loss as correct and turn the eventual fix
-//! (accumulate every unlaid index, not just the first) into a red
-//! "regression". This is a diagnostic-completeness gap, not a soundness one
-//! — the render object still refuses to commit geometry either way — which
-//! is why it does not block the rest of this port.
+//! `"3"` never appeared anywhere in it. `finish` now collects EVERY unlaid
+//! index and joins them into one diagnostic, so both cases 11 and 12 are
+//! faithful real-green ports and case 12 is no longer `#[ignore]`d. The gap
+//! was a diagnostic-completeness one, not a soundness one — the render object
+//! refused to commit geometry either way — which is why it never blocked the
+//! rest of this port.
 //!
 //! **A third finding, reported rather than fixed (case 8 is real green, not
 //! a pin, but the "why" is worth flagging):** Flutter's `layoutChild` rejects
@@ -962,19 +964,12 @@ fn a_child_never_laid_out_names_it_in_the_captured_log() {
     );
 }
 
-/// **Divergence pin, asserting the oracle.**
-///
 /// Port of `'performLayout did not layout multiple child'`: four children
 /// (`"0"`..`"3"`), the same delegate lays out only `"0"` and `"1"`, leaving
 /// BOTH `"2"` and `"3"` forgotten. The oracle's message enumerates every
-/// forgotten child; see "Divergence found by this port" above for why FLUI's
-/// `DelegateLayoutContext::finish` names only the first (`"2"`) and never
-/// mentions `"3"` at all.
+/// forgotten child, and so does FLUI's: `DelegateLayoutContext::finish`
+/// collects every unlaid index instead of stopping at the first.
 #[test]
-#[ignore = "divergence pin: DelegateLayoutContext::finish only names the \
-            FIRST unlaid-out child (Iterator::position stops at the first \
-            match); the oracle's message enumerates every forgotten child -- \
-            see 'Divergence found by this port' in the module doc"]
 fn multiple_children_never_laid_out_are_all_named_in_the_panic_pin() {
     let (laid, log_text) = pump_and_capture_log(|| {
         Center::new()

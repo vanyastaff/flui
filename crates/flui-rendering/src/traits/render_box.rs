@@ -473,6 +473,17 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The data-only arbitrated trackpad pan-zoom target this box contributes
+    /// to its hit entry.
+    ///
+    /// Default `None`; override (e.g. `RenderListener`) to compete for
+    /// trackpad pinch ticks. The blanket `RenderObject<BoxProtocol>` impl
+    /// forwards to this. See [`RenderObject::pan_zoom_target`] for the
+    /// two-channel (observe vs claim) delivery contract.
+    fn pan_zoom_target(&self) -> Option<crate::hit_testing::PanZoomTarget> {
+        None
+    }
+
     /// The mouse cursor this box contributes to its hit entry.
     fn mouse_cursor(&self) -> CursorIcon {
         CursorIcon::Default
@@ -787,6 +798,10 @@ where
 
     fn scroll_target(&self) -> Option<crate::hit_testing::ScrollTarget> {
         <T as RenderBox>::scroll_target(self)
+    }
+
+    fn pan_zoom_target(&self) -> Option<crate::hit_testing::PanZoomTarget> {
+        <T as RenderBox>::pan_zoom_target(self)
     }
 
     fn mouse_cursor(&self) -> CursorIcon {

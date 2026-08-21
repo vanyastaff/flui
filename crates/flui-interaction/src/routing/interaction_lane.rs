@@ -22,6 +22,7 @@ use flui_types::{Offset, Pixels, Rect, Size};
 
 use super::hit_test::{EventPropagation, HitTestEntry, transform_pointer_event};
 use crate::events::{DeviceId, PointerEvent, PointerEventExt, ScrollEventData};
+use crate::pan_zoom::PointerPanZoomEvent;
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -129,6 +130,25 @@ pub struct ScrollTarget {
 impl fmt::Debug for ScrollTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScrollTarget").finish_non_exhaustive()
+    }
+}
+
+/// Opaque data-plane identity for an owner-local trackpad pan-zoom target.
+///
+/// The counterpart of [`ScrollTarget`] for the pan-zoom lane: hit-test
+/// entries carry this identity, and the claiming handler itself stays in the
+/// active owner lane, invoked synchronously during pan-zoom dispatch. A
+/// separate type keeps a wheel claim and a pinch claim from addressing each
+/// other's handler.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PanZoomTarget {
+    lane_id: LaneId,
+    target_id: TargetId,
+}
+
+impl fmt::Debug for PanZoomTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PanZoomTarget").finish_non_exhaustive()
     }
 }
 
@@ -263,6 +283,7 @@ fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchErr
 
 type PointerHandler = Rc<dyn Fn(&PointerEvent) + 'static>;
 type ScrollHandler = Rc<dyn Fn(&ScrollEventData) -> EventPropagation + 'static>;
+type PanZoomHandler = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
 type ShaderMaskFactory = Rc<dyn Fn(Rect<Pixels>) -> Shader + 'static>;
 
@@ -353,6 +374,26 @@ impl ScrollCell {
     }
 
     fn replace(&self, handler: ScrollHandler) -> ScrollHandler {
+        std::mem::replace(&mut *self.current.borrow_mut(), handler)
+    }
+}
+
+struct PanZoomCell {
+    current: RefCell<PanZoomHandler>,
+}
+
+impl PanZoomCell {
+    fn new(handler: PanZoomHandler) -> Self {
+        Self {
+            current: RefCell::new(handler),
+        }
+    }
+
+    fn snapshot(&self) -> PanZoomHandler {
+        Rc::clone(&self.current.borrow())
+    }
+
+    fn replace(&self, handler: PanZoomHandler) -> PanZoomHandler {
         std::mem::replace(&mut *self.current.borrow_mut(), handler)
     }
 }
@@ -567,6 +608,7 @@ struct LocalLaneInner {
     targets: RefCell<HashMap<TargetId, Rc<HandlerCell>>>,
     mouse_targets: RefCell<HashMap<TargetId, Rc<MouseRegionCell>>>,
     scroll_targets: RefCell<HashMap<TargetId, Rc<ScrollCell>>>,
+    pan_zoom_targets: RefCell<HashMap<TargetId, Rc<PanZoomCell>>>,
     path_clip_targets: RefCell<HashMap<TargetId, Rc<PathClipCell>>>,
     shader_mask_targets: RefCell<HashMap<TargetId, Rc<ShaderMaskCell>>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
@@ -607,6 +649,7 @@ impl InteractionLane {
             targets: RefCell::new(HashMap::new()),
             mouse_targets: RefCell::new(HashMap::new()),
             scroll_targets: RefCell::new(HashMap::new()),
+            pan_zoom_targets: RefCell::new(HashMap::new()),
             path_clip_targets: RefCell::new(HashMap::new()),
             shader_mask_targets: RefCell::new(HashMap::new()),
             routes: RefCell::new(HashMap::new()),
@@ -654,6 +697,7 @@ impl Drop for InteractionLane {
         let targets = self.inner.targets.take();
         let mouse_targets = self.inner.mouse_targets.take();
         let scroll_targets = self.inner.scroll_targets.take();
+        let pan_zoom_targets = self.inner.pan_zoom_targets.take();
         let path_clip_targets = self.inner.path_clip_targets.take();
         let shader_mask_targets = self.inner.shader_mask_targets.take();
 
@@ -672,6 +716,10 @@ impl Drop for InteractionLane {
         let mut scroll_targets: Vec<_> = scroll_targets.into_iter().collect();
         scroll_targets.sort_unstable_by_key(|(id, _)| *id);
         drop(scroll_targets);
+
+        let mut pan_zoom_targets: Vec<_> = pan_zoom_targets.into_iter().collect();
+        pan_zoom_targets.sort_unstable_by_key(|(id, _)| *id);
+        drop(pan_zoom_targets);
 
         let mut path_clip_targets: Vec<_> = path_clip_targets.into_iter().collect();
         path_clip_targets.sort_unstable_by_key(|(id, _)| *id);
@@ -973,6 +1021,97 @@ impl InteractionDispatchHandle {
         self.validate_lane(target.lane_id)?;
         let cell = lane
             .scroll_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let handler = cell.snapshot();
+        let result = handler(event);
+        drop(handler);
+        Ok(result)
+    }
+
+    /// Register a trackpad pan-zoom claim handler in the active owner lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active on this
+    /// thread, or when the lane's private identity source is exhausted.
+    pub fn register_pan_zoom(
+        &self,
+        handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
+    ) -> Result<PanZoomTarget, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        let target_id = TargetId(lane.target_ids.try_next()?);
+        lane.pan_zoom_targets
+            .borrow_mut()
+            .insert(target_id, Rc::new(PanZoomCell::new(Rc::new(handler))));
+        Ok(PanZoomTarget {
+            lane_id: self.ticket.lane_id,
+            target_id,
+        })
+    }
+
+    /// Replace a pan-zoom target's current handler without changing identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active, when the
+    /// target belongs to a different lane, or when it is already gone.
+    pub fn replace_pan_zoom(
+        &self,
+        target: PanZoomTarget,
+        handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .pan_zoom_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let old_handler = cell.replace(Rc::new(handler));
+        drop(old_handler);
+        Ok(())
+    }
+
+    /// Remove a pan-zoom target from future dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active, when the
+    /// target belongs to a different lane, or when it is already gone.
+    pub fn unregister_pan_zoom(
+        &self,
+        target: PanZoomTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let removed = lane
+            .pan_zoom_targets
+            .borrow_mut()
+            .remove(&target.target_id)
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        drop(removed);
+        Ok(())
+    }
+
+    /// Invoke one registered pan-zoom target synchronously.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active, when the
+    /// target belongs to a different lane, or when it is already gone.
+    pub fn invoke_pan_zoom_target(
+        &self,
+        target: PanZoomTarget,
+        event: &PointerPanZoomEvent,
+    ) -> Result<EventPropagation, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .pan_zoom_targets
             .borrow()
             .get(&target.target_id)
             .cloned()

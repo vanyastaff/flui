@@ -729,6 +729,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 Some(target) => entry.scroll_target(target),
                 None => entry,
             };
+            let entry = match render_object.pan_zoom_target() {
+                Some(target) => entry.pan_zoom_target(target),
+                None => entry,
+            };
             let entry = entry.cursor(render_object.mouse_cursor());
             let entry = match render_object.mouse_tracker_annotation(id) {
                 Some(annotation) => entry.mouse_annotation(annotation),

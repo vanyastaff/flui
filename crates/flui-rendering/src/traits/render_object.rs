@@ -617,6 +617,23 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         None
     }
 
+    /// The data-only arbitrated trackpad pan-zoom target this render object
+    /// contributes to its hit entry.
+    ///
+    /// The pan-zoom counterpart of [`scroll_target`](Self::scroll_target),
+    /// with the identical two-channel contract: every pointer target on the
+    /// path *observes* the raw gesture tick, but only the first (leaf-most)
+    /// pan-zoom target whose handler returns `EventPropagation::Stop` *acts*
+    /// on it (`HitTestResult::dispatch_pan_zoom`). A consumer claims a tick
+    /// only when it will actually consume it, so nested pinch consumers hand
+    /// the gesture inward-out instead of all transforming at once.
+    ///
+    /// Default `None` — only a render object that arbitrates pan-zoom (e.g.
+    /// `RenderListener` configured with a claiming handler) overrides it.
+    fn pan_zoom_target(&self) -> Option<crate::hit_testing::PanZoomTarget> {
+        None
+    }
+
     /// The mouse cursor this render object contributes to its hit entry.
     ///
     /// Default `CursorIcon::Default`; `RenderMouseRegion` overrides this so

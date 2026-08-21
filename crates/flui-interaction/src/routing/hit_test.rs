@@ -20,29 +20,34 @@
 pub use flui_foundation::RenderId;
 use flui_types::geometry::{Matrix4, Offset, Pixels};
 
+use crate::pan_zoom::PointerPanZoomEvent;
 use crate::{
     events::{CursorIcon, PointerEvent, ScrollEventData},
     routing::MouseTrackerAnnotation,
-    routing::interaction_lane::{PointerTarget, RoutePanic, ScrollTarget, active_dispatch_handle},
+    routing::interaction_lane::{
+        PanZoomTarget, PointerTarget, RoutePanic, ScrollTarget, active_dispatch_handle,
+    },
 };
 
 // ============================================================================
-// EVENT PROPAGATION (scroll arbitration only)
+// EVENT PROPAGATION (claim walks only)
 // ============================================================================
 
-/// Scroll-claim propagation control.
+/// Claim-walk propagation control.
 ///
 /// Ordinary pointer delivery has no propagation result: every hit target
 /// receives its locally transformed event in leaf-first order (ADR-0027,
-/// Flutter `GestureBinding.dispatchEvent` parity). Only the pointer-signal /
-/// scroll resolver keeps a claiming result, mirroring Flutter's separate
-/// `PointerSignalResolver` arbitration.
+/// Flutter `GestureBinding.dispatchEvent` parity). Only the two arbitrated
+/// walks carry a claiming result — the pointer-signal / scroll resolver
+/// (mirroring Flutter's separate `PointerSignalResolver`) and the trackpad
+/// pan-zoom walk (standing in for Flutter's scale gesture arena until FLUI
+/// has a scale recognizer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EventPropagation {
-    /// Keep dispatching the scroll event to the remaining entries.
+    /// Keep dispatching to the remaining entries on the walk.
     #[default]
     Continue,
-    /// Claim the scroll event; entries deeper on the route do not see it.
+    /// Claim the event; entries further out on the walk do not see it.
     Stop,
 }
 
@@ -135,6 +140,9 @@ pub struct HitTestEntry {
     /// Data-plane identity of this target's owner-local scroll handler.
     pub scroll_target: Option<ScrollTarget>,
 
+    /// Data-plane identity of this target's owner-local pan-zoom handler.
+    pub pan_zoom_target: Option<PanZoomTarget>,
+
     /// Mouse cursor for this target.
     pub cursor: CursorIcon,
 
@@ -151,6 +159,7 @@ impl std::fmt::Debug for HitTestEntry {
             .field("has_pointer_target", &self.pointer_target.is_some())
             .field("cursor", &self.cursor)
             .field("has_scroll_target", &self.scroll_target.is_some())
+            .field("has_pan_zoom_target", &self.pan_zoom_target.is_some())
             .field("has_mouse_annotation", &self.mouse_annotation.is_some())
             .finish_non_exhaustive()
     }
@@ -164,6 +173,7 @@ impl HitTestEntry {
             transform: None,
             pointer_target: None,
             scroll_target: None,
+            pan_zoom_target: None,
             cursor: CursorIcon::Default,
             mouse_annotation: None,
         }
@@ -190,6 +200,12 @@ impl HitTestEntry {
     /// Builder: set the owner-local scroll target identity.
     pub fn scroll_target(mut self, target: ScrollTarget) -> Self {
         self.scroll_target = Some(target);
+        self
+    }
+
+    /// Builder: set the owner-local pan-zoom target identity.
+    pub fn pan_zoom_target(mut self, target: PanZoomTarget) -> Self {
+        self.pan_zoom_target = Some(target);
         self
     }
 
@@ -497,6 +513,11 @@ impl HitTestResult {
         self.path.iter().filter(|e| e.scroll_target.is_some())
     }
 
+    /// Returns an iterator over entries with pan-zoom targets.
+    pub fn entries_with_pan_zoom_targets(&self) -> impl Iterator<Item = &HitTestEntry> {
+        self.path.iter().filter(|e| e.pan_zoom_target.is_some())
+    }
+
     /// Clears all entries and transforms.
     pub fn clear(&mut self) {
         self.path.clear();
@@ -677,6 +698,71 @@ impl HitTestResult {
         false
     }
 
+    /// Dispatches a trackpad pan-zoom event to the path's pan-zoom targets,
+    /// leaf-first, stopping at the first one that claims it.
+    ///
+    /// The pan-zoom counterpart of
+    /// [`dispatch_scroll`](Self::dispatch_scroll), and arbitrated for the
+    /// same reason: ordinary pointer delivery has no propagation result, so
+    /// without this walk every enabled consumer under the focal point acts on
+    /// the same tick and two nested viewers both zoom. A consumer returns
+    /// [`EventPropagation::Stop`] only when it will actually consume the tick,
+    /// so a viewer already clamped at its scale extent hands the pinch to the
+    /// one above it.
+    ///
+    /// Flutter routes trackpad pan-zoom through the SCALE GESTURE ARENA
+    /// (`PointerPanZoomStartEvent` opens a `ScaleGestureRecognizer`'s arena
+    /// entry, `gestures/scale.dart`), which resolves the same contention with
+    /// full gesture arbitration. This claim walk is the interim arbitration
+    /// FLUI has until that recognizer lands; it is deliberately shaped like
+    /// the pointer-signal claim walk, which is the arbitration primitive this
+    /// codebase already has.
+    ///
+    /// Returns `true` when a target claimed the event.
+    pub fn dispatch_pan_zoom(&self, event: &PointerPanZoomEvent) -> bool {
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "pan-zoom dispatch skipped without an active owner lane"
+                );
+                return false;
+            }
+        };
+        for entry in &self.path {
+            if let Some(target) = entry.pan_zoom_target {
+                let local_event = if let Some(ref transform) = entry.transform {
+                    // `transform` is already global-to-local (see
+                    // `HitTestEntry::transform`'s doc). A degenerate ancestor
+                    // transform makes the composed matrix singular; such an
+                    // entry skips delivery rather than reporting a focal
+                    // point that is not on screen, exactly as the scroll walk
+                    // does.
+                    if transform.is_invertible() {
+                        transform_pan_zoom_event(event, transform)
+                    } else {
+                        continue;
+                    }
+                } else {
+                    *event
+                };
+
+                match handle.invoke_pan_zoom_target(target, &local_event) {
+                    Ok(propagation) if propagation.should_stop() => return true,
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::debug!(
+                            ?error,
+                            "pan-zoom target unavailable during owner-lane dispatch"
+                        );
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Resolves the active mouse cursor.
     ///
     /// Returns the first non-default cursor in the path, or
@@ -807,6 +893,84 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
         }
         // Cancel, Enter, Leave don't have position - just clone
         other => other.clone(),
+    }
+}
+
+/// Re-express a pan-zoom event in an entry's local space.
+///
+/// Ported from Flutter's `_TransformedPointerPanZoomUpdateEvent`
+/// (`gestures/events.dart`), which is the oracle for exactly this
+/// localization and treats each field differently:
+///
+/// - `position` and `pan` are **positions**: `transformPosition`.
+/// - `pan_delta` is a **delta anchored at `pan`**: the oracle's
+///   `transformDeltaViaPositions` transforms the delta's start and end points
+///   separately and subtracts, rather than mapping the offset directly —
+///   mathematically equivalent for an affine matrix, but it also stays
+///   correct under perspective and, as the oracle's own comment records,
+///   carries less precision error.
+/// - `scale` and `rotation` are dimensionless and pass through untouched.
+///
+/// Localizing `pan`/`pan_delta` matters even though today's W3C adapter
+/// synthesizes both as zero (`convert_gesture` has no upstream pan field to
+/// read): `PointerPanZoomEvent` is public and `dispatch_pan_zoom` accepts a
+/// fully populated one, so a richer producer must not silently observe
+/// global-space offsets inside a scaled or rotated subtree.
+fn transform_pan_zoom_event(
+    event: &PointerPanZoomEvent,
+    transform: &Matrix4,
+) -> PointerPanZoomEvent {
+    let localize = |point: Offset<Pixels>| {
+        let (x, y) = transform.transform_point(point.dx, point.dy);
+        Offset::new(x, y)
+    };
+    match *event {
+        PointerPanZoomEvent::Start {
+            pointer_id,
+            position,
+            timestamp_nanos,
+            device_kind,
+        } => PointerPanZoomEvent::Start {
+            pointer_id,
+            position: localize(position),
+            timestamp_nanos,
+            device_kind,
+        },
+        PointerPanZoomEvent::Update {
+            pointer_id,
+            position,
+            pan,
+            pan_delta,
+            scale,
+            rotation,
+            timestamp_nanos,
+            device_kind,
+        } => {
+            let local_pan = localize(pan);
+            PointerPanZoomEvent::Update {
+                pointer_id,
+                position: localize(position),
+                pan: local_pan,
+                // `transformDeltaViaPositions`: end minus start, both mapped
+                // as positions, with `pan` as the delta's end point.
+                pan_delta: local_pan - localize(pan - pan_delta),
+                scale,
+                rotation,
+                timestamp_nanos,
+                device_kind,
+            }
+        }
+        PointerPanZoomEvent::End {
+            pointer_id,
+            position,
+            timestamp_nanos,
+            device_kind,
+        } => PointerPanZoomEvent::End {
+            pointer_id,
+            position: localize(position),
+            timestamp_nanos,
+            device_kind,
+        },
     }
 }
 
@@ -1110,6 +1274,197 @@ mod tests {
             assert!(result.dispatch_scroll(&scroll));
         });
         assert_eq!(&*order.borrow(), &["first"]);
+    }
+
+    #[test]
+    fn dispatch_pan_zoom_stops_at_the_first_claiming_target() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::events::make_pinch_gesture_event;
+        use crate::pan_zoom::from_w3c_event;
+        use crate::routing::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let order = Rc::new(RefCell::new(Vec::new()));
+        lane.enter(|| {
+            let leaf_order = Rc::clone(&order);
+            let leaf = handle
+                .register_pan_zoom(move |_| {
+                    leaf_order.borrow_mut().push("leaf");
+                    EventPropagation::Stop
+                })
+                .expect("register leaf");
+            let root_order = Rc::clone(&order);
+            let root = handle
+                .register_pan_zoom(move |_| {
+                    root_order.borrow_mut().push("root");
+                    EventPropagation::Continue
+                })
+                .expect("register root");
+
+            let mut result = HitTestResult::new();
+            result.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(leaf));
+            result.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(root));
+
+            let event = make_pinch_gesture_event(Offset::new(Pixels(50.0), Pixels(50.0)), 0.5);
+            let pan_zoom = from_w3c_event(&event).expect("gesture converts");
+            assert!(result.dispatch_pan_zoom(&pan_zoom));
+        });
+        assert_eq!(&*order.borrow(), &["leaf"]);
+    }
+
+    #[test]
+    fn dispatch_pan_zoom_passes_an_unclaimed_tick_outward() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::events::make_pinch_gesture_event;
+        use crate::pan_zoom::from_w3c_event;
+        use crate::routing::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let order = Rc::new(RefCell::new(Vec::new()));
+        lane.enter(|| {
+            let leaf_order = Rc::clone(&order);
+            let leaf = handle
+                .register_pan_zoom(move |_| {
+                    leaf_order.borrow_mut().push("leaf");
+                    EventPropagation::Continue
+                })
+                .expect("register leaf");
+            let root_order = Rc::clone(&order);
+            let root = handle
+                .register_pan_zoom(move |_| {
+                    root_order.borrow_mut().push("root");
+                    EventPropagation::Stop
+                })
+                .expect("register root");
+
+            let mut result = HitTestResult::new();
+            result.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(leaf));
+            result.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(root));
+
+            let event = make_pinch_gesture_event(Offset::new(Pixels(50.0), Pixels(50.0)), 0.5);
+            let pan_zoom = from_w3c_event(&event).expect("gesture converts");
+            assert!(result.dispatch_pan_zoom(&pan_zoom));
+        });
+        assert_eq!(&*order.borrow(), &["leaf", "root"]);
+    }
+
+    #[test]
+    fn dispatch_pan_zoom_localizes_pan_as_a_position_and_pan_delta_as_a_delta() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use crate::events::make_pinch_gesture_event;
+        use crate::pan_zoom::from_w3c_event;
+        use crate::routing::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let observed = Rc::new(Cell::new(None));
+        lane.enter(|| {
+            let probe = Rc::clone(&observed);
+            let target = handle
+                .register_pan_zoom(move |event| {
+                    if let PointerPanZoomEvent::Update { pan, pan_delta, .. } = *event {
+                        probe.set(Some((pan, pan_delta)));
+                    }
+                    EventPropagation::Stop
+                })
+                .expect("register");
+
+            let mut result = HitTestResult::new();
+            // A subtree scaled 2x in paint: its global-to-local transform
+            // halves. `pan` is a POSITION and `pan_delta` a DELTA anchored at
+            // it, so both must halve here — the oracle's
+            // `_TransformedPointerPanZoomUpdateEvent` maps `pan` through
+            // `transformPosition` and `panDelta` through
+            // `transformDeltaViaPositions` (`gestures/events.dart`).
+            let mut forward = Matrix4::identity();
+            forward.scale(2.0, 2.0, 1.0);
+            result.with_paint_transform(forward, |result| {
+                result.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(target));
+            });
+
+            // Build on a real converted tick so pointer identity and device
+            // kind come from the production adapter, then supply the nonzero
+            // pan payload that adapter cannot yet produce.
+            let converted = from_w3c_event(&make_pinch_gesture_event(
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                0.0,
+            ))
+            .expect("gesture converts");
+            let PointerPanZoomEvent::Update {
+                pointer_id,
+                scale,
+                rotation,
+                timestamp_nanos,
+                device_kind,
+                ..
+            } = converted
+            else {
+                panic!("convert_gesture yields an Update");
+            };
+            let event = PointerPanZoomEvent::Update {
+                pointer_id,
+                position: Offset::new(Pixels(50.0), Pixels(50.0)),
+                pan: Offset::new(Pixels(40.0), Pixels(20.0)),
+                pan_delta: Offset::new(Pixels(10.0), Pixels(4.0)),
+                scale,
+                rotation,
+                timestamp_nanos,
+                device_kind,
+            };
+            assert!(result.dispatch_pan_zoom(&event));
+        });
+
+        let (pan, pan_delta) = observed.get().expect("an Update reached the target");
+        assert_eq!(pan, Offset::new(Pixels(20.0), Pixels(10.0)), "pan halves");
+        assert_eq!(
+            pan_delta,
+            Offset::new(Pixels(5.0), Pixels(2.0)),
+            "pan_delta halves with the subtree, not passed through in global space"
+        );
+    }
+
+    #[test]
+    fn dispatch_pan_zoom_applies_the_entry_local_transform() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use crate::events::make_pinch_gesture_event;
+        use crate::pan_zoom::from_w3c_event;
+        use crate::routing::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let observed = Rc::new(Cell::new(Offset::new(Pixels(0.0), Pixels(0.0))));
+        lane.enter(|| {
+            let position_probe = Rc::clone(&observed);
+            let target = handle
+                .register_pan_zoom(move |event| {
+                    position_probe.set(event.position());
+                    EventPropagation::Stop
+                })
+                .expect("register");
+            let mut result = HitTestResult::new();
+            // Same production `with_paint_offset` path the scroll and
+            // pointer transform tests use: a claimant in a subtree
+            // translated by (10, 20) must see the focal point in ITS space,
+            // or it scales around a point that is not under the fingers.
+            result.with_paint_offset(Offset::new(Pixels(10.0), Pixels(20.0)), |result| {
+                result.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(target));
+            });
+
+            let event = make_pinch_gesture_event(Offset::new(Pixels(50.0), Pixels(50.0)), 0.5);
+            let pan_zoom = from_w3c_event(&event).expect("gesture converts");
+            assert!(result.dispatch_pan_zoom(&pan_zoom));
+        });
+        assert_eq!(observed.get(), Offset::new(Pixels(40.0), Pixels(30.0)));
     }
 
     #[test]

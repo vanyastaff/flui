@@ -736,3 +736,88 @@ fn a_pinch_over_an_offset_viewer_keeps_the_focal_point_fixed() {
          after {scene_after:?}"
     );
 }
+
+/// Nested enabled viewers, one pinch tick: exactly ONE transform changes,
+/// and it is the inner (leaf-most) one.
+///
+/// FLUI-added coverage, no oracle case. Flutter routes trackpad pan-zoom
+/// through the scale gesture arena (`PointerPanZoomStartEvent` opens a
+/// `ScaleGestureRecognizer` entry, `gestures/scale.dart`), so nesting is
+/// arbitrated there; FLUI's V1 viewer has no scale recognizer, and before
+/// the pan-zoom claim walk existed the tick reached every listener on the
+/// hit path and BOTH controllers scaled. Whichever mechanism arbitrates,
+/// the observable contract is this one.
+#[test]
+fn nested_viewers_give_one_pinch_tick_to_the_inner_one_only() {
+    let outer = TransformationController::new();
+    let inner = TransformationController::new();
+    let widget = InteractiveViewer::new()
+        .controller(outer.clone())
+        .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
+        .min_scale(0.01)
+        .max_scale(100.0)
+        .child(
+            InteractiveViewer::new()
+                .controller(inner.clone())
+                .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
+                .min_scale(0.01)
+                .max_scale(100.0)
+                .child(child()),
+        );
+    let laid = lay_out(widget, loose(500.0));
+
+    laid.dispatch_pointer_event(&flui_interaction::events::make_pinch_gesture_event(
+        Offset::new(px(100.0), px(100.0)),
+        0.5,
+    ));
+
+    let inner_scale = scale_of(inner.value());
+    let outer_scale = scale_of(outer.value());
+    assert!(
+        (inner_scale - 1.5).abs() < 1e-4,
+        "the leaf-most viewer consumes the tick, got {inner_scale}"
+    );
+    assert!(
+        (outer_scale - 1.0).abs() < 1e-6,
+        "the enclosing viewer must not also scale on the same tick, got {outer_scale}"
+    );
+}
+
+/// The claim is conditional on actually transforming: a viewer with scaling
+/// disabled hands the tick to the one enclosing it instead of swallowing it.
+///
+/// FLUI-added coverage. This is the pan-zoom half of the same
+/// can-I-actually-consume-it predicate the wheel claim already applies, and
+/// it is what keeps the walk from degrading into "leaf always wins".
+#[test]
+fn a_scale_disabled_inner_viewer_hands_the_pinch_to_the_outer_one() {
+    let outer = TransformationController::new();
+    let inner = TransformationController::new();
+    let widget = InteractiveViewer::new()
+        .controller(outer.clone())
+        .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
+        .min_scale(0.01)
+        .max_scale(100.0)
+        .child(
+            InteractiveViewer::new()
+                .controller(inner.clone())
+                .scale_enabled(false)
+                .child(child()),
+        );
+    let laid = lay_out(widget, loose(500.0));
+
+    laid.dispatch_pointer_event(&flui_interaction::events::make_pinch_gesture_event(
+        Offset::new(px(100.0), px(100.0)),
+        0.5,
+    ));
+
+    assert!(
+        (scale_of(inner.value()) - 1.0).abs() < 1e-6,
+        "a scale-disabled viewer must not scale"
+    );
+    let outer_scale = scale_of(outer.value());
+    assert!(
+        (outer_scale - 1.5).abs() < 1e-4,
+        "the unclaimed tick must reach the enclosing viewer, got {outer_scale}"
+    );
+}

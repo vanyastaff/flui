@@ -217,10 +217,7 @@ family = "layout"
 oracles = ["widgets/custom_multi_child_layout_test.dart"]
 tests = 13
 
-[[targets.pins]]
-test = "multiple_children_never_laid_out_are_all_named_in_the_panic_pin"
-capability = "complete unlaid-child enumeration in DelegateLayoutContext::finish diagnostics"
-issue = 786
+[[targets.claims]]
 oracle = "widgets/custom_multi_child_layout_test.dart"
 cases = ["performLayout did not layout multiple child"]
 
@@ -488,7 +485,7 @@ tests = 4
 rust = "interactive_viewer_test"
 family = "gesture"
 oracles = ["widgets/interactive_viewer_test.dart"]
-tests = 18
+tests = 20
 
 [[targets.claims]]
 oracle = "widgets/interactive_viewer_test.dart"
@@ -1250,7 +1247,7 @@ cases = [
 "widgets/container_test.dart" = { cases = 18, claimed = 6, status = "partial" }
 "widgets/context_menu_controller_test.dart" = { cases = 4, claimed = 0, status = "pending" }
 "widgets/coordinates_test.dart" = { cases = 1, claimed = 0, status = "pending" }
-"widgets/custom_multi_child_layout_test.dart" = { cases = 12, claimed = 0, diverged = 1, status = "partial" }
+"widgets/custom_multi_child_layout_test.dart" = { cases = 12, claimed = 1, diverged = 0, status = "partial" }
 "widgets/custom_paint_test.dart" = { cases = 7, claimed = 0, status = "pending" }
 "widgets/custom_painter_test.dart" = { cases = 14, claimed = 0, status = "pending" }
 "widgets/custom_scroll_view_test.dart" = { cases = 5, claimed = 0, status = "pending" }
@@ -1582,16 +1579,16 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 90
-rust_tests = 645
-pins = 6
+rust_tests = 647
+pins = 5
 oracle_files = 389
 oracle_cases = 5696
-cases_claimed = 293
-cases_diverged = 6
+cases_claimed = 294
+cases_diverged = 5
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 285
-universe_cases_diverged = 6
+universe_cases_claimed = 286
+universe_cases_diverged = 5
 universe_pending_files = 331
 
 [summary.families."animation"]
@@ -1624,7 +1621,7 @@ pins = 0
 
 [summary.families."gesture"]
 targets = 5
-rust_tests = 68
+rust_tests = 70
 cases_claimed = 17
 cases_diverged = 0
 pins = 0
@@ -1632,9 +1629,9 @@ pins = 0
 [summary.families."layout"]
 targets = 22
 rust_tests = 131
-cases_claimed = 75
-cases_diverged = 1
-pins = 1
+cases_claimed = 76
+cases_diverged = 0
+pins = 0
 
 [summary.families."navigation"]
 targets = 4
