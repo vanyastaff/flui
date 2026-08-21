@@ -607,12 +607,33 @@ impl Path {
                     subpath_open = true;
                 }
                 PathCommand::AddRect(rect) => {
+                    // A standalone shape ends whatever contour was open, so a
+                    // following arc starts fresh instead of chording back
+                    // across the shape. The tessellator does exactly this
+                    // (`builder.end(false)` then `has_begun = false`), and
+                    // containment has to agree with it or the hittable region
+                    // grows a wedge nothing paints.
+                    Self::end_open_contour_even_odd(
+                        point,
+                        &mut crossings,
+                        &mut current_pos,
+                        &mut subpath_start,
+                        &mut subpath_open,
+                    );
                     // Simple rectangle test
                     if rect.contains(point) {
                         crossings += 1;
                     }
                 }
                 PathCommand::AddCircle(center, radius) => {
+                    // Standalone shape — see the `AddRect` arm.
+                    Self::end_open_contour_even_odd(
+                        point,
+                        &mut crossings,
+                        &mut current_pos,
+                        &mut subpath_start,
+                        &mut subpath_open,
+                    );
                     // Simple circle test
                     let dx = point.x - center.x;
                     let dy = point.y - center.y;
@@ -621,6 +642,14 @@ impl Path {
                     }
                 }
                 PathCommand::AddOval(rect) => {
+                    // Standalone shape — see the `AddRect` arm.
+                    Self::end_open_contour_even_odd(
+                        point,
+                        &mut crossings,
+                        &mut current_pos,
+                        &mut subpath_start,
+                        &mut subpath_open,
+                    );
                     // Ellipse test
                     let cx = (rect.left() + rect.right()) * 0.5;
                     let cy = (rect.top() + rect.bottom()) * 0.5;
@@ -703,11 +732,29 @@ impl Path {
                     subpath_open = true;
                 }
                 PathCommand::AddRect(rect) => {
+                    // Standalone shape ends the open contour — see the
+                    // even-odd walker's `AddRect` arm.
+                    Self::end_open_contour_non_zero(
+                        point,
+                        &mut winding,
+                        &mut current_pos,
+                        &mut subpath_start,
+                        &mut subpath_open,
+                    );
                     if rect.contains(point) {
                         winding += 1;
                     }
                 }
                 PathCommand::AddCircle(center, radius) => {
+                    // Standalone shape ends the open contour — see the
+                    // even-odd walker's `AddRect` arm.
+                    Self::end_open_contour_non_zero(
+                        point,
+                        &mut winding,
+                        &mut current_pos,
+                        &mut subpath_start,
+                        &mut subpath_open,
+                    );
                     let dx = point.x - center.x;
                     let dy = point.y - center.y;
                     if dx.0 * dx.0 + dy.0 * dy.0 <= radius * radius {
@@ -715,6 +762,15 @@ impl Path {
                     }
                 }
                 PathCommand::AddOval(rect) => {
+                    // Standalone shape ends the open contour — see the
+                    // even-odd walker's `AddRect` arm.
+                    Self::end_open_contour_non_zero(
+                        point,
+                        &mut winding,
+                        &mut current_pos,
+                        &mut subpath_start,
+                        &mut subpath_open,
+                    );
                     let cx = (rect.left() + rect.right()) * 0.5;
                     let cy = (rect.top() + rect.bottom()) * 0.5;
                     let rx = rect.width() * 0.5;
@@ -786,6 +842,69 @@ impl Path {
         (p2.x - p1.x).get() * (point.y - p1.y).get() - (point.x - p1.x).get() * (p2.y - p1.y).get()
     }
 
+    /// Ends an open contour before a standalone shape, for the even-odd
+    /// walker.
+    ///
+    /// Fill semantics close an open contour implicitly, so the closing edge
+    /// is counted here rather than being deferred to the walk's tail — the
+    /// tail can no longer see it once the position resets. Resetting to the
+    /// origin restores the state the walk starts in, which is what a command
+    /// arriving with no current position already assumes.
+    #[inline]
+    fn end_open_contour_even_odd(
+        point: Point<Pixels>,
+        crossings: &mut usize,
+        current_pos: &mut Point<Pixels>,
+        subpath_start: &mut Point<Pixels>,
+        subpath_open: &mut bool,
+    ) {
+        if !*subpath_open {
+            return;
+        }
+        if Self::ray_intersects_segment(point, *current_pos, *subpath_start) {
+            *crossings += 1;
+        }
+        *current_pos = Point::new(px(0.0), px(0.0));
+        *subpath_start = *current_pos;
+        *subpath_open = false;
+    }
+
+    /// Non-zero counterpart of [`Self::end_open_contour_even_odd`].
+    #[inline]
+    fn end_open_contour_non_zero(
+        point: Point<Pixels>,
+        winding: &mut i32,
+        current_pos: &mut Point<Pixels>,
+        subpath_start: &mut Point<Pixels>,
+        subpath_open: &mut bool,
+    ) {
+        if !*subpath_open {
+            return;
+        }
+        *winding += Self::segment_winding(point, *current_pos, *subpath_start);
+        *current_pos = Point::new(px(0.0), px(0.0));
+        *subpath_start = *current_pos;
+        *subpath_open = false;
+    }
+
+    /// Largest gap, in local units, allowed between an arc and the chords
+    /// containment flattens it into.
+    ///
+    /// Matched to the renderer's own fill-flattening bound
+    /// (`DEVICE_FILL_TOLERANCE`, 0.1 device pixels in
+    /// `flui-engine`'s `wgpu::tessellator`) so the hittable region tracks
+    /// the painted one. The renderer pre-divides that bound by the paint
+    /// transform's scale; a local-space containment test cannot see the
+    /// transform, so this is the un-scaled figure — which means containment
+    /// is at least as fine as the raster wherever the path is not scaled
+    /// down.
+    const ARC_FLATTENING_TOLERANCE: f32 = 0.1;
+
+    /// Ceiling on chords per arc, so a pathological radius costs a bounded
+    /// walk instead of an unbounded one. Generous enough that the tolerance
+    /// above is met exactly for a full turn up to a radius near 85,000.
+    const MAX_ARC_CHORDS: usize = 2048;
+
     /// Samples the ellipse inscribed in `rect` at `angle` radians.
     ///
     /// Deliberately the same parametrization the tessellator rasterizes an
@@ -802,21 +921,47 @@ impl Path {
         Point::new(cx + rx * angle.cos(), cy + ry * angle.sin())
     }
 
-    /// How many chords to flatten an arc of `sweep` radians into.
+    /// How many chords to flatten an arc into, chosen from the arc's own
+    /// radius so the error stays bounded in *distance* rather than in angle.
     ///
-    /// One chord per 11.25° keeps a quarter-turn at eight chords (a full
-    /// turn at 32), so the worst-case gap between the chord and the true
-    /// curve is `r · (1 - cos(5.625°))` ≈ `r / 200` — well under a pixel
-    /// for the button-sized radii this gate actually decides. Clamped so a
-    /// degenerate or absurd sweep still costs a bounded walk.
+    /// A fixed angular step would under-approximate in proportion to the
+    /// radius — at one chord per 11.25° the gap is `r · (1 - cos(5.625°))` ≈
+    /// `r / 200`, which is a fifth of a pixel on a button and fifty pixels
+    /// on a 10,000-unit circle. `Path` is a general primitive, so the step
+    /// is derived from [`Self::ARC_FLATTENING_TOLERANCE`] instead: the sagitta of
+    /// a chord spanning `theta` on a circle of radius `r` is
+    /// `r · (1 - cos(theta / 2))`, so the widest chord within tolerance is
+    /// `theta = 2 · acos(1 - tolerance / r)`. Ellipses use the larger
+    /// semi-axis, which is conservative.
+    ///
+    /// Degenerate input (a zero or non-finite radius or sweep) costs one
+    /// chord; a radius large enough that `1 - tolerance / r` rounds to `1`
+    /// in `f32` saturates at [`Self::MAX_ARC_CHORDS`] rather than dividing by an
+    /// angle of zero.
     #[inline]
-    fn arc_chord_count(sweep: f32) -> usize {
-        const RADIANS_PER_CHORD: f32 = core::f32::consts::PI / 16.0;
-        let wanted = (sweep.abs() / RADIANS_PER_CHORD).ceil();
+    fn arc_chord_count(rect: Rect<Pixels>, sweep: f32) -> usize {
+        let radius = (rect.width() * 0.5)
+            .get()
+            .abs()
+            .max((rect.height() * 0.5).get().abs());
+        let sweep = sweep.abs();
+        if !radius.is_finite() || radius <= 0.0 || !sweep.is_finite() || sweep <= 0.0 {
+            return 1;
+        }
+
+        let cos_half_chord = (1.0 - Self::ARC_FLATTENING_TOLERANCE / radius).clamp(-1.0, 1.0);
+        let chord_angle = 2.0 * cos_half_chord.acos();
+        if !chord_angle.is_finite() || chord_angle <= f32::EPSILON {
+            return Self::MAX_ARC_CHORDS;
+        }
+
+        let wanted = (sweep / chord_angle).ceil();
         if wanted.is_finite() {
-            (wanted as usize).clamp(1, 64)
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let wanted = wanted as usize;
+            wanted.clamp(1, Self::MAX_ARC_CHORDS)
         } else {
-            1
+            Self::MAX_ARC_CHORDS
         }
     }
 
@@ -830,7 +975,7 @@ impl Path {
         start_angle: f32,
         sweep_angle: f32,
     ) -> usize {
-        let chords = Self::arc_chord_count(sweep_angle);
+        let chords = Self::arc_chord_count(rect, sweep_angle);
         let mut crossings = 0;
         let mut from = Self::eval_arc(rect, start_angle);
 
@@ -856,7 +1001,7 @@ impl Path {
         start_angle: f32,
         sweep_angle: f32,
     ) -> i32 {
-        let chords = Self::arc_chord_count(sweep_angle);
+        let chords = Self::arc_chord_count(rect, sweep_angle);
         let mut winding = 0;
         let mut from = Self::eval_arc(rect, start_angle);
 
@@ -1215,6 +1360,96 @@ mod tests {
             !path.contains(Point::new(px(50.0), px(50.0))),
             "a point back toward the origin is outside — a leading arc must \
              not chord to (0, 0)"
+        );
+    }
+
+    /// A standalone shape ends any open contour, so a following arc starts
+    /// its own instead of chording back across the shape.
+    ///
+    /// The renderer already behaves this way — every `AddRect`/`AddCircle`/
+    /// `AddOval` arm in `flui-engine`'s tessellator ends the builder's
+    /// contour and clears `has_begun`. If containment kept the contour open
+    /// it would chord from the stale pre-shape position to the arc's start,
+    /// and the wedge that chord encloses would hit-test as filled while
+    /// nothing paints it.
+    #[test]
+    fn a_standalone_shape_ends_the_open_contour_before_a_following_arc() {
+        use core::f32::consts::TAU;
+        for fill_type in [PathFillType::NonZero, PathFillType::EvenOdd] {
+            let mut path = Path::new();
+            path.set_fill_type(fill_type);
+            path.move_to(Point::new(px(0.0), px(0.0)));
+            path.line_to(Point::new(px(100.0), px(0.0)));
+            path.add_rect(Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)));
+            path.add_arc(
+                Rect::from_xywh(px(200.0), px(200.0), px(40.0), px(40.0)),
+                0.0,
+                TAU,
+            );
+            path.close();
+
+            assert!(
+                path.contains(Point::new(px(5.0), px(5.0))),
+                "{fill_type:?}: the standalone rect is still filled"
+            );
+            assert!(
+                path.contains(Point::new(px(220.0), px(220.0))),
+                "{fill_type:?}: the arc's own circle is still filled"
+            );
+            assert!(
+                !path.contains(Point::new(px(150.0), px(100.0))),
+                "{fill_type:?}: the gap between the rect and the circle paints \
+                 nothing, so it must not hit-test as filled"
+            );
+        }
+    }
+
+    /// Flattening error is bounded in distance, not in angle: a large arc
+    /// gets proportionally more chords so containment keeps tracking the
+    /// curve the renderer draws.
+    ///
+    /// A fixed angular step fails here. At one chord per 11.25° the chord
+    /// sags `r * (1 - cos(5.625))` below the arc — a fifth of a pixel at
+    /// `r = 40`, but roughly 48 units at `r = 10_000`, which would reject a
+    /// wide band of pixels that are painted.
+    #[test]
+    fn a_large_arc_is_flattened_to_the_same_distance_tolerance_as_a_small_one() {
+        use core::f32::consts::TAU;
+        const RADIUS: f32 = 10_000.0;
+
+        let mut path = Path::new();
+        path.add_arc(
+            Rect::from_xywh(px(0.0), px(0.0), px(2.0 * RADIUS), px(2.0 * RADIUS)),
+            0.0,
+            TAU,
+        );
+        path.close();
+
+        // Probe midway between two chords, where a flattened polygon cuts
+        // deepest — at a vertex it touches the circle exactly and proves
+        // nothing. 5.625 degrees is the midpoint of the first 11.25-degree
+        // chord, so under a fixed angular step the polygon sits
+        // `RADIUS * (1 - cos(5.625 deg))`, about 48 units, inside the rim
+        // there. A probe 5 units in is painted, comfortably inside the
+        // 0.1-unit tolerance, and comfortably outside that 48.
+        const PROBE_ANGLE: f32 = core::f32::consts::PI / 32.0;
+        let inset = RADIUS - 5.0;
+        let probe = Point::new(
+            px(RADIUS + inset * PROBE_ANGLE.cos()),
+            px(RADIUS + inset * PROBE_ANGLE.sin()),
+        );
+
+        assert!(
+            path.contains(probe),
+            "a point 5 units inside a {RADIUS}-unit circle is painted, so it \
+             must hit-test as filled"
+        );
+        assert!(
+            !path.contains(Point::new(
+                px(RADIUS + (RADIUS + 5.0) * PROBE_ANGLE.cos()),
+                px(RADIUS + (RADIUS + 5.0) * PROBE_ANGLE.sin()),
+            )),
+            "a point 5 units outside the same rim stays outside"
         );
     }
 }
