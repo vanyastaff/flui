@@ -74,6 +74,14 @@ pub struct ListView {
     children: Vec<BoxedView>,
     /// Builder delegate for the lazy variant. `None` in the static variant.
     builder_source: Option<SliverChildBuilderDelegate>,
+    /// Wrap each item in a `RepaintBoundary` (default `true`).
+    ///
+    /// Flutter parity: the same knob its delegates carry as
+    /// `addRepaintBoundaries`, defaulting to `true` for the reason its doc
+    /// gives — children in a scrolling container "do not need to be repainted
+    /// as the list scrolls". Set `false` when an item is cheaper to repaint
+    /// than to composite.
+    add_repaint_boundaries: bool,
 }
 
 impl ListView {
@@ -90,8 +98,9 @@ impl ListView {
             item_extent_estimate: item_extent,
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
-            children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
+            children: children.into_boxed_vec(),
             builder_source: None,
+            add_repaint_boundaries: true,
         }
     }
 
@@ -121,7 +130,20 @@ impl ListView {
             shrink_wrap: false,
             children: Vec::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
+            add_repaint_boundaries: true,
         }
+    }
+
+    /// Wrap each item in a `RepaintBoundary` (default `true`).
+    ///
+    /// Flutter parity: the `addRepaintBoundaries` knob its delegates carry,
+    /// defaulting to `true` for the reason its doc gives — children in a
+    /// scrolling container "do not need to be repainted as the list scrolls".
+    /// Pass `false` when a item is cheaper to repaint than to composite.
+    #[must_use]
+    pub fn repaint_boundaries(mut self, add: bool) -> Self {
+        self.add_repaint_boundaries = add;
+        self
     }
 
     /// Set the scroll axis (default [`Axis::Vertical`]).
@@ -179,7 +201,8 @@ impl fmt::Debug for ListView {
             s.field("builder_source", &self.builder_source);
         } else {
             s.field("item_extent", &self.item_extent)
-                .field("children", &self.children.len());
+                .field("children", &self.children.len())
+                .field("add_repaint_boundaries", &self.add_repaint_boundaries);
         }
         s.finish()
     }
@@ -202,14 +225,19 @@ impl StatelessView for ListView {
         // widgets-side wrapper. The element's `view_type_id()` now returns
         // `TypeId::of::<SliverList>()`, fixing BLOCKER 1 (element identity).
         let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
-            SliverList::new(
-                delegate.item_count,
-                self.item_extent_estimate,
-                Rc::clone(&delegate.builder),
-            )
-            .boxed()
+            let builder = if self.add_repaint_boundaries {
+                super::sliver_list::wrap_builder_in_repaint_boundaries(&delegate.builder)
+            } else {
+                Rc::clone(&delegate.builder)
+            };
+            SliverList::new(delegate.item_count, self.item_extent_estimate, builder).boxed()
         } else {
-            SliverFixedExtentList::new(self.item_extent, self.children.clone()).boxed()
+            let children = if self.add_repaint_boundaries {
+                super::sliver_list::wrap_in_repaint_boundaries(self.children.clone())
+            } else {
+                self.children.clone()
+            };
+            SliverFixedExtentList::new(self.item_extent, children).boxed()
         };
         if self.shrink_wrap {
             let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);

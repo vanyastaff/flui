@@ -492,3 +492,48 @@ fn lazy_list_view_builder_wraps_each_item_in_a_repaint_boundary() {
         boundaries.len()
     );
 }
+
+/// `repaint_boundaries(false)` actually reaches the tree.
+///
+/// The knob exists because Flutter's does (`addRepaintBoundaries`), for the
+/// case its doc names: items cheaper to repaint than to composite. An earlier
+/// version of this work put the opt-out on the delegate, where no widget could
+/// reach it — the flag was public API that nothing could call. This pins that
+/// it is wired end to end.
+#[test]
+fn lazy_list_view_builder_repaint_boundaries_false_drops_the_wrappers() {
+    const ITEMS: usize = 3;
+
+    let build = |add: bool| {
+        let mut laid = lay_out(
+            ListView::builder(ITEMS, 100.0, |i| {
+                (i < ITEMS).then(|| SizedBox::square(100.0).boxed())
+            })
+            .repaint_boundaries(add),
+            tight(200.0, 400.0),
+        );
+        laid.tick();
+        laid.tick();
+        (
+            laid.find_all_by_render_type("RenderRepaintBoundary").len(),
+            laid.find_all_by_render_type("RenderConstrainedBox").len(),
+        )
+    };
+
+    let (with_boundaries, items_with) = build(true);
+    let (without_boundaries, items_without) = build(false);
+
+    assert_eq!(
+        (items_with, items_without),
+        (ITEMS, ITEMS),
+        "precondition: the items themselves are built either way"
+    );
+    assert_eq!(
+        with_boundaries, ITEMS,
+        "the default wraps every item; got {with_boundaries}"
+    );
+    assert_eq!(
+        without_boundaries, 0,
+        "repaint_boundaries(false) must drop them; got {without_boundaries}"
+    );
+}
