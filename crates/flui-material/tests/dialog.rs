@@ -17,6 +17,12 @@ use flui_types::styling::BorderRadius;
 use flui_view::ViewExt;
 use flui_widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 
+/// The corner probe both radius tests share, on the diagonal from the
+/// Material's top-left corner. See
+/// [`default_corner_radius_reaches_the_mounted_material`] for how it is
+/// derived from `p >= r * (1 - 1/sqrt(2))`.
+const PROBE: f32 = 7.6;
+
 /// `_DialogDefaultsM3`'s formatted `Debug` string for a resolved
 /// [`Color`](flui_types::Color) — the same helper `tests/card.rs`/
 /// `tests/elevated_button.rs` use for `RenderPhysicalShape`'s `"color"`
@@ -150,16 +156,17 @@ fn default_inset_padding_offsets_the_aligned_content_by_40x24() {
 /// `3.44.0`), proven against the REAL mounted `RenderPhysicalShape` clip via
 /// hit-testing — not `MaterialShape::to_rrect` computed in isolation.
 ///
-/// The probe point `(13, 13)` is chosen empirically (measured directly
-/// against `MaterialShape::to_path`/`Path::contains`, not derived from an
-/// idealized inscribed-circle formula — the corner's actual point-in-path
-/// test lands on the `x + y >= radius` side of a straight diagonal, not a
-/// true arc, at the tolerance these probes sit at): excluded at the 28dp
-/// default (`13 + 13 = 26 < 28`), included once the radius shrinks to 24dp
-/// (companion test
-/// `an_overridden_24dp_corner_radius_includes_the_same_probe_point` below,
-/// `13 + 13 = 26 >= 24`) — i.e. this probe is chosen specifically to flip if
-/// the default drifts from 28.0 to 24.0.
+/// The probe point `(7.6, 7.6)` is derived from the corner's real geometry
+/// rather than measured off whatever the containment test happened to do. A
+/// corner of radius `r` centres its arc at `(r, r)`, so a point `(p, p)` on
+/// the diagonal is inside exactly when `(r - p) * sqrt(2) <= r`, i.e. when
+/// `p >= r * (1 - 1/sqrt(2))` — `8.20` at 28dp and `7.03` at 24dp. Any probe
+/// strictly between those two thresholds is excluded at the default and
+/// included at the override (companion test
+/// `an_overridden_24dp_corner_radius_includes_the_same_probe_point` below),
+/// so it flips if the default ever drifts from 28.0 to 24.0. `7.6` sits mid
+/// band, ~0.6px clear on each side — comfortably more than the sub-pixel
+/// error of flattening the arc into chords.
 #[test]
 fn default_corner_radius_reaches_the_mounted_material() {
     let taps = Arc::new(AtomicUsize::new(0));
@@ -183,15 +190,15 @@ fn default_corner_radius_reaches_the_mounted_material() {
         .expect("Dialog must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
-    laid.dispatch_pointer_down(origin.dx.get() + 13.0, origin.dy.get() + 13.0);
-    laid.dispatch_pointer_up(origin.dx.get() + 13.0, origin.dy.get() + 13.0);
+    laid.dispatch_pointer_down(origin.dx.get() + PROBE, origin.dy.get() + PROBE);
+    laid.dispatch_pointer_up(origin.dx.get() + PROBE, origin.dy.get() + PROBE);
 
     assert_eq!(
         taps.load(Ordering::SeqCst),
         0,
-        "_DialogDefaultsM3's 28dp corner radius must EXCLUDE a point 13px from the corner \
-         along the diagonal — the mounted Material's actual registered clip, not merely \
-         MaterialShape's geometry computed in isolation"
+        "_DialogDefaultsM3's 28dp corner radius must EXCLUDE a point {PROBE}px from the \
+         corner along the diagonal — the mounted Material's actual registered clip, not \
+         merely MaterialShape's geometry computed in isolation"
     );
 }
 
@@ -225,8 +232,8 @@ fn an_overridden_24dp_corner_radius_includes_the_same_probe_point() {
         .expect("Dialog must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
-    laid.dispatch_pointer_down(origin.dx.get() + 13.0, origin.dy.get() + 13.0);
-    laid.dispatch_pointer_up(origin.dx.get() + 13.0, origin.dy.get() + 13.0);
+    laid.dispatch_pointer_down(origin.dx.get() + PROBE, origin.dy.get() + PROBE);
+    laid.dispatch_pointer_up(origin.dx.get() + PROBE, origin.dy.get() + PROBE);
 
     assert_eq!(
         taps.load(Ordering::SeqCst),
