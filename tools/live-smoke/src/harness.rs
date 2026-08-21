@@ -361,24 +361,41 @@ fn check_occlusion_gating(
         &[],
     )?;
 
-    // 3. Launch a vigorous downward drag-fling (content scrolls back up —
-    //    room is guaranteed, every prior check scrolled down) so a live
-    //    ballistic animation is presenting frames at the moment the cover
-    //    maps.
+    // 3. Launch a vigorous UPWARD drag-fling — finger up, so the content
+    //    scrolls DOWN and the offset grows.
+    //
+    //    The direction is load-bearing, and the opposite one is a real trap
+    //    this check fell into: the arming ticks above are wheel-UP, which
+    //    walks the offset back toward the top (observed: 318 -> 106 px, two
+    //    requested ticks arriving as four scroll events). A downward
+    //    drag-fling needs room in that SAME direction, so it would be
+    //    dragging into the ~106 px the arming just left — 240 px of motion
+    //    against a 106 px wall clamps almost immediately, the release
+    //    carries no ballistic velocity, and the premise below fails with a
+    //    dead fling while pointer delivery is perfectly healthy. Dragging
+    //    the other way instead consumes the room the arming CREATED: the
+    //    demo is 30 rows (~1.9 k px of content in an 800 px viewport), so
+    //    near the top there is ~1 k px of down-room — an order of magnitude
+    //    more than this drag needs, independent of where earlier checks
+    //    happened to leave the offset.
+    //
+    //    Starting low (3/4 of the way down) keeps all six upward steps
+    //    inside the window; starting at 1/4 would walk the pointer off the
+    //    top edge and silently truncate the gesture.
     let geometry = conn.get_geometry(window)?.reply()?;
     let coords = conn
         .translate_coordinates(window, root, 0, 0)?
         .reply()
         .context("window position on the root")?;
     let center_x = (i32::from(coords.dst_x) + i32::from(geometry.width) / 2) as i16;
-    let fling_start_y = (i32::from(coords.dst_y) + i32::from(geometry.height) / 4) as i16;
+    let fling_start_y = (i32::from(coords.dst_y) + i32::from(geometry.height) * 3 / 4) as i16;
     fake_motion(conn, root, center_x, fling_start_y)?;
     conn.sync()?;
     std::thread::sleep(Duration::from_millis(100));
     conn.xtest_fake_input(BUTTON_PRESS, 1, 0, root, 0, 0, 0)?;
     conn.sync()?;
     for step in 1..=6i16 {
-        fake_motion(conn, root, center_x, fling_start_y + step * 40)?;
+        fake_motion(conn, root, center_x, fling_start_y - step * 40)?;
         conn.sync()?;
         std::thread::sleep(Duration::from_millis(8));
     }
