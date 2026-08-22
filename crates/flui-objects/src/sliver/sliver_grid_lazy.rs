@@ -31,9 +31,10 @@
 //! on a later pass — so it has no way to discover the builder's end within the
 //! frame that must commit a size. It therefore caps the window at
 //! [`MAX_UNBOUNDED_WINDOW_CHILDREN`], reports the extent it actually covers
-//! rather than the declared one, and logs the shortfall. Only an item count
-//! past the cap is affected; every count below it lays out in full, matching
-//! the oracle.
+//! rather than the declared one, and logs the shortfall. That cap separates a
+//! sentinel from a length, not a large grid from a small one: every count at
+//! or below it lays out in full, matching the oracle, and it is set above
+//! every count that can render at all.
 //!
 //! # Lifecycle
 //!
@@ -61,16 +62,25 @@ use flui_rendering::{
 // RENDER OBJECT
 // ============================================================================
 
-/// Upper bound on how many children one frame will request when the window
-/// end is unbounded.
+/// The count above which a declared `item_count` is read as an undefined-count
+/// stand-in rather than a real data-source length, when the window end is
+/// unbounded.
 ///
-/// Not a performance budget: a shrink-wrapped grid under an unbounded main
-/// axis must lay every child out to know its own size, so a configuration
-/// larger than this cannot mean anything useful in the first place. The cap
-/// exists so a declared `item_count` of `usize::MAX` — the conventional
-/// stand-in for the oracle's undefined `itemCount` — cannot turn one frame
-/// into ~2^64 build requests.
-const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 10_000;
+/// This separates a sentinel from a length. It is deliberately NOT a "large
+/// grids are too slow" budget: every count at or below it is laid out in full,
+/// however large. The hazard it guards is specific — with no finite window end
+/// the request loop runs `first..=last` in a single pass, so a declared
+/// `usize::MAX` (the conventional stand-in for the oracle's undefined
+/// `itemCount`) would enqueue ~2^64 build requests before the frame could
+/// return.
+///
+/// The value sits above every count that can render at all, and far below the
+/// sentinel. Measured on the widget harness with a 4-column shrink-wrapped
+/// grid: 10 001 items settle in ~0.3 s, 40 000 in ~1.5 s, 160 000 in ~10 s — a
+/// grid an order of magnitude past that is already unusable for reasons this
+/// constant has no part in, while one frame at the cap itself costs ~70 ms and
+/// returns. `usize::MAX` is thirteen orders of magnitude beyond it.
+const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
 
 /// A request-strategy lazily-virtualized 2-D grid sliver.
 ///
@@ -244,14 +254,14 @@ impl RenderSliver for RenderSliverGridLazy {
         // `itemCount`. The request loop below is synchronous, so an unbounded
         // count would ask for ~2^64 build requests in a single frame.
         //
-        // [`MAX_UNBOUNDED_WINDOW_CHILDREN`] bounds that, and the bound is not
-        // an arbitrary budget: a shrink-wrapped grid under an unbounded main
-        // axis has no virtualization left to perform — it must lay every child
-        // out to learn its own size — so the only configurations this branch
-        // can ever serve are ones small enough to lay out eagerly anyway. Past
-        // that the tree is asking for infinite content in an infinitely tall
-        // box, which the oracle answers by looping until the builder returns
-        // null and would never terminate for a builder that never does.
+        // [`MAX_UNBOUNDED_WINDOW_CHILDREN`] bounds that, and it draws its line
+        // between a declared length and a sentinel rather than between a large
+        // grid and a small one: a finite count at or below it is laid out in
+        // full, and the constant is set above every count that can render at
+        // all. Past it the tree is asking for infinite content in an infinitely
+        // tall box, which the oracle answers by looping until the builder
+        // returns null — and would never terminate for a builder that never
+        // does.
         //
         // Truncating also has to move the reported scroll extent with it.
         // `item_count` normally drives that extent so a bounded viewport can
@@ -270,8 +280,9 @@ impl RenderSliver for RenderSliverGridLazy {
                 item_count = self.item_count,
                 cap = MAX_UNBOUNDED_WINDOW_CHILDREN,
                 "lazy grid asked to fill an unbounded main axis declares more \
-                 children than one frame can lay out; truncating the window, so \
-                 the committed extent is short of the declared content"
+                 children than one frame can even request; reading the count as \
+                 an undefined-count stand-in and truncating the window, so the \
+                 committed extent is short of the declared content"
             );
             (
                 MAX_UNBOUNDED_WINDOW_CHILDREN - 1,

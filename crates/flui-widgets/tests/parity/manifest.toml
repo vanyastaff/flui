@@ -404,7 +404,7 @@ tests = 8
 rust = "grid_view_interaction_test"
 family = "scroll"
 oracles = ["widgets/grid_view_test.dart"]
-tests = 24
+tests = 25
 
 [[targets.claims]]
 oracle = "widgets/grid_view_test.dart"
@@ -1571,7 +1571,7 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 90
-rust_tests = 647
+rust_tests = 648
 pins = 3
 oracle_files = 389
 oracle_cases = 5696
@@ -1648,7 +1648,7 @@ pins = 0
 
 [summary.families."scroll"]
 targets = 8
-rust_tests = 74
+rust_tests = 75
 cases_claimed = 36
 cases_diverged = 0
 pins = 0

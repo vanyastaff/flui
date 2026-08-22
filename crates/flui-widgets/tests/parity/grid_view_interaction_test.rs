@@ -202,7 +202,11 @@
 //!     `sliver_grid.dart:608-610`), so the oracle's expectation holds
 //!     directly and the pair is retired. The lazy path needs one bound the
 //!     eager path does not, and a DIVERGENCE rides on it — see
-//!     [`grid_view_builder_in_unbounded_context_with_undefined_item_count_terminates`].
+//!     [`grid_view_builder_in_unbounded_context_with_undefined_item_count_terminates`]
+//!     for the truncation and
+//!     [`grid_view_builder_in_unbounded_context_lays_out_a_large_finite_item_count_in_full`]
+//!     for its other side, that a declared finite length is never treated as
+//!     that sentinel.
 //! 12. `'GridView.builder control test'` — **ported, real green**:
 //!     [`grid_view_builder_control_test_shrink_wrap_builds_exactly_viewport_fit`].
 //!     Lazy path, but Finding 2's residency-vs-onstage distinction still
@@ -1122,16 +1126,46 @@ fn grid_view_builder_in_unbounded_context_with_undefined_item_count_terminates()
     );
     let laid = harness::pump_widget(root, harness::screen());
 
-    // The grid truncates to its unbounded-window cap (10 000 tiles) and
-    // reports the extent it actually covers: 10 000 tiles over 4 columns is
-    // 2500 rows of 200px cells. Exact, not a range — a bound this test cannot
-    // compute is a bound it cannot notice drifting.
+    // The grid truncates to its unbounded-window cap (1 000 000 tiles) and
+    // reports the extent it actually covers: 1 000 000 tiles over 4 columns is
+    // 250 000 rows of 200px cells. Exact, not a range — a bound this test
+    // cannot compute is a bound it cannot notice drifting.
     let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
     assert_eq!(
         laid.size(viewport_id),
-        size(800.0, 500_000.0),
+        size(800.0, 50_000_000.0),
         "an unbounded window over an undefined item count must commit the \
          truncated extent, not collapse to zero and not declare 2^64 rows"
+    );
+}
+
+/// The other side of that bound: a large but genuinely finite `item_count`
+/// is a declared data-source length, not the undefined-count stand-in, and
+/// must be laid out in full.
+///
+/// 10 001 items is deliberately chosen: it is large enough that a naive
+/// "cap the unbounded window at a round number" guard would swallow it, and
+/// small enough to be an ordinary data source. `ceil(10001 / 4) = 2501` rows
+/// of 200px cells is 500 200px — one row MORE than a truncation to 10 000
+/// would report, which is exactly the observable a too-eager cap destroys.
+#[test]
+fn grid_view_builder_in_unbounded_context_lays_out_a_large_finite_item_count_in_full() {
+    let delegate: Arc<dyn SliverGridDelegate> =
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(4));
+    let root = SingleChildScrollView::new().child(
+        GridView::builder(delegate, 10_001, |i| {
+            Some(SizedBox::shrink().child(Text::new(format!("{i}"))).boxed())
+        })
+        .shrink_wrap(true),
+    );
+    let laid = harness::pump_widget(root, harness::screen());
+
+    let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport_id),
+        size(800.0, 500_200.0),
+        "a finite item_count is a declared length, not a sentinel: every \
+         declared row must be in the committed extent"
     );
 }
 
