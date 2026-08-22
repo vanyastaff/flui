@@ -293,8 +293,12 @@ impl ChangeNotifier {
         }
         // The snapshot-then-fire loop (ordering, mid-notify removal skip,
         // per-callback `catch_unwind`, mid-flight-dispose honouring) lives
-        // once, in [`Notifier::notify`].
-        self.inner.notify(());
+        // once, in the generic channel. The UNCHECKED variant on purpose:
+        // the branded check above is this method's one documented entry
+        // check, and a `dispose` racing in after it must behave as it always
+        // did under the single-check semantics (the in-flight call proceeds)
+        // rather than trip the inner channel's generically-worded gate.
+        self.inner.notify_unchecked(());
     }
 
     /// Whether any listeners are currently registered
@@ -325,7 +329,10 @@ impl Listenable for ChangeNotifier {
             // Release-mode no-op: return a fresh id that is not registered.
             return self.inner.mint_id();
         }
-        self.inner.add(Arc::new(move |()| listener()))
+        // Unchecked for the same reason as `notify_listeners`: the branded
+        // check above is the one entry check; a racing `dispose` must not
+        // produce the inner channel's generically-worded failure.
+        self.inner.add_unchecked(Arc::new(move |()| listener()))
     }
 
     fn remove_listener(&self, id: ListenerId) {
@@ -347,7 +354,8 @@ impl Listenable for ChangeNotifier {
         if self.check_disposed() {
             return;
         }
-        self.inner.remove_all();
+        // Unchecked: same single-entry-check rationale as `add_listener`.
+        self.inner.remove_all_unchecked();
     }
 }
 

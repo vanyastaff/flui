@@ -107,6 +107,16 @@ impl<Arg> Notifier<Arg> {
         if self.check_disposed() {
             return self.mint_id();
         }
+        self.add_unchecked(listener)
+    }
+
+    /// [`Self::add`] without the disposed gate — for wrappers
+    /// (`ChangeNotifier`) that run their own differently-branded entry check
+    /// first. A second gate here would turn a `dispose` racing in between the
+    /// wrapper's check and this call into a generically-worded debug panic,
+    /// where the historical single-check semantics let the already-started
+    /// call proceed.
+    pub(crate) fn add_unchecked(&self, listener: ArgCallback<Arg>) -> ListenerId {
         let id = self.mint_id();
         self.listeners.lock().insert(id, listener);
         id
@@ -142,6 +152,13 @@ impl<Arg> Notifier<Arg> {
         if self.check_disposed() {
             return;
         }
+        self.remove_all_unchecked();
+    }
+
+    /// [`Self::remove_all`] without the disposed gate — same single-check
+    /// rationale as [`Self::add_unchecked`]; racing a `dispose` here is
+    /// harmless (both clear the same map).
+    pub(crate) fn remove_all_unchecked(&self) {
         self.listeners.lock().clear();
     }
 
@@ -184,6 +201,15 @@ impl<Arg: Clone> Notifier<Arg> {
         if self.check_disposed() {
             return;
         }
+        self.notify_unchecked(arg);
+    }
+
+    /// [`Self::notify`] without the entry disposed gate — same single-check
+    /// rationale as [`Self::add_unchecked`]. The firing loop itself is
+    /// dispose-safe either way: once the snapshot is taken it is honoured to
+    /// completion, and a fully-disposed (empty) listener map simply yields an
+    /// empty snapshot.
+    pub(crate) fn notify_unchecked(&self, arg: Arg) {
         // Stack-allocate the snapshot for the common case (1-4 listeners);
         // ≥5 spills to the heap. `SmallVec` over `tinyvec::ArrayVec`
         // deliberately: the callbacks are `Arc<dyn Fn(..)>`, which does not
