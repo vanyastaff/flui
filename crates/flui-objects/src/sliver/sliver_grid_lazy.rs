@@ -118,6 +118,16 @@ pub struct RenderSliverGridLazy {
     /// Used by the `&self` hit-test reverse walk which cannot re-read
     /// `ctx.child_count()`.
     attached_child_count: usize,
+    /// The `item_count` the unbounded-window truncation warning has already
+    /// been emitted for, if any.
+    ///
+    /// Layout runs every frame, so an ungated warning there would repeat at
+    /// frame rate for a misconfiguration that is static — the same
+    /// once-per-misconfiguration frequency `flui_painting`'s decoration
+    /// warnings take, scoped per render object rather than per process so two
+    /// misconfigured grids each report, and so a count that CHANGES to another
+    /// over-cap value reports again.
+    warned_truncation_for: Option<usize>,
 }
 
 impl RenderSliverGridLazy {
@@ -130,6 +140,7 @@ impl RenderSliverGridLazy {
             item_count,
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
+            warned_truncation_for: None,
         }
     }
 
@@ -189,6 +200,9 @@ impl Clone for RenderSliverGridLazy {
             item_count: self.item_count,
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
             attached_child_count: self.attached_child_count,
+            // Carried, not reset: it tracks a configuration, so a clone that
+            // dropped it would re-report the same misconfiguration.
+            warned_truncation_for: self.warned_truncation_for,
         }
     }
 }
@@ -276,14 +290,18 @@ impl RenderSliver for RenderSliverGridLazy {
                 .min(self.item_count - 1);
             (last, self.item_count)
         } else if self.item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
-            tracing::warn!(
-                item_count = self.item_count,
-                cap = MAX_UNBOUNDED_WINDOW_CHILDREN,
-                "lazy grid asked to fill an unbounded main axis declares more \
-                 children than one frame can even request; reading the count as \
-                 an undefined-count stand-in and truncating the window, so the \
-                 committed extent is short of the declared content"
-            );
+            if self.warned_truncation_for != Some(self.item_count) {
+                self.warned_truncation_for = Some(self.item_count);
+                tracing::warn!(
+                    item_count = self.item_count,
+                    cap = MAX_UNBOUNDED_WINDOW_CHILDREN,
+                    "lazy grid asked to fill an unbounded main axis declares \
+                     more children than one frame can even request; reading \
+                     the count as an undefined-count stand-in and truncating \
+                     the window, so the committed extent is short of the \
+                     declared content"
+                );
+            }
             (
                 MAX_UNBOUNDED_WINDOW_CHILDREN - 1,
                 MAX_UNBOUNDED_WINDOW_CHILDREN,
