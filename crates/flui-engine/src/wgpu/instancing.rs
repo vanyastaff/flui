@@ -774,10 +774,10 @@ pub(crate) fn reduce_superellipse_clip(c: [f32; 12]) -> [f32; 8] {
         c[1],
         c[2],
         c[3],
-        0.5 * (c[4] + c[5]),
-        0.5 * (c[6] + c[7]),
-        0.5 * (c[8] + c[9]),
-        0.5 * (c[10] + c[11]),
+        f32::midpoint(c[4], c[5]),
+        f32::midpoint(c[6], c[7]),
+        f32::midpoint(c[8], c[9]),
+        f32::midpoint(c[10], c[11]),
     ]
 }
 

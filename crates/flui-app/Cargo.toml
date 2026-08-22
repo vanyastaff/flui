@@ -92,7 +92,7 @@ thiserror.workspace = true
 crossbeam-channel.workspace = true
 anyhow.workspace = true
 raw-window-handle.workspace = true
-pollster = "0.4"
+pollster = { workspace = true }
 web-time = { workspace = true }
 
 # Default execution services (issue #557): the loop-scoped `AppRuntime` owns

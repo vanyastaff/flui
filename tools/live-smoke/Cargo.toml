@@ -39,4 +39,4 @@ anyhow = "1.0"
 # VisibilityFullyObscured — the exact event winit's X11 backend translates
 # to `WindowEvent::Occluded(true)`) while wheel input passes straight
 # through to the app beneath, keeping frame demand alive while hidden.
-x11rb = { version = "0.13", features = ["xtest", "shape"] }
+x11rb = { version = "0.14", features = ["xtest", "shape"] }

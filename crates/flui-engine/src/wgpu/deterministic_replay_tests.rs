@@ -472,7 +472,9 @@ mod tests {
         // A/B equality assertion above already passed, proving target A has drawn color
         // is sufficient — target B is byte-identical and therefore also has drawn color.
         let has_drawn_color = pixels_a
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|rgba| rgba[0] > 0 || rgba[1] > 0 || rgba[2] > 0);
         assert!(
             has_drawn_color,
@@ -673,7 +675,9 @@ mod tests {
 
         // ── Step 8: Non-vacuous content guard ─────────────────────────────────
         let has_drawn_color = pixels_a
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|rgba| rgba[0] > 0 || rgba[1] > 0 || rgba[2] > 0);
         assert!(
             has_drawn_color,
@@ -699,18 +703,19 @@ mod tests {
         // (which also composites a full-viewport texture to a dst_rect), not a bare
         // `DrawItem::Segment`. That oracle is deferred to Slice 1 when the integration
         // test framework can construct a `PooledTexture` without a painter round-trip.
-        let filter_has_content_in_composite_area =
-            pixels_a
-                .chunks_exact(4)
-                .enumerate()
-                .any(|(pixel_idx, rgba)| {
-                    let col = pixel_idx % SCENE_SIZE as usize;
-                    let row = pixel_idx / SCENE_SIZE as usize;
-                    // Check the composite area (grown_bounds = [10,10]-[30,30])
-                    (10..30).contains(&row)
-                        && (10..30).contains(&col)
-                        && (rgba[0] > 0 || rgba[1] > 0 || rgba[2] > 0)
-                });
+        let filter_has_content_in_composite_area = pixels_a
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .any(|(pixel_idx, rgba)| {
+                let col = pixel_idx % SCENE_SIZE as usize;
+                let row = pixel_idx / SCENE_SIZE as usize;
+                // Check the composite area (grown_bounds = [10,10]-[30,30])
+                (10..30).contains(&row)
+                    && (10..30).contains(&col)
+                    && (rgba[0] > 0 || rgba[1] > 0 || rgba[2] > 0)
+            });
         assert!(
             filter_has_content_in_composite_area,
             "G3 identity-fidelity: Filter(Identity) must produce non-zero RGB content \
@@ -720,7 +725,9 @@ mod tests {
 
         let segment_has_content_in_rect_area =
             pixels_c
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .enumerate()
                 .any(|(pixel_idx, rgba)| {
                     let col = pixel_idx % SCENE_SIZE as usize;

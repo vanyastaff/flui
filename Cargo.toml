@@ -165,7 +165,7 @@ toml = "1.1"
 bon = "3.8"
 
 # DX TOOLING - flui-cli / flui-build / flui-devtools
-indicatif = "0.17" # progress bars (build/cli)
+indicatif = "0.18" # progress bars (build/cli)
 tempfile = "3"     # scratch dirs/files (build/cli tests)
 which = "8"        # locate toolchain executables (build/cli)
 
@@ -222,7 +222,7 @@ wgpu-profiler = { version = "0.27", default-features = false }
 naga_oil = { version = "0.22", default-features = false }
 winit = "0.30.12"
 raw-window-handle = "0.6"
-pollster = "0.4"
+pollster = "1.0"
 # Trait-only `Stream`. NOT `futures`/`futures-util`: no executor, no
 # combinators, no proc macros — just the trait `StreamBuilder` polls by hand.
 futures-core = { version = "0.3", default-features = false, features = ["std"] }
@@ -277,13 +277,14 @@ regex = "1"
 moka = { version = "0.12", features = ["future"] }
 
 # NETWORKING - Used by flui-assets
-# default-features = false: reqwest's default `native-tls` pulls openssl,
-# which deny.toml bans — this workspace is rustls-only by policy.
-reqwest = { version = "0.12", default-features = false, features = [
-    "json",
-    "stream",
-    "rustls-tls",
-] }
+# `default-features = false` + an explicit `rustls`: reqwest 0.13 made rustls
+# its default backend, but `default-tls` still resolves to native-tls (and
+# therefore openssl, which deny.toml bans) whenever a sibling feature turns it
+# on, so the opt-out plus the explicit backend is what actually keeps this
+# workspace rustls-only rather than merely rustls-by-default. The feature is
+# spelled `rustls` here, not `rustls-tls` — 0.13 renamed it. Dropping the
+# defaults also drops `charset`/`http2`/`system-proxy`, unchanged from 0.12.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
 ui-events = "0.3"
@@ -303,7 +304,7 @@ rustc-hash = "2.1"
 lasso = { version = "0.7", features = ["multi-threaded"] }
 
 # PERFORMANCE & PROFILING
-criterion = "0.7"
+criterion = "0.8"
 
 # SNAPSHOT TESTING - render-harness paint-phase (sub-project A) and any crate
 # that needs deterministic output assertions. Test-only; not compiled in release.
@@ -400,6 +401,15 @@ items_after_statements = "allow"
 needless_pass_by_value = "allow"
 trivially_copy_pass_by_ref = "allow"
 struct_excessive_bools = "allow"
+# An `async fn` implementing an `async fn` trait method keeps the trait's own
+# signature even when that particular impl has nothing to await — the lint's fix
+# (`fn … -> impl Future<Output = …>` plus `future::ready`) desugars one impl of a
+# trait whose other impls stay `async fn`, so the family stops reading alike for
+# no runtime difference. It also has no answer for the feature-gated stub pairs
+# (`flui-assets`'s `network`-off `load_url`/`load_text`), where the `async` is
+# what keeps the two configurations' signatures identical. Fires on `flui-assets`
+# and `flui-build` today; new in Rust 1.98's pedantic set.
+unused_async_trait_impl = "allow"
 
 [package]
 name = "flui"

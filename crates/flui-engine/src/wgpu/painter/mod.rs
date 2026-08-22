@@ -558,11 +558,13 @@ impl WgpuPainter {
             "Drawing commands"
         );
 
-        // Finalise the current segment and drain the draw order into a local
-        // vec.  The drain is a pure move — no per-frame alloc beyond the vec
-        // header (capacity was already allocated by the record side).
+        // Finalise the current segment and move the draw order into a local
+        // vec.  `mem::take` hands the record side's existing allocation
+        // straight to the replay side instead of copying it into a freshly
+        // allocated one, so the frame's items never get reallocated on the way
+        // out; `self.draw_order` is left empty for the next record pass.
         self.finish_current_segment();
-        let items: Vec<DrawItem> = self.draw_order.drain(..).collect();
+        let items: Vec<DrawItem> = std::mem::take(&mut self.draw_order);
 
         // Dispatch all items + text via GpuReplay::submit.
         // Segment text renders in draw order inside submit; finish_pass
