@@ -157,7 +157,7 @@ file records the repo-consumer-visible summary.
   (`enable-wgpu-tests`) compile clean but cannot execute here — this container
   has no Vulkan ICD and no `/dev/dri`, the same reason CI's Linux jobs don't run
   them. Their executing coverage is CI's `gpu-test` job on WARP.
-- **Dependency refresh: full `cargo update` plus eleven semver-major bumps.**
+- **Dependency refresh: full `cargo update` plus ten semver-major bumps.**
   `reqwest` 0.12 → 0.13 (its `rustls-tls` feature is now spelled `rustls`;
   0.13 also makes rustls the default backend, so `default-features = false`
   plus the explicit backend is what keeps the openssl ban enforced rather than

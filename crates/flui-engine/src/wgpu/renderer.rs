@@ -3119,7 +3119,14 @@ mod tests {
             })
             .ok()?;
 
-        let mapped = staging_buffer.slice(..4).get_mapped_range().ok()?;
+        // The `?`s above return `None` for "no usable device", which is what
+        // this helper's callers read. A map that fails AFTER the poll-wait
+        // succeeded is not that — it is a broken invariant, and folding it into
+        // the same `None` would report a real failure as an absent GPU.
+        let mapped = staging_buffer
+            .slice(..4)
+            .get_mapped_range()
+            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
         let bytes: [u8; 4] = mapped[..4].try_into().ok()?;
         Some(bytes)
     }
