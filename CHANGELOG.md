@@ -106,6 +106,51 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **Workspace-wide dedup/refactor pass (round 2), foundation → widgets.**
+  flui-rendering's `RenderNode` collapsed 39 identical Box/Sliver
+  match-delegations onto one local `with_entry!` macro (~110 LOC), and its
+  42-file integration binary gained the `tests/common` module its per-file
+  scaffolding copies (7× `laid_out`, 5× `sliver_geometry`, constraint
+  helpers, the `Boxed*Object` aliases) had been begging for; six orphaned
+  snapshot files whose source test moved to flui-objects long ago are gone
+  along with the unused `insta` dev-dependency. flui-objects gained
+  `forward_single_child_box_layout!`/`forward_single_child_box_hit_test!`
+  beside the existing query-forwarding macro (23 verbatim proxy bodies
+  replaced; constraint-transforming implementations stay hand-written).
+  `ChangeNotifier` is re-seated on `Notifier<()>` — the snapshot/ordering/
+  `catch_unwind` firing discipline now lives once in `flui-foundation`'s
+  generic channel, with `ChangeNotifier` keeping only its Flutter-parity
+  seams (branded use-after-dispose message; `remove_listener` tolerating a
+  disposed receiver via the new `Notifier::remove_even_if_disposed`).
+  `flui-layer` gained the `gen_layer_from_impls!` macro its backlog called
+  for (18 hand-written `From<XxxLayer>` impls collapsed, plus the previously
+  missing `From<PerformanceOverlayLayer>` closed and its one hand-boxed
+  construction site in `flui-app` simplified). `flui-view` gained
+  `single_child_view_children!`, replacing 51 verbatim
+  `has_children`/`visit_child_views` blocks across
+  flui-widgets/-material/-cupertino. flui-painting's text layout finished
+  the cosmic-text 0.19 migration semantically, not just syntactically:
+  `Buffer::new_empty` drops the wasted empty-string shape pass at both
+  construction sites, the global `FONT_SYSTEM` lock now brackets only shape
+  passes (the lazy setters run before it), and the verbatim metrics fold
+  shared by `TextLayout::metrics` and `measure_text` lives once
+  (`metrics_from_shaped_buffer`). `Color::to_f32_array` is a `const`
+  delegation to `to_rgba_f32_array` instead of a copy, and the two
+  ignored HSL/HSV round-trip tests whose "not implemented" premise was
+  false (the `From` conversions exist) now run.
+- **Doc truth-sync across crates.** Every claim that routed current behavior
+  through the deleted `AppBinding` now names the real successor
+  (`UiRealm::draw_frame` / `render_frame_entered` /
+  `handle_input_addressed`) across ~30 sites in
+  flui-view/-testing/-widgets/-material/-cupertino/-app/-platform;
+  deliberately historical "retired `AppBinding`" anchors stay.
+  flui-layer's ARCHITECTURE.md dropped its stale doctest backlog (the
+  `px()`-wrap sweep landed long ago; doctests are green) and records the
+  `From`-impls macro as done. flui-foundation's notifier docs now state the
+  round-N-vs-round-N+1 rule on both channels, closing that backlog entry.
+  flui-painting's ARCHITECTURE.md reflects the 0.19 lock discipline and
+  newly files the UAX #29 word-segmentation entry `get_word_boundary`'s
+  doc always claimed existed.
 - **flui-engine: single homes for the GPU rituals the wgpu 30 bump touched at
   every call site.** The version bump adapted each site in place; this change
   deduplicates the repeated shapes. `wgpu/adapter.rs` now owns the production

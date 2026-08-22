@@ -9,7 +9,7 @@
 //!
 //! `tests/ink_well.rs`'s own module doc already established this gap:
 //! `MouseRegion::on_enter`/`on_exit` require `MouseTracker::update_with_event`,
-//! which only a full `AppBinding` frame pump runs — the raw
+//! which only a full `UiRealm` frame pump runs — the raw
 //! `HitTestResult::dispatch` this headless harness's `dispatch_pointer_move`
 //! calls never reaches it. `InputDecoratorState` uses `on_enter`/`on_exit`
 //! (the oracle's own `TextField._handleHover` wiring, `text_field.dart:1799`,

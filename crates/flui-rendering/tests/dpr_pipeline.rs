@@ -12,8 +12,7 @@ use flui_painting::DisplayListCore;
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 use flui_types::{Point, Rect, Size, geometry::px};
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+use crate::common::BoxedRenderObject;
 
 #[test]
 fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {

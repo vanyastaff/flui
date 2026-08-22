@@ -1,7 +1,7 @@
 //! Public-API tests for `Navigator`.
 //!
 //! Driven through the real `flui_widgets::prelude` surface and a real
-//! `HeadlessBinding` frame — the path `AppBinding::draw_frame` takes. If a name
+//! `HeadlessBinding` frame — the path `UiRealm::draw_frame` takes. If a name
 //! were not exported, this file would not compile.
 //!
 //! # Parity oracles

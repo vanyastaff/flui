@@ -11,12 +11,10 @@
 //!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
 use flui_objects::{RenderColoredBox, RenderPadding};
-use flui_rendering::{constraints::BoxConstraints, error::RenderError, pipeline::PipelineOwner};
+use flui_rendering::{constraints::BoxConstraints, error::RenderError};
 use flui_types::{Size, geometry::px};
 
-fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {
-    PipelineOwner::new().into_layout()
-}
+use crate::common::fresh_layout_pipeline;
 
 // ============================================================================
 // Structural cycle on leaf-only path — guard does NOT trigger

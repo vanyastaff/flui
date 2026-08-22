@@ -39,14 +39,8 @@
 //! otherwise.
 
 use flui_tree::Single;
-use flui_types::{Offset, Size};
 
-use flui_rendering::{
-    RenderUpdateImpact,
-    context::{BoxHitTestContext, BoxLayoutContext},
-    parent_data::BoxParentData,
-    traits::RenderBox,
-};
+use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::RenderBox};
 
 /// A render object that lays its child out normally but paints it only while
 /// `visible`.
@@ -112,18 +106,7 @@ impl RenderBox for RenderVisibility {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        if ctx.child_count() > 0 {
-            self.has_child = true;
-            let child_size = ctx.layout_child(0, constraints);
-            ctx.position_child(0, Offset::ZERO);
-            child_size
-        } else {
-            self.has_child = false;
-            constraints.smallest()
-        }
-    }
+    flui_rendering::forward_single_child_box_layout!();
 
     flui_rendering::forward_single_child_box_queries!();
 
@@ -132,16 +115,7 @@ impl RenderBox for RenderVisibility {
         !self.visible
     }
 
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_own_size() {
-            return false;
-        }
-        if self.has_child {
-            ctx.hit_test_child_at_offset(0, Offset::ZERO)
-        } else {
-            false
-        }
-    }
+    flui_rendering::forward_single_child_box_hit_test!();
 }
 
 // ===========================================================================

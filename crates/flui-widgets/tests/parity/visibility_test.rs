@@ -104,7 +104,7 @@
 //!
 //! Divergences:
 //! - `maintainAnimation` matches Flutter for descendants registered through an
-//!   ambient `VsyncScope`, including production `AppBinding` roots. With no
+//!   ambient `VsyncScope`, including production `UiRealm` roots. With no
 //!   ambient scope, FLUI's `TickerMode` intentionally passes the child through
 //!   to preserve wall-clock fallback behavior.
 //! - `maintainSemantics` is absent: no semantics-visiting hook exists to

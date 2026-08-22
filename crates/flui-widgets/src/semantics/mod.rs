@@ -9,7 +9,7 @@ use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{SemanticsConfiguration, SemanticsProperties, SemanticsRole, TextDirection},
 };
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 #[derive(Clone, Copy, Debug, Default)]
 struct SemanticsOptions {
@@ -336,15 +336,7 @@ impl RenderView for Semantics {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(Semantics);
@@ -388,15 +380,7 @@ impl RenderView for MergeSemantics {
         flui_rendering::RenderUpdateImpact::NONE
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(MergeSemantics);
@@ -459,15 +443,7 @@ impl RenderView for ExcludeSemantics {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(ExcludeSemantics);

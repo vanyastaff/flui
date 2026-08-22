@@ -26,8 +26,7 @@ use flui_rendering::{
 use flui_tree::{Leaf, Variable};
 use flui_types::{Size, geometry::px};
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+use crate::common::BoxedRenderObject;
 
 // ============================================================================
 // Counting test objects

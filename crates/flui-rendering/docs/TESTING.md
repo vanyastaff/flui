@@ -1,7 +1,7 @@
 # Render-object test harness (`flui_rendering::testing`)
 
 Headless integration testing for `RenderBox` and `RenderSliver` types through the
-**real** [`PipelineOwner`](../src/pipeline/owner.rs) pipeline — no mocks, no GPU,
+**real** [`PipelineOwner`](../src/pipeline/owner/mod.rs) pipeline — no mocks, no GPU,
 no window.
 
 ## Enabling
@@ -17,7 +17,7 @@ The module is **off by default** so it never lands in release builds.
 ```bash
 cargo test -p flui-rendering
 cargo test -p flui-objects --test render_object_harness
-cargo test -p flui-rendering --test harness_animation
+cargo test -p flui-rendering --test rendering_it harness_animation
 ```
 
 ## Design
@@ -122,7 +122,7 @@ Implements [`Probe`](../src/testing/inspect.rs) and [`BoxQueryRun`](../src/testi
 
 Implemented on both [`LayoutRun`](../src/testing/harness.rs) and
 [`FrameRun`](../src/testing/harness.rs). Queries use the production
-[`PipelineOwner`](../src/pipeline/owner.rs) memoization path — they do **not**
+[`PipelineOwner`](../src/pipeline/owner/mod.rs) memoization path — they do **not**
 require a prior layout pass, but you can call them after `run_layout` or
 `run_frame` to assert proxy forwarding contracts.
 
@@ -137,7 +137,7 @@ require a prior layout pass, but you can call them after `run_layout` or
 | `dry_baseline(id, constraints, baseline)` | Flutter `getDryBaseline` |
 
 ```rust
-use flui_rendering::objects::{RenderColoredBox, RenderOpacity};
+use flui_objects::{RenderColoredBox, RenderOpacity};
 use flui_rendering::testing::{BoxQueryRun, RenderTester, box_node};
 use flui_types::{Size, geometry::px};
 
@@ -178,7 +178,7 @@ Snapshot returned by `pump` / `advance_*` / `simulate`: `painted`, `structure`
 ### Single frame — layout + paint
 
 ```rust
-use flui_rendering::objects::{RenderColoredBox, RenderPadding};
+use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::testing::{RenderTester, Probe, box_node};
 use flui_types::{Offset, Size, geometry::px};
 
@@ -205,8 +205,8 @@ assert_eq!(run.box_geometry(run.root()), Size::new(px(200.0), px(200.0)));
 ### Stack positioned child (`ParentDataSeed`)
 
 ```rust
+use flui_objects::{RenderColoredBox, RenderStack};
 use flui_rendering::parent_data::StackParentData;
-use flui_rendering::objects::{RenderColoredBox, RenderStack};
 use flui_rendering::testing::{RenderTester, Probe, box_node};
 
 let run = RenderTester::mount(
@@ -267,7 +267,7 @@ the pipeline settles.
 
 ### CI catalog
 
-[`tests/render_object_harness.rs`](../tests/render_object_harness.rs) mounts every
+[`flui-objects/tests/render_object_harness.rs`](../../flui-objects/tests/render_object_harness.rs) mounts every
 exported `RenderBox` / `RenderSliver` type. `catalog_covers_every_render_object_name`
 fails CI if a new render object lacks harness coverage.
 
@@ -281,7 +281,7 @@ fails CI if a new render object lacks harness coverage.
 
 ## Paint snapshots & phase pumping
 
-_Design reference: [`docs/plans/2026-06-14-render-harness-paint-phase-design.md`](../../plans/2026-06-14-render-harness-paint-phase-design.md)_
+_Design reference: [`docs/plans/2026-06-14-render-harness-paint-phase-design.md`](../../../docs/plans/2026-06-14-render-harness-paint-phase-design.md)_
 
 Sub-project A of render-harness 2.0 adds three integrated capabilities:
 
@@ -306,7 +306,7 @@ The guarantee is **compile-time**: `LayoutRun` has no `snapshot` method — call
 compile error, not a runtime panic:
 
 ```rust
-use flui_rendering::objects::RenderColoredBox;
+use flui_objects::RenderColoredBox;
 use flui_rendering::testing::{RenderTester, box_node};
 
 // cheapest handle that exposes the painted layer tree
@@ -347,7 +347,7 @@ Offset dx=0.00 dy=0.00
 **Pin snapshots with `insta`:**
 
 ```rust
-use flui_rendering::objects::RenderDecoratedBox;
+use flui_objects::RenderDecoratedBox;
 use flui_rendering::testing::{DrawKind, RenderTester, box_node};
 use flui_types::{Size, geometry::px};
 
@@ -361,7 +361,7 @@ run.assert_paints_any(|c| c.kind == DrawKind::Shadow);   // shadow is painted
 
 **`insta` workflow:** run `cargo insta review` to inspect diffs and accept or reject them.
 Committed `.snap` files are reviewed like code — never auto-accept blindly.  Snapshot files
-live in `crates/flui-rendering/tests/snapshots/`.
+live in `crates/flui-objects/tests/snapshots/`.
 
 **Op-sequence matching is intentionally absent.** Flutter's `paints..rect()..clip()`
 style matcher is a documented anti-pattern: it has a silent-pass bug
@@ -412,7 +412,7 @@ assert!(matches!(err, RenderError::Poisoned { .. }));
 not an error variant.
 
 ```rust
-use flui_rendering::objects::{RenderColoredBox, RenderFittedBox};
+use flui_objects::{RenderColoredBox, RenderFittedBox};
 use flui_rendering::testing::{RenderTester, box_node, has_overflow};
 use flui_types::{Alignment, Size, geometry::px, layout::BoxFit, painting::Clip};
 
@@ -429,7 +429,7 @@ assert!(has_overflow(&run, run.id("fitted")));   // 100×100 child in 50×50 box
 
 ### Dogfood integration tests
 
-[`tests/harness_snapshot.rs`](../tests/harness_snapshot.rs) covers paint-logic-heavy objects
+[`flui-objects/tests/harness_snapshot.rs`](../../flui-objects/tests/harness_snapshot.rs) covers paint-logic-heavy objects
 (not tautological single-rect tests):
 
 | Test | Object | What the snapshot proves |

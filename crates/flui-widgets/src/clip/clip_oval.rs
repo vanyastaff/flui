@@ -3,7 +3,7 @@
 use flui_objects::RenderClipOval;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::painting::Clip;
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to the axis-aligned oval inscribed in this widget's bounds
 /// (a circle when the bounds are square — the common avatar case).
@@ -68,15 +68,7 @@ impl RenderView for ClipOval {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(ClipOval);

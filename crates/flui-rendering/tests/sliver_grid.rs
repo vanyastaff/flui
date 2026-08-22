@@ -34,15 +34,13 @@ use flui_rendering::{
     delegates::SliverGridDelegateWithFixedCrossAxisCount,
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
-    protocol::{BoxProtocol, SliverProtocol},
     testing::{inspect, sliver as sliver_presets},
-    traits::{RenderBox, RenderObject},
+    traits::RenderBox,
 };
 use flui_tree::Leaf;
 use flui_types::{Offset, Rect, Size, geometry::px};
 
-type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
-type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
+use crate::common::{BoxedRenderObject, BoxedSliverObject, sliver_geometry};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -151,13 +149,6 @@ fn build_grid_tree(
     owner.run_layout().expect("layout succeeds");
 
     (owner, root_id, grid_id, child_ids)
-}
-
-fn sliver_geometry(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    id: flui_foundation::RenderId,
-) -> SliverGeometry {
-    inspect::sliver_geometry(owner, id).expect("sliver geometry committed")
 }
 
 fn box_size(

@@ -209,7 +209,8 @@ impl LaidOut {
     /// loudly, which made an earlier version of this harness pass shape
     /// hit-tests that should have failed — the owner scope must wrap the
     /// whole hit-test + dispatch sequence, matching how a real frame runs
-    /// (`AppBinding::handle_input` executes entirely inside the lane).
+    /// (production delivers through `UiRealm::handle_input_addressed`, which
+    /// executes entirely inside the lane).
     fn hit_test(&self, position: Offset) -> HitTestResult {
         self.pipeline_owner.with(|owner| {
             let mut result = HitTestResult::new();

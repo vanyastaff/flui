@@ -16,8 +16,7 @@ use flui_rendering::{
 };
 use flui_types::{Size, geometry::px};
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+use crate::common::BoxedRenderObject;
 
 fn fixture() -> (PipelineOwner, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new();

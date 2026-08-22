@@ -517,7 +517,7 @@ impl HeadlessBinding {
 
     /// The most recently committed composited layer tree.
     ///
-    /// This is the headless counterpart of the value `AppBinding::draw_frame`
+    /// This is the headless counterpart of the value `UiRealm::draw_frame`
     /// hands the compositor — the same tree, from the same pipeline step, simply
     /// kept instead of dropped. It answers "what did this frame actually
     /// composite", which the render tree alone cannot: layers are created by
@@ -733,9 +733,9 @@ impl HeadlessBinding {
     ///    region that appears, moves, or disappears under a **motionless**
     ///    pointer emit enter/exit with no new pointer motion: the mechanism
     ///    production already wires
-    ///    (`AppBinding::render_frame_entered`,
-    ///    `crates/flui-app/src/app/binding.rs`, driven from inside
-    ///    `UpdateScheduler::drive_frame`'s own pipeline closure —
+    ///    (`UiRealm::render_frame_entered`,
+    ///    `crates/flui-app/src/app/ui_realm.rs`, driven from inside
+    ///    the scheduler's frame closure —
     ///    `crates/flui-app/src/app/runner.rs`) right after layout/paint and
     ///    still inside that same closure, mirrored here against this
     ///    binding's own tree-bound `PipelineOwner` rather than a
@@ -841,8 +841,8 @@ impl HeadlessBinding {
                     //    slot — i.e. BEFORE `end_frame` drains post-frame
                     //    callbacks below, not after `drive_frame` returns.
                     //    Placement matters: production
-                    //    (`AppBinding::render_frame_entered`,
-                    //    `crates/flui-app/src/app/binding.rs`, invoked from
+                    //    (`UiRealm::render_frame_entered`,
+                    //    `crates/flui-app/src/app/ui_realm.rs`, invoked from
                     //    `crates/flui-app/src/app/runner.rs`) calls
                     //    `update_all_devices` from inside the SAME
                     //    `drive_frame` pipeline closure it runs its own
@@ -891,7 +891,7 @@ impl HeadlessBinding {
         // `run_frame_with_layout_builders` is the shared
         // layout<->build fixpoint — it settles every build-during-layout node
         // before paint, then delegates to `PipelineOwner::run_frame`. It is a
-        // plain `run_frame` while the registry is empty. `AppBinding::draw_frame`
+        // plain `run_frame` while the registry is empty. `UiRealm::draw_frame`
         // calls the SAME helper: a builder that settles headlessly but not on
         // screen would be a silent correctness bug, so neither path may
         // hand-roll the loop.

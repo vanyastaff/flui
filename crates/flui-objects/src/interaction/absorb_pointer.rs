@@ -21,13 +21,9 @@
 //!   `hit_test` body is the *only* place the semantic differs.
 
 use flui_tree::Single;
-use flui_types::{Offset, Size};
+use flui_types::Offset;
 
-use flui_rendering::{
-    context::{BoxHitTestContext, BoxLayoutContext},
-    parent_data::BoxParentData,
-    traits::RenderBox,
-};
+use flui_rendering::{context::BoxHitTestContext, parent_data::BoxParentData, traits::RenderBox};
 
 /// A render object that, when `absorbing` is true, takes any pointer
 /// hit within its bounds for itself — its child is never tested.
@@ -83,18 +79,7 @@ impl RenderBox for RenderAbsorbPointer {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        if ctx.child_count() > 0 {
-            self.has_child = true;
-            let child_size = ctx.layout_child(0, constraints);
-            ctx.position_child(0, Offset::ZERO);
-            child_size
-        } else {
-            self.has_child = false;
-            constraints.smallest()
-        }
-    }
+    flui_rendering::forward_single_child_box_layout!();
 
     flui_rendering::forward_single_child_box_queries!();
 

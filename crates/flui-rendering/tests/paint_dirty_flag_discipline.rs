@@ -7,7 +7,7 @@
 //! the end of `run_paint` emits a warning + force-clears.
 //!
 //! Refs:
-//!   * crates/flui-rendering/src/objects/repaint_boundary.rs
+//!   * crates/flui-objects/src/proxy/repaint_boundary.rs
 //!   * crates/flui-rendering/src/pipeline/owner/mod.rs — `run_paint`,
 //!     `paint_subtree`
 

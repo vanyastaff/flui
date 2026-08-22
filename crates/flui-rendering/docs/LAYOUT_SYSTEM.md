@@ -1,5 +1,7 @@
 # Layout System Architecture
 
+> See also [crates/flui-rendering/ARCHITECTURE.md](../ARCHITECTURE.md) for the per-crate template instance.
+
 ## Overview
 
 The layout system in FLUI determines the size and position of every render object in the tree. It uses a **constraint-based** approach where parents pass constraints down and children return geometry up.

@@ -5,17 +5,17 @@
 //! wgpu API migration (most recently wgpu 30 adding `apply_limit_buckets`)
 //! had to touch all of them. The policy now lives here once:
 //!
-//! - [`trusted_adapter_options`] — the `RequestAdapterOptions` used everywhere.
-//! - [`request_flui_device`] — the capability-derived `DeviceDescriptor` shared
+//! - `trusted_adapter_options` — the `RequestAdapterOptions` used everywhere.
+//! - `request_flui_device` — the capability-derived `DeviceDescriptor` shared
 //!   by the windowed and offscreen stacks.
-//! - [`request_offscreen_gpu`] — the full offscreen acquisition
+//! - `request_offscreen_gpu` — the full offscreen acquisition
 //!   (instance → adapter → capabilities → device) that `Renderer::new_offscreen`,
 //!   the offscreen half of `Renderer::recover`, and
 //!   `GpuServices::resolve_offscreen` previously each spelled out.
 //!
-//! [`super::headless::HeadlessRenderer`] deliberately does not use
-//! [`request_flui_device`]: capture wants wgpu's default (downlevel-friendly)
-//! device rather than the renderer's capability-negotiated one.
+//! `HeadlessRenderer` deliberately does not use `request_flui_device`:
+//! capture wants wgpu's default (downlevel-friendly) device rather than the
+//! renderer's capability-negotiated one.
 
 use crate::error::{EngineError, EngineResult};
 

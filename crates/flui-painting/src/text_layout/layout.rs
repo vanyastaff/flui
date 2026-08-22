@@ -38,7 +38,7 @@ use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
 /// force every call site to `match` the lock result. A `catch_unwind`
 /// wrapper around `set_text` / `shape_until_scroll` is the
 /// principled fix and is tracked in
-/// `crates/flui-painting/ARCHITECTURE.md ## Future Enhancements`.
+/// `crates/flui-painting/docs/ARCHITECTURE.md ## Future Enhancements`.
 //
 // REMOVE_BY: 2026-09-22 — this is a scheduled re-check. By this date the
 // `catch_unwind` wrapper around cosmic-text's `set_text` /
@@ -73,6 +73,56 @@ pub(super) fn font_system() -> &'static Mutex<FontSystem> {
 /// this module measures with. See ADR-0016.
 pub(crate) fn shared_font_system() -> SharedFontSystem {
     SharedFontSystem(Arc::clone(font_system_arc()))
+}
+
+/// Folds a **shaped** buffer's layout runs into [`TextLayoutResult`] metrics.
+///
+/// The one metrics fold shared by [`TextLayout::metrics`] and
+/// [`super::measure::measure_text`] (previously two verbatim copies).
+/// Baselines come from the shaper: cosmic-text's `LayoutRun::line_y` IS the
+/// alphabetic baseline of the line; the ideographic baseline is bounded by
+/// the first line's descent edge (cosmic exposes no per-font ideographic
+/// metric). The `height * 0.8` approximation survives ONLY in the
+/// empty-text branch, where no shaped run exists to ask.
+pub(super) fn metrics_from_shaped_buffer(
+    buffer: &Buffer,
+    line_height: f32,
+    truncated: bool,
+) -> TextLayoutResult {
+    let mut total_height = 0.0f32;
+    let mut max_line_width = 0.0f32;
+    let mut line_count = 0usize;
+    let mut first_baseline = 0.0f32;
+    let mut first_descent_edge = 0.0f32;
+
+    for run in buffer.layout_runs() {
+        line_count += 1;
+        max_line_width = max_line_width.max(run.line_w);
+        total_height = total_height.max(run.line_top + run.line_height);
+
+        if line_count == 1 {
+            first_baseline = run.line_y;
+            first_descent_edge = run.line_top + run.line_height;
+        }
+    }
+
+    if line_count == 0 {
+        // Empty text: nothing was shaped, synthesize from the line box.
+        line_count = 1;
+        total_height = line_height;
+        first_baseline = line_height * 0.8;
+        first_descent_edge = line_height;
+    }
+
+    TextLayoutResult {
+        width: max_line_width,
+        height: total_height,
+        line_count,
+        max_line_width,
+        alphabetic_baseline: first_baseline,
+        ideographic_baseline: first_descent_edge,
+        truncated,
+    }
 }
 
 /// A cheaply-cloneable handle to the process-wide [`FontSystem`] the
@@ -272,9 +322,13 @@ impl TextLayout {
             })
             .collect();
 
-        let mut font_system = font_system().lock();
-        let mut buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
+        // cosmic-text 0.19: `new_empty` skips the empty-string shape pass
+        // `Buffer::new` performs, and `set_size` is lazy — the first (and
+        // only) shape happens in `shape_runs` below, so the global
+        // `FONT_SYSTEM` lock is taken only once the buffer is fully set up.
+        let mut buffer = Buffer::new_empty(Metrics::new(font_size, line_height));
         buffer.set_size(max_width, None);
+        let mut font_system = font_system().lock();
 
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         let mut this = Self {
@@ -431,41 +485,7 @@ impl TextLayout {
     /// approximations survive ONLY in the empty-text branch, where no
     /// shaped run exists to ask.
     pub fn metrics(&self) -> TextLayoutResult {
-        let mut total_height = 0.0f32;
-        let mut max_line_width = 0.0f32;
-        let mut line_count = 0usize;
-        let mut first_baseline = 0.0f32;
-        let mut first_descent_edge = 0.0f32;
-
-        for run in self.buffer.layout_runs() {
-            line_count += 1;
-            max_line_width = max_line_width.max(run.line_w);
-            total_height = total_height.max(run.line_top + run.line_height);
-
-            if line_count == 1 {
-                first_baseline = run.line_y;
-                first_descent_edge = run.line_top + run.line_height;
-            }
-        }
-
-        if line_count == 0 {
-            // Empty text: nothing was shaped, synthesize from the line
-            // box. The only consumer is empty-string measurement.
-            line_count = 1;
-            total_height = self.line_height;
-            first_baseline = self.line_height * 0.8;
-            first_descent_edge = self.line_height;
-        }
-
-        TextLayoutResult {
-            width: max_line_width,
-            height: total_height,
-            line_count,
-            max_line_width,
-            alphabetic_baseline: first_baseline,
-            ideographic_baseline: first_descent_edge,
-            truncated: self.truncated,
-        }
+        metrics_from_shaped_buffer(&self.buffer, self.line_height, self.truncated)
     }
 
     /// Whether `with_overflow` truncated the text to its max line count.

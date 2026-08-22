@@ -15,8 +15,7 @@ use flui_types::{
     styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color},
 };
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+use crate::common::BoxedRenderObject;
 
 fn frame_commands(owner: PipelineOwner) -> (PipelineOwner, Vec<&'static str>) {
     let (owner, result) = owner.run_frame();

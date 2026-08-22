@@ -8,7 +8,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_types::Color;
 use flui_types::Size;
 use flui_types::painting::{Clip, Path};
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
 /// [`Path`] to clip against — Flutter's `CustomClipper<Path>` (`clipper`).
@@ -186,15 +186,7 @@ impl RenderView for PhysicalShape {
         }
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(PhysicalShape);

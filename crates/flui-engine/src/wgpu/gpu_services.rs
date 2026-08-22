@@ -125,7 +125,7 @@ static_assertions::assert_impl_all!(GpuServices: Send);
 
 impl GpuServices {
     /// Resolve GPU services for the offscreen path (no surface), through the
-    /// same [`super::adapter::request_offscreen_gpu`] acquisition
+    /// same `request_offscreen_gpu` acquisition (`wgpu/adapter.rs`)
     /// `Renderer::new_offscreen` uses — the one difference is the device
     /// label.
     ///

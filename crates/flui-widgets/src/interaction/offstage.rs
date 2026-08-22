@@ -2,7 +2,7 @@
 
 use flui_objects::RenderOffstage;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Keeps its child in the tree (so its state persists) but, while `offstage`,
 /// lays it out off-screen at zero size and does not paint or hit-test it.
@@ -67,15 +67,7 @@ impl RenderView for Offstage {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(Offstage);

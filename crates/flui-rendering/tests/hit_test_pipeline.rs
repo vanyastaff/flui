@@ -17,38 +17,19 @@ use flui_objects::{
     RenderSliverPadding, RenderTransform,
 };
 use flui_rendering::{
-    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
     hit_testing::HitTestResult,
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
-    protocol::{BoxProtocol, SliverProtocol},
     testing::inspect,
-    traits::{RenderBox, RenderObject, RenderSliver},
+    traits::{RenderBox, RenderSliver},
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
 use flui_types::{Matrix4, Offset, Size, geometry::px, layout::AxisDirection};
 
-type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
-type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
-
-/// Lays out the tree, then returns the laid-out owner for hit queries.
-fn laid_out(
-    mut owner: PipelineOwner,
-    root: flui_foundation::RenderId,
-) -> flui_rendering::pipeline::PipelineOwner<flui_rendering::pipeline::phase::Layout> {
-    owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
-    owner
-}
+use crate::common::{BoxedRenderObject, BoxedSliverObject, laid_out_loose_200x200 as laid_out};
 
 fn hits(
     owner: &flui_rendering::pipeline::PipelineOwner<flui_rendering::pipeline::phase::Layout>,

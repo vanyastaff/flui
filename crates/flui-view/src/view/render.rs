@@ -517,6 +517,37 @@ macro_rules! impl_render_view {
     };
 }
 
+/// Implements [`RenderView::has_children`] + [`RenderView::visit_child_views`]
+/// for the standard single-child widget shape (`child: Option<…>`), invoked
+/// from *inside* the `impl RenderView for …` block:
+///
+/// ```rust,ignore
+/// impl RenderView for MyProxyBox {
+///     // ...
+///     flui_view::single_child_view_children!();
+/// }
+/// ```
+///
+/// Pass a field name when the child is stored under something other than
+/// `child`.
+#[macro_export]
+macro_rules! single_child_view_children {
+    () => {
+        $crate::single_child_view_children!(child);
+    };
+    ($field:ident) => {
+        fn has_children(&self) -> bool {
+            self.$field.is_some()
+        }
+
+        fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn $crate::View)) {
+            if let Some(child) = self.$field.as_ref() {
+                visitor(child);
+            }
+        }
+    };
+}
+
 // NOTE: RenderElement implementation has been moved to unified Element
 // architecture. See crates/flui-view/src/element/unified.rs and
 // element/behavior.rs The type alias is exported from element/mod.rs:

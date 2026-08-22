@@ -185,7 +185,7 @@ fn lay_out_with_pipeline_owner_and_binding(
 
     let bootstrap_layer_tree = {
         // Mirror the production frame path exactly: `HeadlessBinding::pump_frame`
-        // and `AppBinding::draw_frame` both run the ADR-0017 layout<->build
+        // and `UiRealm::draw_frame` both run the ADR-0017 layout<->build
         // fixpoint, not a bare `PipelineOwner::run_frame`. Bootstrapping with
         // `run_frame` here would leave a `LayoutBuilder`'s child unbuilt on the
         // very frame these tests assert about.
@@ -1113,7 +1113,7 @@ impl LaidOut {
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down
     /// event there — the headless analogue of a platform pointer-down reaching
-    /// the framework (`AppBinding::handle_input` → hit_test → dispatch). Used by
+    /// the framework (`UiRealm::handle_input_addressed` → hit_test → dispatch). Used by
     /// the `Listener` test to assert its callback fires.
     ///
     /// See [`hit_test_pointer`](Self::hit_test_pointer) for why hit-testing runs inside

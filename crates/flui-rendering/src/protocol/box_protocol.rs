@@ -25,11 +25,10 @@ use crate::{
 // CHILD STATE
 // ============================================================================
 //
-// Per-child layout-time bookkeeping owned by `BoxLayoutCtx`. Previously
-// lived in `crates/flui-rendering/src/children_access.rs` alongside a
-// 500-LOC closure-based iterator (`ChildrenAccess`) and the
-// `ChildHandle` wrapper in `child_handle.rs` -- both fought the borrow
-// checker for users that never appeared, so they were deleted outright.
+// Per-child layout-time bookkeeping owned by `BoxLayoutCtx`. Earlier
+// companions — a closure-based iterator (`ChildrenAccess`) and a
+// `ChildHandle` wrapper — fought the borrow checker for users that
+// never appeared, so they were deleted outright.
 // `ChildState<P>` itself stays because it IS the data shape
 // `BoxLayoutContextApi::layout_child` / `position_child` /
 // `child_geometry` / `child_parent_data` need.

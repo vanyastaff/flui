@@ -98,5 +98,44 @@ macro_rules! gen_layer_accessors {
 
 pub(crate) use gen_layer_accessors;
 
-// The actual macro invocation lives in `layer/mod.rs` next to the enum
+/// Generates the `impl From<XxxLayer> for Layer` conversion per variant.
+///
+/// Two storage forms mirror the enum's own variant shapes (a TT-munch per
+/// line, so boxed and inline entries can mix freely in one invocation):
+/// - `Variant => boxed Type;` emits `Layer::Variant(Box::new(layer))` for
+///   the variants whose payload is boxed.
+/// - `Variant => Type;` emits `Layer::Variant(layer)` for inline payloads.
+///
+/// The expansion for one inline pair:
+///
+/// ```ignore
+/// impl From<OffsetLayer> for Layer {
+///     fn from(layer: OffsetLayer) -> Self {
+///         Layer::Offset(layer)
+///     }
+/// }
+/// ```
+macro_rules! gen_layer_from_impls {
+    () => {};
+    ( $variant:ident => boxed $ty:ty; $($rest:tt)* ) => {
+        impl ::core::convert::From<$ty> for crate::layer::Layer {
+            fn from(layer: $ty) -> Self {
+                crate::layer::Layer::$variant(::std::boxed::Box::new(layer))
+            }
+        }
+        crate::layer::dispatch::gen_layer_from_impls! { $($rest)* }
+    };
+    ( $variant:ident => $ty:ty; $($rest:tt)* ) => {
+        impl ::core::convert::From<$ty> for crate::layer::Layer {
+            fn from(layer: $ty) -> Self {
+                crate::layer::Layer::$variant(layer)
+            }
+        }
+        crate::layer::dispatch::gen_layer_from_impls! { $($rest)* }
+    };
+}
+
+pub(crate) use gen_layer_from_impls;
+
+// The actual macro invocations live in `layer/mod.rs` next to the enum
 // definition so the generated methods render in the enum's rustdoc.

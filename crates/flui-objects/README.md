@@ -1,6 +1,6 @@
 # flui-objects
 
-**The concrete `RenderBox` / `RenderSliver` catalog for FLUI** — 74
+**The concrete `RenderBox` / `RenderSliver` catalog for FLUI** — 83
 ready-to-use render objects in six domain families, sitting directly above the
 `flui-rendering` engine crate.
 
@@ -28,7 +28,7 @@ All types re-export flat from the crate root: `flui_objects::RenderPadding`.
 - **Harness-tested.** Every exported object appears in the render-object
   test catalog (`RENDER_OBJECT_TYPES`) with `harness_*` tests exercising the
   real pipeline — the catalog completeness is CI-enforced.
-- **Authoring-surface proof.** 74 objects compiling from outside
+- **Authoring-surface proof.** 83 objects compiling from outside
   `flui-rendering` prove the engine's custom-object authoring API is complete.
 
 ## Documentation

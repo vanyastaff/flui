@@ -3,7 +3,7 @@
 use flui_objects::RenderSizedOverflowBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{Alignment, Size};
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Claims a specific size for itself while laying its child out under the
 /// incoming (parent) constraints, which may allow the child to be a different
@@ -68,15 +68,7 @@ impl RenderView for SizedOverflowBox {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(SizedOverflowBox);

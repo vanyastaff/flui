@@ -298,9 +298,9 @@ impl RenderingFlutterBinding {
     // plus a default `draw_frame()` gate that no real embedder overrode.
     // Both were deleted — see AGENTS.md's port-methodology note against
     // reintroducing a second copy of this state. Every consumer (the
-    // `RendererBinding` trait impl below and `AppBinding::defer_first_frame`
+    // `RendererBinding` trait impl below and `UiRealm::defer_first_frame`
     // / `allow_first_frame` / `send_frames_to_engine` in
-    // `crates/flui-app/src/app/binding.rs`, which the production
+    // `crates/flui-app/src/app/ui_realm.rs`, which the production
     // `render_frame_entered` path actually calls) forwards to this struct.
     //
     // # Flutter Equivalence (oracle tag `3.44.0`)
@@ -339,8 +339,8 @@ impl RenderingFlutterBinding {
     // ```
     // Layout/compositing-bits/paint always run; only the composite-to-engine
     // step (and Flutter's semantics flush alongside it) is gated. FLUI's
-    // production mirror of this split lives in `AppBinding::
-    // render_frame_entered` (`crates/flui-app/src/app/binding.rs`): the
+    // production mirror of this split lives in `UiRealm::
+    // render_frame_entered` (`crates/flui-app/src/app/ui_realm.rs`): the
     // build/layout/paint pipeline always runs in `draw_frame_entered`, and
     // only the GPU `render_scene` (present) call is gated on
     // `send_frames_to_engine`. FLUI's `run_frame` does not yet gate its own
@@ -474,8 +474,8 @@ impl RenderingFlutterBinding {
     /// note above `defer_first_frame`).
     ///
     /// This is a convenience for using `RenderingFlutterBinding` directly,
-    /// without `WidgetsBinding` (see the module doc). `AppBinding`'s
-    /// production frame path (`render_frame_entered`) does **not** call
+    /// without `WidgetsBinding` (see the module doc). The production
+    /// frame path (`UiRealm::render_frame_entered`) does **not** call
     /// this method — it drives the shared pipeline through
     /// `WidgetsBinding::run_frame_with_layout_builders` instead (the
     /// build-during-layout fixpoint this method does not need to settle)

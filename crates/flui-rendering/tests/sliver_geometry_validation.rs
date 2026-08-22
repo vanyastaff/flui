@@ -14,15 +14,13 @@ use flui_rendering::{
     error::RenderError,
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
-    protocol::{BoxProtocol, SliverProtocol},
-    traits::{RenderBox, RenderObject, RenderSliver},
+    traits::{RenderBox, RenderSliver},
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
 use flui_types::{Size, geometry::px, layout::AxisDirection};
 
-type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
-type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
+use crate::common::{BoxedRenderObject, BoxedSliverObject};
 
 fn sliver_constraints() -> SliverConstraints {
     SliverConstraints {

@@ -31,8 +31,7 @@ use flui_rendering::{
 use flui_scheduler::UpdateScheduler;
 use flui_types::{Alignment, EdgeInsets, Matrix4, Offset, Size, geometry::px};
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+use crate::common::BoxedRenderObject;
 
 fn controller() -> AnimationController {
     AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new())

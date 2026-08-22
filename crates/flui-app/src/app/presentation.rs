@@ -15,7 +15,7 @@ use flui_foundation::PresentationId;
 use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
 };
-use flui_layer::{Layer, LayerTree, PerformanceOverlayLayer, PerformanceStats};
+use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceStats};
 #[cfg(test)]
 use flui_platform::traits::PlatformTextInput;
 use flui_platform::{
@@ -1085,7 +1085,7 @@ impl PresentationState {
             self.frames_dropped(),
         )));
 
-        let overlay_id = layer_tree.insert(Layer::PerformanceOverlay(Box::new(overlay)));
+        let overlay_id = layer_tree.insert(overlay.into());
         // `insert` does not link the node — parent and child sides are set
         // explicitly, same as every other layer-tree insertion.
         if let Some(node) = layer_tree.get_mut(overlay_id) {
@@ -1595,7 +1595,7 @@ mod tests {
     // module.
     // ========================================================================
     mod performance_overlay_wiring {
-        use flui_layer::CanvasLayer;
+        use flui_layer::{CanvasLayer, Layer};
 
         use super::*;
 

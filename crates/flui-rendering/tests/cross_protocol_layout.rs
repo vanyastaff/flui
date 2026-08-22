@@ -13,7 +13,7 @@
 //!      (protocol mismatch) → `SliverGeometry::ZERO`, parent stays dirty.
 //!
 //! Refs:
-//!   * `crates/flui-rendering/src/pipeline/owner.rs` `layout_sliver_subtree_borrowed`
+//!   * `crates/flui-rendering/src/pipeline/owner/subtree_arena.rs` `layout_sliver_subtree_borrowed`
 //!   * `crates/flui-rendering/src/protocol/box_protocol.rs` `BoxLayoutCtxErased::layout_sliver_child`
 
 // Target-level lint relaxations — crate-level allows don't reach this
@@ -29,7 +29,6 @@ use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
     parent_data::{BoxParentData, SliverParentData},
-    pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     traits::{RenderBox, RenderObject, RenderSliver},
     view::ScrollDirection,
@@ -37,14 +36,11 @@ use flui_rendering::{
 use flui_tree::{Leaf, Variable};
 use flui_types::{Size, geometry::px, layout::AxisDirection};
 
+use crate::common::fresh_layout_pipeline;
+
 // ============================================================================
 // Shared fixtures
 // ============================================================================
-
-/// Pipeline owner in the Layout phase.
-fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {
-    PipelineOwner::new().into_layout()
-}
 
 /// A sliver constraints value representing a 600×300 vertical viewport
 /// at scroll offset 0 with 400 px of remaining paint extent.

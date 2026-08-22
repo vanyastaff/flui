@@ -8,8 +8,8 @@ Render tree: `RenderObject` / `RenderBox` / `RenderSliver` with Protocol-based l
 - **RenderBox** — 2D cartesian layout (most widgets); `protocol/box_protocol.rs`
 - **RenderSliver** — scrollable content layout; `protocol/sliver_protocol.rs`
 - **Protocol** — type-safe abstraction over layout protocols (Box vs Sliver)
-- **PipelineOwner** — manages layout/paint/semantics phases with typestate-enforced ordering (`pipeline/owner.rs`)
-- **Concrete render objects** — `objects/`: Padding, Center, ColoredBox, Flex, Opacity, SizedBox, Transform, etc.
+- **PipelineOwner** — manages layout/paint/semantics phases with typestate-enforced ordering (`pipeline/owner/`)
+- **Concrete render objects live in the sibling `flui-objects` crate** (Padding, Center, ColoredBox, Flex, Opacity, SizedBox, Transform, etc.) — a dev-only dependency here; this crate ships the protocol/pipeline machinery only
 - **Parent data** — `parent_data/`: BoxParentData, SliverParentData, container mixin
 - **Constraints** — `constraints/`: BoxConstraints, SliverConstraints, SliverGeometry, GrowthDirection
 
@@ -20,8 +20,8 @@ Render tree: `RenderObject` / `RenderBox` / `RenderSliver` with Protocol-based l
 - **Stack safety via `stacker::maybe_grow`** — recursive layout/paint/hit-test walks use `ensure_stack` (128KiB red zone / 4MiB segment). Not on wasm32.
 - **`testing` feature** — opt-in test harness (`RenderTester`/`Probe` API). Forwards to `flui-layer/testing`. See `crates/flui-rendering/docs/TESTING.md` for the catalog rules.
 - **`experimental-delegates` feature** — gates delegate trait modules with zero production impls: custom_clipper. (`sliver_grid`/`custom_painter`/`flow`/`single_child_layout`/`multi_child_layout` ship unconditionally now that `RenderSliverGrid`/`RenderCustomPaint`/`RenderFlow`/`RenderCustomSingleChildLayoutBox`/`RenderCustomMultiChildLayoutBox` landed — ADR-0007.)
-- **Benchmarks** — `layout` and `paint` benches. `autobenches = false` (shared `benches/helpers.rs` module).
-- **Integration tests** — 31 test files under `tests/`: render_object_harness.rs (catalog CI guard), pipeline_scenarios.rs, deep_tree_stack.rs, etc.
+- **Benchmarks** — 5 benches: `layout`, `paint`, `virtualizer`, `intrinsic_parent_data`, `semantics_assembly`. `autobenches = false` because the first three share the `benches/helpers.rs` module (declared via `mod helpers;`), which must not compile as its own bench target.
+- **Integration tests** — 42 files under `tests/` (41 test modules + `main.rs`), all compiled into the single `rendering_it` binary via `tests/main.rs` (`autotests = false`); byte-identical scaffolding is shared through `tests/common/`. The render-object catalog CI guard (`render_object_harness.rs`) lives in `flui-objects`.
 
 ## Architecture doc
 

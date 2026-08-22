@@ -62,7 +62,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     let focus_manager = build_owner.focus_manager();
     let mut tree = ElementTree::new();
     let mut binding = HeadlessBinding::new();
-    // Match AppBinding's production root: every detector in the mounted tree
+    // Match the production `UiRealm` root: every detector in the mounted tree
     // competes in the binding-owned arena instead of inventing private arenas.
     let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
 
@@ -226,7 +226,8 @@ impl LaidOut {
     /// loudly, which made an earlier version of this harness pass shape
     /// hit-tests that should have failed — the owner scope must wrap the
     /// whole hit-test + dispatch sequence, matching how a real frame runs
-    /// (`AppBinding::handle_input` executes entirely inside the lane).
+    /// (production delivers through `UiRealm::handle_input_addressed`, which
+    /// executes entirely inside the lane).
     fn hit_test(&self, position: Offset) -> HitTestResult {
         self.pipeline_owner.with(|owner| {
             let mut result = HitTestResult::new();

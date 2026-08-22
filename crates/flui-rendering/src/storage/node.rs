@@ -8,6 +8,20 @@ use flui_foundation::RenderId;
 use super::{entry::RenderEntry, links::NodeLinks};
 use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
 
+/// Delegates to the same expression on either protocol's entry.
+///
+/// Both variants wrap a `RenderEntry<P>` whose common surface is identical
+/// modulo the protocol type parameter; this macro collapses the `match`
+/// that would otherwise repeat the same arm body for `Box` and `Sliver`.
+macro_rules! with_entry {
+    ($self:expr, $entry:ident => $body:expr) => {
+        match $self {
+            Self::Box($entry) => $body,
+            Self::Sliver($entry) => $body,
+        }
+    };
+}
+
 /// Render node enum for heterogeneous tree storage.
 ///
 /// This enum wraps protocol-specific `RenderEntry<P>` variants, allowing
@@ -122,10 +136,7 @@ impl RenderNode {
     ///
     /// Dispatches to [`RenderObject::reassemble`] on the underlying object.
     pub fn reassemble(&mut self) {
-        match self {
-            Self::Box(entry) => entry.render_object_mut().reassemble(),
-            Self::Sliver(entry) => entry.render_object_mut().reassemble(),
-        }
+        with_entry!(self, entry => entry.render_object_mut().reassemble());
     }
 
     /// Tree-lifecycle hook (ADR-0013): hands the freshly-inserted render
@@ -133,10 +144,7 @@ impl RenderNode {
     ///
     /// Dispatches to [`RenderObject::attach`] on the underlying object.
     pub fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
-        match self {
-            Self::Box(entry) => entry.render_object_mut().attach(handle),
-            Self::Sliver(entry) => entry.render_object_mut().attach(handle),
-        }
+        with_entry!(self, entry => entry.render_object_mut().attach(handle));
     }
 
     /// Tree-lifecycle hook (ADR-0013): tears down whatever `attach`
@@ -144,10 +152,7 @@ impl RenderNode {
     ///
     /// Dispatches to [`RenderObject::detach`] on the underlying object.
     pub fn detach(&mut self) {
-        match self {
-            Self::Box(entry) => entry.render_object_mut().detach(),
-            Self::Sliver(entry) => entry.render_object_mut().detach(),
-        }
+        with_entry!(self, entry => entry.render_object_mut().detach());
     }
 }
 
@@ -218,19 +223,13 @@ impl RenderNode {
     /// Returns a reference to the tree links.
     #[inline]
     pub fn links(&self) -> &NodeLinks {
-        match self {
-            Self::Box(entry) => entry.links(),
-            Self::Sliver(entry) => entry.links(),
-        }
+        with_entry!(self, entry => entry.links())
     }
 
     /// Returns a mutable reference to the tree links.
     #[inline]
     pub fn links_mut(&mut self) -> &mut NodeLinks {
-        match self {
-            Self::Box(entry) => entry.links_mut(),
-            Self::Sliver(entry) => entry.links_mut(),
-        }
+        with_entry!(self, entry => entry.links_mut())
     }
 
     // Convenience methods
@@ -314,19 +313,13 @@ impl RenderNode {
     /// Returns true if layout is needed.
     #[inline]
     pub fn needs_layout(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.needs_layout(),
-            Self::Sliver(entry) => entry.needs_layout(),
-        }
+        with_entry!(self, entry => entry.needs_layout())
     }
 
     /// Returns true if paint is needed.
     #[inline]
     pub fn needs_paint(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.needs_paint(),
-            Self::Sliver(entry) => entry.needs_paint(),
-        }
+        with_entry!(self, entry => entry.needs_paint())
     }
 
     /// Sets the `NEEDS_LAYOUT` flag on this node's state — **flag-only**, no
@@ -342,10 +335,7 @@ impl RenderNode {
     /// Flutter-parity boundary semantics.
     #[inline]
     pub fn mark_layout_flag(&self) {
-        match self {
-            Self::Box(entry) => entry.state().mark_needs_layout(),
-            Self::Sliver(entry) => entry.state().mark_needs_layout(),
-        }
+        with_entry!(self, entry => entry.state().mark_needs_layout());
     }
 
     /// Clears this node's layout calculation cache (memoized intrinsics /
@@ -358,10 +348,7 @@ impl RenderNode {
     /// `false`.
     #[inline]
     pub fn clear_layout_cache(&mut self) -> bool {
-        match self {
-            Self::Box(entry) => entry.state_mut().clear_layout_cache(),
-            Self::Sliver(entry) => entry.state_mut().clear_layout_cache(),
-        }
+        with_entry!(self, entry => entry.state_mut().clear_layout_cache())
     }
 
     /// Sets the `NEEDS_PAINT` flag on this node's state — flag-only,
@@ -374,10 +361,7 @@ impl RenderNode {
     /// `RenderState::new()` already starts with `NEEDS_PAINT = true`.
     #[inline]
     pub fn mark_paint_flag(&self) {
-        match self {
-            Self::Box(entry) => entry.state().flags().mark_needs_paint(),
-            Self::Sliver(entry) => entry.state().flags().mark_needs_paint(),
-        }
+        with_entry!(self, entry => entry.state().flags().mark_needs_paint());
     }
 
     /// Sets the `NEEDS_COMPOSITING` flag on this node's state —
@@ -386,10 +370,7 @@ impl RenderNode {
     /// [`Self::mark_paint_flag`] doc for rationale).
     #[inline]
     pub fn mark_compositing_flag(&self) {
-        match self {
-            Self::Box(entry) => entry.state().flags().mark_needs_compositing(),
-            Self::Sliver(entry) => entry.state().flags().mark_needs_compositing(),
-        }
+        with_entry!(self, entry => entry.state().flags().mark_needs_compositing());
     }
 
     /// Sets the legacy `NEEDS_SEMANTICS` flag on this node's state.
@@ -400,10 +381,7 @@ impl RenderNode {
     /// instead. This accessor remains only for future flag-based work.
     #[inline]
     pub fn mark_semantics_flag(&self) {
-        match self {
-            Self::Box(entry) => entry.state().flags().mark_needs_semantics(),
-            Self::Sliver(entry) => entry.state().flags().mark_needs_semantics(),
-        }
+        with_entry!(self, entry => entry.state().flags().mark_needs_semantics());
     }
 
     /// Returns true if `NEEDS_SEMANTICS` is set on this node's state.
@@ -411,16 +389,10 @@ impl RenderNode {
     /// scheduling uses queue-scan dedup, not this flag.
     #[inline]
     pub fn needs_semantics(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry
-                .state()
-                .flags()
-                .contains(crate::storage::flags::RenderFlags::NEEDS_SEMANTICS),
-            Self::Sliver(entry) => entry
-                .state()
-                .flags()
-                .contains(crate::storage::flags::RenderFlags::NEEDS_SEMANTICS),
-        }
+        with_entry!(self, entry => entry
+            .state()
+            .flags()
+            .contains(crate::storage::flags::RenderFlags::NEEDS_SEMANTICS))
     }
 
     /// Returns true if `NEEDS_COMPOSITING` is set on this node's
@@ -428,10 +400,7 @@ impl RenderNode {
     /// [`Self::needs_semantics`] doc for usage notes).
     #[inline]
     pub fn needs_compositing(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.state().needs_compositing(),
-            Self::Sliver(entry) => entry.state().needs_compositing(),
-        }
+        with_entry!(self, entry => entry.state().needs_compositing())
     }
 
     /// Protocol-erased **leaf-mode** layout dispatch.
@@ -509,10 +478,7 @@ impl RenderNode {
     /// by `PipelineOwner::bootstrap_repaint_boundary_flag` on insert), use
     /// [`Self::is_repaint_boundary_flag`].
     pub fn is_repaint_boundary(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.render_object().is_repaint_boundary(),
-            Self::Sliver(entry) => entry.render_object().is_repaint_boundary(),
-        }
+        with_entry!(self, entry => entry.render_object().is_repaint_boundary())
     }
 
     /// Reads the `IS_REPAINT_BOUNDARY` storage flag.
@@ -525,10 +491,7 @@ impl RenderNode {
     /// source of truth.
     #[inline]
     pub fn is_repaint_boundary_flag(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.state().flags().is_repaint_boundary(),
-            Self::Sliver(entry) => entry.state().flags().is_repaint_boundary(),
-        }
+        with_entry!(self, entry => entry.state().flags().is_repaint_boundary())
     }
 
     /// Sets the `IS_REPAINT_BOUNDARY` storage flag.
@@ -538,10 +501,7 @@ impl RenderNode {
     /// hot paths (the flag is configuration, not dirty state).
     #[inline]
     pub fn set_repaint_boundary_flag(&self, is_boundary: bool) {
-        match self {
-            Self::Box(entry) => entry.state().flags().set_repaint_boundary(is_boundary),
-            Self::Sliver(entry) => entry.state().flags().set_repaint_boundary(is_boundary),
-        }
+        with_entry!(self, entry => entry.state().flags().set_repaint_boundary(is_boundary));
     }
 
     /// Returns true if this node is a relayout boundary.
@@ -561,10 +521,7 @@ impl RenderNode {
     /// [`RenderState::compute_relayout_boundary`]: crate::storage::RenderState::compute_relayout_boundary
     #[inline]
     pub fn is_relayout_boundary(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.state().is_relayout_boundary(),
-            Self::Sliver(entry) => entry.state().is_relayout_boundary(),
-        }
+        with_entry!(self, entry => entry.state().is_relayout_boundary())
     }
 
     /// Returns the persistent parent data for this node, if set.
@@ -573,10 +530,7 @@ impl RenderNode {
     /// across frames. Returns `None` if no parent data has been set yet.
     #[inline]
     pub fn parent_data(&self) -> Option<&dyn crate::parent_data::ParentData> {
-        match self {
-            Self::Box(entry) => entry.state().parent_data(),
-            Self::Sliver(entry) => entry.state().parent_data(),
-        }
+        with_entry!(self, entry => entry.state().parent_data())
     }
 
     /// Mutable access to the persistent parent data for this node.
@@ -584,10 +538,7 @@ impl RenderNode {
     /// Returns `None` if no parent data has been set yet.
     #[inline]
     pub fn parent_data_mut(&mut self) -> Option<&mut dyn crate::parent_data::ParentData> {
-        match self {
-            Self::Box(entry) => entry.state_mut().parent_data_mut(),
-            Self::Sliver(entry) => entry.state_mut().parent_data_mut(),
-        }
+        with_entry!(self, entry => entry.state_mut().parent_data_mut())
     }
 
     /// Installs `data` as this node's parent data, replacing any previously
@@ -600,10 +551,7 @@ impl RenderNode {
     /// only a field needs updating.
     #[inline]
     pub fn set_parent_data(&mut self, data: Box<dyn crate::parent_data::ParentData>) {
-        match self {
-            Self::Box(entry) => entry.state_mut().set_parent_data(data),
-            Self::Sliver(entry) => entry.state_mut().set_parent_data(data),
-        }
+        with_entry!(self, entry => entry.state_mut().set_parent_data(data));
     }
 
     // 2B field dedup: `RenderNode::paint_bounds` was deleted. It had zero
@@ -619,19 +567,13 @@ impl RenderNode {
     /// Stable debug name for the stored render object.
     #[inline]
     pub fn debug_name(&self) -> &'static str {
-        match self {
-            Self::Box(entry) => entry.render_object().debug_name(),
-            Self::Sliver(entry) => entry.render_object().debug_name(),
-        }
+        with_entry!(self, entry => entry.render_object().debug_name())
     }
 
     /// Optional paint opacity effect for this render object.
     #[inline]
     pub fn paint_alpha(&self) -> Option<u8> {
-        match self {
-            Self::Box(entry) => entry.render_object().paint_alpha(),
-            Self::Sliver(entry) => entry.render_object().paint_alpha(),
-        }
+        with_entry!(self, entry => entry.render_object().paint_alpha())
     }
 
     /// Whether this node's render object requests that child paint be skipped.
@@ -642,10 +584,7 @@ impl RenderNode {
     /// draws.
     #[inline]
     pub fn skip_paint(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.render_object().skip_paint(),
-            Self::Sliver(entry) => entry.render_object().skip_paint(),
-        }
+        with_entry!(self, entry => entry.render_object().skip_paint())
     }
 
     /// Optional blend mode for the opacity layer wrapping children.
@@ -654,10 +593,7 @@ impl RenderNode {
     /// object uses the default `SrcOver` compositing (most objects).
     #[inline]
     pub fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
-        match self {
-            Self::Box(entry) => entry.render_object().paint_layer_blend(),
-            Self::Sliver(entry) => entry.render_object().paint_layer_blend(),
-        }
+        with_entry!(self, entry => entry.render_object().paint_layer_blend())
     }
 
     /// Optional paint transform effect for this render object.
@@ -725,18 +661,9 @@ impl RenderNode {
         transform: &mut flui_types::Matrix4,
     ) -> Option<()> {
         let size = self.laid_out_size()?;
-        match self {
-            Self::Box(entry) => {
-                entry
-                    .render_object()
-                    .apply_paint_transform(child, child_offset, size, transform);
-            }
-            Self::Sliver(entry) => {
-                entry
-                    .render_object()
-                    .apply_paint_transform(child, child_offset, size, transform);
-            }
-        }
+        with_entry!(self, entry => entry
+            .render_object()
+            .apply_paint_transform(child, child_offset, size, transform));
         Some(())
     }
 
@@ -764,19 +691,13 @@ impl RenderNode {
     /// Returns this node's parent-relative offset.
     #[inline]
     pub fn offset(&self) -> flui_types::Offset {
-        match self {
-            Self::Box(entry) => entry.state().offset(),
-            Self::Sliver(entry) => entry.state().offset(),
-        }
+        with_entry!(self, entry => entry.state().offset())
     }
 
     /// Sets this node's parent-relative offset.
     #[inline]
     pub fn set_offset(&self, offset: flui_types::Offset) {
-        match self {
-            Self::Box(entry) => entry.state().set_offset(offset),
-            Self::Sliver(entry) => entry.state().set_offset(offset),
-        }
+        with_entry!(self, entry => entry.state().set_offset(offset));
     }
 
     /// Returns the size for Box protocol nodes (None for Sliver nodes).
@@ -825,28 +746,19 @@ impl RenderNode {
     /// `RenderView::update_render_object` to apply the new configuration in
     /// place (Flutter's `Widget.updateRenderObject`).
     pub fn downcast_render_object_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
-        match self {
-            Self::Box(entry) => entry.render_object_mut().as_any_mut().downcast_mut::<T>(),
-            Self::Sliver(entry) => entry.render_object_mut().as_any_mut().downcast_mut::<T>(),
-        }
+        with_entry!(self, entry => entry.render_object_mut().as_any_mut().downcast_mut::<T>())
     }
 
     /// Clears the needs_paint flag.
     #[inline]
     pub fn clear_needs_paint(&self) {
-        match self {
-            Self::Box(entry) => entry.clear_needs_paint(),
-            Self::Sliver(entry) => entry.clear_needs_paint(),
-        }
+        with_entry!(self, entry => entry.state().clear_needs_paint());
     }
 
     /// Clears the needs_layout flag.
     #[inline]
     pub fn clear_needs_layout(&self) {
-        match self {
-            Self::Box(entry) => entry.clear_needs_layout(),
-            Self::Sliver(entry) => entry.clear_needs_layout(),
-        }
+        with_entry!(self, entry => entry.state().clear_needs_layout());
     }
 
     /// Reads the `RenderObject::always_needs_compositing()` static trait
@@ -857,10 +769,7 @@ impl RenderNode {
     /// per-frame compositor effects (e.g., shader masks, backdrop filters).
     #[inline]
     pub fn always_needs_compositing(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.render_object().always_needs_compositing(),
-            Self::Sliver(entry) => entry.render_object().always_needs_compositing(),
-        }
+        with_entry!(self, entry => entry.render_object().always_needs_compositing())
     }
 
     /// Reads the `WAS_REPAINT_BOUNDARY` storage flag.
@@ -872,10 +781,7 @@ impl RenderNode {
     /// (object.dart:3246-3251).
     #[inline]
     pub fn was_repaint_boundary(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.state().flags().was_repaint_boundary(),
-            Self::Sliver(entry) => entry.state().flags().was_repaint_boundary(),
-        }
+        with_entry!(self, entry => entry.state().flags().was_repaint_boundary())
     }
 
     /// Writes the `WAS_REPAINT_BOUNDARY` storage flag.
@@ -884,10 +790,7 @@ impl RenderNode {
     /// compositing-bits walks can detect boundary-status transitions.
     #[inline]
     pub fn set_was_repaint_boundary(&self, was_boundary: bool) {
-        match self {
-            Self::Box(entry) => entry.state().flags().set_was_repaint_boundary(was_boundary),
-            Self::Sliver(entry) => entry.state().flags().set_was_repaint_boundary(was_boundary),
-        }
+        with_entry!(self, entry => entry.state().flags().set_was_repaint_boundary(was_boundary));
     }
 
     /// Sets the `NEEDS_COMPOSITING` flag.
@@ -898,19 +801,13 @@ impl RenderNode {
     /// separately as an additive helper.
     #[inline]
     pub fn mark_needs_compositing(&self) {
-        match self {
-            Self::Box(entry) => entry.state().flags().mark_needs_compositing(),
-            Self::Sliver(entry) => entry.state().flags().mark_needs_compositing(),
-        }
+        with_entry!(self, entry => entry.state().flags().mark_needs_compositing());
     }
 
     /// Clears the `NEEDS_COMPOSITING` flag.
     #[inline]
     pub fn clear_needs_compositing(&self) {
-        match self {
-            Self::Box(entry) => entry.state().flags().clear_needs_compositing(),
-            Self::Sliver(entry) => entry.state().flags().clear_needs_compositing(),
-        }
+        with_entry!(self, entry => entry.state().flags().clear_needs_compositing());
     }
 
     /// Reads the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
@@ -921,28 +818,19 @@ impl RenderNode {
     /// nothing to do.
     #[inline]
     pub fn needs_compositing_bits_update(&self) -> bool {
-        match self {
-            Self::Box(entry) => entry.state().flags().needs_compositing_bits_update(),
-            Self::Sliver(entry) => entry.state().flags().needs_compositing_bits_update(),
-        }
+        with_entry!(self, entry => entry.state().flags().needs_compositing_bits_update())
     }
 
     /// Sets the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     #[inline]
     pub fn mark_needs_compositing_bits_update(&self) {
-        match self {
-            Self::Box(entry) => entry.state().flags().mark_needs_compositing_bits_update(),
-            Self::Sliver(entry) => entry.state().flags().mark_needs_compositing_bits_update(),
-        }
+        with_entry!(self, entry => entry.state().flags().mark_needs_compositing_bits_update());
     }
 
     /// Clears the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     #[inline]
     pub fn clear_needs_compositing_bits_update(&self) {
-        match self {
-            Self::Box(entry) => entry.state().flags().clear_needs_compositing_bits_update(),
-            Self::Sliver(entry) => entry.state().flags().clear_needs_compositing_bits_update(),
-        }
+        with_entry!(self, entry => entry.state().flags().clear_needs_compositing_bits_update());
     }
 }
 

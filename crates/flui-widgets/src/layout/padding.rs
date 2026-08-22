@@ -3,7 +3,7 @@
 use flui_geometry::{EdgeInsets, px};
 use flui_objects::RenderPadding;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A widget that insets its child by the given [`EdgeInsets`].
 ///
@@ -76,15 +76,7 @@ impl RenderView for Padding {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(Padding);

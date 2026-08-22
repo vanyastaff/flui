@@ -463,7 +463,7 @@ impl BuildOwner {
 
     /// Install the binding's async task driver.
     ///
-    /// Called once, at wiring time, by `HeadlessBinding` and `AppBinding`. Must
+    /// Called once, at wiring time, by `HeadlessBinding` and `UiRealm`. Must
     /// be the same driver the binding's frame step polls.
     pub fn set_async_driver(&mut self, driver: flui_scheduler::AsyncDriver) {
         self.async_driver = Some(driver);
@@ -1431,11 +1431,11 @@ impl BuildOwner {
     /// # Production and headless bindings
     ///
     /// Called by both `HeadlessBinding::pump_frame` (step 6) and
-    /// `AppBinding::draw_frame` (after `run_frame` drops the pipeline write-lock)
+    /// `UiRealm::draw_frame` (after `run_frame` drops the pipeline write-lock)
     /// — the two frame paths are now converged at this call site. Headless
     /// tests drive it directly via `HeadlessBinding`; a real window drives it via
-    /// `WidgetsBinding::service_child_requests`, which `AppBinding` invokes after
-    /// each `run_frame`.
+    /// `WidgetsBinding::service_child_requests`, which `UiRealm::draw_frame`
+    /// invokes after each `run_frame`.
     pub fn service_child_requests(
         &mut self,
         tree: &mut ElementTree,

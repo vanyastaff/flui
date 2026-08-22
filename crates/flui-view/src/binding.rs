@@ -1186,8 +1186,8 @@ impl WidgetsBinding {
     /// `PipelineOwner::run_frame` releases its write-lock so no `NodePtr`
     /// alias is live.
     ///
-    /// `AppBinding::draw_frame` calls this method after the `run_frame`
-    /// write-guard drops (~line 459), passing the same `shared_pipeline_owner`
+    /// `UiRealm::draw_frame` (`flui-app`) calls this method after the
+    /// `run_frame` write-guard drops, passing the same shared `PipelineOwner`
     /// that `run_frame` used. The lock order is `widgets → pipeline`: the
     /// `widgets` write-lock (`WidgetsBinding::inner`) is held here; the brief
     /// `pipeline.write()` taken inside the delegate is a narrower, nested
@@ -1210,7 +1210,7 @@ impl WidgetsBinding {
     ///
     /// This call site is the **production↔headless convergence point** for the
     /// post-`run_frame` pipeline tail steps. `HeadlessBinding::pump_frame`
-    /// step 6 and `AppBinding::draw_frame` (via this method) now execute the
+    /// step 6 and `UiRealm::draw_frame` (via this method) now execute the
     /// same code path. Future gap-#2 work (production Vsync / implicit-animation
     /// tick) will land at the same `draw_frame` call site immediately after this
     /// call, keeping both bindings in sync.
@@ -1231,7 +1231,7 @@ impl WidgetsBinding {
     /// run, because `build_scope` mounts render objects through that same lock.
     ///
     /// This is the second production↔headless convergence point:
-    /// `AppBinding::draw_frame` reaches the shared fixpoint through here, and
+    /// `UiRealm::draw_frame` reaches the shared fixpoint through here, and
     /// `HeadlessBinding::pump_frame` calls
     /// `BuildOwner::run_frame_with_layout_builders` directly (it owns its
     /// `BuildOwner` and `ElementTree` without a lock). Both end up in the same
@@ -1395,9 +1395,9 @@ impl WidgetsBinding {
     // never actually gated anything reachable from the production frame
     // path. It has been removed — the single canonical counter lives on
     // `RenderingFlutterBinding` (`crates/flui-app/src/bindings/
-    // renderer_binding.rs`), forwarded through `AppBinding::defer_first_frame`
+    // renderer_binding.rs`), forwarded through `UiRealm::defer_first_frame`
     // / `allow_first_frame` / `send_frames_to_engine`, and consulted by
-    // `AppBinding::render_frame_entered`.
+    // `UiRealm::render_frame_entered`.
 
     /// Whether the binding is ready to produce frames.
     pub fn is_ready_to_produce_frames(&self) -> bool {
