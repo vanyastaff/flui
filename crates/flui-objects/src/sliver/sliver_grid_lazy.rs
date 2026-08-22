@@ -21,6 +21,23 @@
 //! (`SliverMultiBoxAdaptorElement`) — the "lazy" constructor path.  Oracle:
 //! `flutter/rendering/sliver_grid.dart:594-728`.
 //!
+//! ## Documented divergence — unbounded main axis + undefined item count
+//!
+//! An infinite window end (a shrink-wrapping viewport in an unbounded parent)
+//! means "no upper bound", which the oracle expresses by passing a null
+//! `targetLastIndex` (`sliver_grid.dart:608-610`) and then looping until the
+//! builder returns null. That loop can call the builder mid-layout; this
+//! render object cannot — it emits build *requests* the element tree services
+//! on a later pass — so it has no way to discover the builder's end within the
+//! frame that must commit a size. A count past
+//! [`MAX_UNBOUNDED_WINDOW_CHILDREN`] is therefore read as that sentinel and
+//! served a small bounded window ([`UNBOUNDED_SENTINEL_WINDOW`]) instead,
+//! reporting the extent it actually covers rather than the declared one and
+//! logging the shortfall once. The threshold separates a sentinel from a
+//! length, not a large grid from a small one: every count at or below it lays
+//! out in full, matching the oracle, and it is set above every count that can
+//! render at all.
+//!
 //! # Lifecycle
 //!
 //! Inert until a `ChildManager` is wired (via `SliverGridLazy` view).
@@ -46,6 +63,42 @@ use flui_rendering::{
 // ============================================================================
 // RENDER OBJECT
 // ============================================================================
+
+/// The count above which a declared `item_count` is read as an undefined-count
+/// stand-in rather than a real data-source length, when the window end is
+/// unbounded.
+///
+/// This separates a sentinel from a length. It is deliberately NOT a "large
+/// grids are too slow" budget: every count at or below it is laid out in full,
+/// however large. The hazard it guards is specific — with no finite window end
+/// the request loop runs `first..=last` in a single pass, so a declared
+/// `usize::MAX` (the conventional stand-in for the oracle's undefined
+/// `itemCount`) would enqueue ~2^64 build requests before the frame could
+/// return.
+///
+/// The value sits above every count that can render at all. Measured on the
+/// widget harness with a 4-column shrink-wrapped grid: 10 001 items settle in
+/// ~0.3 s, 40 000 in ~1.5 s, 160 000 in ~10 s — a grid an order of magnitude
+/// past that is already unusable for reasons this constant has no part in,
+/// while `usize::MAX` is thirteen orders of magnitude beyond it.
+const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
+
+/// How many children the sentinel case actually lays out.
+///
+/// Deliberately a SEPARATE number from [`MAX_UNBOUNDED_WINDOW_CHILDREN`], and
+/// conflating the two was a real bug. The threshold has to be high, since no
+/// genuine data-source length may fall past it; the window served once it
+/// trips has to be small, because layout runs EVERY FRAME. Serving a
+/// threshold-sized window meant enqueueing a million build requests per frame
+/// — survivable once, an out-of-memory kill after a few, which is how this
+/// was found.
+///
+/// There is no correct extent for "infinite content in an infinitely tall
+/// box", so the requirements that remain are that the answer be bounded,
+/// stable across frames, and large enough to fill any viewport it is asked to
+/// fill. A thousand tiles clears the last by a wide margin, and it converges:
+/// the requests are serviced once and every later frame finds them resident.
+const UNBOUNDED_SENTINEL_WINDOW: usize = 1_000;
 
 /// A request-strategy lazily-virtualized 2-D grid sliver.
 ///
@@ -83,6 +136,16 @@ pub struct RenderSliverGridLazy {
     /// Used by the `&self` hit-test reverse walk which cannot re-read
     /// `ctx.child_count()`.
     attached_child_count: usize,
+    /// The `item_count` the unbounded-window truncation warning has already
+    /// been emitted for, if any.
+    ///
+    /// Layout runs every frame, so an ungated warning there would repeat at
+    /// frame rate for a misconfiguration that is static — the same
+    /// once-per-misconfiguration frequency `flui_painting`'s decoration
+    /// warnings take, scoped per render object rather than per process so two
+    /// misconfigured grids each report, and so a count that CHANGES to another
+    /// over-cap value reports again.
+    warned_truncation_for: Option<usize>,
 }
 
 impl RenderSliverGridLazy {
@@ -95,6 +158,7 @@ impl RenderSliverGridLazy {
             item_count,
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
+            warned_truncation_for: None,
         }
     }
 
@@ -154,6 +218,9 @@ impl Clone for RenderSliverGridLazy {
             item_count: self.item_count,
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
             attached_child_count: self.attached_child_count,
+            // Carried, not reset: it tracks a configuration, so a clone that
+            // dropped it would re-report the same misconfiguration.
+            warned_truncation_for: self.warned_truncation_for,
         }
     }
 }
@@ -204,33 +271,64 @@ impl RenderSliver for RenderSliverGridLazy {
         let first_in_window = tile_layout.get_min_child_index_for_scroll_offset(cache_start_offset);
         // Clamp to item_count−1; no underflow risk since item_count > 0 above.
         //
-        // NOT guarded on `cache_end_offset.is_finite()`, unlike the eager
-        // `RenderSliverGrid`. There, falling back to "every child" is safe
-        // because `child_count` counts children that are already mounted, so
-        // the bound is real. Here `item_count` may be the caller's
-        // over-estimate — `usize::MAX` is this crate's stand-in for Flutter's
-        // undefined `itemCount` — and it is the finite window that keeps that
-        // workable today, since the layout loop below walks
-        // `first_in_window..=last_in_window` synchronously and only then can
-        // the adaptor manager call the builder, see `None`, and clamp. Widening
-        // to `item_count - 1` on an unbounded window would ask it to enqueue
-        // ~2^64 indices in one frame.
+        // An infinite window end means "no upper bound" and must not reach the
+        // delegate: it divides infinity by the stride, saturates the
+        // `f32 as usize` cast at `usize::MAX`, and overflows the index product.
+        // The oracle expresses the same thing by not asking at all —
+        // `sliver_grid.dart:608-610` passes a null `targetLastIndex` — and a
+        // shrink-wrapped `GridView::builder` under an unbounded parent hands
+        // down exactly that window.
         //
-        // The oracle avoids this with a nullable upper bound
-        // (`sliver_grid.dart:608-610`) that lets the builder's end be
-        // discovered incrementally; FLUI has no such sentinel here, and
-        // inventing a batch size would be policy this change has no basis to
-        // pick. So an unbounded lazy grid keeps its existing behaviour — the
-        // delegate's index arithmetic overflows and pipeline resilience
-        // recovers into degraded geometry — which is wrong, but bounded, and
-        // strictly better than a hung frame.
-        let last_in_window = tile_layout
-            .get_max_child_index_for_scroll_offset(cache_end_offset)
-            .min(self.item_count - 1);
+        // Falling back to every child needs one more bound than the eager
+        // `RenderSliverGrid` does, because `item_count` here is whatever the
+        // caller declared rather than a count of mounted children, and
+        // `usize::MAX` is the conventional stand-in for the oracle's undefined
+        // `itemCount`. The request loop below is synchronous, so an unbounded
+        // count would ask for ~2^64 build requests in a single frame.
+        //
+        // [`MAX_UNBOUNDED_WINDOW_CHILDREN`] bounds that, and it draws its line
+        // between a declared length and a sentinel rather than between a large
+        // grid and a small one: a finite count at or below it is laid out in
+        // full, and the constant is set above every count that can render at
+        // all. Past it the tree is asking for infinite content in an infinitely
+        // tall box, which the oracle answers by looping until the builder
+        // returns null — and would never terminate for a builder that never
+        // does.
+        //
+        // Truncating also has to move the reported scroll extent with it.
+        // `item_count` normally drives that extent so a bounded viewport can
+        // scroll through content it has not built yet — correct there, and
+        // left alone. But under an unbounded main axis the shrink-wrapping
+        // viewport *sizes itself* to that extent, and declaring content this
+        // frame never laid out would commit a box no child of it fills. So a
+        // truncated window reports the extent it actually covers.
+        let (last_in_window, effective_item_count) = if cache_end_offset.is_finite() {
+            let last = tile_layout
+                .get_max_child_index_for_scroll_offset(cache_end_offset)
+                .min(self.item_count - 1);
+            (last, self.item_count)
+        } else if self.item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
+            if self.warned_truncation_for != Some(self.item_count) {
+                self.warned_truncation_for = Some(self.item_count);
+                tracing::warn!(
+                    item_count = self.item_count,
+                    threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
+                    window = UNBOUNDED_SENTINEL_WINDOW,
+                    "lazy grid asked to fill an unbounded main axis declares \
+                     more children than any real data source has; reading the \
+                     count as an undefined-count stand-in and serving a small \
+                     bounded window instead, so the committed extent is far \
+                     short of the declared content"
+                );
+            }
+            (UNBOUNDED_SENTINEL_WINDOW - 1, UNBOUNDED_SENTINEL_WINDOW)
+        } else {
+            (self.item_count - 1, self.item_count)
+        };
 
         // Guard: window is entirely past the last item (e.g. scrolled to end).
         if first_in_window > last_in_window {
-            let scroll_extent = tile_layout.compute_max_scroll_offset(self.item_count);
+            let scroll_extent = tile_layout.compute_max_scroll_offset(effective_item_count);
             self.attached_child_count = ctx.child_count();
             // Empty retain band tells the element tree to evict all off-window children.
             ctx.emit_retain_band(first_in_window, first_in_window);
@@ -277,7 +375,7 @@ impl RenderSliver for RenderSliverGridLazy {
         // ── 7. Deterministic scroll extent ────────────────────────────────────
         // Unlike a list, the delegate gives exact extent from item_count — no
         // virtualizer or estimate needed.
-        let scroll_extent = tile_layout.compute_max_scroll_offset(self.item_count);
+        let scroll_extent = tile_layout.compute_max_scroll_offset(effective_item_count);
 
         // ── 8. Paint geometry (mirror of eager RenderSliverGrid, oracle 700-719) ──
         let leading_row_offset = tile_layout.get_scroll_offset_of_child(first_in_window);

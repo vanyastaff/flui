@@ -188,13 +188,25 @@
 //!    painted") via geometry instead of a canvas-call interceptor.
 //! 10. `'GridView in zero context'` — **ported, real green**:
 //!     [`grid_view_in_zero_context_renders_no_onstage_children`].
-//! 11. `'GridView in unbounded context'` — **ported, real green**:
-//!     [`grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content`].
-//!     Was a current-behavior-plus-oracle-pin pair while a shrink-wrapped
-//!     grid collapsed to zero height in an unbounded context; the grid now
-//!     treats an infinite target end as "no upper bound" instead of asking
-//!     the delegate (oracle `sliver_grid.dart:608-610`), so the oracle's
-//!     expectation holds directly and the pair is retired.
+//! 11. `'GridView in unbounded context'` — **ported, real green**, and
+//!     covered TWICE because FLUI splits one oracle render object in two:
+//!     [`grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content`]
+//!     for the eager path (`.count`) and
+//!     [`grid_view_builder_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content`]
+//!     for the lazy one (`.builder`). Flutter needs one test here — `.count`
+//!     and `.builder` differ only in their child delegate, both driving
+//!     `RenderSliverGrid`. Was a current-behavior-plus-oracle-pin pair while
+//!     a shrink-wrapped grid collapsed to zero height in an unbounded
+//!     context; both grids now treat an infinite target end as "no upper
+//!     bound" instead of asking the delegate (oracle
+//!     `sliver_grid.dart:608-610`), so the oracle's expectation holds
+//!     directly and the pair is retired. The lazy path needs one bound the
+//!     eager path does not, and a DIVERGENCE rides on it — see
+//!     [`grid_view_builder_in_unbounded_context_with_undefined_item_count_terminates`]
+//!     for the truncation and
+//!     [`grid_view_builder_in_unbounded_context_lays_out_a_large_finite_item_count_in_full`]
+//!     for its other side, that a declared finite length is never treated as
+//!     that sentinel.
 //! 12. `'GridView.builder control test'` — **ported, real green**:
 //!     [`grid_view_builder_control_test_shrink_wrap_builds_exactly_viewport_fit`].
 //!     Lazy path, but Finding 2's residency-vs-onstage distinction still
@@ -1055,6 +1067,182 @@ fn grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content() {
     );
     assert!(laid.find_text("0").is_some(), "item 0 must be found");
     assert!(laid.find_text("19").is_some(), "item 19 must be found");
+}
+
+/// The same oracle case as above, reached through `GridView::builder`.
+///
+/// Flutter needs one test here because one `RenderSliverGrid` serves both
+/// constructors — `.count` and `.builder` differ only in their child
+/// delegate. FLUI splits that render object in two (eager
+/// `RenderSliverGrid`, lazy `RenderSliverGridLazy`), so the oracle's single
+/// case needs two tests to cover, and the fix that retired the pin above
+/// left this half producing the identical 800x0 collapse.
+#[test]
+fn grid_view_builder_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content() {
+    let delegate: Arc<dyn SliverGridDelegate> =
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(4));
+    let root = SingleChildScrollView::new().child(
+        GridView::builder(delegate, 20, |i| {
+            Some(SizedBox::shrink().child(Text::new(format!("{i}"))).boxed())
+        })
+        .shrink_wrap(true),
+    );
+    let mut laid = harness::pump_widget(root, harness::screen());
+    common::settle_lazy(&mut laid);
+
+    let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport_id),
+        size(800.0, 1000.0),
+        "shrink_wrap must size the lazy grid's viewport to its content extent"
+    );
+    assert!(laid.find_text("0").is_some(), "item 0 must be found");
+    assert!(laid.find_text("19").is_some(), "item 19 must be found");
+}
+
+/// A DIVERGENCE, asserted so it cannot drift silently.
+///
+/// `usize::MAX` is this crate's stand-in for the oracle's undefined
+/// `itemCount` (case 13). Combined with an unbounded main axis it asks for
+/// infinite content in an infinitely tall box, which the oracle answers by
+/// looping until the builder returns null — so a never-null builder does not
+/// terminate in Flutter either. FLUI cannot discover that end mid-frame (the
+/// render object emits build *requests*; the element tree services them on a
+/// later pass), so it truncates the window instead and logs that the
+/// committed extent is short of the declared content.
+///
+/// What this test protects is that the truncation stays bounded and
+/// terminating: before it, the delegate's index product overflowed and
+/// pipeline resilience recovered into a zero-height viewport.
+#[test]
+fn grid_view_builder_in_unbounded_context_with_undefined_item_count_terminates() {
+    let delegate: Arc<dyn SliverGridDelegate> =
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(4));
+    let root = SingleChildScrollView::new().child(
+        GridView::builder(delegate, usize::MAX, |i| {
+            Some(SizedBox::shrink().child(Text::new(format!("{i}"))).boxed())
+        })
+        .shrink_wrap(true),
+    );
+    let laid = harness::pump_widget(root, harness::screen());
+
+    // The count trips the sentinel threshold, so the grid serves its small
+    // bounded window (1000 tiles) and reports the extent it actually covers:
+    // 1000 tiles over 4 columns is 250 rows of 200px cells. Exact, not a
+    // range — a bound this test cannot compute is a bound it cannot notice
+    // drifting.
+    let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport_id),
+        size(800.0, 50_000.0),
+        "an unbounded window over an undefined item count must commit the \
+         truncated extent, not collapse to zero and not declare 2^64 rows"
+    );
+}
+
+/// The other side of that bound: a large but genuinely finite `item_count`
+/// is a declared data-source length, not the undefined-count stand-in, and
+/// must be laid out in full.
+///
+/// 10 001 items is deliberately chosen: it is large enough that a naive
+/// "cap the unbounded window at a round number" guard would swallow it, and
+/// small enough to be an ordinary data source. `ceil(10001 / 4) = 2501` rows
+/// of 200px cells is 500 200px — one row MORE than a truncation to 10 000
+/// would report, which is exactly the observable a too-eager cap destroys.
+#[test]
+fn grid_view_builder_in_unbounded_context_lays_out_a_large_finite_item_count_in_full() {
+    let delegate: Arc<dyn SliverGridDelegate> =
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(4));
+    let root = SingleChildScrollView::new().child(
+        GridView::builder(delegate, 10_001, |i| {
+            Some(SizedBox::shrink().child(Text::new(format!("{i}"))).boxed())
+        })
+        .shrink_wrap(true),
+    );
+    let laid = harness::pump_widget(root, harness::screen());
+
+    let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport_id),
+        size(800.0, 500_200.0),
+        "a finite item_count is a declared length, not a sentinel: every \
+         declared row must be in the committed extent"
+    );
+}
+
+/// The truncation above is a misconfiguration notice, and layout runs every
+/// frame — so it must be reported ONCE, not at frame rate.
+///
+/// Capture technique and its caveat are the same as
+/// `custom_multi_child_layout_test`'s: `tracing::subscriber::with_default`
+/// redirects dispatch per-thread, but `tracing`'s per-callsite interest
+/// cache is process-global, so this is only race-free when each test owns
+/// its process — which is what `cargo nextest run` (what CI uses) gives.
+#[test]
+fn grid_view_builder_unbounded_truncation_warns_once_not_every_frame() {
+    use std::sync::Mutex;
+
+    #[derive(Clone, Default)]
+    struct CapturedLog(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLog {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("captured-log mutex")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLog {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    let captured = CapturedLog::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_max_level(tracing::level_filters::LevelFilter::TRACE)
+        .with_ansi(false)
+        .without_time()
+        .finish();
+
+    let delegate: Arc<dyn SliverGridDelegate> =
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(4));
+    let root = SingleChildScrollView::new().child(
+        GridView::builder(delegate, usize::MAX, |i| {
+            Some(SizedBox::shrink().child(Text::new(format!("{i}"))).boxed())
+        })
+        .shrink_wrap(true),
+    );
+
+    tracing::subscriber::with_default(subscriber, || {
+        let mut laid = harness::pump_widget(root, harness::screen());
+        // Three more frames over the SAME render object — `pump` dirties the
+        // root and re-runs layout, so `perform_layout` (and the truncation
+        // branch inside it) executes on every one. An ungated warning fires
+        // four times; a gated one fires once.
+        for _ in 0..3 {
+            laid.pump();
+        }
+    });
+
+    let bytes = captured.0.lock().expect("captured-log mutex").clone();
+    let log = String::from_utf8(bytes).expect("tracing output is valid UTF-8");
+    let warnings = log.matches("unbounded main axis declares").count();
+    assert_eq!(
+        warnings, 1,
+        "the truncation is a static misconfiguration and must be reported once \
+         per configuration, not once per frame; saw {warnings} in:\n{log}"
+    );
 }
 
 // ============================================================================
