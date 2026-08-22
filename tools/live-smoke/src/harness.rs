@@ -392,6 +392,13 @@ fn check_occlusion_gating(
     fake_motion(conn, root, center_x, fling_start_y)?;
     conn.sync()?;
     std::thread::sleep(Duration::from_millis(100));
+    // Witnesses for the premise below. The drag itself writes nothing to the
+    // log — only the wheel path logs `pointer-scroll tick` — so when the
+    // premise fails with a dead fling, the log alone cannot say whether the
+    // gesture engaged at all. These two make that distinction reportable
+    // instead of leaving the next reader to guess.
+    let before_drag_pixels = capture(conn, window, &geometry)?;
+    let gpu_before_drag = count(&read_log()?, GPU_PRESENT_MARKER);
     conn.xtest_fake_input(BUTTON_PRESS, 1, 0, root, 0, 0, 0)?;
     conn.sync()?;
     for step in 1..=6i16 {
@@ -401,6 +408,9 @@ fn check_occlusion_gating(
     }
     conn.xtest_fake_input(BUTTON_RELEASE, 1, 0, root, 0, 0, 0)?;
     conn.sync()?;
+    let after_drag_pixels = capture(conn, window, &geometry)?;
+    let drag_moved_content = after_drag_pixels != before_drag_pixels;
+    let drag_frames = count(&read_log()?, GPU_PRESENT_MARKER).saturating_sub(gpu_before_drag);
 
     // 4. Cover the app mid-fling — DEMAND-gated, never time-gated: a fixed
     //    gap between drag and cover is runner-speed-dependent (a slow CI
@@ -423,12 +433,29 @@ fn check_occlusion_gating(
             break;
         }
         if Instant::now() > fling_deadline {
+            // Two different defects reach this line, and the frame count alone
+            // does not separate them, so say which one this was. The drag
+            // either moved the content (the gesture engaged and the release
+            // simply carried no ballistic velocity) or it did not (the press
+            // never became a scroll gesture — hit-testing, arena, or event
+            // delivery), and a reader who cannot tell them apart is left
+            // guessing at the whole subsystem.
+            let verdict = if drag_moved_content {
+                "the drag DID move the content, so the gesture engaged and the \
+                 release carried no ballistic velocity — look at the drag's \
+                 velocity samples, not at delivery"
+            } else {
+                "the drag did NOT move the content at all, so the press never \
+                 became a scroll gesture — look at hit-testing, the gesture \
+                 arena, or event delivery, not at the fling"
+            };
             bail!(
                 "occlusion check FAILED (premise): the drag-fling presented only \
                  {frames} frame(s) beyond the quiesced post-arming baseline (or \
                  stopped producing) within 10s of the drag — no live animation \
                  exists for the gate to stop, so the zero-submissions assertion \
-                 would be vacuous"
+                 would be vacuous.\n  Drag itself presented {drag_frames} frame(s). \
+                 {verdict}."
             );
         }
         previous = sample;

@@ -197,9 +197,17 @@ impl MountedDemo {
     /// Taps the center of `id`'s rendered box — the standard way this test
     /// drives a button whose own on-screen glyph text was used only to find
     /// it (see [`find_text`](Self::find_text)'s callers).
+    ///
+    /// The center, not a corner: a Material button clips to its shape, so a
+    /// point just inside the bounding box of a *circular* one can sit outside
+    /// the circle and never reach the button at all.
     fn tap_node(&self, id: RenderId) {
         let position = self.absolute_position(id);
-        self.tap(position.dx.get() + 1.0, position.dy.get() + 1.0);
+        let size = self.size(id);
+        self.tap(
+            position.dx.get() + size.width.get() / 2.0,
+            position.dy.get() + size.height.get() / 2.0,
+        );
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down,
