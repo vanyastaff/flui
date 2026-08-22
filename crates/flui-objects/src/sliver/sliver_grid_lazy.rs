@@ -203,9 +203,16 @@ impl RenderSliver for RenderSliverGridLazy {
 
         let first_in_window = tile_layout.get_min_child_index_for_scroll_offset(cache_start_offset);
         // Clamp to item_count−1; no underflow risk since item_count > 0 above.
-        let last_in_window = tile_layout
-            .get_max_child_index_for_scroll_offset(cache_end_offset)
-            .min(self.item_count - 1);
+        // An infinite window end means "no upper bound" and must not reach the
+        // delegate — see the same guard and oracle citation in the eager
+        // `RenderSliverGrid` (`sliver/sliver_grid.rs`).
+        let last_in_window = if cache_end_offset.is_finite() {
+            tile_layout
+                .get_max_child_index_for_scroll_offset(cache_end_offset)
+                .min(self.item_count - 1)
+        } else {
+            self.item_count - 1
+        };
 
         // Guard: window is entirely past the last item (e.g. scrolled to end).
         if first_in_window > last_in_window {

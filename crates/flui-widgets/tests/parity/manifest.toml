@@ -404,7 +404,7 @@ tests = 8
 rust = "grid_view_interaction_test"
 family = "scroll"
 oracles = ["widgets/grid_view_test.dart"]
-tests = 23
+tests = 22
 
 [[targets.claims]]
 oracle = "widgets/grid_view_test.dart"
@@ -429,14 +429,9 @@ cases = [
     "SliverGridDelegateWithMaxCrossAxisExtent throws assertion error when maxCrossAxisExtent is 0",
     "SliverGridDelegate mainAxisExtent add assert",
     "SliverGrid sets correct extent for null returning builder delegate",
+    "GridView in unbounded context",
 ]
 
-[[targets.pins]]
-test = "grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content"
-capability = "shrink-wrap content sizing under an unbounded main axis"
-issue = 537
-oracle = "widgets/grid_view_test.dart"
-cases = ["GridView in unbounded context"]
 
 [[targets]]
 rust = "grid_view_test"
@@ -1300,7 +1295,7 @@ cases = [
 "widgets/global_keys_moving_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/grid_paper_test.dart" = { cases = 2, claimed = 0, status = "pending" }
 "widgets/grid_view_layout_test.dart" = { cases = 1, claimed = 1, status = "ported" }
-"widgets/grid_view_test.dart" = { cases = 29, claimed = 20, diverged = 1, status = "partial" }
+"widgets/grid_view_test.dart" = { cases = 29, claimed = 21, diverged = 0, status = "partial" }
 "widgets/heroes_test.dart" = { cases = 56, claimed = 6, status = "partial" }
 "widgets/hit_testing_test.dart" = { cases = 3, claimed = 0, status = "pending" }
 "widgets/html_element_view_test.dart" = { cases = 13, claimed = 0, status = "pending" }
@@ -1579,16 +1574,16 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 90
-rust_tests = 647
-pins = 5
+rust_tests = 646
+pins = 4
 oracle_files = 389
 oracle_cases = 5696
-cases_claimed = 294
-cases_diverged = 5
+cases_claimed = 295
+cases_diverged = 4
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 286
-universe_cases_diverged = 5
+universe_cases_claimed = 287
+universe_cases_diverged = 4
 universe_pending_files = 331
 
 [summary.families."animation"]
@@ -1656,10 +1651,10 @@ pins = 0
 
 [summary.families."scroll"]
 targets = 8
-rust_tests = 73
-cases_claimed = 35
-cases_diverged = 1
-pins = 1
+rust_tests = 72
+cases_claimed = 36
+cases_diverged = 0
+pins = 0
 
 [summary.families."sliver"]
 targets = 15
