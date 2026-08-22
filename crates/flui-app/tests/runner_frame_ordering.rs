@@ -191,3 +191,53 @@ fn every_pump_async_arm_calls_finish_then_drive_async_tasks() {
          the app is backgrounded"
     );
 }
+
+/// The native (desktop/Android) production frame paths must drive the
+/// raster mailbox — every frame crossing to the backend as an owned,
+/// stamped `SceneSnapshot` through `RasterLane` (ADR-0045's inline lane) —
+/// never the pre-mailbox direct backend call. Only the web runner still
+/// takes the direct entry point, for a stated reason (its renderer arrives
+/// asynchronously and recovers across an `.await`, a shape the lane does
+/// not yet accommodate — see `FrameSink`'s own doc in `raster_lane.rs`).
+///
+/// Red-check: revert either native bootstrap to `Arc<Mutex<Renderer>>` +
+/// `render_frame_entered` and the corresponding count here breaks.
+#[test]
+fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend() {
+    const RUNNER: &str = include_str!("../src/app/runner.rs");
+    let code_lines = production_lines(RUNNER);
+
+    let lane_constructions = code_lines
+        .iter()
+        .filter(|l| l.contains("RasterLane::new("))
+        .count();
+    assert_eq!(
+        lane_constructions, 2,
+        "expected exactly two PRODUCTION `RasterLane::new(` sites (the desktop and Android \
+         bootstraps each wrap their renderer in the raster mailbox); found \
+         {lane_constructions}"
+    );
+
+    let direct_entry_sites = code_lines
+        .iter()
+        .filter(|l| l.contains(".render_frame_entered("))
+        .count();
+    assert_eq!(
+        direct_entry_sites, 1,
+        "expected exactly one PRODUCTION `.render_frame_entered(` site (the web runner's \
+         direct-backend path, the only one with a stated reason to bypass the mailbox); \
+         found {direct_entry_sites} — a second site means a native path regressed to the \
+         pre-mailbox direct call"
+    );
+
+    let recovery_sites = code_lines
+        .iter()
+        .filter(|l| l.contains("render_frame_with_device_recovery("))
+        .count();
+    assert_eq!(
+        recovery_sites, 2,
+        "expected exactly two PRODUCTION `render_frame_with_device_recovery(` call sites \
+         (desktop and Android, each handing their raster lane to the recovery wrapper); \
+         found {recovery_sites}"
+    );
+}

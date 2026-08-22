@@ -7963,13 +7963,15 @@ struct FrameRecoveryOutcome {
     next_attempt_at: Option<web_time::Instant>,
 }
 
-/// Drive one frame through `realm` against `renderer`, rebuilding a lost
-/// device around it.
+/// Drive one frame through `realm` against `lane`'s raster mailbox,
+/// rebuilding a lost device around it.
 ///
 /// A device already lost at frame start gets a backoff-gated recovery
-/// attempt here, BEFORE [`super::ui_realm::UiRealm::render_frame_entered`]
-/// — but `render_frame_entered` runs regardless of whether that attempt
-/// happened or what it returned. Skipping it on a still-lost device was the
+/// attempt here, BEFORE [`super::ui_realm::UiRealm::render_frame_on_lane`]
+/// (the mailbox-driving twin of `render_frame_entered` — this doc refers to
+/// the pair interchangeably below) — but that frame drive runs regardless
+/// of whether that attempt happened or what it returned. Skipping it on a
+/// still-lost device was the
 /// original bug this function fixes: `render_frame_entered` is the only
 /// caller of `drain_deferred_arena_resolutions`, `flush_pending_moves`,
 /// `draw_frame_entered`, and `mouse_tracker().update_all_devices()`, all of
@@ -8016,25 +8018,34 @@ struct FrameRecoveryOutcome {
 /// loss was even noticed, so there is no known-blank backing store to force
 /// a fresh submit for.
 #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
-fn render_frame_with_device_recovery<R>(
+fn render_frame_with_device_recovery<B>(
     realm: &super::ui_realm::UiRealm,
-    renderer: &mut R,
+    lane: &mut super::raster_lane::RasterLane<B>,
     backoff: &DeviceRecoveryBackoff,
     now: web_time::Instant,
 ) -> FrameRecoveryOutcome
 where
-    R: flui_engine::RasterBackend + DeviceRecovery,
+    B: flui_engine::RasterBackend + DeviceRecovery,
 {
     let mut just_failed = false;
     let mut next_attempt_at = None;
 
-    if renderer.is_device_lost() {
-        match attempt_device_recovery(renderer, backoff, now) {
-            // Pre-frame only: nothing has presented since the device died,
-            // so the recovered backing store needs a genuinely fresh
-            // submit — see `UiRealm::mark_primary_needs_full_repaint`'s
-            // own doc for why `request_redraw` alone does not get one.
-            RecoveryAttempt::Recovered => realm.mark_primary_needs_full_repaint(),
+    if lane.is_device_lost() {
+        match lane.with_backend(|renderer| attempt_device_recovery(renderer, backoff, now)) {
+            RecoveryAttempt::Recovered => {
+                // Recovery rebuilt the surface, so the lane re-mints its
+                // `SurfaceGeneration` through the mailbox's one counter
+                // (ADR-0045 decision 4 names recovery's surface recreation
+                // as a mint site) — without this, the recovered lane's
+                // next frame would still stamp the pre-loss generation.
+                lane.note_surface_recreated();
+                // Pre-frame only: nothing has presented since the device
+                // died, so the recovered backing store needs a genuinely
+                // fresh submit — see `UiRealm::mark_primary_needs_full_
+                // repaint`'s own doc for why `request_redraw` alone does
+                // not get one.
+                realm.mark_primary_needs_full_repaint();
+            }
             RecoveryAttempt::Failed(deadline) => {
                 just_failed = true;
                 next_attempt_at = Some(deadline);
@@ -8043,17 +8054,21 @@ where
         }
     }
 
-    let presented = realm.render_frame_entered(renderer);
+    let presented = realm.render_frame_on_lane(lane);
 
-    if next_attempt_at.is_none() && renderer.is_device_lost() {
-        match attempt_device_recovery(renderer, backoff, now) {
-            // Post-frame (mid-frame loss) success arms NOTHING, unlike the
-            // pre-frame case above: the frame that just ran already had
+    if next_attempt_at.is_none() && lane.is_device_lost() {
+        match lane.with_backend(|renderer| attempt_device_recovery(renderer, backoff, now)) {
+            // Post-frame (mid-frame loss) success arms NO repaint, unlike
+            // the pre-frame case above: the frame that just ran already had
             // its own chance to present before the loss was noticed, so
             // there is no known-blank backing store to force a fresh
             // submit for here — forcing one anyway would just be a
             // spurious extra repaint with no correctness reason behind it.
-            RecoveryAttempt::Recovered => {}
+            // The generation re-mint is NOT skippable the same way: the
+            // recovery rebuilt the surface either way, and the next frame
+            // (whenever something else dirties the tree) must stamp the
+            // post-recovery generation.
+            RecoveryAttempt::Recovered => lane.note_surface_recreated(),
             RecoveryAttempt::Failed(deadline) => {
                 just_failed = true;
                 next_attempt_at = Some(deadline);
@@ -8152,6 +8167,22 @@ mod device_recovery_tests {
         realm
     }
 
+    /// Wraps a scripted backend in the raster lane the production frame
+    /// path drives (`render_frame_with_device_recovery` takes a lane, not
+    /// a bare backend, since the desktop/Android runners adopted the
+    /// mailbox) — the size matches the scripted backends' own `size()`.
+    fn lane_over<B: RasterBackend>(backend: B) -> super::super::raster_lane::RasterLane<B> {
+        super::super::raster_lane::RasterLane::new(
+            backend,
+            flui_foundation::PresentationAddress {
+                realm_id: flui_foundation::RealmId::new(1),
+                presentation_id: flui_foundation::PresentationId::new(1),
+            },
+            800,
+            600,
+        )
+    }
+
     struct ScriptedDeviceBackend {
         /// Current device-lost flag (what `RasterBackend::is_device_lost` reports).
         lost: bool,
@@ -8228,17 +8259,22 @@ mod device_recovery_tests {
     #[test]
     fn a_healthy_device_renders_without_any_recovery() {
         let realm = mount_root();
-        let mut backend = ScriptedDeviceBackend::healthy();
+        let mut lane = lane_over(ScriptedDeviceBackend::healthy());
         realm.mark_rendered();
         let backoff = DeviceRecoveryBackoff::new();
         let now = Instant::now();
 
-        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert!(outcome.presented, "Ok(true) reaches present()");
-        assert_eq!(backend.render_calls, 1, "the scene reached render_scene");
         assert_eq!(
-            backend.recover_attempts, 0,
+            lane.with_backend(|b| b.render_calls),
+            1,
+            "the scene reached render_scene"
+        );
+        assert_eq!(
+            lane.with_backend(|b| b.recover_attempts),
+            0,
             "no recovery on a healthy device"
         );
         assert!(
@@ -8258,26 +8294,28 @@ mod device_recovery_tests {
     #[test]
     fn a_pre_frame_loss_with_a_successful_recovery_renders_the_same_frame_and_arms_nothing() {
         let realm = mount_root();
-        let mut backend = ScriptedDeviceBackend {
+        let mut lane = lane_over(ScriptedDeviceBackend {
             lost: true,
             ..ScriptedDeviceBackend::healthy()
-        };
+        });
         realm.mark_rendered();
         let backoff = DeviceRecoveryBackoff::new();
         let now = Instant::now();
 
-        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            backend.recover_attempts, 1,
+            lane.with_backend(|b| b.recover_attempts),
+            1,
             "the pre-frame loss is recovered"
         );
         assert!(
-            !backend.lost,
+            !lane.with_backend(|b| b.lost),
             "the scripted successful recovery cleared the lost flag"
         );
         assert_eq!(
-            backend.render_calls, 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "after a successful recovery the SAME frame renders — no extra wake needed"
         );
         assert!(outcome.presented, "the recovered frame reaches present()");
@@ -8306,7 +8344,7 @@ mod device_recovery_tests {
     #[test]
     fn a_successful_recovery_forces_the_recovered_devices_next_frame_to_actually_paint() {
         let realm = mount_root();
-        let mut backend = ScriptedDeviceBackend::healthy();
+        let mut lane = lane_over(ScriptedDeviceBackend::healthy());
         let backoff = DeviceRecoveryBackoff::new();
         let now = Instant::now();
 
@@ -8316,20 +8354,22 @@ mod device_recovery_tests {
         // definitely false going into the recovery below — otherwise this
         // test could pass by riding the mount's own leftover demand
         // instead of proving what the recovery success arm itself does.
-        let warm_up = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let warm_up = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
         assert!(
             warm_up.presented,
             "precondition: the mount's own first frame presented"
         );
-        assert_eq!(backend.render_calls, 1);
+        assert_eq!(lane.with_backend(|b| b.render_calls), 1);
 
         // Now the device dies and recovers, with NOTHING else marking the
         // tree dirty in between (no input, no animation, no resize).
-        backend.lost = true;
-        backend.scene_outcome = Some(Ok(true));
-        backend.recover_outcome = Some(Ok(()));
+        lane.with_backend(|b| {
+            b.lost = true;
+            b.scene_outcome = Some(Ok(true));
+            b.recover_outcome = Some(Ok(()));
+        });
 
-        let recovery = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let recovery = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         // The fix this test pins: `wake_frame()` alone (the realm-level
         // flag plus a platform poke) does NOT set `PresentationState::
@@ -8343,7 +8383,8 @@ mod device_recovery_tests {
         // full repaint for whatever gets submitted next, but nothing
         // submits at all without this).
         assert_eq!(
-            backend.render_calls, 2,
+            lane.with_backend(|b| b.render_calls),
+            2,
             "a successful recovery must force the recovered device's next frame to reach \
              render_scene, not silently stay Idle"
         );
@@ -8356,7 +8397,7 @@ mod device_recovery_tests {
     #[test]
     fn a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off() {
         let realm = mount_root();
-        let mut backend = ScriptedDeviceBackend {
+        let mut lane = lane_over(ScriptedDeviceBackend {
             lost: true,
             // The real `Renderer::acquire_surface_texture` bails on the
             // `device_lost` flag before touching the GPU — scripted here
@@ -8366,15 +8407,19 @@ mod device_recovery_tests {
             recover_outcome: Some(Err(EngineError::DeviceLost)),
             recover_clears_lost: false,
             ..ScriptedDeviceBackend::healthy()
-        };
+        });
         realm.mark_rendered();
         let backoff = DeviceRecoveryBackoff::new();
         let now = Instant::now();
 
-        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert!(!outcome.presented, "a still-lost device presents nothing");
-        assert_eq!(backend.recover_attempts, 1, "the recovery was attempted");
+        assert_eq!(
+            lane.with_backend(|b| b.recover_attempts),
+            1,
+            "the recovery was attempted"
+        );
         // The fix this test exists to pin: the earlier version of this
         // function returned `false` here WITHOUT calling
         // `render_frame_entered` at all on a still-lost device, so
@@ -8383,7 +8428,8 @@ mod device_recovery_tests {
         // deadlines, coalesced pointer moves, and every Vsync ticker all
         // depend on it).
         assert_eq!(
-            backend.render_calls, 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "render_frame_entered must run even when the pre-frame recovery attempt \
              failed — a dead device must not stop the non-GPU half of the frame"
         );
@@ -8407,31 +8453,34 @@ mod device_recovery_tests {
         let backoff = DeviceRecoveryBackoff::new();
         let now = Instant::now();
 
-        let mut backend = ScriptedDeviceBackend {
+        let mut lane = lane_over(ScriptedDeviceBackend {
             lost: true,
             scene_outcome: Some(Err(EngineError::DeviceLost)),
             recover_outcome: Some(Err(EngineError::DeviceLost)),
             recover_clears_lost: false,
             ..ScriptedDeviceBackend::healthy()
-        };
-        let first = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        });
+        let first = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
         assert!(
             first.just_failed,
             "precondition: the first attempt genuinely failed"
         );
-        assert_eq!(backend.recover_attempts, 1);
+        assert_eq!(lane.with_backend(|b| b.recover_attempts), 1);
 
         // Refilled so a genuine second attempt, if this test's premise is
         // wrong, fails loudly on its own assertions below rather than
         // panicking on a `.take()` of `None`.
-        backend.scene_outcome = Some(Err(EngineError::DeviceLost));
-        backend.recover_outcome = Some(Err(EngineError::DeviceLost));
+        lane.with_backend(|b| {
+            b.scene_outcome = Some(Err(EngineError::DeviceLost));
+            b.recover_outcome = Some(Err(EngineError::DeviceLost));
+        });
 
         // Same instant, well before the backoff's own deadline (BASE, 16ms).
-        let second = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let second = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            backend.recover_attempts, 1,
+            lane.with_backend(|b| b.recover_attempts),
+            1,
             "a wake before the backoff's deadline must not touch the renderer at all — the \
              whole point of a deadline CHECK over a sleep is that a still-too-early wake \
              costs nothing"
@@ -8517,24 +8566,26 @@ mod device_recovery_tests {
     #[test]
     fn a_pre_frame_recovery_success_does_not_block_a_fresh_mid_frame_loss() {
         let realm = mount_root();
-        let mut backend = AlwaysRecoversButDiesOnFirstRenderBackend::new();
+        let mut lane = lane_over(AlwaysRecoversButDiesOnFirstRenderBackend::new());
         realm.mark_rendered();
         let backoff = DeviceRecoveryBackoff::new();
         let now = Instant::now();
 
-        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            backend.recover_attempts, 2,
+            lane.with_backend(|b| b.recover_attempts),
+            2,
             "the device recovered pre-frame, died again mid-frame, and must be attempted \
              a SECOND time in the same call"
         );
         assert_eq!(
-            backend.render_calls, 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "the frame still rendered exactly once"
         );
         assert!(
-            !backend.lost,
+            !lane.with_backend(|b| b.lost),
             "the second, post-frame recovery attempt succeeded"
         );
         assert!(
@@ -8550,20 +8601,21 @@ mod device_recovery_tests {
     #[test]
     fn a_mid_frame_loss_with_a_failing_recovery_backs_off() {
         let realm = mount_root();
-        let mut backend = ScriptedDeviceBackend {
+        let mut lane = lane_over(ScriptedDeviceBackend {
             lose_on_render: true,
             recover_outcome: Some(Err(EngineError::DeviceLost)),
             recover_clears_lost: false,
             ..ScriptedDeviceBackend::healthy()
-        };
+        });
         realm.mark_rendered();
         let backoff = DeviceRecoveryBackoff::new();
         let now = Instant::now();
 
-        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            backend.render_calls, 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "the frame rendered before the loss landed"
         );
         assert!(
@@ -8571,7 +8623,8 @@ mod device_recovery_tests {
             "the frame that rendered still reaches present()"
         );
         assert_eq!(
-            backend.recover_attempts, 1,
+            lane.with_backend(|b| b.recover_attempts),
+            1,
             "the mid-frame loss is recovered after the render"
         );
         assert!(
@@ -8601,18 +8654,19 @@ mod device_recovery_tests {
     #[test]
     fn a_mid_frame_loss_with_a_successful_recovery_arms_nothing() {
         let realm = mount_root();
-        let mut backend = ScriptedDeviceBackend {
+        let mut lane = lane_over(ScriptedDeviceBackend {
             lose_on_render: true,
             ..ScriptedDeviceBackend::healthy()
-        };
+        });
         realm.mark_rendered();
         let backoff = DeviceRecoveryBackoff::new();
         let now = Instant::now();
 
-        let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert_eq!(
-            backend.render_calls, 1,
+            lane.with_backend(|b| b.render_calls),
+            1,
             "the frame rendered before the loss landed"
         );
         assert!(
@@ -8620,11 +8674,12 @@ mod device_recovery_tests {
             "the frame that rendered still reaches present()"
         );
         assert_eq!(
-            backend.recover_attempts, 1,
+            lane.with_backend(|b| b.recover_attempts),
+            1,
             "the mid-frame loss is recovered after the render"
         );
         assert!(
-            !backend.lost,
+            !lane.with_backend(|b| b.lost),
             "the scripted successful recovery cleared the lost flag"
         );
         assert!(
@@ -8692,15 +8747,15 @@ mod device_recovery_tests {
         // worst case for the deleted early return, and the one production
         // scenario (driver still mid-reset) this fix must keep advancing
         // through.
-        let mut backend = ScriptedDeviceBackend {
+        let mut lane = lane_over(ScriptedDeviceBackend {
             lost: true,
             scene_outcome: Some(Err(EngineError::DeviceLost)),
             recover_outcome: Some(Err(EngineError::DeviceLost)),
             recover_clears_lost: false,
             ..ScriptedDeviceBackend::healthy()
-        };
+        });
 
-        let _ = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let _ = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
 
         assert!(
             long_press_fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -8730,14 +8785,14 @@ mod device_recovery_tests {
         let mut now = Instant::now();
 
         for frame in 1..=3u32 {
-            let mut backend = ScriptedDeviceBackend {
+            let mut lane = lane_over(ScriptedDeviceBackend {
                 lost: true,
                 scene_outcome: Some(Err(EngineError::DeviceLost)),
                 recover_outcome: Some(Err(EngineError::DeviceLost)),
                 recover_clears_lost: false,
                 ..ScriptedDeviceBackend::healthy()
-            };
-            let _ = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+            });
+            let _ = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
             assert!(
                 realm.needs_redraw(),
                 "needs_redraw must still be armed after frame {frame} against a \
@@ -8800,8 +8855,8 @@ mod device_recovery_tests {
         // called directly, bypassing the closure's own gate, the same way
         // every wake in production reaches this function only once
         // `wake_action` has already decided `Render`.
-        let mut backend = permanently_dead_backend();
-        let seed = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let mut lane = lane_over(permanently_dead_backend());
+        let seed = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
         assert!(
             seed.just_failed,
             "precondition: wake 1 is a genuine failure"
@@ -8858,9 +8913,9 @@ mod device_recovery_tests {
                 })
             };
 
-            let mut backend = permanently_dead_backend();
-            let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
-            if backend.recover_attempts == 1 {
+            let mut lane = lane_over(permanently_dead_backend());
+            let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
+            if lane.with_backend(|b| b.recover_attempts) == 1 {
                 total_attempts += 1;
                 armed_deadlines.push(
                     outcome
@@ -8927,8 +8982,8 @@ mod device_recovery_tests {
             }
         }
 
-        let mut backend = permanently_dead_backend();
-        let seed = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
+        let mut lane = lane_over(permanently_dead_backend());
+        let seed = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
         assert!(
             seed.just_failed,
             "precondition: wake 1 is a genuine failure"
@@ -8964,9 +9019,9 @@ mod device_recovery_tests {
                 }) + super::NO_PRESENT_FALLBACK_PACE
             };
 
-            let mut backend = permanently_dead_backend();
-            let outcome = render_frame_with_device_recovery(&realm, &mut backend, &backoff, now);
-            if backend.recover_attempts == 1 {
+            let mut lane = lane_over(permanently_dead_backend());
+            let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
+            if lane.with_backend(|b| b.recover_attempts) == 1 {
                 total_attempts += 1;
             }
             poke_pending = outcome.just_failed;
@@ -9365,22 +9420,42 @@ where
             }
         });
 
-        // 4. Wrap renderer for callback sharing
-        let renderer = Arc::new(Mutex::new(renderer));
+        // 4. Adopt the raster mailbox (ADR-0045's inline lane). The lane's
+        // owner SOLELY owns the renderer from here on: the platform resize
+        // path holds only the lane's mailbox handle plus the owner-affine
+        // stamp/size state, and the frame closure below drives every
+        // submit through the mailbox pump — an owned, stamped
+        // `SceneSnapshot` per frame, checked against the lane's single
+        // `SurfaceGeneration` counter. `Arc<Mutex<RasterLane>>` mirrors the
+        // `Arc<Mutex<Renderer>>` it replaces (the platform's callback
+        // registrations require `Send` closures even though they only ever
+        // fire on this owner thread); a reentrant frame dispatch — already
+        // skipped upstream by the empty-slot drain protection — degrades to
+        // a skipped frame at the `try_lock` below instead of a same-thread
+        // lock deadlock.
+        let lane = Arc::new(Mutex::new(super::raster_lane::RasterLane::new(
+            renderer,
+            realm_dispatch.address,
+            phys_size.width.0 as u32,
+            phys_size.height.0 as u32,
+        )));
 
         // Install the registration-lifetime surface applier alongside the
         // realm (cleared together at teardown): a `Resized` event takes it
         // out of the TLS slot, calls it, and restores it (see
         // `PlatformToUi::run`'s `Resized` arm) rather than capturing the
-        // renderer inside the event payload itself.
+        // lane inside the event payload itself. The hook mints the frame
+        // stamp's next `SurfaceGeneration` and records the platform's new
+        // size as layout's authority; the backend surface itself is
+        // reconfigured by the lane's next pump, before the next render.
         {
-            let renderer_resize = Arc::clone(&renderer);
+            let resize_hook = lane.lock().resize_hook();
             install_surface_applier(
                 realm_dispatch.address.realm_id,
                 move |size, scale_factor| {
                     let w = (size.width.0 * scale_factor) as u32;
                     let h = (size.height.0 * scale_factor) as u32;
-                    renderer_resize.lock().resize(w, h);
+                    resize_hook.apply(w, h);
                 },
             );
         }
@@ -9394,13 +9469,13 @@ where
             DispatchEventResult::resolved(false, true)
         }));
 
-        // 6. Register frame callback -> scheduler + UiRealm::render_frame_entered()
-        let renderer_frame = Arc::clone(&renderer);
+        // 6. Register frame callback -> scheduler + UiRealm::render_frame_on_lane()
+        let lane_frame = Arc::clone(&lane);
         let worker_reload_frame = worker_reload.clone();
         // Reuses the SAME backoff constructed at step 0c (already wired
         // into the wake-deadline hook above) — not a fresh one.
         window.on_request_frame(Box::new(move || {
-            let renderer_frame = Arc::clone(&renderer_frame);
+            let lane_frame = Arc::clone(&lane_frame);
             let worker_reload_frame = worker_reload_frame.clone();
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let _ = dispatch_platform_realm(
@@ -9533,10 +9608,24 @@ where
                             // frame builds anyway, see this function's own doc for why),
                             // and AFTER when the wgpu device-lost callback fired
                             // mid-frame — see `render_frame_with_device_recovery`.
-                            let mut r = renderer_frame.lock();
+                            let Some(mut lane) = lane_frame.try_lock() else {
+                                // A reentrant frame dispatch that slipped past the
+                                // empty-slot drain protection upstream: skip this
+                                // nested frame rather than deadlock mid-pump; the
+                                // outer dispatch still completes its own.
+                                tracing::error!(
+                                    "frame skipped: raster lane already held by an \
+                                     outer frame dispatch"
+                                );
+                                return FrameRecoveryOutcome {
+                                    presented: false,
+                                    just_failed: false,
+                                    next_attempt_at: None,
+                                };
+                            };
                             render_frame_with_device_recovery(
                                 realm,
-                                &mut *r,
+                                &mut *lane,
                                 &device_recovery_backoff,
                                 now,
                             )
@@ -10545,20 +10634,30 @@ where
             }
         }
 
-        // 4. Wrap renderer for callback sharing
-        let renderer = Arc::new(Mutex::new(renderer));
+        // 4. Adopt the raster mailbox (ADR-0045's inline lane) — the same
+        // ownership shape as the desktop bootstrap: the lane's owner solely
+        // owns the renderer, the resize path holds only the mailbox handle
+        // plus the owner-affine stamp/size state, and every frame submit
+        // below crosses the raster boundary as an owned, stamped
+        // `SceneSnapshot`.
+        let lane = Arc::new(Mutex::new(super::raster_lane::RasterLane::new(
+            renderer,
+            realm_dispatch.address,
+            phys_size.width.0 as u32,
+            phys_size.height.0 as u32,
+        )));
 
         // Install the registration-lifetime surface applier alongside the
         // realm (cleared together at teardown) — see the desktop bootstrap's
         // matching comment for the take/call/restore protocol this feeds.
         {
-            let renderer_resize = Arc::clone(&renderer);
+            let resize_hook = lane.lock().resize_hook();
             install_surface_applier(
                 realm_dispatch.address.realm_id,
                 move |size, scale_factor| {
                     let w = (size.width.0 * scale_factor) as u32;
                     let h = (size.height.0 * scale_factor) as u32;
-                    renderer_resize.lock().resize(w, h);
+                    resize_hook.apply(w, h);
                 },
             );
         }
@@ -10573,12 +10672,12 @@ where
         }));
 
         // 6. Register frame callback -- with hot-reload plugin override
-        let renderer_frame = Arc::clone(&renderer);
+        let lane_frame = Arc::clone(&lane);
         let hot_reload_frame = hot_reload.clone();
         // Reuses the SAME backoff constructed at step 0b (already wired
         // into the wake-deadline hook above) — not a fresh one.
         window.on_request_frame(Box::new(move || {
-            let renderer_frame = Arc::clone(&renderer_frame);
+            let lane_frame = Arc::clone(&lane_frame);
             let hot_reload_frame = hot_reload_frame.clone();
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let _ = dispatch_platform_realm(
@@ -10593,17 +10692,30 @@ where
                     // regardless of which rendering path this frame takes.
                     let inbox_redraw = drain_owner_inbox(realm);
 
-                    let mut r = renderer_frame.lock();
-                    let (w, h) = r.size();
-
                     // If a scene plugin is live it owns this presentation frame,
                     // but the callback still executes inside the realm entry
                     // scope. Always `false` in a build without the `hot-reload`
-                    // feature.
-                    if hot_reload_frame.try_render_frame(&mut *r, w as f32, h as f32) {
-                        return;
+                    // feature. The plugin renders through the backend directly
+                    // (its own diagnostic scene, not a realm-produced frame),
+                    // so it goes through the lane's scoped backend access —
+                    // per ADR-0045 decision 6 the plugin path is one of the
+                    // named inline-only lanes.
+                    {
+                        let Some(mut lane) = lane_frame.try_lock() else {
+                            tracing::error!(
+                                "frame skipped: raster lane already held by an outer \
+                                 frame dispatch"
+                            );
+                            return;
+                        };
+                        let plugin_rendered = lane.with_backend(|r| {
+                            let (w, h) = r.size();
+                            hot_reload_frame.try_render_frame(r, w as f32, h as f32)
+                        });
+                        if plugin_rendered {
+                            return;
+                        }
                     }
-                    drop(r);
 
                     let has_pending = realm.has_pending_work();
                     // See the desktop closure's matching comment: a wake-
@@ -10692,10 +10804,16 @@ where
                             // Device-loss recovery around the frame, same
                             // shape as the desktop path — see
                             // `render_frame_with_device_recovery`.
-                            let mut r = renderer_frame.lock();
+                            let Some(mut lane) = lane_frame.try_lock() else {
+                                tracing::error!(
+                                    "frame skipped: raster lane already held by an \
+                                     outer frame dispatch"
+                                );
+                                return;
+                            };
                             let _ = render_frame_with_device_recovery(
                                 realm,
-                                &mut *r,
+                                &mut *lane,
                                 &device_recovery_backoff,
                                 now,
                             );
