@@ -308,8 +308,8 @@ impl Alignment {
     #[inline]
     pub fn along_size(self, free_space: Size<Pixels>) -> Offset<Pixels> {
         Offset::new(
-            free_space.width * (0.5 * (1.0 + self.x)),
-            free_space.height * (0.5 * (1.0 + self.y)),
+            free_space.width * f32::midpoint(1.0, self.x),
+            free_space.height * f32::midpoint(1.0, self.y),
         )
     }
 

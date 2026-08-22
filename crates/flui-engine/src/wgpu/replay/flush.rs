@@ -719,7 +719,7 @@ impl GpuReplay {
             super::super::texture_cache::TextureId,
             super::super::instancing::TextureInstance,
             ScissorRect,
-        )> = segment.cached_images.drain(..).collect();
+        )> = std::mem::take(&mut segment.cached_images);
 
         if pending_images.is_empty() {
             return;
@@ -818,14 +818,14 @@ impl GpuReplay {
             return;
         }
 
-        // Drain into a local vec so we can call `&mut self` methods
+        // Move into a local vec so we can call `&mut self` methods
         // (`flush_texture_batch`) while iterating without holding a borrow on
         // `segment.external_images`.
         let pending: Vec<(
             flui_types::painting::TextureId,
             super::super::instancing::TextureInstance,
             ScissorRect,
-        )> = segment.external_images.drain(..).collect();
+        )> = std::mem::take(&mut segment.external_images);
 
         for (texture_id, instance, scissor) in pending {
             // Resolve ID → view at replay time.  Clone the view to release the

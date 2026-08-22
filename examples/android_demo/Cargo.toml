@@ -29,7 +29,7 @@ log = "0.4"
 
 # GPU
 raw-window-handle = "0.6"
-pollster = "0.4"
+pollster = "1.0"
 
 
 [lints]

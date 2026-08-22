@@ -68,7 +68,7 @@ static_assertions = { workspace = true }
 # thread-local fallback GlobalKey registry via `test_only_set_global_key_registry`.
 # The adapter is isolated from the production realm-activation stack, but the
 # fixture tests still share assumptions about explicit install/clear pairing.
-serial_test = "3"
+serial_test = "4"
 # Exercises the
 # `#[derive(StatelessView, ::bon::Builder)]` attribute stack
 # (the catalog's most-common future authoring pattern). The

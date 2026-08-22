@@ -106,6 +106,71 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **Toolchain 1.97.1 → 1.98.0 (development pin only; MSRV floor stays 1.97).**
+  `rust-toolchain.toml` is the *development* toolchain and moves independently
+  of the floor, which remains a separate promise checked by the one `msrv` job —
+  nothing in 1.98 is used that 1.97 cannot compile, so the floor was not moved.
+  Three new lints fired under the `-D warnings` gate and were fixed rather than
+  suppressed: `clippy::manual_midpoint` (`Alignment::along_size`, and the
+  superellipse clip reduction in `flui-engine`'s instancing — `f32::midpoint`
+  now expresses what `0.5 * (a + b)` meant), `clippy::chunks_exact_to_as_chunks`
+  (eight per-pixel `chunks_exact(4)` walks, now `as_chunks::<4>()`, which hands
+  the loop a `&[u8; 4]` instead of an unsized slice), and `clippy::drain_collect`
+  (three `drain(..).collect()` hand-offs, now `mem::take`, which moves the
+  existing allocation instead of copying it into a fresh one). A fourth,
+  `clippy::unused_async_trait_impl`, is allowed workspace-wide with its
+  rationale in `Cargo.toml`: its fix desugars one impl of an `async fn` trait to
+  `-> impl Future` while the trait's other impls stay `async fn`, and it has no
+  answer for the feature-gated stub pairs whose `async` is exactly what keeps
+  the two configurations' signatures identical.
+- **GPU stack: wgpu 29 → 30, and the five crates pinned to it.** `naga`/`naga_oil`
+  0.22 → 0.23, `wgsl_bindgen` 0.22 → 0.23, `wgpu-profiler` 0.27 → 0.28,
+  `glyphon` 0.11 → 0.12, `cosmic-text` 0.18 → 0.19 — they move as one set
+  because each pins the others' majors. Four API changes reach this tree:
+  `SurfaceConfiguration` gained `color_space` (set to `Auto`, which is wgpu's
+  own pre-30 behaviour — naming a wide-gamut or HDR space would change how the
+  shaders must encode their output and is a rendering decision, not a version
+  bump); `RequestAdapterOptions` gained `apply_limit_buckets` (set to `false`:
+  the bucketing is an anti-fingerprinting measure for embedders exposing a GPU
+  to untrusted content, and rounds real adapter limits down to a coarse tier);
+  `SurfaceTexture::present()` moved to `Queue::present(texture)`; and
+  `BufferSlice::get_mapped_range()` now returns a `Result`. `VertexState::buffers`
+  became `&[Option<VertexBufferLayout>]`, so every layout is `Some`-wrapped —
+  `None` would mean a deliberately empty slot, which no pipeline here has.
+  cosmic-text 0.19 made the `Buffer` setters lazy: `set_size`/`set_text`/
+  `set_rich_text` no longer take `&mut FontSystem` (shaping still does, at
+  `shape_until_scroll`), which touches both flui-painting's text layout and
+  flui-engine's glyph cache.
+
+  Two stale claims in comments were corrected rather than renumbered, because
+  checking them showed the underlying facts had changed: `wgsl_bindgen` 0.23.3
+  no longer emits the `#![allow(...)]` inner attribute that `build.rs` strips
+  (verified against the generated output — the strip is now a guard, not a
+  fixup), and `wgpu-profiler` 0.28 *does* type-check for `wasm32-unknown-unknown`
+  (measured with the guard lifted), so the `compile_error!` rejecting
+  `gpu-profiler` on wasm now stands on "unexercised here", not "impossible".
+  The `RUSTSEC-2026-0253` ignore in `deny.toml` was re-derived against glyphon
+  0.12.0's own source, not carried over: both grounds still hold and 0.12 still
+  caps `lru` at `^0.16.2`.
+
+  Not verified locally: the GPU readback and deterministic-replay suites
+  (`enable-wgpu-tests`) compile clean but cannot execute here — this container
+  has no Vulkan ICD and no `/dev/dri`, the same reason CI's Linux jobs don't run
+  them. Their executing coverage is CI's `gpu-test` job on WARP.
+- **Dependency refresh: full `cargo update` plus ten semver-major bumps.**
+  `reqwest` 0.12 → 0.13 (its `rustls-tls` feature is now spelled `rustls`;
+  0.13 also makes rustls the default backend, so `default-features = false`
+  plus the explicit backend is what keeps the openssl ban enforced rather than
+  merely defaulted — and the `rustls` feature's provider is aws-lc-rs, a native
+  build that adds a cmake/C-toolchain requirement to `flui-assets`' `network`
+  feature; reqwest 0.13 offers no ring-backed alternative short of
+  `rustls-no-provider`, which would push crypto-provider installation onto every
+  consumer), `syn` 2 → 3, `pollster` 0.4 → 1.0, `criterion` 0.7 → 0.8,
+  `cliclack` 0.3 → 0.5, `indicatif` 0.17 → 0.18, `serial_test` 3 → 4,
+  `notify-debouncer-mini` 0.5 → 0.7, `tower-http` 0.6 → 0.7, `x11rb` 0.13 → 0.14.
+  None of them needed a source change. `flui-app` also stopped carrying its own
+  `pollster = "0.4"` pin and now takes the workspace one, which is what had been
+  holding a second copy of the crate in the lockfile.
 - **`flui-scheduler`'s `Scheduler` hard-renamed `UpdateScheduler`, and
   reshaped around a deadline-bounded Idle slice** (#556): `WeakScheduler` →
   `WeakUpdateScheduler` too, no alias, workspace-wide (61 files outside

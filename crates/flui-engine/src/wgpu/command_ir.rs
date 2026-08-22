@@ -289,7 +289,7 @@ pub(crate) enum ImageFilterPass {
 /// reclaims its pool slot on `Drop`); adding such a field would break the
 /// `const _FILTER_OP_IS_CLONE` witness — enforcing "acquire textures at replay,
 /// never store them in the IR". (Raw `wgpu::Texture`/`TextureView` are `Clone`
-/// in wgpu 29, so `Clone` alone does not bar them — the discipline is to use
+/// in wgpu 30, so `Clone` alone does not bar them — the discipline is to use
 /// `PooledTexture` for all owned GPU textures, which the witness then catches.)
 ///
 /// Textures are acquired at REPLAY time (never held in the IR), matching the

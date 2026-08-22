@@ -971,8 +971,8 @@ When a need arises that the table does not cover, the order of operations is:
 
 ### Version policy
 
-- **Rust toolchain**: the *development* toolchain, pinned to an explicit stable patch release (currently `channel = "1.97.1"`) in [`rust-toolchain.toml`](../rust-toolchain.toml). It is not the MSRV and may run ahead of the MSRV minor — pinning it at the floor hides new lints and codegen changes from the developer until CI surfaces them.
-- **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current stable: **1.97.1**, released 2026-07-14). The MSRV is a promise to consumers — cheap to give, expensive to retract — so it moves only when a stabilization actually earns it. Bumping it touches `Cargo.toml`, `clippy.toml`, the `msrv` CI job and the two `flui-cli` templates; the full list lives in `rust-toolchain.toml`'s header.
+- **Rust toolchain**: the *development* toolchain, pinned to an explicit stable patch release (currently `channel = "1.98.0"`) in [`rust-toolchain.toml`](../rust-toolchain.toml). It is not the MSRV and may run ahead of the MSRV minor — pinning it at the floor hides new lints and codegen changes from the developer until CI surfaces them.
+- **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current stable: **1.98.0**, released 2026-08-18). The MSRV is a promise to consumers — cheap to give, expensive to retract — so it moves only when a stabilization actually earns it. Bumping it touches `Cargo.toml`, `clippy.toml`, the `msrv` CI job and the two `flui-cli` templates; the full list lives in `rust-toolchain.toml`'s header.
 - **Workspace dependencies**: caret-pinned (`"1.43"`, not `"=1.43.2"`). Patch bumps automatic via `cargo update`. Minor bumps batched monthly; major bumps reviewed individually.
 - **Pinned exceptions**: documented inline in `Cargo.toml` (current: `image` `webp` feature disabled per `image-webp` issue #102; no wgpu pin — tracking latest stable major).
 

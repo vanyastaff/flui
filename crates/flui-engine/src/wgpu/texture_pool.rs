@@ -365,6 +365,7 @@ mod tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("Failed to find a suitable GPU adapter for testing");
 

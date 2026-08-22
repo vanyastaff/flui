@@ -25,7 +25,7 @@ impl OffscreenRenderer {
                         immediate_size: 0,
                     });
 
-            let vertex_buffer_layout = wgpu::VertexBufferLayout {
+            let vertex_buffers = [Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<FullscreenVertex>() as wgpu::BufferAddress,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
@@ -42,7 +42,7 @@ impl OffscreenRenderer {
                         shader_location: 1,
                     },
                 ],
-            };
+            })];
 
             // Downsample pipeline
             let downsample_shader = self
@@ -61,7 +61,7 @@ impl OffscreenRenderer {
                         vertex: wgpu::VertexState {
                             module: downsample_module,
                             entry_point: Some("vs_main"),
-                            buffers: std::slice::from_ref(&vertex_buffer_layout),
+                            buffers: &vertex_buffers,
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                         },
                         fragment: Some(wgpu::FragmentState {
@@ -110,7 +110,7 @@ impl OffscreenRenderer {
                         vertex: wgpu::VertexState {
                             module: upsample_module,
                             entry_point: Some("vs_main"),
-                            buffers: &[vertex_buffer_layout],
+                            buffers: &vertex_buffers,
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                         },
                         fragment: Some(wgpu::FragmentState {

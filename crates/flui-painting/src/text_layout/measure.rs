@@ -82,10 +82,10 @@ pub fn measure_text(
     let metrics = Metrics::new(font_size, line_height);
 
     let mut buffer = Buffer::new(&mut font_system, metrics);
-    buffer.set_size(&mut font_system, max_width, None);
+    buffer.set_size(max_width, None);
 
     let attrs = style_to_attrs(style);
-    buffer.set_text(&mut font_system, text, &attrs, Shaping::Advanced, None);
+    buffer.set_text(text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(&mut font_system, false);
 
     let mut total_height = 0.0f32;

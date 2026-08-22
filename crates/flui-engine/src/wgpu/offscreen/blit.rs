@@ -101,7 +101,7 @@ impl OffscreenRenderer {
                     vertex: wgpu::VertexState {
                         module: &shader_module,
                         entry_point: Some("vs_main"),
-                        buffers: &[vertex_buffer_layout],
+                        buffers: &[Some(vertex_buffer_layout)],
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                     },
                     fragment: Some(wgpu::FragmentState {

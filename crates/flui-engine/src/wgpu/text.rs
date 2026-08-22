@@ -101,14 +101,13 @@ pub(super) fn collect_styled_spans(
 /// Maps a FLUI [`TextStyle`] to an owned cosmic-text [`AttrsOwned`].
 ///
 /// Per-span font size overrides the buffer-level default via
-/// `Attrs::metrics(Metrics::new(size, size * 1.2))` (cosmic-text 0.18.2
-/// `attrs.rs:304`).  Color is mapped from `style.foreground` (takes
+/// `Attrs::metrics(Metrics::new(size, size * 1.2))` (cosmic-text 0.19.0
+/// `attrs.rs:365`).  Color is mapped from `style.foreground` (takes
 /// precedence) or `style.color`; when neither is set `base_color` is used.
 ///
-/// API verified against:
-/// `C:/.cargo/registry/src/.../cosmic-text-0.18.2/src/attrs.rs:263`
-/// (`Attrs::color`), `:304` (`Attrs::metrics`), `:269` (`Attrs::family`),
-/// `:285` (`Attrs::style`), `:289` (`Attrs::weight`).
+/// API verified against cosmic-text 0.19.0's `src/attrs.rs`: `:323`
+/// (`Attrs::color`), `:329` (`Attrs::family`), `:341` (`Attrs::style`),
+/// `:347` (`Attrs::weight`), `:365` (`Attrs::metrics`).
 pub(super) fn style_to_attrs_owned(style: Option<&TextStyle>, base_color: Color) -> AttrsOwned {
     let mut attrs = Attrs::new();
 
@@ -155,7 +154,7 @@ pub(super) fn style_to_attrs_owned(style: Option<&TextStyle>, base_color: Color)
         }
 
         // Per-span font size → per-span Metrics override.
-        // cosmic-text 0.18.2: Attrs::metrics(Metrics) sets metrics_opt on the
+        // cosmic-text 0.19.0: Attrs::metrics(Metrics) sets metrics_opt on the
         // run, overriding the buffer-level default for this run only.
         // line_height = size × height-multiplier (or ×1.2 when absent).
         #[allow(clippy::cast_possible_truncation)]
@@ -343,7 +342,7 @@ pub struct TextPlacement {
     /// # Known limit: anisotropic transforms
     ///
     /// This is ONE number because `glyphon::TextArea::scale` is one `f32`;
-    /// glyphon 0.11 has no way to express a different scale per axis. Under a
+    /// glyphon 0.12 has no way to express a different scale per axis. Under a
     /// non-uniform CTM such as `scale(2.0, 1.0)` the larger axis wins, so a
     /// glyph run is stretched on both axes while the geometry around it
     /// stretches on one. Neither this nor the previous behaviour (a hard `1.0`,
@@ -633,9 +632,9 @@ impl TextRenderer {
                 let buffer = self.font_system.with_mut(|font_system| {
                     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
                     // Unbounded width — wrap-width matching is a follow-up (paint seam).
-                    buffer.set_size(font_system, Some(f32::MAX), None);
+                    buffer.set_size(Some(f32::MAX), None);
                     let attrs = Attrs::new().family(Family::SansSerif);
-                    buffer.set_text(font_system, &key.text, &attrs, Shaping::Advanced, None);
+                    buffer.set_text(&key.text, &attrs, Shaping::Advanced, None);
                     buffer.shape_until_scroll(font_system, false);
                     buffer
                 });
@@ -745,9 +744,8 @@ impl TextRenderer {
             let buffer = self.font_system.with_mut(|font_system| {
                 let mut buffer =
                     Buffer::new(font_system, Metrics::new(base_font_size, line_height));
-                buffer.set_size(font_system, Some(buffer_width), None);
+                buffer.set_size(Some(buffer_width), None);
                 buffer.set_rich_text(
-                    font_system,
                     runs.iter()
                         .zip(owned_attrs.iter())
                         .map(|((text, _), attrs)| (text.as_str(), attrs.as_attrs())),
@@ -1436,6 +1434,7 @@ mod gpu_tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("a GPU adapter must be available on a GPU-enabled test host");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -1532,7 +1531,9 @@ mod gpu_tests {
                 timeout: None,
             })
             .expect("device poll must complete the readback copy");
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
         let mut pixels = Vec::with_capacity((W * H) as usize);
         for row in 0..H {
             let row_start = (row * bytes_per_row) as usize;

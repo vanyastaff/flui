@@ -59,6 +59,7 @@ mod gpu_tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("a GPU adapter must be available for blur_filter_tests");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -174,7 +175,10 @@ mod gpu_tests {
             })
             .expect("GPU readback poll must complete within wait timeout");
 
-        let raw_bytes = staging.slice(..).get_mapped_range();
+        let raw_bytes = staging
+            .slice(..)
+            .get_mapped_range()
+            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
         let pixel_count = (SURFACE_WIDTH * SURFACE_HEIGHT) as usize;
         let mut pixels = Vec::with_capacity(pixel_count);
         for row_index in 0..SURFACE_HEIGHT {

@@ -345,21 +345,25 @@ fn run_wgsl_bindgen(
     }
     builder.build()?.generate()?;
 
-    // wgsl_bindgen 0.22 emits `#![allow(...)]` at the top of the generated file.
-    // Inner attributes (`#!`) are only valid at the beginning of a *file*, not
-    // inside an inline `mod { }` block.  Strip that line so the generated content
-    // can be `include!`d inside the `<name>_gen` module without a compile error.
-    // The suppressed lints are covered by the outer `#[allow(...)]` on the wrapping
-    // `mod` item in each `generated.rs`.
+    // wgsl_bindgen 0.22 emitted `#![allow(...)]` at the top of every generated
+    // file. Inner attributes (`#!`) are only valid at the beginning of a *file*,
+    // not inside an inline `mod { }` block, so that line had to go before the
+    // generated content could be `include!`d inside the `<name>_gen` module.
+    // 0.23.3 no longer emits it (checked against the actual generated output, not
+    // its changelog), which makes this pass a no-op today; it is kept as a guard
+    // so a future version reintroducing the attribute cannot break the include.
+    // Either way the suppressed lints are covered by the outer `#[allow(...)]` on
+    // the wrapping `mod` item in each `generated.rs`.
     strip_inner_allow_from_generated(out_path)?;
 
     Ok(())
 }
 
-/// Remove the `#![allow(...)]` inner-attribute line that wgsl_bindgen 0.22 emits
-/// at the top of every generated file.  Replacing it with an empty line preserves
-/// line numbers for the rest of the file (useful when diagnosing compiler errors
-/// against the generated source).
+/// Remove the `#![allow(...)]` inner-attribute line that wgsl_bindgen emitted at
+/// the top of every generated file through 0.22 (0.23.3 does not — see the call
+/// site).  Replacing it with an empty line preserves line numbers for the rest of
+/// the file (useful when diagnosing compiler errors against the generated
+/// source).
 fn strip_inner_allow_from_generated(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
     let patched = content

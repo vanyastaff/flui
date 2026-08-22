@@ -1112,6 +1112,7 @@ mod tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("a GPU adapter for texture-cache tests");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

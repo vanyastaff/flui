@@ -932,7 +932,7 @@ impl DrawBatcher {
                 let h = image.height();
                 let mut new_data = Vec::with_capacity(data.len());
 
-                for pixel in data.chunks_exact(4) {
+                for pixel in data.as_chunks::<4>().0 {
                     let dst_pixel = Color::rgba(pixel[0], pixel[1], pixel[2], pixel[3]);
                     let blended = color.blend(dst_pixel, filter_mode);
                     new_data.extend_from_slice(&[blended.r, blended.g, blended.b, blended.a]);
@@ -969,7 +969,7 @@ impl DrawBatcher {
                 let h = image.height();
                 let mut new_data = Vec::with_capacity(data.len());
 
-                for pixel in data.chunks_exact(4) {
+                for pixel in data.as_chunks::<4>().0 {
                     let r = f32::from(pixel[0]) / 255.0;
                     let g = f32::from(pixel[1]) / 255.0;
                     let b = f32::from(pixel[2]) / 255.0;
@@ -1009,7 +1009,7 @@ impl DrawBatcher {
                 let h = image.height();
                 let mut new_data = Vec::with_capacity(data.len());
 
-                for pixel in data.chunks_exact(4) {
+                for pixel in data.as_chunks::<4>().0 {
                     for &ch in &pixel[..3] {
                         let linear = f32::from(ch) / 255.0;
                         let srgb = if linear <= 0.003_130_8 {
@@ -1043,7 +1043,7 @@ impl DrawBatcher {
                 let h = image.height();
                 let mut new_data = Vec::with_capacity(data.len());
 
-                for pixel in data.chunks_exact(4) {
+                for pixel in data.as_chunks::<4>().0 {
                     for &ch in &pixel[..3] {
                         let srgb = f32::from(ch) / 255.0;
                         let linear = if srgb <= 0.04045 {

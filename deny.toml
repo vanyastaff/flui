@@ -41,9 +41,9 @@ unsound = "all"
 # Ignore specific advisories
 ignore = [
     # RUSTSEC-2025-0057: fxhash is unmaintained (repo stale, owner inactive).
-    # Source: fxhash v0.2.1 ← wgsl_bindgen v0.22.2 (BUILD-DEP ONLY — never
-    # compiled into the binary or public API).  Introduced in PR wgsl-bindgen
-    # pilot (P1); no upgrade is available upstream.  The only risk is build-time
+    # Source: fxhash v0.2.1 ← wgsl_bindgen v0.23.3 (BUILD-DEP ONLY — never
+    # compiled into the binary or public API).  Arrived with the wgsl-bindgen
+    # adoption; no upgrade is available upstream.  The only risk is build-time
     # hash non-determinism, which does not affect the compiled artefact.
     { id = "RUSTSEC-2025-0057" },
 
@@ -54,42 +54,25 @@ ignore = [
     # Revisit when cosmic-text migrates (skrifa is the ecosystem successor).
     { id = "RUSTSEC-2026-0192" },
 
-    # RUSTSEC-2026-0194 / RUSTSEC-2026-0195: quick-xml <0.41 quadratic
-    # duplicate-attribute check + unbounded namespace allocation (DoS via
-    # hostile XML).  Source: quick-xml v0.39.4 ← wayland-scanner v0.31.10 ←
-    # smithay-client-toolkit ← winit 0.30 (BUILD-TIME code generator only —
-    # it parses the vendored Wayland protocol XML shipped inside the crates,
-    # never attacker-controlled input, and is not compiled into the binary).
-    # Unfixable locally: wayland-scanner caps quick-xml at ^0.39; drop these
-    # ignores when winit's Wayland stack releases against >=0.41.
-    { id = "RUSTSEC-2026-0194" },
-    { id = "RUSTSEC-2026-0195" },
-
     # RUSTSEC-2026-0253: lru <0.18.2 `LruCache::pop()` is not panic-safe — a
     # panicking key `Drop` skips `detach()`, leaving a dangling node in the
     # linked list for a later eviction to write through (UAF / double-free).
-    # Source: lru v0.16.4 ← glyphon v0.11 ← flui-engine.
+    # Source: lru v0.16.4 ← glyphon v0.12 ← flui-engine.
     #
-    # Not reachable here, on two independent grounds, both checked against
-    # glyphon 0.11.0's source rather than assumed:
+    # Not reachable here, on two independent grounds, both re-checked against
+    # glyphon 0.12.0's own source rather than carried over from the 0.11 entry:
     #   1. The advisory needs a key whose `Drop` can panic. `GlyphonCacheKey`
-    #      derives `Copy` (text_render.rs), and Rust forbids `Copy + Drop`, so
-    #      the precondition is structurally impossible rather than unlikely.
-    #   2. glyphon never calls the vulnerable function — zero `.pop(` sites in
-    #      its source, and its cache is `unbounded_with_hasher`, so no eviction
+    #      derives `Copy` (text_render.rs:376), and Rust forbids `Copy + Drop`,
+    #      so the precondition is structurally impossible rather than unlikely.
+    #   2. glyphon never calls the vulnerable function — zero `.pop(` sites
+    #      across its source, and its cache is built with
+    #      `LruCache::unbounded_with_hasher` (text_atlas.rs:57), so no eviction
     #      path runs at all.
-    # Unfixable locally: glyphon still caps lru at ^0.16.2 as of 0.12.0 (its
-    # latest), which additionally requires wgpu ^30. Drop this ignore when
-    # glyphon releases against lru >=0.18.2.
+    # Unfixable locally: 0.12.0 still caps lru at ^0.16.2 (its Cargo.toml), so
+    # the workspace bump to glyphon 0.12 / wgpu 30 did not clear this. Drop the
+    # ignore when glyphon releases against lru >=0.18.2 — note flui-widgets'
+    # own direct `lru` dep is already on 0.18 and unaffected.
     { id = "RUSTSEC-2026-0253" },
-
-    # RUSTSEC-2026-0186: memmap2 ≤0.9.10 passes an unchecked pointer offset to
-    # madvise/msync syscalls.  PRE-EXISTING on main (pinned by cosmic-text 0.18.2
-    # → fontdb → memmap2 0.9.10; cosmic-text caps the version).
-    # Fixed in memmap2 0.9.11 — unblock by updating cosmic-text when 0.18.3+.
-    # The pointer is NOT dereferenced; exploitability requires our code to pass
-    # an out-of-bounds range to advise_range/flush_range, which we do not do.
-    { id = "RUSTSEC-2026-0186" },
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════

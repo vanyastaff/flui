@@ -77,11 +77,21 @@ compile_error!(
      — see flui-engine Cargo.toml [target.wasm32] note"
 );
 
-// wgpu-profiler 0.27 has no wasm32 support; reject the combination at compile
-// time so a downstream consumer cannot accidentally enable both.
+// The `gpu-profiler` + wasm32 combination is rejected at compile time so a
+// downstream consumer cannot enable both by accident.
+//
+// The original reason was that wgpu-profiler 0.27 did not build for wasm32 at
+// all. That is no longer why: 0.28 type-checks clean for
+// `wasm32-unknown-unknown` (measured — `cargo check -p flui-engine --target
+// wasm32-unknown-unknown --features gpu-profiler` succeeds with the guard
+// lifted). What has NOT changed is that nothing here exercises timestamp
+// queries on a browser WebGPU adapter, so the guard stays: it now marks an
+// unverified configuration rather than an impossible one, and lifting it is a
+// deliberate decision that needs a run on a real wasm target, not a
+// side effect of a version bump.
 #[cfg(all(target_arch = "wasm32", feature = "gpu-profiler"))]
 compile_error!(
-    "the `gpu-profiler` feature (wgpu-profiler 0.27) is not supported on wasm32; \
+    "the `gpu-profiler` feature is not supported on wasm32 by this workspace; \
      build without it"
 );
 

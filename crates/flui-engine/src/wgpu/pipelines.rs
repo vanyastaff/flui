@@ -606,8 +606,8 @@ fn create_instanced_rect_pipeline(
             module: &shader,
             entry_point: Some("vs_main"),
             buffers: &[
-                unit_quad_vertex_buffer_layout(),
-                super::instancing::RectInstance::desc(),
+                Some(unit_quad_vertex_buffer_layout()),
+                Some(super::instancing::RectInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -645,8 +645,8 @@ fn create_instanced_circle_pipeline(
             module: &shader,
             entry_point: Some("vs_main"),
             buffers: &[
-                unit_quad_vertex_buffer_layout(),
-                super::instancing::CircleInstance::desc(),
+                Some(unit_quad_vertex_buffer_layout()),
+                Some(super::instancing::CircleInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -684,8 +684,8 @@ fn create_instanced_arc_pipeline(
             module: &shader,
             entry_point: Some("vs_main"),
             buffers: &[
-                unit_quad_vertex_buffer_layout(),
-                super::instancing::ArcInstance::desc(),
+                Some(unit_quad_vertex_buffer_layout()),
+                Some(super::instancing::ArcInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -723,8 +723,8 @@ fn create_instanced_texture_pipeline(
             module: &shader,
             entry_point: Some("vs_main"),
             buffers: &[
-                unit_quad_vertex_buffer_layout(),
-                super::instancing::TextureInstance::desc(),
+                Some(unit_quad_vertex_buffer_layout()),
+                Some(super::instancing::TextureInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -769,8 +769,8 @@ fn create_instanced_texture_premul_pipeline(
             module: &shader,
             entry_point: Some("vs_main"),
             buffers: &[
-                unit_quad_vertex_buffer_layout(),
-                super::instancing::TextureInstance::desc(),
+                Some(unit_quad_vertex_buffer_layout()),
+                Some(super::instancing::TextureInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -824,8 +824,8 @@ fn create_instanced_texture_with_blend_state(
             module: &shader,
             entry_point: Some("vs_main"),
             buffers: &[
-                unit_quad_vertex_buffer_layout(),
-                super::instancing::TextureInstance::desc(),
+                Some(unit_quad_vertex_buffer_layout()),
+                Some(super::instancing::TextureInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -864,6 +864,7 @@ mod gpu_tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("a GPU adapter must be available on a GPU-enabled test host");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

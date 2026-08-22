@@ -41,6 +41,7 @@ impl GpuState {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .expect("Failed to find GPU adapter");
 
@@ -68,6 +69,7 @@ impl GpuState {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.0 as u32,
             height: size.height.0 as u32,
             present_mode: wgpu::PresentMode::Fifo,
@@ -151,7 +153,7 @@ impl GpuState {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        self.queue.present(output);
 
         if self.frame_count.is_multiple_of(60) {
             tracing::info!("Frame {}", self.frame_count);

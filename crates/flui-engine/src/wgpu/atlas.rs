@@ -520,6 +520,7 @@ mod tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("a GPU adapter for atlas tests");
         let (device, _queue) =

@@ -90,13 +90,13 @@ pub fn create_linear_gradient_pipeline(
             entry_point: Some("vs_main"),
             buffers: &[
                 // Vertex buffer (shared unit quad)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: 8, // 2 floats (vec2)
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                },
+                }),
                 // Instance buffer
-                super::instancing::LinearGradientInstance::desc(),
+                Some(super::instancing::LinearGradientInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -155,13 +155,13 @@ pub fn create_radial_gradient_pipeline(
             entry_point: Some("vs_main"),
             buffers: &[
                 // Vertex buffer (shared unit quad)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: 8, // 2 floats (vec2)
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                },
+                }),
                 // Instance buffer
-                super::instancing::RadialGradientInstance::desc(),
+                Some(super::instancing::RadialGradientInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -220,13 +220,13 @@ pub fn create_sweep_gradient_pipeline(
             entry_point: Some("vs_main"),
             buffers: &[
                 // Vertex buffer (shared unit quad)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: 8, // 2 floats (vec2)
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                },
+                }),
                 // Instance buffer
-                super::instancing::SweepGradientInstance::desc(),
+                Some(super::instancing::SweepGradientInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -285,13 +285,13 @@ pub fn create_shadow_pipeline(
             entry_point: Some("vs_main"),
             buffers: &[
                 // Vertex buffer (shared unit quad)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: 8, // 2 floats (vec2)
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                },
+                }),
                 // Instance buffer
-                super::instancing::ShadowInstance::desc(),
+                Some(super::instancing::ShadowInstance::desc()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },

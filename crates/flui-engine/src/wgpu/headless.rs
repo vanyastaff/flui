@@ -46,6 +46,7 @@ impl HeadlessRenderer {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .map_err(EngineError::adapter_request)?;
 
@@ -203,7 +204,10 @@ impl HeadlessRenderer {
                 "headless readback poll must complete: the submit above is the only pending work",
             );
 
-        let mapped = staging.slice(..).get_mapped_range();
+        let mapped = staging.slice(..).get_mapped_range().expect(
+            "BUG: readback staging buffer must be mapped — the poll above waited for the \
+             map_async issued on this same slice",
+        );
         let mut pixels = Vec::with_capacity((unpadded_row_bytes * height) as usize);
         for row in 0..height {
             let start = (row * padded_row_bytes) as usize;

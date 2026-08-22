@@ -1842,6 +1842,7 @@ mod tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .ok()?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -2306,7 +2307,9 @@ mod tests {
                     timeout: None,
                 })
                 .expect("readback poll must complete");
-            let data = slice.get_mapped_range();
+            let data = slice.get_mapped_range().expect(
+                "staging buffer must be mapped: the poll above waited for the map to complete",
+            );
             let center = (H / 2) as usize * padded as usize + (W / 2) as usize * 4;
             let px = [
                 data[center],

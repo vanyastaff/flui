@@ -12,6 +12,7 @@ fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         power_preference: wgpu::PowerPreference::LowPower,
         force_fallback_adapter: false,
         compatible_surface: None,
+        apply_limit_buckets: false,
     }))
     .expect("a GPU adapter for painter tests");
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -487,7 +488,9 @@ fn render_and_read_center(
         })
         .expect("device poll must complete the readback copy");
 
-    let data = slice.get_mapped_range();
+    let data = slice
+        .get_mapped_range()
+        .expect("staging buffer must be mapped: the poll above waited for the map to complete");
     let center = size / 2;
     let row = center as usize * padded_bytes_per_row as usize;
     let col = center as usize * bytes_per_pixel as usize;
@@ -603,7 +606,9 @@ fn render_to_rgba(
         })
         .expect("device poll must complete the readback copy");
 
-    let data = slice.get_mapped_range();
+    let data = slice
+        .get_mapped_range()
+        .expect("staging buffer must be mapped: the poll above waited for the map to complete");
     let stride = padded_bytes_per_row as usize;
     let row_bytes = (size * bytes_per_pixel) as usize;
     let mut out = Vec::with_capacity(row_bytes * size as usize);
@@ -1017,7 +1022,9 @@ fn decoded_image_midtone_round_trips() {
         })
         .expect("device poll must complete");
 
-    let data = slice.get_mapped_range();
+    let data = slice
+        .get_mapped_range()
+        .expect("staging buffer must be mapped: the poll above waited for the map to complete");
     let center = SIZE / 2;
     let row = center as usize * padded_bytes_per_row as usize;
     let col = center as usize * bytes_per_pixel as usize;
@@ -2650,7 +2657,9 @@ fn external_texture_resolves_at_replay_not_record_time() {
         })
         .expect("device poll must complete the readback copy");
 
-    let data = slice.get_mapped_range();
+    let data = slice
+        .get_mapped_range()
+        .expect("staging buffer must be mapped: the poll above waited for the map to complete");
     // Sample center pixel.
     let center = (SIZE / 2) as usize;
     let stride = padded_bytes_per_row as usize;

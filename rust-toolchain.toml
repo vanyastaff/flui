@@ -26,6 +26,6 @@
 #   4. Run `just ci` and update the CI matrix if needed.
 
 [toolchain]
-channel = "1.97.1"
+channel = "1.98.0"
 profile = "default"                # includes rustc, cargo, rustfmt, clippy, rust-docs
 components = ["rustfmt", "clippy"]

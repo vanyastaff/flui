@@ -803,7 +803,7 @@ jobs:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
-      # named `stable`, but the committed `rust-toolchain.toml` makes `1.97.1`
+      # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.0`
       # the ACTIVE toolchain — a separate rustup install even at the same
       # version — so the target has to be added again against the pin. Without
       # this the build fails with E0463 "can't find crate for `core`".
@@ -888,7 +888,7 @@ jobs:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
-      # named `stable`, but the committed `rust-toolchain.toml` makes `1.97.1`
+      # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.0`
       # the ACTIVE toolchain — a separate rustup install even at the same
       # version — so the target has to be added again against the pin. Without
       # this the build fails with E0463 "can't find crate for `core`".

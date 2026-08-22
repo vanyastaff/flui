@@ -545,6 +545,7 @@ mod gpu_tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("a GPU adapter must be available for aa_oracle_tests");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -654,7 +655,10 @@ mod gpu_tests {
             })
             .expect("GPU readback poll must complete");
 
-        let raw = staging.slice(..).get_mapped_range();
+        let raw = staging
+            .slice(..)
+            .get_mapped_range()
+            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
         let mut pixels = Vec::with_capacity((SURFACE_WIDTH * SURFACE_HEIGHT) as usize);
         for row in 0..SURFACE_HEIGHT {
             let row_start = (row * padded_bytes_per_row) as usize;
@@ -3145,7 +3149,7 @@ mod gpu_tests {
     /// KNOWN LIMIT, pinned: a non-uniform transform stretches glyphs uniformly.
     ///
     /// `TextPlacement::scale` is one `f32` because `glyphon::TextArea::scale`
-    /// is one `f32`; glyphon 0.11 cannot express a different scale per axis. So
+    /// is one `f32`; glyphon 0.12 cannot express a different scale per axis. So
     /// under `scale(2.0, 1.0)` the larger axis wins and a run is stretched both
     /// ways, while the geometry around it stretches one way.
     ///

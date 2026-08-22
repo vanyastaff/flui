@@ -34,9 +34,11 @@ assets = ["dep:flui-assets"]
 serialization = ["lyon?/serialization"]
 lyon-debugger = ["lyon?/debugger"]
 
-# GPU profiling via wgpu-profiler 0.27. OFF by default and excluded from wasm32
-# (wgpu-profiler has no wasm support). Requires TIMESTAMP_QUERY adapter support
-# at runtime; the engine gracefully no-ops when the adapter lacks it.
+# GPU profiling via wgpu-profiler 0.28. OFF by default and excluded from wasm32
+# — not because the crate cannot build there any more (0.28 type-checks clean
+# for wasm32; see the `compile_error!` in src/lib.rs for the measurement) but
+# because nothing exercises the combination. Requires TIMESTAMP_QUERY adapter
+# support at runtime; the engine gracefully no-ops when the adapter lacks it.
 gpu-profiler = ["dep:wgpu-profiler"]
 
 # === Test Features ===
@@ -59,7 +61,7 @@ naga_oil = { workspace = true }
 # box a `HandleError` directly into `EngineError::SurfaceCreation` via the typed
 # `#[source] Box<dyn Error + Send + Sync + 'static>` ctor instead of stringifying.
 raw-window-handle = { version = "0.6", features = ["std"] }
-glyphon = { version = "0.11", optional = true }
+glyphon = { version = "0.12", optional = true }
 bytemuck = { workspace = true }
 
 # Vector graphics tessellation — optional, pulled in by `wgpu-backend`.
