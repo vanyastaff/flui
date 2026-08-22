@@ -756,18 +756,10 @@ impl Renderer {
         };
 
         let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-                // wgpu 30's anti-fingerprinting knob, for embedders that expose a
-                // GPU to untrusted content (a browser). `false` — this engine's
-                // callers ARE the trusted application, and bucketing would round
-                // the adapter's real limits down to a coarse tier the pipelines
-                // would then have to fit. Same answer at every other
-                // `request_adapter` in this workspace.
-                apply_limit_buckets: false,
-            })
+            .request_adapter(&super::adapter::trusted_adapter_options(
+                wgpu::PowerPreference::HighPerformance,
+                Some(&surface),
+            ))
             .await
             .map_err(EngineError::adapter_request)?;
 
@@ -779,18 +771,8 @@ impl Renderer {
             capabilities.backend
         );
 
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("FLUI GPU Device"),
-                required_features: Self::required_features(&capabilities),
-                required_limits: Self::required_limits(&capabilities),
-                // Desktop UI: trade VRAM for faster per-frame GPU allocations.
-                memory_hints: wgpu::MemoryHints::Performance,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                trace: wgpu::Trace::Off,
-            })
-            .await
-            .map_err(EngineError::device_creation)?;
+        let (device, queue) =
+            super::adapter::request_flui_device(&adapter, &capabilities, "FLUI GPU Device").await?;
 
         let device_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
         Self::install_device_diagnostics(&device, Arc::clone(&device_lost));
@@ -916,49 +898,19 @@ impl Renderer {
     ///
     /// Useful for headless rendering, tests, and compute-only tasks.
     pub async fn new_offscreen() -> EngineResult<Self> {
-        let backends = Self::select_backend();
-
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-                apply_limit_buckets: false,
-            })
-            .await
-            .map_err(EngineError::adapter_request)?;
-
-        let capabilities = GpuCapabilities::detect(&adapter);
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("FLUI Offscreen Device"),
-                required_features: Self::required_features(&capabilities),
-                required_limits: Self::required_limits(&capabilities),
-                // Desktop UI: trade VRAM for faster per-frame GPU allocations.
-                memory_hints: wgpu::MemoryHints::Performance,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                trace: wgpu::Trace::Off,
-            })
-            .await
-            .map_err(EngineError::device_creation)?;
+        let gpu = super::adapter::request_offscreen_gpu("FLUI Offscreen Device").await?;
 
         let device_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        Self::install_device_diagnostics(&device, Arc::clone(&device_lost));
+        Self::install_device_diagnostics(&gpu.device, Arc::clone(&device_lost));
 
         Ok(Self {
-            instance,
-            adapter,
-            device: Arc::new(device),
-            queue: Arc::new(queue),
+            instance: gpu.instance,
+            adapter: gpu.adapter,
+            device: Arc::new(gpu.device),
+            queue: Arc::new(gpu.queue),
             surface: None,
             config: None,
-            capabilities,
+            capabilities: gpu.capabilities,
             painter: None,
             offscreen: None,
             supports_copy_src: false,
@@ -1149,41 +1101,16 @@ impl Renderer {
             self.damage_tracker.mark_full_repaint();
         } else {
             // Offscreen path: rebuild device/queue only.
-            let backends = Self::select_backend();
-            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends,
-                ..wgpu::InstanceDescriptor::new_without_display_handle()
-            });
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: None,
-                    force_fallback_adapter: false,
-                    apply_limit_buckets: false,
-                })
-                .await
-                .map_err(EngineError::adapter_request)?;
-            let capabilities = GpuCapabilities::detect(&adapter);
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("FLUI Offscreen Device"),
-                    required_features: Self::required_features(&capabilities),
-                    required_limits: Self::required_limits(&capabilities),
-                    memory_hints: wgpu::MemoryHints::Performance,
-                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                    trace: wgpu::Trace::Off,
-                })
-                .await
-                .map_err(EngineError::device_creation)?;
+            let gpu = super::adapter::request_offscreen_gpu("FLUI Offscreen Device").await?;
 
             let fresh_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            Self::install_device_diagnostics(&device, Arc::clone(&fresh_flag));
+            Self::install_device_diagnostics(&gpu.device, Arc::clone(&fresh_flag));
 
-            self.instance = instance;
-            self.adapter = adapter;
-            self.device = Arc::new(device);
-            self.queue = Arc::new(queue);
-            self.capabilities = capabilities;
+            self.instance = gpu.instance;
+            self.adapter = gpu.adapter;
+            self.device = Arc::new(gpu.device);
+            self.queue = Arc::new(gpu.queue);
+            self.capabilities = gpu.capabilities;
             self.device_lost = fresh_flag;
         }
 
@@ -1826,14 +1753,17 @@ impl Renderer {
         if !scene.has_content() {
             return;
         }
-        let Some(mut painter) = self.painter.take() else {
+        // Borrowed in place — `painter` and `offscreen` are disjoint fields,
+        // so the Backend can hold both while the rest of the frame reads
+        // `damage_tracker` / `device` / `queue` / `gpu_profiler`.
+        let Some(painter) = self.painter.as_mut() else {
             return;
         };
 
-        let mut backend = if let Some(ref mut offscreen) = self.offscreen {
-            Backend::with_offscreen(&mut painter, offscreen)
+        let mut backend = if let Some(offscreen) = self.offscreen.as_mut() {
+            Backend::with_offscreen(painter, offscreen)
         } else {
-            Backend::new(&mut painter)
+            Backend::new(painter)
         };
         // Bind the frame render target so the DisplayList-level
         // `render_backdrop_filter` path can flush + blur the same
@@ -1973,9 +1903,6 @@ impl Renderer {
         // flushes call it mid-frame), so maintenance lives here — not inside
         // `render` — to avoid resetting use-counters between passes.
         painter.end_frame_maintenance();
-
-        // Return painter to Renderer for reuse
-        self.painter = Some(painter);
     }
 
     /// Recursively render a layer and its children (depth-first, back-to-front /
@@ -2640,20 +2567,7 @@ mod tests {
     /// Acquire a real device/queue for the HiDPI backdrop regression below.
     /// Returns `None` when no GPU adapter is available (CI without a GPU).
     fn test_device_and_queue() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .ok()?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("Backdrop HiDPI Test Device"),
-            ..Default::default()
-        }))
-        .ok()?;
-        Some((Arc::new(device), Arc::new(queue)))
+        crate::wgpu::test_support::try_test_device_and_queue("Backdrop HiDPI Test Device")
     }
 
     /// BUG 1 (HiDPI backdrop "Path A"): the layer-tree backdrop path must map

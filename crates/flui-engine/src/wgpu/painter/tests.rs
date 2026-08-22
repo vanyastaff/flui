@@ -7,20 +7,7 @@ use super::WgpuPainter;
 
 /// Headless GPU device + queue for painter tests.
 fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        apply_limit_buckets: false,
-    }))
-    .expect("a GPU adapter for painter tests");
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("Painter Test Device"),
-        ..Default::default()
-    }))
-    .expect("a GPU device for painter tests");
-    (Arc::new(device), Arc::new(queue))
+    crate::wgpu::test_support::test_device_and_queue("Painter Test Device")
 }
 
 /// Regression: tessellated vertices must be baked through `current_transform`
@@ -389,21 +376,30 @@ fn render_and_read_center(
     clear: wgpu::Color,
     draw: impl FnOnce(&mut WgpuPainter),
 ) -> [u8; 4] {
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("readback target"),
-        size: wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: READBACK_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let rgba = render_to_rgba(device, queue, size, clear, draw);
+    pixel_at(&rgba, size, size / 2, size / 2)
+}
+
+/// Render `draw` into a `size`×`size` UNorm target cleared to `clear`, then
+/// return the tightly-packed RGBA bytes (`size*size*4`, row stride
+/// `size*4`). Use [`pixel_at`] to sample an individual texel. Unlike
+/// [`render_and_read_center`] this exposes every pixel so edge/column
+/// sampling (e.g. atlas-bleed checks) is possible.
+fn render_to_rgba(
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
+    size: u32,
+    clear: wgpu::Color,
+    draw: impl FnOnce(&mut WgpuPainter),
+) -> Vec<u8> {
+    let (target, target_view) = crate::wgpu::test_support::create_target(
+        device,
+        "readback target",
+        size,
+        size,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
 
     let mut painter = WgpuPainter::with_shared_device(
         Arc::clone(device),
@@ -414,8 +410,6 @@ fn render_and_read_center(
 
     let mut encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-    // Clear the target to the requested background colour.
     {
         let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("readback clear"),
@@ -439,187 +433,9 @@ fn render_and_read_center(
     painter
         .render_to_view(&target_view, &mut encoder)
         .expect("painter.render must succeed for readback");
-
-    // Copy the target into a CPU-readable buffer. `bytes_per_row` must be a
-    // multiple of 256; for the small square targets here a single padded row
-    // covers the full width.
-    let bytes_per_pixel = 4u32;
-    let unpadded = size * bytes_per_pixel;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_bytes_per_row = unpadded.div_ceil(align) * align;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback buffer"),
-        size: u64::from(padded_bytes_per_row) * u64::from(size),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(size),
-            },
-        },
-        wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-    );
     queue.submit(std::iter::once(encoder.finish()));
 
-    let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| {
-        r.expect("buffer mapping must succeed");
-    });
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .expect("device poll must complete the readback copy");
-
-    let data = slice
-        .get_mapped_range()
-        .expect("staging buffer must be mapped: the poll above waited for the map to complete");
-    let center = size / 2;
-    let row = center as usize * padded_bytes_per_row as usize;
-    let col = center as usize * bytes_per_pixel as usize;
-    let off = row + col;
-    let px = [data[off], data[off + 1], data[off + 2], data[off + 3]];
-    drop(data);
-    buffer.unmap();
-    px
-}
-
-/// Render `draw` into a `size`×`size` UNorm target cleared to `clear`, then
-/// return the tightly-packed RGBA bytes (`size*size*4`, row stride
-/// `size*4`). Use [`pixel_at`] to sample an individual texel. Unlike
-/// [`render_and_read_center`] this exposes every pixel so edge/column
-/// sampling (e.g. atlas-bleed checks) is possible.
-fn render_to_rgba(
-    device: &Arc<wgpu::Device>,
-    queue: &Arc<wgpu::Queue>,
-    size: u32,
-    clear: wgpu::Color,
-    draw: impl FnOnce(&mut WgpuPainter),
-) -> Vec<u8> {
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("readback target (full)"),
-        size: wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: READBACK_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-
-    let mut painter = WgpuPainter::with_shared_device(
-        Arc::clone(device),
-        Arc::clone(queue),
-        READBACK_FORMAT,
-        (size, size),
-    );
-
-    let mut encoder =
-        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    {
-        let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("readback clear (full)"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-    }
-
-    draw(&mut painter);
-    painter
-        .render_to_view(&target_view, &mut encoder)
-        .expect("painter.render must succeed for readback");
-
-    let bytes_per_pixel = 4u32;
-    let unpadded = size * bytes_per_pixel;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_bytes_per_row = unpadded.div_ceil(align) * align;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback buffer (full)"),
-        size: u64::from(padded_bytes_per_row) * u64::from(size),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(size),
-            },
-        },
-        wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit(std::iter::once(encoder.finish()));
-
-    let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| {
-        r.expect("buffer mapping must succeed");
-    });
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .expect("device poll must complete the readback copy");
-
-    let data = slice
-        .get_mapped_range()
-        .expect("staging buffer must be mapped: the poll above waited for the map to complete");
-    let stride = padded_bytes_per_row as usize;
-    let row_bytes = (size * bytes_per_pixel) as usize;
-    let mut out = Vec::with_capacity(row_bytes * size as usize);
-    for y in 0..size as usize {
-        let start = y * stride;
-        out.extend_from_slice(&data[start..start + row_bytes]);
-    }
-    drop(data);
-    buffer.unmap();
-    crate::wgpu::readback_dump::dump_frame(size, size, &out);
-    out
+    crate::wgpu::test_support::readback_bytes(device, queue, &target, size, size)
 }
 
 /// Sample one RGBA texel from a tightly-packed buffer produced by

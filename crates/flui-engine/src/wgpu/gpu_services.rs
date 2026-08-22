@@ -49,7 +49,7 @@ use std::thread::ThreadId;
 
 use super::renderer::{GpuCapabilities, Renderer};
 use super::shader_compiler::ShaderCache;
-use crate::error::{EngineError, EngineResult};
+use crate::error::EngineResult;
 
 /// Re-exported so `flui_engine::GpuResourceGeneration` keeps resolving —
 /// this module's own call site below ([`GpuServices::resolve_offscreen`])
@@ -124,53 +124,25 @@ pub struct GpuServices {
 static_assertions::assert_impl_all!(GpuServices: Send);
 
 impl GpuServices {
-    /// Resolve GPU services for the offscreen path (no surface):
-    /// `HighPerformance`, `compatible_surface: None`,
-    /// `force_fallback_adapter: false` — the same policy
-    /// `Renderer::new_offscreen` uses today, diffed field-by-field (the one
-    /// difference is the device label).
+    /// Resolve GPU services for the offscreen path (no surface), through the
+    /// same [`super::adapter::request_offscreen_gpu`] acquisition
+    /// `Renderer::new_offscreen` uses — the one difference is the device
+    /// label.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::AdapterRequest`] when no compatible adapter is
-    /// found, or [`EngineError::DeviceCreation`] when the driver rejects the
+    /// Returns [`crate::EngineError::AdapterRequest`] when no compatible
+    /// adapter is found, or [`crate::EngineError::DeviceCreation`] when the
+    /// driver rejects the
     /// requested device.
     pub async fn resolve_offscreen() -> EngineResult<Self> {
-        let backends = Renderer::select_backend();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-                apply_limit_buckets: false,
-            })
-            .await
-            .map_err(EngineError::adapter_request)?;
-
-        let capabilities = GpuCapabilities::detect(&adapter);
+        let gpu = super::adapter::request_offscreen_gpu("FLUI Shared GPU Device").await?;
         tracing::info!(
-            adapter = capabilities.adapter_name,
-            vendor = capabilities.vendor,
-            backend = ?capabilities.backend,
+            adapter = gpu.capabilities.adapter_name,
+            vendor = gpu.capabilities.vendor,
+            backend = ?gpu.capabilities.backend,
             "GpuServices: selected GPU (shared across this owner thread's renderers)"
         );
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("FLUI Shared GPU Device"),
-                required_features: Renderer::required_features(&capabilities),
-                required_limits: Renderer::required_limits(&capabilities),
-                memory_hints: wgpu::MemoryHints::Performance,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                trace: wgpu::Trace::Off,
-            })
-            .await
-            .map_err(EngineError::device_creation)?;
 
         // The ONLY call site in the crate that installs
         // `set_device_lost_callback` against a device `GpuServices` owns —
@@ -178,14 +150,14 @@ impl GpuServices {
         // its own, so there is no second install to race or clobber this
         // one (ADR-0045 decision 2's first hazard).
         let device_lost = Arc::new(AtomicBool::new(false));
-        Renderer::install_device_diagnostics(&device, Arc::clone(&device_lost));
+        Renderer::install_device_diagnostics(&gpu.device, Arc::clone(&device_lost));
 
         Ok(Self {
-            instance,
-            adapter,
-            device: Arc::new(device),
-            queue: Arc::new(queue),
-            capabilities,
+            instance: gpu.instance,
+            adapter: gpu.adapter,
+            device: Arc::new(gpu.device),
+            queue: Arc::new(gpu.queue),
+            capabilities: gpu.capabilities,
             shader_cache: Arc::new(ShaderCache::new()),
             device_lost,
             generation: GpuResourceGeneration::mint(),

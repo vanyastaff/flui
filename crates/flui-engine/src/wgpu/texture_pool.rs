@@ -360,23 +360,9 @@ mod tests {
 
     /// Helper: create a wgpu device for testing (headless)
     fn create_test_device() -> Arc<wgpu::Device> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("Failed to find a suitable GPU adapter for testing");
-
-        let (device, _queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("Test Device"),
-                ..Default::default()
-            }))
-            .expect("Failed to create GPU device for testing");
-
-        Arc::new(device)
+        Arc::new(crate::wgpu::test_support::test_device(
+            "TexturePool Test Device",
+        ))
     }
 
     #[test]

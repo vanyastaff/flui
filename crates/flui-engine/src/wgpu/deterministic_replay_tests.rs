@@ -140,65 +140,24 @@ mod tests {
 
     /// Headless GPU device + queue, identical to the painter-test helper.
     fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available for deterministic-replay tests");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("deterministic-replay test device"),
-            ..Default::default()
-        }))
-        .expect("a GPU device must be available for deterministic-replay tests");
-        (Arc::new(device), Arc::new(queue))
+        crate::wgpu::test_support::test_device_and_queue("deterministic-replay test device")
     }
 
     /// Create a fresh render target (RENDER_ATTACHMENT | COPY_SRC) and its view.
     fn make_render_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("deterministic-replay render target"),
-            size: wgpu::Extent3d {
-                width: SCENE_SIZE,
-                height: SCENE_SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: SCENE_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
+        crate::wgpu::test_support::create_target(
+            device,
+            "deterministic-replay render target",
+            SCENE_SIZE,
+            SCENE_SIZE,
+            SCENE_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        )
     }
 
     /// Clear `target_view` to a solid opaque black via a one-shot render pass.
     fn clear_target(device: &wgpu::Device, queue: &wgpu::Queue, target_view: &wgpu::TextureView) {
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("deterministic-replay clear pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        queue.submit(std::iter::once(encoder.finish()));
+        crate::wgpu::test_support::clear_target(device, queue, target_view, wgpu::Color::BLACK);
     }
 
     /// Read back all pixels from `texture` into a tightly-packed `Vec<u8>` (RGBA,
@@ -208,67 +167,7 @@ mod tests {
         queue: &wgpu::Queue,
         texture: &wgpu::Texture,
     ) -> Vec<u8> {
-        let bytes_per_pixel = 4u32;
-        let unpadded = SCENE_SIZE * bytes_per_pixel;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_stride = unpadded.div_ceil(align) * align;
-
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("deterministic-replay readback staging buffer"),
-            size: u64::from(padded_stride) * u64::from(SCENE_SIZE),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut copy_encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        copy_encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_stride),
-                    rows_per_image: Some(SCENE_SIZE),
-                },
-            },
-            wgpu::Extent3d {
-                width: SCENE_SIZE,
-                height: SCENE_SIZE,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(std::iter::once(copy_encoder.finish()));
-
-        let slice = staging.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| {
-            r.expect("staging buffer mapping must succeed");
-        });
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .expect("device poll must complete the readback copy");
-
-        let raw = slice
-            .get_mapped_range()
-            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
-        let row_bytes = (SCENE_SIZE * bytes_per_pixel) as usize;
-        let mut packed = Vec::with_capacity(row_bytes * SCENE_SIZE as usize);
-        for row_index in 0..SCENE_SIZE as usize {
-            let row_start = row_index * padded_stride as usize;
-            packed.extend_from_slice(&raw[row_start..row_start + row_bytes]);
-        }
-        drop(raw);
-        staging.unmap();
-        crate::wgpu::readback_dump::dump_frame(SCENE_SIZE, SCENE_SIZE, &packed);
-        packed
+        crate::wgpu::test_support::readback_bytes(device, queue, texture, SCENE_SIZE, SCENE_SIZE)
     }
 
     /// Record the multi-phase test scene into `painter` without flushing.

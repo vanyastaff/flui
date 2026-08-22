@@ -106,6 +106,40 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **flui-engine: single homes for the GPU rituals the wgpu 30 bump touched at
+  every call site.** The version bump adapted each site in place; this change
+  deduplicates the repeated shapes. `wgpu/adapter.rs` now owns the production
+  acquisition policy — `trusted_adapter_options` (the one
+  `RequestAdapterOptions`, carrying the `apply_limit_buckets: false` rationale
+  once instead of five times), `request_flui_device` (the
+  capability-negotiated `DeviceDescriptor`), and `request_offscreen_gpu` (the
+  instance → adapter → capabilities → device sequence that
+  `Renderer::new_offscreen`, the offscreen half of `recover`, and
+  `GpuServices::resolve_offscreen` each previously spelled out).
+  `wgpu/test_support.rs` (gated on `enable-wgpu-tests`) replaces the per-file
+  GPU test scaffolding — adapter/device acquisition under six different names,
+  render-target creation, clear passes, and the padded-row staging readback —
+  that ~25 test files each carried a copy of; per-suite oracles and scene
+  builders stay local. The ten near-identical unit-quad pipeline constructors
+  in `pipelines.rs`/`effects_pipeline.rs` collapsed onto one
+  `QuadPipelineSpec` + `create_unit_quad_pipeline` builder. Benches and
+  examples keep their two inline copies each: they are separate compilation
+  units that cannot reach `pub(crate)` helpers, and exporting the policy for
+  demo code would widen the public API for no consumer.
+- **flui-engine: `render_scene_content` borrows the painter in place.** The
+  `self.painter.take()` / reassign dance — an enabler left over from the
+  `Arc<Mutex<OffscreenRenderer>>` removal, tracked as the blocker-free entry
+  on ARCHITECTURE.md's Outstanding-refactors list — is gone; the `Backend`
+  holds disjoint `painter`/`offscreen` field borrows for the frame.
+  ARCHITECTURE.md was reconciled against the code while landing this: the
+  per-frame `Arc::clone` entry had already been resolved by deletion
+  (`RenderContext` lost its device/queue fields), the `offscreen.rs` split had
+  already landed as `offscreen/{mod,blit,blur,mask}.rs`, and port-check
+  trigger 5's whitelist comments now describe the current shape instead of
+  line numbers that no longer exist. The `Arc<Mutex<TexturePoolInner>>`
+  refactor stays open on the list — it re-plumbs ownership through the
+  painter/offscreen hot paths and needs GPU-verified behavior, not just a
+  clean compile.
 - **Toolchain 1.97.1 → 1.98.0 (development pin only; MSRV floor stays 1.97).**
   `rust-toolchain.toml` is the *development* toolchain and moves independently
   of the floor, which remains a separate promise checked by the one `msrv` job —

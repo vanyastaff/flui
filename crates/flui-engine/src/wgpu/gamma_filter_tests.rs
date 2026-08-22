@@ -51,42 +51,17 @@ mod gpu_tests {
     // ── Harness helpers ───────────────────────────────────────────────────────
 
     fn acquire_test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available for gamma_filter_tests");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("GammaFilter Test Device"),
-            ..Default::default()
-        }))
-        .expect("a GPU device must be available for gamma_filter_tests");
-        (Arc::new(device), Arc::new(queue))
+        crate::wgpu::test_support::test_device_and_queue("GammaFilter Test Device")
     }
 
     fn create_surface(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("GammaFilter Test Surface"),
-            size: wgpu::Extent3d {
-                width: SURFACE_WIDTH,
-                height: SURFACE_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: SURFACE_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
+        crate::wgpu::test_support::create_sampleable_target(
+            device,
+            "GammaFilter Test Surface",
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+            SURFACE_FORMAT,
+        )
     }
 
     fn clear_surface(
@@ -95,28 +70,7 @@ mod gpu_tests {
         view: &wgpu::TextureView,
         color: wgpu::Color,
     ) {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("GammaFilter Surface Clear"),
-        });
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("GammaFilter Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(color),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        queue.submit(std::iter::once(encoder.finish()));
+        crate::wgpu::test_support::clear_target(device, queue, view, color);
     }
 
     fn readback_pixels(
@@ -124,77 +78,13 @@ mod gpu_tests {
         queue: &wgpu::Queue,
         texture: &wgpu::Texture,
     ) -> Vec<[u8; 4]> {
-        let bytes_per_pixel = 4u32;
-        let unpadded_row_bytes = SURFACE_WIDTH * bytes_per_pixel;
-        let row_alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_row_bytes = unpadded_row_bytes.div_ceil(row_alignment) * row_alignment;
-        let staging_size = u64::from(padded_row_bytes * SURFACE_HEIGHT);
-
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("GammaFilter Readback Staging"),
-            size: staging_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("GammaFilter Readback Encoder"),
-        });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_row_bytes),
-                    rows_per_image: Some(SURFACE_HEIGHT),
-                },
-            },
-            wgpu::Extent3d {
-                width: SURFACE_WIDTH,
-                height: SURFACE_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(std::iter::once(encoder.finish()));
-
-        staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .expect("GPU readback poll must complete within wait timeout");
-
-        let raw_bytes = staging
-            .slice(..)
-            .get_mapped_range()
-            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
-        let pixel_count = (SURFACE_WIDTH * SURFACE_HEIGHT) as usize;
-        let mut pixels = Vec::with_capacity(pixel_count);
-        for row_index in 0..SURFACE_HEIGHT {
-            let row_start = (row_index * padded_row_bytes) as usize;
-            for col_index in 0..SURFACE_WIDTH {
-                let byte_offset = row_start + col_index as usize * 4;
-                pixels.push([
-                    raw_bytes[byte_offset],
-                    raw_bytes[byte_offset + 1],
-                    raw_bytes[byte_offset + 2],
-                    raw_bytes[byte_offset + 3],
-                ]);
-            }
-        }
-        crate::wgpu::readback_dump::dump_frame(
+        crate::wgpu::test_support::readback_pixels(
+            device,
+            queue,
+            texture,
             SURFACE_WIDTH,
             SURFACE_HEIGHT,
-            bytemuck::cast_slice(&pixels),
-        );
-        pixels
+        )
     }
 
     fn build_painter(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> WgpuPainter {
@@ -677,20 +567,7 @@ mod gpu_tests {
     fn gamma_pipeline_construction_succeeds() {
         use crate::wgpu::gamma::GammaPipeline;
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available for GA5");
-        let (device, _queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("GA5 GammaPipeline Test Device"),
-                ..Default::default()
-            }))
-            .expect("GPU device creation succeeded when adapter was found");
+        let (device, _queue) = acquire_test_device_and_queue();
 
         let _pipeline = GammaPipeline::new(&device, wgpu::TextureFormat::Rgba8Unorm);
     }

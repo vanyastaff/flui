@@ -130,26 +130,7 @@ impl UniformPool {
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
-    use std::sync::Arc;
-
     use super::UniformPool;
-
-    fn device_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available on a GPU-enabled test host");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("UniformPool Test Device"),
-            ..Default::default()
-        }))
-        .expect("GPU device creation succeeded when adapter was found");
-        (Arc::new(device), Arc::new(queue))
-    }
 
     /// The pool reuses buffers across frames and hands out distinct buffers
     /// within a frame.
@@ -160,7 +141,8 @@ mod tests {
     /// 16-byte allocations in one frame create two buffers, never one reused.
     #[test]
     fn reuses_across_frames_and_distinct_within_frame() {
-        let (device, queue) = device_queue();
+        let (device, queue) =
+            crate::wgpu::test_support::test_device_and_queue("UniformPool Test Device");
         let mut pool = UniformPool::new(device, queue);
 
         // Frame 1: two 16-byte + one 32-byte uniform.

@@ -283,25 +283,27 @@ check "4" \
 #
 # *** SCOPE EXCLUSIONS BELOW ARE TRACKED-OUTSTANDING-REFACTOR WHITELISTS ***
 #
-# `flui-engine/src/wgpu/backend.rs` is NOT in the scope yet because it has
-# known per-frame `Arc::clone` sites at lines 121-122 (offscreen-painter
-# cache initialisation) and lines 408-409 (`render_shader_mask` accessor
-# pattern). Both are documented as Friction log entries in
-# `crates/flui-engine/ARCHITECTURE.md` and tracked as Outstanding refactor #1
-# (`Arc<Mutex<OffscreenRenderer>>` -> direct ownership + `Backend<'a>`). When
-# the refactor lands, `backend.rs` MUST be added to this trigger's scope in
-# the same PR so regressions are caught against the post-refactor shape.
+# `flui-engine/src/wgpu/backend.rs` is NOT in the scope. The
+# `Arc<Mutex<OffscreenRenderer>>` refactor this exclusion originally tracked
+# has landed, but per-effect-frame `Arc::clone` sites survived it: the
+# offscreen-painter cache initialisation and the device/queue handle grabs
+# inside the backdrop-blur / shader-mask paths (cheap ref-count bumps, per
+# effect application, not per layer; documented in
+# `crates/flui-engine/ARCHITECTURE.md`'s thread-safety table). Adding
+# `backend.rs` to the scope requires either removing those clones or a
+# function-level exclusion mechanism this script does not have.
 #
 # `flui-engine/src/wgpu/renderer.rs` is NOT in the scope because:
-# - `Renderer::new` and `new_offscreen` perform setup-phase `Arc::clone(&device)`
-#   / `Arc::clone(&queue)` calls that amortise across the renderer's lifetime
+# - `Renderer::new`, `new_offscreen`, `recover`, and
+#   `from_offscreen_services` perform setup-phase `Arc::clone(&device)` /
+#   `Arc::clone(&queue)` calls that amortise across the renderer's lifetime
 #   (acceptable per the strategy clause).
-# - The canonical per-frame clones at lines 656-657 (RenderContext
-#   construction) are documented as Friction log entries and tracked as
-#   Outstanding refactor #3 (Per-frame Arc::clone -> borrowed references;
-#   depends on Outstanding refactor #1). When that refactor lands, `renderer.rs`
-#   should be added to this trigger's scope with a function-level exclusion
-#   for `Renderer::new` / `new_offscreen` (setup-phase) only.
+# - The formerly-canonical per-frame clones (RenderContext construction) no
+#   longer exist: `RenderContext` lost its device/queue fields entirely, so
+#   there is no per-frame clone left to watch. What blocks adding the file
+#   wholesale is the in-file `#[cfg(test)]` modules' own `Arc::clone` calls,
+#   which the `!**/test*.rs` glob cannot exclude; a function-level exclusion
+#   mechanism would be needed first.
 # -----------------------------------------------------------------------------
 check "5" \
   "Arc::clone in per-frame paint/composite loop" \

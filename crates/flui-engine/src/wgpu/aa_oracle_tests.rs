@@ -540,66 +540,24 @@ mod gpu_tests {
     // ── Harness helpers ───────────────────────────────────────────────────────
 
     fn acquire_test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available for aa_oracle_tests");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("AA Oracle Test Device"),
-            ..Default::default()
-        }))
-        .expect("a GPU device must be available for aa_oracle_tests");
-        (Arc::new(device), Arc::new(queue))
+        crate::wgpu::test_support::test_device_and_queue("AA Oracle Test Device")
     }
 
     fn create_render_surface(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("AA Oracle Test Surface"),
-            size: wgpu::Extent3d {
-                width: SURFACE_WIDTH,
-                height: SURFACE_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: SURFACE_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+        crate::wgpu::test_support::create_target(
+            device,
+            "AA Oracle Test Surface",
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+            SURFACE_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
+        )
     }
 
     fn clear_surface(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("AA Oracle Clear"),
-        });
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("AA Oracle Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        queue.submit(std::iter::once(encoder.finish()));
+        crate::wgpu::test_support::clear_target(device, queue, view, wgpu::Color::TRANSPARENT);
     }
 
     /// Read all pixels from a texture and return RGBA bytes (row-major).
@@ -608,76 +566,13 @@ mod gpu_tests {
         queue: &wgpu::Queue,
         texture: &wgpu::Texture,
     ) -> Vec<[u8; 4]> {
-        let bytes_per_pixel = 4u32;
-        let unpadded_bytes_per_row = SURFACE_WIDTH * bytes_per_pixel;
-        let row_alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(row_alignment) * row_alignment;
-        let staging_size = u64::from(padded_bytes_per_row * SURFACE_HEIGHT);
-
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("AA Oracle Readback Staging"),
-            size: staging_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("AA Oracle Readback Encoder"),
-        });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(SURFACE_HEIGHT),
-                },
-            },
-            wgpu::Extent3d {
-                width: SURFACE_WIDTH,
-                height: SURFACE_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(std::iter::once(encoder.finish()));
-
-        staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .expect("GPU readback poll must complete");
-
-        let raw = staging
-            .slice(..)
-            .get_mapped_range()
-            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
-        let mut pixels = Vec::with_capacity((SURFACE_WIDTH * SURFACE_HEIGHT) as usize);
-        for row in 0..SURFACE_HEIGHT {
-            let row_start = (row * padded_bytes_per_row) as usize;
-            for col in 0..SURFACE_WIDTH {
-                let byte_offset = row_start + col as usize * 4;
-                pixels.push([
-                    raw[byte_offset],
-                    raw[byte_offset + 1],
-                    raw[byte_offset + 2],
-                    raw[byte_offset + 3],
-                ]);
-            }
-        }
-        crate::wgpu::readback_dump::dump_frame(
+        crate::wgpu::test_support::readback_pixels(
+            device,
+            queue,
+            texture,
             SURFACE_WIDTH,
             SURFACE_HEIGHT,
-            bytemuck::cast_slice(&pixels),
-        );
-        pixels
+        )
     }
 
     fn build_painter(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> WgpuPainter {
