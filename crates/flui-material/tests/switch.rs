@@ -51,7 +51,7 @@ fn mounting_a_switch_creates_a_semantics_annotated_tap_target() {
     let laid = lay_out(themed(Switch::new(false).on_changed(|_| {})), constraints());
 
     let semantics = laid
-        .find_by_render_type("RenderSemanticsAnnotations")
+        .try_find_by_render_type("RenderSemanticsAnnotations")
         .expect("Switch must mount a Semantics wrapper");
     assert_eq!(
         laid.size(semantics),

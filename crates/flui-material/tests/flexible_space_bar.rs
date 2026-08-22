@@ -51,7 +51,7 @@ fn expanded_background_is_opaque_and_unshifted() {
     let laid = lay_out(bar_at(0.0), tight(400.0, 600.0));
 
     let opacity = laid
-        .find_by_render_type("RenderOpacity")
+        .try_find_by_render_type("RenderOpacity")
         .expect("the flexible space's fade wrapper is in the tree");
     assert_eq!(
         laid.render_property(opacity, "opacity").as_deref(),
@@ -74,7 +74,7 @@ fn collapsed_background_fades_out_and_parallaxes_up() {
     laid.pump_widget(bar_at(500.0));
 
     let opacity = laid
-        .find_by_render_type("RenderOpacity")
+        .try_find_by_render_type("RenderOpacity")
         .expect("fade wrapper still in the tree");
     assert_eq!(
         laid.render_property(opacity, "opacity").as_deref(),

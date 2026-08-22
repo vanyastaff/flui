@@ -36,7 +36,7 @@ fn default_hairline_border_carries_the_oracles_exact_alpha() {
         tight(400.0, 50.0),
     );
     let decorated = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("the tab bar always paints a DecoratedBox for its background/border");
     let decoration = laid
         .render_property(decorated, "decoration")
@@ -72,7 +72,7 @@ fn default_hairline_border_carries_the_oracles_exact_dark_alpha() {
         tight(400.0, 50.0),
     );
     let decorated = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("the tab bar always paints a DecoratedBox for its background/border");
     let decoration = laid
         .render_property(decorated, "decoration")

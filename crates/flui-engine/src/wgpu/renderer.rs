@@ -1545,7 +1545,7 @@ impl Renderer {
                         .map_or((800u32, 600u32), |c| (c.width, c.height));
                     Some(
                         offscreen
-                            .texture_pool()
+                            .texture_pool_mut()
                             .acquire(surface_w, surface_h, surface_format),
                     )
                 } else {
@@ -2201,7 +2201,7 @@ impl Renderer {
             let queue = Arc::clone(offscreen.queue());
             let format = offscreen.surface_format();
             let child_tex = offscreen
-                .texture_pool()
+                .texture_pool_mut()
                 .acquire(dev_width, dev_height, format);
             (device, queue, format, child_tex)
         };

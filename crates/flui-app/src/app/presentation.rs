@@ -89,7 +89,12 @@ pub(crate) struct RealmCapabilities<'a> {
 pub(crate) fn test_platform_window(
     platform_text_input: Option<Arc<dyn PlatformTextInput>>,
 ) -> Arc<dyn PlatformWindow> {
-    Arc::new(TestPresentationWindow::new(platform_text_input))
+    use super::window_test_support::TestWindow;
+    Arc::new(
+        TestWindow::new()
+            .focused(true)
+            .with_text_input(platform_text_input),
+    )
 }
 
 /// A realm-backed test window whose accessibility capability is the given
@@ -100,75 +105,12 @@ pub(crate) fn test_platform_window(
 pub(crate) fn test_platform_window_with_accessibility(
     accessibility: Arc<flui_platform::FakeAccessibility>,
 ) -> Arc<dyn PlatformWindow> {
-    let mut window = TestPresentationWindow::new(None);
-    window.accessibility = Some(accessibility);
-    Arc::new(window)
-}
-
-#[cfg(test)]
-struct TestPresentationWindow {
-    text_input: Option<Arc<dyn PlatformTextInput>>,
-    accessibility: Option<Arc<flui_platform::FakeAccessibility>>,
-    cursor: parking_lot::Mutex<CursorIcon>,
-}
-
-#[cfg(test)]
-impl TestPresentationWindow {
-    fn new(text_input: Option<Arc<dyn PlatformTextInput>>) -> Self {
-        Self {
-            text_input,
-            accessibility: None,
-            cursor: parking_lot::Mutex::new(CursorIcon::Default),
-        }
-    }
-}
-
-#[cfg(test)]
-impl PlatformWindow for TestPresentationWindow {
-    fn id(&self) -> flui_platform::traits::WindowId {
-        flui_platform::traits::WindowId(1)
-    }
-
-    fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
-        flui_types::geometry::Size::default()
-    }
-
-    fn logical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::Pixels> {
-        flui_types::geometry::Size::default()
-    }
-
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
-
-    fn request_redraw(&self) {}
-
-    fn is_focused(&self) -> bool {
-        true
-    }
-
-    fn is_visible(&self) -> bool {
-        true
-    }
-
-    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        self.text_input.clone()
-    }
-
-    fn accessibility(&self) -> Option<Arc<dyn flui_platform::traits::PlatformAccessibility>> {
-        self.accessibility
-            .clone()
-            .map(|fake| fake as Arc<dyn flui_platform::traits::PlatformAccessibility>)
-    }
-
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        *self.cursor.lock() = cursor;
-        Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+    use super::window_test_support::TestWindow;
+    Arc::new(
+        TestWindow::new()
+            .focused(true)
+            .with_accessibility(accessibility),
+    )
 }
 
 /// Lifecycle of the owner-thread half of a presentation.
@@ -651,8 +593,7 @@ impl PresentationState {
         pipeline: PipelineCell,
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
     ) -> Self {
-        let window: Arc<dyn PlatformWindow> =
-            Arc::new(TestPresentationWindow::new(platform_text_input));
+        let window: Arc<dyn PlatformWindow> = test_platform_window(platform_text_input);
         Self::new_for_test_with_window(id, pipeline, window)
     }
 
@@ -1429,7 +1370,7 @@ mod tests {
         };
         use flui_types::geometry::{Offset, Pixels};
 
-        let window = Arc::new(TestPresentationWindow::new(None));
+        let window = Arc::new(crate::app::window_test_support::TestWindow::new().focused(true));
         let platform_window: Arc<dyn PlatformWindow> = window.clone();
         let presentation = PresentationState::new_for_test_with_window(
             PresentationId::new_gen(0, NonZeroU32::MIN),
@@ -1447,9 +1388,9 @@ mod tests {
             &hit_test,
         );
 
-        assert_eq!(*window.cursor.lock(), CursorIcon::Pointer);
+        assert_eq!(window.cursor(), CursorIcon::Pointer);
         presentation.close();
-        assert_eq!(*window.cursor.lock(), CursorIcon::Default);
+        assert_eq!(window.cursor(), CursorIcon::Default);
     }
 
     // ========================================================================
@@ -1480,52 +1421,6 @@ mod tests {
                 .as_any()
                 .downcast_ref::<flui_platform::FakeHaptics>()
                 .expect("the headless backend's PlatformHaptics is a FakeHaptics")
-        }
-
-        /// A minimal `PlatformWindow` implementing only the trait's required
-        /// methods (`as_any` has no default; everything else here does), so
-        /// `haptics()` falls through to the trait default (`None`).
-        struct BareWindow;
-
-        impl PlatformWindow for BareWindow {
-            fn id(&self) -> flui_platform::traits::WindowId {
-                flui_platform::traits::WindowId(1)
-            }
-
-            fn physical_size(
-                &self,
-            ) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
-                flui_types::geometry::Size::default()
-            }
-
-            fn logical_size(&self) -> flui_types::geometry::Size<flui_types::Pixels> {
-                flui_types::geometry::Size::default()
-            }
-
-            fn scale_factor(&self) -> f64 {
-                1.0
-            }
-
-            fn request_redraw(&self) {}
-
-            fn is_focused(&self) -> bool {
-                false
-            }
-
-            fn is_visible(&self) -> bool {
-                true
-            }
-
-            fn set_cursor(
-                &self,
-                _cursor: flui_platform::CursorIcon,
-            ) -> Result<(), flui_platform::CursorError> {
-                Ok(())
-            }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
         }
 
         /// Real-path proof: `perform_haptic_feedback` reads the
@@ -1564,7 +1459,8 @@ mod tests {
         /// is gone", not "never installed".
         #[test]
         fn perform_haptic_feedback_with_no_active_window_is_a_silent_no_op() {
-            let window: Arc<dyn PlatformWindow> = Arc::new(BareWindow);
+            let window: Arc<dyn PlatformWindow> =
+                Arc::new(crate::app::window_test_support::TestWindow::new());
             let presentation = PresentationState::new_for_test_with_window(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
                 PipelineCell::new(PipelineOwner::new()),
@@ -1583,7 +1479,7 @@ mod tests {
             let presentation = PresentationState::new_for_test_with_window(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
                 PipelineCell::new(PipelineOwner::new()),
-                Arc::new(BareWindow),
+                Arc::new(crate::app::window_test_support::TestWindow::new()),
             );
 
             presentation.perform_haptic_feedback(HapticFeedback::MediumImpact);

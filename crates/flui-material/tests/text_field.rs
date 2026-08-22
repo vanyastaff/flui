@@ -79,7 +79,7 @@ fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() {
         tight(300.0, 100.0),
     );
     let decorated_box = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("TextField must compose an InputDecorator's DecoratedBox");
 
     let unfocused = laid.render_property(decorated_box, "decoration").unwrap();
@@ -147,7 +147,7 @@ fn disabling_the_text_field_disables_both_editable_text_and_the_decorator() {
 
     // Sink 2: the decorator renders the disabled M3 indicator color.
     let decorated_box = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("TextField must compose an InputDecorator's DecoratedBox");
     let decoration_debug = laid.render_property(decorated_box, "decoration").unwrap();
     let disabled_indicator = colors.on_surface.with_opacity(0.38);
@@ -195,7 +195,7 @@ fn decoration_only_enabled_false_is_respected_without_a_text_field_level_overrid
 
     assert!(!focus_node.can_request_focus());
     let decorated_box = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("TextField must compose an InputDecorator's DecoratedBox");
     let decoration_debug = laid.render_property(decorated_box, "decoration").unwrap();
     let disabled_indicator = colors.on_surface.with_opacity(0.38);
@@ -240,7 +240,7 @@ fn text_field_enabled_override_wins_over_a_conflicting_decoration_enabled() {
 
     assert!(focus_node.can_request_focus());
     let decorated_box = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("TextField must compose an InputDecorator's DecoratedBox");
     let decoration_debug = laid.render_property(decorated_box, "decoration").unwrap();
     let disabled_indicator = colors.on_surface.with_opacity(0.38);
@@ -344,7 +344,7 @@ fn disabling_a_focused_field_then_re_enabling_renders_the_unfocused_indicator() 
     laid.dispatch_pointer_up(150.0, 50.0);
     laid.tick();
     let decorated_box = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("TextField must compose an InputDecorator's DecoratedBox");
     let focused_decoration = laid.render_property(decorated_box, "decoration").unwrap();
     assert!(
@@ -368,7 +368,7 @@ fn disabling_a_focused_field_then_re_enabling_renders_the_unfocused_indicator() 
         TextField::new(controller).focus_node(Rc::clone(&focus_node)),
     ));
     let decorated_box = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("TextField must compose an InputDecorator's DecoratedBox");
     let reenabled_decoration = laid.render_property(decorated_box, "decoration").unwrap();
     assert!(
@@ -568,7 +568,9 @@ fn caret_color_is_error_colored_with_error_text_and_primary_otherwise() {
         ),
         tight(300.0, 100.0),
     );
-    let editable = with_error.find_by_render_type("RenderEditable").unwrap();
+    let editable = with_error
+        .try_find_by_render_type("RenderEditable")
+        .unwrap();
     let error_caret = with_error.render_property(editable, "caret_color").unwrap();
     assert!(
         error_caret.contains(&format!("{:?}", colors.error)),
@@ -580,7 +582,9 @@ fn caret_color_is_error_colored_with_error_text_and_primary_otherwise() {
         Theme::new(theme, TextField::new(TextEditingController::new())),
         tight(300.0, 100.0),
     );
-    let editable = without_error.find_by_render_type("RenderEditable").unwrap();
+    let editable = without_error
+        .try_find_by_render_type("RenderEditable")
+        .unwrap();
     let plain_caret = without_error
         .render_property(editable, "caret_color")
         .unwrap();
@@ -652,7 +656,7 @@ fn label_hint_and_helper_flow_through_the_decoration_builder() {
         2,
         "expected label + helper rows, found {text_rows:?}"
     );
-    laid.find_by_render_type("RenderEditable")
+    laid.try_find_by_render_type("RenderEditable")
         .expect("the EditableText interior must still be composed");
 }
 

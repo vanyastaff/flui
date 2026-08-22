@@ -11,6 +11,9 @@
     any(target_os = "linux", target_os = "windows", target_os = "macos")
 ))]
 pub(crate) mod accessibility_bridge;
+// `pub` for the same off-target-consumed reason as `hwnd_affinity` below
+// (consumers: the winit, Win32, and AppKit event-conversion backends).
+pub mod events;
 pub mod gestures;
 mod handlers;
 // `pub`, not `pub(crate)`, for the same reason `keys`/`keys_macos` are:
@@ -28,4 +31,5 @@ pub mod scroll;
 // `hwnd_affinity` above (consumers: the Win32 and AppKit backends).
 pub mod visibility;
 
+pub(crate) use handlers::impl_window_callback_setters;
 pub use handlers::{PlatformHandlers, WindowCallbacks};

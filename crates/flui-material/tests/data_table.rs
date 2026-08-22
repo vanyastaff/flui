@@ -72,7 +72,7 @@ fn mounting_composes_a_render_table_with_row_major_children() {
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(600.0));
 
     let render_table = laid
-        .find_by_render_type("RenderTable")
+        .try_find_by_render_type("RenderTable")
         .expect("DataTable must mount exactly one RenderTable");
     // 2 columns x (1 heading row + 1 data row) = 4 flat children, no
     // checkbox column since no row is selectable.
@@ -89,7 +89,7 @@ fn default_row_heights_match_the_verified_m3_token_table() {
         vec![DataRow::new(vec![text_cell("Ada")])],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
 
     let heading_cell = laid.child(render_table, 0);
     let data_cell = laid.child(render_table, 1);
@@ -120,7 +120,7 @@ fn heading_row_height_theme_override_reaches_the_mounted_tree() {
         vec![DataRow::new(vec![text_cell("Ada")])],
     );
     let laid = common::lay_out(themed(theme, table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
     let heading_cell = laid.child(render_table, 0);
 
     assert_eq!(laid.size(heading_cell).height.get(), 80.0);
@@ -143,7 +143,7 @@ fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
     )
     .heading_row_height(96.0);
     let laid = common::lay_out(themed(theme, table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
     let heading_cell = laid.child(render_table, 0);
 
     assert_eq!(
@@ -168,7 +168,7 @@ fn numeric_columns_right_align_their_cell_content() {
         vec![DataRow::new(vec![text_cell("1"), text_cell("2")])],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(600.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
 
     // Row-major flat children: [heading A, heading N, data A, data N].
     let data_a = laid.child(render_table, 2);
@@ -212,7 +212,7 @@ fn row_checkbox_tap_fires_on_select_changed_with_the_next_value() {
         ],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
 
     // Checkbox column now leads: [heading checkbox, heading Name, row checkbox, row Name].
     let row_checkbox = laid.child(render_table, 2);
@@ -244,7 +244,7 @@ fn row_tap_on_a_plain_data_cell_fires_on_select_changed_with_the_next_value() {
         ],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
 
     // [heading checkbox(0), heading Name(1), row checkbox(2), row Name(3)] —
     // index 3 is the plain data cell, deliberately NOT the checkbox at 2.
@@ -283,7 +283,7 @@ fn data_cell_on_tap_fires_and_suppresses_the_row_selection_toggle() {
         ],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
 
     let data_cell = laid.child(render_table, 3);
     let (x, y) = center_of(&laid, data_cell);
@@ -319,7 +319,7 @@ fn heading_checkbox_selects_all_when_none_are_checked() {
         vec![make_row("Ada"), make_row("Grace")],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
 
     let heading_checkbox = laid.child(render_table, 0);
     let (x, y) = center_of(&laid, heading_checkbox);
@@ -353,7 +353,7 @@ fn heading_checkbox_clears_all_when_every_row_is_checked() {
         vec![make_row("Ada"), make_row("Grace")],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
 
     let heading_checkbox = laid.child(render_table, 0);
     let (x, y) = center_of(&laid, heading_checkbox);
@@ -393,7 +393,7 @@ fn heading_checkbox_tap_selects_all_from_the_indeterminate_state() {
         ],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
 
     let heading_checkbox = laid.child(render_table, 0);
     let (x, y) = center_of(&laid, heading_checkbox);
@@ -423,7 +423,7 @@ fn a_row_with_no_handler_swallows_a_checkbox_tap() {
         ],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
 
     // Row-major: [heading checkbox, heading Name, Ada checkbox, Ada Name,
     // Unselectable checkbox, Unselectable Name] — index 4 is the disabled row's cell.

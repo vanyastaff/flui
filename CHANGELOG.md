@@ -106,7 +106,49 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
-- **Workspace-wide dedup/refactor pass (round 2), foundation → widgets.**
+- **Workspace-wide dedup/refactor pass (round 3): every deferred item from
+  round 2's assessment, closed.** flui-engine's `TexturePool` drops its
+  `Arc<Mutex<TexturePoolInner>>` — the pool owns its inventory directly and
+  hands out `PooledTexture`s carrying an `mpsc` return channel, so a dropped
+  texture rejoins the free list at the pool's next `&mut` operation instead
+  of through a lock (`Sender` keeps the type `Send`; no consumer signature
+  changed). This diverges deliberately from the backlog's original
+  explicit-`release` sketch — pooled textures ride inside `draw_order` and
+  blend-op values whose drop order is not a call site — and the divergence
+  is documented in flui-engine's ARCHITECTURE.md; port-check trigger 7's
+  `texture_pool.rs` exemption glob is deleted per its stated obligation.
+  flui-platform collapses the ~60 verbatim `on_*` callback setters across
+  its six `PlatformWindow` backends onto one
+  `impl_window_callback_setters!` macro, hoists the thrice-copied
+  `PROCESS_START`/`event_timestamp_ns`/`primary_mouse_info` block into
+  `shared/events.rs`, and exports the headless `MockWindow` type so
+  downstream tests can downcast to it. flui-app replaces fourteen of its
+  sixteen hand-rolled `RasterBackend` test doubles with one configurable
+  `TestRasterBackend` (scripted per-frame outcomes; the two doubles that
+  exercise the private `DeviceRecovery` seam stay hand-written and say why),
+  and its six `PlatformWindow` stubs with one builder-style `TestWindow`
+  (kept crate-local rather than adopting `MockWindow`: that double is
+  minted by a live `HeadlessPlatform` and drags in window-tracking and
+  exit-policy machinery that state-level unit tests do not want). Finally,
+  the three drifted copies of the widget mount harness are one module:
+  `flui_widgets::testing` (moved from flui-widgets' `tests/common`, gated
+  `#[cfg(any(test, feature = "testing"))]` — the feature name port-check
+  trigger 11 sanctions) absorbs the material/cupertino extras
+  (`count_elements_by_view_type`, `children`, ErrorView-tolerant root
+  resolution, a new Option-returning `try_find_by_render_type`), and both
+  design-system crates' `tests/common` shrink to re-export shims. The
+  unification is a semantics upgrade, not just dedup: material/cupertino
+  tests now get the fresh-pointer-id-per-contact dispatch flui-widgets
+  already had, which exposed nine material tests driving a contactless
+  hover as a pressed-button move — a stream no platform emits — now
+  corrected to `dispatch_pointer_hover`. The per-contact id allocation and
+  the 8ms pointer-sample clock policy are shared with `test_harness.rs`
+  via `testing::PointerContacts`; `Harness` itself deliberately stays a
+  separate type (it exposes element-tree probes and withholdable IME/
+  post-frame capabilities the mount harness does not). `flui-testing`
+  stays out of every production graph (`cargo tree --edges normal`
+  verified), with the new feature-only edge registered in
+  `docs/workspace-layers.toml`.
   flui-rendering's `RenderNode` collapsed 39 identical Box/Sliver
   match-delegations onto one local `with_entry!` macro (~110 LOC), and its
   42-file integration binary gained the `tests/common` module its per-file

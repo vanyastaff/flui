@@ -24,8 +24,6 @@
 //! - NSPoint → logical pixels (NSEvent coordinates are already logical;
 //!   the Y axis is flipped from bottom-left to top-left origin)
 
-use std::{sync::LazyLock, time::Instant};
-
 use cocoa::{
     appkit::{NSEventModifierFlags, NSEventType},
     base::id,
@@ -37,37 +35,15 @@ use objc::{class, msg_send, sel, sel_impl};
 use ui_events::{
     keyboard::{KeyState, KeyboardEvent},
     pointer::{
-        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
+        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerInfo,
         PointerOrientation, PointerScrollEvent, PointerState, PointerType, PointerUpdate,
     },
 };
 
-use crate::traits::PlatformInput;
-
-/// Process-start epoch for monotonic event timestamps.
-static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
-
-/// Get monotonic timestamp in nanoseconds since process start.
-#[inline]
-fn event_timestamp_ns() -> u64 {
-    // Upstream ui-events documents PointerState.time as NANOSECONDS
-    // ("u64 nanoseconds real time"); a millisecond stamp here silently
-    // broke the unit for every consumer comparing across devices.
-    #[allow(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-    {
-        PROCESS_START.elapsed().as_nanos() as u64
-    }
-}
-
-/// Create a `PointerInfo` for the primary mouse pointer.
-#[inline]
-fn primary_mouse_info() -> PointerInfo {
-    PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
-        pointer_type: PointerType::Mouse,
-        persistent_device_id: None,
-    }
-}
+use crate::{
+    shared::events::{event_timestamp_ns, primary_mouse_info},
+    traits::PlatformInput,
+};
 
 // ============================================================================
 // NSEvent Conversion

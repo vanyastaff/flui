@@ -27,7 +27,7 @@ fn default_geometry_matches_the_m3_token_table() {
     );
 
     let decorated = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("Divider must compose a decorated (filled) line");
     assert_eq!(
         laid.size(decorated).height.get(),
@@ -64,7 +64,7 @@ fn vertical_divider_default_geometry_matches_the_m3_token_table_on_the_transpose
     );
 
     let decorated = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("VerticalDivider must compose a decorated (filled) line");
     assert_eq!(
         laid.size(decorated).width.get(),
@@ -99,7 +99,7 @@ fn themed_color_beats_the_m3_default() {
     let laid = lay_out(Theme::new(theme, Divider::new()), loose(400.0));
 
     let decorated = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("Divider must compose a decorated (filled) line");
     let decoration = laid
         .render_property(decorated, "decoration")
@@ -130,7 +130,7 @@ fn widget_color_override_wins_over_the_divider_theme() {
     );
 
     let decorated = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("Divider must compose a decorated (filled) line");
     let decoration = laid
         .render_property(decorated, "decoration")

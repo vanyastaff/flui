@@ -294,49 +294,8 @@ mod tests {
         }
     }
 
-    struct StubWindow(WindowId);
-
-    impl PlatformWindow for StubWindow {
-        fn id(&self) -> WindowId {
-            self.0
-        }
-
-        fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
-            flui_types::geometry::Size::default()
-        }
-
-        fn logical_size(&self) -> flui_types::geometry::Size<flui_types::Pixels> {
-            flui_types::geometry::Size::default()
-        }
-
-        fn scale_factor(&self) -> f64 {
-            1.0
-        }
-
-        fn request_redraw(&self) {}
-
-        fn is_focused(&self) -> bool {
-            false
-        }
-
-        fn is_visible(&self) -> bool {
-            true
-        }
-
-        fn set_cursor(
-            &self,
-            _cursor: flui_platform::CursorIcon,
-        ) -> Result<(), flui_platform::CursorError> {
-            Ok(())
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
     fn stub_window(id: u64) -> Arc<dyn PlatformWindow> {
-        Arc::new(StubWindow(WindowId(id)))
+        Arc::new(crate::app::window_test_support::TestWindow::new().with_id(id))
     }
 
     #[test]

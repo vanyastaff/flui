@@ -138,7 +138,7 @@ fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_inta
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("the pushed dialog must mount its Material surface over the page");
     assert!(
         laid.size(material).width.get() > 0.0,

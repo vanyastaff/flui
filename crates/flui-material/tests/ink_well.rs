@@ -32,7 +32,7 @@ fn hover_updates_widget_states_when_the_pointer_moves_over_the_ink_well() {
 
     assert!(!states.value().contains_state(WidgetState::Hovered));
 
-    laid.dispatch_pointer_move(10.0, 10.0);
+    laid.dispatch_pointer_hover(10.0, 10.0);
 
     assert!(
         states.value().contains_state(WidgetState::Hovered),
@@ -50,10 +50,10 @@ fn hover_clears_when_the_pointer_exits_the_ink_well() {
         tight(60.0, 40.0),
     );
 
-    laid.dispatch_pointer_move(10.0, 10.0);
+    laid.dispatch_pointer_hover(10.0, 10.0);
     assert!(states.value().contains_state(WidgetState::Hovered));
 
-    laid.dispatch_pointer_move(80.0, 60.0);
+    laid.dispatch_pointer_hover(80.0, 60.0);
     assert!(
         !states.value().contains_state(WidgetState::Hovered),
         "leaving the InkWell must clear WidgetState::Hovered",
@@ -73,7 +73,7 @@ fn disabled_ink_well_does_not_update_hovered_state() {
 
     assert!(states.value().contains_state(WidgetState::Disabled));
 
-    laid.dispatch_pointer_move(10.0, 10.0);
+    laid.dispatch_pointer_hover(10.0, 10.0);
 
     assert!(
         !states.value().contains_state(WidgetState::Hovered),
@@ -251,15 +251,17 @@ fn overlay_color_resolution_reflects_the_hovered_state() {
     // Before any hover: no `RenderPhysicalShape` (the render object
     // `Material` wraps) should be mounted under the InkWell.
     assert!(
-        laid.find_by_render_type("RenderPhysicalShape").is_none(),
+        laid.try_find_by_render_type("RenderPhysicalShape")
+            .is_none(),
         "no overlay layer should be mounted before any state resolves to Some",
     );
 
-    laid.dispatch_pointer_move(10.0, 10.0);
+    laid.dispatch_pointer_hover(10.0, 10.0);
     laid.pump();
 
     assert!(
-        laid.find_by_render_type("RenderPhysicalShape").is_some(),
+        laid.try_find_by_render_type("RenderPhysicalShape")
+            .is_some(),
         "hovering must resolve overlay_color to Some and mount the Material overlay",
     );
 }
@@ -288,7 +290,7 @@ fn rebuilding_with_a_different_states_controller_re_homes_hover_tracking() {
             .states_controller(controller_b.clone()),
     );
 
-    laid.dispatch_pointer_move(10.0, 10.0);
+    laid.dispatch_pointer_hover(10.0, 10.0);
 
     assert!(
         controller_b.value().contains_state(WidgetState::Hovered),
@@ -321,7 +323,7 @@ fn rebuilding_with_the_same_cloned_controller_keeps_driving_it() {
             .states_controller(controller.clone()),
     );
 
-    laid.dispatch_pointer_move(10.0, 10.0);
+    laid.dispatch_pointer_hover(10.0, 10.0);
 
     assert!(
         controller.value().contains_state(WidgetState::Hovered),

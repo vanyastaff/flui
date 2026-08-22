@@ -36,7 +36,7 @@ fn default_material_matches_card_defaults_m3() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Card must compose a Material (RenderPhysicalShape) surface");
 
     let color = laid
@@ -89,7 +89,7 @@ fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Card must compose a Material surface");
     assert_eq!(
         laid.render_property(material, "color"),
@@ -135,7 +135,7 @@ fn default_corner_radius_reaches_the_mounted_material() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Card must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
@@ -177,7 +177,7 @@ fn an_overridden_99dp_corner_radius_excludes_the_same_probe_point() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Card must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
@@ -205,7 +205,7 @@ fn default_margin_insets_the_material_by_four_pixels() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Card must compose a Material surface");
 
     assert_eq!(
@@ -229,7 +229,7 @@ fn margin_override_replaces_the_default_inset() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Card must compose a Material surface");
 
     assert_eq!(
@@ -252,7 +252,7 @@ fn child_mounts_inside_the_material_surface() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Card must compose a Material surface");
     let child = laid.only_child(material);
 

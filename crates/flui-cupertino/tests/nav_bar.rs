@@ -49,7 +49,7 @@ fn default_hairline_border_carries_the_oracles_exact_alpha_and_border_none_remov
         tight(400.0, 44.0),
     );
     let decorated = with_border
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("the bar always paints a DecoratedBox for its background/border");
     let decoration = with_border
         .render_property(decorated, "decoration")
@@ -67,7 +67,7 @@ fn default_hairline_border_carries_the_oracles_exact_alpha_and_border_none_remov
         tight(400.0, 44.0),
     );
     let decorated = without_border
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("still paints a background even with no border");
     let decoration = without_border
         .render_property(decorated, "decoration")
@@ -89,7 +89,7 @@ fn background_defaults_to_the_themes_light_bar_background_color() {
         tight(400.0, 44.0),
     );
     let decorated = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("the bar paints its background via DecoratedBox");
     let decoration = laid
         .render_property(decorated, "decoration")
@@ -118,7 +118,7 @@ fn total_mounted_height_adds_the_top_media_query_inset() {
     );
 
     let bar_box = laid
-        .find_by_render_type("RenderConstrainedBox")
+        .try_find_by_render_type("RenderConstrainedBox")
         .expect("the bar's own outer SizedBox mounts as a RenderConstrainedBox");
     let size = laid.size(bar_box);
     assert!(
@@ -151,7 +151,7 @@ fn leading_middle_and_trailing_all_mount() {
     );
 
     assert!(
-        laid.find_by_render_type("RenderParagraph").is_some(),
+        laid.try_find_by_render_type("RenderParagraph").is_some(),
         "the middle Text must mount as a RenderParagraph"
     );
     assert_eq!(

@@ -274,7 +274,12 @@ conceptually with the transitional `AppBinding` graph Runtime.1 removes, and the
 package name becomes a public testing contract once conformance tests import it. \
 Runtime and \
 framework crates take *development* edges into it only — a normal edge from a \
-shipped library would link the test driver into production.\
+shipped library would link the test driver into production. One sanctioned \
+exception: `flui-widgets` declares an *optional* edge, activated solely by its \
+`testing` feature, so the canonical `flui_widgets::testing` harness (shared \
+by the flui-material/flui-cupertino test suites) can be built on \
+`HeadlessBinding` without per-crate copies; no default or production feature \
+set activates it (see same_layer_edge).\
 """
 
 [[member]]
@@ -385,6 +390,20 @@ would actually break the layering.\
 from = "flui-cli"
 to = "flui-devtools"
 why = "`flui run` drives the profiler/hot-reload orchestration devtools exposes. Devtools never depends on the CLI."
+
+[[same_layer_edge]]
+from = "flui-widgets"
+to = "flui-testing"
+why = """
+Optional, activated only by flui-widgets' `testing` feature: the canonical \
+headless mount harness (`flui_widgets::testing::LaidOut`) is built on \
+`HeadlessBinding` and shared by the flui-widgets/flui-material/flui-cupertino \
+test suites, replacing three drifted per-crate copies. No default or \
+production feature set activates the edge, so ordinary graphs never link the \
+test driver; the facade-combos job's `cargo tree` assertions keep production \
+graphs honest. The reverse edge stays forbidden by the layer rule — \
+flui-testing must never depend on the widget catalog.\
+"""
 
 # =============================================================================
 # Forbidden edges (fail even where the layer rule alone would allow them)

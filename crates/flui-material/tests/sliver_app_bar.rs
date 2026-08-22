@@ -44,7 +44,7 @@ fn scroll_view_at(offset: f32, bar: SliverAppBar) -> Theme {
 /// (the child is laid out to the header's layout extent every pass).
 fn header_child_height(laid: &common::LaidOut, render_type: &str) -> f32 {
     let header = laid
-        .find_by_render_type(render_type)
+        .try_find_by_render_type(render_type)
         .unwrap_or_else(|| panic!("a {render_type} must be in the tree"));
     laid.size(laid.only_child(header)).height.get()
 }
@@ -100,12 +100,12 @@ fn an_unpinned_bar_uses_the_scrolling_variant() {
     let laid = lay_out(scroll_view_at(0.0, bar), tight(400.0, 600.0));
 
     assert!(
-        laid.find_by_render_type("RenderSliverScrollingPersistentHeader")
+        laid.try_find_by_render_type("RenderSliverScrollingPersistentHeader")
             .is_some(),
         "pinned(false)/floating(false) must select the scrolling variant"
     );
     assert!(
-        laid.find_by_render_type("RenderSliverPinnedPersistentHeader")
+        laid.try_find_by_render_type("RenderSliverPinnedPersistentHeader")
             .is_none(),
         "no pinned render object may exist for an unpinned bar"
     );
@@ -129,7 +129,7 @@ fn flexible_space_fills_the_expanded_box_inside_the_material_surface() {
     let laid = lay_out(scroll_view_at(0.0, bar), tight(400.0, 600.0));
 
     let fill = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("the flexible space's render object is in the tree");
     assert_eq!(
         laid.size(fill).height.get(),
@@ -138,7 +138,7 @@ fn flexible_space_fills_the_expanded_box_inside_the_material_surface() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("the bar's Material surface is in the tree");
     assert_eq!(
         laid.size(material).height.get(),

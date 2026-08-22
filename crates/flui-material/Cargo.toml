@@ -41,6 +41,11 @@ flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# `tests/common/mod.rs` is a thin re-export of the canonical headless harness
+# in `flui_widgets::testing` — the dev-dependency flips the feature that
+# compiles it (the normal dependency above stays featureless, so no
+# production graph links the test driver).
+flui-widgets = { path = "../flui-widgets", version = "0.2.0", features = ["testing"] }
 # Integration tests mount a real widget tree (`Theme` + a `SizedBox` leaf)
 # through the render pipeline to prove `Theme::of`/`maybe_of` and rebuild
 # scoping end-to-end.
@@ -53,9 +58,10 @@ flui-testing = { path = "../flui-testing", version = "0.2.0" }
 # `Canvas`/`DisplayList` from this crate but not the `DrawCommand` enum
 # itself.
 flui-painting = { path = "../flui-painting", version = "0.2.0" }
-# `make_down_event`/`make_up_event`/`make_move_event` — synthetic pointer
-# events `tests/common` dispatches to drive `InkWell`'s hover/tap at the
-# widget level.
+# `FocusNode` handles and gesture-arena types a few tests construct directly
+# (`ink_well.rs`, `text_field.rs`, `material.rs`). Pointer-event construction
+# moved into the shared harness (`flui_widgets::testing`), which enables this
+# same `testing` feature itself.
 flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
 parking_lot = { workspace = true }
 

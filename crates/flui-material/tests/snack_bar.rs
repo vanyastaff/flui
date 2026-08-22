@@ -685,7 +685,7 @@ fn snack_bar_clips_to_its_animated_height_mid_entrance() {
     handle.show_snack_bar(SnackBar::new(Text::new("clip me")));
     pump_ms(&mut laid, 60); // mid-entrance: a partial, still-growing height
 
-    let clip_rect = laid.find_by_render_type("RenderClipRect").expect(
+    let clip_rect = laid.try_find_by_render_type("RenderClipRect").expect(
         "the entrance/exit transition must be wrapped in a ClipRect (snack_bar.dart's own \
              outermost wrap) — without it, Align's full-height, unclipped child paint bleeds \
              past the partially-grown box into whatever sits below (an adjacent Scaffold's own \

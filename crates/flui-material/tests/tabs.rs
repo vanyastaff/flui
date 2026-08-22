@@ -319,7 +319,7 @@ fn indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it(
     // second (later) child, with the divider strip first — so wherever a
     // band is opaque, it paints over the divider beneath it.
     let stack = laid
-        .find_by_render_type("RenderStack")
+        .try_find_by_render_type("RenderStack")
         .expect("the divider and tab row must be layered in a Stack");
     let stack_children = laid.children(stack);
     assert_eq!(

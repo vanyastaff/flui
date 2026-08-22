@@ -51,9 +51,9 @@ fn mouse_region_wraps_the_composed_decoration() {
         tight(300.0, 100.0),
     );
 
-    laid.find_by_render_type("RenderMouseRegion")
+    laid.try_find_by_render_type("RenderMouseRegion")
         .expect("InputDecorator must wrap its content in a MouseRegion for hover tracking");
-    laid.find_by_render_type("RenderDecoratedBox")
+    laid.try_find_by_render_type("RenderDecoratedBox")
         .expect("InputDecorator must compose a DecoratedBox for the fill/underline");
 }
 
@@ -89,7 +89,7 @@ fn slot_presence_label_hint_child_and_error_all_render() {
         3,
         "expected label + hint + error rows, found {text_nodes:?}"
     );
-    laid.find_by_render_type("RenderConstrainedBox")
+    laid.try_find_by_render_type("RenderConstrainedBox")
         .expect("the child content must still be composed");
 }
 
@@ -137,7 +137,7 @@ fn disabled_row_reaches_the_mounted_decoration_with_disabled_m3_colors() {
     );
 
     let decorated_box = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("InputDecorator must compose a DecoratedBox");
     let decoration_debug = laid
         .render_property(decorated_box, "decoration")
@@ -179,7 +179,7 @@ fn unfilled_enabled_decoration_has_a_transparent_fill_but_still_paints_the_under
     );
 
     let decorated_box = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("InputDecorator must compose a DecoratedBox");
     let decoration_debug = laid
         .render_property(decorated_box, "decoration")
@@ -229,7 +229,7 @@ fn themed_fill_color_and_active_indicator_beat_the_m3_default_at_the_mounted_lev
     );
 
     let decorated_box = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("InputDecorator must compose a DecoratedBox");
     let decoration_debug = laid
         .render_property(decorated_box, "decoration")

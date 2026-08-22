@@ -463,7 +463,7 @@ impl<'frame> Backend<'frame> {
             .offscreen
             .as_deref_mut()
             .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow")
-            .texture_pool()
+            .texture_pool_mut()
             .acquire(w, h, format);
         flush_encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
@@ -832,7 +832,7 @@ impl CommandRenderer for Backend<'_> {
                 let queue = Arc::clone(offscreen.queue());
                 let format = offscreen.surface_format();
                 let child_tex = offscreen
-                    .texture_pool()
+                    .texture_pool_mut()
                     .acquire(dev_width, dev_height, format);
                 (device, queue, format, child_tex)
             };

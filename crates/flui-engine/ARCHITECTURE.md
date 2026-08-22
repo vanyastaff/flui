@@ -22,7 +22,7 @@ The relevant external APIs the crate consumes:
 | [`src/wgpu/offscreen/`](src/wgpu/offscreen/mod.rs) `OffscreenRenderer` | `wgpu::RenderPipeline`, `wgpu::BindGroupLayout`, `wgpu::BindGroup`, `wgpu::Sampler` | Offscreen-texture pipelines for `ShaderMaskLayer` (compose with mask shader) and `BackdropFilterLayer` (Dual-Kawase blur). |
 | [`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs) `ShaderCache` | `wgpu::ShaderModule`, `wgpu::ShaderSource` | Caches compiled WGSL modules per `ShaderType` enum (Solid/LinearGradient/RadialGradient mask shaders; BlurHorizontal/Vertical/Downsample/Upsample; MorphDilate/Erode). |
 | [`src/wgpu/pipeline.rs`](src/wgpu/pipeline.rs) `PipelineCache` + [`src/wgpu/pipelines.rs`](src/wgpu/pipelines.rs) `PipelineSet` | `wgpu::RenderPipelineDescriptor`, `wgpu::VertexBufferLayout`, `wgpu::ColorTargetState`, `wgpu::BlendState`, `wgpu::DepthStencilState` | `PipelineCache` caches shape pipelines per `PipelineKey` (paint-style + blend-mode + format); `PipelineSet` owns the named instanced/gradient/shadow pipelines, all specs over its shared unit-quad constructor. |
-| [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs) `TexturePool` | `wgpu::TextureDescriptor`, `wgpu::TextureUsages` | Per-frame texture reuse for offscreen renders. Currently `Arc<Mutex<TexturePoolInner>>` -- Mythos friction; see [Outstanding refactors](#outstanding-refactors). |
+| [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs) `TexturePool` | `wgpu::TextureDescriptor`, `wgpu::TextureUsages` | Per-frame texture reuse for offscreen renders. Directly-owned inventory + mpsc return channel (no lock, `Send`-only). |
 | [`src/wgpu/tessellator.rs`](src/wgpu/tessellator.rs) `Tessellator` | -- | Adapter over `lyon::tessellation::FillTessellator` + `StrokeTessellator`. |
 | [`src/wgpu/text.rs`](src/wgpu/text.rs) `TextRenderer` | -- | Adapter over `glyphon` (cosmic-text + glyph atlas + GPU sampling). |
 
@@ -333,7 +333,7 @@ The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) was extr
 | `WgpuPainter::device` / `WgpuPainter::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | Same as `Renderer::device`. |
 | `WgpuPainter::transform_stack` / `clip_stack` / `opacity_stack` | `Vec<T>` | Owned, single-mutator | Per-frame save/restore stacks. No lock. |
 | `OffscreenRenderer::pipelines` ([`src/wgpu/offscreen/`](src/wgpu/offscreen/mod.rs)) | `HashMap<ShaderType, Arc<wgpu::RenderPipeline>>` | Setup-phase populated, frame-read | The `Arc<RenderPipeline>` clones at lines 659-660, 1051-1053 are per-effect-frame (small constant; not per-layer). |
-| `TexturePool::pool` ([`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs)) | `Arc<Mutex<TexturePoolInner>>` | **Mythos friction** | Single-mutator data behind a lock + back-reference on `PooledTexture` for release-on-drop. Refactor target; see [Outstanding refactors](#outstanding-refactors). |
+| `TexturePool::inventory` ([`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs)) | Directly-owned `TexturePoolInner` + mpsc return channel | Single-mutator | No lock: every pool operation takes `&mut self`; dropped `PooledTexture`s come home through the channel, drained under the pool's own exclusive borrow. |
 | `ShaderCache::cache` ([`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs)) | `RwLock<HashMap<ShaderType, Arc<CompiledShader>>>` | Setup-phase populated, frame-read | The lock is uncontended; cache is populated lazily on first use of each shader, then read-only. Acceptable per the precedent of `PipelineOwner`'s `Weak<RwLock<>>` in `flui-rendering`. |
 | `layer_render.rs` `SUPERELLIPSE_CACHE` | `thread_local! RefCell<HashMap<SuperellipseKey, Path>>` | Thread-local, hot-path | Canonical Rust pattern for single-threaded hot-path caching; not a refusal-trigger violation per `docs/PORT.md` Trigger 2 (the regex matches `Box<dyn Layer>` / `dyn RenderObject` shapes, not `HashMap<SuperellipseKey, Path>`). |
 
@@ -358,7 +358,7 @@ There is **no `unsafe impl Sync`** anywhere in the crate. Two further unsafe sur
 - `Renderer` -- `Send` by compiler derivation (every field is `Send`, including `raw_handles` via `RawHandles`' `unsafe impl Send` above); **not `Sync`**. Pinned unconditionally by `static_assertions::assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` right after the struct definition, plus the pre-existing `compile_fail` doctest for the `!Sync` half. Single-mutator enforced by code convention, not by trait bound.
 - `WgpuPainter` -- `Send`, not `Sync` (holds `Arc<wgpu::Device>` + `Arc<wgpu::Queue>` which are `Send + Sync`, but internal batch state uses `Vec<T>` mutated through `&mut self`; no interior mutability sync surface).
 - `OffscreenRenderer` -- `Send`, not `Sync` (HashMap of `Arc<RenderPipeline>` is `Send`; the struct has no interior-mutability sync primitives).
-- `TexturePool` -- `Send + Sync` today (through inner `Arc<Mutex<TexturePoolInner>>`); will become `Send`-only when the Outstanding refactor replaces the inner lock with direct ownership.
+- `TexturePool` -- `Send`-only (the mpsc `Receiver` is `!Sync`), exactly the narrowing the refactor predicted: the pool is single-mutator by construction and lives on one renderer thread.
 
 ---
 
@@ -378,13 +378,13 @@ The `self.painter.take()` / reassign pattern that survived the lock removal is g
 `render_scene_content` now borrows the painter in place (`self.painter.as_mut()`), with the
 `Backend` holding the disjoint `painter`/`offscreen` field borrows for the frame.
 
-### `Arc<Mutex<TexturePoolInner>>` back-reference on `PooledTexture`
+### `Arc<Mutex<TexturePoolInner>>` back-reference on `PooledTexture` -- RESOLVED
 
-**Sites:** [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs) -- the `TexturePool::inner` field, the `PooledTexture::pool` back-reference, the `Arc::new(Mutex::new(...))` at construction, and the `Arc::clone(&self.inner)` at the `acquire` return.
-
-**Violation:** none of the seven refusal triggers; the lock is uncontended (single-mutator). The Mythos verdict §9 flagged this as the second canonical Arc<Mutex<>> smell.
-
-**Next planned step:** see [Outstanding refactors](#outstanding-refactors) -- replace back-reference + Drop with explicit `pool.release(texture)` API.
+The lock and the back-reference are gone: `TexturePool` owns `TexturePoolInner` directly
+(every operation takes `&mut self`, and the type is now `Send`-only), and `PooledTexture`
+carries only a lightweight mpsc `Sender` — drop sends the texture home, and the pool drains
+the channel under its own exclusive borrow at the top of each operation. Port-check trigger 7's
+`texture_pool.rs` exclusion was removed in the same change, per the obligation it carried.
 
 ### Per-frame `Arc::clone(&self.device)` / `Arc::clone(&self.queue)` in `Renderer::render_scene` -- RESOLVED
 
@@ -447,23 +447,27 @@ borrow-checker work, exactly as predicted: `render_scene_content` borrows the pa
 place via `self.painter.as_mut()`, the `Backend` holds the disjoint `painter`/`offscreen`
 field borrows, and every other access in the frame body touches other fields.
 
-### `Arc<Mutex<TexturePoolInner>>` -> direct ownership + explicit `pool.release(texture)`
+### `Arc<Mutex<TexturePoolInner>>` -> direct ownership — DONE (return channel, not mandatory `release`)
 
-**Files:** [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs), [`src/wgpu/offscreen/`](src/wgpu/offscreen/mod.rs) (consumer).
+The goal — remove the lock and the back-reference so the pool is a single-mutator value —
+landed, with one deliberate divergence from the six-step shape this entry used to
+prescribe. The prescription assumed 4-6 `PooledTexture` consumers in `offscreen/` that
+could each call an explicit `pool.release(texture)`. By the time the refactor landed,
+`PooledTexture`s also live inside the painter's draw order (`PendingOffscreenTexture`),
+advanced-blend ops, and the replay flush path, and they are minted by two different pools
+(the offscreen renderer's and `GpuResources::layer_texture_pool`). Mandatory explicit
+release at every one of those death sites would have been exactly the "mechanical but
+error-prone" hazard the old blocker named — any missed site silently stops pool reuse.
 
-**Goal:** remove the back-reference `Arc<Mutex<TexturePoolInner>>` on `PooledTexture` that exists only for release-on-drop. Replace with explicit `pool.release(texture)` at the workflow boundaries.
-
-**Shape:**
-1. `TexturePool::pool: Arc<Mutex<TexturePoolInner>>` -> `TexturePool::available: Vec<TextureSlot>` (direct).
-2. `PooledTexture` removes the `inner: Arc<Mutex<TexturePoolInner>>` field; Drop becomes a no-op (or drops the `wgpu::Texture` directly, releasing GPU memory if not pooled).
-3. New method: `TexturePool::release(&mut self, texture: PooledTexture)`.
-4. `TexturePool::acquire(&mut self, ...)` (was `&self`).
-5. `OffscreenRenderer::with_caches` parameter changes from `Arc<TexturePool>` to `TexturePool`.
-6. Every consumer of `PooledTexture` either calls `pool.release(tex)` after the texture is no longer needed, or accepts that Drop discards the texture (acceptable for one-frame textures; the slot is reused via `release`).
-
-**Concrete blocker:** the refactor touches every `PooledTexture` consumer (currently 4-6 sites across `OffscreenRenderer::render_blur`, `render_masked`, `render_dilate`, `render_erode`). Each consumer needs an explicit `release` call -- mechanical but error-prone if a consumer forgets to release.
-
-**Dependencies:** none.
+The landed shape keeps return-on-drop but removes what made it a smell: `TexturePool`
+owns its inventory directly (`acquire`/`stats`/`clear` take `&mut self`; the type is
+`Send`-only), and the drop path is an mpsc send into a channel the pool drains under its
+own exclusive borrow — no lock around pool state, no `Arc` into the pool. A texture that
+outlives its pool degrades gracefully (the failed send drops the GPU resource). An
+explicit `TexturePool::release(&mut self, texture)` exists for call sites that hold the
+pool and want the texture reusable for their very next `acquire`; it is an optimization,
+not an obligation. `OffscreenRenderer` now owns its pool by value (`with_caches` takes
+`TexturePool`), and callers reach it through `texture_pool_mut`.
 
 ### Per-frame `Arc::clone(&self.device)` / `Arc::clone(&self.queue)` -> borrowed references — DONE (by deletion)
 

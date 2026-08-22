@@ -1,13 +1,17 @@
 //! A headless widget harness for `flui-widgets`' **in-crate** unit tests.
 //!
-//! `tests/common::lay_out` is an integration-test module and cannot be reached
-//! from `src/`, so private modules — `overlay` and `navigator`
-//! — need their own. This is the trimmed equivalent: it keeps `lay_out`'s
-//! load-bearing ordering (**binding first, so the async driver is installed before
-//! the mount `build_scope`**) and drops the geometry helpers.
+//! [`crate::testing::lay_out`] is the canonical integration harness, but the
+//! private `overlay` / `navigator` modules need element-tree probes
+//! (`children_of`, `view_type_of`) and withholdable IME/post-frame
+//! capabilities that `LaidOut` deliberately does not expose. This is the
+//! trimmed element-level equivalent: it keeps `lay_out`'s load-bearing
+//! ordering (**binding first, so the async driver is installed before the
+//! mount `build_scope`**), drops the geometry helpers, and shares the
+//! pointer-contact identity and sample-interval policy with the canonical
+//! harness via [`crate::testing::PointerContacts`] /
+//! [`crate::testing::POINTER_SAMPLE_INTERVAL`].
 
 use std::any::TypeId;
-use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,6 +27,8 @@ use flui_testing::HeadlessBinding;
 use flui_types::geometry::{Bounds, Pixels, px};
 use flui_types::{Offset, Size};
 use flui_view::{ElementNode, View};
+
+use crate::testing::{POINTER_SAMPLE_INTERVAL, PointerContacts};
 
 /// A mounted, laid-out widget tree.
 pub(crate) struct Harness {
@@ -44,8 +50,9 @@ pub(crate) struct Harness {
     ime_allowed_calls: Option<Arc<parking_lot::Mutex<Vec<bool>>>>,
     /// Owner-local state backing the installed IME capability.
     text_input_owner: Option<Rc<flui_interaction::TextInputOwner>>,
-    next_pointer: Cell<u64>,
-    current_pointer: Cell<u64>,
+    /// Per-contact pointer identity, shared with `crate::testing`'s
+    /// integration harness so the two cannot drift.
+    contacts: PointerContacts,
 }
 
 /// Mount `root` as the render-tree root and drive one frame.
@@ -195,8 +202,7 @@ pub(crate) fn mount_with_capabilities(
         cursor_area_calls,
         ime_allowed_calls,
         text_input_owner,
-        next_pointer: Cell::new(1),
-        current_pointer: Cell::new(0),
+        contacts: PointerContacts::new(),
     }
 }
 
@@ -211,15 +217,15 @@ impl Harness {
         self.binding.enter_owner_scope(callback)
     }
 
-    /// Advance the binding's virtual clock by a fixed, deterministic sample
-    /// interval before a synthetic Move that records a new velocity sample —
-    /// the same mechanism (and same 8ms rationale) as
-    /// `tests/common::LaidOut::advance_pointer_clock`. `DragGestureRecognizer`
-    /// timestamps its velocity samples from `RecognizerBase::now()`, which
-    /// reads this SAME clock-bound `GestureArena` via `binding.arena()`
-    /// above, so a spin-wait on the real clock (which made sample spacing
-    /// depend on however much wall-clock time the test process happened to
-    /// be scheduled between dispatch calls) is neither necessary nor correct.
+    /// Advance the binding's virtual clock by the shared
+    /// [`POINTER_SAMPLE_INTERVAL`] before a synthetic Move that records a new
+    /// velocity sample — the same mechanism (and same 8ms rationale) as
+    /// `crate::testing::LaidOut`. `DragGestureRecognizer` timestamps its
+    /// velocity samples from `RecognizerBase::now()`, which reads this SAME
+    /// clock-bound `GestureArena` via `binding.arena()` above, so a spin-wait
+    /// on the real clock (which made sample spacing depend on however much
+    /// wall-clock time the test process happened to be scheduled between
+    /// dispatch calls) is neither necessary nor correct.
     ///
     /// Only a Move calls this: `DragGestureRecognizer::handle_down` always
     /// resets the velocity tracker before recording its own sample, so a Down
@@ -227,23 +233,15 @@ impl Harness {
     /// there would only cost deadline-timing tests virtual time they did not
     /// ask to spend.
     fn advance_pointer_clock(&self) {
-        const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(8);
         self.binding.clock().advance(POINTER_SAMPLE_INTERVAL);
     }
 
     fn begin_contact(&self) -> PointerId {
-        let id = self.next_pointer.get();
-        self.next_pointer.set(
-            id.checked_add(1)
-                .expect("BUG: headless pointer id space exhausted"),
-        );
-        self.current_pointer.set(id);
-        PointerId::new(id).expect("BUG: headless pointer ids start at one")
+        self.contacts.begin()
     }
 
     fn current_contact(&self) -> PointerId {
-        PointerId::new(self.current_pointer.get())
-            .expect("BUG: pointer Down must precede Move, Up, or Cancel")
+        self.contacts.current()
     }
 
     fn hit_test_pointer(

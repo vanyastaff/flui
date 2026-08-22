@@ -55,8 +55,10 @@ const MAX_BLUR_ITERATIONS: usize = 5;
 /// ```
 #[allow(missing_debug_implementations)]
 pub struct OffscreenRenderer {
-    /// Texture pool for offscreen rendering
-    texture_pool: Arc<TexturePool>,
+    /// Texture pool for offscreen rendering — owned directly; borrow it via
+    /// [`Self::texture_pool_mut`]. The pool is single-mutator by
+    /// construction (see `texture_pool.rs`'s module doc).
+    texture_pool: TexturePool,
 
     /// Shader cache for compiled shaders
     shader_cache: Arc<ShaderCache>,
@@ -162,7 +164,7 @@ impl OffscreenRenderer {
         let blur_uniform_buffers = Self::create_blur_uniform_buffers(&device);
 
         Self {
-            texture_pool: Arc::new(TexturePool::new(Arc::clone(&device))),
+            texture_pool: TexturePool::new(Arc::clone(&device)),
             shader_cache: Arc::new(ShaderCache::new()),
             device,
             queue,
@@ -180,7 +182,7 @@ impl OffscreenRenderer {
 
     /// Create with custom texture pool and shader cache
     pub fn with_caches(
-        texture_pool: Arc<TexturePool>,
+        texture_pool: TexturePool,
         shader_cache: Arc<ShaderCache>,
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -369,18 +371,19 @@ impl OffscreenRenderer {
         self.surface_format
     }
 
-    /// Access the texture pool
-    pub fn texture_pool(&self) -> &Arc<TexturePool> {
-        &self.texture_pool
+    /// Exclusive access to the texture pool (all pool operations take
+    /// `&mut` — the inventory is directly owned, not behind a lock).
+    pub fn texture_pool_mut(&mut self) -> &mut TexturePool {
+        &mut self.texture_pool
     }
 
     /// Get texture pool statistics
-    pub fn texture_pool_stats(&self) -> super::texture_pool::PoolStats {
+    pub fn texture_pool_stats(&mut self) -> super::texture_pool::PoolStats {
         self.texture_pool.stats()
     }
 
     /// Clear texture pool (useful for memory management)
-    pub fn clear_texture_pool(&self) {
+    pub fn clear_texture_pool(&mut self) {
         self.texture_pool.clear();
     }
 }

@@ -3584,6 +3584,7 @@ mod tests {
     use flui_widgets::{NavigatorCommand, NavigatorHandle, SimpleRoute, SizedBox};
 
     use super::*;
+    use crate::app::raster_test_support::TestRasterBackend;
 
     static_assertions::assert_not_impl_any!(UiRealm: Send, Sync);
 
@@ -3603,9 +3604,7 @@ mod tests {
     }
 
     fn test_window() -> Arc<dyn PlatformWindow> {
-        flui_platform::headless_platform()
-            .open_window(flui_platform::WindowOptions::default())
-            .expect("headless platform should create a test window")
+        crate::app::window_test_support::headless_test_window()
     }
 
     fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {
@@ -5979,8 +5978,8 @@ mod tests {
         /// schedulable across every mid-animation frame, and the gate must
         /// go idle once the controller completes.
         ///
-        /// Drives `render_frame_entered` (a fresh `ScriptedRasterBackend`
-        /// per call, since it is single-shot), not the bare `draw_frame`
+        /// Drives `render_frame_entered` (a fresh single-shot
+        /// `TestRasterBackend` per call), not the bare `draw_frame`
         /// this test used before — the continuation wake this test pins is
         /// now raised in `render_frame_entered`, AFTER `mark_rendered()`
         /// runs, not inside `draw_frame_entered` (a reviewer
@@ -6004,7 +6003,7 @@ mod tests {
 
             realm.set_now_secs_for_test(0.0);
             realm.mark_rendered();
-            let mut backend = ScriptedRasterBackend::new(Ok(true));
+            let mut backend = TestRasterBackend::single_shot(Ok(true));
             let _ = realm.render_frame_entered(&mut backend);
             // `needs_redraw()` is what actually carries this assertion in
             // this test, not `has_pending_work()`: no widget is attached
@@ -6028,7 +6027,7 @@ mod tests {
 
             realm.set_now_secs_for_test(0.05);
             realm.mark_rendered();
-            let mut backend = ScriptedRasterBackend::new(Ok(true));
+            let mut backend = TestRasterBackend::single_shot(Ok(true));
             let _ = realm.render_frame_entered(&mut backend);
             assert!(
                 realm.needs_redraw() || realm.has_pending_work(),
@@ -6042,7 +6041,7 @@ mod tests {
 
             realm.set_now_secs_for_test(0.20);
             realm.mark_rendered();
-            let mut backend = ScriptedRasterBackend::new(Ok(true));
+            let mut backend = TestRasterBackend::single_shot(Ok(true));
             let _ = realm.render_frame_entered(&mut backend);
             assert_eq!(controller.status(), AnimationStatus::Completed);
 
@@ -6275,44 +6274,6 @@ mod tests {
 
         // ---- render_frame_entered retry / first-frame-deferral semantics ----
 
-        struct ScriptedRasterBackend {
-            outcome: Option<Result<bool, EngineError>>,
-            render_scene_calls: u32,
-        }
-
-        impl ScriptedRasterBackend {
-            fn new(outcome: Result<bool, EngineError>) -> Self {
-                Self {
-                    outcome: Some(outcome),
-                    render_scene_calls: 0,
-                }
-            }
-        }
-
-        impl RasterBackend for ScriptedRasterBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                self.render_scene_calls += 1;
-                self.outcome
-                    .take()
-                    .expect("render_scene called more than once in a single-frame test")
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
-        }
-
         fn mount_root() -> UiRealm {
             let realm = UiRealm::for_test();
             realm
@@ -6324,7 +6285,7 @@ mod tests {
         #[test]
         fn surface_lost_keeps_needs_redraw_armed_for_a_retry() {
             let realm = mount_root();
-            let mut backend = ScriptedRasterBackend::new(Err(EngineError::SurfaceLost));
+            let mut backend = TestRasterBackend::single_shot(Err(EngineError::SurfaceLost));
 
             realm.mark_rendered();
             let presented = realm.render_frame_entered(&mut backend);
@@ -6344,7 +6305,7 @@ mod tests {
         #[test]
         fn device_lost_keeps_needs_redraw_armed_for_a_retry() {
             let realm = mount_root();
-            let mut backend = ScriptedRasterBackend::new(Err(EngineError::DeviceLost));
+            let mut backend = TestRasterBackend::single_shot(Err(EngineError::DeviceLost));
 
             realm.mark_rendered();
             let presented = realm.render_frame_entered(&mut backend);
@@ -6365,7 +6326,7 @@ mod tests {
         #[test]
         fn surface_validation_keeps_needs_redraw_armed_for_a_retry() {
             let realm = mount_root();
-            let mut backend = ScriptedRasterBackend::new(Err(EngineError::SurfaceValidation));
+            let mut backend = TestRasterBackend::single_shot(Err(EngineError::SurfaceValidation));
 
             realm.mark_rendered();
             let presented = realm.render_frame_entered(&mut backend);
@@ -6389,7 +6350,7 @@ mod tests {
         #[test]
         fn a_successful_frame_still_clears_needs_redraw() {
             let realm = mount_root();
-            let mut backend = ScriptedRasterBackend::new(Ok(true));
+            let mut backend = TestRasterBackend::single_shot(Ok(true));
 
             realm.request_redraw();
             let presented = realm.render_frame_entered(&mut backend);
@@ -6401,44 +6362,10 @@ mod tests {
             );
         }
 
-        struct CountingRasterBackend {
-            render_scene_calls: u32,
-        }
-
-        impl CountingRasterBackend {
-            fn new() -> Self {
-                Self {
-                    render_scene_calls: 0,
-                }
-            }
-        }
-
-        impl RasterBackend for CountingRasterBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                self.render_scene_calls += 1;
-                Ok(true)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
-        }
-
         #[test]
         fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene() {
             let realm = mount_root();
-            let mut backend = CountingRasterBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             realm.defer_first_frame();
             realm.mark_rendered();
@@ -6474,7 +6401,7 @@ mod tests {
         #[test]
         fn allow_first_frame_alone_presents_the_previously_withheld_content() {
             let realm = mount_root();
-            let mut backend = CountingRasterBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             realm.defer_first_frame();
             let withheld = realm.render_frame_entered(&mut backend);
@@ -6500,7 +6427,7 @@ mod tests {
         #[test]
         fn nested_defer_allow_only_presents_after_the_last_allow() {
             let realm = mount_root();
-            let mut backend = CountingRasterBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             realm.defer_first_frame();
             realm.defer_first_frame();
@@ -6573,7 +6500,7 @@ mod tests {
         #[test]
         fn errored_first_frame_does_not_latch_first_frame_sent() {
             let realm = mount_panicking_root();
-            let mut backend = CountingRasterBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             let prev_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {}));
@@ -6595,7 +6522,7 @@ mod tests {
         #[test]
         fn first_frame_sent_latch_short_circuits_later_defers() {
             let realm = mount_root();
-            let mut backend = CountingRasterBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             let presented = realm.render_frame_entered(&mut backend);
             assert!(
@@ -7605,62 +7532,12 @@ mod tests {
     mod redraw_wake_routing {
         use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
-        use flui_platform::CursorIcon;
-        use flui_platform::traits::{CursorError, WindowId};
-        use flui_types::geometry::{DevicePixels, Pixels};
-
         use super::*;
 
-        struct RedrawCountingWindow {
-            id: WindowId,
-            redraw_calls: Arc<AtomicU32>,
-        }
-
-        impl PlatformWindow for RedrawCountingWindow {
-            fn id(&self) -> WindowId {
-                self.id
-            }
-
-            fn physical_size(&self) -> Size<DevicePixels> {
-                Size::default()
-            }
-
-            fn logical_size(&self) -> Size<Pixels> {
-                Size::default()
-            }
-
-            fn scale_factor(&self) -> f64 {
-                1.0
-            }
-
-            fn request_redraw(&self) {
-                self.redraw_calls.fetch_add(1, AtomicOrdering::Relaxed);
-            }
-
-            fn is_focused(&self) -> bool {
-                false
-            }
-
-            fn is_visible(&self) -> bool {
-                true
-            }
-
-            fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-                Ok(())
-            }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-        }
-
         fn counting_window(id: u64) -> (Arc<dyn PlatformWindow>, Arc<AtomicU32>) {
-            let redraw_calls = Arc::new(AtomicU32::new(0));
-            let window: Arc<dyn PlatformWindow> = Arc::new(RedrawCountingWindow {
-                id: WindowId(id),
-                redraw_calls: Arc::clone(&redraw_calls),
-            });
-            (window, redraw_calls)
+            let window = crate::app::window_test_support::TestWindow::new().with_id(id);
+            let redraw_calls = window.redraw_calls_handle();
+            (Arc::new(window), redraw_calls)
         }
 
         /// A redraw request that dirties presentation A's own pipeline must
@@ -7818,52 +7695,8 @@ mod tests {
     // same DPR-before-first-frame ordering the primary path already gets.
     // ========================================================================
     mod presentation_dpr_seeding {
-        use flui_platform::CursorIcon;
-        use flui_platform::traits::{CursorError, WindowId};
-        use flui_types::geometry::{DevicePixels, Pixels};
 
         use super::*;
-
-        struct ScaledTestWindow {
-            id: WindowId,
-            scale_factor: f64,
-        }
-
-        impl PlatformWindow for ScaledTestWindow {
-            fn id(&self) -> WindowId {
-                self.id
-            }
-
-            fn physical_size(&self) -> Size<DevicePixels> {
-                Size::default()
-            }
-
-            fn logical_size(&self) -> Size<Pixels> {
-                Size::default()
-            }
-
-            fn scale_factor(&self) -> f64 {
-                self.scale_factor
-            }
-
-            fn request_redraw(&self) {}
-
-            fn is_focused(&self) -> bool {
-                false
-            }
-
-            fn is_visible(&self) -> bool {
-                true
-            }
-
-            fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-                Ok(())
-            }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-        }
 
         /// A non-primary presentation's pipeline must be seeded with ITS
         /// OWN window's `scale_factor()` before construction — the same
@@ -7880,10 +7713,11 @@ mod tests {
         #[test]
         fn non_primary_presentation_pipeline_is_seeded_with_its_own_windows_scale_factor() {
             let mut realm = UiRealm::for_test();
-            let window_b: Arc<dyn PlatformWindow> = Arc::new(ScaledTestWindow {
-                id: WindowId(42),
-                scale_factor: 2.5,
-            });
+            let window_b: Arc<dyn PlatformWindow> = Arc::new(
+                crate::app::window_test_support::TestWindow::new()
+                    .with_id(42)
+                    .with_scale_factor(2.5),
+            );
             let presentation_b = realm.assemble_presentation(window_b);
             let b_id = realm.install_presentation(presentation_b);
 
@@ -8354,47 +8188,6 @@ mod tests {
         use super::*;
         use crate::app::frame_failure::{FrameFailureHandler, FrameFailureKind};
 
-        /// This module's own minimal raster double: counts `render_scene`
-        /// calls, records whether each submitted scene carried content, and
-        /// always reports a successful present. Sibling test modules'
-        /// backends are private to them.
-        struct RecordingBackend {
-            render_scene_calls: u32,
-            submitted_scene_had_content: Vec<bool>,
-        }
-
-        impl RecordingBackend {
-            fn new() -> Self {
-                Self {
-                    render_scene_calls: 0,
-                    submitted_scene_had_content: Vec::new(),
-                }
-            }
-        }
-
-        impl RasterBackend for RecordingBackend {
-            fn render_scene(&mut self, scene: &Scene) -> Result<bool, EngineError> {
-                self.render_scene_calls += 1;
-                self.submitted_scene_had_content.push(scene.has_content());
-                Ok(true)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
-        }
-
         /// Failure reports collected through the real registered-handler
         /// route — the same `FrameFailureHandler` an embedder registers via
         /// `AppConfig::with_frame_failure_handler`. Flattened to owned
@@ -8609,7 +8402,7 @@ mod tests {
                 .attach_root_widget_to_for_test(b_id, &SizedBox::new(20.0, 20.0))
                 .expect("B attaches");
 
-            let mut backend = RecordingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             // Pump 1: both presentations mount and frame cleanly.
             assert!(
@@ -8742,7 +8535,7 @@ mod tests {
             realm
                 .attach_root_widget(&SizedBox::new(10.0, 10.0))
                 .expect("attaches");
-            let mut backend = RecordingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             assert!(
                 realm.render_frame_entered(&mut backend),
@@ -8791,7 +8584,7 @@ mod tests {
                 .attach_root_widget(&SizedBox::new(10.0, 10.0))
                 .expect("attaches");
             let seen = install_collecting_handler(&realm);
-            let mut backend = RecordingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             let probe_armed = Rc::new(Cell::new(true));
             let armed = Rc::clone(&probe_armed);
@@ -8802,7 +8595,7 @@ mod tests {
                     assert!(!armed.get(), "segment probe — intentional test panic");
                 })));
 
-            let pump = |realm: &UiRealm, backend: &mut RecordingBackend| {
+            let pump = |realm: &UiRealm, backend: &mut TestRasterBackend| {
                 realm.request_redraw();
                 realm.mark_rendered();
                 with_quiet_panics(|| {
@@ -8850,7 +8643,7 @@ mod tests {
                 owner.set_root_id(Some(root_id));
             });
 
-            let mut backend = RecordingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
             let presented = with_quiet_panics(|| {
                 catch_unwind(AssertUnwindSafe(|| {
                     realm.render_frame_entered(&mut backend)
@@ -8987,7 +8780,7 @@ mod tests {
                 flui_types::geometry::Offset::new(px(10.0), px(10.0)),
             );
 
-            let mut backend = RecordingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
             let _ = realm.render_frame_entered(&mut backend);
             let hits_after_clean_pump = hits.load(Ordering::Relaxed);
             assert!(
@@ -9034,7 +8827,7 @@ mod tests {
                 })));
             realm.request_redraw();
 
-            let mut backend = RecordingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
             let _ = with_quiet_panics(|| {
                 catch_unwind(AssertUnwindSafe(|| {
                     realm.render_frame_entered(&mut backend)
@@ -9085,7 +8878,7 @@ mod tests {
                 panic!("FrameFailureHandler — intentional embedder-bug test panic");
             })));
 
-            let mut backend = RecordingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
             assert!(
                 realm.render_frame_entered(&mut backend),
                 "pump 1: both presentations frame cleanly"
@@ -9188,7 +8981,7 @@ mod tests {
                 owner.set_root_id(Some(root_id));
             });
 
-            let mut backend = RecordingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
             let presented = with_quiet_panics(|| {
                 catch_unwind(AssertUnwindSafe(|| {
                     realm.render_frame_entered(&mut backend)
@@ -9270,116 +9063,6 @@ mod tests {
                 .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(1.0, 1.0)))
                 .expect("attach succeeds");
             realm
-        }
-
-        /// A raster backend that always reports a successful present --
-        /// this module's own minimal double (the sibling
-        /// `frame_pipeline_and_vsync` module's `ScriptedRasterBackend` is
-        /// private to it).
-        struct AlwaysPresentBackend;
-
-        impl RasterBackend for AlwaysPresentBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                Ok(true)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
-        }
-
-        /// A raster backend that always reports `SurfaceLost` — this
-        /// module's own minimal double for the "a real submit genuinely
-        /// failed" half of the frames-dropped-vs-deferred pin below.
-        struct AlwaysErrorsBackend;
-
-        impl RasterBackend for AlwaysErrorsBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                Err(EngineError::SurfaceLost)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
-        }
-
-        /// A raster backend that always reports `DeviceLost` — this
-        /// module's own minimal double for
-        /// `device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`
-        /// below, kept separate from [`AlwaysErrorsBackend`] (which is
-        /// dedicated to the `SurfaceLost` pin) so each test's backend name
-        /// says exactly which failure it scripts.
-        struct AlwaysDeviceLostBackend;
-
-        impl RasterBackend for AlwaysDeviceLostBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                Err(EngineError::DeviceLost)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
-        }
-
-        /// A raster backend that always reports `SurfaceValidation` — this
-        /// module's own minimal double for
-        /// `surface_validation_retry_preserves_the_original_input_epoch_for_the_presented_frame`
-        /// below, the `SurfaceValidation` counterpart of
-        /// [`AlwaysDeviceLostBackend`].
-        struct AlwaysSurfaceValidationBackend;
-
-        impl RasterBackend for AlwaysSurfaceValidationBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                Err(EngineError::SurfaceValidation)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
         }
 
         /// END-STATE INVARIANT: at N=1 -- a clock that is
@@ -9525,7 +9208,7 @@ mod tests {
             let realm = UiRealm::for_test(); // nothing attached: no demand at all
             realm.defer_first_frame();
 
-            let mut backend = AlwaysPresentBackend;
+            let mut backend = TestRasterBackend::always_presents();
             let presented = realm.render_frame_entered(&mut backend);
             assert!(!presented, "nothing to present with no root attached");
 
@@ -9727,7 +9410,7 @@ mod tests {
             clock.record_submit(); // at capacity for the whole loop below
             wake_count.store(0, Ordering::Relaxed);
 
-            let mut backend = AlwaysPresentBackend;
+            let mut backend = TestRasterBackend::always_presents();
 
             for tick in 1..=5 {
                 realm.set_now_secs_for_test(0.01 * f64::from(tick));
@@ -9887,45 +9570,6 @@ mod tests {
         // that keeps a demand mark from stranding the presentation.
         // ================================================================
 
-        /// A raster backend that always presents, counting how many times
-        /// `render_scene` actually ran -- the "zero GPU submits" oracle for
-        /// the tests below. Distinct from the sibling `frame_pipeline_and_
-        /// vsync` module's own `CountingRasterBackend`, which is private to
-        /// that module.
-        struct HiddenGateCountingBackend {
-            render_scene_calls: u32,
-        }
-
-        impl HiddenGateCountingBackend {
-            fn new() -> Self {
-                Self {
-                    render_scene_calls: 0,
-                }
-            }
-        }
-
-        impl RasterBackend for HiddenGateCountingBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                self.render_scene_calls += 1;
-                Ok(true)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
-        }
-
         /// END-STATE INVARIANT: a hidden presentation's segment never runs
         /// and its backend never receives a submit, however many times it
         /// is dirtied and pumped.
@@ -9933,7 +9577,7 @@ mod tests {
         fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden() {
             let realm = mount_root_here();
             let presentation_id = realm.presentations.primary().id();
-            let mut backend = HiddenGateCountingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             // Settle the initial attach paint first, so the assertions below
             // isolate exactly what happens WHILE hidden -- baselines
@@ -10035,7 +9679,7 @@ mod tests {
                 .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
                 .expect("attach succeeds");
             let presentation_id = realm.presentations.primary().id();
-            let mut backend = HiddenGateCountingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             // Settle the attach's own first paint.
             realm.set_now_secs_for_test(0.0);
@@ -10160,7 +9804,7 @@ mod tests {
             let (wake, wake_count) = super::counting_wake();
             let realm = super::new_runtime(wake).expect("runtime");
             let presentation_id = realm.presentations.primary().id();
-            let mut backend = HiddenGateCountingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             let controller = AnimationController::new(
                 Duration::from_secs(1),
@@ -10224,7 +9868,7 @@ mod tests {
 
             let realm = mount_root_here();
             let presentation_id = realm.presentations.primary().id();
-            let mut backend = HiddenGateCountingBackend::new();
+            let mut backend = TestRasterBackend::always_presents();
 
             // Settle the attach's own first paint before gating -- baselines
             // captured AFTER settling, not absolute zero.
@@ -10448,7 +10092,7 @@ mod tests {
             // A measurable, non-flaky real gap between dispatch and produce.
             thread::sleep(Duration::from_millis(5));
 
-            let mut backend = AlwaysPresentBackend;
+            let mut backend = TestRasterBackend::always_presents();
             let presented = realm.render_frame_entered(&mut backend);
             assert!(
                 presented,
@@ -10506,7 +10150,7 @@ mod tests {
                 realm.handle_input_addressed(primary_id, PlatformInput::Pointer(second));
             });
 
-            let mut backend = AlwaysPresentBackend;
+            let mut backend = TestRasterBackend::always_presents();
             assert!(realm.render_frame_entered(&mut backend));
 
             let snapshots = realm.presentations.primary().clock().frames_since(None);
@@ -10567,7 +10211,7 @@ mod tests {
             presentation.clock().record_retire();
             presentation.mark_redraw_pending();
 
-            let mut backend = AlwaysErrorsBackend;
+            let mut backend = TestRasterBackend::new(|_, _| Err(EngineError::SurfaceLost));
             let presented = realm.render_frame_entered(&mut backend);
 
             assert!(!presented, "SurfaceLost never reaches present()");
@@ -10589,7 +10233,7 @@ mod tests {
             let realm = mount_root_here();
             let capture = FrameEventCapture::default();
             let subscriber = Registry::default().with(capture.clone());
-            let mut backend = AlwaysPresentBackend;
+            let mut backend = TestRasterBackend::always_presents();
 
             tracing::subscriber::with_default(subscriber, || {
                 assert!(realm.render_frame_entered(&mut backend));
@@ -10649,7 +10293,7 @@ mod tests {
             realm
                 .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
                 .expect("A attaches");
-            let mut backend = AlwaysPresentBackend;
+            let mut backend = TestRasterBackend::always_presents();
             assert!(
                 realm.render_frame_entered(&mut backend),
                 "pump 1: A alone must produce and present"
@@ -10737,7 +10381,7 @@ mod tests {
                 thread::sleep(Duration::from_micros(200));
             }
 
-            let mut backend = AlwaysPresentBackend;
+            let mut backend = TestRasterBackend::always_presents();
             assert!(realm.render_frame_entered(&mut backend));
 
             let snapshots = realm.presentations.primary().clock().frames_since(None);
@@ -10758,38 +10402,6 @@ mod tests {
                 "must keep the newest-dispatched inputs, not the oldest -- the discard \
                  policy this test pins"
             );
-        }
-
-        /// A raster backend whose `render_scene` sleeps a known interval
-        /// before returning `Ok(true)` — standing in for the production
-        /// wgpu backend's `output.present()` under the default `Fifo`
-        /// presentation mode, which blocks until the next vsync before
-        /// `render_scene` returns. Proves `submit_at` is sampled AFTER
-        /// `render_scene` returns, not before it.
-        struct SleepingPresentBackend {
-            sleep: std::time::Duration,
-        }
-
-        impl RasterBackend for SleepingPresentBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                std::thread::sleep(self.sleep);
-                Ok(true)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
         }
 
         /// Finding: `submit_at` used to be sampled BEFORE `render_scene`
@@ -10814,8 +10426,16 @@ mod tests {
                 realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
             });
 
+            // The sleep stands in for the production wgpu backend's
+            // `output.present()` under the default `Fifo` presentation
+            // mode, which blocks until the next vsync before `render_scene`
+            // returns — proving `submit_at` is sampled AFTER `render_scene`
+            // returns, not before it.
             let sleep = std::time::Duration::from_millis(30);
-            let mut backend = SleepingPresentBackend { sleep };
+            let mut backend = TestRasterBackend::new(move |_, _| {
+                std::thread::sleep(sleep);
+                Ok(true)
+            });
             assert!(
                 realm.render_frame_entered(&mut backend),
                 "precondition: the frame actually reached present()"
@@ -10861,7 +10481,7 @@ mod tests {
             // First attempt: the surface is lost. A retry is armed, and the
             // failed attempt's own snapshot must still see the epoch that
             // was pending (diagnostic value), but must NOT consume it.
-            let mut failing_backend = AlwaysErrorsBackend;
+            let mut failing_backend = TestRasterBackend::new(|_, _| Err(EngineError::SurfaceLost));
             let presented = realm.render_frame_entered(&mut failing_backend);
             assert!(!presented, "SurfaceLost never reaches present()");
             let after_failure = realm.presentations.primary().clock().frames_since(None);
@@ -10895,7 +10515,7 @@ mod tests {
                 }
             });
             primary.mark_redraw_pending();
-            let mut succeeding_backend = AlwaysPresentBackend;
+            let mut succeeding_backend = TestRasterBackend::always_presents();
             let presented = realm.render_frame_entered(&mut succeeding_backend);
             assert!(presented, "the retry must actually reach present()");
 
@@ -10942,7 +10562,7 @@ mod tests {
             // First attempt: the device is lost. A retry is armed, and the
             // failed attempt's own snapshot must still see the epoch that
             // was pending (diagnostic value), but must NOT consume it.
-            let mut failing_backend = AlwaysDeviceLostBackend;
+            let mut failing_backend = TestRasterBackend::new(|_, _| Err(EngineError::DeviceLost));
             let presented = realm.render_frame_entered(&mut failing_backend);
             assert!(!presented, "DeviceLost never reaches present()");
             let after_failure = realm.presentations.primary().clock().frames_since(None);
@@ -10971,7 +10591,7 @@ mod tests {
                 }
             });
             primary.mark_redraw_pending();
-            let mut succeeding_backend = AlwaysPresentBackend;
+            let mut succeeding_backend = TestRasterBackend::always_presents();
             let presented = realm.render_frame_entered(&mut succeeding_backend);
             assert!(presented, "the retry must actually reach present()");
 
@@ -11020,7 +10640,8 @@ mod tests {
             // armed, and the failed attempt's own snapshot must still see
             // the epoch that was pending (diagnostic value), but must NOT
             // consume it.
-            let mut failing_backend = AlwaysSurfaceValidationBackend;
+            let mut failing_backend =
+                TestRasterBackend::new(|_, _| Err(EngineError::SurfaceValidation));
             let presented = realm.render_frame_entered(&mut failing_backend);
             assert!(!presented, "SurfaceValidation never reaches present()");
             let after_failure = realm.presentations.primary().clock().frames_since(None);
@@ -11049,7 +10670,7 @@ mod tests {
                 }
             });
             primary.mark_redraw_pending();
-            let mut succeeding_backend = AlwaysPresentBackend;
+            let mut succeeding_backend = TestRasterBackend::always_presents();
             let presented = realm.render_frame_entered(&mut succeeding_backend);
             assert!(presented, "the retry must actually reach present()");
 
@@ -11070,53 +10691,6 @@ mod tests {
                 "the presented retry frame must carry the ORIGINAL input epoch -- retaining \
                  it across the failed attempt must not have lost it"
             );
-        }
-
-        /// A raster backend that fails its first `render_scene` call with a
-        /// scripted [`EngineError`] and presents on every call after — the
-        /// double [`a_mid_frame_submit_failure_retry_actually_reaches_render_scene_again_on_a_static_tree`]
-        /// needs to observe whether a retry actually reaches `render_scene`
-        /// a second time, not just whether bookkeeping (`needs_redraw()`,
-        /// epoch attribution) looks right around it. Every `Always*Backend`
-        /// above scripts a single outcome forever, which cannot express "the
-        /// transient failure clears" — the shape a real retry produces.
-        struct FailOnceThenPresentsBackend {
-            error: Option<EngineError>,
-            render_scene_calls: u32,
-        }
-
-        impl FailOnceThenPresentsBackend {
-            fn new(error: EngineError) -> Self {
-                Self {
-                    error: Some(error),
-                    render_scene_calls: 0,
-                }
-            }
-        }
-
-        impl RasterBackend for FailOnceThenPresentsBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                self.render_scene_calls += 1;
-                match self.error.take() {
-                    Some(e) => Err(e),
-                    None => Ok(true),
-                }
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
         }
 
         /// Issue #637's own oracle requirement: the epoch-preservation pins
@@ -11154,7 +10728,7 @@ mod tests {
             // Pump 1: the mount's own dirty state is genuinely consumed --
             // build, layout, and paint all run, producing real content --
             // but the submit of that content fails.
-            let mut backend = FailOnceThenPresentsBackend::new(EngineError::SurfaceLost);
+            let mut backend = TestRasterBackend::fails_once_then_presents(EngineError::SurfaceLost);
             let presented = realm.render_frame_entered(&mut backend);
             assert!(!presented, "SurfaceLost never reaches present()");
             assert_eq!(
@@ -11216,7 +10790,7 @@ mod tests {
             realm
                 .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
                 .expect("A attaches");
-            let mut warm_up = AlwaysPresentBackend;
+            let mut warm_up = TestRasterBackend::always_presents();
             assert!(
                 realm.render_frame_entered(&mut warm_up),
                 "pump 1: A alone must produce and present"
@@ -11240,7 +10814,7 @@ mod tests {
 
             // Pump 2: B is the producer (A's segment skips -- nothing dirty
             // there), and B's submit fails.
-            let mut backend = FailOnceThenPresentsBackend::new(EngineError::SurfaceLost);
+            let mut backend = TestRasterBackend::fails_once_then_presents(EngineError::SurfaceLost);
             let presented = realm.render_frame_entered(&mut backend);
             assert!(!presented, "SurfaceLost never reaches present()");
             assert_eq!(
@@ -11327,7 +10901,7 @@ mod tests {
                 realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
             });
 
-            let mut backend = AlwaysPresentBackend;
+            let mut backend = TestRasterBackend::always_presents();
             assert!(realm.render_frame_entered(&mut backend));
 
             let snapshots = realm.presentations.primary().clock().frames_since(None);

@@ -1847,7 +1847,6 @@ version = "0.2.0"
 dependencies = [
  "flui-animation",
  "flui-foundation",
- "flui-interaction",
  "flui-objects",
  "flui-rendering",
  "flui-scheduler",
@@ -2330,6 +2329,7 @@ dependencies = [
  "flui-testing",
  "flui-types",
  "flui-view",
+ "flui-widgets",
  "futures-core",
  "futures-util",
  "image",

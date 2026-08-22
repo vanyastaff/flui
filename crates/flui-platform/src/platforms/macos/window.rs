@@ -27,9 +27,7 @@ use super::view;
 use crate::{
     config::WindowConfiguration,
     shared::WindowCallbacks,
-    traits::{
-        CursorError, DispatchEventResult, PlatformInput, PlatformWindow, WindowId, WindowOptions,
-    },
+    traits::{CursorError, PlatformWindow, WindowId, WindowOptions},
 };
 
 /// macOS window wrapper around NSWindow
@@ -486,45 +484,7 @@ impl PlatformWindow for MacOSWindow {
 
     // ==================== Callback Registration ====================
 
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
-        *self.callbacks.on_input.lock() = Some(callback);
-    }
-
-    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_request_frame.lock() = Some(callback);
-    }
-
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
-        *self.callbacks.on_resize.lock() = Some(callback);
-    }
-
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_moved.lock() = Some(callback);
-    }
-
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        *self.callbacks.on_close.lock() = Some(callback);
-    }
-
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        *self.callbacks.on_should_close.lock() = Some(callback);
-    }
-
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_active_status_change.lock() = Some(callback);
-    }
-
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_visibility_status_change.lock() = Some(callback);
-    }
-
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_hover_status_change.lock() = Some(callback);
-    }
-
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_appearance_changed.lock() = Some(callback);
-    }
+    crate::shared::impl_window_callback_setters!(callbacks);
 
     fn window_handle(
         &self,

@@ -29,7 +29,7 @@ use flui_widgets::{Icon, MediaQuery, MediaQueryData, SizedBox, Text};
 /// view, so this is resolved by render type instead of assuming a fixed depth
 /// below the presentation root.
 fn layout_root(laid: &common::LaidOut) -> flui_foundation::RenderId {
-    laid.find_by_render_type("RenderCustomMultiChildLayoutBox")
+    laid.try_find_by_render_type("RenderCustomMultiChildLayoutBox")
         .expect("Scaffold must mount exactly one CustomMultiChildLayout")
 }
 

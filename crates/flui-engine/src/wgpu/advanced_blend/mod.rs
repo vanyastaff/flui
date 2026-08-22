@@ -562,7 +562,7 @@ mod synthetic_op_tests {
         ];
 
         let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT);
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let mut resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
 
         // Build the foreground pooled texture (solid src, full target size).
@@ -750,7 +750,7 @@ mod synthetic_op_tests {
     fn color_dodge_and_burn_boundary_inputs_match_cpu_oracle() {
         let (device, queue) = request_device_and_queue();
         let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT);
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let mut resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
         let tolerance = 1u8;
 
@@ -879,7 +879,7 @@ mod synthetic_op_tests {
         );
         let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let fg_transparent = pool.acquire(4, 2, TEST_FORMAT);
         // Explicitly upload transparent (all-zero) pixels — do not rely on pool zero-init,
         // which is an implementation detail not guaranteed by the pool contract.
@@ -1008,7 +1008,7 @@ mod synthetic_op_tests {
             wgpu::TextureUsages::COPY_SRC,
         );
 
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let fg_pooled = pool.acquire(4, SURF_H, TEST_FORMAT);
         {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1132,7 +1132,7 @@ mod synthetic_op_tests {
     fn translucent_composite_matches_oracle() {
         let (device, queue) = request_device_and_queue();
         let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT);
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let mut resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
 
         // Semi-transparent inputs — the composite path where αs·αb terms are non-trivial.

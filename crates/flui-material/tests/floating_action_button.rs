@@ -45,7 +45,8 @@ fn tap_fires_on_pressed_and_the_button_mounts_a_material_surface() {
     );
 
     assert!(
-        laid.find_by_render_type("RenderPhysicalShape").is_some(),
+        laid.try_find_by_render_type("RenderPhysicalShape")
+            .is_some(),
         "FloatingActionButton must compose a Material (RenderPhysicalShape) surface",
     );
 
@@ -69,14 +70,14 @@ fn a_button_with_no_press_handler_is_disabled_and_a_tap_dispatch_is_a_no_op() {
         tight(56.0, 56.0),
     );
     let material_before = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("a disabled FloatingActionButton must still mount its Material surface");
 
     laid.dispatch_pointer_down(28.0, 28.0);
     laid.dispatch_pointer_up(28.0, 28.0);
 
     let material_after = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("the Material surface must survive a tap dispatch");
     assert_eq!(
         material_before, material_after,
@@ -110,7 +111,7 @@ fn disabled_fab_still_resolves_the_m3_default_background_and_elevation() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Material must mount");
     assert_eq!(
         laid.render_property(material, "color"),
@@ -138,7 +139,7 @@ fn enabled_fab_resolves_the_m3_default_background_and_elevation() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Material must mount");
     assert_eq!(
         laid.render_property(material, "color"),
@@ -176,7 +177,7 @@ fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Material must mount");
     assert_eq!(
         laid.render_property(material, "color"),
@@ -291,7 +292,7 @@ fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_posi
     );
 
     let layout_root = laid
-        .find_by_render_type("RenderCustomMultiChildLayoutBox")
+        .try_find_by_render_type("RenderCustomMultiChildLayoutBox")
         .expect("Scaffold's multi-child layout must be mounted");
     // `Scaffold::build` pushes `LayoutId`s in `body`, `floating_action_button`
     // order when both are set and there is no `app_bar` — see `scaffold.rs`.
@@ -342,7 +343,7 @@ fn a_nonzero_bottom_safe_area_still_clears_the_fab_by_at_least_the_flat_margin()
     );
 
     let layout_root = laid
-        .find_by_render_type("RenderCustomMultiChildLayoutBox")
+        .try_find_by_render_type("RenderCustomMultiChildLayoutBox")
         .expect("Scaffold's multi-child layout must be mounted");
     let fab = laid.child(layout_root, 1);
 

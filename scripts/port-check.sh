@@ -339,21 +339,19 @@ check "6" \
 # handle behind a shared lock invites a second mutator into a single-mutator
 # design. The regex is narrow enough that any new one is a regression.
 #
-# ONE file is excluded, and the exclusion carries an obligation.
+# No production file is excluded any more. `texture_pool.rs` used to be, for
+# its `Arc<Mutex<TexturePoolInner>>` back-reference; that shape is gone (the
+# pool owns its inventory directly and dropped textures come home through an
+# mpsc return channel), and the glob was removed in the same change per the
+# obligation this comment used to carry.
 #
-#   texture_pool.rs -- `Arc<Mutex<TexturePoolInner>>` at two sites, still the
-#   real shape. **When that lock is removed, this `--glob` MUST go in the same
-#   change**, or the file silently stops being watched precisely when it
-#   becomes watchable.
-#
-# Two other exclusions used to sit here, for `renderer.rs` and `backend.rs`,
+# Two other exclusions once sat here, for `renderer.rs` and `backend.rs`,
 # both waiting on the same refactor. That refactor landed -- `Renderer` now
 # owns its `OffscreenRenderer` outright and `Backend` borrows one for a frame
 # -- and nobody removed the globs, so both files went unwatched for however
 # long. A stale exclusion is worse than none: it reads as "known to violate"
 # while the file is clean, and it permits the next real violation in exactly
-# the place the rule most wants to look. Both are now gone, verified by
-# running the trigger against both files with the globs removed (zero hits).
+# the place the rule most wants to look.
 #
 # Test files (`!**/test*.rs`, `!**/tests/**`) stay excluded so fixtures are
 # not flagged.
@@ -378,7 +376,6 @@ check "7" \
   --type rust \
   --glob '!**/test*.rs' \
   --glob '!**/tests/**' \
-  --glob '!**/texture_pool.rs' \
   crates/flui-engine/src/wgpu
 
 # -----------------------------------------------------------------------------

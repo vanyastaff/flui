@@ -386,7 +386,7 @@ fn a_callback_less_but_enabled_destination_still_paints_the_hover_overlay() {
     // only SCHEDULES a rebuild (see `crate::ink_well`'s own
     // `overlay_color_resolution_reflects_the_hovered_state` test, same
     // shape), it doesn't run one synchronously.
-    laid.dispatch_pointer_move(50.0, 40.0);
+    laid.dispatch_pointer_hover(50.0, 40.0);
     laid.pump();
 
     let overlays: Vec<_> = laid

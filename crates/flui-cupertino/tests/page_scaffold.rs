@@ -37,7 +37,7 @@ fn background_defaults_to_the_themes_system_background_color() {
         tight(400.0, 600.0),
     );
     let decorated = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("the scaffold always paints its background via DecoratedBox");
     let decoration = laid
         .render_property(decorated, "decoration")
@@ -123,7 +123,7 @@ fn resize_to_avoid_bottom_inset_toggles_the_bottom_padding() {
         tight(400.0, 600.0),
     );
     let padding_box = enabled
-        .find_by_render_type("RenderPadding")
+        .try_find_by_render_type("RenderPadding")
         .expect("resize_to_avoid_bottom_inset always wraps content in a Padding");
     let padding = enabled
         .render_property(padding_box, "padding")
@@ -143,7 +143,7 @@ fn resize_to_avoid_bottom_inset_toggles_the_bottom_padding() {
         tight(400.0, 600.0),
     );
     assert!(
-        disabled.find_by_render_type("RenderPadding").is_none(),
+        disabled.try_find_by_render_type("RenderPadding").is_none(),
         "resize_to_avoid_bottom_inset(false) with no navigation bar must not wrap content \
          in a Padding at all"
     );

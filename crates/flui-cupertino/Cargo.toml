@@ -52,6 +52,11 @@ flui-animation = { path = "../flui-animation", version = "0.2.0" }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# `tests/common/mod.rs` is a thin re-export of the canonical headless harness
+# in `flui_widgets::testing` — the dev-dependency flips the feature that
+# compiles it (the normal dependency above stays featureless, so no
+# production graph links the test driver).
+flui-widgets = { path = "../flui-widgets", version = "0.2.0", features = ["testing"] }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
 flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
 flui-testing = { path = "../flui-testing", version = "0.2.0" }
@@ -60,11 +65,6 @@ flui-testing = { path = "../flui-testing", version = "0.2.0" }
 # matching `flui-widgets/tests/visibility.rs`'s identical animation-probe
 # fixture.
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
-# Synthetic pointer events (`make_down_event`/`make_up_event`) — `tests/common`
-# dispatches these to drive `CupertinoButton`'s tap handling at the widget
-# level. No `flui-interaction` usage in `src/` (no `FocusNode` wiring yet —
-# see `button.rs`'s deferred-`autofocus`/`onFocusChange` note).
-flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
 parking_lot = { workspace = true }
 
 [lints]
