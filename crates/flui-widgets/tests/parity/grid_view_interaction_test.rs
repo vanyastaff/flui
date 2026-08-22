@@ -188,13 +188,21 @@
 //!    painted") via geometry instead of a canvas-call interceptor.
 //! 10. `'GridView in zero context'` — **ported, real green**:
 //!     [`grid_view_in_zero_context_renders_no_onstage_children`].
-//! 11. `'GridView in unbounded context'` — **ported, real green**:
-//!     [`grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content`].
-//!     Was a current-behavior-plus-oracle-pin pair while a shrink-wrapped
-//!     grid collapsed to zero height in an unbounded context; the grid now
-//!     treats an infinite target end as "no upper bound" instead of asking
-//!     the delegate (oracle `sliver_grid.dart:608-610`), so the oracle's
-//!     expectation holds directly and the pair is retired.
+//! 11. `'GridView in unbounded context'` — **ported, real green**, and
+//!     covered TWICE because FLUI splits one oracle render object in two:
+//!     [`grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content`]
+//!     for the eager path (`.count`) and
+//!     [`grid_view_builder_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content`]
+//!     for the lazy one (`.builder`). Flutter needs one test here — `.count`
+//!     and `.builder` differ only in their child delegate, both driving
+//!     `RenderSliverGrid`. Was a current-behavior-plus-oracle-pin pair while
+//!     a shrink-wrapped grid collapsed to zero height in an unbounded
+//!     context; both grids now treat an infinite target end as "no upper
+//!     bound" instead of asking the delegate (oracle
+//!     `sliver_grid.dart:608-610`), so the oracle's expectation holds
+//!     directly and the pair is retired. The lazy path needs one bound the
+//!     eager path does not, and a DIVERGENCE rides on it — see
+//!     [`grid_view_builder_in_unbounded_context_with_undefined_item_count_terminates`].
 //! 12. `'GridView.builder control test'` — **ported, real green**:
 //!     [`grid_view_builder_control_test_shrink_wrap_builds_exactly_viewport_fit`].
 //!     Lazy path, but Finding 2's residency-vs-onstage distinction still
@@ -1055,6 +1063,76 @@ fn grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content() {
     );
     assert!(laid.find_text("0").is_some(), "item 0 must be found");
     assert!(laid.find_text("19").is_some(), "item 19 must be found");
+}
+
+/// The same oracle case as above, reached through `GridView::builder`.
+///
+/// Flutter needs one test here because one `RenderSliverGrid` serves both
+/// constructors — `.count` and `.builder` differ only in their child
+/// delegate. FLUI splits that render object in two (eager
+/// `RenderSliverGrid`, lazy `RenderSliverGridLazy`), so the oracle's single
+/// case needs two tests to cover, and the fix that retired the pin above
+/// left this half producing the identical 800x0 collapse.
+#[test]
+fn grid_view_builder_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content() {
+    let delegate: Arc<dyn SliverGridDelegate> =
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(4));
+    let root = SingleChildScrollView::new().child(
+        GridView::builder(delegate, 20, |i| {
+            Some(SizedBox::shrink().child(Text::new(format!("{i}"))).boxed())
+        })
+        .shrink_wrap(true),
+    );
+    let mut laid = harness::pump_widget(root, harness::screen());
+    common::settle_lazy(&mut laid);
+
+    let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport_id),
+        size(800.0, 1000.0),
+        "shrink_wrap must size the lazy grid's viewport to its content extent"
+    );
+    assert!(laid.find_text("0").is_some(), "item 0 must be found");
+    assert!(laid.find_text("19").is_some(), "item 19 must be found");
+}
+
+/// A DIVERGENCE, asserted so it cannot drift silently.
+///
+/// `usize::MAX` is this crate's stand-in for the oracle's undefined
+/// `itemCount` (case 13). Combined with an unbounded main axis it asks for
+/// infinite content in an infinitely tall box, which the oracle answers by
+/// looping until the builder returns null — so a never-null builder does not
+/// terminate in Flutter either. FLUI cannot discover that end mid-frame (the
+/// render object emits build *requests*; the element tree services them on a
+/// later pass), so it truncates the window instead and logs that the
+/// committed extent is short of the declared content.
+///
+/// What this test protects is that the truncation stays bounded and
+/// terminating: before it, the delegate's index product overflowed and
+/// pipeline resilience recovered into a zero-height viewport.
+#[test]
+fn grid_view_builder_in_unbounded_context_with_undefined_item_count_terminates() {
+    let delegate: Arc<dyn SliverGridDelegate> =
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(4));
+    let root = SingleChildScrollView::new().child(
+        GridView::builder(delegate, usize::MAX, |i| {
+            Some(SizedBox::shrink().child(Text::new(format!("{i}"))).boxed())
+        })
+        .shrink_wrap(true),
+    );
+    let laid = harness::pump_widget(root, harness::screen());
+
+    // The grid truncates to its unbounded-window cap (10 000 tiles) and
+    // reports the extent it actually covers: 10 000 tiles over 4 columns is
+    // 2500 rows of 200px cells. Exact, not a range — a bound this test cannot
+    // compute is a bound it cannot notice drifting.
+    let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport_id),
+        size(800.0, 500_000.0),
+        "an unbounded window over an undefined item count must commit the \
+         truncated extent, not collapse to zero and not declare 2^64 rows"
+    );
 }
 
 // ============================================================================
