@@ -29,12 +29,14 @@
 //! builder returns null. That loop can call the builder mid-layout; this
 //! render object cannot — it emits build *requests* the element tree services
 //! on a later pass — so it has no way to discover the builder's end within the
-//! frame that must commit a size. It therefore caps the window at
-//! [`MAX_UNBOUNDED_WINDOW_CHILDREN`], reports the extent it actually covers
-//! rather than the declared one, and logs the shortfall. That cap separates a
-//! sentinel from a length, not a large grid from a small one: every count at
-//! or below it lays out in full, matching the oracle, and it is set above
-//! every count that can render at all.
+//! frame that must commit a size. A count past
+//! [`MAX_UNBOUNDED_WINDOW_CHILDREN`] is therefore read as that sentinel and
+//! served a small bounded window ([`UNBOUNDED_SENTINEL_WINDOW`]) instead,
+//! reporting the extent it actually covers rather than the declared one and
+//! logging the shortfall once. The threshold separates a sentinel from a
+//! length, not a large grid from a small one: every count at or below it lays
+//! out in full, matching the oracle, and it is set above every count that can
+//! render at all.
 //!
 //! # Lifecycle
 //!
@@ -74,13 +76,29 @@ use flui_rendering::{
 /// `itemCount`) would enqueue ~2^64 build requests before the frame could
 /// return.
 ///
-/// The value sits above every count that can render at all, and far below the
-/// sentinel. Measured on the widget harness with a 4-column shrink-wrapped
-/// grid: 10 001 items settle in ~0.3 s, 40 000 in ~1.5 s, 160 000 in ~10 s — a
-/// grid an order of magnitude past that is already unusable for reasons this
-/// constant has no part in, while one frame at the cap itself costs ~70 ms and
-/// returns. `usize::MAX` is thirteen orders of magnitude beyond it.
+/// The value sits above every count that can render at all. Measured on the
+/// widget harness with a 4-column shrink-wrapped grid: 10 001 items settle in
+/// ~0.3 s, 40 000 in ~1.5 s, 160 000 in ~10 s — a grid an order of magnitude
+/// past that is already unusable for reasons this constant has no part in,
+/// while `usize::MAX` is thirteen orders of magnitude beyond it.
 const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
+
+/// How many children the sentinel case actually lays out.
+///
+/// Deliberately a SEPARATE number from [`MAX_UNBOUNDED_WINDOW_CHILDREN`], and
+/// conflating the two was a real bug. The threshold has to be high, since no
+/// genuine data-source length may fall past it; the window served once it
+/// trips has to be small, because layout runs EVERY FRAME. Serving a
+/// threshold-sized window meant enqueueing a million build requests per frame
+/// — survivable once, an out-of-memory kill after a few, which is how this
+/// was found.
+///
+/// There is no correct extent for "infinite content in an infinitely tall
+/// box", so the requirements that remain are that the answer be bounded,
+/// stable across frames, and large enough to fill any viewport it is asked to
+/// fill. A thousand tiles clears the last by a wide margin, and it converges:
+/// the requests are serviced once and every later frame finds them resident.
+const UNBOUNDED_SENTINEL_WINDOW: usize = 1_000;
 
 /// A request-strategy lazily-virtualized 2-D grid sliver.
 ///
@@ -294,18 +312,16 @@ impl RenderSliver for RenderSliverGridLazy {
                 self.warned_truncation_for = Some(self.item_count);
                 tracing::warn!(
                     item_count = self.item_count,
-                    cap = MAX_UNBOUNDED_WINDOW_CHILDREN,
+                    threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
+                    window = UNBOUNDED_SENTINEL_WINDOW,
                     "lazy grid asked to fill an unbounded main axis declares \
-                     more children than one frame can even request; reading \
-                     the count as an undefined-count stand-in and truncating \
-                     the window, so the committed extent is short of the \
-                     declared content"
+                     more children than any real data source has; reading the \
+                     count as an undefined-count stand-in and serving a small \
+                     bounded window instead, so the committed extent is far \
+                     short of the declared content"
                 );
             }
-            (
-                MAX_UNBOUNDED_WINDOW_CHILDREN - 1,
-                MAX_UNBOUNDED_WINDOW_CHILDREN,
-            )
+            (UNBOUNDED_SENTINEL_WINDOW - 1, UNBOUNDED_SENTINEL_WINDOW)
         } else {
             (self.item_count - 1, self.item_count)
         };

@@ -316,17 +316,25 @@ fn check_occlusion_gating(
     // Growth beyond THIS baseline is attributable to the drag/fling alone.
     // Quiescence is best-effort (bounded): a stuck-animating app weakens
     // attribution but cannot weaken the gate assertion itself.
-    let mut gpu_armed_base = count(&read_log()?, GPU_PRESENT_MARKER);
-    let quiesce_deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        std::thread::sleep(Duration::from_millis(300));
-        let sample = count(&read_log()?, GPU_PRESENT_MARKER);
-        let stable = sample == gpu_armed_base;
-        gpu_armed_base = sample;
-        if stable || Instant::now() > quiesce_deadline {
-            break;
+    //
+    // Re-established before EVERY drag attempt, not once: a retry that
+    // reused the first attempt's baseline could satisfy the >= 3 frame
+    // premise from the dead attempt's own leftovers, which is exactly the
+    // vacuous pass the baseline exists to prevent.
+    let quiesced_present_baseline = || -> Result<usize> {
+        let mut base = count(&read_log()?, GPU_PRESENT_MARKER);
+        let quiesce_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            std::thread::sleep(Duration::from_millis(300));
+            let sample = count(&read_log()?, GPU_PRESENT_MARKER);
+            let stable = sample == base;
+            base = sample;
+            if stable || Instant::now() > quiesce_deadline {
+                break;
+            }
         }
-    }
+        Ok(base)
+    };
 
     // 2. Prepare (but do not yet map) the cover: an input-transparent
     //    override-redirect window spanning the whole screen. Created ahead
@@ -379,9 +387,27 @@ fn check_occlusion_gating(
     //    more than this drag needs, independent of where earlier checks
     //    happened to leave the offset.
     //
-    //    Starting low (3/4 of the way down) keeps all six upward steps
+    //    Starting low (3/4 of the way down) keeps all eight upward steps
     //    inside the window; starting at 1/4 would walk the pointer off the
     //    top edge and silently truncate the gesture.
+    //
+    //    The drag is RETRIED, because its premise depends on something the
+    //    harness cannot control: whether the app's event loop drained each
+    //    motion promptly. Timestamps on this backend are RECEIPT times, not
+    //    input times — winit's `CursorMoved` carries no timestamp, so
+    //    `flui_platform`'s winit `pointer_state` stamps
+    //    `PROCESS_START.elapsed()` when the event reaches FLUI. A stalled
+    //    loop therefore corrupts the velocity samples even though every
+    //    motion was delivered and applied, and `VelocityTracker` answers
+    //    with `Offset::ZERO`: either a delivery gap crosses its 40 ms
+    //    `ASSUME_POINTER_STOPPED` contiguity cliff, or a batched drain
+    //    compresses the whole drag into one timestamp. Both leave a moved
+    //    viewport with no ballistic release, which is precisely the failure
+    //    this premise reports.
+    //
+    //    Retrying the PREMISE is not retrying the assertion. The occlusion
+    //    gate below still has to hold on its own; all these attempts buy is
+    //    a live animation for it to be asserted against.
     let geometry = conn.get_geometry(window)?.reply()?;
     let coords = conn
         .translate_coordinates(window, root, 0, 0)?
@@ -389,28 +415,39 @@ fn check_occlusion_gating(
         .context("window position on the root")?;
     let center_x = (i32::from(coords.dst_x) + i32::from(geometry.width) / 2) as i16;
     let fling_start_y = (i32::from(coords.dst_y) + i32::from(geometry.height) * 3 / 4) as i16;
-    fake_motion(conn, root, center_x, fling_start_y)?;
-    conn.sync()?;
-    std::thread::sleep(Duration::from_millis(100));
-    // Witnesses for the premise below. The drag itself writes nothing to the
-    // log — only the wheel path logs `pointer-scroll tick` — so when the
-    // premise fails with a dead fling, the log alone cannot say whether the
-    // gesture engaged at all. These two make that distinction reportable
-    // instead of leaving the next reader to guess.
-    let before_drag_pixels = capture(conn, window, &geometry)?;
-    let gpu_before_drag = count(&read_log()?, GPU_PRESENT_MARKER);
-    conn.xtest_fake_input(BUTTON_PRESS, 1, 0, root, 0, 0, 0)?;
-    conn.sync()?;
-    for step in 1..=6i16 {
-        fake_motion(conn, root, center_x, fling_start_y - step * 40)?;
+
+    // Eight steps of 30 px at 12 ms rather than six of 40 px at 8 ms. Same
+    // 240 px of travel and the same direction; the point is the SPACING.
+    // Denser sampling gives the tracker more than its three-sample minimum
+    // to work with, and a 12 ms cadence leaves the loop a frame's worth of
+    // time to drain each motion separately instead of batching them —
+    // while staying well clear of the 40 ms contiguity cliff that a longer
+    // pause would walk into.
+    let drag_once = || -> Result<(bool, usize)> {
+        fake_motion(conn, root, center_x, fling_start_y)?;
         conn.sync()?;
-        std::thread::sleep(Duration::from_millis(8));
-    }
-    conn.xtest_fake_input(BUTTON_RELEASE, 1, 0, root, 0, 0, 0)?;
-    conn.sync()?;
-    let after_drag_pixels = capture(conn, window, &geometry)?;
-    let drag_moved_content = after_drag_pixels != before_drag_pixels;
-    let drag_frames = count(&read_log()?, GPU_PRESENT_MARKER).saturating_sub(gpu_before_drag);
+        std::thread::sleep(Duration::from_millis(100));
+        // Witnesses for the premise below. The drag itself writes nothing to
+        // the log — only the wheel path logs `pointer-scroll tick` — so when
+        // the premise fails with a dead fling, the log alone cannot say
+        // whether the gesture engaged at all. These two make that distinction
+        // reportable instead of leaving the next reader to guess.
+        let before_drag_pixels = capture(conn, window, &geometry)?;
+        let gpu_before_drag = count(&read_log()?, GPU_PRESENT_MARKER);
+        conn.xtest_fake_input(BUTTON_PRESS, 1, 0, root, 0, 0, 0)?;
+        conn.sync()?;
+        for step in 1..=8i16 {
+            fake_motion(conn, root, center_x, fling_start_y - step * 30)?;
+            conn.sync()?;
+            std::thread::sleep(Duration::from_millis(12));
+        }
+        conn.xtest_fake_input(BUTTON_RELEASE, 1, 0, root, 0, 0, 0)?;
+        conn.sync()?;
+        let after_drag_pixels = capture(conn, window, &geometry)?;
+        let drag_moved_content = after_drag_pixels != before_drag_pixels;
+        let drag_frames = count(&read_log()?, GPU_PRESENT_MARKER).saturating_sub(gpu_before_drag);
+        Ok((drag_moved_content, drag_frames))
+    };
 
     // 4. Cover the app mid-fling — DEMAND-gated, never time-gated: a fixed
     //    gap between drag and cover is runner-speed-dependent (a slow CI
@@ -421,44 +458,86 @@ fn check_occlusion_gating(
     //    sample window — the gate must close on a LIVE animation, not one
     //    that just died), then map immediately. Only a bound expiring
     //    without that evidence is a failure: a genuinely dead fling.
-    let fling_deadline = Instant::now() + Duration::from_secs(10);
-    let mut previous = count(&read_log()?, GPU_PRESENT_MARKER);
-    let fling_frames;
-    loop {
-        std::thread::sleep(Duration::from_millis(150));
-        let sample = count(&read_log()?, GPU_PRESENT_MARKER);
-        let frames = sample.saturating_sub(gpu_armed_base);
-        if frames >= 3 && sample > previous {
-            fling_frames = frames;
+    //
+    //    Each attempt gets its own freshly quiesced baseline, so a later
+    //    attempt can never inherit a dead earlier one's frames.
+    const FLING_ATTEMPTS: u32 = 3;
+    let mut fling_frames = 0usize;
+    let mut established = false;
+    // Carried out of the loop so the failure below reports the LAST
+    // attempt's evidence rather than a placeholder.
+    let mut drag_moved_content = false;
+    let mut drag_frames = 0usize;
+    let mut frames = 0usize;
+
+    for attempt in 1..=FLING_ATTEMPTS {
+        let gpu_armed_base = quiesced_present_baseline()?;
+        let outcome = drag_once()?;
+        drag_moved_content = outcome.0;
+        drag_frames = outcome.1;
+
+        // The first attempt keeps the original 10s bound; retries are
+        // shorter, since a fling that has not appeared in 6s on an already
+        // warm app is not going to.
+        let bound = if attempt == 1 {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_secs(6)
+        };
+        let fling_deadline = Instant::now() + bound;
+        let mut previous = count(&read_log()?, GPU_PRESENT_MARKER);
+        loop {
+            std::thread::sleep(Duration::from_millis(150));
+            let sample = count(&read_log()?, GPU_PRESENT_MARKER);
+            frames = sample.saturating_sub(gpu_armed_base);
+            if frames >= 3 && sample > previous {
+                fling_frames = frames;
+                established = true;
+                break;
+            }
+            if Instant::now() > fling_deadline {
+                break;
+            }
+            previous = sample;
+        }
+        if established {
             break;
         }
-        if Instant::now() > fling_deadline {
-            // Two different defects reach this line, and the frame count alone
-            // does not separate them, so say which one this was. The drag
-            // either moved the content (the gesture engaged and the release
-            // simply carried no ballistic velocity) or it did not (the press
-            // never became a scroll gesture — hit-testing, arena, or event
-            // delivery), and a reader who cannot tell them apart is left
-            // guessing at the whole subsystem.
-            let verdict = if drag_moved_content {
-                "the drag DID move the content, so the gesture engaged and the \
-                 release carried no ballistic velocity — look at the drag's \
-                 velocity samples, not at delivery"
-            } else {
-                "the drag did NOT move the content at all, so the press never \
-                 became a scroll gesture — look at hit-testing, the gesture \
-                 arena, or event delivery, not at the fling"
-            };
-            bail!(
-                "occlusion check FAILED (premise): the drag-fling presented only \
-                 {frames} frame(s) beyond the quiesced post-arming baseline (or \
-                 stopped producing) within 10s of the drag — no live animation \
-                 exists for the gate to stop, so the zero-submissions assertion \
-                 would be vacuous.\n  Drag itself presented {drag_frames} frame(s). \
-                 {verdict}."
-            );
-        }
-        previous = sample;
+        eprintln!(
+            "live-smoke: drag-fling attempt {attempt}/{FLING_ATTEMPTS} produced no live \
+             animation ({frames} frame(s) past baseline, drag itself {drag_frames}); retrying"
+        );
+    }
+
+    if !established {
+        // Two different defects reach this line, and the frame count alone
+        // does not separate them, so say which one this was. The drag
+        // either moved the content (the gesture engaged and the release
+        // simply carried no ballistic velocity) or it did not (the press
+        // never became a scroll gesture — hit-testing, arena, or event
+        // delivery), and a reader who cannot tell them apart is left
+        // guessing at the whole subsystem.
+        let verdict = if drag_moved_content {
+            "the drag DID move the content, so the gesture engaged and the \
+             release carried no ballistic velocity — look at the drag's \
+             velocity samples, not at delivery. The app logs those samples: \
+             grep the captured log for `velocity estimate` and read \
+             `contiguous_samples` and `span_ms` — fewer than 3 samples means a \
+             delivery gap crossed the 40 ms contiguity cliff, while 3 or more \
+             over a near-zero span means a batched drain collapsed the drag \
+             into one receipt timestamp"
+        } else {
+            "the drag did NOT move the content at all, so the press never \
+             became a scroll gesture — look at hit-testing, the gesture \
+             arena, or event delivery, not at the fling"
+        };
+        bail!(
+            "occlusion check FAILED (premise): {FLING_ATTEMPTS} drag-fling attempts each \
+             presented only a few frames beyond their own quiesced post-arming baseline \
+             (last attempt: {frames}) — no live animation exists for the gate to stop, so \
+             the zero-submissions assertion would be vacuous.\n  Last drag itself presented \
+             {drag_frames} frame(s). {verdict}."
+        );
     }
     eprintln!("live-smoke: drag-fling live with {fling_frames} presented frames — covering now");
     conn.map_window(cover)?;

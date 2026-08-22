@@ -339,6 +339,23 @@ impl VelocityTracker {
         // We were unable to gather enough samples to fit. Report zero
         // velocity with confidence 1.0 and the span we did see.
         if n < MIN_SAMPLE_SIZE {
+            // A zero velocity here means no fling at all, and the two ways to
+            // reach one are indistinguishable from the outside: this one (the
+            // contiguous run was cut short, so a delivery gap crossed
+            // ASSUME_POINTER_STOPPED) and the degenerate-span one below.
+            // Naming which fired is the difference between a diagnosis and a
+            // guess when a gesture dies on a loaded machine.
+            tracing::trace!(
+                target: "flui.velocity",
+                contiguous_samples = n,
+                span_ms = newest
+                    .time
+                    .saturating_duration_since(oldest.time)
+                    .as_secs_f64()
+                    * 1000.0,
+                reason = "too_few_contiguous_samples",
+                "velocity estimate: no fling"
+            );
             return Some(VelocityEstimate::new(
                 Offset::ZERO,
                 Offset::ZERO,
@@ -359,6 +376,16 @@ impl VelocityTracker {
             .map(|&t| -t) // ts are stored as negative age_ms; max(-ts) = total age
             .fold(0.0_f64, f64::max);
         if total_span_ms < 1e-6 {
+            // Enough samples, but they all carry one timestamp — the batched
+            // drain. See the note at the sibling return above for why this is
+            // reported rather than left silent.
+            tracing::trace!(
+                target: "flui.velocity",
+                contiguous_samples = n,
+                span_ms = total_span_ms,
+                reason = "degenerate_time_span",
+                "velocity estimate: no fling"
+            );
             return Some(VelocityEstimate::new(
                 newest.position - oldest.position,
                 Offset::ZERO,
@@ -1297,5 +1324,133 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Dead-fling witnesses ─────────────────────────────────────────────
+    //
+    // Both zero-velocity exits below are reachable on a loaded machine and
+    // are indistinguishable from the outside — a gesture that moved the
+    // content but produced no fling. These assert that each one SAYS which
+    // it was, because that distinction is the whole diagnostic value.
+
+    /// Captures `tracing` output for the duration of `run`, thread-locally.
+    ///
+    /// Same technique and the same caveat as the widget-side capture helper:
+    /// `with_default` redirects dispatch per-thread, but `tracing`'s
+    /// per-callsite interest cache is process-global, so this is only
+    /// race-free when each test owns its process — which is exactly what
+    /// `cargo nextest run` (what CI uses) provides.
+    fn capture_tracing<T>(run: impl FnOnce() -> T) -> (T, String) {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct CapturedLog(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for CapturedLog {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("captured-log mutex")
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLog {
+            type Writer = Self;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let captured = CapturedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_max_level(tracing::level_filters::LevelFilter::TRACE)
+            .with_ansi(false)
+            .without_time()
+            .finish();
+
+        let out = tracing::subscriber::with_default(subscriber, run);
+        let bytes = captured.0.lock().expect("captured-log mutex").clone();
+        (
+            out,
+            String::from_utf8(bytes).expect("tracing output is valid UTF-8"),
+        )
+    }
+
+    /// A delivery gap wider than `ASSUME_POINTER_STOPPED` cuts the contiguous
+    /// run short, so fewer than `MIN_SAMPLE_SIZE` samples survive and the
+    /// estimate is zero. This is what a stalled event loop looks like when
+    /// timestamps are receipt times.
+    #[test]
+    fn too_few_contiguous_samples_reports_zero_and_names_the_gap() {
+        let start = Instant::now();
+        let mut tracker = VelocityTracker::new();
+        // Three early samples, then a 120 ms silence, then two more. Only the
+        // last two are contiguous with the newest, so n = 2 < 3.
+        for i in 0..3u32 {
+            tracker.add_position(
+                start + Duration::from_millis(u64::from(i) * 10),
+                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+            );
+        }
+        for i in 0..2u32 {
+            tracker.add_position(
+                start + Duration::from_millis(150 + u64::from(i) * 10),
+                Offset::new(Pixels(100.0 + i as f32 * 10.0), Pixels(0.0)),
+            );
+        }
+
+        let (estimate, log) = capture_tracing(|| tracker.get_velocity_estimate());
+        let estimate = estimate.expect("an estimate is always produced");
+        assert_eq!(
+            estimate.pixels_per_second,
+            Offset::ZERO,
+            "a broken contiguous run must not invent a velocity"
+        );
+        assert!(
+            log.contains("too_few_contiguous_samples"),
+            "the dead fling must name the gap as its cause; got: {log}"
+        );
+        assert!(
+            log.contains("contiguous_samples=2"),
+            "the witness must report how many samples survived; got: {log}"
+        );
+    }
+
+    /// The other way to a dead fling: enough samples, but a stalled loop
+    /// drained them all in one iteration so they share a timestamp. The fit
+    /// would be singular, so the estimate is zero — and says so distinctly.
+    #[test]
+    fn degenerate_time_span_reports_zero_and_names_the_batch() {
+        let instant = Instant::now();
+        let mut tracker = VelocityTracker::new();
+        for i in 0..5u32 {
+            // Same timestamp, different positions: a batched drain.
+            tracker.add_position(instant, Offset::new(Pixels(i as f32 * 20.0), Pixels(0.0)));
+        }
+
+        let (estimate, log) = capture_tracing(|| tracker.get_velocity_estimate());
+        let estimate = estimate.expect("an estimate is always produced");
+        assert_eq!(
+            estimate.pixels_per_second,
+            Offset::ZERO,
+            "a degenerate time span must not invent a velocity"
+        );
+        assert!(
+            log.contains("degenerate_time_span"),
+            "the dead fling must name the batched drain as its cause, distinctly \
+             from the gap case; got: {log}"
+        );
+        assert!(
+            !log.contains("too_few_contiguous_samples"),
+            "the two causes must not be reported interchangeably; got: {log}"
+        );
     }
 }

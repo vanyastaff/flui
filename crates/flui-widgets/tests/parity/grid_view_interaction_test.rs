@@ -1126,14 +1126,15 @@ fn grid_view_builder_in_unbounded_context_with_undefined_item_count_terminates()
     );
     let laid = harness::pump_widget(root, harness::screen());
 
-    // The grid truncates to its unbounded-window cap (1 000 000 tiles) and
-    // reports the extent it actually covers: 1 000 000 tiles over 4 columns is
-    // 250 000 rows of 200px cells. Exact, not a range — a bound this test
-    // cannot compute is a bound it cannot notice drifting.
+    // The count trips the sentinel threshold, so the grid serves its small
+    // bounded window (1000 tiles) and reports the extent it actually covers:
+    // 1000 tiles over 4 columns is 250 rows of 200px cells. Exact, not a
+    // range — a bound this test cannot compute is a bound it cannot notice
+    // drifting.
     let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
     assert_eq!(
         laid.size(viewport_id),
-        size(800.0, 50_000_000.0),
+        size(800.0, 50_000.0),
         "an unbounded window over an undefined item count must commit the \
          truncated extent, not collapse to zero and not declare 2^64 rows"
     );
@@ -1166,6 +1167,81 @@ fn grid_view_builder_in_unbounded_context_lays_out_a_large_finite_item_count_in_
         size(800.0, 500_200.0),
         "a finite item_count is a declared length, not a sentinel: every \
          declared row must be in the committed extent"
+    );
+}
+
+/// The truncation above is a misconfiguration notice, and layout runs every
+/// frame — so it must be reported ONCE, not at frame rate.
+///
+/// Capture technique and its caveat are the same as
+/// `custom_multi_child_layout_test`'s: `tracing::subscriber::with_default`
+/// redirects dispatch per-thread, but `tracing`'s per-callsite interest
+/// cache is process-global, so this is only race-free when each test owns
+/// its process — which is what `cargo nextest run` (what CI uses) gives.
+#[test]
+fn grid_view_builder_unbounded_truncation_warns_once_not_every_frame() {
+    use std::sync::Mutex;
+
+    #[derive(Clone, Default)]
+    struct CapturedLog(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLog {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("captured-log mutex")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLog {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    let captured = CapturedLog::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_max_level(tracing::level_filters::LevelFilter::TRACE)
+        .with_ansi(false)
+        .without_time()
+        .finish();
+
+    let delegate: Arc<dyn SliverGridDelegate> =
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(4));
+    let root = SingleChildScrollView::new().child(
+        GridView::builder(delegate, usize::MAX, |i| {
+            Some(SizedBox::shrink().child(Text::new(format!("{i}"))).boxed())
+        })
+        .shrink_wrap(true),
+    );
+
+    tracing::subscriber::with_default(subscriber, || {
+        let mut laid = harness::pump_widget(root, harness::screen());
+        // Three more frames over the SAME render object — `pump` dirties the
+        // root and re-runs layout, so `perform_layout` (and the truncation
+        // branch inside it) executes on every one. An ungated warning fires
+        // four times; a gated one fires once.
+        for _ in 0..3 {
+            laid.pump();
+        }
+    });
+
+    let bytes = captured.0.lock().expect("captured-log mutex").clone();
+    let log = String::from_utf8(bytes).expect("tracing output is valid UTF-8");
+    let warnings = log.matches("unbounded main axis declares").count();
+    assert_eq!(
+        warnings, 1,
+        "the truncation is a static misconfiguration and must be reported once \
+         per configuration, not once per frame; saw {warnings} in:\n{log}"
     );
 }
 
