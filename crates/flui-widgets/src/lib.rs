@@ -172,7 +172,7 @@ pub use interaction::{
     InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MouseRegion,
     NextFocusAction, NextFocusIntent, Offstage, PanAxis, PreviousFocusAction, PreviousFocusIntent,
     ShortcutCallback, Shortcuts, SingleActivator, TransformationController, Visibility,
-    WheelScaleGate,
+    VisibilityGate, WheelScaleGate,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
@@ -321,9 +321,9 @@ pub mod prelude {
         SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
         SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table, TableCell, TableRow, Text,
         TextEditingController, TextField, TextFieldState, TickerMode, Transform, UnconstrainedBox,
-        ValueListenableBuilder, Viewport, Visibility, WidgetState, WidgetStateConstraint,
-        WidgetStateProperty, WidgetStates, WidgetStatesController, WidgetsApp,
-        WidgetsLocalizations, Wrap,
+        ValueListenableBuilder, Viewport, Visibility, VisibilityGate, WidgetState,
+        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
+        WidgetsApp, WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

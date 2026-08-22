@@ -23,6 +23,7 @@
 //! | `RenderLimitedBox` | `harness_limited_box_*` | yes | — | — | yes | — |
 //! | `RenderOffstage` | `harness_offstage_*` | yes | yes | — | yes | — |
 //! | `RenderOpacity` | `harness_opacity_*` | yes | — | yes | yes | queries |
+//! | `RenderVisibility` | `harness_visibility_*` | yes | — | yes | yes | queries |
 //! | `RenderAnimatedOpacity` | `harness_animated_opacity_*` | yes | yes | yes | yes | tick dirty-marking |
 //! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | paint transform |
 //! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | paint transform |
@@ -164,6 +165,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderLimitedBox",
     "RenderOffstage",
     "RenderOpacity",
+    "RenderVisibility",
     "RenderAnimatedOpacity",
     "RenderTransform",
     "RenderFittedBox",
@@ -6024,6 +6026,84 @@ fn harness_ignore_pointer_self_describes() {
 
     assert!(
         run.descendant_property("RenderIgnorePointer", "ignoring")
+            .is_some()
+    );
+}
+
+/// A hidden `RenderVisibility` keeps its child's geometry — that is the whole
+/// contract `Visibility::maintain_size` rests on, so it is asserted as
+/// geometry rather than inferred from the flag.
+#[test]
+fn harness_visibility_keeps_child_geometry_while_hidden() {
+    for visible in [true, false] {
+        let run = RenderTester::mount(
+            box_node(RenderVisibility::new(visible))
+                .child(box_node(RenderColoredBox::red(40.0, 24.0)).label("child")),
+        )
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+        assert_eq!(
+            run.box_geometry(run.root()),
+            Size::new(px(40.0), px(24.0)),
+            "visible={visible}: the child's size must survive being hidden"
+        );
+        assert_eq!(
+            run.box_geometry(run.id("child")),
+            Size::new(px(40.0), px(24.0)),
+            "visible={visible}: the child itself is still laid out"
+        );
+    }
+}
+
+/// The flag gates paint and only paint.
+#[test]
+fn harness_visibility_suppresses_paint_only_while_hidden() {
+    let shown = RenderTester::mount(
+        box_node(RenderVisibility::new(true))
+            .child(box_node(RenderColoredBox::red(40.0, 24.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+    let shown_rects = shown
+        .display_commands()
+        .into_iter()
+        .filter(|cmd| cmd.line.contains("DrawRect"))
+        .count();
+
+    let hidden = RenderTester::mount(
+        box_node(RenderVisibility::new(false))
+            .child(box_node(RenderColoredBox::red(40.0, 24.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+    let hidden_rects = hidden
+        .display_commands()
+        .into_iter()
+        .filter(|cmd| cmd.line.contains("DrawRect"))
+        .count();
+
+    assert!(
+        shown_rects > 0,
+        "a visible child must reach the display list"
+    );
+    assert_eq!(
+        hidden_rects, 0,
+        "a hidden child must issue no paint commands at all"
+    );
+}
+
+#[test]
+fn harness_visibility_self_describes() {
+    let run = RenderTester::mount(
+        box_node(RenderVisibility::new(false))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert!(
+        run.descendant_property("RenderVisibility", "visible")
             .is_some()
     );
 }

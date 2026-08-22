@@ -167,9 +167,22 @@ impl RenderSliver for RenderSliverGrid {
         let target_end = effective_scroll_offset + constraints.remaining_cache_extent;
 
         let first_in_band = layout.get_min_child_index_for_scroll_offset(effective_scroll_offset);
-        let last_in_band = layout
-            .get_max_child_index_for_scroll_offset(target_end)
-            .min(self.child_count - 1);
+        // An infinite target end means "no upper bound", and the oracle says so
+        // by not asking the delegate at all: `sliver_grid.dart:608-610` computes
+        // `targetLastIndex` as `targetEndScrollOffset.isFinite ? … : null`, and a
+        // null bound downstream means every child. Handing infinity to the
+        // delegate instead divides it by the stride, saturates the cast at
+        // `usize::MAX`, and overflows the `cross_axis_count * main_axis_count`
+        // product. A shrink-wrapped grid inside an unbounded parent — a
+        // `SingleChildScrollView` over `GridView.count(shrink_wrap: true)` —
+        // hands down exactly that infinite window.
+        let last_in_band = if target_end.is_finite() {
+            layout
+                .get_max_child_index_for_scroll_offset(target_end)
+                .min(self.child_count - 1)
+        } else {
+            self.child_count - 1
+        };
 
         let scroll_extent = layout.compute_max_scroll_offset(self.child_count);
 

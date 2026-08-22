@@ -29,14 +29,14 @@
 //!     [`visibility_true_maintain_state_tap_reaches_child_through_transparent_offstage`],
 //!     [`visibility_false_maintain_state_tap_is_suppressed_by_offstage`],
 //!     [`visibility_maintain_state_hit_test_tracks_visibility_across_repeated_toggles`].
-//!   - **`maintainSize`/`maintainSemantics`/`maintainInteractivity`-as-full-feature
-//!     legs** (the 5 sub-scenarios that set `maintainSize: true`) — out of
-//!     scope: `maintainSize` is a documented, deferred gap (see the divergence
-//!     note on `Visibility` in `crates/flui-widgets/src/interaction/visibility.rs`).
-//!     [`visibility_maintain_interactivity_true_is_currently_a_no_op_without_maintain_size`]
-//!     proves the current no-op with a real (non-vacuous) assertion, and
-//!     [`visibility_maintain_interactivity_with_maintain_size_would_let_hidden_taps_through`]
-//!     keeps the oracle's real target alive as an `#[ignore]`d red case.
+//!   - **`maintainSize`/`maintainInteractivity` legs** — ported, real green:
+//!     [`visibility_maintain_interactivity_with_maintain_size_lets_hidden_taps_through`].
+//!     Was an `#[ignore]`d red case beside a pin of the inert flag; both are
+//!     retired now that `maintain_size` composes the oracle's
+//!     `_Visibility` + `IgnorePointer` pair. **`maintainSemantics` is still
+//!     out of scope** and is not merely untested: FLUI's render traits expose
+//!     no `visitChildrenForSemantics` analogue, so `Visibility` carries no
+//!     `maintain_semantics` knob rather than one that silently does nothing.
 //!   - **`hasSemantics(...)` assertions** — out of scope: FLUI's headless test
 //!     harness has no semantics-tree assembly step (no `SemanticsTester`
 //!     analogue) to check these against.
@@ -58,9 +58,11 @@
 //!   `AssertionError` from the constructor — same invariant, FLUI's standard
 //!   build-time error-substitution idiom instead of a constructor-time panic.
 //! - `'Visibility does not force compositing when visible and maintain*'` —
-//!   out of scope: requires `maintainSize` (deferred, see above) plus a
-//!   layer-tree/compositing-layer-count inspection capability the headless
-//!   test harness does not have (`tester.layers` has no FLUI analogue here).
+//!   out of scope: needs a layer-tree/compositing-layer-count inspection
+//!   capability the headless test harness does not have (`tester.layers` has
+//!   no FLUI analogue here). `maintain_size` itself is implemented, and over
+//!   a dedicated paint gate rather than a zero opacity precisely so it does
+//!   not force compositing — but that property is unobservable from here.
 //! - `'SliverVisibility does not force compositing when visible and
 //!   maintain*'` — out of scope: `SliverVisibility` does not exist in FLUI;
 //!   no sliver equivalent of `Visibility` has been ported.
@@ -105,9 +107,8 @@
 //!   ambient `VsyncScope`, including production `AppBinding` roots. With no
 //!   ambient scope, FLUI's `TickerMode` intentionally passes the child through
 //!   to preserve wall-clock fallback behavior.
-//! - `maintainSize` is deferred.
-//! - `maintain_interactivity` is accepted but is a no-op until `maintainSize`
-//!   lands. Tested to confirm it does not panic or break the tree.
+//! - `maintainSemantics` is absent: no semantics-visiting hook exists to
+//!   implement it against, so no knob is offered.
 //! - Flutter wraps in `_VisibilityScope`; FLUI omits that scope widget.
 
 use std::sync::Arc;
@@ -467,66 +468,40 @@ fn visibility_maintain_state_hit_test_tracks_visibility_across_repeated_toggles(
     );
 }
 
-/// Documents a real, currently-accepted divergence: `maintain_interactivity`
-/// is a no-op until `maintainSize` is implemented (see the "Divergences from
-/// Flutter" note on `Visibility` in
-/// `crates/flui-widgets/src/interaction/visibility.rs`). Flutter itself only
-/// allows `maintainInteractivity` when `maintainSize` is also set, so there
-/// is no Flutter-legal configuration this could instead assert the true
-/// target against — this proves the accepted-but-inert flag really has no
-/// effect today, rather than silently omitting the case.
+// `maintain_interactivity` without `maintain_size` used to be pinned here as
+// an accepted-but-inert flag, with a note explaining that no Flutter-legal
+// configuration existed to assert the real target against while `maintainSize`
+// was missing. `maintain_size` now exists, so that premise is gone: the
+// combination is a programming error, rejected by a `debug_assert!` in
+// `Visibility::build` mirroring the oracle's own constructor assert.
+//
+// That invariant carries no test, and deliberately so rather than by
+// oversight. A `#[should_panic]` test cannot observe it: the build phase runs
+// under the pipeline's `catch_unwind`, so the assert fires but never reaches
+// the test harness, which instead trips its own unrelated tree-shape
+// assertion. The sibling `maintain_animation requires maintain_state`
+// invariant is untested for exactly the same structural reason.
+
+/// `maintainInteractivity` (with `maintainSize`) lets a hidden-but-space-
+/// occupying child keep receiving pointer events.
 ///
-/// Red-check performed (not committed): temporarily changed
-/// `Visibility::build` to gate `Offstage::offstage` on
-/// `!self.maintain_interactivity` as well as `!self.visible` (i.e.
-/// accidentally wiring the flag through without `maintainSize`) — this test
-/// failed under that mutation, confirming the assertion is sensitive to the
-/// real seam and not vacuously true. Reverted after confirming.
-#[test]
-fn visibility_maintain_interactivity_true_is_currently_a_no_op_without_maintain_size() {
-    let did_tap = Arc::new(AtomicBool::new(false));
-
-    let laid = harness::pump_widget(
-        Visibility::new(tap_probe(&did_tap))
-            .visible(false)
-            .maintain_state(true)
-            .maintain_interactivity(true),
-        screen(),
-    );
-
-    laid.dispatch_pointer_down(10.0, 10.0);
-    laid.dispatch_pointer_up(10.0, 10.0);
-
-    assert!(
-        !did_tap.load(Ordering::SeqCst),
-        "maintain_interactivity=true currently has no effect beyond \
-         maintain_state — Offstage still suppresses hit-testing while \
-         hidden (documented divergence: full semantics deferred with \
-         maintainSize)"
-    );
-}
-
-/// The real Flutter target: `maintainInteractivity` (with `maintainSize`)
-/// lets a hidden-but-space-occupying child keep receiving pointer events.
-/// FLUI cannot pass this until `maintainSize` lands — kept as a real,
-/// `#[ignore]`d assertion of the oracle's actual expectation rather than
-/// narrowed away, per the project's no-narrowing rule.
-///
-/// Un-ignore when `maintainSize` closes the gap documented on `Visibility`
-/// in `crates/flui-widgets/src/interaction/visibility.rs` (Cross.H).
+/// Was `#[ignore]`d while `maintainSize` was missing — kept as a real
+/// assertion of the oracle's expectation rather than narrowed away, per the
+/// project's no-narrowing rule — and now passes directly.
 ///
 /// Flutter parity: `visibility_test.dart` `'Visibility'` (3.44.0) — the
 /// `maintainInteractivity: true` (with `maintainSize: true`) leg: `await
 /// tester.tap(find.byType(Visibility))` reaches the child even while hidden.
 #[test]
-#[ignore = "un-ignore when maintainSize lands (Cross.H) — see the Visibility divergence note"]
-fn visibility_maintain_interactivity_with_maintain_size_would_let_hidden_taps_through() {
+fn visibility_maintain_interactivity_with_maintain_size_lets_hidden_taps_through() {
     let did_tap = Arc::new(AtomicBool::new(false));
 
     let laid = harness::pump_widget(
         Visibility::new(tap_probe(&did_tap))
             .visible(false)
             .maintain_state(true)
+            .maintain_animation(true)
+            .maintain_size(true)
             .maintain_interactivity(true),
         screen(),
     );

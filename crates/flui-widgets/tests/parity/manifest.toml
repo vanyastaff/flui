@@ -404,7 +404,7 @@ tests = 8
 rust = "grid_view_interaction_test"
 family = "scroll"
 oracles = ["widgets/grid_view_test.dart"]
-tests = 23
+tests = 22
 
 [[targets.claims]]
 oracle = "widgets/grid_view_test.dart"
@@ -429,14 +429,9 @@ cases = [
     "SliverGridDelegateWithMaxCrossAxisExtent throws assertion error when maxCrossAxisExtent is 0",
     "SliverGridDelegate mainAxisExtent add assert",
     "SliverGrid sets correct extent for null returning builder delegate",
+    "GridView in unbounded context",
 ]
 
-[[targets.pins]]
-test = "grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content"
-capability = "shrink-wrap content sizing under an unbounded main axis"
-issue = 537
-oracle = "widgets/grid_view_test.dart"
-cases = ["GridView in unbounded context"]
 
 [[targets]]
 rust = "grid_view_test"
@@ -1147,12 +1142,9 @@ cases = ["Viewport basic test", "Multiple grids and lists"]
 rust = "visibility_test"
 family = "painting"
 oracles = ["widgets/visibility_test.dart"]
-tests = 12
+tests = 11
 
-[[targets.pins]]
-test = "visibility_maintain_interactivity_with_maintain_size_would_let_hidden_taps_through"
-capability = "Visibility maintain-size / maintain-interactivity composition"
-issue = 543
+[[targets.claims]]
 oracle = "widgets/visibility_test.dart"
 cases = ["Visibility"]
 
@@ -1300,7 +1292,7 @@ cases = [
 "widgets/global_keys_moving_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/grid_paper_test.dart" = { cases = 2, claimed = 0, status = "pending" }
 "widgets/grid_view_layout_test.dart" = { cases = 1, claimed = 1, status = "ported" }
-"widgets/grid_view_test.dart" = { cases = 29, claimed = 20, diverged = 1, status = "partial" }
+"widgets/grid_view_test.dart" = { cases = 29, claimed = 21, diverged = 0, status = "partial" }
 "widgets/heroes_test.dart" = { cases = 56, claimed = 6, status = "partial" }
 "widgets/hit_testing_test.dart" = { cases = 3, claimed = 0, status = "pending" }
 "widgets/html_element_view_test.dart" = { cases = 13, claimed = 0, status = "pending" }
@@ -1564,7 +1556,7 @@ cases = [
 "widgets/unique_widget_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/value_listenable_builder_test.dart" = { cases = 6, claimed = 6, status = "ported" }
 "widgets/view_test.dart" = { cases = 22, claimed = 0, status = "pending" }
-"widgets/visibility_test.dart" = { cases = 9, claimed = 0, diverged = 1, status = "partial" }
+"widgets/visibility_test.dart" = { cases = 9, claimed = 1, diverged = 0, status = "partial" }
 "widgets/widget_inspector_structure_error_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/widget_inspector_test.dart" = { cases = 128, claimed = 0, status = "pending" }
 "widgets/widget_span_test.dart" = { cases = 2, claimed = 0, status = "pending" }
@@ -1579,16 +1571,16 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 90
-rust_tests = 647
-pins = 5
+rust_tests = 645
+pins = 3
 oracle_files = 389
 oracle_cases = 5696
-cases_claimed = 294
-cases_diverged = 5
+cases_claimed = 296
+cases_diverged = 3
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 286
-universe_cases_diverged = 5
+universe_cases_claimed = 288
+universe_cases_diverged = 3
 universe_pending_files = 331
 
 [summary.families."animation"]
@@ -1642,10 +1634,10 @@ pins = 0
 
 [summary.families."painting"]
 targets = 6
-rust_tests = 56
-cases_claimed = 16
-cases_diverged = 1
-pins = 1
+rust_tests = 55
+cases_claimed = 17
+cases_diverged = 0
+pins = 0
 
 [summary.families."pointer"]
 targets = 3
@@ -1656,10 +1648,10 @@ pins = 0
 
 [summary.families."scroll"]
 targets = 8
-rust_tests = 73
-cases_claimed = 35
-cases_diverged = 1
-pins = 1
+rust_tests = 72
+cases_claimed = 36
+cases_diverged = 0
+pins = 0
 
 [summary.families."sliver"]
 targets = 15

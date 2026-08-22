@@ -203,6 +203,27 @@ impl RenderSliver for RenderSliverGridLazy {
 
         let first_in_window = tile_layout.get_min_child_index_for_scroll_offset(cache_start_offset);
         // Clamp to item_count−1; no underflow risk since item_count > 0 above.
+        //
+        // NOT guarded on `cache_end_offset.is_finite()`, unlike the eager
+        // `RenderSliverGrid`. There, falling back to "every child" is safe
+        // because `child_count` counts children that are already mounted, so
+        // the bound is real. Here `item_count` may be the caller's
+        // over-estimate — `usize::MAX` is this crate's stand-in for Flutter's
+        // undefined `itemCount` — and it is the finite window that keeps that
+        // workable today, since the layout loop below walks
+        // `first_in_window..=last_in_window` synchronously and only then can
+        // the adaptor manager call the builder, see `None`, and clamp. Widening
+        // to `item_count - 1` on an unbounded window would ask it to enqueue
+        // ~2^64 indices in one frame.
+        //
+        // The oracle avoids this with a nullable upper bound
+        // (`sliver_grid.dart:608-610`) that lets the builder's end be
+        // discovered incrementally; FLUI has no such sentinel here, and
+        // inventing a batch size would be policy this change has no basis to
+        // pick. So an unbounded lazy grid keeps its existing behaviour — the
+        // delegate's index arithmetic overflows and pipeline resilience
+        // recovers into degraded geometry — which is wrong, but bounded, and
+        // strictly better than a hung frame.
         let last_in_window = tile_layout
             .get_max_child_index_for_scroll_offset(cache_end_offset)
             .min(self.item_count - 1);
