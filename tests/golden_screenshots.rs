@@ -158,8 +158,10 @@ fn assert_matches_golden(name: &str, actual: &[u8]) {
 
     let total = (SHOT_WIDTH * SHOT_HEIGHT) as usize;
     let changed = actual
-        .chunks_exact(4)
-        .zip(golden.as_raw().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(golden.as_raw().as_chunks::<4>().0.iter())
         .filter(|(a, g)| {
             a.iter()
                 .zip(g.iter())
