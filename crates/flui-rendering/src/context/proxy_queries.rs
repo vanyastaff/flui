@@ -195,12 +195,23 @@ macro_rules! forward_single_child_box_queries {
 /// proxy: child laid out under the unmodified constraints at the origin, its
 /// size adopted (or `smallest()` when childless), with child presence recorded
 /// in the implementor's `has_child` field.
+/// The emitted signature is deliberately concrete — `Single` arity with
+/// `BoxParentData` — because that is the only shape the forwarding helper
+/// supports (it lays out and positions child index 0 with plain box parent
+/// data). On an implementor with any other `Arity`/`ParentData` the method
+/// signature no longer matches the trait's, so a misapplication surfaces as
+/// an immediate incompatible-signature error at the impl rather than a type
+/// mismatch deep inside the macro body.
 #[macro_export]
 macro_rules! forward_single_child_box_layout {
     () => {
         fn perform_layout(
             &mut self,
-            ctx: &mut $crate::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+            ctx: &mut $crate::context::BoxLayoutContext<
+                '_,
+                $crate::prelude::Single,
+                $crate::parent_data::BoxParentData,
+            >,
         ) -> flui_types::Size {
             $crate::context::proxy_queries::forward_layout(&mut self.has_child, ctx)
         }
@@ -210,12 +221,20 @@ macro_rules! forward_single_child_box_layout {
 /// Expands the standard `hit_test` for a pure single-child passthrough proxy:
 /// inside its own bounds, defer to the child at the origin (presence read from
 /// the implementor's `has_child` field); otherwise a miss.
+/// Deliberately concrete over `Single`/`BoxParentData` for the same reason as
+/// [`forward_single_child_box_layout!`]: the helper only supports that shape,
+/// and a concrete signature turns a misapplication into an immediate
+/// incompatible-signature error at the impl.
 #[macro_export]
 macro_rules! forward_single_child_box_hit_test {
     () => {
         fn hit_test(
             &self,
-            ctx: &mut $crate::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+            ctx: &mut $crate::context::BoxHitTestContext<
+                '_,
+                $crate::prelude::Single,
+                $crate::parent_data::BoxParentData,
+            >,
         ) -> bool {
             $crate::context::proxy_queries::forward_hit_test(self.has_child, ctx)
         }
