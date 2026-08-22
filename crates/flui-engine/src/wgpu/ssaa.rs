@@ -159,12 +159,12 @@ impl SsaaDownsamplePipeline {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     // Two f32 position + two f32 UV per vertex.
                     array_stride: 4 * std::mem::size_of::<f32>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
-                }],
+                })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -1347,6 +1347,7 @@ mod gpu_tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("GPU adapter required for ssaa::gpu_tests");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -1457,7 +1458,9 @@ mod gpu_tests {
             })
             .expect("GPU readback poll must complete within the test timeout");
 
-        let raw = slice.get_mapped_range();
+        let raw = slice
+            .get_mapped_range()
+            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
         let mut pixels = Vec::with_capacity((SURFACE_W * SURFACE_H) as usize);
         for row in 0..SURFACE_H {
             let row_start = (row * padded_row) as usize;

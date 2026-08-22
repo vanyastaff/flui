@@ -274,7 +274,7 @@ impl TextLayout {
 
         let mut font_system = font_system().lock();
         let mut buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
-        buffer.set_size(&mut font_system, max_width, None);
+        buffer.set_size(max_width, None);
 
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         let mut this = Self {
@@ -300,7 +300,6 @@ impl TextLayout {
     /// (Re-)shapes the buffer from the current runs.
     fn shape_runs(&mut self, font_system: &mut FontSystem) {
         self.buffer.set_rich_text(
-            font_system,
             self.runs
                 .iter()
                 .map(|run| (run.text.as_str(), run.attrs.as_attrs())),

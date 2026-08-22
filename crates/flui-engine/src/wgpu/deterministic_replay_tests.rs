@@ -145,6 +145,7 @@ mod tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("a GPU adapter must be available for deterministic-replay tests");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -255,7 +256,9 @@ mod tests {
             })
             .expect("device poll must complete the readback copy");
 
-        let raw = slice.get_mapped_range();
+        let raw = slice
+            .get_mapped_range()
+            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
         let row_bytes = (SCENE_SIZE * bytes_per_pixel) as usize;
         let mut packed = Vec::with_capacity(row_bytes * SCENE_SIZE as usize);
         for row_index in 0..SCENE_SIZE as usize {

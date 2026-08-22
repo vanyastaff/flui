@@ -346,6 +346,7 @@ mod synthetic_op_tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .expect("a GPU adapter must be available on a GPU-enabled test host");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -534,7 +535,9 @@ mod synthetic_op_tests {
             })
             .expect("device poll must complete the readback copy");
 
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
         let raw = mapped.as_ref();
 
         let mut pixels = Vec::with_capacity((w * h) as usize);

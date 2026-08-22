@@ -122,7 +122,7 @@ pub enum EngineError {
     /// No suitable GPU adapter found (sentinel; carries no underlying error).
     ///
     /// Use this variant when `request_adapter` returns no underlying error
-    /// (e.g. the future resolved to `None` semantically). For wgpu 29.x
+    /// (e.g. the future resolved to `None` semantically). For wgpu 30's
     /// `Result<Adapter, RequestAdapterError>` returns prefer
     /// [`EngineError::AdapterRequest`] which preserves the wgpu diagnostic
     /// (`NotFound { active_backends, requested_backends, supported_backends,

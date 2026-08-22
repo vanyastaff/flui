@@ -61,7 +61,7 @@ impl OffscreenRenderer {
                         entry_point: Some("vs_main"),
                         buffers: &[
                             // Fullscreen quad vertex buffer layout
-                            wgpu::VertexBufferLayout {
+                            Some(wgpu::VertexBufferLayout {
                                 array_stride: std::mem::size_of::<[f32; 4]>()
                                     as wgpu::BufferAddress,
                                 step_mode: wgpu::VertexStepMode::Vertex,
@@ -80,7 +80,7 @@ impl OffscreenRenderer {
                                         shader_location: 1,
                                     },
                                 ],
-                            },
+                            }),
                         ],
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                     },

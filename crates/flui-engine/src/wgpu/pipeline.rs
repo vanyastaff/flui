@@ -389,7 +389,7 @@ impl PipelineCache {
             vertex: wgpu::VertexState {
                 module: &self.shader,
                 entry_point: Some("vs_main"),
-                buffers: &[super::vertex::Vertex::desc()],
+                buffers: &[Some(super::vertex::Vertex::desc())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {

@@ -16,7 +16,7 @@
 //! lets us hand the composed `naga::Module` directly to wgpu, skipping the
 //! naga → WGSL back-end round-trip.  That path has lower overhead (no string
 //! serialisation) and zero extra dependencies beyond naga_oil itself, which
-//! already pulls `naga ^29` matching wgpu 29's vendored naga.
+//! already pulls `naga ^30` matching wgpu 30's vendored naga.
 //!
 //! naga_oil's `Composer::make_naga_module` returns `naga::Module`, and
 //! `wgpu::ShaderSource::Naga` accepts `std::borrow::Cow<'static, naga::Module>`

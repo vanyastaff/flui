@@ -58,6 +58,7 @@ pub async fn main() {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
         .expect("no suitable GPU adapter found");
@@ -139,7 +140,7 @@ pub async fn main() {
     }
 
     queue.submit(std::iter::once(encoder.finish()));
-    output.present();
+    queue.present(output);
 
     web_sys::console::log_1(&"FLUI Painting Demo rendered successfully!".into());
 }

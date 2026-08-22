@@ -760,6 +760,13 @@ impl Renderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                // wgpu 30's anti-fingerprinting knob, for embedders that expose a
+                // GPU to untrusted content (a browser). `false` — this engine's
+                // callers ARE the trusted application, and bucketing would round
+                // the adapter's real limits down to a coarse tier the pipelines
+                // would then have to fit. Same answer at every other
+                // `request_adapter` in this workspace.
+                apply_limit_buckets: false,
             })
             .await
             .map_err(EngineError::adapter_request)?;
@@ -810,6 +817,14 @@ impl Renderer {
         let config = wgpu::SurfaceConfiguration {
             usage: surface_usage,
             format: surface_format,
+            // `Auto` is wgpu's own pre-30 behaviour, made explicit when wgpu 30
+            // added the field: sRGB for every format this engine configures, and
+            // extended-linear-sRGB only for an `Rgba16Float` surface that supports
+            // it. Naming a wide-gamut or HDR space instead would change how the
+            // shaders must encode their output, which is a rendering decision with
+            // its own colour-management work — not something a version bump gets
+            // to make.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width,
             height,
             present_mode: Self::select_present_mode(&surface_caps),
@@ -913,6 +928,7 @@ impl Renderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(EngineError::adapter_request)?;
@@ -1143,6 +1159,7 @@ impl Renderer {
                     power_preference: wgpu::PowerPreference::HighPerformance,
                     compatible_surface: None,
                     force_fallback_adapter: false,
+                    apply_limit_buckets: false,
                 })
                 .await
                 .map_err(EngineError::adapter_request)?;
@@ -1395,7 +1412,7 @@ impl Renderer {
     /// vsync and ghosts a stale frame during the modal resize loop, same as
     /// Mailbox stretching the in-flight frame. The wobble is inherent
     /// flip-model DWM compositing; the only real fix is DXGI_SCALING_NONE,
-    /// which wgpu 29 does not expose.
+    /// which wgpu 30 still does not expose.
     fn select_present_mode(surface_caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
         debug_assert!(
             surface_caps
@@ -1660,7 +1677,7 @@ impl Renderer {
             offscreen.blit_to_surface(slot.texture(), &view, surface_format);
         }
 
-        output.present();
+        self.queue.present(output);
 
         // Dedicated target so a harness can count REAL per-frame GPU work
         // from the log (`RUST_LOG` filter: `flui.gpu=trace`): this line is
@@ -2628,6 +2645,7 @@ mod tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .ok()?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -3101,7 +3119,7 @@ mod tests {
             })
             .ok()?;
 
-        let mapped = staging_buffer.slice(..4).get_mapped_range();
+        let mapped = staging_buffer.slice(..4).get_mapped_range().ok()?;
         let bytes: [u8; 4] = mapped[..4].try_into().ok()?;
         Some(bytes)
     }

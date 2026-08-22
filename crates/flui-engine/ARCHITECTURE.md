@@ -325,7 +325,7 @@ The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) was extr
 | `Renderer::instance` ([`src/wgpu/renderer.rs`](src/wgpu/renderer.rs)) | `wgpu::Instance` | Owned, keep-alive | Single mutator. `#[allow(dead_code)]` documents the keep-alive shape (Adapter depends on Instance being alive). |
 | `Renderer::adapter` | `wgpu::Adapter` | Owned, keep-alive | Same shape. |
 | `Renderer::device` / `Renderer::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | wgpu's own API uses `Arc` for these handles (cheap ref-count, not lock-protected). Shared by `WgpuPainter` and `OffscreenRenderer` via setup-phase `Arc::clone` (acceptable; not per-frame). |
-| `Renderer::surface` | `Option<wgpu::Surface<'static>>` | Owned, single-mutator | wgpu 29.x's `Surface<'_>: Send + Sync` (verified via `assert_impl_all!` in `wgpu/src/api/surface.rs`). Single-mutator enforced by code convention (only `Renderer::render_scene` calls `surface.get_current_texture`), not by trait bound. |
+| `Renderer::surface` | `Option<wgpu::Surface<'static>>` | Owned, single-mutator | wgpu 30's `Surface<'_>: Send + Sync` (verified via `assert_impl_all!` in `wgpu/src/api/surface.rs:268`). Single-mutator enforced by code convention (only `Renderer::render_scene` calls `surface.get_current_texture`), not by trait bound. |
 | `Renderer::painter` | `Option<WgpuPainter>` | Owned, single-mutator | The take/return dance during `render_scene` is the per-frame ownership transfer. |
 | `Renderer::offscreen` | `Option<super::offscreen::OffscreenRenderer>` | resolved | Owned outright. The `Backend<'a>` lifetime refactor that this waited on has landed, so the lock is gone; port-check trigger 7 now watches this file. |
 | `Backend::offscreen` | `Option<&'frame mut super::offscreen::OffscreenRenderer>` | resolved | Borrowed for the frame, symmetric with the above. |
@@ -354,7 +354,7 @@ The SAFETY comment on `RawHandles`' impl is **not** a single cross-platform argu
 
 There is **no `unsafe impl Sync`** anywhere in the crate. Two further unsafe surfaces: the wgpu surface-creation block in `renderer.rs`, and the `buffer_pool.rs` 5-block disjoint-borrow primitive (pre-existing).
 
-**Send/Sync** on (verified against wgpu 29.x trait bounds):
+**Send/Sync** on (verified against wgpu 30 trait bounds):
 - `Renderer` -- `Send` by compiler derivation (every field is `Send`, including `raw_handles` via `RawHandles`' `unsafe impl Send` above); **not `Sync`**. Pinned unconditionally by `static_assertions::assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` right after the struct definition, plus the pre-existing `compile_fail` doctest for the `!Sync` half. Single-mutator enforced by code convention, not by trait bound.
 - `WgpuPainter` -- `Send`, not `Sync` (holds `Arc<wgpu::Device>` + `Arc<wgpu::Queue>` which are `Send + Sync`, but internal batch state uses `Vec<T>` mutated through `&mut self`; no interior mutability sync surface).
 - `OffscreenRenderer` -- `Send`, not `Sync` (HashMap of `Arc<RenderPipeline>` is `Send`; the struct has no interior-mutability sync primitives).

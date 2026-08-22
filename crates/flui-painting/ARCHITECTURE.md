@@ -38,7 +38,7 @@ The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `pa
 | `painting/binding.dart` `SystemFontsNotifier` | [`src/binding.rs`](src/binding.rs) -- `SystemFontsNotifier` struct | `RwLock<Vec<Arc<dyn Fn>>>` listener registry; setup-phase only. |
 | `painting/text_painter.dart` `TextPainter` | [`src/text_painter/*`](src/text_painter/) -- 4 files | TextPainter struct + builder + getters + setters + layout + measure + paint + cursor. Split in Mythos chain Step 7. |
 | `painting/text_painter.dart` `TextBaseline` enum | [`src/text_painter/baseline.rs`](src/text_painter/baseline.rs) | |
-| cosmic-text 0.18 `Buffer` + `FontSystem` shaping API | [`src/text_layout/*`](src/text_layout/) -- 5 files | cosmic-text-backed text shaping. Split in Mythos chain Step 6; `mod inner` cfg indirection flattened. |
+| cosmic-text 0.19 `Buffer` + `FontSystem` shaping API | [`src/text_layout/*`](src/text_layout/) -- 5 files | cosmic-text-backed text shaping. Split in Mythos chain Step 6; `mod inner` cfg indirection flattened. |
 | Flutter `TextDirection` detection (Unicode bidi) | [`src/text_layout/detect.rs`](src/text_layout/detect.rs) | Strong-LTR / strong-RTL / neutral Unicode codepoint ranges. |
 | `painting/shader_warm_up.dart` `ShaderWarmUp` abstract class | -- | **Deleted in Mythos chain Step 2.** Decorative subsystem; `execute()` was a stub. Real offscreen-canvas-backed warm-up tracked in Outstanding refactors. |
 
@@ -184,7 +184,7 @@ Known sites that do not yet match the methodology but are not violations of the 
 
 **Cost:** Per-shape lock held during `Buffer::set_text` + `Buffer::shape_until_scroll` (1-10ms for complex text). Multi-text-widget workloads serialise. Audit finding F5.
 
-**Status:** Deferred to Outstanding refactor "Per-thread cosmic-text FontSystem". The former blocker (cosmic-text 0.12 vs glyphon's 0.14 duplicate-version split) is resolved: the workspace is unified on cosmic-text 0.18 (2026-06 dep refresh).
+**Status:** Deferred to Outstanding refactor "Per-thread cosmic-text FontSystem". The former blocker (cosmic-text 0.12 vs glyphon's 0.14 duplicate-version split) is resolved: the workspace is unified on cosmic-text 0.19 (2026-08 dep refresh).
 
 ### Per-`draw_*` `tracing::instrument` -- NOT added by design
 
@@ -267,7 +267,7 @@ Concrete cleanups visible from `flui-painting` outward, sized for an `/aif-imple
 **Files:** [`src/text_layout/layout.rs`](src/text_layout/layout.rs), [`src/text_layout/measure.rs`](src/text_layout/measure.rs), [`Cargo.toml`](Cargo.toml).
 
 **Named blockers:**
-- ~~cosmic-text 0.12 → 0.13+ upgrade~~ — done: workspace unified on cosmic-text 0.18 / glyphon 0.11 (2026-06 dep refresh); the duplicate-version split is gone.
+- ~~cosmic-text 0.12 → 0.13+ upgrade~~ — done: workspace unified on cosmic-text 0.19 / glyphon 0.12 (2026-08 dep refresh); the duplicate-version split is gone.
 - Measured benchmark on concurrent text-shape workload.
 
 **Reference:** Audit F5.
