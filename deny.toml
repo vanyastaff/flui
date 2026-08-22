@@ -42,8 +42,8 @@ unsound = "all"
 ignore = [
     # RUSTSEC-2025-0057: fxhash is unmaintained (repo stale, owner inactive).
     # Source: fxhash v0.2.1 ← wgsl_bindgen v0.23.3 (BUILD-DEP ONLY — never
-    # compiled into the binary or public API).  Introduced in PR wgsl-bindgen
-    # pilot (P1); no upgrade is available upstream.  The only risk is build-time
+    # compiled into the binary or public API).  Arrived with the wgsl-bindgen
+    # adoption; no upgrade is available upstream.  The only risk is build-time
     # hash non-determinism, which does not affect the compiled artefact.
     { id = "RUSTSEC-2025-0057" },
 
