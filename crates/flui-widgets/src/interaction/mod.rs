@@ -18,6 +18,7 @@ mod offstage;
 mod shortcuts;
 mod transformation_controller;
 mod visibility;
+mod visibility_gate;
 
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
@@ -54,3 +55,4 @@ pub use shortcuts::{
 };
 pub use transformation_controller::TransformationController;
 pub use visibility::Visibility;
+pub use visibility_gate::VisibilityGate;

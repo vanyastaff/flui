@@ -68,7 +68,7 @@ pub use proxy::{
     RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint, RenderDecoratedBox,
     RenderFollowerLayer, RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity,
     RenderPhysicalModel, RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations,
-    RenderShaderMask, RenderSubtreeAnchor, SubtreeAnchor,
+    RenderShaderMask, RenderSubtreeAnchor, RenderVisibility, SubtreeAnchor,
 };
 pub use proxy::{RenderExcludeSemantics, RenderMergeSemantics};
 

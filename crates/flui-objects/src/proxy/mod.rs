@@ -13,6 +13,7 @@ mod repaint_boundary;
 mod semantics;
 mod shader_mask;
 mod subtree_anchor;
+mod visibility;
 
 pub use animated_opacity::*;
 pub use backdrop_filter::*;
@@ -29,3 +30,4 @@ pub use repaint_boundary::*;
 pub use semantics::*;
 pub use shader_mask::*;
 pub use subtree_anchor::*;
+pub use visibility::*;

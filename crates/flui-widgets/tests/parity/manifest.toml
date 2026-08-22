@@ -1142,12 +1142,9 @@ cases = ["Viewport basic test", "Multiple grids and lists"]
 rust = "visibility_test"
 family = "painting"
 oracles = ["widgets/visibility_test.dart"]
-tests = 12
+tests = 11
 
-[[targets.pins]]
-test = "visibility_maintain_interactivity_with_maintain_size_would_let_hidden_taps_through"
-capability = "Visibility maintain-size / maintain-interactivity composition"
-issue = 543
+[[targets.claims]]
 oracle = "widgets/visibility_test.dart"
 cases = ["Visibility"]
 
@@ -1559,7 +1556,7 @@ cases = [
 "widgets/unique_widget_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/value_listenable_builder_test.dart" = { cases = 6, claimed = 6, status = "ported" }
 "widgets/view_test.dart" = { cases = 22, claimed = 0, status = "pending" }
-"widgets/visibility_test.dart" = { cases = 9, claimed = 0, diverged = 1, status = "partial" }
+"widgets/visibility_test.dart" = { cases = 9, claimed = 1, diverged = 0, status = "partial" }
 "widgets/widget_inspector_structure_error_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/widget_inspector_test.dart" = { cases = 128, claimed = 0, status = "pending" }
 "widgets/widget_span_test.dart" = { cases = 2, claimed = 0, status = "pending" }
@@ -1574,16 +1571,16 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 90
-rust_tests = 646
-pins = 4
+rust_tests = 645
+pins = 3
 oracle_files = 389
 oracle_cases = 5696
-cases_claimed = 295
-cases_diverged = 4
+cases_claimed = 296
+cases_diverged = 3
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 287
-universe_cases_diverged = 4
+universe_cases_claimed = 288
+universe_cases_diverged = 3
 universe_pending_files = 331
 
 [summary.families."animation"]
@@ -1637,10 +1634,10 @@ pins = 0
 
 [summary.families."painting"]
 targets = 6
-rust_tests = 56
-cases_claimed = 16
-cases_diverged = 1
-pins = 1
+rust_tests = 55
+cases_claimed = 17
+cases_diverged = 0
+pins = 0
 
 [summary.families."pointer"]
 targets = 3

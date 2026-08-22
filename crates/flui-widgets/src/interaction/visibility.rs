@@ -6,7 +6,7 @@ use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
 use crate::animated::TickerMode;
-use crate::interaction::{ExcludeFocus, Offstage};
+use crate::interaction::{ExcludeFocus, IgnorePointer, Offstage, VisibilityGate};
 use crate::layout::SizedBox;
 
 /// Controls whether its child is shown, hidden, or hidden while keeping its
@@ -42,10 +42,10 @@ use crate::layout::SizedBox;
 ///   an ambient scope, FLUI's `TickerMode` intentionally passes its child
 ///   through so an undriven nested registry cannot swallow wall-clock
 ///   fallback animations.
-/// - `maintainSize` (requires `maintainAnimation`) — deferred.
-/// - `maintainInteractivity` (requires `maintainSize` in Flutter) — accepted
-///   but currently a no-op beyond `maintain_state`; full semantics deferred
-///   with `maintainSize`.
+/// - `maintainSemantics` — absent by design rather than deferred-and-inert:
+///   the oracle implements it by overriding `visitChildrenForSemantics` on
+///   `_RenderVisibility`, and FLUI's render traits expose no equivalent hook,
+///   so no knob is offered that would silently do nothing.
 /// - Flutter also wraps the result in `_VisibilityScope`; FLUI omits that
 ///   scope widget (no equivalent query API yet).
 #[derive(Clone, StatelessView)]
@@ -53,6 +53,7 @@ pub struct Visibility {
     visible: bool,
     maintain_state: bool,
     maintain_animation: bool,
+    maintain_size: bool,
     maintain_focusability: bool,
     maintain_interactivity: bool,
     replacement: BoxedView,
@@ -68,6 +69,7 @@ impl Visibility {
             visible: true,
             maintain_state: false,
             maintain_animation: false,
+            maintain_size: false,
             maintain_focusability: false,
             maintain_interactivity: false,
             replacement: SizedBox::shrink().boxed(),
@@ -123,11 +125,25 @@ impl Visibility {
         self
     }
 
+    /// Keep the child occupying its space while hidden, instead of collapsing
+    /// it away.
+    ///
+    /// Requires `maintain_animation = true` (and so `maintain_state = true`),
+    /// matching the oracle's constructor chain. With this set the child is
+    /// laid out exactly as if visible and merely not painted, which is what
+    /// makes [`maintain_interactivity`](Self::maintain_interactivity)
+    /// meaningful: there is still a box in the tree for a pointer to land on.
+    #[must_use]
+    pub fn maintain_size(mut self, maintain_size: bool) -> Self {
+        self.maintain_size = maintain_size;
+        self
+    }
+
     /// Allow pointer events to reach the child even when it is not visible.
     ///
-    /// Requires `maintain_state = true`. Full implementation is deferred until
-    /// `maintainSize` lands; this flag is accepted but currently has no
-    /// additional effect beyond `maintain_state`.
+    /// Requires `maintain_size = true` — without it the hidden child occupies
+    /// no space, so there is nothing for a pointer to hit and the flag has
+    /// nothing to act on. Debug builds check that invariant in `build`.
     #[must_use]
     pub fn maintain_interactivity(mut self, maintain_interactivity: bool) -> Self {
         self.maintain_interactivity = maintain_interactivity;
@@ -149,6 +165,7 @@ impl fmt::Debug for Visibility {
             .field("visible", &self.visible)
             .field("maintain_state", &self.maintain_state)
             .field("maintain_animation", &self.maintain_animation)
+            .field("maintain_size", &self.maintain_size)
             .field("maintain_focusability", &self.maintain_focusability)
             .field("maintain_interactivity", &self.maintain_interactivity)
             .finish_non_exhaustive()
@@ -162,29 +179,54 @@ impl StatelessView for Visibility {
             "maintain_animation requires maintain_state"
         );
         debug_assert!(
+            self.maintain_animation || !self.maintain_size,
+            "maintain_size requires maintain_animation"
+        );
+        debug_assert!(
+            self.maintain_size || !self.maintain_interactivity,
+            "maintain_interactivity requires maintain_size"
+        );
+        debug_assert!(
             self.maintain_state || !self.maintain_focusability,
             "maintain_focusability requires maintain_state"
         );
 
         // Flutter oracle: `indexed_stack.dart` `Visibility.build`.
         //
-        // Non-maintainSize path:
-        //   maintainState=true  → Offstage(offstage: !visible,
-        //                           TickerMode(enabled: visible, child))
-        //                         unless maintainAnimation=true
-        //   maintainState=false → visible ? child : replacement
+        //   result = ExcludeFocus(excluding: !visible && !maintainFocusability, child)
+        //   if (maintainSize)  → _Visibility(visible, IgnorePointer(
+        //                            ignoring: !visible && !maintainInteractivity, result))
+        //   else if maintainState → Offstage(offstage: !visible,
+        //                              TickerMode(enabled: visible, result))
+        //                            (TickerMode skipped when maintainAnimation)
+        //   else                  → visible ? child : replacement
         //
-        // `maintain_interactivity` is accepted but has no additional effect
-        // until `maintainSize` is implemented (documented divergence above).
-        let result: BoxedView = if self.maintain_state {
-            let focusable_child = ExcludeFocus::new(self.child.clone())
+        // Note the last arm reads `child`, not `result`: the oracle discards
+        // the focus wrapper there, so FLUI does too.
+        let focusable_child = || {
+            ExcludeFocus::new(self.child.clone())
                 .excluding(!self.visible && !self.maintain_focusability)
                 .into_view()
-                .boxed();
+                .boxed()
+        };
+
+        let result: BoxedView = if self.maintain_size {
+            // The child stays laid out at full size and merely stops being
+            // painted, so `maintain_interactivity` decides whether pointers
+            // still reach it.
+            VisibilityGate::new()
+                .visible(self.visible)
+                .child(
+                    IgnorePointer::new()
+                        .ignoring(!self.visible && !self.maintain_interactivity)
+                        .child(focusable_child()),
+                )
+                .boxed()
+        } else if self.maintain_state {
             let child = if self.maintain_animation {
-                focusable_child
+                focusable_child()
             } else {
-                TickerMode::new(focusable_child)
+                TickerMode::new(focusable_child())
                     .enabled(self.visible)
                     .into_view()
                     .boxed()
