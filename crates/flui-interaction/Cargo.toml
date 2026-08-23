@@ -37,11 +37,12 @@ thiserror = { workspace = true }
 dpi = "0.1.2"
 
 [dev-dependencies]
-# `testing` for `tracing_interest::disarm_interest_cache`, which this crate's
-# tracing-capturing tests call so a sibling test cannot poison their
-# callsites' cached interest. Dev-only: the feature never reaches a
-# production build.
-flui-foundation = { path = "../flui-foundation", version = "0.2.0", features = ["testing"] }
+# `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
+# tests call so a sibling test cannot poison their callsites' cached interest.
+# A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
+# normally, which cargo permits for dev-dependencies precisely so a lower crate
+# can use the test support built on it.
+flui-testing = { path = "../flui-testing", version = "0.2.0" }
 static_assertions = { workspace = true }
 # `tracing-subscriber` is a dev-only dependency — the observability tests
 # install a `fmt::TestWriter` subscriber to exercise span emission on hot

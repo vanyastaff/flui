@@ -380,16 +380,21 @@ then install its own subscriber the ordinary composable way, thread-locally for
 one closure. So it never takes the process-global default slot: a binary keeps
 its own logging subscriber, events outside a capture still reach it, and
 concurrent captures on different threads neither block nor see each other.
-A crate too low in the DAG to reach `flui-testing` keeps its own subscriber and
-its own assertions, and just calls the same primitive first — every crate
-already depends on `flui-foundation`, so this needs no new dependency edge.
-`flui-view`, `flui-interaction`, `flui-app`, `flui-devtools` and
-`flui-foundation` itself all do this now.
+A crate whose capture helper is too specialised to replace keeps it, and calls
+`log_capture::disarm_interest_cache` first — that is public for exactly this.
+`flui-view`, `flui-interaction`, `flui-app` and `flui-devtools` do, through a
+**dev-dependency cycle**: `flui-testing` depends on them normally, and cargo
+permits the reverse edge for dev-dependencies precisely so a lower crate can
+use the test support built on it.
 
-`flui-log` deliberately does not: it has no in-workspace dependencies at all,
-which is part of its layer contract, and its capture tests share no callsite
-with anything else in their binary — each emits at its own source line inside
-its own capture helper — so there is nothing there to poison.
+Two crates deliberately do not, because they have nothing to poison — their
+capture tests share no callsite with anything else in their binary, each
+emitting at its own source line inside its own helper. `flui-log` additionally
+has no in-workspace dependencies at all, which its layer entry states as a
+contract; `flui-foundation` is emission-only and may not construct a subscriber
+(`crates/flui-foundation/AGENTS.md`), which is also why the primitive lives in
+`flui-testing` rather than at the bottom of the DAG where every crate could
+reach it without an edge.
 
 ## Visual regression (goldens)
 

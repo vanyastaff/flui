@@ -186,12 +186,6 @@ pub mod notifier_generic;
 // Diagnostics and debugging
 pub mod debug;
 
-// Test-support primitive. Behind the `testing` feature so the
-// `enabled()`-per-event cost it imposes never reaches a production build; the
-// module's own docs carry the mechanism.
-#[cfg(any(test, feature = "testing"))]
-pub mod tracing_interest;
-
 // ============================================================================
 // RE-EXPORTS
 // ============================================================================

@@ -1371,8 +1371,8 @@ mod tests {
         // Disarm `tracing`'s process-global callsite-interest cache first: it is
         // computed on whichever thread reaches a callsite FIRST, so without this a
         // sibling test can have it cached as `never` and silently empty this capture.
-        // See `flui_foundation::tracing_interest`.
-        flui_foundation::tracing_interest::disarm_interest_cache();
+        // See `flui_testing::log_capture`.
+        flui_testing::log_capture::disarm_interest_cache();
         let captured = CapturedLog::default();
         let subscriber = tracing_subscriber::fmt()
             .with_writer(captured.clone())

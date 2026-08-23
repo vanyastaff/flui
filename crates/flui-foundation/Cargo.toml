@@ -48,10 +48,6 @@ tracing-subscriber = { workspace = true }
 [features]
 default = []
 serde = ["dep:serde", "dep:serde_json"]
-# Test-support only: exposes `tracing_interest::disarm_interest_cache`, which
-# every crate with a `tracing`-capturing test needs and which no production
-# build should pay for. Enable it from `[dev-dependencies]`.
-testing = []
 
 [package.metadata.docs.rs]
 all-features = true

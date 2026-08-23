@@ -56,8 +56,8 @@ fn spans_during(body: impl FnOnce()) -> Vec<OpenedSpan> {
     // Disarm `tracing`'s process-global callsite-interest cache first: it is
     // computed on whichever thread reaches a callsite FIRST, so without this a
     // sibling test can have it cached as `never` and silently empty this capture.
-    // See `flui_foundation::tracing_interest`.
-    flui_foundation::tracing_interest::disarm_interest_cache();
+    // See `flui_testing::log_capture`.
+    flui_testing::log_capture::disarm_interest_cache();
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
     collector
         .spans
