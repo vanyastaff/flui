@@ -1,34 +1,18 @@
-//! Testing utilities for gesture and event handling
+//! Testing utilities for gesture and event handling.
 //!
-//! This module provides utilities for testing gesture recognizers and event
-//! handling:
+//! [`input`] builds individual synthetic events (pointer, keyboard, modifier
+//! chords) for a test that drives a recognizer or a binding directly.
 //!
-//! - [`GestureRecorder`] - Record pointer event sequences
-//! - [`GesturePlayer`] - Replay recorded gestures
-//! - [`GestureBuilder`] - Pre-built gesture patterns (tap, drag, pinch, etc.)
-//! - [`input`] - Builders for creating test events
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use flui_interaction::testing::{GestureBuilder, GesturePlayer};
-//!
-//! // Create a tap gesture
-//! let recording = GestureBuilder::tap(Offset::new(Pixels(100.0), Pixels(100.0)));
-//!
-//! // Replay it
-//! let player = GesturePlayer::new(recording);
-//! for event in player {
-//!     recognizer.handle_event(&event);
-//! }
-//! ```
+//! **Scripted gestures and replay live in `flui-testing`**, not here. This
+//! module used to carry a `GestureRecorder`/`GesturePlayer`/`GestureBuilder`
+//! trio, but a gesture is a shape in time and none of it could replay time: the
+//! recorder stamped `Instant::now()` and the player was an
+//! `Iterator<Item = PointerEvent>` that advanced no clock, so a recorded long
+//! press replayed as an instant tap. It had no consumers as a result. See
+//! `flui_testing::replay`, which scripts explicit virtual-time offsets and
+//! replays them by advancing a `HeadlessBinding`'s `ManualClock`.
 
 pub mod input;
-mod recording;
 
 // Re-export input builders
 pub use input::ModifiersBuilder;
-pub use recording::{
-    GestureBuilder, GesturePlayer, GestureRecorder, GestureRecording, RecordedEvent,
-    RecordedEventType,
-};

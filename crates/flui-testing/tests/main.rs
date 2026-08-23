@@ -24,6 +24,8 @@ mod long_press_via_pump_frame;
 mod multi_presentation_clock;
 #[path = "owner_scope.rs"]
 mod owner_scope;
+#[path = "pointer_script_replay.rs"]
+mod pointer_script_replay;
 #[path = "post_frame_after_layout.rs"]
 mod post_frame_after_layout;
 #[path = "self_rescheduling_local_post_frame.rs"]

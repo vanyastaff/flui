@@ -87,9 +87,11 @@
 
 pub mod a11y;
 pub mod bootstrap;
+pub mod replay;
 
 pub use a11y::{A11yNode, A11yQuery, A11yQueryError, A11yTree, NotTreeBound};
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
+pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
 
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -487,6 +489,16 @@ impl HeadlessBinding {
             .as_mut()
             .expect("tree_mut requires a tree-bound binding (built via with_tree)")
             .tree
+    }
+
+    /// The shared render owner this binding drives, when tree-bound.
+    ///
+    /// `None` for a gesture-only binding. The cell is shared with the element
+    /// tree, so a caller reads committed geometry through it without taking
+    /// the owner away from the frame loop.
+    #[must_use]
+    pub fn pipeline_owner(&self) -> Option<&PipelineCell> {
+        self.tree.as_ref().map(|tree| &tree.pipeline_owner)
     }
 
     /// The shared, clock-bound gesture arena.

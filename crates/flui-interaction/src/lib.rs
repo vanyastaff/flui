@@ -282,10 +282,7 @@ pub use text_input::{
 // Re-exports: Testing Utilities (feature-gated)
 // ============================================================================
 #[cfg(any(test, feature = "testing"))]
-pub use testing::{
-    GestureBuilder, GesturePlayer, GestureRecorder, GestureRecording, ModifiersBuilder,
-    RecordedEvent, RecordedEventType,
-};
+pub use testing::ModifiersBuilder;
 // ============================================================================
 // Re-exports: Traits
 // ============================================================================
@@ -328,7 +325,7 @@ pub mod prelude {
     pub use crate::sealed::{CustomGestureRecognizer, CustomHitTestable};
     // Testing (feature-gated)
     #[cfg(any(test, feature = "testing"))]
-    pub use crate::testing::{GestureBuilder, GesturePlayer, GestureRecorder};
+    pub use crate::testing::ModifiersBuilder;
     // Traits
     pub use crate::traits::{
         Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,

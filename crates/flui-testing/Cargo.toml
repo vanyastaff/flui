@@ -21,8 +21,17 @@ autotests = false
 workspace = true
 
 [dependencies]
-# The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline polling).
-flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
+# The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline
+# polling). `features = ["testing"]` on the NORMAL edge, not just the dev one:
+# `replay` builds its scripted events through flui-interaction's own
+# `make_*_event_for_id` constructors, so a script cannot drift from the event
+# shape a real platform translation produces. This crate is itself test
+# support and never enters a production graph (dev edges only, plus the one
+# sanctioned optional edge from flui-widgets' `testing` feature, which already
+# enables flui-interaction/testing itself), so the feature travels nowhere new.
+flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = [
+  "testing",
+] }
 # PresentationId, the multi-presentation clock registry's key -- it now
 # appears directly in HeadlessBinding's own public method signatures
 # (install_presentation_clock/pump_presentation/pump_all/etc.), which is what
@@ -64,7 +73,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 static_assertions.workspace = true
-flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
 # Enable flui-view's `test-utils` feature in test builds so the layout-builder
 # seam test can plant a registry entry (`register_layout_builder_for_test`).
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out
