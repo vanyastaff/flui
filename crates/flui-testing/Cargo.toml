@@ -34,7 +34,7 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0", features =
 # appears directly in HeadlessBinding's own public method signatures
 # (install_presentation_clock/pump_presentation/pump_all/etc.), which is what
 # promotes this from a transitive (dev-only) dependency to a normal one.
-flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0", features = ["testing"] }
 # Canonical hit-test positions accepted by the production input pipeline.
 flui-types = { path = "../flui-types", version = "0.2.0" }
 # The element tree + build owner this binding drives each frame (`build_scope`

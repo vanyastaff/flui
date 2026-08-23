@@ -70,6 +70,11 @@ inspector = ["dep:flui-foundation", "dep:tracing"]
 full = ["profiling", "timeline", "hot-reload", "inspector"]
 
 [dev-dependencies]
+# `testing` for `tracing_interest::disarm_interest_cache`, which this crate's
+# tracing-capturing tests call so a sibling test cannot poison their
+# callsites' cached interest. Dev-only: the feature never reaches a
+# production build.
+flui-foundation = { path = "../flui-foundation", version = "0.2.0", features = ["testing"] }
 
 # The profiler demo exercises the `profiling`-gated `profiler` module, so it
 # only builds when that feature is enabled (it is off in the default build).

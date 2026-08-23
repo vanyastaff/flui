@@ -36,6 +36,11 @@ pub fn capture<F: FnOnce()>(body: F) -> Vec<CollectedEvent> {
     ensure_global_subscriber();
     let collector = ReconcileEventCollector::new();
     let subscriber = Registry::default().with(collector.layer());
+    // Disarm `tracing`'s process-global callsite-interest cache first: it is
+    // computed on whichever thread reaches a callsite FIRST, so without this a
+    // sibling test can have it cached as `never` and silently empty this capture.
+    // See `flui_foundation::tracing_interest`.
+    flui_foundation::tracing_interest::disarm_interest_cache();
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
     collector.events()
 }

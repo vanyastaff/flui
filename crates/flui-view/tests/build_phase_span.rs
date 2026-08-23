@@ -53,6 +53,11 @@ impl<S: tracing::Subscriber> Layer<S> for SpanCollector {
 fn spans_during(body: impl FnOnce()) -> Vec<OpenedSpan> {
     let collector = SpanCollector::default();
     let subscriber = Registry::default().with(collector.clone());
+    // Disarm `tracing`'s process-global callsite-interest cache first: it is
+    // computed on whichever thread reaches a callsite FIRST, so without this a
+    // sibling test can have it cached as `never` and silently empty this capture.
+    // See `flui_foundation::tracing_interest`.
+    flui_foundation::tracing_interest::disarm_interest_cache();
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
     collector
         .spans

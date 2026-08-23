@@ -380,8 +380,16 @@ then install its own subscriber the ordinary composable way, thread-locally for
 one closure. So it never takes the process-global default slot: a binary keeps
 its own logging subscriber, events outside a capture still reach it, and
 concurrent captures on different threads neither block nor see each other.
-Crates at or below `flui-interaction` cannot depend on `flui-testing` and keep
-their own technique.
+A crate too low in the DAG to reach `flui-testing` keeps its own subscriber and
+its own assertions, and just calls the same primitive first — every crate
+already depends on `flui-foundation`, so this needs no new dependency edge.
+`flui-view`, `flui-interaction`, `flui-app`, `flui-devtools` and
+`flui-foundation` itself all do this now.
+
+`flui-log` deliberately does not: it has no in-workspace dependencies at all,
+which is part of its layer contract, and its capture tests share no callsite
+with anything else in their binary — each emits at its own source line inside
+its own capture helper — so there is nothing there to poison.
 
 ## Visual regression (goldens)
 

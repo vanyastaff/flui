@@ -85,12 +85,13 @@ So: mount through it. If a harness needs something it does not offer, extend
   other test reached first — cached as `Interest::never()` and silent for the
   rest of the process. That is not a hypothesis: it made a `flui-widgets`
   parity test fail 4 times in 25 runs of its binary while passing 60/60 in
-  isolation. Use [`log_capture::capture`], which disarms that cache with
-  registered-but-never-default sentinel dispatchers and then installs its own
-  subscriber only thread-locally — so it does **not** take the process-global
-  default slot, and a binary's own logging subscriber keeps working. Crates at
-  or below `flui-interaction` cannot depend on this one and keep their own
-  technique — and their own caveat.
+  isolation. Use [`log_capture::capture`], which calls
+  `flui_foundation::tracing_interest::disarm_interest_cache` and then installs
+  its own subscriber only thread-locally — so it does **not** take the
+  process-global default slot, and a binary's own logging subscriber keeps
+  working. A crate too low in the DAG to reach this one keeps its own
+  subscriber and calls that same primitive first; it lives in `flui-foundation`
+  precisely so every crate can reach it without a new dependency edge.
 - **`#![deny(missing_docs)]`.** Every public item, including test-facing ones.
 - **No process-global state, with one named exception.** Every test constructs
   its own binding, so nothing in this crate needs a test lock. If you find

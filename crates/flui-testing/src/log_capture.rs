@@ -38,52 +38,22 @@
 //!
 //! Not by claiming the process-global default subscriber — that would evict a
 //! binary's own logging setup and swallow every event emitted outside a
-//! capture. The fix works one level down, on how that cache is computed.
+//! capture. [`capture`] first calls
+//! [`flui_foundation::tracing_interest::disarm_interest_cache`], which
+//! registers permissive sentinel dispatchers so `tracing`'s cache can no longer
+//! resolve any callsite to `never` — that module carries the mechanism in full.
+//! With the cache disarmed, `capture` installs its subscriber the ordinary,
+//! composable way: thread-locally, for one closure.
 //!
-//! `Rebuilder::JustOne` — the branch that asks only the emitting thread — is
-//! taken exactly while **at most one** dispatcher is registered:
+//! So everything else about the process is untouched:
 //!
-//! ```text
-//! fn rebuilder(&self) -> Rebuilder<'_> {
-//!     if self.has_just_one.load(SeqCst) { return Rebuilder::JustOne; }
-//!     Rebuilder::Read(LOCKED_DISPATCHERS.read().unwrap())
-//! }
-//! fn register_dispatch(&self, d: &Dispatch) -> Rebuilder<'_> {
-//!     dispatchers.retain(|d| d.upgrade().is_some());
-//!     dispatchers.push(d.registrar());
-//!     self.has_just_one.store(dispatchers.len() <= 1, SeqCst);
-//! }
-//! ```
-//!
-//! So this module registers **two permissive sentinel dispatchers** and keeps
-//! them alive for the process. `has_just_one` is then permanently false, every
-//! interest rebuild takes `Rebuilder::Read` over *all* live dispatchers, and
-//! their opinions are combined with
-//! [`Interest::and`](tracing::subscriber::Interest), which resolves a
-//! disagreement to `sometimes`:
-//!
-//! ```text
-//! fn and(self, rhs: Interest) -> Self {
-//!     if self.0 == rhs.0 { self } else { Interest::sometimes() }
-//! }
-//! ```
-//!
-//! A sentinel that answers `sometimes` for every callsite therefore makes
-//! `never` unreachable, whichever thread registers the callsite first. With the
-//! cache disarmed, [`capture`] can install its subscriber the ordinary,
-//! composable way — thread-locally, for one closure — and everything else about
-//! the process is untouched:
-//!
-//! - the sentinels are **never** anyone's default dispatcher, so they receive no
-//!   events; they only vote on interest;
 //! - a binary keeps its own global subscriber, and events outside a capture
 //!   still reach it;
 //! - two threads can capture at once without seeing each other's events, and
 //!   without a lock between them.
 //!
-//! The cost is that no callsite is ever cached as `never` in a process that has
-//! captured, so a disabled event pays one `enabled()` call instead of an atomic
-//! load. That is the price of the cache being unable to lie.
+//! The same primitive is what a crate too low in the DAG to reach this one uses
+//! to keep its own `with_default` capture honest.
 //!
 //! # Limits
 //!
@@ -95,7 +65,6 @@
 
 use std::cell::RefCell;
 use std::fmt::Write as _;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tracing::field::{Field, Visit};
@@ -323,55 +292,6 @@ impl Subscriber for CaptureSubscriber {
     fn exit(&self, _span: &Id) {}
 }
 
-/// Votes `sometimes` on every callsite and is never anyone's default, so it
-/// receives no events and only ever influences the interest cache.
-struct InterestSentinel;
-
-impl Subscriber for InterestSentinel {
-    /// The whole point. See this module's docs: with two of these registered,
-    /// `Interest::and` can no longer resolve any callsite to `never`.
-    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
-        Interest::sometimes()
-    }
-
-    /// Unreachable in practice — a sentinel is never a default dispatcher — and
-    /// `false` regardless, so a future path that did consult it records nothing.
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-        false
-    }
-
-    fn new_span(&self, _span: &Attributes<'_>) -> Id {
-        Id::from_u64(1)
-    }
-
-    fn record(&self, _span: &Id, _values: &Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
-
-    fn event(&self, _event: &Event<'_>) {}
-
-    fn enter(&self, _span: &Id) {}
-
-    fn exit(&self, _span: &Id) {}
-}
-
-/// Disarm `tracing`'s per-callsite interest cache for this process, once.
-///
-/// Constructing a [`Dispatch`](tracing::Dispatch) registers it, and the second
-/// registration is what flips `has_just_one` false for good — the registry only
-/// ever drops dispatchers whose `Weak` no longer upgrades, and these two are
-/// held for the life of the process. From then on every interest rebuild
-/// consults all live dispatchers instead of just the emitting thread's.
-fn disarm_interest_cache() {
-    static SENTINELS: OnceLock<[tracing::Dispatch; 2]> = OnceLock::new();
-    SENTINELS.get_or_init(|| {
-        [
-            tracing::Dispatch::new(InterestSentinel),
-            tracing::Dispatch::new(InterestSentinel),
-        ]
-    });
-}
-
 /// Restores the previous (absent) sink even if `body` panics.
 struct SinkGuard;
 
@@ -402,7 +322,7 @@ impl Drop for SinkGuard {
 /// assert_eq!(log.count_containing("unbounded main axis declares"), 1, "{log}");
 /// ```
 pub fn capture<R>(body: impl FnOnce() -> R) -> (R, CapturedLog) {
-    disarm_interest_cache();
+    flui_foundation::tracing_interest::disarm_interest_cache();
     tracing::subscriber::with_default(CaptureSubscriber, || capture_into_sink(body))
 }
 

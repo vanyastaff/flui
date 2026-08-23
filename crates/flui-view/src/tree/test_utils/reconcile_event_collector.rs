@@ -291,6 +291,11 @@ mod tests {
     fn with_collector<F: FnOnce()>(body: F) -> Vec<CollectedEvent> {
         let collector = ReconcileEventCollector::new();
         let subscriber = Registry::default().with(collector.layer());
+        // Disarm `tracing`'s process-global callsite-interest cache first: it is
+        // computed on whichever thread reaches a callsite FIRST, so without this a
+        // sibling test can have it cached as `never` and silently empty this capture.
+        // See `flui_foundation::tracing_interest`.
+        flui_foundation::tracing_interest::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
         collector.events()
     }
@@ -410,6 +415,11 @@ mod tests {
     fn collector_clear_resets_buffer() {
         let collector = ReconcileEventCollector::new();
         let subscriber = Registry::default().with(collector.layer());
+        // Disarm `tracing`'s process-global callsite-interest cache first: it is
+        // computed on whichever thread reaches a callsite FIRST, so without this a
+        // sibling test can have it cached as `never` and silently empty this capture.
+        // See `flui_foundation::tracing_interest`.
+        flui_foundation::tracing_interest::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
             emit_event(&ReconcileEvent::mount(
                 ElementId::new(1),

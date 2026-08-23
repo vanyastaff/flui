@@ -233,6 +233,7 @@ declarations = [
     "pub mod listener_registry;",
     "pub mod notifier_generic;",
     "pub mod debug;",
+    "pub mod tracing_interest;",
     "pub use affinity::OwnerAffinity;",
     "pub use async_snapshot::{AsyncSnapshot, ConnectionState};",
     "pub use callbacks::{ FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer, VoidCallback, };",
