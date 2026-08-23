@@ -86,8 +86,14 @@
 #![deny(missing_docs)]
 
 pub mod a11y;
+pub mod bootstrap;
+pub mod log_capture;
+pub mod replay;
 
 pub use a11y::{A11yNode, A11yQuery, A11yQueryError, A11yTree, NotTreeBound};
+pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
+pub use log_capture::{CapturedLog, CapturedRecord, capture};
+pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
 
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -394,19 +400,49 @@ impl HeadlessBinding {
         pipeline_owner: PipelineCell,
         committed_layer_tree: Option<LayerTree>,
     ) {
+        self.bind_tree_with_capabilities(
+            build_owner,
+            tree,
+            pipeline_owner,
+            committed_layer_tree,
+            bootstrap::BuildCapabilities::Installed,
+        );
+    }
+
+    /// [`bind_tree_with_committed_layer_tree`](Self::bind_tree_with_committed_layer_tree)
+    /// under an explicit capability policy.
+    ///
+    /// The public entry point installs the full set, which is right for a
+    /// caller handing over owners it configured itself: it cannot know what the
+    /// binding's own handles are, so the binding supplies them. A bootstrap
+    /// that was asked to *withhold* a capability must not go through that door,
+    /// or the withholding would last only until the bind and every rebuild
+    /// after `init_state` would see a handle the caller believes is absent.
+    pub(crate) fn bind_tree_with_capabilities(
+        &mut self,
+        build_owner: BuildOwner,
+        tree: ElementTree,
+        pipeline_owner: PipelineCell,
+        committed_layer_tree: Option<LayerTree>,
+        capabilities: bootstrap::BuildCapabilities,
+    ) {
         // Widgets spawn into the driver this binding's frame step
         // polls — the binding-local one, never some OTHER binding's or
         // realm's `UpdateScheduler`. Idempotent: installing it again is a no-op if
-        // the caller already did.
+        // the caller already did. The async driver goes in under either policy:
+        // withholding it would change *which* capability is under test.
         let mut build_owner = build_owner;
         build_owner.set_async_driver(self.scheduler.async_driver().clone());
-        // The post-frame capability must name THIS binding's
-        // scheduler — the one `pump_frame`'s `drive_frame` drains — never
-        // some other binding's or realm's `UpdateScheduler`, which nothing drives
-        // headlessly.
-        build_owner.set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
-        build_owner.set_local_post_frame_handle(self.local_post_frame.local_handle());
-        build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
+        if capabilities == bootstrap::BuildCapabilities::Installed {
+            // The post-frame capability must name THIS binding's
+            // scheduler — the one `pump_frame`'s `drive_frame` drains — never
+            // some other binding's or realm's `UpdateScheduler`, which nothing drives
+            // headlessly.
+            build_owner
+                .set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
+            build_owner.set_local_post_frame_handle(self.local_post_frame.local_handle());
+            build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
+        }
         self.tree = Some(TreeBinding {
             build_owner,
             tree,
@@ -485,6 +521,16 @@ impl HeadlessBinding {
             .as_mut()
             .expect("tree_mut requires a tree-bound binding (built via with_tree)")
             .tree
+    }
+
+    /// The shared render owner this binding drives, when tree-bound.
+    ///
+    /// `None` for a gesture-only binding. The cell is shared with the element
+    /// tree, so a caller reads committed geometry through it without taking
+    /// the owner away from the frame loop.
+    #[must_use]
+    pub fn pipeline_owner(&self) -> Option<&PipelineCell> {
+        self.tree.as_ref().map(|tree| &tree.pipeline_owner)
     }
 
     /// The shared, clock-bound gesture arena.

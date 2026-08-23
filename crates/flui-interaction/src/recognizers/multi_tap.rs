@@ -221,7 +221,7 @@ impl MultiTapGestureRecognizer {
         match state.phase {
             MultiTapPhase::Ready | MultiTapPhase::Collecting => {
                 // Add pointer
-                let now = Instant::now();
+                let now = self.state.now();
 
                 // Check time window if not first pointer
                 if let Some(first_time) = state.first_down_time {
@@ -403,7 +403,7 @@ impl MultiTapGestureRecognizer {
         if state.phase == MultiTapPhase::Collecting
             && let Some(first_time) = state.first_down_time
         {
-            let elapsed = Instant::now().duration_since(first_time);
+            let elapsed = self.state.now().duration_since(first_time);
             if elapsed > self.max_time_window {
                 // Timeout - cancel
                 state.phase = MultiTapPhase::Cancelled;

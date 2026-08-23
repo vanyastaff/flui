@@ -267,8 +267,11 @@ layer = 6
 disposition = "keep"
 note = """
 Test-support crate: the deterministic headless frame driver \
-(`HeadlessBinding::pump_frame`) plus the future home for `WidgetTester`, virtual \
-time, fake platform capabilities, deterministic replay, and golden helpers. The \
+(`HeadlessBinding::pump_frame`), the canonical mount bootstrap \
+(`bootstrap::mount_root`), virtual-clock gesture replay (`replay`, which \
+superseded flui-interaction's wall-clock recorder/player), and accessibility \
+queries (`a11y`) -- plus the future home for fake platform capabilities and \
+golden helpers. The \
 package was renamed during the Runtime.1 preflight: the old name collided \
 conceptually with the transitional `AppBinding` graph Runtime.1 removes, and the \
 package name becomes a public testing contract once conformance tests import it. \

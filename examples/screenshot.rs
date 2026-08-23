@@ -47,12 +47,9 @@ mod widgets_gallery;
 
 use flui_engine::wgpu::HeadlessRenderer;
 use flui_layer::{Layer, LayerTree, PerformanceOverlayLayer};
-use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
-use flui_types::Size;
-use flui_types::geometry::px;
-use flui_view::{BuildOwner, ElementTree, IntoView};
+use flui_testing::bootstrap::{MountOptions, MountOwners};
+use flui_view::IntoView;
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 
 fn main() {
@@ -62,40 +59,69 @@ fn main() {
     let height: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(760);
     let out_path = args.next().unwrap_or_else(|| format!("{demo}.png"));
 
-    // Each arm mounts a different concrete root but returns the same
-    // `LayerTree`, so the raster/encode tail is shared below.
-    let layer_tree = match demo.as_str() {
-        "material" => render_view_to_layers(material_demo::MaterialDemoApp, width, height),
-        "cupertino" => render_view_to_layers(cupertino_demo::CupertinoDemoApp, width, height),
+    // Argument validation comes BEFORE the GPU: an unknown demo name must
+    // reach the usage message and its exit code on a machine with no device,
+    // not die on renderer construction.
+    const DEMOS: &[&str] = &[
+        "material",
+        "cupertino",
+        "vertical-slice",
+        "vslice",
+        "gallery",
+        "animated-box",
+        "colored-box",
+        "text",
+        "telemetry-overlay",
+        "sliver",
+        "sliver-mid",
+        "sliver-collapsed",
+    ];
+    if !DEMOS.contains(&demo.as_str()) {
+        eprintln!(
+            "unknown demo {demo:?}; expected: material | cupertino | vertical-slice | \
+             gallery | animated-box | colored-box | text | telemetry-overlay | \
+             sliver | sliver-mid | sliver-collapsed"
+        );
+        std::process::exit(2);
+    }
+
+    let renderer = HeadlessRenderer::new().expect("a GPU device for headless capture");
+    // A mounted demo's `LayerTree` is owned by the binding that produced it
+    // (`LayerTree` is not `Clone`), so rasterization happens inside each arm
+    // rather than after the match — the binding stays alive exactly as long as
+    // the tree being rendered.
+    let raster = |layer_tree: &LayerTree| {
+        renderer
+            .render_layer_tree(layer_tree, (width, height))
+            .expect("headless render of the demo layer tree")
+    };
+
+    let rgba = match demo.as_str() {
+        "material" => capture(material_demo::MaterialDemoApp, width, height, &raster),
+        "cupertino" => capture(cupertino_demo::CupertinoDemoApp, width, height, &raster),
         "vertical-slice" | "vslice" => {
-            render_view_to_layers(vertical_slice_demo::DemoApp, width, height)
+            capture(vertical_slice_demo::DemoApp, width, height, &raster)
         }
-        "gallery" => render_view_to_layers(widgets_gallery::Gallery, width, height),
-        "animated-box" => render_view_to_layers(animated_box_app::App::new(), width, height),
-        "colored-box" => render_view_to_layers(colored_box_app::App, width, height),
-        "text" => render_view_to_layers(text_app::App, width, height),
-        "telemetry-overlay" => telemetry_overlay_layers(),
+        "gallery" => capture(widgets_gallery::Gallery, width, height, &raster),
+        "animated-box" => capture(animated_box_app::App::new(), width, height, &raster),
+        "colored-box" => capture(colored_box_app::App, width, height, &raster),
+        "text" => capture(text_app::App, width, height, &raster),
+        "telemetry-overlay" => raster(&telemetry_overlay_layers()),
         // The collapsing-sliver scene at three scroll depths — a visual
         // check on the SliverAppBar / FlexibleSpaceBar / pinned-header
         // pipeline (expanded, mid-collapse with the background fading and
         // parallaxing, and fully collapsed to the pinned toolbar).
-        "sliver" => render_view_to_layers(sliver_demo_app::tree(0.0), width, height),
-        "sliver-mid" => render_view_to_layers(sliver_demo_app::tree(90.0), width, height),
-        "sliver-collapsed" => render_view_to_layers(sliver_demo_app::tree(500.0), width, height),
+        "sliver" => capture(sliver_demo_app::tree(0.0), width, height, &raster),
+        "sliver-mid" => capture(sliver_demo_app::tree(90.0), width, height, &raster),
+        "sliver-collapsed" => capture(sliver_demo_app::tree(500.0), width, height, &raster),
+        // Unreachable: the name was validated against DEMOS above, before the
+        // GPU was touched. Kept total rather than `unreachable!()` so a name
+        // added to one list and not the other fails loudly here.
         other => {
-            eprintln!(
-                "unknown demo {other:?}; expected: material | cupertino | vertical-slice | \
-                 gallery | animated-box | colored-box | text | telemetry-overlay | \
-                 sliver | sliver-mid | sliver-collapsed"
-            );
+            eprintln!("demo {other:?} is listed as known but has no arm");
             std::process::exit(2);
         }
     };
-
-    let renderer = HeadlessRenderer::new().expect("a GPU device for headless capture");
-    let rgba = renderer
-        .render_layer_tree(&layer_tree, (width, height))
-        .expect("headless render of the demo layer tree");
 
     image::save_buffer(
         &out_path,
@@ -121,63 +147,40 @@ fn telemetry_overlay_layers() -> LayerTree {
     tree
 }
 
-/// Mount `root_view` headlessly at `width`×`height` and drive one frame,
-/// returning the composited `LayerTree`.
-fn render_view_to_layers<V: IntoView + 'static>(
+/// Mount `root_view` headlessly at `width`×`height`, drive its bootstrap frame,
+/// and hand the composited `LayerTree` to `raster` while the binding that owns
+/// it is still alive.
+fn capture<V: IntoView + 'static>(
     root_view: V,
     width: u32,
     height: u32,
-) -> LayerTree {
-    let binding = HeadlessBinding::new();
-    let mut build_owner = BuildOwner::new();
-    let mut element_tree = ElementTree::new();
-    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+    raster: &impl Fn(&LayerTree) -> Vec<u8>,
+) -> Vec<u8> {
+    let mut binding = HeadlessBinding::new();
 
-    // Wire the async-driver / post-frame / interaction capabilities onto the
-    // owner before the mount build pass (matches the acceptance-test bootstrap).
-    binding.install_build_capabilities(&mut build_owner);
-
+    // The presentation scopes this crate supplies; `flui-testing` owns the
+    // mount ordering and the bootstrap frame itself (`mount_root`), so this
+    // capture is driven by the SAME sequence `pump_frame` and the live
+    // `draw_frame` run — including the layout<->build fixpoint, without which
+    // build-during-layout content (a `SliverAppBar`'s delegate child, any
+    // persistent-header body) captures as empty space.
     let focused_root = FocusRoot::new(root_view);
     let animated_root = VsyncScope::new(binding.vsync().clone(), focused_root);
     let scoped_root = GestureArenaScope::new(binding.arena().clone(), animated_root);
 
-    binding.enter_owner_scope(|| {
-        let root_element = element_tree.mount_root_with_pipeline_owner(
-            &scoped_root,
-            Some(pipeline_owner.clone()),
-            &mut build_owner.element_owner_mut(),
-        );
-        build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
-        build_owner.build_scope(&mut element_tree);
-    });
+    let mounted = binding.mount_root(
+        &scoped_root,
+        MountOwners::fresh(),
+        MountOptions::tight(width as f32, height as f32),
+    );
+    assert!(
+        mounted.painted,
+        "the bootstrap frame must produce a LayerTree"
+    );
 
-    let root_render_id = pipeline_owner.with(|owner| {
-        let render_tree = owner.render_tree();
-        render_tree
-            .iter()
-            .map(|(id, _)| id)
-            .find(|id| render_tree.parent(*id).is_none())
-            .expect("the mounted demo tree must have a render root")
-    });
-
-    pipeline_owner.with_mut(|owner| {
-        owner.set_root_id(Some(root_render_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
-            px(width as f32),
-            px(height as f32),
-        ))));
-    });
-
-    // The layout↔build fixpoint frame — the SAME helper `HeadlessBinding`'s
-    // pump and the live `draw_frame` use. A bare `PipelineOwner::run_frame`
-    // never services build-during-layout content (a `SliverAppBar`'s
-    // delegate child, any persistent-header body), so a hand-rolled frame
-    // here captured collapsing app bars as empty space.
-    let layer_tree = binding.enter_owner_scope(|| {
-        build_owner
-            .run_frame_with_layout_builders(&mut element_tree, &pipeline_owner)
-            .expect("the render frame must succeed")
-    });
-
-    layer_tree.expect("the render frame must produce a LayerTree")
+    raster(
+        binding
+            .layer_tree()
+            .expect("the bootstrap frame committed a layer tree"),
+    )
 }

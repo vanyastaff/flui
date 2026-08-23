@@ -4,6 +4,45 @@
 
 This page documents the test, lint, format, and benchmark commands enforced for FLUI. All gates listed here must pass before a change is merged.
 
+## Map of the testing layer
+
+FLUI's test support is a stack, not one harness. Each tier drives the machine at
+one depth; pick the **shallowest tier that can fail for the reason you care
+about** — a layout bug found by a `RenderTester` test names the render object,
+the same bug found by a golden names a PNG.
+
+| Tier | Drives | Entry point | Enabled by |
+|------|--------|-------------|------------|
+| Diagnostics | Structured self-description of any node | `flui_foundation::{DiagnosticsNode, DiagnosticsBuilder}` | always |
+| Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
+| Layer | A `LayerTree` built declaratively | `flui_layer::testing::{LayerTester, layer, inspect}` | `flui-layer/testing` |
+| Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
+| **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessBinding` | dev-dependency |
+| **Widget** | A mounted widget tree with geometry probes and synthetic input | `flui_widgets::testing::{lay_out, LaidOut}` | `flui-widgets/testing` |
+| Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
+| Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
+| Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
+| GPU readback | Real pixels off a real device (WARP in CI) | `flui-engine`'s readback suite | `flui-engine/enable-wgpu-tests` |
+| Visual regression | Whole-demo pixels vs. committed PNGs | `tests/golden_screenshots.rs` | `flui/golden` |
+| Live E2E | A real window, real X11/Wayland input, real exit code | `tools/live-smoke` | `just live-smoke` |
+
+Two structural rules hold across the stack:
+
+- **Test-only APIs live in `flui-testing`**, not behind a `testing` feature on a
+  shipped crate. Where layering forbids the move — `flui_widgets::testing`
+  mounts `FocusRoot`/`VsyncScope`/`GestureArenaScope`, which are widgets, and
+  `flui-testing` may never depend on the widget catalog — the harness stays put
+  but is *built on* `flui-testing`, so the shared machinery is not forked. See
+  [`crates/flui-testing/AGENTS.md`](../crates/flui-testing/AGENTS.md).
+- **Mount through `HeadlessBinding::mount_root`.** It owns the eight-step
+  bootstrap whose ordering is load-bearing, and its contract is that the
+  bootstrap frame is the same frame `pump_frame` runs (same layout↔build
+  fixpoint, same lazy-sliver service pass). Hand-rolled copies of that sequence
+  have already drifted once, silently: of the eight that existed, one
+  bootstrapped with a bare `PipelineOwner::run_frame` and captured every
+  `SliverAppBar` delegate child unbuilt, and none ran the lazy-sliver service
+  pass. All eight now go through `mount_root`.
+
 ## Quality Gates
 
 The local pre-review gate is:
@@ -83,12 +122,15 @@ The constitution sets minimum coverage thresholds per crate category:
 | Platform | 70 % | `flui-platform` |
 | Widget | 85 % | (future widget crates) |
 
-Generate a coverage report with [`cargo-tarpaulin`](https://crates.io/crates/cargo-tarpaulin) or [`cargo-llvm-cov`](https://crates.io/crates/cargo-llvm-cov):
+Generate a coverage report with [`cargo-llvm-cov`](https://crates.io/crates/cargo-llvm-cov)
+— `just coverage` wraps it, and it is the only coverage tool this workspace uses:
 
 ```bash
 cargo install cargo-llvm-cov
-cargo llvm-cov --workspace --html
+just coverage                        # or: cargo llvm-cov --workspace --html
 ```
+
+These thresholds are a target, not a gate: no CI job enforces them today.
 
 ## Benchmarks
 
@@ -160,7 +202,7 @@ The constitution requires `///` doc comments on every public item and `//!` over
 - **Unit tests** live in the same file under `#[cfg(test)] mod tests { ... }`.
 - **Integration tests** live in `tests/` per crate. Cross-crate pipelines are tested in `flui-engine`.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
-- **Visual regression tests** exist: `tests/golden_screenshots.rs` (209 lines) renders each demo headless and compares against 6 committed PNGs in `tests/goldens/`. Needs a GPU; run with `just golden` (`--features golden`); regenerate with `UPDATE_GOLDENS=1`.
+- **Visual regression tests** live in `tests/golden_screenshots.rs`: each demo renders headless and is compared against a committed PNG in `tests/goldens/`. See [Visual regression](#visual-regression-goldens) below for the run/regenerate workflow and what counts as a pass.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.
 
 ## Test Harnesses (`testing` feature)
@@ -178,12 +220,16 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 | `flui-layer` | [crates/flui-layer/docs/TESTING.md](../crates/flui-layer/docs/TESTING.md) | `LayerTester`, `layer`, `inspect::structure` |
 | `flui-painting` | [crates/flui-painting/docs/TESTING.md](../crates/flui-painting/docs/TESTING.md) | `record`, `command_count`, `bounds`, `diagnostics` |
 | `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `DiagnosticsNode` / `DiagnosticsBuilder` for structured assertions (no `testing` module) |
+| `flui-testing` | [crates/flui-testing/AGENTS.md](../crates/flui-testing/AGENTS.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
+| `flui-widgets` | [crates/flui-widgets/AGENTS.md](../crates/flui-widgets/AGENTS.md) | `testing::{lay_out, LaidOut, settle_lazy}` — the canonical widget harness, shared verbatim by `flui-material` / `flui-cupertino` |
 
 | Crate | What it gives you |
 |-------|-------------------|
 | `flui-painting` | Builds a `DisplayList` without `Canvas::new()` / `finish()` boilerplate. |
 | `flui-layer` | Declarative `LayerTree` builder and layer walkers reused by `flui-rendering`. |
 | `flui-rendering` | Real `PipelineOwner` trees (Box + Sliver), layout/frame depths, animation helpers. |
+| `flui-testing` | A whole headless frame on a virtual clock: gesture deadlines, animation ticks, async tasks, build/layout/paint/composite, semantics, scripted gesture replay. |
+| `flui-widgets` | A mounted widget tree: geometry probes, synthetic pointer/scroll input with per-contact identity, root swap, lazy-sliver settling. |
 | `flui-foundation` | Diagnostics substrate: `find_descendant`, `get_property`, typed property builders. |
 
 Diagnostics dumps are backed by `flui_foundation::Diagnosticable`: every node
@@ -251,6 +297,136 @@ production-faithful animation tests. Assert per frame via `Probe` (`offset`,
 `crates/flui-rendering/tests/harness_animation.rs` and
 `crates/flui-rendering/tests/animation_pipeline.rs`.
 
+## Headless frames and widget trees
+
+`flui_testing::HeadlessBinding` is the frame tier: a non-singleton, sleep-free
+runtime whose `pump_frame(dt)` advances a virtual `ManualClock` and runs the
+same frame the live `draw_frame` runs. Mount through `mount_root`; never
+hand-roll the bootstrap (see the map above).
+
+```rust,ignore
+let mut binding = HeadlessBinding::new();
+let mounted = binding.mount_root(&root, MountOwners::fresh(), MountOptions::tight(800.0, 600.0));
+binding.pump_frame(Duration::from_millis(16));
+```
+
+`flui_widgets::testing::lay_out` is the widget tier over it, adding the
+presentation scopes and geometry probes. It is one harness, shared verbatim by
+`flui-widgets`, `flui-material`, and `flui-cupertino` — the per-crate
+`tests/common/mod.rs` files are thin re-export shims, so mount ordering,
+pointer-contact identity, and virtual-clock policy cannot drift apart between
+crates again.
+
+Two behaviours worth knowing before you write an assertion:
+
+- **Lazy children build after paint**, not during layout as Flutter does, so a
+  triggering change (initial mount, a root swap, a scroll) needs two ticks to
+  settle. Use `settle_lazy`.
+- **A contact's route is captured on its Down** and reused for that contact's
+  remaining events, so a harness hit-test hook fires once per contact, not once
+  per event. Give each contact its own `PointerId`.
+
+### Scripted gestures
+
+`flui_testing::replay` scripts a gesture as data with explicit virtual-time
+offsets and replays it by advancing the clock — so the timing that decides a
+deadline-driven recognizer's verdict is part of the script, not of how the test
+process happened to be scheduled.
+
+```rust,ignore
+binding.replay(&PointerScript::long_press(at, Duration::from_millis(600)));
+binding.replay(&PointerScript::fling(from, to));
+```
+
+Presets: `tap`, `double_tap`, `long_press`, `drag`, `fling`, `swipe`, `pinch`.
+`GestureRecorder` captures a script off the same virtual clock, so a recording
+round-trips to its own timing.
+
+### Accessibility
+
+`binding.enable_semantics()` then `binding.a11y_tree()` gives an `A11yTree` of
+AccessKit nodes, translated by the same `flui_semantics::tree_to_update` a
+platform adapter uses — so a test and a screen reader cannot disagree. Query by
+role rather than by node index.
+
+### Asserting on what was logged
+
+Some contracts are only observable as a diagnostic — a misconfiguration
+reported once rather than every frame, the text of a caught panic that
+`RenderError` does not carry. Capture those with
+`flui_testing::log_capture::capture`:
+
+```rust,ignore
+let (laid, log) = capture(|| harness::pump_widget(root, harness::screen()));
+assert!(!log.is_empty(), "vacuous-pass guard: the frame must have logged something");
+assert_eq!(log.count_containing("unbounded main axis declares"), 1, "{log}");
+```
+
+**Do not hand-roll this with `tracing::subscriber::with_default`.** `tracing`
+computes a callsite's interest once, on whichever thread reaches it first, and
+caches it process-globally, so a thread-local subscriber silently loses every
+event from a callsite another test reached first. This suite carried two
+hand-rolled copies of that technique, both documenting the caveat and neither
+able to fix it: one failed 4 times in 25 runs of the `parity` binary while
+passing 60/60 in isolation, and the other serialised its tests behind a mutex
+that could not help, because the poisoner is every other test in the binary,
+not the one it was serialised against.
+
+`capture` fixes it at the cause, one level below the subscriber: it registers
+two permissive sentinel dispatchers — never anyone's default, so they receive no
+events — which makes `tracing`'s interest cache unable to resolve any callsite
+to `never`, whichever thread reaches it first. With the cache disarmed it can
+then install its own subscriber the ordinary composable way, thread-locally for
+one closure. So it never takes the process-global default slot: a binary keeps
+its own logging subscriber, events outside a capture still reach it, and
+concurrent captures on different threads neither block nor see each other.
+Crates at or below `flui-interaction` cannot depend on `flui-testing` and keep
+their own technique.
+
+## Visual regression (goldens)
+
+```bash
+just golden          # compare against tests/goldens/ (needs a GPU)
+just golden-update   # regenerate after an intended visual change, then review the diff
+```
+
+Off by default (`--features golden` on the `flui` package) because the goldens
+are machine-specific: GPU and driver differences move anti-aliased edges, so
+they must be regenerated on one reference device.
+
+**What counts as a pass is only a pixel comparison against a committed golden.**
+Two paths that used to go green having compared nothing are now failures:
+
+- a **missing golden fails** — writing the absent PNG and returning would let a
+  deleted or never-committed golden heal itself into a pass, so a golden is only
+  ever written under an explicit `UPDATE_GOLDENS=1` regeneration;
+- a **missing GPU fails** — set `FLUI_GOLDEN_ALLOW_NO_GPU=1` to skip explicitly
+  on a device-less machine, which reports each skip on stderr instead of
+  pretending to have run.
+
+No CI job runs this suite; it is a local gate on the reference device. The
+committed PNGs predate the bootstrap consolidation and were captured without
+the layout↔build fixpoint — regenerate them before trusting a comparison.
+
+To *look* at what a tree renders without a window, capture it instead:
+
+```bash
+cargo run -p flui --example screenshot --features "material cupertino" -- material 900 760 out.png
+```
+
+## Live E2E smoke
+
+```bash
+just live-smoke           # X11 under Xvfb: real window, real XTEST input, real pixels
+just live-smoke-wayland   # headless weston: the close-path teardown ordering
+```
+
+`tools/live-smoke` is the only executing coverage of the band **above**
+synthetic event dispatch — platform translation, the event-loop wake chain,
+window-close teardown — each of which has shipped broken while every synthetic
+gesture test stayed green. It also verifies hidden-surface gating against a real
+occlusion signal. Both variants run in CI.
+
 ## CI Expectations
 
 CI runs the same local gates plus repository-wide source checks. Every job is
@@ -279,12 +455,13 @@ cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
 FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test job's dedicated flui-platform step
 cargo test --workspace --locked --doc
 cargo check --workspace --all-targets --locked                # repeated on Rust 1.97 (MSRV job)
-cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena  # advisory (continue-on-error); NARROW —
-                                                              # covers two real-NodePtr walks driving layout_dirty_root
-                                                              # through every reborrow phase of layout_subtree_borrowed_impl
-                                                              # (one straight pass, one cyclic edge exercising the
-                                                              # baseline callback's in-flight gate). Sliver walks and
-                                                              # intrinsics queries are not interpreted.
+cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (continue-on-error); NARROW — every
+                                                              # unit test under that module, including PipelineCell
+                                                              # checkout, an owner-local run_frame traversal, a
+                                                              # reentrant-layout walk, and two real-NodePtr walks
+                                                              # driving layout_dirty_root through every reborrow phase
+                                                              # of layout_subtree_borrowed_impl. Deeper sliver walks
+                                                              # and intrinsics queries are not interpreted.
 ```
 
 The `gpu-test` job additionally runs the full `enable-wgpu-tests` readback

@@ -64,10 +64,10 @@
 //!   names one forgotten child or several, and that text is not part of
 //!   `RenderError::Poisoned` at all (only `render_object` + `phase`) — it
 //!   exists solely as a `tracing::error!(panic_msg = ..., ...)` diagnostic
-//!   inside `subtree_arena.rs`. A capturing `tracing::Subscriber` (installed
-//!   thread-locally for the one call via `tracing::subscriber::with_default`,
-//!   never process-global) is therefore the only way to make that divergence
-//!   falsifiable at all — confirmed by capturing the real log line first,
+//!   inside `subtree_arena.rs`. Capturing that event
+//!   ([`flui_testing::log_capture::capture`]) is therefore the only way to
+//!   make that divergence falsifiable at all — confirmed by capturing the
+//!   real log line first,
 //!   which at the time read `panic_msg="Each child of
 //!   RenderCustomMultiChildLayoutBox must be laid out exactly once; missing
 //!   id \"2\""` with `"3"` nowhere in it. That truncation is now fixed and
@@ -250,6 +250,7 @@ use std::sync::{Arc, Mutex};
 use flui_foundation::RenderId;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::delegates::{MultiChildLayoutContext, MultiChildLayoutDelegate};
+use flui_testing::log_capture::CapturedLog;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BoxedView, View, ViewExt};
@@ -842,93 +843,32 @@ fn a_child_without_a_layout_id_names_the_missing_id_in_the_captured_log() {
          report some layout failure — absent geometry alone is also what the \
          forgotten-child path produces (whose diagnostic reads `missing id`), \
          so without this the test would pass with the id validation deleted; \
-         captured log: {log_text}",
+         captured:\n{}",
+        log_text.render_at_least(tracing::Level::WARN),
     );
 }
 
-/// Serializes the two tests that install a capturing `tracing` subscriber
-/// against each other, and documents a hard requirement: **this technique
-/// is only race-free under `cargo nextest run`, never under plain `cargo
-/// test`.**
-///
-/// `tracing::subscriber::with_default` only redirects *event dispatch* for
-/// the current thread; the crate's per-callsite "is anyone interested"
-/// cache is process-global. Under plain `cargo test` (thread-parallel, every
-/// test sharing one process) this was confirmed empirically to be
-/// double-broken, not single-broken: without any lock,
-/// `a_child_never_laid_out_names_it_in_the_captured_log` intermittently
-/// captured an EMPTY log (the render pipeline's own `tracing::error!` call
-/// site decided nobody was listening and dropped the event before it ever
-/// reached this subscriber); WITH this lock added, the failure mode changed
-/// to intermittently capturing text from an *unrelated concurrently-running
-/// test's* widget mount instead. Neither failure mode is reachable under
-/// `cargo nextest run`: nextest re-invokes the compiled test binary once per
-/// test with `--exact <name>`, so every `#[test]` fn gets its own OS
-/// process and there is no other test's tracing activity in the same
-/// process to race against at all — the same precondition this codebase
-/// already leans on for flui-app's genuinely process-global ambient state
-/// (see the "Testing Quirks" section of `AGENTS.md`, and the ambient-reach
-/// ratchet in `docs/runtime-contract.toml` for the named residuals
-/// `Registry::global`/`FONT_SYSTEM` — `AppBinding`
-/// and `UpdateScheduler` are no longer singletons at all, so there is no lock left
-/// to name for them). This lock still
-/// serializes these two tests against each other as a defensive backstop
-/// (e.g. a future `--test-threads>1` invocation scoped to just this file),
-/// but it does not and cannot substitute for nextest's process isolation —
-/// run this file's tracing-capturing tests via `cargo nextest run`, not
-/// `cargo test`.
-static TRACING_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
-
 /// Installs a capturing `tracing` subscriber for the duration of `pump`,
-/// returning both the laid-out tree and the diagnostic text the render
-/// pipeline logged while pumping it. Thread-local for exactly this call
-/// (`tracing::subscriber::with_default`) — never a process-global
-/// subscriber — but see [`TRACING_CAPTURE_LOCK`] for the hard
-/// nextest-only-isolation requirement this still carries.
-fn pump_and_capture_log(build: impl FnOnce() -> BoxedView) -> (LaidOut, String) {
-    #[derive(Clone, Default)]
-    struct CapturedLog(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for CapturedLog {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("captured-log mutex")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLog {
-        type Writer = Self;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
-    let _guard = TRACING_CAPTURE_LOCK.lock().expect("tracing-capture lock");
-
-    let captured = CapturedLog::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(captured.clone())
-        .with_max_level(tracing::level_filters::LevelFilter::TRACE)
-        .with_ansi(false)
-        .without_time()
-        .finish();
-
+/// returning both the laid-out tree and the events the render pipeline logged
+/// while pumping it.
+///
+/// This used to hand-roll the capture with `tracing::subscriber::with_default`
+/// plus a `TRACING_CAPTURE_LOCK` serialising these tests against each other,
+/// and carried a hard caveat: it was only race-free under `cargo nextest run`,
+/// where every `#[test]` gets its own process. Neither the lock nor process
+/// isolation was the real fix — `tracing` caches each callsite's interest
+/// process-globally, computed on whichever thread reaches it first, so ANY
+/// other test reaching the same `error!` first could have it cached as
+/// `Interest::never()` and leave this capture empty. Serialising two tests
+/// cannot prevent that; the poisoner is every other test in the binary.
+///
+/// [`flui_testing::log_capture::capture`] fixes it at the cause by keeping
+/// every callsite's cached interest permissive process-wide and deciding
+/// per-event against a thread-local sink, so concurrent captures on different
+/// threads neither block nor see each other. The lock is gone with it.
+fn pump_and_capture_log(build: impl FnOnce() -> BoxedView) -> (LaidOut, CapturedLog) {
     let root = build();
-    let laid = tracing::subscriber::with_default(subscriber, || {
-        harness::pump_widget(root, harness::screen())
-    });
-
-    let bytes = captured.0.lock().expect("captured-log mutex").clone();
-    let text = String::from_utf8(bytes).expect("tracing output is valid UTF-8");
-    (laid, text)
+    flui_testing::log_capture::capture(|| harness::pump_widget(root, harness::screen()))
 }
 
 /// Port of 'performLayout did not layout a child': three children (`"0"`,
@@ -959,8 +899,9 @@ fn a_child_never_laid_out_names_it_in_the_captured_log() {
          geometry for the subject",
     );
     assert!(
-        log_text.contains(r#"missing id \"2\""#),
-        "the forgotten child's id must be named in the diagnostic: got {log_text:?}",
+        log_text.contains(r#"missing id "2""#),
+        "the forgotten child's id must be named in the diagnostic; captured:\n{}",
+        log_text.render_at_least(tracing::Level::WARN),
     );
 }
 
@@ -993,9 +934,10 @@ fn multiple_children_never_laid_out_are_all_named_in_the_panic_pin() {
     );
     for forgotten_id in ["2", "3"] {
         assert!(
-            log_text.contains(&format!("missing id \\\"{forgotten_id}\\\"")),
+            log_text.contains(&format!(r#"missing id "{forgotten_id}""#)),
             "the oracle names every forgotten child, not just the first \
-             (checking for {forgotten_id:?}): got {log_text:?}",
+             (checking for {forgotten_id:?}); captured:\n{}",
+            log_text.render_at_least(tracing::Level::WARN),
         );
     }
 }

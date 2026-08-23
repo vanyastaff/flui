@@ -221,6 +221,9 @@ test-doc:
 [group("test")]
 [doc("Golden-image regression tests: render each demo headless and compare to tests/goldens/ (needs a GPU)")]
 golden:
+    # A missing golden and a missing GPU both FAIL: only a pixel comparison
+    # against a committed PNG is a pass. On a device-less machine, skip
+    # explicitly with FLUI_GOLDEN_ALLOW_NO_GPU=1 (each skip is reported).
     cargo nextest run -p flui --features golden --test golden_screenshots
 
 [group("test")]

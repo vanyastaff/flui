@@ -372,8 +372,11 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             ds.last = Some(position);
             ds.tap_viable = true;
             ds.velocity_tracker.reset();
-            ds.velocity_tracker
-                .add_position(web_time::Instant::now(), position);
+            // Read the arena's clock, not the OS clock: production binds it to
+            // `SystemClock` (identical there), but a headless frame driver binds a
+            // `ManualClock`, so a replayed gesture's own sample spacing decides the
+            // velocity instead of however the test process happened to be scheduled.
+            ds.velocity_tracker.add_position(self.state.now(), position);
         }
         *self.phase.lock() = Phase::Down;
     }
@@ -478,8 +481,7 @@ impl TapAndDragGestureRecognizer {
                         let mut ds = self.drag_state.lock();
                         ds.last = Some(position);
                         ds.velocity_tracker.reset();
-                        ds.velocity_tracker
-                            .add_position(web_time::Instant::now(), position);
+                        ds.velocity_tracker.add_position(self.state.now(), position);
                     }
 
                     let start_cb = self.callbacks.borrow().on_drag_start.clone();
@@ -522,8 +524,7 @@ impl TapAndDragGestureRecognizer {
                 {
                     let mut ds = self.drag_state.lock();
                     ds.last = Some(position);
-                    ds.velocity_tracker
-                        .add_position(web_time::Instant::now(), position);
+                    ds.velocity_tracker.add_position(self.state.now(), position);
                 }
                 let cb = self.callbacks.borrow().on_drag_update.clone();
                 if let Some(cb) = cb {
@@ -1015,5 +1016,74 @@ mod tests {
             !*tap_up.lock(),
             "a tap-and-drag that lost the arena must not fire on_tap_up"
         );
+    }
+}
+
+#[cfg(test)]
+mod clock_source_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use flui_foundation::ManualClock;
+    use parking_lot::Mutex;
+
+    use super::*;
+    use crate::arena::GestureArena;
+    use crate::events::{make_move_event, make_up_event};
+
+    /// End-of-drag velocity is measured on the ARENA's clock, not the OS clock.
+    ///
+    /// Every velocity sample this recogniser takes used to call
+    /// `web_time::Instant::now()`, so the reported speed was a function of how
+    /// the test process happened to be scheduled between two synthetic events —
+    /// unreproducible, and immune to a headless driver's virtual timeline. The
+    /// two runs below feed byte-for-byte the same 240px path and differ only in
+    /// how much VIRTUAL time passes between samples, so each one's expected
+    /// speed is exactly `40px / step`. With a wall clock neither figure is
+    /// reachable: the samples all land microseconds apart.
+    ///
+    /// Both spacings stay under [`ASSUME_POINTER_STOPPED`] (40ms), past which
+    /// the tracker treats the gap as a pause and reports nothing at all.
+    #[test]
+    fn end_of_drag_velocity_is_measured_on_the_arena_clock() {
+        let fast = drag_velocity_over(Duration::from_millis(8));
+        let slow = drag_velocity_over(Duration::from_millis(24));
+
+        assert!(
+            (fast - 5000.0).abs() < 50.0,
+            "40px per 8ms of virtual time is 5000 px/s, got {fast}",
+        );
+        assert!(
+            (slow - 1666.7).abs() < 50.0,
+            "40px per 24ms of virtual time is ~1667 px/s, got {slow}",
+        );
+    }
+
+    /// Drive a fixed 240px horizontal drag whose samples are `step` of virtual
+    /// time apart, and return the reported horizontal speed.
+    fn drag_velocity_over(step: Duration) -> f32 {
+        let clock = ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+
+        let reported = Arc::new(Mutex::new(0.0_f32));
+        let sink = Arc::clone(&reported);
+        let recognizer = TapAndDragGestureRecognizer::new(arena).with_on_drag_end(move |details| {
+            *sink.lock() = details.velocity.pixels_per_second.dx.get();
+        });
+
+        let at = |x: f32| Offset::new(Pixels(x), Pixels(0.0));
+        recognizer.add_pointer(PointerId::PRIMARY, at(0.0));
+        for sample in 1..=6 {
+            clock.advance(step);
+            recognizer.handle_event(&make_move_event(
+                at(40.0 * sample as f32),
+                PointerType::Touch,
+            ));
+        }
+        clock.advance(step);
+        recognizer.handle_event(&make_up_event(at(240.0), PointerType::Touch));
+
+        let velocity = *reported.lock();
+        velocity.abs()
     }
 }

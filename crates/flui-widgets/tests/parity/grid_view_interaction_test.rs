@@ -1173,48 +1173,17 @@ fn grid_view_builder_in_unbounded_context_lays_out_a_large_finite_item_count_in_
 /// The truncation above is a misconfiguration notice, and layout runs every
 /// frame — so it must be reported ONCE, not at frame rate.
 ///
-/// Capture technique and its caveat are the same as
-/// `custom_multi_child_layout_test`'s: `tracing::subscriber::with_default`
-/// redirects dispatch per-thread, but `tracing`'s per-callsite interest
-/// cache is process-global, so this is only race-free when each test owns
-/// its process — which is what `cargo nextest run` (what CI uses) gives.
+/// Captured through [`flui_testing::log_capture::capture`], which owns the
+/// one technique that survives a thread-parallel binary. A hand-rolled
+/// `tracing::subscriber::with_default` here did not: `tracing` caches each
+/// callsite's interest process-globally, computed on whichever thread reaches
+/// it first, so the sibling test above — same tree, same warning — could
+/// register this callsite against `NoSubscriber` and have it cached as
+/// `Interest::never()`, after which this test captured nothing and failed.
+/// Measured at 4 failures in 25 runs of the `parity` binary while passing
+/// 60/60 in isolation.
 #[test]
 fn grid_view_builder_unbounded_truncation_warns_once_not_every_frame() {
-    use std::sync::Mutex;
-
-    #[derive(Clone, Default)]
-    struct CapturedLog(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for CapturedLog {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("captured-log mutex")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLog {
-        type Writer = Self;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
-    let captured = CapturedLog::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(captured.clone())
-        .with_max_level(tracing::level_filters::LevelFilter::TRACE)
-        .with_ansi(false)
-        .without_time()
-        .finish();
-
     let delegate: Arc<dyn SliverGridDelegate> =
         Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(4));
     let root = SingleChildScrollView::new().child(
@@ -1224,7 +1193,7 @@ fn grid_view_builder_unbounded_truncation_warns_once_not_every_frame() {
         .shrink_wrap(true),
     );
 
-    tracing::subscriber::with_default(subscriber, || {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         let mut laid = harness::pump_widget(root, harness::screen());
         // Three more frames over the SAME render object — `pump` dirties the
         // root and re-runs layout, so `perform_layout` (and the truncation
@@ -1235,13 +1204,17 @@ fn grid_view_builder_unbounded_truncation_warns_once_not_every_frame() {
         }
     });
 
-    let bytes = captured.0.lock().expect("captured-log mutex").clone();
-    let log = String::from_utf8(bytes).expect("tracing output is valid UTF-8");
-    let warnings = log.matches("unbounded main axis declares").count();
+    assert!(
+        !log.is_empty(),
+        "vacuous-pass guard: mounting and pumping this tree must log something, \
+         so an empty capture means the events never reached the subscriber \
+         rather than that the warning was correctly gated",
+    );
     assert_eq!(
-        warnings, 1,
+        log.count_containing("unbounded main axis declares"),
+        1,
         "the truncation is a static misconfiguration and must be reported once \
-         per configuration, not once per frame; saw {warnings} in:\n{log}"
+         per configuration, not once per frame; captured:\n{log}"
     );
 }
 

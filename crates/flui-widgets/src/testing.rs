@@ -39,11 +39,12 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::storage::IntrinsicDimension;
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
+use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_types::geometry::px;
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
 use flui_types::{Offset, Pixels, Rect, Size};
-use flui_view::{BuildOwner, ElementTree, View};
+use flui_view::View;
 
 use crate::{FocusRoot, GestureArenaScope};
 
@@ -130,6 +131,18 @@ impl PointerContacts {
         PointerId::new(self.current.get())
             .expect("BUG: pointer Down must precede Move, Up, or Cancel")
     }
+
+    /// Retire the in-flight contact, so a stray Move/Up/Cancel after it trips
+    /// [`current`](Self::current)'s assertion instead of silently reusing a
+    /// completed contact's id.
+    ///
+    /// Without this the sentinel only ever caught the very first malformed
+    /// dispatch of a test — everything after the first completed contact
+    /// inherited a plausible-looking id and was routed as if the gesture were
+    /// still live.
+    pub fn end(&self) {
+        self.current.set(0);
+    }
 }
 
 /// Default spacing between the synthetic pointer samples that record a
@@ -195,95 +208,22 @@ fn lay_out_with_pipeline_owner_and_binding(
     mut binding: HeadlessBinding,
 ) -> LaidOut {
     let logical_root_type = root.view_type_id();
-    let mut build_owner = BuildOwner::new();
-    let focus_manager = build_owner.focus_manager();
-    let mut tree = ElementTree::new();
+    let owners = MountOwners::with_pipeline_owner(pipeline_owner.clone());
+    let focus_manager = owners.build_owner.focus_manager();
 
-    // The binding is created FIRST so its async driver can be installed on the
-    // `BuildOwner` before the mount `build_scope` below. `FutureBuilder` /
-    // `StreamBuilder` subscribe in `init_state`, which runs inside that pass — with
-    // no driver installed they would silently never poll.
-    binding.install_build_capabilities(&mut build_owner);
-
+    // Presentation scopes are this crate's to supply — `flui-testing` owns the
+    // mount ordering, not the widget catalog. `FocusRoot` contributes the
+    // transparent traversal anchor the pipeline roots on; the caller's own
+    // render root is the single node below it.
     let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
-    let root_id = binding.enter_owner_scope(|| {
-        let root_id = tree.mount_root_with_pipeline_owner(
-            &root,
-            Some(pipeline_owner.clone()),
-            &mut build_owner.element_owner_mut(),
-        );
-
-        // Reconcile + mount the whole subtree (children's render objects attach to
-        // their parent render objects during this pass).
-        build_owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
-        build_owner.build_scope(&mut tree);
-        root_id
-    });
-
-    // `FocusRoot` installs one transparent traversal anchor as the
-    // presentation render root. The pipeline must retain that parentless
-    // anchor, while geometry probes keep their historical meaning: the
-    // caller's logical render root immediately below it.
-    let (presentation_render_root_id, root_render_id) = pipeline_owner.with(|owner| {
-        let render_tree = owner.render_tree();
-        let mut roots = render_tree
-            .iter()
-            .map(|(id, _)| id)
-            .filter(|id| render_tree.parent(*id).is_none());
-        let root = roots
-            .next()
-            .expect("the mounted subtree should have a render root");
-        assert!(
-            roots.next().is_none(),
-            "expected exactly one render-tree root after mount",
-        );
-        let children = render_tree.children(root);
-        // A recovered `ErrorView` is render-less, so the anchor legitimately
-        // has no child; element-level error-recovery tests (the design-system
-        // crates' build-failure probes) do not ask for root geometry, so the
-        // anchor itself stands in as the reported root in that case.
-        assert!(
-            children.len() <= 1,
-            "the presentation traversal anchor must wrap at most one logical render root",
-        );
-        (root, children.first().copied().unwrap_or(root))
-    });
-
-    pipeline_owner.with_mut(|owner| {
-        owner.set_root_id(Some(presentation_render_root_id));
-        // Setting fresh root constraints marks the root dirty for layout.
-        owner.set_root_constraints(Some(constraints));
-    });
-
-    let bootstrap_layer_tree = {
-        // Mirror the production frame path exactly: `HeadlessBinding::pump_frame`
-        // and `UiRealm::draw_frame` both run the ADR-0017 layout<->build
-        // fixpoint, not a bare `PipelineOwner::run_frame`. Bootstrapping with
-        // `run_frame` here would leave a `LayoutBuilder`'s child unbuilt on the
-        // very frame these tests assert about.
-        binding.enter_owner_scope(|| {
-            build_owner
-                .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
-                .expect("headless frame should succeed")
-        })
-    };
-
-    // Bootstrap done (mounted, rooted, first frame run): hand the three owners to
-    // the tree-bound binding, keeping our own clone of the shared `PipelineCell`
-    // for geometry reads. `pump`/`tick`/`pump_for` route through the binding.
-    binding.bind_tree_with_committed_layer_tree(
-        build_owner,
-        tree,
-        pipeline_owner.clone(),
-        bootstrap_layer_tree,
-    );
+    let mounted = binding.mount_root(&root, owners, MountOptions::new(constraints));
 
     LaidOut {
         binding,
         focus_manager,
         pipeline_owner,
-        root_render_id,
-        root_element_id: root_id,
+        root_render_id: mounted.logical_render_root(),
+        root_element_id: mounted.root_element,
         logical_root_type,
         contacts: PointerContacts::new(),
     }
@@ -1244,6 +1184,7 @@ impl LaidOut {
         let event = make_up_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.contacts.end();
     }
 
     /// A contact move to `(x, y)` — to drive slop / drag handling. Advances
@@ -1322,6 +1263,7 @@ impl LaidOut {
     pub fn dispatch_pointer_cancel(&self) {
         let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);
         self.dispatch_pointer_event(&event);
+        self.contacts.end();
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic secondary-button
@@ -1356,6 +1298,7 @@ impl LaidOut {
         );
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.contacts.end();
     }
 }
 

@@ -1,0 +1,248 @@
+//! The contract of [`HeadlessBinding::mount_root`]: the bootstrap frame is the
+//! same frame `pump_frame` runs.
+//!
+//! This is the property eight hand-rolled copies of the bootstrap kept losing.
+//! The `flui` golden-screenshot suite drove its capture with a bare
+//! `PipelineOwner::run_frame`, which never services build-during-layout
+//! content, so every `SliverAppBar` delegate child it photographed was
+//! unbuilt — and nothing failed, because no test asserted the bootstrap ran
+//! the fixpoint at all.
+//!
+//! `layout_builder_seam.rs` pins the same seam for `pump_frame`; this pins it
+//! for the bootstrap. Both plant a registry entry by hand rather than mounting
+//! a real `LayoutBuilder`, so they stay pure wiring tests of the frame path.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use flui_foundation::{ElementId, RenderId};
+use flui_objects::RenderSizedBox;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+use flui_rendering::testing::inspect;
+use flui_testing::HeadlessBinding;
+use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
+use flui_types::Size;
+use flui_types::geometry::px;
+use flui_view::{BuildOwner, ElementTree, RenderView, View};
+
+/// A leaf of a fixed size, so the bootstrap frame has real geometry to commit.
+#[derive(Clone)]
+struct SizedLeaf {
+    size: Size,
+}
+
+impl RenderView for SizedLeaf {
+    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::new(Some(self.size.width), Some(self.size.height))
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
+
+impl View for SizedLeaf {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
+fn leaf(width: f32, height: f32) -> SizedLeaf {
+    SizedLeaf {
+        size: Size::new(px(width), px(height)),
+    }
+}
+
+#[test]
+fn the_bootstrap_frame_runs_the_layout_builder_seam() {
+    // A stale registry entry — its element and render node do not exist, so
+    // `service_layout_builders` prunes it on the pass it runs. Pruning is the
+    // observable side effect available without a real `RenderLayoutBuilder`.
+    //
+    // The ids are deliberately far above anything this mount will mint: the
+    // low ids `layout_builder_seam.rs` can use over an empty tree would be
+    // handed straight to the leaf below, and an entry pointing at a node that
+    // exists is not stale.
+    let mut build_owner = BuildOwner::new();
+    let cell =
+        build_owner.register_layout_builder_for_test(RenderId::new(9_999), ElementId::new(9_999));
+    assert_eq!(build_owner.layout_builder_count(), 1);
+    drop(cell);
+
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(
+        &leaf(10.0, 10.0),
+        MountOwners {
+            build_owner,
+            tree: ElementTree::new(),
+            pipeline_owner: PipelineCell::new(PipelineOwner::new()),
+        },
+        MountOptions::tight(100.0, 100.0),
+    );
+
+    assert_eq!(
+        binding.build_owner_mut().layout_builder_count(),
+        0,
+        "the bootstrap frame must go through run_frame_with_layout_builders, \
+         which prunes the stale entry — a bare PipelineOwner::run_frame would \
+         leave it, and would leave a real LayoutBuilder's child unbuilt on the \
+         very frame a screenshot captures",
+    );
+}
+
+#[test]
+fn mount_root_installs_the_render_root_and_lays_it_out() {
+    let mut binding = HeadlessBinding::new();
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+    let mounted = binding.mount_root(
+        &leaf(40.0, 25.0),
+        MountOwners::with_pipeline_owner(pipeline_owner.clone()),
+        MountOptions::new(flui_rendering::constraints::BoxConstraints::loose(
+            Size::new(px(200.0), px(200.0)),
+        )),
+    );
+
+    assert_eq!(
+        pipeline_owner.with(flui_rendering::PipelineOwner::root_id),
+        Some(mounted.render_root),
+        "the discovered parentless node is installed as the pipeline root",
+    );
+    assert_eq!(
+        pipeline_owner.with(|owner| inspect::box_geometry(owner, mounted.render_root)),
+        Some(Size::new(px(40.0), px(25.0))),
+        "the bootstrap frame lays the root out under the mount constraints",
+    );
+    assert!(
+        mounted.painted,
+        "a tree with real geometry paints on its bootstrap frame",
+    );
+}
+
+#[test]
+fn a_single_root_view_mounts_with_no_presentation_anchor() {
+    // Without presentation scopes the caller's own view IS the parentless
+    // node, so `logical_render_root` reports it rather than inventing a child.
+    let mut binding = HeadlessBinding::new();
+    let mounted = binding.mount_root(
+        &leaf(10.0, 10.0),
+        MountOwners::fresh(),
+        MountOptions::tight(50.0, 50.0),
+    );
+
+    assert!(mounted.render_root_children.is_empty());
+    assert_eq!(mounted.logical_render_root(), mounted.render_root);
+}
+
+#[test]
+fn the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off() {
+    // The bootstrap ends bound, so the next frame is an ordinary pump: no
+    // second mount, no re-rooting, and the committed layer tree survives a
+    // frame that has no paint work.
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(
+        &leaf(10.0, 10.0),
+        MountOwners::fresh(),
+        MountOptions::tight(50.0, 50.0),
+    );
+    let after_bootstrap = binding.painted_frame_count();
+
+    binding.pump_frame(Duration::from_millis(16));
+
+    assert!(
+        binding.layer_tree().is_some(),
+        "the committed layer tree is retained across a frame with no paint work",
+    );
+    assert!(
+        binding.painted_frame_count() >= after_bootstrap,
+        "a settled frame never un-counts an earlier paint",
+    );
+}
+
+#[test]
+fn withholding_the_post_frame_capability_outlasts_the_mount() {
+    // An embedder that drives frames itself installs no post-frame handle, and
+    // code acquiring one must behave when it is absent. The async driver still
+    // goes in — withholding it too would change which capability is under test.
+    //
+    // The withholding has to survive the bootstrap, not just the mount pass:
+    // `bind_tree` installs the full capability set unconditionally (that is its
+    // documented job for a caller binding owners directly), so a bootstrap that
+    // handed its owners to the public `bind_tree` would restore exactly what
+    // the caller asked to withhold, and every rebuild after `init_state` would
+    // silently see a handle the test believes is absent.
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(
+        &leaf(10.0, 10.0),
+        MountOwners::fresh(),
+        MountOptions::tight(50.0, 50.0).with_capabilities(BuildCapabilities::AsyncDriverOnly),
+    );
+
+    // The mount pass itself depends on the async driver, so reaching here at
+    // all is the assertion that `AsyncDriverOnly` still installs it.
+    binding.pump_frame(Duration::from_millis(16));
+
+    let build_owner = binding.build_owner_mut();
+    assert!(
+        build_owner.post_frame_handle().is_none(),
+        "AsyncDriverOnly must still be in force after the bootstrap bound the tree",
+    );
+    assert!(
+        build_owner.local_post_frame_handle().is_none(),
+        "the owner-local post-frame handle is withheld together with the shared one",
+    );
+}
+
+/// The bootstrap is a pipeline step, not a whole scheduler frame — and the
+/// difference is observable, so it is pinned rather than merely documented.
+///
+/// `pump_frame` wraps the same pipeline in `drive_frame_with_lane`, which adds
+/// `end_frame`'s post-frame callbacks. A callback scheduled while the tree is
+/// mounting therefore waits for the first pump. That mirrors production, where
+/// `attach_root_widget` mounts and lays out and the first `draw_frame` follows.
+#[test]
+fn a_post_frame_callback_scheduled_during_mount_waits_for_the_first_pump() {
+    let mut binding = HeadlessBinding::new();
+    let ran = Arc::new(AtomicBool::new(false));
+
+    let mounted = binding.mount_root(
+        &leaf(10.0, 10.0),
+        MountOwners::fresh(),
+        MountOptions::tight(50.0, 50.0),
+    );
+    assert!(
+        mounted.painted,
+        "precondition: the bootstrap committed a frame"
+    );
+
+    // Scheduled after the bootstrap for the same reason a `ViewState` would
+    // schedule one from `init_state`: the capability is installed before the
+    // mount, so the queue is reachable that early. What is being pinned is
+    // WHEN it drains.
+    let flag = Arc::clone(&ran);
+    flui_scheduler::PostFrameHandle::new(binding.scheduler())
+        .schedule(move |_| flag.store(true, Ordering::SeqCst));
+
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "the bootstrap runs the pipeline, not `end_frame`, so nothing drains \
+         the post-frame queue yet",
+    );
+
+    binding.pump_frame(Duration::from_millis(16));
+
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "the first pump is a whole frame and drains the post-frame queue",
+    );
+}

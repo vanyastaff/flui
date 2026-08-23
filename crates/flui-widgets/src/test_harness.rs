@@ -21,11 +21,11 @@ use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
-use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
+use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
+use flui_types::Offset;
 use flui_types::geometry::{Bounds, Pixels, px};
-use flui_types::{Offset, Size};
 use flui_view::{ElementNode, View};
 
 use crate::testing::{POINTER_SAMPLE_INTERVAL, PointerContacts};
@@ -115,19 +115,15 @@ pub(crate) fn mount_with_capabilities(
 ) -> Harness {
     let logical_root_type = root.view_type_id();
     let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-    let mut build_owner = flui_view::BuildOwner::new();
-    let focus_manager = build_owner.focus_manager();
-    let mut tree = flui_view::ElementTree::new();
+    let mut owners = MountOwners::with_pipeline_owner(pipeline_owner.clone());
+    let focus_manager = owners.build_owner.focus_manager();
+    let build_owner = &mut owners.build_owner;
 
     let mut binding = HeadlessBinding::new();
-    match post_frame {
-        PostFrameCapability::Installed => binding.install_build_capabilities(&mut build_owner),
-        // The async driver still goes in: withholding it too would change *which*
-        // capability the test is about — the mount `build_scope` depends on it.
-        PostFrameCapability::Absent => {
-            build_owner.set_async_driver(binding.scheduler().async_driver().clone());
-        }
-    }
+    let capabilities = match post_frame {
+        PostFrameCapability::Installed => BuildCapabilities::Installed,
+        PostFrameCapability::Absent => BuildCapabilities::AsyncDriverOnly,
+    };
     let (cursor_area_calls, ime_allowed_calls, text_input_owner) =
         if text_input == TextInputCapability::Installed {
             struct HarnessTextInput {
@@ -161,37 +157,12 @@ pub(crate) fn mount_with_capabilities(
         };
 
     let root = crate::GestureArenaScope::new(binding.arena().clone(), crate::FocusRoot::new(root));
-    let root_element = binding.enter_owner_scope(|| {
-        let root_element = tree.mount_root_with_pipeline_owner(
-            &root,
-            Some(pipeline_owner.clone()),
-            &mut build_owner.element_owner_mut(),
-        );
-
-        build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
-        build_owner.build_scope(&mut tree);
-        root_element
-    });
-
-    let root_render = pipeline_owner.with(|owner| {
-        let render_tree = owner.render_tree();
-        render_tree
-            .iter()
-            .map(|(id, _)| id)
-            .find(|id| render_tree.parent(*id).is_none())
-            .expect("the mounted subtree should have a render root")
-    });
-    pipeline_owner.with_mut(|owner| {
-        owner.set_root_id(Some(root_render));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(800.0), px(600.0)))));
-    });
-    binding.enter_owner_scope(|| {
-        build_owner
-            .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
-            .expect("headless frame should succeed");
-    });
-
-    binding.bind_tree(build_owner, tree, pipeline_owner.clone());
+    let mounted = binding.mount_root(
+        &root,
+        owners,
+        MountOptions::tight(800.0, 600.0).with_capabilities(capabilities),
+    );
+    let root_element = mounted.root_element;
 
     Harness {
         binding,

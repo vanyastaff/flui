@@ -117,7 +117,7 @@ the app boundary; the crate does not install one. Filter via
 
 ## Outstanding refactors
 
-- **Doc-test sweep: convert the remaining 72 `rust,ignore` to runnable.** The `processing::InputPredictor` and `routing::FocusManager` doc-tests are the next highest-value targets. The `testing` module builders (`GestureBuilder`, `ModifiersBuilder`, `GestureRecorder`) are the third tier. Land as a follow-up PR.
+- **Doc-test sweep: convert the remaining 72 `rust,ignore` to runnable.** The `processing::InputPredictor` and `routing::FocusManager` doc-tests are the next highest-value targets. The `testing` module builders (`ModifiersBuilder`, `KeyEventBuilder`) are the third tier. Land as a follow-up PR.
 - **Property tests for the gesture arena** (deferred). `proptest` over a sequence of `add` / `close` / `sweep` operations, asserting: every reachable pointer has a state, no arena has two winners, `is_resolved` ⇔ `winner_count >= 1` after `close`. Bench time + property-cost justifies a separate `flui-interaction/tests/proptest_arena.rs` file.
 - **Loom test coverage for the arena's DashMap + Mutex pairing** (deferred). `loom` over a small parallel `add` / `resolve` workload. Same precedent as `flui-rendering` — needs a `#[cfg(loom)]` gate.
 - **Bench fidelity pass: realistic workloads.** Current benches use synthetic events; the next pass should replay recorded gesture traces from `flui-app` (TBD where they live). The `testing::recording` module is the substrate.
