@@ -119,7 +119,8 @@
 //! - [`processing`] - Velocity tracking, prediction, resampling
 //!
 //! ## Testing Utilities
-//! - `testing` - Gesture recording/replay, event builders (requires `testing` feature)
+//! - `testing` - Synthetic event builders (requires `testing` feature). Gesture
+//!   scripting and replay live in `flui-testing`, which owns the virtual clock
 //!
 //! ## Other
 //! - [`routing::MouseTracker`] — Mouse enter/exit/hover tracking

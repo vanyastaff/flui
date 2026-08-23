@@ -240,3 +240,19 @@ fn a_script_pushed_out_of_time_order_is_rejected() {
         at(0.0, 0.0),
     ));
 }
+
+#[test]
+#[should_panic(expected = "resampling to be disabled")]
+fn replay_refuses_to_run_with_pointer_resampling_enabled() {
+    // With resampling on, the emitted move samples come from the resampler's
+    // wall-clock queue and a wall-clock sampling window, neither of which the
+    // script's offsets reach. A replay that ran anyway would return a number
+    // that looks deterministic and is not, so it refuses.
+    let mut binding = HeadlessBinding::new();
+    binding
+        .gestures()
+        .set_resampling_enabled(true)
+        .expect("no active pointers yet, so the mode is still settable");
+
+    binding.replay(&PointerScript::tap(at(5.0, 5.0)));
+}

@@ -59,6 +59,32 @@ fn main() {
     let height: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(760);
     let out_path = args.next().unwrap_or_else(|| format!("{demo}.png"));
 
+    // Argument validation comes BEFORE the GPU: an unknown demo name must
+    // reach the usage message and its exit code on a machine with no device,
+    // not die on renderer construction.
+    const DEMOS: &[&str] = &[
+        "material",
+        "cupertino",
+        "vertical-slice",
+        "vslice",
+        "gallery",
+        "animated-box",
+        "colored-box",
+        "text",
+        "telemetry-overlay",
+        "sliver",
+        "sliver-mid",
+        "sliver-collapsed",
+    ];
+    if !DEMOS.contains(&demo.as_str()) {
+        eprintln!(
+            "unknown demo {demo:?}; expected: material | cupertino | vertical-slice | \
+             gallery | animated-box | colored-box | text | telemetry-overlay | \
+             sliver | sliver-mid | sliver-collapsed"
+        );
+        std::process::exit(2);
+    }
+
     let renderer = HeadlessRenderer::new().expect("a GPU device for headless capture");
     // A mounted demo's `LayerTree` is owned by the binding that produced it
     // (`LayerTree` is not `Clone`), so rasterization happens inside each arm
@@ -88,12 +114,11 @@ fn main() {
         "sliver" => capture(sliver_demo_app::tree(0.0), width, height, &raster),
         "sliver-mid" => capture(sliver_demo_app::tree(90.0), width, height, &raster),
         "sliver-collapsed" => capture(sliver_demo_app::tree(500.0), width, height, &raster),
+        // Unreachable: the name was validated against DEMOS above, before the
+        // GPU was touched. Kept total rather than `unreachable!()` so a name
+        // added to one list and not the other fails loudly here.
         other => {
-            eprintln!(
-                "unknown demo {other:?}; expected: material | cupertino | vertical-slice | \
-                 gallery | animated-box | colored-box | text | telemetry-overlay | \
-                 sliver | sliver-mid | sliver-collapsed"
-            );
+            eprintln!("demo {other:?} is listed as known but has no arm");
             std::process::exit(2);
         }
     };

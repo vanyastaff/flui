@@ -533,14 +533,38 @@ impl HeadlessBinding {
     /// gesture's effect should be observed before or after one more frame is
     /// the assertion's business, not the replay's.
     ///
+    /// # Resampling is rejected, not silently tolerated
+    ///
+    /// Pointer resampling is off on a fresh binding and this method requires it
+    /// to stay off. With it on, a replay would stop being reproducible for
+    /// reasons the script cannot see: `flush_pending_moves` takes its sampling
+    /// window from a wall-clock `SamplingClock`, and `PointerEventResampler`
+    /// stamps every queued event with `Instant::now()` regardless of the window
+    /// it is later flushed under. The scripted offsets reach neither, so the
+    /// emitted move samples would vary with how the test process happened to be
+    /// scheduled.
+    ///
+    /// Making them virtual means threading a clock into the resampler itself,
+    /// on the live input hot path — out of scope here, and not something to
+    /// approximate. So this refuses loudly instead of returning a number that
+    /// looks deterministic and is not.
+    ///
     /// # Panics
     ///
-    /// If `script` is not in non-decreasing time order.
+    /// If `script` is not in non-decreasing time order, or if resampling is
+    /// enabled on this binding.
     pub fn replay_with(
         &mut self,
         script: &PointerScript,
         mut hit_test: impl FnMut(&Self, Offset<Pixels>) -> HitTestResult,
     ) {
+        assert!(
+            !self.gestures().is_resampling_enabled(),
+            "replay requires pointer resampling to be disabled: the resampler \
+             stamps its queue with the wall clock and takes its sampling window \
+             from a wall-clock SamplingClock, so a script's timing would not \
+             reach the emitted move samples",
+        );
         let mut previous = Duration::ZERO;
         for event in script.events() {
             assert!(

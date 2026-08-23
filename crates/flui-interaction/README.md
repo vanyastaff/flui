@@ -311,39 +311,27 @@ let predicted = predictor.predict(future_timestamp);
 
 ## Testing Utilities
 
-### GestureRecorder
+### Synthetic events
 
-Record gestures for replay.
-
-```rust
-use flui_interaction::testing::{GestureRecorder, GesturePlayer};
-
-// Record
-let mut recorder = GestureRecorder::new();
-recorder.start();
-// ... user performs gesture ...
-recorder.stop();
-let recording = recorder.recording();
-
-// Replay
-let player = GesturePlayer::new(recording);
-player.play(&mut hit_testable);
-```
-
-### GestureBuilder
-
-Programmatically create gesture sequences.
+`flui_interaction::testing::input` (behind the `testing` feature) builds
+individual pointer, keyboard, and modifier events for a test that drives a
+recogniser or a binding directly.
 
 ```rust
-use flui_interaction::testing::GestureBuilder;
-
-let tap = GestureBuilder::tap(Offset::new(100.0, 100.0));
-let drag = GestureBuilder::drag(
-    Offset::new(0.0, 0.0),
-    Offset::new(100.0, 0.0),
-    Duration::from_millis(200),
-);
+use flui_interaction::testing::input::KeyEventBuilder;
 ```
+
+### Scripted gestures
+
+Gesture scripting and replay live in **`flui-testing`**, not here. A gesture is
+a shape in time, and replaying one means replaying its timing — which needs a
+virtual clock this crate has no driver for. See `flui_testing::replay`:
+`PointerScript` authors explicit virtual-time offsets and
+`HeadlessBinding::replay` advances the binding's `ManualClock` to each one.
+
+This crate's part of that contract is that every recogniser samples the
+**arena's** clock (`RecognizerState::now()`) rather than `Instant::now()`, so a
+replayed gesture's own sample spacing decides the velocity it carries.
 
 ---
 
