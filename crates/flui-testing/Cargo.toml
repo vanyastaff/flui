@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
-description = "Test support for FLUI: a deterministic headless frame driver (pump_frame) over the gesture arena + virtual clock"
+description = "Test support for FLUI: a deterministic headless frame driver on a virtual clock, the canonical mount bootstrap, gesture replay, and race-free tracing capture"
 keywords = ["ui", "gesture", "headless", "testing"]
 categories = ["gui"]
 # Single-binary integration-test consolidation: every root test file is a
@@ -29,9 +29,7 @@ workspace = true
 # support and never enters a production graph (dev edges only, plus the one
 # sanctioned optional edge from flui-widgets' `testing` feature, which already
 # enables flui-interaction/testing itself), so the feature travels nowhere new.
-flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = [
-  "testing",
-] }
+flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
 # PresentationId, the multi-presentation clock registry's key -- it now
 # appears directly in HeadlessBinding's own public method signatures
 # (install_presentation_clock/pump_presentation/pump_all/etc.), which is what
@@ -76,9 +74,7 @@ static_assertions.workspace = true
 # `inspect::box_geometry` — the canonical committed-geometry accessor the
 # bootstrap contract test asserts against. Dev-only: the harness itself never
 # reads geometry, its consumers do.
-flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = [
-  "testing",
-] }
+flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
 # Enable flui-view's `test-utils` feature in test builds so the layout-builder
 # seam test can plant a registry entry (`register_layout_builder_for_test`).
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out
