@@ -308,6 +308,11 @@ impl PointerScript {
     /// hardware reports around 8 ms, which is what [`fling`](Self::fling) and
     /// [`swipe`](Self::swipe) use.
     ///
+    /// That holds because every recogniser samples the arena's clock, which a
+    /// replay advances — `RecognizerState::now()`, not `Instant::now()`. Keep
+    /// consecutive samples under `ASSUME_POINTER_STOPPED` (40 ms) or the
+    /// tracker reads the gap as a pause and reports no velocity at all.
+    ///
     /// # Panics
     ///
     /// If `steps` is zero — a drag with no move samples is a tap with a
@@ -493,9 +498,13 @@ impl GestureRecorder {
 impl HeadlessBinding {
     /// Replay `script` against this binding's own tree.
     ///
-    /// Hit-testing routes through the bound pipeline owner; on a gesture-only
-    /// binding every position misses, which is the right answer for driving a
-    /// recognizer registered directly on the arena.
+    /// Hit-testing routes through the bound pipeline owner. On a gesture-only
+    /// binding every position misses, which is the right answer for a
+    /// deadline-driven recogniser — the arena polls those from the clock this
+    /// replay advances, with no routing involved. A recogniser that must
+    /// *receive* the events (a drag building velocity) needs a hit-test result
+    /// naming it, which a mounted tree supplies; see
+    /// [`replay_with`](Self::replay_with) to provide one directly.
     ///
     /// See [`replay_with`](Self::replay_with) for the mechanics — this is that
     /// method over [`hit_test`](Self::hit_test).

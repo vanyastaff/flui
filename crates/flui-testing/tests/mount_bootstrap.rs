@@ -168,10 +168,17 @@ fn the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off() {
 }
 
 #[test]
-fn withholding_the_post_frame_capability_is_a_reachable_configuration() {
+fn withholding_the_post_frame_capability_outlasts_the_mount() {
     // An embedder that drives frames itself installs no post-frame handle, and
     // code acquiring one must behave when it is absent. The async driver still
     // goes in — withholding it too would change which capability is under test.
+    //
+    // The withholding has to survive the bootstrap, not just the mount pass:
+    // `bind_tree` installs the full capability set unconditionally (that is its
+    // documented job for a caller binding owners directly), so a bootstrap that
+    // handed its owners to the public `bind_tree` would restore exactly what
+    // the caller asked to withhold, and every rebuild after `init_state` would
+    // silently see a handle the test believes is absent.
     let mut binding = HeadlessBinding::new();
     binding.mount_root(
         &leaf(10.0, 10.0),
@@ -182,4 +189,14 @@ fn withholding_the_post_frame_capability_is_a_reachable_configuration() {
     // The mount pass itself depends on the async driver, so reaching here at
     // all is the assertion that `AsyncDriverOnly` still installs it.
     binding.pump_frame(Duration::from_millis(16));
+
+    let build_owner = binding.build_owner_mut();
+    assert!(
+        build_owner.post_frame_handle().is_none(),
+        "AsyncDriverOnly must still be in force after the bootstrap bound the tree",
+    );
+    assert!(
+        build_owner.local_post_frame_handle().is_none(),
+        "the owner-local post-frame handle is withheld together with the shared one",
+    );
 }

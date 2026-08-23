@@ -333,8 +333,12 @@ impl ScaleGestureRecognizer {
                     let rotation = current_rotation_raw - initial_rotation;
 
                     // Track scale velocity: use scale as a position-like value
-                    // (we track how scale changes over time)
-                    let now = Instant::now();
+                    // (we track how scale changes over time).
+                    // Read the arena's clock, not the OS clock: production binds it to
+                    // `SystemClock` (identical there), but a headless frame driver binds a
+                    // `ManualClock`, so a replayed gesture's own sample spacing decides the
+                    // velocity instead of however the test process happened to be scheduled.
+                    let now = self.state.now();
                     state
                         .scale_velocity_tracker
                         .add_position(now, Offset::new(Pixels(scale), Pixels(0.0)));

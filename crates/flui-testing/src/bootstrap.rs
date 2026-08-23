@@ -313,11 +313,15 @@ impl HeadlessBinding {
         });
 
         let painted = committed_layer_tree.is_some();
-        self.bind_tree_with_committed_layer_tree(
+        // Through the capability-aware door: the public `bind_tree*` installs
+        // the full set unconditionally, which would undo an `AsyncDriverOnly`
+        // request the moment the bootstrap finished.
+        self.bind_tree_with_capabilities(
             build_owner,
             tree,
             pipeline_owner,
             committed_layer_tree,
+            options.capabilities,
         );
 
         Mounted {

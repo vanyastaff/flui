@@ -599,7 +599,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         // Position is `PhysicalPosition<f64>`; convert to Offset<Pixels>.
         let position = Offset::new(Pixels(position.x as f32), Pixels(position.y as f32));
         match event {
-            PointerEvent::Move(_) => self.handle_move(pointer, position, kind, Instant::now()),
+            PointerEvent::Move(_) => self.handle_move(pointer, position, kind, self.state.now()),
             PointerEvent::Up(_) => self.handle_up(pointer, position, kind),
             _ => {}
         }

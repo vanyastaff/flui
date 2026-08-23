@@ -371,11 +371,16 @@ passing 60/60 in isolation, and the other serialised its tests behind a mutex
 that could not help, because the poisoner is every other test in the binary,
 not the one it was serialised against.
 
-`capture` fixes it at the cause — one process-global subscriber that keeps every
-callsite permissive, deciding per event against a thread-local sink. Concurrent
-captures on different threads neither block nor see each other. Crates at or
-below `flui-interaction` cannot depend on `flui-testing` and keep their own
-technique.
+`capture` fixes it at the cause, one level below the subscriber: it registers
+two permissive sentinel dispatchers — never anyone's default, so they receive no
+events — which makes `tracing`'s interest cache unable to resolve any callsite
+to `never`, whichever thread reaches it first. With the cache disarmed it can
+then install its own subscriber the ordinary composable way, thread-locally for
+one closure. So it never takes the process-global default slot: a binary keeps
+its own logging subscriber, events outside a capture still reach it, and
+concurrent captures on different threads neither block nor see each other.
+Crates at or below `flui-interaction` cannot depend on `flui-testing` and keep
+their own technique.
 
 ## Visual regression (goldens)
 

@@ -85,15 +85,20 @@ So: mount through it. If a harness needs something it does not offer, extend
   other test reached first — cached as `Interest::never()` and silent for the
   rest of the process. That is not a hypothesis: it made a `flui-widgets`
   parity test fail 4 times in 25 runs of its binary while passing 60/60 in
-  isolation. Use [`log_capture::capture`], which keeps every callsite's
-  interest permissive process-wide and gates per event on a thread-local sink.
-  Crates at or below `flui-interaction` cannot depend on this one and keep
-  their own technique — and their own caveat.
+  isolation. Use [`log_capture::capture`], which disarms that cache with
+  registered-but-never-default sentinel dispatchers and then installs its own
+  subscriber only thread-locally — so it does **not** take the process-global
+  default slot, and a binary's own logging subscriber keeps working. Crates at
+  or below `flui-interaction` cannot depend on this one and keep their own
+  technique — and their own caveat.
 - **`#![deny(missing_docs)]`.** Every public item, including test-facing ones.
-- **No process-global state.** Every test constructs its own binding, so
-  nothing in this crate needs a test lock. If you find yourself wanting one,
-  check `docs/runtime-contract.toml`'s ambient-reach ratchet — the resource
-  you are racing on is named there, and the lock belongs beside that test.
+- **No process-global state, with one named exception.** Every test constructs
+  its own binding, so nothing in this crate needs a test lock. If you find
+  yourself wanting one, check `docs/runtime-contract.toml`'s ambient-reach
+  ratchet — the resource you are racing on is named there, and the lock belongs
+  beside that test. The exception is `log_capture`'s two sentinel dispatchers,
+  which are process-wide by necessity (`tracing`'s interest cache is), but hold
+  no state, receive no events, and never occupy the global default slot.
 
 ## Dependency rule
 

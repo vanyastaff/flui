@@ -400,19 +400,49 @@ impl HeadlessBinding {
         pipeline_owner: PipelineCell,
         committed_layer_tree: Option<LayerTree>,
     ) {
+        self.bind_tree_with_capabilities(
+            build_owner,
+            tree,
+            pipeline_owner,
+            committed_layer_tree,
+            bootstrap::BuildCapabilities::Installed,
+        );
+    }
+
+    /// [`bind_tree_with_committed_layer_tree`](Self::bind_tree_with_committed_layer_tree)
+    /// under an explicit capability policy.
+    ///
+    /// The public entry point installs the full set, which is right for a
+    /// caller handing over owners it configured itself: it cannot know what the
+    /// binding's own handles are, so the binding supplies them. A bootstrap
+    /// that was asked to *withhold* a capability must not go through that door,
+    /// or the withholding would last only until the bind and every rebuild
+    /// after `init_state` would see a handle the caller believes is absent.
+    pub(crate) fn bind_tree_with_capabilities(
+        &mut self,
+        build_owner: BuildOwner,
+        tree: ElementTree,
+        pipeline_owner: PipelineCell,
+        committed_layer_tree: Option<LayerTree>,
+        capabilities: bootstrap::BuildCapabilities,
+    ) {
         // Widgets spawn into the driver this binding's frame step
         // polls — the binding-local one, never some OTHER binding's or
         // realm's `UpdateScheduler`. Idempotent: installing it again is a no-op if
-        // the caller already did.
+        // the caller already did. The async driver goes in under either policy:
+        // withholding it would change *which* capability is under test.
         let mut build_owner = build_owner;
         build_owner.set_async_driver(self.scheduler.async_driver().clone());
-        // The post-frame capability must name THIS binding's
-        // scheduler — the one `pump_frame`'s `drive_frame` drains — never
-        // some other binding's or realm's `UpdateScheduler`, which nothing drives
-        // headlessly.
-        build_owner.set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
-        build_owner.set_local_post_frame_handle(self.local_post_frame.local_handle());
-        build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
+        if capabilities == bootstrap::BuildCapabilities::Installed {
+            // The post-frame capability must name THIS binding's
+            // scheduler — the one `pump_frame`'s `drive_frame` drains — never
+            // some other binding's or realm's `UpdateScheduler`, which nothing drives
+            // headlessly.
+            build_owner
+                .set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
+            build_owner.set_local_post_frame_handle(self.local_post_frame.local_handle());
+            build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
+        }
         self.tree = Some(TreeBinding {
             build_owner,
             tree,

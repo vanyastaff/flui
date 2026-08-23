@@ -96,6 +96,14 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 name = "flui_testing_it"
 path = "tests/main.rs"
 
+# Own target, per the ambient-state note above: this one INSTALLS a
+# process-global default subscriber to prove `capture` composes with a binary
+# that owns that slot, which is exactly the state its neighbours must not
+# inherit.
+[[test]]
+name = "log_capture_global_subscriber"
+path = "tests/log_capture_global_subscriber.rs"
+
 [[bench]]
 name = "tree_observer_overhead"
 harness = false

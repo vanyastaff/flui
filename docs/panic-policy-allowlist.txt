@@ -37,8 +37,7 @@
 # consumer feature), which check-panic-policy.sh's whole-module exclusion
 # (mirroring `tests/`/`benches/`/`examples/`) correctly never scans.
 #
-# flui-testing/src/{lib,bootstrap,log_capture}.rs stay here rather than being
-# reworded:
+# flui-testing/src/{lib,bootstrap}.rs stay here rather than being reworded:
 # this crate IS the test harness, so a panic in it is the harness reporting a
 # failure of the code UNDER TEST, not FLUI asserting one of its own internal
 # invariants -- "the mounted subtree must have a render root" and "the
@@ -48,10 +47,7 @@
 # because this crate is not itself feature-gated: it is a dev-dependency, so
 # it never enters a production graph at all. Neither site may become a
 # `Result`: a harness that returned an error for a tree that failed to mount
-# would let a test go green having rendered nothing. log_capture.rs's site is
-# the same shape: the process-global default subscriber slot was claimed by
-# something else in the test binary, which is the binary's configuration
-# problem, named in full at the panic.
+# would let a test go green having rendered nothing.
 #
 # flui-foundation/src/id.rs keeps 3 of its original 7 sites here rather than
 # rewording them: `RawId::zip`, `GenId::new`, and `ElementId::new` all carry
@@ -115,7 +111,6 @@ crates/flui-scheduler/src/frame.rs 2
 crates/flui-scheduler/src/scheduler.rs 1
 crates/flui-testing/src/bootstrap.rs 2
 crates/flui-testing/src/lib.rs 3
-crates/flui-testing/src/log_capture.rs 1
 crates/flui-view/src/element/behavior.rs 2
 crates/flui-view/src/tree/element_tree.rs 5
 crates/flui-view/src/tree/id_reconcile.rs 2
