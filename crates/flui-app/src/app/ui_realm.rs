@@ -10235,6 +10235,11 @@ mod tests {
             let subscriber = Registry::default().with(capture.clone());
             let mut backend = TestRasterBackend::always_presents();
 
+            // Disarm `tracing`'s process-global callsite-interest cache first: it is
+            // computed on whichever thread reaches a callsite FIRST, so without this a
+            // sibling test can have it cached as `never` and silently empty this capture.
+            // See `flui_testing::log_capture`.
+            flui_testing::log_capture::disarm_interest_cache();
             tracing::subscriber::with_default(subscriber, || {
                 assert!(realm.render_frame_entered(&mut backend));
             });

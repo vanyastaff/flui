@@ -88,9 +88,13 @@ So: mount through it. If a harness needs something it does not offer, extend
   isolation. Use [`log_capture::capture`], which disarms that cache with
   registered-but-never-default sentinel dispatchers and then installs its own
   subscriber only thread-locally — so it does **not** take the process-global
-  default slot, and a binary's own logging subscriber keeps working. Crates at
-  or below `flui-interaction` cannot depend on this one and keep their own
-  technique — and their own caveat.
+  default slot, and a binary's own logging subscriber keeps working. A crate
+  whose own capture helper is too specialised to replace calls
+  `log_capture::disarm_interest_cache` instead, which is public for that;
+  `flui-view`, `flui-interaction`, `flui-app` and `flui-devtools` reach it
+  through a dev-dependency cycle, which cargo permits. The primitive stays here
+  rather than in `flui-foundation`, where every crate could reach it without an
+  edge, because foundation is emission-only and may not construct a subscriber.
 - **`#![deny(missing_docs)]`.** Every public item, including test-facing ones.
 - **No process-global state, with one named exception.** Every test constructs
   its own binding, so nothing in this crate needs a test lock. If you find

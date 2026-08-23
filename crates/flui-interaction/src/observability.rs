@@ -251,6 +251,11 @@ mod tests {
         // Run the hot path inside the subscriber. We don't assert on
         // captured output (TestWriter is a sink) — the smoke value is
         // "this doesn't panic and the span machinery runs".
+        // Disarm `tracing`'s process-global callsite-interest cache first: it is
+        // computed on whichever thread reaches a callsite FIRST, so without this a
+        // sibling test can have it cached as `never` and silently empty this capture.
+        // See `flui_testing::log_capture`.
+        flui_testing::log_capture::disarm_interest_cache();
         tracing::subscriber::with_default(subscriber, || {
             base.start_tracking(pointer, position, &recognizer);
             base.accept_tracked();

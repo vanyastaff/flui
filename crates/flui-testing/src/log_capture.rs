@@ -48,18 +48,12 @@
 //!     if self.has_just_one.load(SeqCst) { return Rebuilder::JustOne; }
 //!     Rebuilder::Read(LOCKED_DISPATCHERS.read().unwrap())
 //! }
-//! fn register_dispatch(&self, d: &Dispatch) -> Rebuilder<'_> {
-//!     dispatchers.retain(|d| d.upgrade().is_some());
-//!     dispatchers.push(d.registrar());
-//!     self.has_just_one.store(dispatchers.len() <= 1, SeqCst);
-//! }
 //! ```
 //!
-//! So this module registers **two permissive sentinel dispatchers** and keeps
-//! them alive for the process. `has_just_one` is then permanently false, every
-//! interest rebuild takes `Rebuilder::Read` over *all* live dispatchers, and
-//! their opinions are combined with
-//! [`Interest::and`](tracing::subscriber::Interest), which resolves a
+//! So [`disarm_interest_cache`] registers **two permissive sentinel
+//! dispatchers** and keeps them alive for the process. `has_just_one` is then
+//! permanently false, every interest rebuild consults *all* live dispatchers,
+//! and their opinions combine with `Interest::and`, which resolves a
 //! disagreement to `sometimes`:
 //!
 //! ```text
@@ -70,20 +64,19 @@
 //!
 //! A sentinel that answers `sometimes` for every callsite therefore makes
 //! `never` unreachable, whichever thread registers the callsite first. With the
-//! cache disarmed, [`capture`] can install its subscriber the ordinary,
+//! cache disarmed, [`capture`] installs its subscriber the ordinary,
 //! composable way — thread-locally, for one closure — and everything else about
 //! the process is untouched:
 //!
-//! - the sentinels are **never** anyone's default dispatcher, so they receive no
-//!   events; they only vote on interest;
+//! - the sentinels are **never** anyone's default dispatcher, so they receive
+//!   no events; they only vote on interest;
 //! - a binary keeps its own global subscriber, and events outside a capture
 //!   still reach it;
 //! - two threads can capture at once without seeing each other's events, and
 //!   without a lock between them.
 //!
-//! The cost is that no callsite is ever cached as `never` in a process that has
-//! captured, so a disabled event pays one `enabled()` call instead of an atomic
-//! load. That is the price of the cache being unable to lie.
+//! [`disarm_interest_cache`] is public on its own, for a crate whose capture
+//! helper is too specialised to replace but which still needs the cache honest.
 //!
 //! # Limits
 //!
@@ -328,8 +321,9 @@ impl Subscriber for CaptureSubscriber {
 struct InterestSentinel;
 
 impl Subscriber for InterestSentinel {
-    /// The whole point. See this module's docs: with two of these registered,
-    /// `Interest::and` can no longer resolve any callsite to `never`.
+    /// The whole point. See [`disarm_interest_cache`]: with two of these
+    /// registered, `Interest::and` can no longer resolve any callsite to
+    /// `never`.
     fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
         Interest::sometimes()
     }
@@ -355,14 +349,36 @@ impl Subscriber for InterestSentinel {
     fn exit(&self, _span: &Id) {}
 }
 
-/// Disarm `tracing`'s per-callsite interest cache for this process, once.
+/// Make `tracing`'s per-callsite interest cache unable to resolve any callsite
+/// to `never` for the rest of this process. Idempotent.
 ///
-/// Constructing a [`Dispatch`](tracing::Dispatch) registers it, and the second
-/// registration is what flips `has_just_one` false for good — the registry only
+/// [`capture`] calls this for you. It is **public** for the crates that keep
+/// their own capture helper — one too specialised to replace, or one whose
+/// assertions are about a bespoke `Layer` — and just need the cache honest.
+/// Call it before installing a thread-local subscriber; it takes no subscriber
+/// slot and changes no dispatch, so it composes with whatever the caller
+/// installs.
+///
+/// # Why two
+///
+/// Constructing a [`tracing::Dispatch`] registers it, and the *second*
+/// registration is what flips `has_just_one` false for good: the registry only
 /// ever drops dispatchers whose `Weak` no longer upgrades, and these two are
 /// held for the life of the process. From then on every interest rebuild
 /// consults all live dispatchers instead of just the emitting thread's.
-fn disarm_interest_cache() {
+///
+/// Registering also rebuilds the interest of every callsite already registered,
+/// so a callsite poisoned earlier in the same process is healed — there is no
+/// ordering requirement on the first call.
+///
+/// # Example
+///
+/// ```
+/// # use flui_testing::log_capture::disarm_interest_cache;
+/// disarm_interest_cache();
+/// // …now install a thread-local subscriber and capture without racing…
+/// ```
+pub fn disarm_interest_cache() {
     static SENTINELS: OnceLock<[tracing::Dispatch; 2]> = OnceLock::new();
     SENTINELS.get_or_init(|| {
         [

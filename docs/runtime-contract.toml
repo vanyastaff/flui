@@ -281,7 +281,7 @@ declarations = [
     "pub mod replay;",
     "pub use a11y::{A11yNode, A11yQuery, A11yQueryError, A11yTree, NotTreeBound};",
     "pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};",
-    "pub use log_capture::{CapturedLog, CapturedRecord, capture};",
+    "pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};",
     "pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};",
     "pub struct HeadlessBinding {",
 ]

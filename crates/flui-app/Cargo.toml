@@ -128,6 +128,12 @@ flui-platform = { path = "../flui-platform", version = "0.2.0", features = ["win
 flui-engine = { path = "../flui-engine", version = "0.2.0", features = ["vulkan"] }
 
 [dev-dependencies]
+# `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
+# tests call so a sibling test cannot poison their callsites' cached interest.
+# A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
+# normally, which cargo permits for dev-dependencies precisely so a lower crate
+# can use the test support built on it.
+flui-testing = { path = "../flui-testing", version = "0.2.0" }
 static_assertions.workspace = true
 # Test-only: constructing `accesskit::ActionRequest`s to drive the platform
 # accessibility wire exactly the way a real adapter would. The shipped crate
