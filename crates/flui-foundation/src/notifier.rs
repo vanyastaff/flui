@@ -33,20 +33,9 @@
 //! `flui-view` which provides the `Notification` trait that integrates with
 //! `BuildContext`.
 
-use std::{
-    collections::HashMap,
-    fmt,
-    ops::Deref,
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
-};
+use std::{fmt, ops::Deref, sync::Arc};
 
-use parking_lot::Mutex;
-
-use crate::id::ListenerId;
+use crate::{id::ListenerId, notifier_generic::Notifier};
 
 /// A listener callback function.
 // Audit I-16: explicit `+ 'static` bound on the listener callback —
@@ -160,9 +149,12 @@ pub trait ValueListenable<T>: Listenable {
 /// [`remove_listener`]: Listenable::remove_listener
 #[derive(Clone)]
 pub struct ChangeNotifier {
-    listeners: Arc<Mutex<HashMap<ListenerId, ListenerCallback>>>,
-    next_id: Arc<AtomicUsize>,
-    is_disposed: Arc<AtomicBool>,
+    /// The shared notification core — `ChangeNotifier` IS `Notifier<()>`
+    /// plus its Flutter-parity seams: the `ChangeNotifier`-branded
+    /// use-after-dispose message, and `remove_listener` tolerating a
+    /// disposed receiver. The snapshot/ordering/`catch_unwind` firing
+    /// discipline lives once, in [`Notifier::notify`].
+    inner: Notifier<()>,
 }
 
 impl Default for ChangeNotifier {
@@ -174,7 +166,7 @@ impl Default for ChangeNotifier {
 impl fmt::Debug for ChangeNotifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ChangeNotifier")
-            .field("listeners_count", &self.listeners.lock().len())
+            .field("listeners_count", &self.inner.len())
             .finish_non_exhaustive()
     }
 }
@@ -185,16 +177,8 @@ impl ChangeNotifier {
     #[inline]
     pub fn new() -> Self {
         Self {
-            listeners: Arc::new(Mutex::new(HashMap::new())),
-            next_id: Arc::new(AtomicUsize::new(1)),
-            is_disposed: Arc::new(AtomicBool::new(false)),
+            inner: Notifier::new(),
         }
-    }
-
-    /// Generate a new unique listener ID.
-    fn next_id(&self) -> ListenerId {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        ListenerId::new(id)
     }
 
     /// Returns `true` if [`dispose`](Self::dispose) has been called on this
@@ -202,7 +186,7 @@ impl ChangeNotifier {
     #[must_use]
     #[inline]
     pub fn is_disposed(&self) -> bool {
-        self.is_disposed.load(Ordering::Acquire)
+        self.inner.is_disposed()
     }
 
     /// Discards listeners and marks this notifier as disposed.
@@ -229,11 +213,7 @@ impl ChangeNotifier {
     /// [`notify_listeners`]: Self::notify_listeners
     /// [`remove_listener`]: Listenable::remove_listener
     pub fn dispose(&self) {
-        // Idempotent: second call sees true and exits.
-        if self.is_disposed.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        self.listeners.lock().clear();
+        self.inner.dispose();
     }
 
     /// Debug-asserts that this notifier has not been disposed.
@@ -250,15 +230,14 @@ impl ChangeNotifier {
     /// (`change_notifier.dart:181`).
     #[inline]
     fn check_disposed(&self) -> bool {
-        if self.is_disposed.load(Ordering::Acquire) {
-            // cfg-explicit layout: an earlier version combined
-            // `debug_assert!(false, ..)` and `tracing::warn!` in one block,
-            // which was misleading — in debug builds the assert diverges, so
-            // the warn! below it was dead code; in release builds the assert
-            // compiled out and only the warn! ran. Splitting on
-            // `cfg(debug_assertions)` makes the intent unambiguous: debug
-            // panics immediately (hard contract violation), release degrades
-            // gracefully with a warning (Flutter parity).
+        if self.inner.is_disposed() {
+            // This branded check runs BEFORE any delegation into the inner
+            // [`Notifier`] so a disposed `ChangeNotifier` panics/warns with
+            // its own documented message, not the generic channel's.
+            //
+            // cfg-explicit layout: debug panics immediately (hard contract
+            // violation), release degrades gracefully with a warning
+            // (Flutter parity).
             #[cfg(debug_assertions)]
             panic!(
                 "ChangeNotifier used after dispose: once dispose() has been \
@@ -312,83 +291,35 @@ impl ChangeNotifier {
         if self.check_disposed() {
             return;
         }
-        // Stack-allocate the snapshot for the common case (1-4 listeners).
-        // `SmallVec<[_; 4]>` keeps inline storage capacity 4 — when there are
-        // ≤4 listeners the snapshot is purely stack memory; ≥5 listeners
-        // spills to the heap. The snapshot carries `(ListenerId,
-        // ListenerCallback)` pairs so each entry can be re-checked against
-        // the live registration before firing.
-        //
-        // `SmallVec` is chosen over `tinyvec::ArrayVec` deliberately.
-        // `ListenerCallback` is `Arc<dyn Fn() + Send + Sync>`, which does NOT
-        // implement `Default`; `tinyvec` requires `T: Default` for every
-        // element type, so it cannot store these callbacks. `SmallVec` imposes
-        // no `Default` bound, so it is the only inline-storage option here.
-        let mut snapshot: smallvec::SmallVec<[(ListenerId, ListenerCallback); 4]> = self
-            .listeners
-            .lock()
-            .iter()
-            .map(|(&id, cb)| (id, Arc::clone(cb)))
-            .collect();
-        // Fire in registration order (Flutter parity). `ListenerId` is assigned
-        // monotonically by `next_id`, so sorting by id reproduces the order in
-        // which listeners were added — the backing `HashMap` does not preserve
-        // insertion order. This also makes the remove-during-notify contract
-        // observe a deterministic ordering rather than arbitrary hash order.
-        snapshot.sort_unstable_by_key(|(id, _)| *id);
-
-        for (id, callback) in &snapshot {
-            // Re-check registration before firing. Acquires the lock
-            // briefly for the lookup and releases it before the callback runs,
-            // so a listener individually removed mid-notify (by an earlier
-            // callback's `remove_listener`) is skipped rather than invoked.
-            //
-            // Disposal is handled distinctly: `dispose()` clears the entire map
-            // (and sets `is_disposed`), but FLUI guarantees that a `dispose()`
-            // call made *mid-notify* by a listener does not abort the in-flight
-            // snapshot — the remaining snapshot listeners still fire (see the
-            // `dispose_during_notify_iteration_safe` reentrancy contract on
-            // [`dispose`](Self::dispose)). We therefore only consult the live
-            // map for the per-listener skip while the notifier is NOT disposed;
-            // once disposed mid-flight, the snapshot is honoured to completion.
-            if !self.is_disposed.load(Ordering::Acquire) && !self.listeners.lock().contains_key(id)
-            {
-                continue; // Individually removed during notify; skip.
-            }
-            // Isolate each callback's panic so one panicking listener does
-            // not abort the remaining listeners. `AssertUnwindSafe` is sound
-            // here: the callback is `Arc<dyn Fn() + Send + Sync>` invoked by
-            // shared reference, and on unwind no borrowed state crosses the
-            // boundary in a broken-invariant form — we only read the snapshot.
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| callback())) {
-                tracing::error!(
-                    listener_id = ?id,
-                    panic_payload = ?payload,
-                    "ChangeNotifier listener panicked; continuing with remaining listeners"
-                );
-            }
-        }
+        // The snapshot-then-fire loop (ordering, mid-notify removal skip,
+        // per-callback `catch_unwind`, mid-flight-dispose honouring) lives
+        // once, in the generic channel. The UNCHECKED variant on purpose:
+        // the branded check above is this method's one documented entry
+        // check, and a `dispose` racing in after it must behave as it always
+        // did under the single-check semantics (the in-flight call proceeds)
+        // rather than trip the inner channel's generically-worded gate.
+        self.inner.notify_unchecked(());
     }
 
     /// Whether any listeners are currently registered
     #[must_use]
     #[inline]
     pub fn has_listeners(&self) -> bool {
-        !self.listeners.lock().is_empty()
+        !self.inner.is_empty()
     }
 
     /// Checks if there are no listeners registered
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.listeners.lock().is_empty()
+        self.inner.is_empty()
     }
 
     /// Returns the number of listeners currently registered
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.listeners.lock().len()
+        self.inner.len()
     }
 }
 
@@ -396,11 +327,12 @@ impl Listenable for ChangeNotifier {
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         if self.check_disposed() {
             // Release-mode no-op: return a fresh id that is not registered.
-            return self.next_id();
+            return self.inner.mint_id();
         }
-        let id = self.next_id();
-        self.listeners.lock().insert(id, listener);
-        id
+        // Unchecked for the same reason as `notify_listeners`: the branded
+        // check above is the one entry check; a racing `dispose` must not
+        // produce the inner channel's generically-worded failure.
+        self.inner.add_unchecked(Arc::new(move |()| listener()))
     }
 
     fn remove_listener(&self, id: ListenerId) {
@@ -413,16 +345,17 @@ impl Listenable for ChangeNotifier {
         // instance would be disposed a frame earlier than the listeners.
         // Allowing calls to this method after it is disposed makes it easier
         // for listeners to properly clean up." `dispose()` already cleared
-        // `self.listeners`, so the lookup below is naturally a no-op; the id
+        // the listener map, so the lookup below is naturally a no-op; the id
         // simply isn't found.
-        self.listeners.lock().remove(&id);
+        self.inner.remove_even_if_disposed(id);
     }
 
     fn remove_all_listeners(&self) {
         if self.check_disposed() {
             return;
         }
-        self.listeners.lock().clear();
+        // Unchecked: same single-entry-check rationale as `add_listener`.
+        self.inner.remove_all_unchecked();
     }
 }
 

@@ -21,11 +21,15 @@ pub(crate) mod logging;
 pub(crate) mod media_query_root;
 pub(crate) mod presentation;
 pub(crate) mod presentation_forest;
+#[cfg(test)]
+pub(crate) mod raster_test_support;
 pub mod runner;
 pub(crate) mod runtime;
 pub(crate) mod semantics_host;
 pub(crate) mod ui_realm;
 pub(crate) mod window_registry;
+#[cfg(test)]
+pub(crate) mod window_test_support;
 
 pub use config::{AppConfig, DiagnosticsProfile};
 pub use direct::run_direct;

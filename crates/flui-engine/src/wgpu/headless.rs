@@ -42,14 +42,14 @@ impl HeadlessRenderer {
     /// Returns [`EngineError`] when no GPU adapter or device is available.
     pub fn new() -> EngineResult<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
+        let adapter = pollster::block_on(instance.request_adapter(
+            &super::adapter::trusted_adapter_options(wgpu::PowerPreference::HighPerformance, None),
+        ))
         .map_err(EngineError::adapter_request)?;
 
+        // Deliberately NOT `adapter::request_flui_device`: capture wants
+        // wgpu's default (downlevel-friendly) device rather than the
+        // renderer's capability-negotiated one.
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("FLUI Headless Capture Device"),
             ..Default::default()

@@ -73,8 +73,19 @@ futures-util = { workspace = true, optional = true }
 # unlike `flui-assets`' own moka byte-loader cache. See
 # `crate::image::decode_cache`'s module doc.
 lru = { workspace = true, optional = true }
+# Headless frame driver behind the `testing` feature only: the canonical
+# `testing::LaidOut` harness (shared with flui-material/flui-cupertino test
+# suites) is built on `HeadlessBinding`. Optional + feature-gated so no
+# production graph ever links the test driver (see the sanctioned
+# same-layer edge in docs/workspace-layers.toml).
+flui-testing = { path = "../flui-testing", version = "0.2.0", optional = true }
 
 [dev-dependencies]
+# Enable this crate's own `testing` feature for its integration tests:
+# `tests/common/mod.rs` is a thin re-export of `flui_widgets::testing`, which
+# only exists on the feature-gated build of the library the test binaries
+# link (the unit-test build reaches it via `cfg(test)` instead).
+flui-widgets = { path = ".", version = "0.2.0", features = ["testing"] }
 # Integration tests drive the real layout pipeline through the render harness.
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
@@ -168,6 +179,17 @@ asset-images = ["dep:flui-assets", "flui-assets/images", "images", "dep:futures-
 # share the same decode cache, coalescing engine, and background runtime.
 network-images = ["asset-images", "flui-assets/network"]
 serde = ["flui-types/serde"]
+# The canonical headless test harness (`flui_widgets::testing`): mounts a
+# widget tree through the real pipeline inside a `HeadlessBinding` and exposes
+# geometry probes + synthetic pointer dispatch. Downstream test suites
+# (flui-material, flui-cupertino) flip this from their dev-dependencies so all
+# three crates drive one harness instead of drifted copies. Pulls in the
+# optional `flui-testing` dep plus the `testing` surfaces of flui-rendering
+# (pipeline inspection) and flui-interaction (synthetic event constructors).
+# Named `testing` to match the flui-rendering/flui-layer convention for
+# feature-gated `src/testing` modules (the shape port-check trigger 11
+# sanctions).
+testing = ["dep:flui-testing", "flui-rendering/testing", "flui-interaction/testing"]
 
 [lints]
 workspace = true

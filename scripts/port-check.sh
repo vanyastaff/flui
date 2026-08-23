@@ -283,25 +283,27 @@ check "4" \
 #
 # *** SCOPE EXCLUSIONS BELOW ARE TRACKED-OUTSTANDING-REFACTOR WHITELISTS ***
 #
-# `flui-engine/src/wgpu/backend.rs` is NOT in the scope yet because it has
-# known per-frame `Arc::clone` sites at lines 121-122 (offscreen-painter
-# cache initialisation) and lines 408-409 (`render_shader_mask` accessor
-# pattern). Both are documented as Friction log entries in
-# `crates/flui-engine/ARCHITECTURE.md` and tracked as Outstanding refactor #1
-# (`Arc<Mutex<OffscreenRenderer>>` -> direct ownership + `Backend<'a>`). When
-# the refactor lands, `backend.rs` MUST be added to this trigger's scope in
-# the same PR so regressions are caught against the post-refactor shape.
+# `flui-engine/src/wgpu/backend.rs` is NOT in the scope. The
+# `Arc<Mutex<OffscreenRenderer>>` refactor this exclusion originally tracked
+# has landed, but per-effect-frame `Arc::clone` sites survived it: the
+# offscreen-painter cache initialisation and the device/queue handle grabs
+# inside the backdrop-blur / shader-mask paths (cheap ref-count bumps, per
+# effect application, not per layer; documented in
+# `crates/flui-engine/ARCHITECTURE.md`'s thread-safety table). Adding
+# `backend.rs` to the scope requires either removing those clones or a
+# function-level exclusion mechanism this script does not have.
 #
 # `flui-engine/src/wgpu/renderer.rs` is NOT in the scope because:
-# - `Renderer::new` and `new_offscreen` perform setup-phase `Arc::clone(&device)`
-#   / `Arc::clone(&queue)` calls that amortise across the renderer's lifetime
+# - `Renderer::new`, `new_offscreen`, `recover`, and
+#   `from_offscreen_services` perform setup-phase `Arc::clone(&device)` /
+#   `Arc::clone(&queue)` calls that amortise across the renderer's lifetime
 #   (acceptable per the strategy clause).
-# - The canonical per-frame clones at lines 656-657 (RenderContext
-#   construction) are documented as Friction log entries and tracked as
-#   Outstanding refactor #3 (Per-frame Arc::clone -> borrowed references;
-#   depends on Outstanding refactor #1). When that refactor lands, `renderer.rs`
-#   should be added to this trigger's scope with a function-level exclusion
-#   for `Renderer::new` / `new_offscreen` (setup-phase) only.
+# - The formerly-canonical per-frame clones (RenderContext construction) no
+#   longer exist: `RenderContext` lost its device/queue fields entirely, so
+#   there is no per-frame clone left to watch. What blocks adding the file
+#   wholesale is the in-file `#[cfg(test)]` modules' own `Arc::clone` calls,
+#   which the `!**/test*.rs` glob cannot exclude; a function-level exclusion
+#   mechanism would be needed first.
 # -----------------------------------------------------------------------------
 check "5" \
   "Arc::clone in per-frame paint/composite loop" \
@@ -337,21 +339,19 @@ check "6" \
 # handle behind a shared lock invites a second mutator into a single-mutator
 # design. The regex is narrow enough that any new one is a regression.
 #
-# ONE file is excluded, and the exclusion carries an obligation.
+# No production file is excluded any more. `texture_pool.rs` used to be, for
+# its `Arc<Mutex<TexturePoolInner>>` back-reference; that shape is gone (the
+# pool owns its inventory directly and dropped textures come home through an
+# mpsc return channel), and the glob was removed in the same change per the
+# obligation this comment used to carry.
 #
-#   texture_pool.rs -- `Arc<Mutex<TexturePoolInner>>` at two sites, still the
-#   real shape. **When that lock is removed, this `--glob` MUST go in the same
-#   change**, or the file silently stops being watched precisely when it
-#   becomes watchable.
-#
-# Two other exclusions used to sit here, for `renderer.rs` and `backend.rs`,
+# Two other exclusions once sat here, for `renderer.rs` and `backend.rs`,
 # both waiting on the same refactor. That refactor landed -- `Renderer` now
 # owns its `OffscreenRenderer` outright and `Backend` borrows one for a frame
 # -- and nobody removed the globs, so both files went unwatched for however
 # long. A stale exclusion is worse than none: it reads as "known to violate"
 # while the file is clean, and it permits the next real violation in exactly
-# the place the rule most wants to look. Both are now gone, verified by
-# running the trigger against both files with the globs removed (zero hits).
+# the place the rule most wants to look.
 #
 # Test files (`!**/test*.rs`, `!**/tests/**`) stay excluded so fixtures are
 # not flagged.
@@ -376,7 +376,6 @@ check "7" \
   --type rust \
   --glob '!**/test*.rs' \
   --glob '!**/tests/**' \
-  --glob '!**/texture_pool.rs' \
   crates/flui-engine/src/wgpu
 
 # -----------------------------------------------------------------------------

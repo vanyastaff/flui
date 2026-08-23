@@ -29,16 +29,14 @@ use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
-    protocol::{BoxProtocol, SliverProtocol},
     testing::inspect,
-    traits::{RenderBox, RenderObject, RenderSliver},
+    traits::{RenderBox, RenderSliver},
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
 use flui_types::{Color, Offset, Point, Rect, Size, geometry::px, layout::AxisDirection};
 
-type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
-type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
+use crate::common::{BoxedRenderObject, BoxedSliverObject};
 
 /// Runs layout → compositing → paint and returns the produced layer
 /// tree.

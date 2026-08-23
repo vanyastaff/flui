@@ -4,7 +4,7 @@
 use flui_objects::{FractionFactor, RenderFractionallySizedBox};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Alignment;
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Sizes its child to a fraction of the available space along each axis.
 ///
@@ -96,15 +96,7 @@ impl RenderView for FractionallySizedBox {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(FractionallySizedBox);

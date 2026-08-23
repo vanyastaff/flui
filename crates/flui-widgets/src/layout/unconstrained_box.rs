@@ -4,7 +4,7 @@
 use flui_objects::RenderConstraintsTransformBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{Alignment, Axis, painting::Clip};
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Removes the constraints imposed on `child` — on both axes, or, when
 /// `constrained_axis` is set, on every axis *except* that one (the named
@@ -126,15 +126,7 @@ impl RenderView for UnconstrainedBox {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(UnconstrainedBox);

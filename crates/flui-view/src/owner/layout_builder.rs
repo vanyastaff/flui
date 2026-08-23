@@ -354,7 +354,7 @@ impl BuildOwner {
     /// Run one frame, settling every build-during-layout node before paint.
     ///
     /// This is the **single** implementation shared by `HeadlessBinding::pump_frame`
-    /// and `AppBinding::draw_frame`. The two frame paths must not diverge here: a
+    /// and `UiRealm::draw_frame`. The two frame paths must not diverge here: a
     /// builder that settles headlessly but not on screen (or vice versa) is a
     /// silent correctness bug, so neither binding may hand-roll this loop.
     ///

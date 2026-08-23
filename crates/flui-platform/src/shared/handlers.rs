@@ -635,6 +635,84 @@ impl Default for WindowCallbacks {
     }
 }
 
+/// Emits the ten `PlatformWindow` `on_*` callback-registration trait methods.
+///
+/// Every backend window stores its callbacks in a [`WindowCallbacks`] — either
+/// as a bare field or behind an `Arc` (auto-deref makes one body cover both) —
+/// and every setter is the same one-liner: store the boxed callback in its
+/// slot, replacing any previous registration. Invoke inside an
+/// `impl PlatformWindow for ...` block, naming the field that holds the
+/// [`WindowCallbacks`]:
+///
+/// ```ignore
+/// impl PlatformWindow for MyWindow {
+///     crate::shared::impl_window_callback_setters!(callbacks);
+///     // ... the rest of the impl ...
+/// }
+/// ```
+///
+/// The signatures below must match the `PlatformWindow` trait exactly; types
+/// are spelled with absolute paths so the expansion never depends on the
+/// invoking module's imports.
+macro_rules! impl_window_callback_setters {
+    ($callbacks_field:ident) => {
+        fn on_input(
+            &self,
+            callback: Box<
+                dyn FnMut($crate::traits::PlatformInput) -> $crate::traits::DispatchEventResult
+                    + Send,
+            >,
+        ) {
+            *self.$callbacks_field.on_input.lock() = Some(callback);
+        }
+
+        fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+            *self.$callbacks_field.on_request_frame.lock() = Some(callback);
+        }
+
+        fn on_resize(
+            &self,
+            callback: Box<
+                dyn FnMut(::flui_types::geometry::Size<::flui_types::geometry::Pixels>, f32) + Send,
+            >,
+        ) {
+            *self.$callbacks_field.on_resize.lock() = Some(callback);
+        }
+
+        fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+            *self.$callbacks_field.on_moved.lock() = Some(callback);
+        }
+
+        fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+            *self.$callbacks_field.on_close.lock() = Some(callback);
+        }
+
+        fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+            *self.$callbacks_field.on_should_close.lock() = Some(callback);
+        }
+
+        fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+            *self.$callbacks_field.on_active_status_change.lock() = Some(callback);
+        }
+
+        fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+            *self.$callbacks_field.on_visibility_status_change.lock() = Some(callback);
+        }
+
+        fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+            *self.$callbacks_field.on_hover_status_change.lock() = Some(callback);
+        }
+
+        fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+            *self.$callbacks_field.on_appearance_changed.lock() = Some(callback);
+        }
+    };
+}
+// Textual-scope escape: `pub(crate) use` gives the macro a normal path
+// (`crate::shared::impl_window_callback_setters`) without `#[macro_export]`,
+// which would put an intra-crate implementation detail on the public API.
+pub(crate) use impl_window_callback_setters;
+
 impl std::fmt::Debug for WindowCallbacks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WindowCallbacks")

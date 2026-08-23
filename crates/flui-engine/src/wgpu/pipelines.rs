@@ -557,9 +557,12 @@ fn create_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLay
 
 // ── Per-pipeline factory functions ─────────────────────────────────────────────
 //
-// Each function is a pure constructor: device + format + layout → one pipeline.
-// The shared primitive and multisample state for all instanced-quad pipelines is
-// captured in helpers below to avoid subtle divergence.
+// Every pipeline in this set (and the gradient/shadow pipelines built by
+// `effects_pipeline`) is the same unit-quad instanced shape; only the shader,
+// labels, instance vertex layout, and blend state differ. That variance is
+// captured in [`QuadPipelineSpec`] and the one true constructor
+// [`create_unit_quad_pipeline`]; the named factories below are thin,
+// documented bindings of a spec.
 
 fn instanced_quad_primitive_state() -> wgpu::PrimitiveState {
     wgpu::PrimitiveState {
@@ -582,7 +585,7 @@ fn single_sample_multisample_state() -> wgpu::MultisampleState {
 }
 
 /// Vertex buffer layout for the shared unit-quad (2-float position only).
-fn unit_quad_vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
+pub(super) fn unit_quad_vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
         array_stride: 8, // 2 × f32
         step_mode: wgpu::VertexStepMode::Vertex,
@@ -590,24 +593,38 @@ fn unit_quad_vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
-fn create_instanced_rect_pipeline(
+/// Everything that distinguishes one unit-quad instanced pipeline from another.
+pub(super) struct QuadPipelineSpec {
+    pub(super) shader_label: &'static str,
+    pub(super) pipeline_label: &'static str,
+    /// WGSL source with `vs_main`/`fs_main` entry points over the shared
+    /// unit-quad vertex layout (slot 0) and one instance buffer (slot 1).
+    pub(super) shader_source: &'static str,
+    pub(super) instance_layout: wgpu::VertexBufferLayout<'static>,
+    pub(super) blend: wgpu::BlendState,
+}
+
+/// The one true unit-quad pipeline constructor: single-sample, no depth,
+/// triangle-list, unit-quad + instance vertex buffers, one color target.
+pub(super) fn create_unit_quad_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
+    spec: &QuadPipelineSpec,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Instanced Rect Shader"),
-        source: wgpu::ShaderSource::Wgsl(super::shaders::RECT_INSTANCED.into()),
+        label: Some(spec.shader_label),
+        source: wgpu::ShaderSource::Wgsl(spec.shader_source.into()),
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Instanced Rect Pipeline"),
+        label: Some(spec.pipeline_label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
             buffers: &[
                 Some(unit_quad_vertex_buffer_layout()),
-                Some(super::instancing::RectInstance::desc()),
+                Some(spec.instance_layout.clone()),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -616,7 +633,7 @@ fn create_instanced_rect_pipeline(
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: Some(spec.blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -627,6 +644,25 @@ fn create_instanced_rect_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+fn create_instanced_rect_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    create_unit_quad_pipeline(
+        device,
+        surface_format,
+        layout,
+        &QuadPipelineSpec {
+            shader_label: "Instanced Rect Shader",
+            pipeline_label: "Instanced Rect Pipeline",
+            shader_source: super::shaders::RECT_INSTANCED,
+            instance_layout: super::instancing::RectInstance::desc(),
+            blend: wgpu::BlendState::ALPHA_BLENDING,
+        },
+    )
 }
 
 fn create_instanced_circle_pipeline(
@@ -634,38 +670,18 @@ fn create_instanced_circle_pipeline(
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Instanced Circle Shader"),
-        source: wgpu::ShaderSource::Wgsl(super::shaders::CIRCLE_INSTANCED.into()),
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Instanced Circle Pipeline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[
-                Some(unit_quad_vertex_buffer_layout()),
-                Some(super::instancing::CircleInstance::desc()),
-            ],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+    create_unit_quad_pipeline(
+        device,
+        surface_format,
+        layout,
+        &QuadPipelineSpec {
+            shader_label: "Instanced Circle Shader",
+            pipeline_label: "Instanced Circle Pipeline",
+            shader_source: super::shaders::CIRCLE_INSTANCED,
+            instance_layout: super::instancing::CircleInstance::desc(),
+            blend: wgpu::BlendState::ALPHA_BLENDING,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        }),
-        primitive: instanced_quad_primitive_state(),
-        depth_stencil: None,
-        multisample: single_sample_multisample_state(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 fn create_instanced_arc_pipeline(
@@ -673,38 +689,18 @@ fn create_instanced_arc_pipeline(
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Instanced Arc Shader"),
-        source: wgpu::ShaderSource::Wgsl(super::shaders::ARC_INSTANCED.into()),
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Instanced Arc Pipeline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[
-                Some(unit_quad_vertex_buffer_layout()),
-                Some(super::instancing::ArcInstance::desc()),
-            ],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+    create_unit_quad_pipeline(
+        device,
+        surface_format,
+        layout,
+        &QuadPipelineSpec {
+            shader_label: "Instanced Arc Shader",
+            pipeline_label: "Instanced Arc Pipeline",
+            shader_source: super::shaders::ARC_INSTANCED,
+            instance_layout: super::instancing::ArcInstance::desc(),
+            blend: wgpu::BlendState::ALPHA_BLENDING,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        }),
-        primitive: instanced_quad_primitive_state(),
-        depth_stencil: None,
-        multisample: single_sample_multisample_state(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 fn create_instanced_texture_pipeline(
@@ -712,38 +708,18 @@ fn create_instanced_texture_pipeline(
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Instanced Texture Shader"),
-        source: wgpu::ShaderSource::Wgsl(super::shaders::TEXTURE_INSTANCED.into()),
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Instanced Texture Pipeline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[
-                Some(unit_quad_vertex_buffer_layout()),
-                Some(super::instancing::TextureInstance::desc()),
-            ],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+    create_unit_quad_pipeline(
+        device,
+        surface_format,
+        layout,
+        &QuadPipelineSpec {
+            shader_label: "Instanced Texture Shader",
+            pipeline_label: "Instanced Texture Pipeline",
+            shader_source: super::shaders::TEXTURE_INSTANCED,
+            instance_layout: super::instancing::TextureInstance::desc(),
+            blend: wgpu::BlendState::ALPHA_BLENDING,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        }),
-        primitive: instanced_quad_primitive_state(),
-        depth_stencil: None,
-        multisample: single_sample_multisample_state(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 /// Creates the **premultiplied** source-over texture pipeline used exclusively
@@ -758,41 +734,21 @@ fn create_instanced_texture_premul_pipeline(
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Instanced Texture Premultiplied Shader"),
-        source: wgpu::ShaderSource::Wgsl(super::shaders::TEXTURE_INSTANCED.into()),
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Instanced Texture Premultiplied Pipeline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[
-                Some(unit_quad_vertex_buffer_layout()),
-                Some(super::instancing::TextureInstance::desc()),
-            ],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+    create_unit_quad_pipeline(
+        device,
+        surface_format,
+        layout,
+        &QuadPipelineSpec {
+            shader_label: "Instanced Texture Premultiplied Shader",
+            pipeline_label: "Instanced Texture Premultiplied Pipeline",
+            shader_source: super::shaders::TEXTURE_INSTANCED,
+            instance_layout: super::instancing::TextureInstance::desc(),
+            // PREMULTIPLIED_ALPHA_BLENDING (src factor One): composites a
+            // premultiplied-alpha texel correctly. This is the defining
+            // distinction from `create_instanced_texture_pipeline`.
+            blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                // PREMULTIPLIED_ALPHA_BLENDING (src factor One): composites a
-                // premultiplied-alpha texel correctly. This is the defining
-                // distinction from `create_instanced_texture_pipeline`.
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        }),
-        primitive: instanced_quad_primitive_state(),
-        depth_stencil: None,
-        multisample: single_sample_multisample_state(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 /// Creates a premultiplied-source texture composite pipeline with an arbitrary
@@ -813,38 +769,18 @@ fn create_instanced_texture_with_blend_state(
     layout: &wgpu::PipelineLayout,
     blend_state: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("SSAA Tile Composite Shader"),
-        source: wgpu::ShaderSource::Wgsl(super::shaders::TEXTURE_INSTANCED.into()),
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("SSAA Tile Composite Pipeline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[
-                Some(unit_quad_vertex_buffer_layout()),
-                Some(super::instancing::TextureInstance::desc()),
-            ],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+    create_unit_quad_pipeline(
+        device,
+        surface_format,
+        layout,
+        &QuadPipelineSpec {
+            shader_label: "SSAA Tile Composite Shader",
+            pipeline_label: "SSAA Tile Composite Pipeline",
+            shader_source: super::shaders::TEXTURE_INSTANCED,
+            instance_layout: super::instancing::TextureInstance::desc(),
+            blend: blend_state,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(blend_state),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        }),
-        primitive: instanced_quad_primitive_state(),
-        depth_stencil: None,
-        multisample: single_sample_multisample_state(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -859,20 +795,7 @@ mod gpu_tests {
     use super::PipelineSet;
 
     fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available on a GPU-enabled test host");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("PipelineSet Test Device"),
-            ..Default::default()
-        }))
-        .expect("a GPU device must be available when an adapter was found");
-        (Arc::new(device), Arc::new(queue))
+        crate::wgpu::test_support::test_device_and_queue("PipelineSet Test Device")
     }
 
     /// `PipelineSet::new` completes without panic for `Bgra8Unorm`.

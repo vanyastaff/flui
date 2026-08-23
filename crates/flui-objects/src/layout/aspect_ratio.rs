@@ -23,7 +23,7 @@ use flui_types::{Offset, Pixels, Size, geometry::px};
 
 use flui_rendering::{
     constraints::{BoxConstraints, Constraints},
-    context::{BoxHitTestContext, BoxLayoutContext},
+    context::BoxLayoutContext,
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -261,16 +261,7 @@ impl RenderBox for RenderAspectRatio {
         target_size
     }
 
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_own_size() {
-            return false;
-        }
-        if self.has_child {
-            ctx.hit_test_child_at_offset(0, Offset::ZERO)
-        } else {
-            false
-        }
-    }
+    flui_rendering::forward_single_child_box_hit_test!();
 
     // ---- intrinsic dimensions ------------------------------------------
 

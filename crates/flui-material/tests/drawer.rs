@@ -357,7 +357,7 @@ fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
     }
 
     assert!(
-        laid.find_by_render_type("RenderDecoratedBox").is_some(),
+        laid.try_find_by_render_type("RenderDecoratedBox").is_some(),
         "the scrim must mount once the drawer is open"
     );
     assert!(
@@ -380,7 +380,7 @@ fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
         laid.pump_for(FRAME);
     }
     assert!(
-        laid.find_by_render_type("RenderDecoratedBox").is_none(),
+        laid.try_find_by_render_type("RenderDecoratedBox").is_none(),
         "once the close fling actually settles, the scrim must unmount — a stuck, \
          alpha-0-but-still-hit-testable scrim would otherwise eat every body tap forever"
     );
@@ -807,7 +807,7 @@ fn assert_opened_drawer_slot_is_last(open_is_end: bool) {
     laid.tick();
 
     let scaffold_layout = laid
-        .find_by_render_type("RenderCustomMultiChildLayoutBox")
+        .try_find_by_render_type("RenderCustomMultiChildLayoutBox")
         .expect("Scaffold's own multi-child layout must be mounted");
     let top_level_children = laid.children(scaffold_layout);
 

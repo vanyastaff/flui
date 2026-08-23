@@ -22,8 +22,7 @@ use flui_rendering::{
 };
 use flui_types::{Offset, Size, geometry::px};
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+use crate::common::BoxedRenderObject;
 
 const DEPTH: usize = 2_500;
 

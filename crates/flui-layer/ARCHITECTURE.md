@@ -133,25 +133,17 @@ No `unsafe impl Send/Sync` anywhere in the crate after Mythos Step 3. No `Arc<>`
 
 Known sites that do not yet match the methodology but are not violations of the current refusal triggers. Each entry names the site and the next planned step.
 
-### Doctest examples use pre-Pixels-wrap `Offset::new(f32, f32)` shape
+### Hand-written `impl From<XxxLayer> for Layer` blocks -- RESOLVED
 
-**Sites:** [`src/compositor/builder.rs`](src/compositor/builder.rs) lines 14-37 (module doc), 77-93 (`SceneBuilder` doc), 184-194 (`push_offset` doc), 219-236 (`push_opacity` doc), 521 (`pop` doc), and ~15 similar examples in layer-type docstrings (`layer/clip_rect.rs:25`, `layer/clip_rrect.rs:28`, etc.).
+The 18 hand-written `From` impls in [`src/layer/mod.rs`](src/layer/mod.rs) collapsed into one
+`gen_layer_from_impls!` invocation (macro in [`src/layer/dispatch.rs`](src/layer/dispatch.rs),
+next to `gen_layer_accessors!`). The sweep also surfaced and closed a gap: the 19-variant enum
+had no `From<PerformanceOverlayLayer>` impl at all, forcing its one construction site in
+`flui-app` to hand-write the boxed variant.
 
-**Violation:** none of the six refusal triggers; pre-existing doctest breakage from a `flui_types::Offset::new` signature change (now requires `Pixels` wrapping). `cargo test -p flui-layer --doc` reports 21 failures across these examples.
+### `link_registry.rs` carries ~430 LOC of inline tests
 
-**Next planned step:** mechanical sweep wrapping `100.0` → `px(100.0)` (or `Pixels(100.0)`) in every affected doctest. Out of scope for the Mythos chain (was tracked as a deferred concern in Step 7's commit message). A standalone `chore(flui-layer): fix doctest pixels wrapping` PR resolves it; estimated 1-2 hours.
-
-### `Layer` enum still carries 19 `impl From<XxxLayer> for Layer` blocks (~95 LOC)
-
-**Site:** [`src/layer/mod.rs`](src/layer/mod.rs) lines ~360-490 (post-Mythos Step 6 layout).
-
-**Violation:** none. The 19 `From` impls are mechanical (each is `fn from(layer: XxxLayer) -> Self { Layer::Xxx(layer) }`) and similar in shape to the `is_*`/`as_*` dispatch that Mythos Step 4 collapsed via macro.
-
-**Next planned step:** add a `gen_layer_from_impls!` macro to `layer/dispatch.rs` and replace the hand-written `From` impls with a single 19-line invocation. Estimated -75 LOC; trivial. Tracked in Outstanding refactors below.
-
-### `link_registry.rs` carries ~290 LOC of inline tests
-
-**Site:** [`src/link_registry.rs`](src/link_registry.rs) lines ~332-621.
+**Site:** [`src/link_registry.rs`](src/link_registry.rs), the `#[cfg(test)]` tail of the file.
 
 **Violation:** none. The tests are clean and focused. The Mythos chain extracted `layer_tree.rs` and `compositor.rs` tests to integration tests but left `link_registry.rs` inline (the file's other concerns are smaller and the test extraction would be cosmetic).
 
@@ -171,15 +163,13 @@ Known sites that do not yet match the methodology but are not violations of the 
 
 Concrete cleanups visible from `flui-layer` outward, sized for an `/aif-implement` dispatch. Each entry names a file and what would need to change.
 
-### `gen_layer_from_impls!` macro for the 19 `impl From<XxxLayer> for Layer` blocks
+### `gen_layer_from_impls!` macro — DONE
 
-**File:** [`src/layer/mod.rs`](src/layer/mod.rs); add to [`src/layer/dispatch.rs`](src/layer/dispatch.rs).
-
-**Goal:** apply the same macro pattern Mythos Step 4 used for `is_*`/`as_*` dispatch to the 19 `From` impls. The new macro accepts `(Variant => Type)` pairs and emits one `impl From<Type> for Layer` per pair. Saves ~75 LOC of mechanical boilerplate.
-
-**Shape:** add `gen_layer_from_impls!` next to `gen_layer_accessors!`; invoke it from `mod.rs` after the existing accessor invocation. External callers of `Layer::from(canvas_layer)` etc. compile unchanged.
-
-**Dependencies:** none. Mechanical extension of the dispatch.rs macro file.
+The macro lives in [`src/layer/dispatch.rs`](src/layer/dispatch.rs) next to
+`gen_layer_accessors!` and is invoked from `mod.rs` after the accessor invocation, one
+`Variant => Type;` line per variant with `boxed` marking box-payload variants. External
+callers of `Layer::from(...)`/`.into()` compile unchanged, and the previously missing
+`From<PerformanceOverlayLayer>` now exists.
 
 ### `SmallVec<[LayerId; 4]>` for `LayerNode::children`
 
@@ -211,16 +201,6 @@ Concrete cleanups visible from `flui-layer` outward, sized for an `/aif-implemen
 
 **Dependencies:** no unsafe blocks currently exist; the gate is forward-looking.
 
-### Fix the pre-existing doctest breakage
-
-**Files:** ~20 doc examples across `src/compositor/builder.rs`, `src/scene.rs`, `src/layer/*.rs`.
-
-**Goal:** every doctest currently uses `Offset::new(100.0, 50.0)` which fails to compile because `Offset<Pixels>::new` requires `Pixels`-wrapped arguments. The breakage predates the Mythos chain; tracked in Friction log above.
-
-**Shape:** mechanical sweep of `Offset::new(<float>, <float>)` → `Offset::new(px(<float>), px(<float>))` plus an explicit `use flui_types::geometry::px;` in each affected doc example. Estimated 1-2 hours of mechanical edits.
-
-**Dependencies:** none. `flui_types::geometry::px` is already available.
-
 ### Per-variant GPU lowering documentation in `flui-engine`
 
 **File:** in `crates/flui-engine/docs/` -- a `LAYER_LOWERING.md` that documents the wgpu translation for every `Layer` variant.
@@ -248,4 +228,4 @@ Concrete cleanups visible from `flui-layer` outward, sized for an `/aif-implemen
 - **Net unsafe delta for this chain: -39.** Every `unsafe impl Send + Sync` block in `flui-layer` was unjustified and is gone. Zero new `unsafe` blocks were added.
 - **Net LOC reduction for this chain: ~3,000 LOC across the touched .rs files.** Three god modules split, two dead files deleted, one duplicate API removed, 57 boilerplate methods collapsed to one macro invocation.
 - **`port-check.sh` extended in Mythos Step 13 (U13)** to cover `crates/flui-layer/src/` paths in Triggers 1, 2, 3 and to flag `Arc::clone` in `crates/flui-engine/src/wgpu/layer_render.rs` (Trigger 5, forward-looking).
-- **Doctest breakage tracked but not fixed by this chain.** See Friction log + Outstanding refactors. 21 doctests fail with the pre-Pixels-wrap signature; the lib + integration test surfaces are fully green (229 lib + 45 integration tests pass after U10).
+- **Doctest breakage was tracked but not fixed by this chain**; the `px(...)`-wrap sweep has since landed — `cargo test -p flui-layer --doc` is green (33 passed / 12 ignored), and every `Offset::new` doc example uses `Pixels`-wrapped arguments.

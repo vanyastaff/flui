@@ -62,7 +62,8 @@ fn tap_fires_on_pressed_and_the_button_mounts_a_material_surface() {
     );
 
     assert!(
-        laid.find_by_render_type("RenderPhysicalShape").is_some(),
+        laid.try_find_by_render_type("RenderPhysicalShape")
+            .is_some(),
         "IconButton must compose a Material (RenderPhysicalShape) surface",
     );
 
@@ -83,14 +84,14 @@ fn a_button_with_no_press_handler_is_disabled_and_a_tap_dispatch_is_a_no_op() {
         tight(40.0, 40.0),
     );
     let material_before = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("a disabled IconButton must still mount its Material surface");
 
     laid.dispatch_pointer_down(20.0, 20.0);
     laid.dispatch_pointer_up(20.0, 20.0);
 
     let material_after = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("the Material surface must survive a tap dispatch");
     assert_eq!(
         material_before, material_after,
@@ -258,7 +259,7 @@ fn icon_button_theme_slot_background_color_reaches_the_mounted_material() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("IconButton must compose a Material surface");
     assert_eq!(
         laid.render_property(material, "color"),
@@ -320,7 +321,10 @@ fn a_hover_varying_icon_button_theme_foreground_color_stays_frozen_at_the_initia
         "the initial (non-hovered) snapshot must resolve the enabled branch",
     );
 
-    laid.dispatch_pointer_move(20.0, 20.0);
+    // A contactless mouse hover (no button held) — the shared harness's
+    // `dispatch_pointer_move` is a contact drag and requires a preceding
+    // Down; hover is its own event shape, matching what a platform emits.
+    laid.dispatch_pointer_hover(20.0, 20.0);
 
     let after_hover = captured.borrow().clone().unwrap().color;
     assert_eq!(

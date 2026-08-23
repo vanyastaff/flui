@@ -4,7 +4,7 @@
 //! the integration tests, ensuring benchmarks measure the genuine production
 //! contract rather than mocks or shortcuts (bench-fidelity discipline).
 
-// Shared across the `layout` and `paint` benches via `mod helpers;`; each bench
+// Shared across the `layout`, `paint`, and `intrinsic_parent_data` benches via `mod helpers;`; each bench
 // uses only the subset it needs, so unused-in-this-unit helpers are expected.
 #![allow(dead_code)]
 

@@ -1342,7 +1342,7 @@ unsafe fn layout_subtree_borrowed_impl(
                  keeping parent NEEDS_LAYOUT set for next-frame retry"
             );
         } else {
-            entry.clear_needs_layout();
+            entry.state().clear_needs_layout();
         }
 
         // `entry`, `node_ref`, and all callbacks drop here.
@@ -1965,7 +1965,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                  keeping parent NEEDS_LAYOUT set for next-frame retry"
             );
         } else {
-            entry.clear_needs_layout();
+            entry.state().clear_needs_layout();
         }
 
         // `entry`, `node_ref`, and all callbacks drop here.

@@ -10,8 +10,7 @@
 use flui_objects::{RenderColoredBox, RenderRepaintBoundary};
 use flui_rendering::pipeline::PipelineOwner;
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+use crate::common::BoxedRenderObject;
 
 #[test]
 fn removing_a_subtree_evicts_its_dirty_entries() {

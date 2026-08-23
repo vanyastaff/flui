@@ -8,15 +8,13 @@
 // All items in this module are prepared for Phase 2 integration.
 #![allow(dead_code)]
 
-use std::{sync::LazyLock, time::Instant};
-
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::Modifiers as KeyboardModifiers;
 use ui_events::{
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
-        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
-        PointerOrientation, PointerState, PointerType, PointerUpdate,
+        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerOrientation,
+        PointerState, PointerUpdate,
     },
 };
 use windows::Win32::{
@@ -27,34 +25,10 @@ use windows::Win32::{
 
 use super::util::{get_x_lparam, get_y_lparam, is_key_pressed};
 use crate::{
+    shared::events::{event_timestamp_ns, primary_mouse_info},
     shared::keys,
     traits::{Key, PlatformInput, device_to_logical},
 };
-
-/// Process-start epoch for monotonic event timestamps.
-static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
-
-/// Get monotonic timestamp in nanoseconds since process start.
-#[inline]
-fn event_timestamp_ns() -> u64 {
-    // Upstream ui-events documents PointerState.time as NANOSECONDS
-    // ("u64 nanoseconds real time"); a millisecond stamp here silently
-    // broke the unit for every consumer comparing across devices.
-    #[allow(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-    {
-        PROCESS_START.elapsed().as_nanos() as u64
-    }
-}
-
-/// Create a `PointerInfo` for the primary mouse pointer.
-#[inline]
-fn primary_mouse_info() -> PointerInfo {
-    PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
-        pointer_type: PointerType::Mouse,
-        persistent_device_id: None,
-    }
-}
 
 // ============================================================================
 // Keyboard Event Conversion

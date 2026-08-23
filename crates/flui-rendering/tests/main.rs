@@ -1,8 +1,11 @@
 //! Single-binary consolidation of the flui-rendering integration tests.
 //!
 //! Each root test file is compiled as a module of one `rendering_it` test
-//! binary instead of 36 separate binaries, cutting link time and disk usage.
-//! Files stay in place so data paths (e.g. `tests/snapshots/`) keep working.
+//! binary instead of one binary per file, cutting link time and disk usage.
+//! Files stay in place so relative data paths keep working. Scaffolding
+//! shared across the modules lives in [`common`].
+
+mod common;
 
 #[path = "animation_pipeline.rs"]
 mod animation_pipeline;

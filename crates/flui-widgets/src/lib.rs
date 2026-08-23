@@ -81,10 +81,22 @@ pub mod interaction;
 pub mod layout;
 pub mod localization;
 // Headless widget harness shared by the in-crate unit tests of the private
-// `overlay` / `navigator` modules. `tests/common` is an integration-test module
-// and cannot be reached from `src/`.
+// `overlay` / `navigator` modules. The public `testing` module below serves
+// integration tests; this trimmed element-level variant exists because those
+// private modules need element-tree probes and IME capabilities `LaidOut`
+// does not expose.
 #[cfg(test)]
 mod test_harness;
+
+// Canonical headless mount/layout/pointer harness (`testing::LaidOut`).
+// Compiled for this crate's own tests (`cfg(test)`, where the dev-dependency
+// on `flui-testing` supplies the frame driver) or when a consumer enables the
+// `testing` feature (which activates the optional `flui-testing` dependency)
+// — never in production builds. `flui-material` and `flui-cupertino`
+// integration tests re-export it instead of carrying drifted copies. See
+// [`testing`] for the module overview.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 /// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The
 /// route stack, its lifecycle, the flush algorithm and the result channel are

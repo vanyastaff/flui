@@ -1342,66 +1342,24 @@ mod gpu_tests {
     // ── harness helpers ───────────────────────────────────────────────────────
 
     fn acquire_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("GPU adapter required for ssaa::gpu_tests");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("SSAA GPU Test Device"),
-            ..Default::default()
-        }))
-        .expect("GPU device required for ssaa::gpu_tests");
-        (Arc::new(device), Arc::new(queue))
+        crate::wgpu::test_support::test_device_and_queue("SSAA GPU Test Device")
     }
 
     fn make_render_surface(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("SSAA GPU Test Surface"),
-            size: wgpu::Extent3d {
-                width: SURFACE_W,
-                height: SURFACE_H,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: SURFACE_FMT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+        crate::wgpu::test_support::create_target(
+            device,
+            "SSAA GPU Test Surface",
+            SURFACE_W,
+            SURFACE_H,
+            SURFACE_FMT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
+        )
     }
 
     fn clear_to_transparent(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("SSAA GPU Test Clear"),
-        });
-        {
-            let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("SSAA GPU Test Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        queue.submit(std::iter::once(enc.finish()));
+        crate::wgpu::test_support::clear_target(device, queue, view, wgpu::Color::TRANSPARENT);
     }
 
     /// Read all SURFACE_W × SURFACE_H pixels, returning row-major RGBA bytes.
@@ -1410,72 +1368,7 @@ mod gpu_tests {
         queue: &wgpu::Queue,
         texture: &wgpu::Texture,
     ) -> Vec<[u8; 4]> {
-        let bytes_per_pixel = 4_u32;
-        let unpadded_row = SURFACE_W * bytes_per_pixel;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_row = unpadded_row.div_ceil(align) * align;
-        let staging_size = u64::from(padded_row * SURFACE_H);
-
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("SSAA GPU Test Readback"),
-            size: staging_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("SSAA GPU Test Readback Encoder"),
-        });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_row),
-                    rows_per_image: Some(SURFACE_H),
-                },
-            },
-            wgpu::Extent3d {
-                width: SURFACE_W,
-                height: SURFACE_H,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(std::iter::once(enc.finish()));
-
-        let slice = staging.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .expect("GPU readback poll must complete within the test timeout");
-
-        let raw = slice
-            .get_mapped_range()
-            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
-        let mut pixels = Vec::with_capacity((SURFACE_W * SURFACE_H) as usize);
-        for row in 0..SURFACE_H {
-            let row_start = (row * padded_row) as usize;
-            for col in 0..SURFACE_W {
-                let offset = row_start + col as usize * 4;
-                pixels.push([
-                    raw[offset],
-                    raw[offset + 1],
-                    raw[offset + 2],
-                    raw[offset + 3],
-                ]);
-            }
-        }
-        crate::wgpu::readback_dump::dump_frame(SURFACE_W, SURFACE_H, bytemuck::cast_slice(&pixels));
-        pixels
+        crate::wgpu::test_support::readback_pixels(device, queue, texture, SURFACE_W, SURFACE_H)
     }
 
     // ── H2(b): view-only fallback exercises the warn + SrcOver composite ──────

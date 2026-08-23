@@ -423,26 +423,7 @@ pub struct BufferPoolStats {
     reason = "tests assert exact expected values produced by exact arithmetic"
 )]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-
-    fn device_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available on a GPU-enabled test host");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("BufferPool Test Device"),
-            ..Default::default()
-        }))
-        .expect("GPU device creation succeeded when adapter was found");
-        (Arc::new(device), Arc::new(queue))
-    }
 
     #[test]
     fn test_buffer_pool_size() {
@@ -465,7 +446,8 @@ mod tests {
     /// matching would miss (300 ≠ 400) → two allocations, reuse_rate 0.0.
     #[test]
     fn grow_to_fit_reuses_across_fluctuating_size() {
-        let (device, queue) = device_queue();
+        let (device, queue) =
+            crate::wgpu::test_support::test_device_and_queue("BufferPool Test Device");
         let mut pool = BufferPool::new();
 
         pool.get_vertex_buffer(&device, &queue, "f1", &[0u8; 300]); // miss → bucket 512
@@ -483,7 +465,8 @@ mod tests {
     /// next power-of-two bucket and allocates fresh (no false reuse).
     #[test]
     fn distinct_buckets_do_not_alias() {
-        let (device, queue) = device_queue();
+        let (device, queue) =
+            crate::wgpu::test_support::test_device_and_queue("BufferPool Test Device");
         let mut pool = BufferPool::new();
 
         pool.get_vertex_buffer(&device, &queue, "small", &[0u8; 300]); // bucket 512
@@ -506,7 +489,8 @@ mod tests {
     /// dropped LRU-first, leaving the newest 2048.
     #[test]
     fn evict_over_budget_drops_lru_free_buffers() {
-        let (device, queue) = device_queue();
+        let (device, queue) =
+            crate::wgpu::test_support::test_device_and_queue("BufferPool Test Device");
         let mut pool = BufferPool::new();
 
         pool.get_vertex_buffer(&device, &queue, "oldest", &[0u8; 300]); // bucket 512, frame 0

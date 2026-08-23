@@ -106,6 +106,127 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **Workspace-wide dedup/refactor pass (round 3): every deferred item from
+  round 2's assessment, closed.** flui-engine's `TexturePool` drops its
+  `Arc<Mutex<TexturePoolInner>>` — the pool owns its inventory directly and
+  hands out `PooledTexture`s carrying an `mpsc` return channel, so a dropped
+  texture rejoins the free list at the pool's next `&mut` operation instead
+  of through a lock (`Sender` keeps the type `Send`; no consumer signature
+  changed). This diverges deliberately from the backlog's original
+  explicit-`release` sketch — pooled textures ride inside `draw_order` and
+  blend-op values whose drop order is not a call site — and the divergence
+  is documented in flui-engine's ARCHITECTURE.md; port-check trigger 7's
+  `texture_pool.rs` exemption glob is deleted per its stated obligation.
+  flui-platform collapses the ~60 verbatim `on_*` callback setters across
+  its six `PlatformWindow` backends onto one
+  `impl_window_callback_setters!` macro, hoists the thrice-copied
+  `PROCESS_START`/`event_timestamp_ns`/`primary_mouse_info` block into
+  `shared/events.rs`, and exports the headless `MockWindow` type so
+  downstream tests can downcast to it. flui-app replaces fourteen of its
+  sixteen hand-rolled `RasterBackend` test doubles with one configurable
+  `TestRasterBackend` (scripted per-frame outcomes; the two doubles that
+  exercise the private `DeviceRecovery` seam stay hand-written and say why),
+  and its six `PlatformWindow` stubs with one builder-style `TestWindow`
+  (kept crate-local rather than adopting `MockWindow`: that double is
+  minted by a live `HeadlessPlatform` and drags in window-tracking and
+  exit-policy machinery that state-level unit tests do not want). Finally,
+  the three drifted copies of the widget mount harness are one module:
+  `flui_widgets::testing` (moved from flui-widgets' `tests/common`, gated
+  `#[cfg(any(test, feature = "testing"))]` — the feature name port-check
+  trigger 11 sanctions) absorbs the material/cupertino extras
+  (`count_elements_by_view_type`, `children`, ErrorView-tolerant root
+  resolution, a new Option-returning `try_find_by_render_type`), and both
+  design-system crates' `tests/common` shrink to re-export shims. The
+  unification is a semantics upgrade, not just dedup: material/cupertino
+  tests now get the fresh-pointer-id-per-contact dispatch flui-widgets
+  already had, which exposed nine material tests driving a contactless
+  hover as a pressed-button move — a stream no platform emits — now
+  corrected to `dispatch_pointer_hover`. The per-contact id allocation and
+  the 8ms pointer-sample clock policy are shared with `test_harness.rs`
+  via `testing::PointerContacts`; `Harness` itself deliberately stays a
+  separate type (it exposes element-tree probes and withholdable IME/
+  post-frame capabilities the mount harness does not). `flui-testing`
+  stays out of every production graph (`cargo tree --edges normal`
+  verified), with the new feature-only edge registered in
+  `docs/workspace-layers.toml`.
+  flui-rendering's `RenderNode` collapsed 39 identical Box/Sliver
+  match-delegations onto one local `with_entry!` macro (~110 LOC), and its
+  42-file integration binary gained the `tests/common` module its per-file
+  scaffolding copies (7× `laid_out`, 5× `sliver_geometry`, constraint
+  helpers, the `Boxed*Object` aliases) had been begging for; six orphaned
+  snapshot files whose source test moved to flui-objects long ago are gone
+  along with the unused `insta` dev-dependency. flui-objects gained
+  `forward_single_child_box_layout!`/`forward_single_child_box_hit_test!`
+  beside the existing query-forwarding macro (23 verbatim proxy bodies
+  replaced; constraint-transforming implementations stay hand-written).
+  `ChangeNotifier` is re-seated on `Notifier<()>` — the snapshot/ordering/
+  `catch_unwind` firing discipline now lives once in `flui-foundation`'s
+  generic channel, with `ChangeNotifier` keeping only its Flutter-parity
+  seams (branded use-after-dispose message; `remove_listener` tolerating a
+  disposed receiver via the new `Notifier::remove_even_if_disposed`).
+  `flui-layer` gained the `gen_layer_from_impls!` macro its backlog called
+  for (18 hand-written `From<XxxLayer>` impls collapsed, plus the previously
+  missing `From<PerformanceOverlayLayer>` closed and its one hand-boxed
+  construction site in `flui-app` simplified). `flui-view` gained
+  `single_child_view_children!`, replacing 51 verbatim
+  `has_children`/`visit_child_views` blocks across
+  flui-widgets/-material/-cupertino. flui-painting's text layout finished
+  the cosmic-text 0.19 migration semantically, not just syntactically:
+  `Buffer::new_empty` drops the wasted empty-string shape pass at both
+  construction sites, the global `FONT_SYSTEM` lock now brackets only shape
+  passes (the lazy setters run before it), and the verbatim metrics fold
+  shared by `TextLayout::metrics` and `measure_text` lives once
+  (`metrics_from_shaped_buffer`). `Color::to_f32_array` is a `const`
+  delegation to `to_rgba_f32_array` instead of a copy, and the two
+  ignored HSL/HSV round-trip tests whose "not implemented" premise was
+  false (the `From` conversions exist) now run.
+- **Doc truth-sync across crates.** Every claim that routed current behavior
+  through the deleted `AppBinding` now names the real successor
+  (`UiRealm::draw_frame` / `render_frame_entered` /
+  `handle_input_addressed`) across ~30 sites in
+  flui-view/-testing/-widgets/-material/-cupertino/-app/-platform;
+  deliberately historical "retired `AppBinding`" anchors stay.
+  flui-layer's ARCHITECTURE.md dropped its stale doctest backlog (the
+  `px()`-wrap sweep landed long ago; doctests are green) and records the
+  `From`-impls macro as done. flui-foundation's notifier docs now state the
+  round-N-vs-round-N+1 rule on both channels, closing that backlog entry.
+  flui-painting's ARCHITECTURE.md reflects the 0.19 lock discipline and
+  newly files the UAX #29 word-segmentation entry `get_word_boundary`'s
+  doc always claimed existed.
+- **flui-engine: single homes for the GPU rituals the wgpu 30 bump touched at
+  every call site.** The version bump adapted each site in place; this change
+  deduplicates the repeated shapes. `wgpu/adapter.rs` now owns the production
+  acquisition policy — `trusted_adapter_options` (the one
+  `RequestAdapterOptions`, carrying the `apply_limit_buckets: false` rationale
+  once instead of five times), `request_flui_device` (the
+  capability-negotiated `DeviceDescriptor`), and `request_offscreen_gpu` (the
+  instance → adapter → capabilities → device sequence that
+  `Renderer::new_offscreen`, the offscreen half of `recover`, and
+  `GpuServices::resolve_offscreen` each previously spelled out).
+  `wgpu/test_support.rs` (gated on `enable-wgpu-tests`) replaces the per-file
+  GPU test scaffolding — adapter/device acquisition under six different names,
+  render-target creation, clear passes, and the padded-row staging readback —
+  that ~25 test files each carried a copy of; per-suite oracles and scene
+  builders stay local. The ten near-identical unit-quad pipeline constructors
+  in `pipelines.rs`/`effects_pipeline.rs` collapsed onto one
+  `QuadPipelineSpec` + `create_unit_quad_pipeline` builder. Benches and
+  examples keep their two inline copies each: they are separate compilation
+  units that cannot reach `pub(crate)` helpers, and exporting the policy for
+  demo code would widen the public API for no consumer.
+- **flui-engine: `render_scene_content` borrows the painter in place.** The
+  `self.painter.take()` / reassign dance — an enabler left over from the
+  `Arc<Mutex<OffscreenRenderer>>` removal, tracked as the blocker-free entry
+  on ARCHITECTURE.md's Outstanding-refactors list — is gone; the `Backend`
+  holds disjoint `painter`/`offscreen` field borrows for the frame.
+  ARCHITECTURE.md was reconciled against the code while landing this: the
+  per-frame `Arc::clone` entry had already been resolved by deletion
+  (`RenderContext` lost its device/queue fields), the `offscreen.rs` split had
+  already landed as `offscreen/{mod,blit,blur,mask}.rs`, and port-check
+  trigger 5's whitelist comments now describe the current shape instead of
+  line numbers that no longer exist. The `Arc<Mutex<TexturePoolInner>>`
+  refactor stays open on the list — it re-plumbs ownership through the
+  painter/offscreen hot paths and needs GPU-verified behavior, not just a
+  clean compile.
 - **Toolchain 1.97.1 → 1.98.0 (development pin only; MSRV floor stays 1.97).**
   `rust-toolchain.toml` is the *development* toolchain and moves independently
   of the floor, which remains a separate promise checked by the one `msrv` job —

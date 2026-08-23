@@ -565,12 +565,27 @@ impl HeadlessDeferredWindowOpens {
 
 // ==================== Mock Implementations ====================
 
-/// Mock window for headless testing
+/// The canonical test/headless window double.
 ///
-/// Supports per-window callback registration and programmatic event injection
-/// for testing without a display server.
+/// Every window [`HeadlessPlatform`] opens is a `MockWindow`: a fully
+/// functional [`PlatformWindow`] that needs no
+/// display server. Beyond the trait surface it offers what a test harness
+/// needs to drive a window from the outside:
+///
+/// - a configurable scale factor ([`Self::simulate_scale_factor_change`],
+///   delivered through the resize path exactly like the winit backend);
+/// - `request_redraw` dispatching through the registered callbacks
+///   ([`WindowCallbacks`]), like a real backend's frame wire;
+/// - programmatic event injection ([`Self::inject_event`]) and lifecycle
+///   simulation (`simulate_resize` / `simulate_focus` /
+///   `simulate_visibility` / `simulate_close`), each firing the same
+///   registered callback a real platform would.
+///
+/// There is no public constructor: obtain one by opening a window on a
+/// [`HeadlessPlatform`] and downcasting the returned
+/// `Arc<dyn PlatformWindow>` via its `as_any()` to `&MockWindow`.
 #[derive(Clone)]
-struct MockWindow {
+pub struct MockWindow {
     id: WindowId,
     state: Arc<Mutex<MockWindowState>>,
     callbacks: Arc<WindowCallbacks>,
@@ -584,6 +599,21 @@ struct MockWindow {
     /// handling does (see `notify_closed`). `Weak`: a window must never
     /// keep the platform state alive past the platform's own lifetime.
     platform_state: Weak<Mutex<HeadlessState>>,
+}
+
+impl std::fmt::Debug for MockWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.lock();
+        f.debug_struct("MockWindow")
+            .field("id", &self.id)
+            .field("title", &state.title)
+            .field("bounds", &state.bounds)
+            .field("scale_factor", &state.scale_factor)
+            .field("focused", &state.focused)
+            .field("visible", &state.visible)
+            .field("callbacks", &self.callbacks)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Mutable state for headless MockWindow
@@ -732,14 +762,12 @@ impl MockWindow {
 
     /// Inject a platform input event for testing.
     /// Fires the registered `on_input` callback.
-    #[allow(dead_code)]
     pub fn inject_event(&self, event: PlatformInput) -> DispatchEventResult {
         self.callbacks.dispatch_input(event)
     }
 
     /// Simulate a resize for testing.
     /// Fires the registered `on_resize` callback.
-    #[allow(dead_code)]
     pub fn simulate_resize(&self, width: f32, height: f32) {
         use flui_types::geometry::px;
         let size = Size::new(px(width), px(height));
@@ -753,7 +781,6 @@ impl MockWindow {
     /// scale is delivered through the resize path with the current logical
     /// size, because that path is the only one the realm learns its
     /// device-pixel ratio from.
-    #[allow(dead_code)]
     pub fn simulate_scale_factor_change(&self, scale_factor: f64) {
         let size = {
             let mut state = self.state.lock();
@@ -765,7 +792,6 @@ impl MockWindow {
 
     /// Simulate focus change for testing.
     /// Fires the registered `on_active_status_change` callback.
-    #[allow(dead_code)]
     pub fn simulate_focus(&self, focused: bool) {
         self.state.lock().focused = focused;
         self.callbacks.dispatch_active_status_change(focused);
@@ -773,7 +799,6 @@ impl MockWindow {
 
     /// Simulate a visibility/occlusion change for testing.
     /// Fires the registered `on_visibility_status_change` callback.
-    #[allow(dead_code)]
     pub fn simulate_visibility(&self, visible: bool) {
         self.state.lock().visible = visible;
         self.callbacks.dispatch_visibility_status_change(visible);
@@ -783,8 +808,7 @@ impl MockWindow {
     /// Fires `on_should_close`, then `on_close` if allowed, then (real,
     /// production behavior — not a test-only shortcut) removes this window
     /// from the platform's tracking and consults the exit-policy hook if
-    /// every tracked window is now gone. See [`Self::notify_closed`].
-    #[allow(dead_code)]
+    /// every tracked window is now gone. See `Self::notify_closed`.
     pub fn simulate_close(&self) -> bool {
         let should = self.callbacks.dispatch_should_close();
         if should {
@@ -953,47 +977,9 @@ impl crate::traits::PlatformWindow for MockWindow {
         Ok(())
     }
 
-    // ==================== Callbacks (US1) ====================
+    // ==================== Callbacks ====================
 
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
-        *self.callbacks.on_input.lock() = Some(callback);
-    }
-
-    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_request_frame.lock() = Some(callback);
-    }
-
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
-        *self.callbacks.on_resize.lock() = Some(callback);
-    }
-
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_moved.lock() = Some(callback);
-    }
-
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        *self.callbacks.on_close.lock() = Some(callback);
-    }
-
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        *self.callbacks.on_should_close.lock() = Some(callback);
-    }
-
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_active_status_change.lock() = Some(callback);
-    }
-
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_visibility_status_change.lock() = Some(callback);
-    }
-
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_hover_status_change.lock() = Some(callback);
-    }
-
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_appearance_changed.lock() = Some(callback);
-    }
+    crate::shared::impl_window_callback_setters!(callbacks);
 
     fn as_any(&self) -> &dyn std::any::Any {
         self

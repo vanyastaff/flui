@@ -1,6 +1,0 @@
----
-source: crates/flui-rendering/tests/harness_snapshot.rs
-expression: "\"line one\\nline two\""
----
-line one
-line two

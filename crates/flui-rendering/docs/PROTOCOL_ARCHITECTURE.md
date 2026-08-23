@@ -1,5 +1,7 @@
 # Protocol Architecture
 
+> See also [crates/flui-rendering/ARCHITECTURE.md](../ARCHITECTURE.md) for the per-crate template instance.
+
 ## Overview
 
 FLUI uses a **composition-based protocol system** that separates layout, hit-testing, and painting concerns into composable capabilities. This architecture enables:

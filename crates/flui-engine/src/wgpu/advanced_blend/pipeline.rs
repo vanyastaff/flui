@@ -392,29 +392,11 @@ mod cpu_tests {
 mod gpu_construction_tests {
     use super::AdvancedBlendPipeline;
 
-    fn test_device() -> wgpu::Device {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available on a GPU-enabled test host");
-        let (device, _queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("AdvancedBlendPipeline Test Device"),
-                ..Default::default()
-            }))
-            .expect("GPU device creation succeeded when adapter was found");
-        device
-    }
-
     /// `AdvancedBlendPipeline::new` completes without a wgpu validation error for
     /// `Bgra8Unorm`, proving the WGSL parses and the bind-group layout is valid.
     #[test]
     fn pipeline_construction_succeeds_for_bgra8unorm() {
-        let device = test_device();
+        let device = crate::wgpu::test_support::test_device("AdvancedBlendPipeline Test Device");
         let _pipeline = AdvancedBlendPipeline::new(&device, wgpu::TextureFormat::Bgra8Unorm);
     }
 }

@@ -18,8 +18,7 @@ use flui_rendering::traits::RenderSliver;
 use flui_tree::Leaf;
 use flui_types::geometry::px;
 
-type BoxedRenderObject = Box<dyn flui_rendering::traits::RenderObject<BoxProtocol>>;
-type BoxedSliverObject = Box<dyn flui_rendering::traits::RenderObject<SliverProtocol>>;
+use crate::common::{BoxedRenderObject, BoxedSliverObject};
 
 // ────────────────────────────────────────────────────────────────────────
 // Probe: a leaf RenderBox that records attach/detach/perform_layout calls

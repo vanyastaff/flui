@@ -491,7 +491,7 @@ mod tests {
     /// entry's left edge.
     #[test]
     fn adjacent_entries_have_a_gutter_between_them() {
-        let device = test_device();
+        let device = crate::wgpu::test_support::test_device("Atlas Test Device");
         let mut atlas = TextureAtlas::new(&device, 2048, 2048, TextureFormat::Rgba8UnormSrgb);
 
         let (_, a) = atlas.allocate(64, 64).expect("first entry fits");
@@ -513,28 +513,9 @@ mod tests {
         let _ = std::marker::PhantomData::<TextureAtlas>;
     }
 
-    /// Headless GPU device for atlas allocation/reset tests.
-    fn test_device() -> Device {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter for atlas tests");
-        let (device, _queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("Atlas Test Device"),
-                ..Default::default()
-            }))
-            .expect("a GPU device for atlas tests");
-        device
-    }
-
     #[test]
     fn reset_reclaims_a_full_atlas() {
-        let device = test_device();
+        let device = crate::wgpu::test_support::test_device("Atlas Test Device");
         // Each 64x64 entry reserves a GUTTER margin, so its footprint is
         // (64+GUTTER)². Size the atlas to fit exactly one such footprint, then
         // it is full.

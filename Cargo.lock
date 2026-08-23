@@ -1847,7 +1847,6 @@ version = "0.2.0"
 dependencies = [
  "flui-animation",
  "flui-foundation",
- "flui-interaction",
  "flui-objects",
  "flui-rendering",
  "flui-scheduler",
@@ -2167,7 +2166,6 @@ dependencies = [
  "flui-semantics",
  "flui-tree",
  "flui-types",
- "insta",
  "parking_lot",
  "proptest",
  "rustc-hash 2.1.3",
@@ -2331,6 +2329,7 @@ dependencies = [
  "flui-testing",
  "flui-types",
  "flui-view",
+ "flui-widgets",
  "futures-core",
  "futures-util",
  "image",

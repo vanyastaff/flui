@@ -5,31 +5,18 @@
 
 use flui_objects::RenderViewport;
 use flui_rendering::{
-    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverLayoutContext},
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
-    protocol::SliverProtocol,
     testing::{inspect, sliver},
-    traits::{RenderBox, RenderObject, RenderSliver},
+    traits::{RenderBox, RenderSliver},
     view::ScrollableViewportOffset,
 };
 use flui_tree::{Leaf, Variable};
 use flui_types::{Offset, Size, geometry::px, layout::AxisDirection};
 
-type BoxedRenderObject = Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>;
-type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
-
-fn laid_out(
-    mut owner: PipelineOwner,
-    root: flui_foundation::RenderId,
-) -> PipelineOwner<flui_rendering::pipeline::phase::Layout> {
-    owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
-    owner
-}
+use crate::common::{BoxedRenderObject, BoxedSliverObject, laid_out_tight_100x100 as laid_out};
 
 fn hits_at(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,

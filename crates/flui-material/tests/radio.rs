@@ -58,7 +58,7 @@ fn mounting_a_radio_creates_a_semantics_annotated_tap_target() {
     );
 
     let semantics = laid
-        .find_by_render_type("RenderSemanticsAnnotations")
+        .try_find_by_render_type("RenderSemanticsAnnotations")
         .expect("Radio must mount a Semantics wrapper");
     assert_eq!(laid.size(semantics), size(TAP_TARGET, TAP_TARGET));
 }

@@ -76,53 +76,23 @@ pub fn measure_text(
         "measure_text font_size must be positive and finite, got {font_size}"
     );
 
-    let mut font_system = font_system().lock();
-
     let line_height = line_height.unwrap_or(font_size * 1.2);
-    let metrics = Metrics::new(font_size, line_height);
 
-    let mut buffer = Buffer::new(&mut font_system, metrics);
+    // cosmic-text 0.19: `set_size`/`set_text` are lazy and `new_empty` skips
+    // the empty-string shape pass `Buffer::new` performs, so the buffer is
+    // fully described before the global `FONT_SYSTEM` lock is taken — the
+    // lock now brackets only the shape pass itself.
+    let mut buffer = Buffer::new_empty(Metrics::new(font_size, line_height));
     buffer.set_size(max_width, None);
 
     let attrs = style_to_attrs(style);
     buffer.set_text(text, &attrs, Shaping::Advanced, None);
-    buffer.shape_until_scroll(&mut font_system, false);
-
-    let mut total_height = 0.0f32;
-    let mut max_line_width = 0.0f32;
-    let mut line_count = 0usize;
-    let mut first_baseline = 0.0f32;
-    let mut first_descent_edge = 0.0f32;
-
-    for run in buffer.layout_runs() {
-        line_count += 1;
-        max_line_width = max_line_width.max(run.line_w);
-        total_height = total_height.max(run.line_top + run.line_height);
-
-        if line_count == 1 {
-            // Shaper-derived: `line_y` IS the alphabetic baseline.
-            first_baseline = run.line_y;
-            first_descent_edge = run.line_top + run.line_height;
-        }
+    {
+        let mut font_system = font_system().lock();
+        buffer.shape_until_scroll(&mut font_system, false);
     }
 
-    if line_count == 0 {
-        // Empty text: nothing was shaped, synthesize from the line box.
-        line_count = 1;
-        total_height = line_height;
-        first_baseline = line_height * 0.8;
-        first_descent_edge = line_height;
-    }
-
-    TextLayoutResult {
-        width: max_line_width,
-        height: total_height,
-        line_count,
-        max_line_width,
-        alphabetic_baseline: first_baseline,
-        ideographic_baseline: first_descent_edge,
-        truncated: false,
-    }
+    super::layout::metrics_from_shaped_buffer(&buffer, line_height, false)
 }
 
 /// Measures text with rich spans (`InlineSpan`).

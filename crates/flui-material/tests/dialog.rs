@@ -45,7 +45,7 @@ fn dialog_material_matches_dialog_defaults_m3() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Dialog must compose a Material (RenderPhysicalShape) surface");
 
     let color = laid
@@ -96,7 +96,7 @@ fn dialog_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Dialog must compose a Material surface");
     assert_eq!(
         laid.render_property(material, "color"),
@@ -120,7 +120,7 @@ fn default_constraints_enforce_a_280px_minimum_width() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Dialog must compose a Material surface");
 
     assert_eq!(
@@ -141,7 +141,7 @@ fn default_inset_padding_offsets_the_aligned_content_by_40x24() {
     );
 
     let aligned = laid
-        .find_by_render_type("RenderAlign")
+        .try_find_by_render_type("RenderAlign")
         .expect("Dialog must center its content through an Align");
 
     assert_eq!(
@@ -186,7 +186,7 @@ fn default_corner_radius_reaches_the_mounted_material() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Dialog must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
@@ -228,7 +228,7 @@ fn an_overridden_24dp_corner_radius_includes_the_same_probe_point() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Dialog must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
@@ -312,7 +312,7 @@ fn a_tap_on_an_action_fires_its_handler() {
     );
 
     let action = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("the action's ColoredBox must mount");
     let origin = laid.absolute_offset(action);
     let size = laid.size(action);

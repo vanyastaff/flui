@@ -1105,24 +1105,6 @@ mod tests {
         assert_eq!(stats.hit_rate, 0.0);
     }
 
-    /// Headless GPU device + queue for cache tests.
-    fn test_device_and_queue() -> (std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter for texture-cache tests");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("TextureCache Test Device"),
-            ..Default::default()
-        }))
-        .expect("a GPU device for texture-cache tests");
-        (std::sync::Arc::new(device), std::sync::Arc::new(queue))
-    }
-
     /// BUG 4 regression: an absurdly large `(width, height)` must return a clean
     /// `Err` (size mismatch), NOT panic in the size multiply.
     ///
@@ -1132,7 +1114,8 @@ mod tests {
     /// to usize first so validation rejects the input gracefully.
     #[test]
     fn load_from_rgba_oversized_dimensions_errors_without_panic() {
-        let (device, queue) = test_device_and_queue();
+        let (device, queue) =
+            crate::wgpu::test_support::test_device_and_queue("TextureCache Test Device");
         let mut cache = TextureCache::new(device, queue);
 
         // Empty data, gigantic dimensions: the size check must fire first.
@@ -1152,7 +1135,8 @@ mod tests {
     /// keeps its entries for cross-frame reuse.
     #[test]
     fn end_frame_maintenance_retains_used_texture() {
-        let (device, queue) = test_device_and_queue();
+        let (device, queue) =
+            crate::wgpu::test_support::test_device_and_queue("TextureCache Test Device");
         let mut cache = TextureCache::new(device, queue);
         let id = TextureId::from_name("retained");
         // 4x4 RGBA — far under the default 100 MB budget.

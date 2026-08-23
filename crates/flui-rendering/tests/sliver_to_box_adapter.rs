@@ -11,48 +11,20 @@
 
 use flui_objects::RenderSliverToBoxAdapter;
 use flui_rendering::{
-    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{GrowthDirection, SliverConstraints},
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
-    protocol::{BoxProtocol, SliverProtocol},
-    testing::{inspect, sliver as sliver_presets},
-    traits::{RenderBox, RenderObject},
+    testing::inspect,
+    traits::RenderBox,
 };
 use flui_tree::Leaf;
 use flui_types::{Offset, Rect, Size, geometry::px};
 
-type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
-type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
-
-fn vertical_constraints(scroll_offset: f32) -> SliverConstraints {
-    sliver_presets::vertical()
-        .scroll_offset(scroll_offset)
-        .remaining_paint_extent(100.0)
-        .cross_axis_extent(300.0)
-        .viewport_main_axis_extent(100.0)
-        .remaining_cache_extent(120.0)
-        .cache_origin(-20.0)
-        .build()
-}
-
-fn laid_out(
-    mut owner: PipelineOwner,
-    root: flui_foundation::RenderId,
-) -> PipelineOwner<flui_rendering::pipeline::phase::Layout> {
-    owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(300.0), px(100.0)))));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
-    owner
-}
-
-fn sliver_geometry(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    id: flui_foundation::RenderId,
-) -> SliverGeometry {
-    inspect::sliver_geometry(owner, id).expect("sliver geometry is committed")
-}
+use crate::common::{
+    BoxedRenderObject, BoxedSliverObject, laid_out_tight_300x100 as laid_out, sliver_geometry,
+    vertical_constraints,
+};
 
 fn render_offset(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,

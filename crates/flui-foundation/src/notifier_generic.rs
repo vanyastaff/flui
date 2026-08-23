@@ -10,8 +10,10 @@
 //! [`crate::listener_registry::ListenerRegistry`]: the *value* channel is a
 //! `Notifier<()>` and the *status* channel is a `Notifier<AnimationStatus>`.
 //!
-//! `ChangeNotifier` is intentionally left untouched (it has many workspace
-//! consumers); a later consolidation can re-seat it on `Notifier<()>`.
+//! It is also the core `ChangeNotifier` itself is seated on: `ChangeNotifier`
+//! wraps a `Notifier<()>` and adds only its Flutter-parity seams (the branded
+//! use-after-dispose message, and `remove_listener` tolerating a disposed
+//! receiver via [`Notifier::remove_even_if_disposed`]).
 
 use std::{
     collections::HashMap,
@@ -68,7 +70,10 @@ impl<Arg> Notifier<Arg> {
         }
     }
 
-    fn mint_id(&self) -> ListenerId {
+    /// `pub(crate)` so [`crate::notifier::ChangeNotifier`]'s release-mode
+    /// use-after-dispose path can hand out an unregistered id without
+    /// tripping this notifier's own (differently-worded) disposed check.
+    pub(crate) fn mint_id(&self) -> ListenerId {
         ListenerId::new(self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 
@@ -102,6 +107,16 @@ impl<Arg> Notifier<Arg> {
         if self.check_disposed() {
             return self.mint_id();
         }
+        self.add_unchecked(listener)
+    }
+
+    /// [`Self::add`] without the disposed gate — for wrappers
+    /// (`ChangeNotifier`) that run their own differently-branded entry check
+    /// first. A second gate here would turn a `dispose` racing in between the
+    /// wrapper's check and this call into a generically-worded debug panic,
+    /// where the historical single-check semantics let the already-started
+    /// call proceed.
+    pub(crate) fn add_unchecked(&self, listener: ArgCallback<Arg>) -> ListenerId {
         let id = self.mint_id();
         self.listeners.lock().insert(id, listener);
         id
@@ -112,13 +127,23 @@ impl<Arg> Notifier<Arg> {
     /// Unlike `ChangeNotifier::remove_listener` (which tolerates post-dispose
     /// removal for Flutter parity), this generic notifier keeps its disposed
     /// gate: it has no Flutter reference contract, and `ListenerRegistry`'s
-    /// Status-channel guard depends on the current shape. Re-seat on the
-    /// parity semantics deliberately if the planned `ChangeNotifier` →
-    /// `Notifier<()>` consolidation lands.
+    /// Status-channel guard depends on the current shape. The parity
+    /// behaviour lives in [`Self::remove_even_if_disposed`], which
+    /// `ChangeNotifier` delegates to.
     pub fn remove(&self, id: ListenerId) {
         if self.check_disposed() {
             return;
         }
+        self.listeners.lock().remove(&id);
+    }
+
+    /// [`Self::remove`] without the disposed gate: always a silent no-op on a
+    /// disposed channel (whose listener map is already empty).
+    ///
+    /// This is the Flutter-parity flavour `ChangeNotifier::remove_listener`
+    /// needs — `ChangeNotifier.removeListener` upstream carries no
+    /// `debugAssertNotDisposed` so teardown code can always detach.
+    pub fn remove_even_if_disposed(&self, id: ListenerId) {
         self.listeners.lock().remove(&id);
     }
 
@@ -127,6 +152,13 @@ impl<Arg> Notifier<Arg> {
         if self.check_disposed() {
             return;
         }
+        self.remove_all_unchecked();
+    }
+
+    /// [`Self::remove_all`] without the disposed gate — same single-check
+    /// rationale as [`Self::add_unchecked`]; racing a `dispose` here is
+    /// harmless (both clear the same map).
+    pub(crate) fn remove_all_unchecked(&self) {
         self.listeners.lock().clear();
     }
 
@@ -162,11 +194,26 @@ impl<Arg: Clone> Notifier<Arg> {
     /// live registration is re-checked so one removed mid-notify is skipped, and
     /// each callback is `catch_unwind`-isolated so a panicking listener does not
     /// abort the rest. Listeners fire in ascending [`ListenerId`] order (the
-    /// backing `HashMap` is unordered, so the snapshot is sorted).
+    /// backing `HashMap` is unordered, so the snapshot is sorted). Listeners
+    /// *added* during a notify round are NOT fired in that round — only in the
+    /// next one (same round-N-vs-round-N+1 rule as `notify_listeners`).
     pub fn notify(&self, arg: Arg) {
         if self.check_disposed() {
             return;
         }
+        self.notify_unchecked(arg);
+    }
+
+    /// [`Self::notify`] without the entry disposed gate — same single-check
+    /// rationale as [`Self::add_unchecked`]. The firing loop itself is
+    /// dispose-safe either way: once the snapshot is taken it is honoured to
+    /// completion, and a fully-disposed (empty) listener map simply yields an
+    /// empty snapshot.
+    pub(crate) fn notify_unchecked(&self, arg: Arg) {
+        // Stack-allocate the snapshot for the common case (1-4 listeners);
+        // ≥5 spills to the heap. `SmallVec` over `tinyvec::ArrayVec`
+        // deliberately: the callbacks are `Arc<dyn Fn(..)>`, which does not
+        // implement `Default`, and `tinyvec` requires `T: Default`.
         let mut snapshot: smallvec::SmallVec<[(ListenerId, ArgCallback<Arg>); 4]> = self
             .listeners
             .lock()

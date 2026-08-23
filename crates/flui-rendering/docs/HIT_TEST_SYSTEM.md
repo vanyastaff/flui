@@ -1,5 +1,7 @@
 # Hit Test System Architecture
 
+> See also [crates/flui-rendering/ARCHITECTURE.md](../ARCHITECTURE.md) for the per-crate template instance.
+
 ## Overview
 
 The hit test system determines which render objects are under a given pointer position. It traverses the render tree in **reverse paint order** (front-to-back) to find the topmost element at a position.

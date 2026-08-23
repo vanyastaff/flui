@@ -24,21 +24,11 @@ use flui_objects::{RenderCenter, RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
     error::RenderError,
-    pipeline::PipelineOwner,
     protocol::{BoxProtocol, RenderObject},
 };
 use flui_types::{Size, geometry::px};
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// Builds a fresh pipeline owner in the Layout phase. Tests construct
-/// the tree via `render_tree_mut` (phase-agnostic accessor) before
-/// invoking [`PipelineOwner::layout_dirty_root`].
-fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {
-    PipelineOwner::new().into_layout()
-}
+use crate::common::fresh_layout_pipeline;
 
 // ============================================================================
 // Happy path — 2-level tree: RenderPadding (parent) + RenderColoredBox (child)

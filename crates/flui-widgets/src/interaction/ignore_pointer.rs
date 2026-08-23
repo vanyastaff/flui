@@ -2,7 +2,7 @@
 
 use flui_objects::RenderIgnorePointer;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// During hit-testing, makes its child (and subtree) invisible to pointer
 /// events while still laying it out and painting it.
@@ -66,15 +66,7 @@ impl RenderView for IgnorePointer {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(IgnorePointer);

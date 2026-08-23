@@ -3,7 +3,7 @@
 
 use flui_objects::{RenderFractionalTranslation, TranslationFraction};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Translates its child by `(dx, dy)` × the child's size before painting (e.g.
 /// `dx = -0.5` shifts the child left by half its width). Layout is unaffected.
@@ -72,15 +72,7 @@ impl RenderView for FractionalTranslation {
             | render_object.set_transform_hit_tests(self.transform_hit_tests)
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(FractionalTranslation);

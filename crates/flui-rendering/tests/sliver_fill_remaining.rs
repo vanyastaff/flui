@@ -5,20 +5,20 @@ use flui_objects::{
     RenderSliverFillRemainingWithScrollable,
 };
 use flui_rendering::{
-    constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
+    constraints::{SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, SliverLayoutContext},
     parent_data::{BoxParentData, SliverPhysicalParentData},
     pipeline::PipelineOwner,
-    protocol::{BoxProtocol, SliverProtocol},
     storage::IntrinsicDimension,
     testing::{inspect, sliver as sliver_presets},
-    traits::{RenderBox, RenderObject, RenderSliver},
+    traits::{RenderBox, RenderSliver},
 };
 use flui_tree::{Leaf, Single};
 use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
 
-type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
-type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
+use crate::common::{
+    BoxedRenderObject, BoxedSliverObject, laid_out_tight_300x100 as laid_out, sliver_geometry,
+};
 
 fn vertical_constraints(
     scroll_offset: f32,
@@ -36,24 +36,6 @@ fn vertical_constraints(
         .remaining_cache_extent(120.0)
         .cache_origin(-20.0)
         .build()
-}
-
-fn laid_out(
-    mut owner: PipelineOwner,
-    root: flui_foundation::RenderId,
-) -> PipelineOwner<flui_rendering::pipeline::phase::Layout> {
-    owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(300.0), px(100.0)))));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
-    owner
-}
-
-fn sliver_geometry(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    id: flui_foundation::RenderId,
-) -> SliverGeometry {
-    inspect::sliver_geometry(owner, id).expect("sliver geometry is committed")
 }
 
 fn box_size(

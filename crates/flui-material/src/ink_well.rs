@@ -447,7 +447,7 @@ impl ViewState<InkWell> for InkWellState {
         // GestureDetector wraps MouseRegion wraps Focus wraps the content —
         // outermost to innermost. `GestureDetector` must be OUTERMOST: with
         // it nested inside `MouseRegion` instead, `RenderMouseRegion`'s own
-        // `hit_test` (`crates/flui-objects/src/proxy/mouse_region.rs`)
+        // `hit_test` (`crates/flui-objects/src/interaction/mouse_region.rs`)
         // returns `hit_target && self.opaque`, and under `Opaque` behavior
         // (both widgets' default) that return value is `true` regardless of
         // whether the inner `GestureDetector`'s `Listener` was hit —

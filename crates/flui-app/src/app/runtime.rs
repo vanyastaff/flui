@@ -1701,52 +1701,13 @@ mod wake_and_clipboard_tests {
     /// is installed.
     #[test]
     fn wake_frame_calls_platform_request_redraw() {
-        use std::sync::atomic::AtomicU32;
+        use flui_types::geometry::{Size, device_px, px};
 
-        use flui_platform::traits::PlatformWindow;
-        use flui_types::geometry::{DevicePixels, Pixels, Size, device_px, px};
-
-        struct CountingWindow {
-            redraw_count: Arc<AtomicU32>,
-        }
-
-        impl PlatformWindow for CountingWindow {
-            fn id(&self) -> flui_platform::traits::WindowId {
-                flui_platform::traits::WindowId(1)
-            }
-            fn physical_size(&self) -> Size<DevicePixels> {
-                Size::new(device_px(800), device_px(600))
-            }
-            fn logical_size(&self) -> Size<Pixels> {
-                Size::new(px(800.0), px(600.0))
-            }
-            fn scale_factor(&self) -> f64 {
-                1.0
-            }
-            fn request_redraw(&self) {
-                self.redraw_count.fetch_add(1, Ordering::Relaxed);
-            }
-            fn is_focused(&self) -> bool {
-                false
-            }
-            fn is_visible(&self) -> bool {
-                true
-            }
-            fn set_cursor(
-                &self,
-                _cursor: flui_platform::CursorIcon,
-            ) -> Result<(), flui_platform::CursorError> {
-                Ok(())
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-        }
-
-        let redraw_count = Arc::new(AtomicU32::new(0));
-        let window = CountingWindow {
-            redraw_count: Arc::clone(&redraw_count),
-        };
+        let window = crate::app::window_test_support::TestWindow::new().with_sizes(
+            Size::new(device_px(800), device_px(600)),
+            Size::new(px(800.0), px(600.0)),
+        );
+        let redraw_count = window.redraw_calls_handle();
 
         let runtime = AppRuntime::new();
         runtime.mark_rendered();

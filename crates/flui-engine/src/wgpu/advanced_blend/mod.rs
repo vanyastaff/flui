@@ -341,20 +341,7 @@ mod synthetic_op_tests {
     // ── GPU test harness ──────────────────────────────────────────────────────
 
     fn request_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available on a GPU-enabled test host");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("AdvancedBlend Synthetic Test Device"),
-            ..Default::default()
-        }))
-        .expect("GPU device creation succeeded when adapter was found");
-        (Arc::new(device), Arc::new(queue))
+        crate::wgpu::test_support::test_device_and_queue("AdvancedBlend Synthetic Test Device")
     }
 
     /// Format used for all synthetic-op textures.
@@ -486,75 +473,7 @@ mod synthetic_op_tests {
         w: u32,
         h: u32,
     ) -> Vec<[u8; 4]> {
-        // wgpu requires the row stride to be a multiple of COPY_BYTES_PER_ROW_ALIGNMENT (256).
-        let bytes_per_row_unaligned = w * 4;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let bytes_per_row = bytes_per_row_unaligned.div_ceil(align) * align;
-        let buffer_size = u64::from(bytes_per_row * h);
-
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Readback Staging Buffer"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Readback Encoder"),
-        });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(h),
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(std::iter::once(encoder.finish()));
-
-        // Map and read.
-        let slice = staging.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .expect("device poll must complete the readback copy");
-
-        let mapped = slice
-            .get_mapped_range()
-            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
-        let raw = mapped.as_ref();
-
-        let mut pixels = Vec::with_capacity((w * h) as usize);
-        for row in 0..h {
-            let row_start = (row * bytes_per_row) as usize;
-            for col in 0..w {
-                let offset = row_start + (col as usize) * 4;
-                pixels.push([
-                    raw[offset],
-                    raw[offset + 1],
-                    raw[offset + 2],
-                    raw[offset + 3],
-                ]);
-            }
-        }
-        crate::wgpu::readback_dump::dump_frame(w, h, bytemuck::cast_slice(&pixels));
-        pixels
+        crate::wgpu::test_support::readback_pixels(device, queue, texture, w, h)
     }
 
     // ── Oracle ────────────────────────────────────────────────────────────────
@@ -643,7 +562,7 @@ mod synthetic_op_tests {
         ];
 
         let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT);
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let mut resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
 
         // Build the foreground pooled texture (solid src, full target size).
@@ -831,7 +750,7 @@ mod synthetic_op_tests {
     fn color_dodge_and_burn_boundary_inputs_match_cpu_oracle() {
         let (device, queue) = request_device_and_queue();
         let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT);
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let mut resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
         let tolerance = 1u8;
 
@@ -960,7 +879,7 @@ mod synthetic_op_tests {
         );
         let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let fg_transparent = pool.acquire(4, 2, TEST_FORMAT);
         // Explicitly upload transparent (all-zero) pixels — do not rely on pool zero-init,
         // which is an implementation detail not guaranteed by the pool contract.
@@ -1089,7 +1008,7 @@ mod synthetic_op_tests {
             wgpu::TextureUsages::COPY_SRC,
         );
 
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let fg_pooled = pool.acquire(4, SURF_H, TEST_FORMAT);
         {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1213,7 +1132,7 @@ mod synthetic_op_tests {
     fn translucent_composite_matches_oracle() {
         let (device, queue) = request_device_and_queue();
         let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT);
-        let pool = TexturePool::new(Arc::clone(&device));
+        let mut pool = TexturePool::new(Arc::clone(&device));
         let mut resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
 
         // Semi-transparent inputs — the composite path where αs·αb terms are non-trivial.

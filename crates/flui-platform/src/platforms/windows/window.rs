@@ -41,9 +41,8 @@ use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device}
 use crate::{
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
-        CursorError, DispatchEventResult, PlatformDisplay, PlatformInput, PlatformWindow,
-        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowId, WindowMode,
-        WindowOptions,
+        CursorError, PlatformDisplay, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
+        WindowBounds, WindowId, WindowMode, WindowOptions,
     },
 };
 
@@ -1063,45 +1062,7 @@ impl PlatformWindow for WindowsWindow {
 
     // ==================== Per-Window Callbacks ====================
 
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
-        *self.callbacks.on_input.lock() = Some(callback);
-    }
-
-    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_request_frame.lock() = Some(callback);
-    }
-
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
-        *self.callbacks.on_resize.lock() = Some(callback);
-    }
-
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_moved.lock() = Some(callback);
-    }
-
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        *self.callbacks.on_close.lock() = Some(callback);
-    }
-
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        *self.callbacks.on_should_close.lock() = Some(callback);
-    }
-
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_active_status_change.lock() = Some(callback);
-    }
-
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_visibility_status_change.lock() = Some(callback);
-    }
-
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        *self.callbacks.on_hover_status_change.lock() = Some(callback);
-    }
-
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        *self.callbacks.on_appearance_changed.lock() = Some(callback);
-    }
+    crate::shared::impl_window_callback_setters!(callbacks);
 
     fn window_handle(
         &self,

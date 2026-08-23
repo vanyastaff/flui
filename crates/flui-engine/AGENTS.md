@@ -20,11 +20,15 @@ GPU rendering engine via wgpu. Converts Layer trees into GPU draw calls.
 - **`assets` feature** — gates `dep:flui-assets` for asset pipeline integration.
 - **`enable-wgpu-tests` feature** — gates GPU-dependent integration tests (not run in CI).
 - **`#![allow(missing_debug_implementations)]`** — wgpu handles (Device, Queue, Texture, Buffer) don't impl Debug.
-- **Outstanding refactors** (tracked in ARCHITECTURE.md):
-  - `Arc<Mutex<TexturePoolInner>>` → direct ownership
-  - Per-frame `Arc::clone` in renderer.rs → borrowed references
-  - `render_scene`'s painter take/reassign pattern (the `Arc<Mutex<OffscreenRenderer>>` half of this list **landed**: `Renderer` owns its `OffscreenRenderer`, `Backend<'frame>` borrows one)
-  - The remaining two are whitelisted in port-check.sh triggers #5 and #7 — **remove the whitelist entry in the same change as the refactor**. Trigger 7's exclusions for `renderer.rs`/`backend.rs` were not removed when that refactor landed, and both files went unwatched until #635 caught it.
+- **Outstanding refactors** (tracked in ARCHITECTURE.md): the headline list is fully landed —
+  the `Arc<Mutex<OffscreenRenderer>>` removal (`Renderer` owns its `OffscreenRenderer`,
+  `Backend<'frame>` borrows one), the painter take/reassign cleanup (`render_scene_content`
+  borrows in place), the per-frame `Arc::clone` entry (resolved when `RenderContext` lost its
+  device/queue fields), and the `Arc<Mutex<TexturePoolInner>>` removal (`TexturePool` owns its
+  inventory directly, `Send`-only, with an mpsc return channel for drop — see ARCHITECTURE.md
+  for the deliberate divergence from the old explicit-release prescription). Port-check
+  trigger #7 now watches `texture_pool.rs` with no exclusions; keep it that way — stale
+  whitelist globs are how `renderer.rs`/`backend.rs` once went unwatched.
 - **No `async fn` in render hot paths** — enforced by port-check trigger #3. `new`/`new_offscreen` are async (setup-phase, acceptable).
 
 ## Architecture doc

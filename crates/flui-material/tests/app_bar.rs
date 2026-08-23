@@ -92,7 +92,7 @@ fn theme_defaults_apply_surface_background_and_zero_elevation() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("AppBar must compose a Material (RenderPhysicalShape) surface");
 
     assert_eq!(
@@ -125,7 +125,7 @@ fn background_color_override_replaces_the_theme_default() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("AppBar must compose a Material (RenderPhysicalShape) surface");
     assert_eq!(
         laid.render_property(material, "color"),
@@ -160,7 +160,7 @@ fn app_bar_theme_slot_reaches_the_mounted_materials_background_color() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("AppBar must compose a Material (RenderPhysicalShape) surface");
     assert_eq!(
         laid.render_property(material, "color"),

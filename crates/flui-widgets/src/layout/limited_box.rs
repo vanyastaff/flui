@@ -5,7 +5,7 @@ use flui_objects::RenderLimitedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Pixels;
 use flui_types::geometry::px;
-use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Caps the maximum size of its child *only when* the corresponding incoming
 /// constraint is unbounded; bounded constraints pass through untouched.
@@ -61,15 +61,7 @@ impl RenderView for LimitedBox {
             | render_object.set_max_height(Self::cap(self.max_height))
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(LimitedBox);

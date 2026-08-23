@@ -64,7 +64,7 @@ fn color_property(color: Color) -> String {
 /// semantics-node-as-container-size assertion).
 fn container_size(laid: &common::LaidOut) -> flui_types::Size {
     let semantics = laid
-        .find_by_render_type("RenderSemanticsAnnotations")
+        .try_find_by_render_type("RenderSemanticsAnnotations")
         .expect("Chip/FilterChip must mount a Semantics wrapper");
     laid.size(semantics)
 }
@@ -267,7 +267,7 @@ fn selected_filter_chip_fill_reaches_the_mounted_material() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("FilterChip must compose a Material container surface");
 
     assert_eq!(
@@ -380,7 +380,7 @@ fn theme_label_color_reaches_the_mounted_paragraph_beating_the_default() {
     let laid = lay_out(Theme::new(theme, Chip::new(Text::new("Tag"))), loose(300.0));
 
     let paragraph = laid
-        .find_by_render_type("RenderParagraph")
+        .try_find_by_render_type("RenderParagraph")
         .expect("Chip must mount a RenderParagraph for its label");
     let style = laid
         .render_property(paragraph, "style")
@@ -398,7 +398,7 @@ fn no_theme_override_paints_the_m3_default_label_color() {
     let laid = lay_out(themed(Chip::new(Text::new("Tag"))), loose(300.0));
 
     let paragraph = laid
-        .find_by_render_type("RenderParagraph")
+        .try_find_by_render_type("RenderParagraph")
         .expect("Chip must mount a RenderParagraph for its label");
     let style = laid
         .render_property(paragraph, "style")
@@ -438,7 +438,7 @@ fn theme_side_reaches_the_mounted_border_painter_beating_the_default() {
     let laid = lay_out(Theme::new(theme, Chip::new(Text::new("Tag"))), loose(300.0));
 
     let custom_paint = laid
-        .find_by_render_type("RenderCustomPaint")
+        .try_find_by_render_type("RenderCustomPaint")
         .expect("Chip must mount a RenderCustomPaint for its border");
     let painter = laid
         .render_property(custom_paint, "foreground_painter")
@@ -456,7 +456,7 @@ fn no_theme_override_paints_the_m3_default_side_color() {
     let laid = lay_out(themed(Chip::new(Text::new("Tag"))), loose(300.0));
 
     let custom_paint = laid
-        .find_by_render_type("RenderCustomPaint")
+        .try_find_by_render_type("RenderCustomPaint")
         .expect("Chip must mount a RenderCustomPaint for its border");
     let painter = laid
         .render_property(custom_paint, "foreground_painter")

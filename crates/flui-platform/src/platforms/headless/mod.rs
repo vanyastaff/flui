@@ -4,5 +4,5 @@ mod platform;
 
 pub use platform::{
     FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
-    HeadlessExitReevaluation, HeadlessPlatform,
+    HeadlessExitReevaluation, HeadlessPlatform, MockWindow,
 };

@@ -9,7 +9,7 @@ use flui_interaction::{PointerPanZoomEvent, PointerTarget, from_w3c_event};
 use flui_objects::RenderListener;
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderObjectContext, RenderView, View, impl_render_view};
+use flui_view::{Child, IntoView, RenderObjectContext, RenderView, impl_render_view};
 
 /// A pointer-event callback: receives the (locally-transformed) [`PointerEvent`]
 /// that landed on the [`Listener`].
@@ -457,15 +457,7 @@ impl RenderView for Listener {
         }
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(Listener);

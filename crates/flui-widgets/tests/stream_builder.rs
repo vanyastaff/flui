@@ -1,7 +1,7 @@
 //! Public-API tests for [`StreamBuilder`].
 //!
 //! Driven through the real `flui_widgets::prelude` surface and a real
-//! `HeadlessBinding` frame — the path `AppBinding::draw_frame` takes.
+//! `HeadlessBinding` frame — the path `UiRealm::draw_frame` takes.
 //!
 //! # Parity oracles
 //!

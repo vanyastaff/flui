@@ -1,5 +1,7 @@
 # Protocol System Roadmap
 
+> See also [crates/flui-rendering/ARCHITECTURE.md](../ARCHITECTURE.md) for the per-crate template instance.
+
 ## Current Status
 
 Foundation protocol traits and Box protocol are shipped. Higher-level backends and optimization passes are in progress.

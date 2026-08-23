@@ -463,7 +463,7 @@ impl<'frame> Backend<'frame> {
             .offscreen
             .as_deref_mut()
             .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow")
-            .texture_pool()
+            .texture_pool_mut()
             .acquire(w, h, format);
         flush_encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
@@ -832,7 +832,7 @@ impl CommandRenderer for Backend<'_> {
                 let queue = Arc::clone(offscreen.queue());
                 let format = offscreen.surface_format();
                 let child_tex = offscreen
-                    .texture_pool()
+                    .texture_pool_mut()
                     .acquire(dev_width, dev_height, format);
                 (device, queue, format, child_tex)
             };
@@ -1837,20 +1837,7 @@ mod tests {
     /// Acquire a real device/queue. Returns `None` when no GPU adapter exists
     /// (CI without a GPU), so the test skips gracefully.
     fn test_device_and_queue() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .ok()?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("ShaderMask HiDPI Test Device"),
-            ..Default::default()
-        }))
-        .ok()?;
-        Some((Arc::new(device), Arc::new(queue)))
+        crate::wgpu::test_support::try_test_device_and_queue("ShaderMask HiDPI Test Device")
     }
 
     /// BUG 2 (HiDPI shader mask): the offscreen child/result textures must be

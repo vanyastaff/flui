@@ -412,21 +412,3 @@ impl<P: Protocol> RenderEntry<P> {
         Ok(geometry)
     }
 }
-
-// ============================================================================
-// COMPATIBILITY METHODS (for gradual migration from old RenderObject API)
-// ============================================================================
-
-impl<P: Protocol> RenderEntry<P> {
-    /// Clears the needs_paint flag.
-    #[inline]
-    pub fn clear_needs_paint(&self) {
-        self.state.clear_needs_paint();
-    }
-
-    /// Clears the needs_layout flag.
-    #[inline]
-    pub fn clear_needs_layout(&self) {
-        self.state.clear_needs_layout();
-    }
-}

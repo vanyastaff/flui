@@ -131,7 +131,7 @@ fn press_opacity_fades_out_then_back_in_over_the_oracle_durations() {
     );
 
     let opacity_id = laid
-        .find_by_render_type("RenderAnimatedOpacity")
+        .try_find_by_render_type("RenderAnimatedOpacity")
         .expect("CupertinoButton should mount a FadeTransition render node");
 
     let read_opacity = |laid: &common::LaidOut| -> f32 {
@@ -220,7 +220,7 @@ fn background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme() 
     );
 
     let decorated = laid
-        .find_by_render_type("RenderDecoratedBox")
+        .try_find_by_render_type("RenderDecoratedBox")
         .expect("CupertinoButton always paints a DecoratedBox background");
     let decoration = laid
         .render_property(decorated, "decoration")

@@ -203,30 +203,12 @@ mod cpu_tests {
 mod gpu_construction_tests {
     use super::GammaPipeline;
 
-    fn test_device() -> wgpu::Device {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available on a GPU-enabled test host");
-        let (device, _queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("GammaPipeline Test Device"),
-                ..Default::default()
-            }))
-            .expect("GPU device creation succeeded when adapter was found");
-        device
-    }
-
     /// `GammaPipeline::new` completes without a wgpu validation error for
     /// `Rgba8Unorm`, proving the WGSL parses and the generated bind-group
     /// layout is valid.
     #[test]
     fn pipeline_construction_succeeds_for_rgba8unorm() {
-        let device = test_device();
+        let device = crate::wgpu::test_support::test_device("GammaPipeline Test Device");
         let _pipeline = GammaPipeline::new(&device, wgpu::TextureFormat::Rgba8Unorm);
     }
 }

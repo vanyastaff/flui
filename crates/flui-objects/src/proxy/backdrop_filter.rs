@@ -43,12 +43,12 @@
 
 use flui_tree::Single;
 use flui_types::{
-    Offset, Size,
+    Offset,
     painting::{BlendMode, ImageFilter},
 };
 
 use flui_rendering::{
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, PaintCx},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -164,18 +164,7 @@ impl RenderBox for RenderBackdropFilter {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        if ctx.child_count() > 0 {
-            self.has_child = true;
-            let size = ctx.layout_child(0, constraints);
-            ctx.position_child(0, Offset::ZERO);
-            size
-        } else {
-            self.has_child = false;
-            constraints.smallest()
-        }
-    }
+    flui_rendering::forward_single_child_box_layout!();
 
     flui_rendering::forward_single_child_box_queries!();
 

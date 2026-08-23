@@ -15,7 +15,7 @@ The deeper architectural write-ups for individual subsystems (protocol, layout, 
 | `.flutter/flutter-master/packages/flutter/lib/src/rendering/box.dart` | [`src/protocol/box_protocol.rs`](src/protocol/box_protocol.rs), [`src/parent_data/box_parent_data.rs`](src/parent_data/box_parent_data.rs) | `BoxConstraints`, `BoxParentData`, `Size`-based geometry. |
 | `.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver.dart` | [`src/protocol/sliver_protocol.rs`](src/protocol/sliver_protocol.rs), [`src/parent_data/sliver_parent_data.rs`](src/parent_data/sliver_parent_data.rs) | Sliver protocol for scrollable layout. |
 | `RenderObjectWithChildMixin`, `ContainerRenderObjectMixin` (`object.dart` lines 4160-4400+) | [`src/storage/links.rs`](src/storage/links.rs), [`src/parent_data/container_mixin.rs`](src/parent_data/container_mixin.rs) | Single-child + variable-children storage. Flutter uses Dart linked lists; FLUI stores `Vec<RenderId>` on the parent. |
-| `proxy_box.dart`, `shifted_box.dart`, `flex.dart` | [`src/objects/`](src/objects/) | Concrete render objects: `Padding`, `Center`, `ColoredBox`, `Flex`, `Opacity`, `SizedBox`, `Transform`. |
+| `proxy_box.dart`, `shifted_box.dart`, `flex.dart` | [`flui-objects`](../flui-objects/src/) crate | Concrete render objects (`Padding`, `Center`, `ColoredBox`, `Flex`, `Opacity`, `SizedBox`, `Transform`, …), extracted to the sibling `flui-objects` crate; this crate keeps only the protocol/pipeline machinery. |
 | Layer-related (`layer.dart`, container layers) | `flui-layer` crate | Compositing layers live in a sibling crate per the layered DAG ([`docs/architecture.md`](../../docs/architecture.md)). |
 
 The full Flutter class hierarchy is enumerated in the sibling appendix [`flutter-rendering-hierarchy.md`](flutter-rendering-hierarchy.md) (1352 LOC, generated from a class-name sweep of `.flutter/flutter-master/packages/flutter/lib/src/rendering/`). That file is kept as a search index; it is not part of the template proper.
@@ -117,11 +117,14 @@ Strategy clause "Behavior loyal, structure Rust-native" treats Flutter as the **
 | `RenderTree::owner` (`src/storage/tree.rs:65`) | `Option<Arc<RwLock<PipelineOwner>>>` | Shared infrastructure | Allowed per [`docs/PORT.md`](../../docs/PORT.md) lock-decision table. Off the per-node hot path. |
 | `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](../../docs/plans/2026-03-31-core-crates-hardening.md)). |
 | `RenderTree::nodes` (`src/storage/tree.rs:59`) | `Slab<RenderNode>` | Auto-derived Send+Sync | No `unsafe impl` needed after U2. |
-| Viewport listener lists (`src/view/viewport_offset.rs:138, 262`) | `RwLock<Vec<…>>` | Listener registry | Off layout/paint hot path. |
-| Mouse tracker maps (`src/input/mouse_tracker.rs:294-303`) | `RwLock<HashMap<…>>` | Tracker state | Off layout/paint hot path. |
-| Render view error builder (`src/view/error.rs`, via `flui-view` integration) | `static RwLock<Option<...>>` | Process-wide singleton | Off any hot path. |
+| Viewport listener list (`ScrollableViewportOffset::listeners`, `src/view/viewport_offset.rs`) | `RwLock<Vec<…>>` | Listener registry | Off layout/paint hot path. `FixedViewportOffset`'s former listener list was deleted as speculative API (a fixed offset never notifies). |
 
-`NodePtr` in `src/pipeline/owner/subtree_arena.rs` is a plain raw-pointer newtype for the disjoint-subtree-borrow substrate ([`SubtreeArena`]) — `!Send + !Sync` by the language default, no manual impl. Confinement to the constructing thread is structural (`SubtreeArena` itself is `!Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!`); there is no runtime thread check (`check_thread` and the pointer's former `unsafe impl Send/Sync` were both deleted once `PipelineCell`/dropped `Send + Sync` bounds made confinement type-enforced). Re-entrancy primitives `RenderTree::get_two_mut` (`src/storage/tree.rs:337`) and `get_parent_and_children_mut` (`src/storage/tree.rs:365`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
+Two rows left this table because their sites left the crate: the mouse tracker
+lives in `flui-interaction` (`src/routing/mouse_tracker.rs`) and the render-view
+error builder in `flui-view` (`src/view/error.rs`); each is accounted for in its
+owning crate.
+
+`NodePtr` in `src/pipeline/owner/subtree_arena.rs` is a plain raw-pointer newtype for the disjoint-subtree-borrow substrate ([`SubtreeArena`]) — `!Send + !Sync` by the language default, no manual impl. Confinement to the constructing thread is structural (`SubtreeArena` itself is `!Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!`); there is no runtime thread check (`check_thread` and the pointer's former `unsafe impl Send/Sync` were both deleted once `PipelineCell`/dropped `Send + Sync` bounds made confinement type-enforced). Re-entrancy primitives `RenderTree::get_two_mut` and `get_parent_and_children_mut` (both in `src/storage/tree.rs`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
 
 ---
 
@@ -141,13 +144,13 @@ These items were listed as pending in earlier drafts; all are now shipped.
 
 ### `RenderTree::get_two_mut` / `get_parent_and_children_mut` — SHIPPED
 
-**Files:** [`src/storage/tree.rs:337`](src/storage/tree.rs), [`src/storage/tree.rs:365`](src/storage/tree.rs).
+**File:** [`src/storage/tree.rs`](src/storage/tree.rs) (`get_two_mut`, `get_parent_and_children_mut`).
 
 Tree-aware disjoint-borrow primitives. `get_two_mut(a, b)` returns `(&mut RenderNode, &mut RenderNode)` for two distinct keys; `get_parent_and_children_mut` generalises to a parent + N children. The unsafe is local to each function with a disjoint-keys assertion and is unit-tested.
 
 ### `layout_dirty_root` + `layout_subtree_borrowed` — SHIPPED
 
-**Files:** [`src/pipeline/owner/mod.rs:2146`](src/pipeline/owner/mod.rs) (`layout_dirty_root`), [`src/pipeline/owner/subtree_arena.rs:580`](src/pipeline/owner/subtree_arena.rs) (`layout_subtree_borrowed`).
+**Files:** [`src/pipeline/owner/layout.rs`](src/pipeline/owner/layout.rs) (`layout_dirty_root`), [`src/pipeline/owner/subtree_arena.rs`](src/pipeline/owner/subtree_arena.rs) (`layout_subtree_borrowed`).
 
 `layout_dirty_root` is the dispatcher: it obtains disjoint `&mut`s via `SubtreeArena`, constructs a typed `BoxLayoutCtx` with children + callback, and calls `perform_layout_raw` through the erased view. The pipeline-driven path was built directly into this entry point; the phantom stubs that earlier documentation described were never real functions.
 
@@ -157,13 +160,11 @@ Tree-aware disjoint-borrow primitives. `get_two_mut(a, b)` returns `(&mut Render
 
 The leaf-only layout method is implemented and exercised through the test harness and the pipeline path for pure-leaf objects.
 
-### Move `RenderEntry<P>::clear_needs_paint` / `clear_needs_layout` to `RenderState<P>`
+### Move `RenderEntry<P>::clear_needs_paint` / `clear_needs_layout` to `RenderState<P>` — DONE
 
 **File:** [`src/storage/entry.rs`](src/storage/entry.rs).
 
-**Goal:** these methods exist on `RenderEntry` for backward compatibility with the previous lock-based API. After the U2 refactor they just forward to `self.state.clear_*`. Worth inlining the call sites and removing the wrapper methods so the only API surface is `RenderState`. Low priority — pure tidy.
-
-**Dependencies:** none.
+The forwarding wrappers left over from the previous lock-based API are deleted; every call site clears the flags through `entry.state().clear_needs_*()` directly, so the only API surface is `RenderState`.
 
 ### Criterion benchmarks for Mythos Step 14 (deferred -- needs workload generator)
 
@@ -176,40 +177,29 @@ The leaf-only layout method is implemented and exercised through the test harnes
 - Marks the root dirty and runs one full `run_frame`.
 - Measures wall-clock time, peak memory, and (with `cargo flamegraph`) hot-loop hot spots.
 
-Criterion is already in `flui-rendering` dev-dependencies. The bench harness needs a workload generator (`fn build_flex_tree(depth: u32, children: u32) -> ...`) that produces realistic structures from the existing `objects/` catalog.
+Criterion is already in `flui-rendering` dev-dependencies. The bench harness needs a workload generator (`fn build_flex_tree(depth: u32, children: u32) -> ...`) that produces realistic structures from the `flui-objects` catalog.
 
 **Why deferred:** the workload generator + benchmark is its own scope of work and is best landed when there are real performance questions to answer (a frame is dropping, a particular operation feels slow, etc.). Premature optimisation guidance landed without observed evidence wastes effort.
 
 **Dependencies:** none beyond existing dev-deps.
 
-### Loom and miri test coverage (deferred — proptest already shipped)
+### Loom test coverage (deferred — miri and proptest already shipped)
 
-**Files:** new `crates/flui-rendering/tests/loom_handle.rs`, miri CI invocation.
+**Files:** new `crates/flui-rendering/tests/loom_handle.rs`.
 
-**Note:** `proptest` is already a dev-dependency (`Cargo.toml:68`) and is used in `src/virtualization/tests.rs`. The two remaining deferred test classes are:
+**Note:** `proptest` is already a dev-dependency and is used in `src/virtualization/tests.rs`. The miri half is LANDED: CI's advisory `miri` job runs `cargo +nightly miri test -p flui-rendering --lib pipeline::owner`, interpreting every unit test under `pipeline::owner` — the raw-pointer `SubtreeArena` substrate and the disjoint-borrow layout walks over it. Widening the filter to `storage::tree`'s own `get_two_mut` / `get_parent_and_children_mut` unit tests remains open alongside loom. The remaining deferred test class:
 
 - **Loom tests** for `AtomicRenderFlags` set/clear/read interleaving + `PipelineOwnerHandle` send/recv sequencing. Needs the `loom` crate gated on `#[cfg(loom)]`.
-- **Miri CI gate** for the disjoint-borrow `unsafe` block in `RenderTree::get_two_mut` / `get_parent_and_children_mut`. Today the unsafe is unit-tested for behavior; miri-checking the aliasing model is a CI extension (e.g. `cargo +nightly miri test -p flui-rendering`).
 
-**Shape:** each class is a new file under `crates/flui-rendering/tests/` plus a dev-dependency.
+**Shape:** a new file under `crates/flui-rendering/tests/` plus a dev-dependency.
 
 **Dependencies:** none beyond crate dev-deps.
 
-### Audit pre-existing clippy issues in `src/objects/flex.rs`
-
-**File:** [`src/objects/flex.rs`](src/objects/flex.rs) lines 261, 280, 321, 322, 367.
-
-**Goal:** four `clippy::pedantic` warnings exist (redundant range loop, collapsible `if`, unnecessary `if let`, range-loop-as-index). Pre-existing per git log (not introduced by U2). Reach `cargo clippy --workspace -- -D warnings` clean. Mechanical fixes, no behaviour change.
-
-**Dependencies:** none.
-
-### Migrate `docs/` companion architecture docs onto template-adjacent shape
+### Migrate `docs/` companion architecture docs onto template-adjacent shape — DONE
 
 **File:** [`docs/PROTOCOL_ARCHITECTURE.md`](docs/PROTOCOL_ARCHITECTURE.md), [`docs/LAYOUT_SYSTEM.md`](docs/LAYOUT_SYSTEM.md), [`docs/PAINT_SYSTEM.md`](docs/PAINT_SYSTEM.md), [`docs/HIT_TEST_SYSTEM.md`](docs/HIT_TEST_SYSTEM.md), [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-**Goal:** these deep-dives stay as companion documents (not under the per-crate template directly), but a header line in each — `> See also [crates/flui-rendering/ARCHITECTURE.md](../ARCHITECTURE.md) for the per-crate template instance.` — would link them into the methodology index. Trivial doc tidy.
-
-**Dependencies:** none.
+These deep-dives stay as companion documents (not under the per-crate template directly); each now opens with a "See also" header line pointing back to this file, linking them into the methodology index.
 
 ---
 

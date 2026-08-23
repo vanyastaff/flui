@@ -142,7 +142,7 @@ declarations = [
     "pub use platforms::IOSPlatform;",
     "pub use platforms::LinuxPlatform;",
     "pub use platforms::MacOSPlatform;",
-    "pub use platforms::{ FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessPlatform, };",
+    "pub use platforms::{ FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessPlatform, MockWindow, };",
     "pub use platforms::WebPlatform;",
     "pub use platforms::WindowsPlatform;",
     "pub use platforms::WinitPlatform;",
@@ -1724,7 +1724,7 @@ state = "partial"
 domain = "application"
 owner_issue = 552
 mechanical = true
-mechanism = "forbidden_pattern scoped scan confines the WindowId token to window_registry.rs (plus three test-only PlatformWindow-mock allow-listed files) within crates/flui-app/src"
+mechanism = "forbidden_pattern scoped scan confines the WindowId token to window_registry.rs (plus the shared test-only PlatformWindow mock module and one allow-listed runtime.rs helper) within crates/flui-app/src"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/window_registry.rs", contains = "pub(crate) struct WindowRegistry" },
     { kind = "symbol", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn contains_address" },
@@ -3333,24 +3333,23 @@ bare WindowId, so runner.rs and friends never name the type). Proxy-gate \
 disclaimer: `let id = window.id();` with an inferred local type defeats a \
 substring scan on its own -- the manual backstop is that no flui-app \
 routing API outside window_registry.rs accepts or returns WindowId. \
-runtime.rs, presentation.rs, and ui_realm.rs are allow-listed only for \
-their test-only PlatformWindow mock implementations, which must restate \
-the trait's required `fn id(&self) -> WindowId` signature to implement it \
-at all; that is a structural trait-conformance fact, not a routing-logic \
-exception, and none of the three files' production code may accept or \
-return the type. The retired `AppBinding`'s equivalent test mock \
-(`binding.rs`) moved to `runtime.rs`'s `wake_and_clipboard_tests` alongside \
-the wake mechanism it exercises. `ui_realm.rs`'s own mock \
-(`RedrawCountingWindow`, in its `redraw_wake_routing` test module, issue \
-#555's addressed-routing slice) exists to observe per-presentation \
-`request_redraw` calls -- proving one presentation's redraw request pokes \
-only its own native window, never a sibling's.\
+window_test_support.rs is the crate's one test-only PlatformWindow mock \
+module (`#[cfg(test)]`, never compiled into production) and is allow-listed \
+because implementing the trait requires restating its `fn id(&self) -> \
+WindowId` signature; that is a structural trait-conformance fact, not a \
+routing-logic exception. The per-test-module mocks that used to earn \
+presentation.rs and ui_realm.rs allow-list entries are consolidated into \
+that module, so those files no longer name the type at all. runtime.rs \
+remains allow-listed for one internal helper predating this entry \
+(`release_redraw_window_for`, which releases the TLS-held redraw window by \
+comparing the platform's own key -- an identity check on a window value, \
+not a routing decision) plus doc-comment mentions; its test mocks moved to \
+window_test_support.rs with the rest.\
 """
 allow_files = [
     "crates/flui-app/src/app/window_registry.rs",
     "crates/flui-app/src/app/runtime.rs",
-    "crates/flui-app/src/app/presentation.rs",
-    "crates/flui-app/src/app/ui_realm.rs",
+    "crates/flui-app/src/app/window_test_support.rs",
 ]
 
 [[forbidden_pattern]]

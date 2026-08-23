@@ -45,7 +45,7 @@ fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("ListTile must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
@@ -85,7 +85,7 @@ fn disabled_tile_swallows_a_tap() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("ListTile must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
@@ -114,7 +114,7 @@ fn title_only_tile_mounts_at_the_one_line_height() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("ListTile must compose a Material surface");
 
     assert_eq!(
@@ -141,7 +141,7 @@ fn every_slot_present_mounts_a_two_line_tile() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("ListTile must compose a Material surface");
 
     assert_eq!(
@@ -186,7 +186,7 @@ fn ambient_icon_theme_size_reaches_a_bare_leading_icon_through_the_tile() {
         );
 
         let glyph = laid
-            .find_by_render_type("RenderParagraph")
+            .try_find_by_render_type("RenderParagraph")
             .expect("the leading Icon must mount its glyph as a RenderParagraph");
         laid.size(glyph).height.get()
     }
@@ -223,7 +223,7 @@ fn list_tile_theme_slot_reaches_the_mounted_materials_color() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("ListTile must compose a Material surface");
     let color = laid
         .render_property(material, "color")

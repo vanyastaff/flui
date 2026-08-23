@@ -60,7 +60,7 @@ use flui_types::{
 use flui_foundation::DiagnosticsBuilder;
 use flui_rendering::{
     RenderUpdateImpact,
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, PaintCx},
     hit_testing::{PathClipTarget, resolve_path_clip_target},
     parent_data::BoxParentData,
     traits::RenderBox,
@@ -687,18 +687,7 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        if ctx.child_count() > 0 {
-            self.has_child = true;
-            let size = ctx.layout_child(0, constraints);
-            ctx.position_child(0, Offset::ZERO);
-            size
-        } else {
-            self.has_child = false;
-            constraints.smallest()
-        }
-    }
+    flui_rendering::forward_single_child_box_layout!();
 
     flui_rendering::forward_single_child_box_queries!();
 

@@ -247,8 +247,10 @@ fn bench_render_blur(c: &mut Criterion) {
 
     // Acquire the input texture via the renderer's pool so it is a warm
     // `PooledTexture` exactly as production code hands it to `render_blur`.
-    let pool = Arc::clone(offscreen.texture_pool());
-    let blur_input = pool.acquire(BENCH_SIDE_TEXELS, BENCH_SIDE_TEXELS, format);
+    let blur_input =
+        offscreen
+            .texture_pool_mut()
+            .acquire(BENCH_SIDE_TEXELS, BENCH_SIDE_TEXELS, format);
 
     // sigma = 5.0 → iterations = ceil(5.0 / 2.0).clamp(1, 5) = 3
     let blur_sigma: f32 = 5.0;

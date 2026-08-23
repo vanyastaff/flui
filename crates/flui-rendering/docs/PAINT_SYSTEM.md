@@ -1,5 +1,7 @@
 # Paint System Architecture
 
+> See also [crates/flui-rendering/ARCHITECTURE.md](../ARCHITECTURE.md) for the per-crate template instance.
+
 ## Overview
 
 The paint system in FLUI is decomposed into four orthogonal components, allowing maximum flexibility and backend independence. Each component can be swapped independently without affecting others.

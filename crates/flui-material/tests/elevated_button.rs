@@ -50,7 +50,8 @@ fn tap_fires_on_pressed_and_the_button_mounts_a_material_surface() {
     );
 
     assert!(
-        laid.find_by_render_type("RenderPhysicalShape").is_some(),
+        laid.try_find_by_render_type("RenderPhysicalShape")
+            .is_some(),
         "ElevatedButton must compose a Material (RenderPhysicalShape) surface",
     );
 
@@ -80,14 +81,14 @@ fn a_button_with_no_press_handler_is_disabled_and_a_tap_dispatch_is_a_no_op() {
         tight(120.0, 48.0),
     );
     let material_before = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("a disabled ElevatedButton must still mount its Material surface");
 
     laid.dispatch_pointer_down(60.0, 24.0);
     laid.dispatch_pointer_up(60.0, 24.0);
 
     let material_after = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("the Material surface must survive a tap dispatch");
     assert_eq!(
         material_before, material_after,
@@ -116,7 +117,7 @@ fn a_handler_less_button_resolves_the_disabled_background_color_through_the_real
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("a disabled ElevatedButton must still mount its Material surface");
     let resolved_color = laid
         .render_property(material, "color")
@@ -152,7 +153,7 @@ fn did_update_view_resyncs_disabled_when_the_press_handler_is_removed() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Material must mount");
     let enabled_color = laid
         .render_property(material, "color")
@@ -169,7 +170,7 @@ fn did_update_view_resyncs_disabled_when_the_press_handler_is_removed() {
     laid.pump_widget(Theme::new(theme, ElevatedButton::new(Text::new("Save"))));
 
     let material_after_swap = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("Material must still be mounted after the swap");
     assert_eq!(
         material, material_after_swap,
@@ -214,7 +215,7 @@ fn elevated_button_theme_slot_reaches_the_mounted_materials_background_color() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("ElevatedButton must compose a Material surface");
     assert_eq!(
         laid.render_property(material, "color"),
@@ -256,7 +257,7 @@ fn widget_level_style_wins_over_the_elevated_button_theme() {
     );
 
     let material = laid
-        .find_by_render_type("RenderPhysicalShape")
+        .try_find_by_render_type("RenderPhysicalShape")
         .expect("ElevatedButton must compose a Material surface");
     assert_eq!(
         laid.render_property(material, "color"),

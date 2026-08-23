@@ -455,16 +455,12 @@ impl Color {
     /// Returns the RGBA channels as an `[r, g, b, a]` array of `f32` values
     /// in `0.0..=1.0`.
     ///
-    /// Equivalent to [`Color::to_rgba_f32_array`].
+    /// The shorter-named alias of [`Color::to_rgba_f32_array`], delegating to
+    /// it so the channel arithmetic exists once.
     #[inline]
     #[must_use]
-    pub fn to_f32_array(&self) -> [f32; 4] {
-        [
-            self.r as f32 / 255.0,
-            self.g as f32 / 255.0,
-            self.b as f32 / 255.0,
-            self.a as f32 / 255.0,
-        ]
+    pub const fn to_f32_array(&self) -> [f32; 4] {
+        self.to_rgba_f32_array()
     }
 
     /// Returns the red channel as an `f32` in `0.0..=1.0`.
@@ -1586,25 +1582,25 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: Implement to_hsl and from_hsl methods"]
     fn test_approx_eq_hsl_conversion_roundtrip() {
-        let _ = Color::rgb(120, 180, 200);
-        // let hsl = original.to_hsl();
-        // let roundtrip = Color::from_hsl(hsl.0, hsl.1, hsl.2);
+        use crate::styling::HSLColor;
 
-        // HSL conversion may introduce small rounding errors
-        // assert!(original.approx_eq(&roundtrip));
+        let original = Color::rgb(120, 180, 200);
+        let roundtrip = Color::from(HSLColor::from(original));
+
+        // HSL conversion may introduce small rounding errors.
+        assert!(original.approx_eq(&roundtrip));
     }
 
     #[test]
-    #[ignore = "TODO: Implement to_hsv and from_hsv methods"]
     fn test_approx_eq_hsv_conversion_roundtrip() {
-        let _ = Color::rgb(80, 120, 160);
-        // let hsv = original.to_hsv();
-        // let roundtrip = Color::from_hsv(hsv.0, hsv.1, hsv.2);
+        use crate::styling::HSVColor;
 
-        // HSV conversion may introduce small rounding errors
-        // assert!(original.approx_eq(&roundtrip));
+        let original = Color::rgb(80, 120, 160);
+        let roundtrip = Color::from(HSVColor::from(original));
+
+        // HSV conversion may introduce small rounding errors.
+        assert!(original.approx_eq(&roundtrip));
     }
 
     #[test]

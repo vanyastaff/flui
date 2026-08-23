@@ -101,8 +101,6 @@ static_assertions.workspace = true
 # Vec oracle + structural invariants. Test-only; no production dependency.
 # Version matches flui-types / flui-interaction (already resolved in the lockfile).
 proptest = "1.5"
-# Snapshot testing for render-harness paint-phase (sub-project A).
-insta.workspace = true
 # Animation -> render-pipeline integration scenarios (tests only; no
 # production dependency between the layers). flui-scheduler moved to
 # `[dependencies]` above — `ScrollPosition` names it in production now.

@@ -181,23 +181,7 @@ mod tests {
         use super::super::GpuResources;
 
         fn create_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-            let adapter =
-                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::LowPower,
-                    force_fallback_adapter: false,
-                    compatible_surface: None,
-                    apply_limit_buckets: false,
-                }))
-                .expect("a GPU adapter must be available on a GPU-enabled test host");
-            let (device, queue) =
-                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                    label: Some("GpuResources Test Device"),
-                    ..Default::default()
-                }))
-                .expect("a GPU device must be available when an adapter was found");
-            (Arc::new(device), Arc::new(queue))
+            crate::wgpu::test_support::test_device_and_queue("GpuResources Test Device")
         }
 
         /// `GpuResources::new` constructs without panic; all four sub-pools are

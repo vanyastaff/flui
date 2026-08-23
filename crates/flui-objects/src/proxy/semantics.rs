@@ -6,10 +6,8 @@
 //! single-child proxy behavior; only the semantics hooks differ.
 
 use flui_tree::Single;
-use flui_types::{Offset, Size};
 
 use flui_rendering::{
-    context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     semantics::{SemanticsConfiguration, SemanticsProperties},
     traits::RenderBox,
@@ -196,31 +194,11 @@ impl RenderBox for RenderSemanticsAnnotations {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        if ctx.child_count() > 0 {
-            self.has_child = true;
-            let child_size = ctx.layout_child(0, constraints);
-            ctx.position_child(0, Offset::ZERO);
-            child_size
-        } else {
-            self.has_child = false;
-            constraints.smallest()
-        }
-    }
+    flui_rendering::forward_single_child_box_layout!();
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_own_size() {
-            return false;
-        }
-        if self.has_child {
-            ctx.hit_test_child_at_offset(0, Offset::ZERO)
-        } else {
-            false
-        }
-    }
+    flui_rendering::forward_single_child_box_hit_test!();
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         *config = self.configuration.clone();
@@ -244,31 +222,11 @@ impl RenderBox for RenderMergeSemantics {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        if ctx.child_count() > 0 {
-            self.has_child = true;
-            let child_size = ctx.layout_child(0, constraints);
-            ctx.position_child(0, Offset::ZERO);
-            child_size
-        } else {
-            self.has_child = false;
-            constraints.smallest()
-        }
-    }
+    flui_rendering::forward_single_child_box_layout!();
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_own_size() {
-            return false;
-        }
-        if self.has_child {
-            ctx.hit_test_child_at_offset(0, Offset::ZERO)
-        } else {
-            false
-        }
-    }
+    flui_rendering::forward_single_child_box_hit_test!();
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         config.set_semantics_boundary(true);
@@ -327,31 +285,11 @@ impl RenderBox for RenderExcludeSemantics {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        if ctx.child_count() > 0 {
-            self.has_child = true;
-            let child_size = ctx.layout_child(0, constraints);
-            ctx.position_child(0, Offset::ZERO);
-            child_size
-        } else {
-            self.has_child = false;
-            constraints.smallest()
-        }
-    }
+    flui_rendering::forward_single_child_box_layout!();
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_own_size() {
-            return false;
-        }
-        if self.has_child {
-            ctx.hit_test_child_at_offset(0, Offset::ZERO)
-        } else {
-            false
-        }
-    }
+    flui_rendering::forward_single_child_box_hit_test!();
 
     fn excludes_semantics_subtree(&self) -> bool {
         self.excluding

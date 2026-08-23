@@ -19,15 +19,15 @@ The relevant external APIs the crate consumes:
 | [`src/wgpu/backend.rs`](src/wgpu/backend.rs) `Backend` | -- | Visitor over `flui_painting::DrawCommand`; implements `CommandRenderer`; bridges per-command to `WgpuPainter` inherent methods. |
 | [`src/wgpu/layer_render.rs`](src/wgpu/layer_render.rs) `LayerRender<R>` | -- | Closed extension trait per `flui_layer::Layer` variant. 19 impls. Static dispatch via generic `R: CommandRenderer + ?Sized`. |
 | [`src/commands.rs`](src/commands.rs) `dispatch_command` | -- | Closed visitor over the ~30-variant `flui_painting::DrawCommand` enum. Static dispatch via generic `R: CommandRenderer + ?Sized`. |
-| [`src/wgpu/offscreen.rs`](src/wgpu/offscreen.rs) `OffscreenRenderer` | `wgpu::RenderPipeline`, `wgpu::BindGroupLayout`, `wgpu::BindGroup`, `wgpu::Sampler` | Offscreen-texture pipelines for `ShaderMaskLayer` (compose with mask shader) and `BackdropFilterLayer` (Dual-Kawase blur). |
+| [`src/wgpu/offscreen/`](src/wgpu/offscreen/mod.rs) `OffscreenRenderer` | `wgpu::RenderPipeline`, `wgpu::BindGroupLayout`, `wgpu::BindGroup`, `wgpu::Sampler` | Offscreen-texture pipelines for `ShaderMaskLayer` (compose with mask shader) and `BackdropFilterLayer` (Dual-Kawase blur). |
 | [`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs) `ShaderCache` | `wgpu::ShaderModule`, `wgpu::ShaderSource` | Caches compiled WGSL modules per `ShaderType` enum (Solid/LinearGradient/RadialGradient mask shaders; BlurHorizontal/Vertical/Downsample/Upsample; MorphDilate/Erode). |
-| [`src/wgpu/pipelines.rs`](src/wgpu/pipelines.rs) `PipelineCache` + `PipelineBuilder` | `wgpu::RenderPipelineDescriptor`, `wgpu::VertexBufferLayout`, `wgpu::ColorTargetState`, `wgpu::BlendState`, `wgpu::DepthStencilState` | Caches pipelines per `PipelineKey` (paint-style + blend-mode + format). |
-| [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs) `TexturePool` | `wgpu::TextureDescriptor`, `wgpu::TextureUsages` | Per-frame texture reuse for offscreen renders. Currently `Arc<Mutex<TexturePoolInner>>` -- Mythos friction; see [Outstanding refactors](#outstanding-refactors). |
+| [`src/wgpu/pipeline.rs`](src/wgpu/pipeline.rs) `PipelineCache` + [`src/wgpu/pipelines.rs`](src/wgpu/pipelines.rs) `PipelineSet` | `wgpu::RenderPipelineDescriptor`, `wgpu::VertexBufferLayout`, `wgpu::ColorTargetState`, `wgpu::BlendState`, `wgpu::DepthStencilState` | `PipelineCache` caches shape pipelines per `PipelineKey` (paint-style + blend-mode + format); `PipelineSet` owns the named instanced/gradient/shadow pipelines, all specs over its shared unit-quad constructor. |
+| [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs) `TexturePool` | `wgpu::TextureDescriptor`, `wgpu::TextureUsages` | Per-frame texture reuse for offscreen renders. Directly-owned inventory + mpsc return channel (no lock, `Send`-only). |
 | [`src/wgpu/tessellator.rs`](src/wgpu/tessellator.rs) `Tessellator` | -- | Adapter over `lyon::tessellation::FillTessellator` + `StrokeTessellator`. |
 | [`src/wgpu/text.rs`](src/wgpu/text.rs) `TextRenderer` | -- | Adapter over `glyphon` (cosmic-text + glyph atlas + GPU sampling). |
 
 **Spec references:**
-- wgpu API: [wgpu.rs documentation](https://docs.rs/wgpu) (workspace 29.x; see [`Cargo.toml`](../../Cargo.toml) `[workspace.dependencies]`).
+- wgpu API: [wgpu.rs documentation](https://docs.rs/wgpu) (workspace 30.x; see [`Cargo.toml`](../../Cargo.toml) `[workspace.dependencies]`).
 - Vulkan spec: [Khronos Vulkan 1.4 Specification](https://registry.khronos.org/vulkan/specs/1.4/html/vkspec.html) -- consumed via wgpu's `vulkan` backend on Linux/Android.
 - Metal spec: [Apple Metal 4 documentation](https://developer.apple.com/documentation/metal) -- consumed via wgpu's `metal` backend on macOS/iOS.
 - DirectX 12: [Microsoft DirectX 12 Agility SDK](https://devblogs.microsoft.com/directx/directx12agility/) -- consumed via wgpu's `dx12` backend on Windows.
@@ -318,7 +318,7 @@ The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) was extr
 
 ## Thread safety
 
-`flui-engine` runs on the render thread; wgpu handles its own thread-safety via `Arc<Device>` / `Arc<Queue>` (cheap ref-counted handles, not lock-protected). Per strategy clause "sync hot path, async at edges," neither the layer walk nor the per-command dispatch is multi-threaded; `Renderer::render_scene` is sync. Async only at `Renderer::new` and `Renderer::new_offscreen` (wgpu's `request_adapter` and `request_device` are async at the wgpu boundary).
+`flui-engine` runs on the render thread; wgpu handles its own thread-safety via `Arc<Device>` / `Arc<Queue>` (cheap ref-counted handles, not lock-protected). Per strategy clause "sync hot path, async at edges," neither the layer walk nor the per-command dispatch is multi-threaded; `Renderer::render_scene` is sync. Async only at the acquisition edges -- `Renderer::new`, `Renderer::new_offscreen`, `Renderer::recover`, and `GpuServices::resolve_offscreen`, all of which now share `wgpu/adapter.rs`'s acquisition helpers (wgpu's `request_adapter` and `request_device` are async at the wgpu boundary).
 
 | Site | Primitive | Category | Notes |
 |---|---|---|---|
@@ -326,14 +326,14 @@ The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) was extr
 | `Renderer::adapter` | `wgpu::Adapter` | Owned, keep-alive | Same shape. |
 | `Renderer::device` / `Renderer::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | wgpu's own API uses `Arc` for these handles (cheap ref-count, not lock-protected). Shared by `WgpuPainter` and `OffscreenRenderer` via setup-phase `Arc::clone` (acceptable; not per-frame). |
 | `Renderer::surface` | `Option<wgpu::Surface<'static>>` | Owned, single-mutator | wgpu 30's `Surface<'_>: Send + Sync` (verified via `assert_impl_all!` in `wgpu/src/api/surface.rs:268`). Single-mutator enforced by code convention (only `Renderer::render_scene` calls `surface.get_current_texture`), not by trait bound. |
-| `Renderer::painter` | `Option<WgpuPainter>` | Owned, single-mutator | The take/return dance during `render_scene` is the per-frame ownership transfer. |
+| `Renderer::painter` | `Option<WgpuPainter>` | Owned, single-mutator | Borrowed in place per frame (`as_mut()`); `Backend<'frame>` holds the disjoint `painter`/`offscreen` field borrows. |
 | `Renderer::offscreen` | `Option<super::offscreen::OffscreenRenderer>` | resolved | Owned outright. The `Backend<'a>` lifetime refactor that this waited on has landed, so the lock is gone; port-check trigger 7 now watches this file. |
 | `Backend::offscreen` | `Option<&'frame mut super::offscreen::OffscreenRenderer>` | resolved | Borrowed for the frame, symmetric with the above. |
 | `Backend::offscreen_painter` | `Option<WgpuPainter>` | Owned, single-mutator | Cross-frame painter cache; resized on demand. No lock. |
 | `WgpuPainter::device` / `WgpuPainter::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | Same as `Renderer::device`. |
 | `WgpuPainter::transform_stack` / `clip_stack` / `opacity_stack` | `Vec<T>` | Owned, single-mutator | Per-frame save/restore stacks. No lock. |
-| `OffscreenRenderer::pipelines` ([`src/wgpu/offscreen.rs`](src/wgpu/offscreen.rs)) | `HashMap<ShaderType, Arc<wgpu::RenderPipeline>>` | Setup-phase populated, frame-read | The `Arc<RenderPipeline>` clones at lines 659-660, 1051-1053 are per-effect-frame (small constant; not per-layer). |
-| `TexturePool::pool` ([`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs)) | `Arc<Mutex<TexturePoolInner>>` | **Mythos friction** | Single-mutator data behind a lock + back-reference on `PooledTexture` for release-on-drop. Refactor target; see [Outstanding refactors](#outstanding-refactors). |
+| `OffscreenRenderer::pipelines` ([`src/wgpu/offscreen/`](src/wgpu/offscreen/mod.rs)) | `HashMap<ShaderType, Arc<wgpu::RenderPipeline>>` | Setup-phase populated, frame-read | The `Arc<RenderPipeline>` clones at lines 659-660, 1051-1053 are per-effect-frame (small constant; not per-layer). |
+| `TexturePool::inventory` ([`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs)) | Directly-owned `TexturePoolInner` + mpsc return channel | Single-mutator | No lock: every pool operation takes `&mut self`; dropped `PooledTexture`s come home through the channel, drained under the pool's own exclusive borrow. |
 | `ShaderCache::cache` ([`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs)) | `RwLock<HashMap<ShaderType, Arc<CompiledShader>>>` | Setup-phase populated, frame-read | The lock is uncontended; cache is populated lazily on first use of each shader, then read-only. Acceptable per the precedent of `PipelineOwner`'s `Weak<RwLock<>>` in `flui-rendering`. |
 | `layer_render.rs` `SUPERELLIPSE_CACHE` | `thread_local! RefCell<HashMap<SuperellipseKey, Path>>` | Thread-local, hot-path | Canonical Rust pattern for single-threaded hot-path caching; not a refusal-trigger violation per `docs/PORT.md` Trigger 2 (the regex matches `Box<dyn Layer>` / `dyn RenderObject` shapes, not `HashMap<SuperellipseKey, Path>`). |
 
@@ -358,7 +358,7 @@ There is **no `unsafe impl Sync`** anywhere in the crate. Two further unsafe sur
 - `Renderer` -- `Send` by compiler derivation (every field is `Send`, including `raw_handles` via `RawHandles`' `unsafe impl Send` above); **not `Sync`**. Pinned unconditionally by `static_assertions::assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` right after the struct definition, plus the pre-existing `compile_fail` doctest for the `!Sync` half. Single-mutator enforced by code convention, not by trait bound.
 - `WgpuPainter` -- `Send`, not `Sync` (holds `Arc<wgpu::Device>` + `Arc<wgpu::Queue>` which are `Send + Sync`, but internal batch state uses `Vec<T>` mutated through `&mut self`; no interior mutability sync surface).
 - `OffscreenRenderer` -- `Send`, not `Sync` (HashMap of `Arc<RenderPipeline>` is `Send`; the struct has no interior-mutability sync primitives).
-- `TexturePool` -- `Send + Sync` today (through inner `Arc<Mutex<TexturePoolInner>>`); will become `Send`-only when the Outstanding refactor replaces the inner lock with direct ownership.
+- `TexturePool` -- `Send`-only (the mpsc `Receiver` is `!Sync`), exactly the narrowing the refactor predicted: the pool is single-mutator by construction and lives on one renderer thread.
 
 ---
 
@@ -374,26 +374,26 @@ path at all. Kept as a heading rather than deleted because port-check trigger 7 
 catch a regression of exactly this shape, and now watches both files -- its exclusions for
 them were retired at the same time.
 
-One piece of the surrounding restructure the Outstanding-refactor entry also described did
-not land with it: `Renderer::render_scene` still uses the `self.painter.take()` /
-reassign pattern (`renderer.rs:1526`). That was an enabler for removing the lock, not the
-goal, and it is now independent of it.
+The `self.painter.take()` / reassign pattern that survived the lock removal is gone too:
+`render_scene_content` now borrows the painter in place (`self.painter.as_mut()`), with the
+`Backend` holding the disjoint `painter`/`offscreen` field borrows for the frame.
 
-### `Arc<Mutex<TexturePoolInner>>` back-reference on `PooledTexture`
+### `Arc<Mutex<TexturePoolInner>>` back-reference on `PooledTexture` -- RESOLVED
 
-**Sites:** [`src/wgpu/texture_pool.rs:71`](src/wgpu/texture_pool.rs) (`TexturePool::pool` field), [`src/wgpu/texture_pool.rs:224`](src/wgpu/texture_pool.rs) (`PooledTexture::inner` back-reference), [`src/wgpu/texture_pool.rs:239`](src/wgpu/texture_pool.rs) (`Arc::new(Mutex::new(...))` at construction), [`src/wgpu/texture_pool.rs:277`](src/wgpu/texture_pool.rs) (`Arc::clone(&self.inner)` at `acquire` return).
+The lock and the back-reference are gone: `TexturePool` owns `TexturePoolInner` directly
+(every operation takes `&mut self`, and the type is now `Send`-only), and `PooledTexture`
+carries only a lightweight mpsc `Sender` — drop sends the texture home, and the pool drains
+the channel under its own exclusive borrow at the top of each operation. Port-check trigger 7's
+`texture_pool.rs` exclusion was removed in the same change, per the obligation it carried.
 
-**Violation:** none of the seven refusal triggers; the lock is uncontended (single-mutator). The Mythos verdict §9 flagged this as the second canonical Arc<Mutex<>> smell.
+### Per-frame `Arc::clone(&self.device)` / `Arc::clone(&self.queue)` in `Renderer::render_scene` -- RESOLVED
 
-**Next planned step:** see [Outstanding refactors](#outstanding-refactors) -- replace back-reference + Drop with explicit `pool.release(texture)` API.
-
-### Per-frame `Arc::clone(&self.device)` / `Arc::clone(&self.queue)` in `Renderer::render_scene`
-
-**Sites:** [`src/wgpu/renderer.rs:636-637`](src/wgpu/renderer.rs) (`RenderContext { device: Arc::clone(&self.device), queue: Arc::clone(&self.queue), … }`).
-
-**Violation:** none today. Trigger 5 now covers the engine's per-frame paths and catches this shape if it is reintroduced.
-
-**Next planned step:** see [Outstanding refactors](#outstanding-refactors) -- `RenderContext` becomes `RenderContext<'frame>` with borrowed `&'frame wgpu::Device` / `&'frame wgpu::Queue` references. Tied to the `Backend<'a>` lifetime refactor.
+The clones are gone, by deletion rather than by borrowing: `RenderContext` no longer
+carries `device`/`queue` at all (the mid-frame backdrop-blur path that needed them now
+sources them from the offscreen renderer inside `Backend::apply_backdrop_blur`, so the
+fields were removed as dead). Every remaining `Arc::clone(&device)` / `Arc::clone(&queue)`
+in `renderer.rs` is setup-phase (constructors, recovery, `from_offscreen_services`) --
+acceptable per the strategy clause -- or test-only.
 
 ### `painter.rs` god module — RESOLVED (split into `painter/`)
 
@@ -401,11 +401,14 @@ goal, and it is now independent of it.
 
 `painter.rs` (which grew to ~5,300 LOC) was a "god module" mixing batch recording, save-layer state machines, gradient construction, text integration, and per-frame submission. It was split **move-only** into `painter/{mod,draw,transform_clip,layer,gradient}.rs` (+ `tests.rs`), each production file **< 1 500 non-test LOC**, restoring the C1 cap. The move was proven behaviour-preserving by the full `enable-wgpu-tests` GPU readback suite staying bit-identical.
 
-### `offscreen.rs` is 1,525 LOC -- second god module
+### `offscreen.rs` god module -- RESOLVED (split into `offscreen/`)
 
-**Site:** [`src/wgpu/offscreen.rs`](src/wgpu/offscreen.rs).
+**Site:** [`src/wgpu/offscreen/`](src/wgpu/offscreen/mod.rs).
 
-Same shape as `painter.rs`. Mixes mask, blur, and morphological filter pipelines. Verdict proposed an `offscreen/{mask, blur, morph}.rs` split; deferred for the same review-clarity reason.
+`offscreen.rs` was split into `offscreen/{mod,blit,blur,mask}.rs` (shared state and
+texture-pool plumbing in `mod.rs`; the surface blit, Dual-Kawase blur, and shader-mask
+paths in their own files). The morphological filter did not join this directory -- it
+lives in `wgpu/morphology/` as one of the format-matched filter pipelines.
 
 ### Forward-looking helpers in `effects`, `instancing`, `pipeline`, `shader_compiler` modules
 
@@ -435,73 +438,53 @@ Same shape as `painter.rs`. Mixes mask, blur, and morphological filter pipelines
 
 Concrete cleanups visible from `flui-engine` outward, sized for an `/aif-implement` dispatch. Each entry names a file and what would need to change. Each has a named concrete blocker per the no-quick-wins memo.
 
-### `Renderer::render_scene`'s painter take/reassign pattern
+### `Renderer::render_scene`'s painter take/reassign pattern — DONE
 
-**Files:** [`src/wgpu/renderer.rs`](src/wgpu/renderer.rs).
+The `Arc<parking_lot::Mutex<OffscreenRenderer>>` removal landed first (`Renderer` owns its
+`OffscreenRenderer`, `Backend<'frame>` borrows one, no `.lock()` on the path; port-check
+trigger 7 watches both files). The surviving take/reassign then fell to ordinary
+borrow-checker work, exactly as predicted: `render_scene_content` borrows the painter in
+place via `self.painter.as_mut()`, the `Backend` holds the disjoint `painter`/`offscreen`
+field borrows, and every other access in the frame body touches other fields.
 
-**What already landed.** This entry used to describe removing
-`Arc<parking_lot::Mutex<OffscreenRenderer>>` from `Renderer` and `Backend`. That is done:
-`Renderer` owns its `OffscreenRenderer`, `Backend<'frame>` borrows one, `handle_backdrop_filter`
-takes `&mut Backend<'_>`, and no `.lock()` remains on the path. Port-check trigger 7 now watches
-both files; its exclusions for them were retired when this was confirmed.
+### `Arc<Mutex<TexturePoolInner>>` -> direct ownership — DONE (return channel, not mandatory `release`)
 
-**What remains.** `render_scene` still takes the painter out of `self` and puts it back
-(`renderer.rs:1526`). That was an enabler for the lifetime work above, not its goal, and with the
-lock gone it stands alone: a smaller, self-contained cleanup with no lock-contention argument
-behind it any more.
+The goal — remove the lock and the back-reference so the pool is a single-mutator value —
+landed, with one deliberate divergence from the six-step shape this entry used to
+prescribe. The prescription assumed 4-6 `PooledTexture` consumers in `offscreen/` that
+could each call an explicit `pool.release(texture)`. By the time the refactor landed,
+`PooledTexture`s also live inside the painter's draw order (`PendingOffscreenTexture`),
+advanced-blend ops, and the replay flush path, and they are minted by two different pools
+(the offscreen renderer's and `GpuResources::layer_texture_pool`). Mandatory explicit
+release at every one of those death sites would have been exactly the "mechanical but
+error-prone" hazard the old blocker named — any missed site silently stops pool reuse.
 
-**Concrete blocker:** none identified beyond ordinary borrow-checker work, now that
-`Backend<'frame>` exists. The original blocker -- needing disjoint `&mut painter` and
-`&mut offscreen` out of one `Backend<'a>` -- was what the lifetime refactor solved.
+The landed shape keeps return-on-drop but removes what made it a smell: `TexturePool`
+owns its inventory directly (`acquire`/`stats`/`clear` take `&mut self`; the type is
+`Send`-only), and the drop path is an mpsc send into a channel the pool drains under its
+own exclusive borrow — no lock around pool state, no `Arc` into the pool. A texture that
+outlives its pool degrades gracefully (the failed send drops the GPU resource). An
+explicit `TexturePool::release(&mut self, texture)` exists for call sites that hold the
+pool and want the texture reusable for their very next `acquire`; it is an optimization,
+not an obligation. `OffscreenRenderer` now owns its pool by value (`with_caches` takes
+`TexturePool`), and callers reach it through `texture_pool_mut`.
 
-**Dependencies:** none.
+### Per-frame `Arc::clone(&self.device)` / `Arc::clone(&self.queue)` -> borrowed references — DONE (by deletion)
 
-### `Arc<Mutex<TexturePoolInner>>` -> direct ownership + explicit `pool.release(texture)`
-
-**Files:** [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs), [`src/wgpu/offscreen.rs`](src/wgpu/offscreen.rs) (consumer).
-
-**Goal:** remove the back-reference `Arc<Mutex<TexturePoolInner>>` on `PooledTexture` that exists only for release-on-drop. Replace with explicit `pool.release(texture)` at the workflow boundaries.
-
-**Shape:**
-1. `TexturePool::pool: Arc<Mutex<TexturePoolInner>>` -> `TexturePool::available: Vec<TextureSlot>` (direct).
-2. `PooledTexture` removes the `inner: Arc<Mutex<TexturePoolInner>>` field; Drop becomes a no-op (or drops the `wgpu::Texture` directly, releasing GPU memory if not pooled).
-3. New method: `TexturePool::release(&mut self, texture: PooledTexture)`.
-4. `TexturePool::acquire(&mut self, ...)` (was `&self`).
-5. `OffscreenRenderer::with_caches` parameter changes from `Arc<TexturePool>` to `TexturePool`.
-6. Every consumer of `PooledTexture` either calls `pool.release(tex)` after the texture is no longer needed, or accepts that Drop discards the texture (acceptable for one-frame textures; the slot is reused via `release`).
-
-**Concrete blocker:** the refactor touches every `PooledTexture` consumer (currently 4-6 sites across `OffscreenRenderer::render_blur`, `render_masked`, `render_dilate`, `render_erode`). Each consumer needs an explicit `release` call -- mechanical but error-prone if a consumer forgets to release.
-
-**Dependencies:** none.
-
-### Per-frame `Arc::clone(&self.device)` / `Arc::clone(&self.queue)` -> borrowed references
-
-**Files:** [`src/wgpu/renderer.rs:636-637`](src/wgpu/renderer.rs).
-
-**Goal:** eliminate per-frame Arc clones in `RenderContext` construction. The clones are uncontested (single ref-count increment), but the pattern compounds across hundreds of frames per second.
-
-**Shape:**
-1. `RenderContext` changes from `device: Arc<wgpu::Device>` -> `device: &'frame wgpu::Device` (with frame lifetime).
-2. `Renderer::render_scene` body: `RenderContext { device: &self.device, queue: &self.queue, ... }`.
-3. `Renderer::handle_backdrop_filter` signature gains `ctx: &RenderContext<'_>` with the frame lifetime.
-
-**Concrete blocker:** depends on the `Backend<'a>` lifetime refactor above; both share the frame-lifetime boundary. Lands together with the `Arc<Mutex<OffscreenRenderer>>` removal.
-
-**Dependencies:** previous Outstanding refactor.
+The planned shape (a `RenderContext<'frame>` with borrowed device/queue) was overtaken:
+`RenderContext` lost its `device`/`queue` fields entirely when the backdrop-blur path moved
+to sourcing them from the offscreen renderer inside `Backend::apply_backdrop_blur`. There
+is no per-frame clone left to convert. See the Friction-log entry above.
 
 ### `painter/` directory split — DONE
 
 The move-only split of `wgpu/painter.rs` into `painter/{mod,draw,transform_clip,layer,gradient}.rs` (+ `tests.rs`) landed (each production file < 1 500 non-test LOC; readback bit-identical). `replay.rs` was likewise split into `replay/{mod,flush}.rs`. See the Friction-log entry above. The descendant modules retain access to `WgpuPainter` / `GpuReplay` private fields, so no field-visibility widening was needed.
 
-### `offscreen/` directory split: `wgpu/offscreen.rs` (1,525 LOC) -> `offscreen/{mask, blur, morph}.rs`
+### `offscreen/` directory split — DONE
 
-**Files:** [`src/wgpu/offscreen.rs`](src/wgpu/offscreen.rs) -> directory.
-
-**Goal:** same shape as `painter/` split. Mixes mask, blur, and morphological filter pipelines.
-
-**Concrete blocker:** same.
-
-**Dependencies:** none.
+`wgpu/offscreen.rs` was split into `offscreen/{mod,blit,blur,mask}.rs` (the morphological
+filter ended up in `wgpu/morphology/` with the other filter pipelines instead of an
+`offscreen/morph.rs`). See the Friction-log entry above.
 
 ### Audit `painter/` consumers of `texture_cache`, `external_texture_registry`, `path_cache`, `multi_draw`
 
@@ -563,7 +546,7 @@ The following pre-existing concerns are tracked outside this Outstanding refacto
 ## Notes
 
 - **Net unsafe delta for this chain: 0.** The single existing `unsafe { instance.create_surface_unsafe(...) }` block in `Renderer::new` is required by wgpu's API contract and stays; the chain consolidated the two unsafe calls into one block with a documented SAFETY comment. Zero new unsafe blocks were added.
-- **Net LOC reduction for this chain: ~-5,888 LOC of production code** (per `git show --stat` totals across the 10 substantive commits): -812 from `utils/`, -2,190 from the parallel scene/compositor stack, -2,188 from platform stubs, -1 from the commands shim/import cleanup, -429 from the Painter trait deletion, +23 from the `anyhow` → `EngineResult` migration, and -291 from deleting `text_renderer.rs` plus the dead-code audit. Original target was ≥6,000 LOC; **target missed by ~112 LOC** because the proposed 1,955 LOC of additional module deletions deferred (the four `wgpu/{texture_cache, external_texture_registry, path_cache, multi_draw}.rs` modules turned out to have in-crate consumers via `painter.rs` fields; deletion deferred to Outstanding refactor #6). `offscreen.rs` remains the one un-split god module (the `painter.rs` → `painter/` and `replay.rs` → `replay/` splits landed); tracked in Outstanding refactors.
+- **Net LOC reduction for this chain: ~-5,888 LOC of production code** (per `git show --stat` totals across the 10 substantive commits): -812 from `utils/`, -2,190 from the parallel scene/compositor stack, -2,188 from platform stubs, -1 from the commands shim/import cleanup, -429 from the Painter trait deletion, +23 from the `anyhow` → `EngineResult` migration, and -291 from deleting `text_renderer.rs` plus the dead-code audit. Original target was ≥6,000 LOC; **target missed by ~112 LOC** because the proposed 1,955 LOC of additional module deletions deferred (the four `wgpu/{texture_cache, external_texture_registry, path_cache, multi_draw}.rs` modules turned out to have in-crate consumers via `painter.rs` fields; deletion deferred to Outstanding refactor #6). `offscreen.rs` remained the one un-split god module at chain end (the `painter.rs` → `painter/` and `replay.rs` → `replay/` splits landed); it has since been split into `offscreen/{mod,blit,blur,mask}.rs` — see the Friction log.
 - **`port-check.sh` was extended during this chain** -- see [`docs/PORT.md`](../../docs/PORT.md) `## Refusal triggers` for the current trigger inventory.
 - **`Arc<Mutex<>>` shapes for `OffscreenRenderer` and `TexturePoolInner` survived the chain.** Documented in Friction log + Outstanding refactors with concrete blockers. The chain prioritised dead-code deletion (largest LOC wins) over lock-shape refactoring (substantial lifetime gymnastics for marginal runtime benefit).
 - **Two test counts** at chain end: `cargo test -p flui-engine --lib` shows 48 passed (down from 53 pre-chain, with 5 tests deleted alongside `text_renderer.rs`); `cargo test -p flui-engine --doc` count TBD per doctest fix Outstanding refactor.

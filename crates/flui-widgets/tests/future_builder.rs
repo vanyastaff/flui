@@ -1,7 +1,7 @@
 //! Public-API tests for [`FutureBuilder`].
 //!
 //! These drive the widget through the real `flui_widgets::prelude` surface and a
-//! real `HeadlessBinding` frame — the same path `AppBinding::draw_frame` takes.
+//! real `HeadlessBinding` frame — the same path `UiRealm::draw_frame` takes.
 //! The `flui-view` unit tests cover the seam's internals; this file covers what an
 //! app author can observe.
 //!

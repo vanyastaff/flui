@@ -274,7 +274,7 @@ fn cupertino_page_route_mounts_the_back_gesture_detector_by_default() {
     laid.tick();
 
     assert!(
-        laid.find_by_render_type("RenderListener").is_some(),
+        laid.try_find_by_render_type("RenderListener").is_some(),
         "back_gesture(true) must mount the edge-swipe-back Listener"
     );
 }

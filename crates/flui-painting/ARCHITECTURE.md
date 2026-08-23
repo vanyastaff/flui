@@ -141,7 +141,7 @@ The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before a
 | `binding::ImageCache::current_size_bytes` / `max_images` / `max_size_bytes` | `AtomicUsize` (3 sites) | Lock-free atomics | Set/get counters; no contention. |
 | `binding::SystemFontsNotifier::listeners` ([`src/binding.rs`](src/binding.rs)) | `RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>` | Setup-phase registry | System font change notifications are rare; off per-command hot path. |
 | `binding::PaintingBinding` | Plain owned value, constructed via `PaintingBinding::new()` | N/A — no longer process-global | Retired from `impl_binding_singleton!`: the macro (and the `flui-foundation::{HasInstance, BindingBase}` trait pair it implemented) is deleted entirely. `PaintingBinding` is now a field on `flui-app`'s `SharedEngineServices`, owned by `AppRuntime` and resolved once per owner thread — one value per process-composition-root, not a `'static` singleton other threads reach ambiently. |
-| `text_layout::layout::FONT_SYSTEM` ([`src/text_layout/layout.rs`](src/text_layout/layout.rs)) | `static OnceLock<Mutex<FontSystem>>` (feature-gated) | Lazy init + per-shape lock | cosmic-text font system; held during `Buffer::set_text` + `Buffer::shape_until_scroll`. Off per-command hot path; per-text-layout-creation. Lock contention on multi-text-widget workloads -- filed in Outstanding refactors as cosmic-text 0.13+ upgrade blocker. |
+| `text_layout::layout::FONT_SYSTEM` ([`src/text_layout/layout.rs`](src/text_layout/layout.rs)) | `static OnceLock<Mutex<FontSystem>>` (feature-gated) | Lazy init + per-shape lock | cosmic-text font system; held during `Buffer::shape_until_scroll` and cursor queries only — cosmic-text 0.19's lazy setters (`set_size`/`set_text`/`set_rich_text`) no longer take it, so buffers are fully described before the lock is acquired. Off per-command hot path; per-text-layout-creation. Residual contention on multi-text-widget workloads -- filed in Outstanding refactors (per-thread `FontSystem`). |
 | `SceneBuilder::stack` (per-Canvas owned) | Owned `Vec<...>` | Single-mutator | Borrow checker enforces single-writer-during-build at compile time. |
 **Zero `unsafe impl Send/Sync` blocks anywhere in the crate.** `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs). Net unsafe delta for this chain: **0**.
 
@@ -271,6 +271,19 @@ Concrete cleanups visible from `flui-painting` outward, sized for an `/aif-imple
 - Measured benchmark on concurrent text-shape workload.
 
 **Reference:** Audit F5.
+
+### "UAX #29 word segmentation for `get_word_boundary`"
+
+**Goal:** Replace the deliberate "non-whitespace run" semantics in
+`TextLayout::get_word_boundary` with full UAX #29 word segmentation via the
+`unicode-segmentation` crate, matching platform text-selection behaviour for
+scripts without whitespace word breaks.
+
+**Files:** [`src/text_layout/layout.rs`](src/text_layout/layout.rs), [`Cargo.toml`](Cargo.toml).
+
+**Named blockers:**
+- Workspace dependency decision on `unicode-segmentation` (new crate in the tree).
+- Parity check against Flutter's `WordBoundary` semantics before switching defaults.
 
 ### "Typed `NonNegativePixels` wrapper for radius/elevation"
 

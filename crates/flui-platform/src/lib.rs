@@ -199,7 +199,7 @@ pub use platforms::LinuxPlatform;
 pub use platforms::MacOSPlatform;
 pub use platforms::{
     FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
-    HeadlessExitReevaluation, HeadlessPlatform,
+    HeadlessExitReevaluation, HeadlessPlatform, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]

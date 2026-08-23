@@ -31,7 +31,7 @@ use flui_objects::RenderAnimatedSize;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{Alignment, painting::Clip};
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{BuildContextExt, Child, IntoView, RenderView, View, ViewState, impl_render_view};
+use flui_view::{BuildContextExt, Child, IntoView, RenderView, ViewState, impl_render_view};
 
 use crate::animated::vsync_scope::VsyncScope;
 
@@ -298,15 +298,7 @@ impl RenderView for AnimatedSizeRenderView {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(AnimatedSizeRenderView);

@@ -84,8 +84,9 @@
 //! every tracked device after a frame that changed the tree shape, with no
 //! new pointer motion (Flutter's implicit `MouseTracker.updateAllDevices`
 //! postframe recheck, `rendering/mouse_tracker.dart:366`) — used to be
-//! called exactly once in the whole workspace:
-//! `crates/flui-app/src/app/binding.rs`, inside the production frame path.
+//! called exactly once in the whole workspace — inside the production frame
+//! path (today `UiRealm::render_frame_entered`,
+//! `crates/flui-app/src/app/ui_realm.rs`).
 //! `flui-testing`'s `HeadlessBinding::pump_frame` (what
 //! `LaidOut::pump_widget`/`pump`/`tick` drive) never called it, so this
 //! widget-test harness could not observe or prove Flutter's "widget moves
@@ -1032,7 +1033,8 @@ fn a_childless_opaque_mouse_region_still_blocks_everything_beneath_it() {
 /// (`rendering/mouse_tracker.dart:366`), wired into
 /// [`HeadlessBinding::pump_frame`] (`crates/flui-testing/src/lib.rs`) to
 /// match the production frame path
-/// (`crates/flui-app/src/app/binding.rs`). Enter only, never hover: Flutter's
+/// (`UiRealm::render_frame_entered`, `crates/flui-app/src/app/ui_realm.rs`).
+/// Enter only, never hover: Flutter's
 /// own `_handleDeviceUpdateMouseEvents` (`mouse_tracker.dart:399-430`), the
 /// handler this recheck drives, synthesizes only enter/exit events — never a
 /// hover — and the upstream oracle test itself asserts `move` (hover) stays
@@ -1231,8 +1233,8 @@ fn rebuilding_a_hovered_region_down_to_no_callbacks_fires_nothing() {
 /// `PersistentCallbacks` slot as layout/paint — not after `drive_frame`
 /// returns. A post-frame callback an enter/exit callback queues must
 /// therefore land in the SAME frame's post-frame phase, matching production
-/// (`AppBinding::render_frame_entered`, `crates/flui-app/src/app/
-/// binding.rs`, which calls `MouseTracker::update_all_devices` from inside
+/// (`UiRealm::render_frame_entered`, `crates/flui-app/src/app/
+/// ui_realm.rs`, which calls `MouseTracker::update_all_devices` from inside
 /// the same `drive_frame` closure it runs its own layout/paint step in —
 /// see `crates/flui-app/src/app/runner.rs`) and the oracle
 /// (`_scheduleMouseTrackerUpdate` posts `updateAllDevices` from

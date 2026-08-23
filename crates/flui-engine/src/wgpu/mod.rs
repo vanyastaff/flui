@@ -58,6 +58,10 @@
 /// Advanced dst-read blend composite driver: backdrop copy, pipeline, and
 /// `flush_advanced_layer`.  No production caller exists yet (wired in PR-3);
 /// the synthetic-op GPU gate in this module is the authoritative WGSL gate.
+/// Shared adapter/device acquisition policy: the one `RequestAdapterOptions`
+/// used everywhere, the capability-negotiated `DeviceDescriptor`, and the
+/// composed offscreen acquisition the offscreen stacks share.
+mod adapter;
 pub(crate) mod advanced_blend;
 mod atlas;
 mod backend;
@@ -225,6 +229,13 @@ pub(crate) mod layer_render;
 // every host; with the env var unset every entry point is a no-op.
 #[cfg(test)]
 mod readback_dump;
+
+// test_support is the other half of the shared scaffolding: adapter/device
+// acquisition, render-target creation, clear passes, and the padded-row
+// staging readback that every GPU suite previously carried its own copy of.
+// GPU-only, so it is gated on `enable-wgpu-tests` like its consumers.
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod sdf_smoke_test;

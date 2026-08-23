@@ -19,9 +19,7 @@ use flui_tree::Single;
 use flui_types::{Offset, Pixels, Size};
 
 use flui_rendering::{
-    constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext},
-    parent_data::BoxParentData,
+    constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,
     traits::RenderBox,
 };
 
@@ -198,16 +196,7 @@ impl RenderBox for RenderLimitedBox {
         }
     }
 
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_own_size() {
-            return false;
-        }
-        if self.has_child {
-            ctx.hit_test_child_at_offset(0, Offset::ZERO)
-        } else {
-            false
-        }
-    }
+    flui_rendering::forward_single_child_box_hit_test!();
 
     flui_rendering::forward_single_child_intrinsics!();
 

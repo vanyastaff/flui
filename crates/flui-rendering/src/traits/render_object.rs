@@ -730,7 +730,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     fn detach(&mut self) {}
 
     // ========================================================================
-    // Children Access (для pipeline/owner.rs)
+    // Children Access (consumed by the pipeline walks in pipeline/owner/)
     // ========================================================================
 
     /// Returns the number of children for painting.

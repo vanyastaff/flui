@@ -73,15 +73,7 @@ impl RenderView for RepaintBoundary {
         flui_rendering::RenderUpdateImpact::NONE
     }
 
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
+    flui_view::single_child_view_children!();
 }
 
 // Hand-written rather than `impl_render_view!`, which emits only

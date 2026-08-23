@@ -2723,6 +2723,7 @@ mod realm_dispatch_tests {
     use flui_types::geometry::{Offset, Pixels};
 
     use super::*;
+    use crate::app::raster_test_support::TestRasterBackend;
 
     static_assertions::assert_impl_all!(PlatformToUi: Send);
 
@@ -2734,9 +2735,7 @@ mod realm_dispatch_tests {
     }
 
     fn test_window() -> std::sync::Arc<dyn flui_platform::traits::PlatformWindow> {
-        flui_platform::headless_platform()
-            .open_window(flui_platform::WindowOptions::default())
-            .expect("headless platform should create a test window")
+        crate::app::window_test_support::headless_test_window()
     }
 
     fn install_test_realm() -> RealmDispatcher {
@@ -3802,43 +3801,6 @@ mod realm_dispatch_tests {
             }
         }
 
-        struct CountingRasterBackend {
-            render_scene_calls: u32,
-        }
-
-        impl CountingRasterBackend {
-            fn new() -> Self {
-                Self {
-                    render_scene_calls: 0,
-                }
-            }
-        }
-
-        impl flui_engine::RasterBackend for CountingRasterBackend {
-            fn render_scene(
-                &mut self,
-                _scene: &flui_layer::Scene,
-            ) -> Result<bool, flui_engine::EngineError> {
-                self.render_scene_calls += 1;
-                Ok(true)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), flui_engine::EngineError> {
-                Ok(())
-            }
-        }
-
         let dispatcher = install_test_realm();
         dispatch_platform_realm(
             dispatcher,
@@ -3860,7 +3822,7 @@ mod realm_dispatch_tests {
         dispatch_platform_realm(
             dispatcher,
             RealmTask::Frame(Box::new(move |realm| {
-                let mut backend = CountingRasterBackend::new();
+                let mut backend = TestRasterBackend::always_presents();
                 initial_presented_in_frame.set(realm.render_frame_entered(&mut backend));
             })),
         )
@@ -3908,7 +3870,7 @@ mod realm_dispatch_tests {
         dispatch_platform_realm(
             dispatcher,
             RealmTask::Frame(Box::new(move |realm| {
-                let mut backend = CountingRasterBackend::new();
+                let mut backend = TestRasterBackend::always_presents();
                 repainted_in_frame.set(realm.render_frame_entered(&mut backend));
                 render_scene_calls_in_frame.set(backend.render_scene_calls);
             })),
@@ -4200,31 +4162,6 @@ mod realm_dispatch_tests {
     fn teardown_realm_a_mid_dispatch_leaves_realm_b_frame_producing() {
         use flui_widgets::SizedBox;
 
-        struct AlwaysPresentsBackend;
-        impl flui_engine::RasterBackend for AlwaysPresentsBackend {
-            fn render_scene(
-                &mut self,
-                _scene: &flui_layer::Scene,
-            ) -> Result<bool, flui_engine::EngineError> {
-                Ok(true)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (64, 64)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), flui_engine::EngineError> {
-                Ok(())
-            }
-        }
-
         let (dispatcher_a, dispatcher_b) = install_two_test_realms();
         let realm_a_id = dispatcher_a.address.realm_id;
 
@@ -4260,7 +4197,7 @@ mod realm_dispatch_tests {
         dispatch_platform_realm(
             dispatcher_b,
             RealmTask::Frame(Box::new(move |realm| {
-                let mut backend = AlwaysPresentsBackend;
+                let mut backend = TestRasterBackend::always_presents().with_size(64, 64);
                 *presented_in_frame.borrow_mut() = realm.render_frame_entered(&mut backend);
             })),
         )
@@ -7307,31 +7244,8 @@ mod desktop_pacing_tests {
     fn a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate()
      {
         use flui_animation::{Animation, AnimationController, AnimationStatus};
-        use flui_engine::{EngineError, RasterBackend};
-        use flui_layer::Scene;
 
-        struct AlwaysPresentsProbeBackend;
-
-        impl RasterBackend for AlwaysPresentsProbeBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                Ok(true)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
-        }
+        use crate::app::raster_test_support::TestRasterBackend;
 
         let realm = super::super::ui_realm::UiRealm::for_test();
         let controller = AnimationController::new(
@@ -7353,7 +7267,7 @@ mod desktop_pacing_tests {
         // check reads, without needing a real platform window to poke.
         realm.request_redraw();
 
-        let mut backend = AlwaysPresentsProbeBackend;
+        let mut backend = TestRasterBackend::always_presents();
         let mut now = Instant::now();
         let mut render_calls = 0u32;
         let mut skip_calls = 0u32;
@@ -7433,45 +7347,17 @@ mod desktop_pacing_tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        use flui_engine::{EngineError, RasterBackend};
         use flui_interaction::{
             GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
         };
-        use flui_layer::Scene;
 
-        struct CountingProbeBackend {
-            render_scene_calls: u32,
-        }
-
-        impl RasterBackend for CountingProbeBackend {
-            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
-                self.render_scene_calls += 1;
-                Ok(true)
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn is_device_lost(&self) -> bool {
-                false
-            }
-            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
-            fn mark_full_repaint(&mut self) {}
-            fn has_damage(&self) -> bool {
-                true
-            }
-            fn size(&self) -> (u32, u32) {
-                (800, 600)
-            }
-            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-                Ok(())
-            }
-        }
+        use crate::app::raster_test_support::TestRasterBackend;
 
         let realm = super::super::ui_realm::UiRealm::for_test();
         realm
             .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
             .expect("attach succeeds");
-        let mut backend = CountingProbeBackend {
-            render_scene_calls: 0,
-        };
+        let mut backend = TestRasterBackend::always_presents();
 
         // Settle the attach's own first paint, through the real gate --
         // so the "instant response" check at the end has real content to

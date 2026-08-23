@@ -47,44 +47,19 @@ mod gpu_tests {
     // ── Harness helpers ───────────────────────────────────────────────────────
 
     fn acquire_test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .expect("a GPU adapter must be available for shape_blend_tests");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("ShapeBlend Test Device"),
-            ..Default::default()
-        }))
-        .expect("a GPU device must be available for shape_blend_tests");
-        (Arc::new(device), Arc::new(queue))
+        crate::wgpu::test_support::test_device_and_queue("ShapeBlend Test Device")
     }
 
     /// Create a sampleable surface texture (RENDER_ATTACHMENT | TEXTURE_BINDING |
     /// COPY_SRC | COPY_DST) needed for advanced blend backdrop reads.
     fn create_sampleable_surface(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("ShapeBlend Test Surface"),
-            size: wgpu::Extent3d {
-                width: SURFACE_WIDTH,
-                height: SURFACE_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: SURFACE_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
+        crate::wgpu::test_support::create_sampleable_target(
+            device,
+            "ShapeBlend Test Surface",
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+            SURFACE_FORMAT,
+        )
     }
 
     /// Fill the entire surface with a solid colour via a clear pass.
@@ -92,30 +67,9 @@ mod gpu_tests {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
-        clear_color: wgpu::Color,
+        color: wgpu::Color,
     ) {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("ShapeBlend Surface Fill"),
-        });
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ShapeBlend Fill Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear_color),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        queue.submit(std::iter::once(encoder.finish()));
+        crate::wgpu::test_support::clear_target(device, queue, view, color);
     }
 
     /// Read all pixels from `texture` and return RGBA bytes (row-major).
@@ -124,77 +78,13 @@ mod gpu_tests {
         queue: &wgpu::Queue,
         texture: &wgpu::Texture,
     ) -> Vec<[u8; 4]> {
-        let bytes_per_pixel = 4u32;
-        let unpadded_row_bytes = SURFACE_WIDTH * bytes_per_pixel;
-        let row_alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_row_bytes = unpadded_row_bytes.div_ceil(row_alignment) * row_alignment;
-        let staging_size = u64::from(padded_row_bytes * SURFACE_HEIGHT);
-
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ShapeBlend Readback Staging"),
-            size: staging_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut copy_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("ShapeBlend Readback Encoder"),
-        });
-        copy_encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_row_bytes),
-                    rows_per_image: Some(SURFACE_HEIGHT),
-                },
-            },
-            wgpu::Extent3d {
-                width: SURFACE_WIDTH,
-                height: SURFACE_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(std::iter::once(copy_encoder.finish()));
-
-        let pixel_slice = staging.slice(..);
-        pixel_slice.map_async(wgpu::MapMode::Read, |_| {});
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .expect("GPU readback poll must complete");
-
-        let raw_bytes = pixel_slice
-            .get_mapped_range()
-            .expect("staging buffer must be mapped: the poll above waited for the map to complete");
-        let pixel_count = (SURFACE_WIDTH * SURFACE_HEIGHT) as usize;
-        let mut pixels = Vec::with_capacity(pixel_count);
-        for row_index in 0..SURFACE_HEIGHT {
-            let row_start = (row_index * padded_row_bytes) as usize;
-            for col_index in 0..SURFACE_WIDTH {
-                let byte_offset = row_start + col_index as usize * 4;
-                pixels.push([
-                    raw_bytes[byte_offset],
-                    raw_bytes[byte_offset + 1],
-                    raw_bytes[byte_offset + 2],
-                    raw_bytes[byte_offset + 3],
-                ]);
-            }
-        }
-        crate::wgpu::readback_dump::dump_frame(
+        crate::wgpu::test_support::readback_pixels(
+            device,
+            queue,
+            texture,
             SURFACE_WIDTH,
             SURFACE_HEIGHT,
-            bytemuck::cast_slice(&pixels),
-        );
-        pixels
+        )
     }
 
     /// CPU oracle: `Color::blend(src, dst, mode)` → premultiplied RGBA u8.
