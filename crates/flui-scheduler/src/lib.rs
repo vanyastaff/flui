@@ -185,7 +185,7 @@ mod post_frame;
 
 pub use web_time::Instant;
 // Re-exports - Duration types
-pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};
+pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};
 pub use frame::{
     AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder,
     LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback,
@@ -208,7 +208,7 @@ pub mod prelude {
         BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
         Priority, SchedulerPhase, Task, TaskId, TaskQueue, Ticker, TickerProvider, TickerState,
         UpdateScheduler,
-        duration::{FrameDuration, Milliseconds, Percentage, Seconds},
+        duration::{BudgetPercentage, FrameDuration, Milliseconds, Seconds},
     };
 }
 

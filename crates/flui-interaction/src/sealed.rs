@@ -166,7 +166,7 @@ pub trait CustomHitTestable: Send + Sync {
 pub mod hit_testable {
     /// Marker supertrait sealing `HitTestable`; implemented automatically for
     /// every [`CustomHitTestable`](super::CustomHitTestable) via blanket impl.
-    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    pub trait Sealed {}
 
     // Blanket impl: any CustomHitTestable automatically gets Sealed
     impl<T: super::CustomHitTestable> Sealed for T {}
@@ -184,7 +184,7 @@ pub mod gesture_recognizer {
     /// Marker supertrait sealing `GestureRecognizer`; implemented for the
     /// built-in recognisers and automatically for every
     /// [`CustomGestureRecognizer`](super::CustomGestureRecognizer).
-    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    pub trait Sealed {}
 
     // Blanket impl: any CustomGestureRecognizer automatically gets Sealed
     impl<T: super::CustomGestureRecognizer> Sealed for T {}
@@ -212,7 +212,7 @@ pub mod arena_member {
     /// Marker supertrait sealing `GestureArenaMember`; implemented for the
     /// built-in recognisers and automatically for every
     /// [`CustomGestureRecognizer`](super::CustomGestureRecognizer).
-    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    pub trait Sealed {}
 
     // Blanket impl: any CustomGestureRecognizer automatically gets Sealed
     impl<T: super::CustomGestureRecognizer> Sealed for T {}
@@ -235,5 +235,5 @@ pub mod arena_member {
 /// This restricts which types can receive keyboard focus.
 pub mod focus_node {
     /// Marker supertrait restricting which types can receive keyboard focus.
-    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    pub trait Sealed {}
 }

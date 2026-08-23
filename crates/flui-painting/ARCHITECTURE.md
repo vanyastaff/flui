@@ -108,17 +108,17 @@ This section records places where the Rust shape diverges from the Dart/Skia sha
 
 **Accepted trade-off:** Release builds silently log the imbalance via tracing rather than surface it as an error. Developer-facing test builds catch the imbalance via panic. The trade matches Flutter's behaviour and avoids the workspace ripple. Verdict §12 rejected design "Make `Canvas::finish()` fallible".
 
-### 6. `Paint.clone()` per `Canvas::draw_*` deferred (measured benefit needed)
+### 6. `Paint` interning per `Canvas::draw_*` (per-canvas `Arc<Paint>` pool)
 
-**Rule:** No-quick-wins memo's "concrete-blocker-with-named-dependency" exception; verdict §9 (Data-Oriented Notes) and §12 (Rejected Designs entry "Paint interning at construction").
+**Rule:** No-quick-wins memo's "concrete-blocker-with-named-dependency" exception; verdict §9 (Data-Oriented Notes).
 
-**Choice:** Every `Canvas::draw_*` method clones the `Paint` parameter into the emitted `DrawCommand`. For 1,000+ commands per frame with reused `Paint`, this is measurable allocation churn (~80-200 bytes per clone). The Mythos chain Step 9 audit documented the cost but deferred the optimisation -- Paint interning requires `Paint: Hash + Eq` (Paint contains `f32` colour components; not `Eq`), a per-canvas interning table, engine-side handle resolution, and a measured benchmark on realistic workloads.
+**Choice:** Every `Canvas::draw_*` method routes its `Paint` parameter through the crate-private `Canvas::intern_paint` ([`src/canvas/mod.rs`](src/canvas/mod.rs)): a per-canvas `Vec<Arc<Paint>>` pool is scanned linearly for a structurally equal entry; a hit returns an `Arc::clone` (one refcount bump), a miss allocates one `Arc::new(paint.clone())` to seed the pool. `DrawCommand` variants carry `paint: Arc<Paint>` ([`src/display_list/command.rs`](src/display_list/command.rs)), and `flui-engine` reads `&Paint` through the `Arc` at GPU lowering, so no handle-resolution table exists on the engine side. This was initially deferred behind named blockers (`Paint: Hash + Eq`, engine-side handle resolution); the shape that landed dissolves both.
 
 **Alternatives:**
-- Implement Paint interning now -- rejected. Real optimisation, but the blocker chain is named (`Paint: Hash + Eq` requires either bit-pattern hashing of `f32` or `ordered-float` wrapping; per-canvas table is new state on `Canvas`; engine handle resolution is a wgpu-backend change; measured benchmark requires a criterion harness). Each blocker is concrete external work.
+- `PaintHandle(NonZeroU32)` + per-canvas table + engine-side handle resolution -- rejected. Requires `Paint: Hash + Eq` (Paint contains `f32` colour components, so bit-pattern hashing or `ordered-float` wrapping) and a coordinated wgpu-backend change; the `Arc<Paint>` shape gets the same allocation win with neither, and realistic canvases hold few distinct paints (1-8 typical), so linear structural comparison beats a hash table anyway (see the [`Canvas::paint_pool`](src/canvas/mod.rs) doc).
 - Use `Cow<'a, Paint>` borrowing in `DrawCommand` -- rejected. Adds lifetime complexity to every `DrawCommand` variant; would force the `DisplayList` to hold the source borrows for its lifetime; ripples into `Arc<DisplayList>` retained-layer use cases where the borrow source is gone.
 
-**Accepted trade-off:** Per-`draw_*` Paint allocation cost is paid by every recorded command today. Filed as Outstanding refactor; tracked in [`docs/research/2026-05-20-flui-painting-alloc-audit.md`](../../docs/research/2026-05-20-flui-painting-alloc-audit.md) with named blockers. Verdict §12 rejected design "Paint interning at construction".
+**Accepted trade-off:** The first use of a distinct paint still pays one full `Paint::clone` (~80-200 bytes incl. optional `Box<Shader>` payload) to seed the pool, and every draw pays an O(distinct-paints) linear scan. Both amortise across a recording; no criterion benchmark has measured the win on a realistic workload (see Outstanding refactors "Paint interning at construction").
 
 ### Net unsafe delta: 0
 
@@ -151,13 +151,11 @@ The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before a
 
 Known sites that do not yet match the methodology but are not violations of the current refusal triggers. Each entry names the site and the next planned step.
 
-### Allocation hot path: `Paint.clone()` per draw_*
+### Allocation hot path: `Paint.clone()` per draw_* -- landed as per-canvas `Arc<Paint>` interning
 
 **Site:** Every `Canvas::draw_*` method in [`src/canvas/drawing.rs`](src/canvas/drawing.rs).
 
-**Cost:** ~80-200 bytes per draw call. For 1000+ commands per frame with reused `Paint`, measurable. Documented in [`docs/research/2026-05-20-flui-painting-alloc-audit.md`](../../docs/research/2026-05-20-flui-painting-alloc-audit.md) finding F1.
-
-**Status:** Deferred to Outstanding refactor "Paint interning at construction" (named blockers: `Paint: Hash + Eq`, per-canvas table, engine handle resolution, measured benchmark).
+**Status:** Landed. `Canvas::intern_paint` ([`src/canvas/mod.rs`](src/canvas/mod.rs)) dedups structurally equal paints into a per-canvas `Arc<Paint>` pool, so a repeated paint costs one refcount bump instead of a full `Paint::clone` (~80-200 bytes); `DrawCommand` carries `paint: Arc<Paint>`. See Mapping decision #6 for the landed shape and Outstanding refactors "Paint interning at construction" for the one narrowed remainder (no measured benchmark). Original cost analysis: [`docs/research/2026-05-20-flui-painting-alloc-audit.md`](../../docs/research/2026-05-20-flui-painting-alloc-audit.md) finding F1.
 
 ### Allocation hot path: per-`DrawCommand` 64-byte `Matrix4` baking
 
@@ -206,11 +204,11 @@ Known sites that do not yet match the methodology but are not violations of the 
 
 **Status:** No verified breakage during the chain. If doctest failures surface in a future audit, they get tracked here.
 
-### CLAUDE.md drift (workspace-wide)
+### CLAUDE.md drift (workspace-wide) -- resolved
 
-**Site:** [`CLAUDE.md`](../../CLAUDE.md) "Current Development Focus" section.
+**Site:** [`CLAUDE.md`](../../CLAUDE.md).
 
-**Status:** Pre-existing per `flui-rendering` and `flui-layer` chains' deferred lists; not addressed here. Workspace-level housekeeping PR will reconcile CLAUDE.md vs AGENTS.md vs `docs/crates.md`.
+**Status:** Resolved. The root `CLAUDE.md` no longer carries a "Current Development Focus" crate inventory at all -- it is a thin shim that imports [`AGENTS.md`](../../AGENTS.md), so there is no second crate list left to drift. The active-crate inventory lives in [`docs/crates.md`](../../docs/crates.md) and the root `Cargo.toml` workspace members.
 
 ---
 
@@ -218,17 +216,11 @@ Known sites that do not yet match the methodology but are not violations of the 
 
 Concrete cleanups visible from `flui-painting` outward, sized for an `/aif-implement` dispatch. Each entry names a file/site and what would need to change. Named blockers are flagged per the no-quick-wins memo's "concrete-blocker-with-named-dependency" exception.
 
-### "Paint interning at construction"
+### "Paint interning at construction" (landed)
 
-**Goal:** Replace per-`Canvas::draw_*` `Paint::clone()` with a per-canvas interning table; `DrawCommand` variants carry `PaintHandle(NonZeroU32)` instead of `Paint`. Engine resolves handle to `&Paint` at GPU lowering.
+**Goal (met):** Replace per-`Canvas::draw_*` `Paint::clone()` with per-canvas interning. Landed as `Canvas::intern_paint` over a per-canvas `Vec<Arc<Paint>>` pool ([`src/canvas/mod.rs`](src/canvas/mod.rs)), cleared on `reset()`; `DrawCommand` variants carry `paint: Arc<Paint>` ([`src/display_list/command.rs`](src/display_list/command.rs)). The landed shape differs from the one sketched here -- structural-equality linear scan instead of `Paint: Hash + Eq` (realistic canvases hold 1-8 distinct paints, so a hash table loses), and `Arc` deref instead of `PaintHandle(NonZeroU32)` + engine-side resolution (`flui-engine` reads `&Paint` through the `Arc` unchanged). See Mapping decision #6.
 
-**Files:** [`src/canvas/drawing.rs`](src/canvas/drawing.rs), [`src/display_list/command.rs`](src/display_list/command.rs), [`src/display_list/command_ops.rs`](src/display_list/command_ops.rs), [`src/canvas/mod.rs`](src/canvas/mod.rs); ripples into `flui-engine`'s wgpu backend.
-
-**Named blockers:**
-- `Paint: Hash + Eq` -- Paint contains `f32` color components; not `Eq`. Requires bit-pattern hashing of `f32` or `ordered-float` wrapping.
-- Per-canvas interning table -- new state on `Canvas`; must be cleared on `reset()`.
-- Engine-side handle resolution in `flui-engine`'s wgpu backend.
-- Measured benchmark via criterion harness for a 1,000-`draw_rect` synthetic workload.
+**Still open (narrowed):** the measured criterion benchmark for a 1,000-`draw_rect` synthetic workload was never captured; the win is reasoned, not measured.
 
 **Reference:** [`docs/research/2026-05-20-flui-painting-alloc-audit.md`](../../docs/research/2026-05-20-flui-painting-alloc-audit.md) finding F1.
 
@@ -355,4 +347,4 @@ scripts without whitespace word breaks.
 - **Post-fixup test counts** (after code-review fixup pass 2): `cargo test -p flui-painting --lib` → 23 passing; `cargo test -p flui-painting --tests` → 141 passing across 13 integration files with default features; `cargo test --no-default-features -p flui-painting --tests` → 75 passing (cosmic-text-shape-dependent tests cfg-gated out, fallback tests cfg-gated in). Combined lib+tests under default features: 164; combined lib+tests under no-default features: 93.
 - **`port-check.sh` re-confirmed in Mythos chain Step 13** to cover the post-split `crates/flui-painting/src/` subdirectories (Triggers 1, 2, 3).
 - **Companion docs preserved.** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) + [`docs/README.md`](docs/README.md) stay alongside this templated file per the [`docs/PORT.md`](../../docs/PORT.md) graft instructions.
-- **CLAUDE.md drift** noted in `## Friction log`. Not addressed by this chain.
+- **CLAUDE.md drift** recorded in `## Friction log` is resolved: the root `CLAUDE.md` is now a thin shim importing `AGENTS.md` and carries no crate inventory.

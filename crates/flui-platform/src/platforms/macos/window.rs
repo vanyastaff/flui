@@ -2,7 +2,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::Result;
 use cocoa::{
     appkit::{NSBackingStoreType, NSWindowStyleMask},
     base::{BOOL, NO, YES, id, nil},
@@ -27,7 +26,7 @@ use super::view;
 use crate::{
     config::WindowConfiguration,
     shared::WindowCallbacks,
-    traits::{CursorError, PlatformWindow, WindowId, WindowOptions},
+    traits::{CursorError, OpenWindowError, PlatformWindow, WindowId, WindowOptions},
 };
 
 /// macOS window wrapper around NSWindow
@@ -99,11 +98,15 @@ impl std::fmt::Debug for MacOSWindow {
 
 impl MacOSWindow {
     /// Create a new macOS window
+    ///
+    /// # Errors
+    /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
+    /// NSWindow.
     pub fn new(
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
         config: WindowConfiguration,
-    ) -> Result<Arc<Self>> {
+    ) -> Result<Arc<Self>, OpenWindowError> {
         // SAFETY: must run on the main thread (enforced by the platform's
         // event-loop ownership); all messaged objects are alive: the freshly
         // allocated NSWindow is checked for nil before further use.
@@ -139,7 +142,9 @@ impl MacOSWindow {
             ];
 
             if ns_window == nil {
-                return Err(anyhow::anyhow!("Failed to create NSWindow"));
+                return Err(OpenWindowError::Backend {
+                    message: "Failed to create NSWindow".to_string(),
+                });
             }
 
             // Set window title

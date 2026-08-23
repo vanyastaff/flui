@@ -30,7 +30,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
-use crate::duration::{FrameDuration, Milliseconds, Percentage, Seconds};
+use crate::duration::{BudgetPercentage, FrameDuration, Milliseconds, Seconds};
 
 /// Unique frame identifier using type-safe ID from `flui_foundation`.
 ///
@@ -648,8 +648,8 @@ impl FrameTiming {
 
     /// Get budget utilization as percentage
     #[inline]
-    pub fn utilization(&self) -> Percentage {
-        Percentage::from_ratio(self.elapsed_ms() / self.target_duration_ms())
+    pub fn utilization(&self) -> BudgetPercentage {
+        BudgetPercentage::from_ratio(self.elapsed_ms() / self.target_duration_ms())
     }
 
     /// Check if deadline is near (>80% budget used)

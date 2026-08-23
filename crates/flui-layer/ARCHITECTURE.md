@@ -149,13 +149,9 @@ had no `From<PerformanceOverlayLayer>` impl at all, forcing its one construction
 
 **Next planned step:** extract to `tests/link_registry.rs` if/when the file is touched for another reason. Not blocking.
 
-### CLAUDE.md still lists `flui-layer` as disabled / mid-integration
+### CLAUDE.md crate-inventory drift -- RESOLVED
 
-**Site:** [`CLAUDE.md`](../../CLAUDE.md) "Current Development Focus" section.
-
-**Violation:** none. CLAUDE.md lists `flui-rendering`, `flui-view`, `flui-app`, `flui-hot-reload` as "Temporarily disabled" while `AGENTS.md` and [`docs/crates.md`](../../docs/crates.md) correctly mark them active. The `flui-rendering` chain (PR #77) also called out this drift as deferred to a separate housekeeping PR.
-
-**Next planned step:** sync CLAUDE.md with `AGENTS.md`/`docs/crates.md` in a follow-up housekeeping PR. Not blocking.
+The root [`CLAUDE.md`](../../CLAUDE.md) once listed `flui-rendering`, `flui-view`, `flui-app`, `flui-hot-reload` as "Temporarily disabled" while `AGENTS.md` and [`docs/crates.md`](../../docs/crates.md) correctly marked them active. That drift is gone: `CLAUDE.md` is now a thin shim that imports [`AGENTS.md`](../../AGENTS.md) and carries no crate inventory of its own, so there is no second crate list left to drift. The active-crate inventory lives in [`docs/crates.md`](../../docs/crates.md) and the root `Cargo.toml` workspace members.
 
 ---
 

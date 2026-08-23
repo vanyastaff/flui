@@ -78,12 +78,13 @@ impl Renderer {
 
 #### Arc-based Sharing (Future)
 
-<!-- REVIEW_BY: 2026-09-22 — audit P-18 cadence marker; mirrors the
-marker on `crates/flui-painting/docs/ARCHITECTURE.md` §Future
-Enhancements §1 (Arc-based DisplayList). Re-justify or delete by the
-review date. Note that cycle 5 U10 already interns `Paint` behind
-`Arc` per-command (audit P-7); the remaining work in this item is the
-whole-`DisplayList`-behind-`Arc` shape sketched below. -->
+<!-- REVIEW_BY: 2026-12-22 — scheduled re-check; mirrors the marker on
+`crates/flui-painting/docs/ARCHITECTURE.md` §Future Enhancements §1
+(Arc-based DisplayList). Still deferred: per-command `Paint` interning
+landed (`DrawCommand` carries `Arc<Paint>`), but `DisplayList::clone()`
+is still a deep copy of the command vector and no consumer has measured
+a need for the whole-list `Arc` wrapper sketched below. Re-justify or
+delete by the review date. -->
 
 Currently, `DisplayList::clone()` does a deep copy. Future versions will use Arc:
 

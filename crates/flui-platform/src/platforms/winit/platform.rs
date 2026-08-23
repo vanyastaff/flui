@@ -76,7 +76,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Result;
 use flui_foundation::{ClaimOutcome, ClaimSlot};
 use keyboard_types::Modifiers as KeyboardModifiers;
 use parking_lot::Mutex;
@@ -101,6 +100,7 @@ use super::{
 };
 use crate::{
     data_transfer::DataTransferSource,
+    error::{BootstrapError, PlatformError},
     executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
@@ -418,10 +418,23 @@ impl WinitPlatform {
     ///
     /// This is the main entry point for the platform. It creates the event
     /// loop, initializes the platform, and runs until quit is requested.
-    pub fn run_event_loop(self: Arc<Self>, on_ready: PlatformReadyCallback) -> Result<()> {
+    ///
+    /// # Errors
+    /// Same contract as [`Platform::run`]: [`PlatformError::Bootstrap`] for
+    /// an `on_ready` failure, [`PlatformError::EventLoop`] for a loop-level
+    /// failure (including a second `run` on the same platform).
+    pub fn run_event_loop(
+        self: Arc<Self>,
+        on_ready: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         tracing::info!("Creating winit event loop");
 
-        let event_loop = EventLoop::builder().build()?;
+        let event_loop =
+            EventLoop::builder()
+                .build()
+                .map_err(|error| PlatformError::EventLoop {
+                    message: error.to_string(),
+                })?;
         let event_loop_proxy = event_loop.create_proxy();
         let wake_owner = Arc::new(move || {
             if event_loop_proxy.send_event(()).is_err() {
@@ -445,7 +458,11 @@ impl WinitPlatform {
             control.request_quit();
         }
 
-        let result = event_loop.run_app(&mut app).map_err(anyhow::Error::from);
+        let result = event_loop
+            .run_app(&mut app)
+            .map_err(|error| PlatformError::EventLoop {
+                message: error.to_string(),
+            });
         // Taken before `finish_shutdown` only so the borrow shape stays
         // simple — `finish_shutdown` does not touch this field.
         let bootstrap_error = app.bootstrap_error.take();
@@ -454,7 +471,11 @@ impl WinitPlatform {
         combine_shutdown_result(bootstrap_error, result)
     }
 
-    fn install_control_lane(&self, owner_thread: ThreadId, control: ControlSender) -> Result<bool> {
+    fn install_control_lane(
+        &self,
+        owner_thread: ThreadId,
+        control: ControlSender,
+    ) -> Result<bool, PlatformError> {
         self.with_state(|state| {
             let previous = std::mem::replace(&mut state.run_state, WinitRunState::Stopped);
             match previous {
@@ -467,9 +488,9 @@ impl WinitPlatform {
                 }
                 other => {
                     state.run_state = other;
-                    Err(anyhow::anyhow!(
-                        "the winit event loop can only be started once"
-                    ))
+                    Err(PlatformError::EventLoop {
+                        message: "the winit event loop can only be started once".to_string(),
+                    })
                 }
             }
         })
@@ -503,7 +524,7 @@ impl WinitPlatform {
         &self,
         event_loop: &ActiveEventLoop,
         options: WindowOptions,
-    ) -> Result<WindowId> {
+    ) -> Result<WindowId, OpenWindowError> {
         let mut attributes = WindowAttributes::default()
             .with_title(options.title)
             .with_inner_size(winit::dpi::LogicalSize::new(
@@ -523,7 +544,11 @@ impl WinitPlatform {
                 .with_max_inner_size(winit::dpi::LogicalSize::new(max.width.0, max.height.0));
         }
 
-        let raw_window = Arc::new(event_loop.create_window(attributes)?);
+        let raw_window = Arc::new(event_loop.create_window(attributes).map_err(|error| {
+            OpenWindowError::Backend {
+                message: format!("winit window creation failed: {error}"),
+            }
+        })?);
         let winit_id = raw_window.id();
         // Allocate the platform identity before constructing the wrapper so
         // `WinitWindow` can carry its own `id()` from the start, rather than
@@ -544,12 +569,17 @@ impl WinitPlatform {
     /// exact stored allocation as a [`PlatformWindow`]. Named `window_by_id`
     /// (not `window_handle`) to avoid colliding with the unrelated
     /// [`PlatformWindow::window_handle`] raw GPU-handle accessor.
-    fn window_by_id(&self, window_id: WindowId) -> Result<Arc<dyn PlatformWindow>> {
+    fn window_by_id(
+        &self,
+        window_id: WindowId,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         self.with_state(|state| {
             state
                 .windows
                 .get(&window_id)
-                .ok_or_else(|| anyhow::anyhow!("Window not found in state"))
+                .ok_or_else(|| OpenWindowError::Backend {
+                    message: "Window not found in state".to_string(),
+                })
                 .map(|window| Arc::clone(window) as Arc<dyn PlatformWindow>)
         })
     }
@@ -657,18 +687,18 @@ impl Drop for ExitPolicyHookLease<'_> {
 /// drop the actual bootstrap failure exactly when
 /// [`WinitApp::request_exit`]'s own `event_loop.exit()` call produces a
 /// winit-level error of its own — the one scenario this whole design
-/// exists to get right. When both are present, the loop error is attached
-/// as `.context()` on top of the bootstrap error, so neither is lost: the
-/// bootstrap error's own chain is still reachable via `{:?}`/`.chain()` on
-/// the returned value.
+/// exists to get right. When both are present, the loop error rides along
+/// in [`PlatformError::Bootstrap`]'s `loop_error` field on top of the
+/// bootstrap error, so neither is lost: the bootstrap error's own chain is
+/// still reachable via `Error::source()` on the returned value.
 fn combine_shutdown_result(
-    bootstrap_error: Option<anyhow::Error>,
-    result: Result<()>,
-) -> Result<()> {
+    bootstrap_error: Option<BootstrapError>,
+    result: Result<(), PlatformError>,
+) -> Result<(), PlatformError> {
     match bootstrap_error {
-        Some(error) => Err(match result {
-            Ok(()) => error,
-            Err(loop_error) => error.context(loop_error),
+        Some(source) => Err(PlatformError::Bootstrap {
+            source,
+            loop_error: result.err().map(|error| error.to_string()),
         }),
         None => result,
     }
@@ -755,9 +785,10 @@ struct WinitApp {
     /// window creation, GPU init, root-widget attach — has no other return
     /// path back to `Platform::run`'s caller). `resumed` stashes it
     /// here and requests exit; `run_event_loop` propagates it out of `run`
-    /// once the loop has actually unwound, rather than swallowing it into a
-    /// bare `tracing::error!` while the loop keeps pumping a half-built app.
-    bootstrap_error: Option<anyhow::Error>,
+    /// (wrapped as [`PlatformError::Bootstrap`]) once the loop has actually
+    /// unwound, rather than swallowing it into a bare `tracing::error!`
+    /// while the loop keeps pumping a half-built app.
+    bootstrap_error: Option<BootstrapError>,
     /// Harness self-close deadline, armed from `FLUI_SELF_CLOSE_AFTER_MS` at
     /// loop start. When it expires, [`WinitApp::fire_self_close_if_due`]
     /// synthesizes `WindowEvent::CloseRequested` for one tracked window —
@@ -1593,9 +1624,7 @@ impl WinitApp {
                             }
                         }
                         Err(backend_error) => {
-                            let _ = guard.complete(Err(OpenWindowError::Backend {
-                                message: backend_error.to_string(),
-                            }));
+                            let _ = guard.complete(Err(backend_error));
                         }
                     }
                 }
@@ -1773,7 +1802,7 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.background_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
         tracing::info!("Starting winit event loop via Platform::run()");
         let platform = Arc::new(*self);
         // Generic wording, not "Winit event loop error": the propagated
@@ -1843,7 +1872,10 @@ impl Platform for WinitPlatform {
         });
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+    fn open_window(
+        &self,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         tracing::info!(?options, "Requesting window creation");
 
         // Same-thread fast path: called synchronously from inside `on_ready`
@@ -1866,27 +1898,44 @@ impl Platform for WinitPlatform {
             return self.window_by_id(window_id);
         }
 
-        let control = self
-            .with_state(|state| {
-                state
-                    .run_state
-                    .control_for_open_window(thread::current().id())
-            })
-            .map_err(|error| match error {
-                OpenWindowStateError::NotRunning => anyhow::anyhow!(
-                    "open_window called before Platform::run — on the winit backend, \
-                     create the first windows inside run()'s on_ready callback"
-                ),
-                OpenWindowStateError::Starting => anyhow::anyhow!(
-                    "open_window called from another thread before winit finished on_ready"
-                ),
-                OpenWindowStateError::OwnerWouldBlock => anyhow::anyhow!(
-                    "open_window cannot block the winit event-loop owner outside on_ready"
-                ),
-                OpenWindowStateError::Stopped => {
-                    anyhow::anyhow!("open_window called after the winit event loop stopped")
-                }
-            })?;
+        let control = match self.with_state(|state| {
+            state
+                .run_state
+                .control_for_open_window(thread::current().id())
+        }) {
+            Ok(control) => control,
+            // The loop has stopped: the owner is genuinely gone, and the
+            // untouched options ride back so the caller can retry against a
+            // fresh platform without rebuilding them.
+            Err(OpenWindowStateError::Stopped) => {
+                return Err(OpenWindowError::OwnerGone {
+                    rejected: Some(options),
+                });
+            }
+            // Lifecycle refusals: the loop is not (yet) in a state that can
+            // service this call site — typed as `Unavailable`, distinct
+            // from a dead owner.
+            Err(state_error) => {
+                return Err(OpenWindowError::Unavailable {
+                    message: match state_error {
+                        OpenWindowStateError::NotRunning => {
+                            "open_window called before Platform::run — on the winit backend, \
+                             create the first windows inside run()'s on_ready callback"
+                        }
+                        OpenWindowStateError::Starting => {
+                            "open_window called from another thread before winit finished \
+                             on_ready"
+                        }
+                        OpenWindowStateError::OwnerWouldBlock => {
+                            "open_window cannot block the winit event-loop owner outside \
+                             on_ready"
+                        }
+                        OpenWindowStateError::Stopped => unreachable!("BUG: handled above"),
+                    }
+                    .to_string(),
+                });
+            }
+        };
 
         // The command crosses threads as data only. The owner creates the
         // window and completes this claim-slot request (ADR-0039 §3)
@@ -1895,13 +1944,11 @@ impl Platform for WinitPlatform {
             .request_open_window(options)
             .map_err(|error| match error {
                 ControlSendError::Full { capacity, rejected } => {
-                    drop(rejected);
-                    anyhow::anyhow!("winit owner-control lane is full (capacity {capacity})")
+                    OpenWindowError::LaneFull { capacity, rejected }
                 }
-                ControlSendError::OwnerGone { rejected } => {
-                    drop(rejected);
-                    anyhow::anyhow!("winit event-loop owner is no longer available")
-                }
+                ControlSendError::OwnerGone { rejected } => OpenWindowError::OwnerGone {
+                    rejected: Some(rejected),
+                },
             })?;
 
         tracing::debug!("Waiting for window creation response");
@@ -1913,16 +1960,12 @@ impl Platform for WinitPlatform {
         // `OwnerGone` is real, though: the event-loop owner can disconnect
         // (quit, panic-unwind) while this request is in flight on the lane.
         let window = match handle.wait() {
-            ClaimOutcome::Delivered(result) => {
-                result.map_err(|error| anyhow::anyhow!("winit window creation failed: {error}"))?
-            }
+            ClaimOutcome::Delivered(result) => result?,
             ClaimOutcome::AlreadyClaimed => {
                 unreachable!("BUG: this handle is never polled by another caller before wait")
             }
             ClaimOutcome::OwnerGone => {
-                return Err(anyhow::anyhow!(
-                    "winit event-loop owner disconnected before delivering the window"
-                ));
+                return Err(OpenWindowError::OwnerGone { rejected: None });
             }
         };
 
@@ -2068,8 +2111,10 @@ impl Platform for WinitPlatform {
         }
     }
 
-    fn app_path(&self) -> Result<PathBuf> {
-        std::env::current_exe().map_err(Into::into)
+    fn app_path(&self) -> Result<PathBuf, PlatformError> {
+        std::env::current_exe().map_err(|error| PlatformError::AppPath {
+            message: error.to_string(),
+        })
     }
 }
 
@@ -2093,17 +2138,8 @@ impl OwnerHooks for WinitOwnerHooks {
             // inside the same nested `on_ready` invocation that publishes
             // `ACTIVE_EVENT_LOOP`.
             let event_loop = unsafe { event_loop_ptr.as_ref() };
-            let window_id = self
-                .platform
-                .create_window_now(event_loop, options)
-                .map_err(|error| OpenWindowError::Backend {
-                    message: error.to_string(),
-                })?;
-            let window = self.platform.window_by_id(window_id).map_err(|error| {
-                OpenWindowError::Backend {
-                    message: error.to_string(),
-                }
-            })?;
+            let window_id = self.platform.create_window_now(event_loop, options)?;
+            let window = self.platform.window_by_id(window_id)?;
             return Ok(WindowOpen::Ready(window));
         }
 
@@ -2228,6 +2264,7 @@ mod tests {
         WinitRunState, combine_shutdown_result,
     };
     use crate::{
+        error::PlatformError,
         platforms::winit::control::{ControlCommand, control_lane},
         traits::{Platform, PlatformWindow, ProxySendError, WindowOptions, owner::ProxyTransport},
     };
@@ -2257,16 +2294,30 @@ mod tests {
 
     #[test]
     fn combine_shutdown_result_surfaces_a_lone_bootstrap_error() {
-        let error = combine_shutdown_result(Some(anyhow::anyhow!("bootstrap failed")), Ok(()))
+        let error = combine_shutdown_result(Some("bootstrap failed".into()), Ok(()))
             .expect_err("a stashed bootstrap error must be Err even when the loop exits cleanly");
-        assert_eq!(error.to_string(), "bootstrap failed");
+        match &error {
+            PlatformError::Bootstrap { source, loop_error } => {
+                assert_eq!(source.to_string(), "bootstrap failed");
+                assert!(
+                    loop_error.is_none(),
+                    "no loop error occurred, so none may be attached: {loop_error:?}"
+                );
+            }
+            other => panic!("expected PlatformError::Bootstrap, got: {other:?}"),
+        }
     }
 
     #[test]
     fn combine_shutdown_result_surfaces_a_lone_loop_error() {
-        let error = combine_shutdown_result(None, Err(anyhow::anyhow!("loop failed")))
-            .expect_err("a loop-level error with no bootstrap error must still be Err");
-        assert_eq!(error.to_string(), "loop failed");
+        let error = combine_shutdown_result(
+            None,
+            Err(PlatformError::EventLoop {
+                message: "loop failed".to_string(),
+            }),
+        )
+        .expect_err("a loop-level error with no bootstrap error must still be Err");
+        assert_eq!(error.to_string(), "platform event loop failed: loop failed");
     }
 
     /// The regression this whole function exists to fix: checking `result`
@@ -2274,23 +2325,34 @@ mod tests {
     /// `loop failed` here and silently drop `bootstrap failed` -- in
     /// exactly the scenario the fallible-`on_ready` design exists to
     /// surface. The bootstrap error must still be the primary `Err`
-    /// returned, with the loop error preserved (not lost) in its chain.
+    /// returned (its own error as the `source`), with the loop error
+    /// preserved (not lost) alongside it.
     #[test]
     fn combine_shutdown_result_keeps_the_bootstrap_error_as_root_cause_when_both_occur() {
         let error = combine_shutdown_result(
-            Some(anyhow::anyhow!("bootstrap failed")),
-            Err(anyhow::anyhow!("loop failed")),
+            Some("bootstrap failed".into()),
+            Err(PlatformError::EventLoop {
+                message: "loop failed".to_string(),
+            }),
         )
         .expect_err("both a bootstrap and a loop error must still be Err");
-        let chain: Vec<String> = error.chain().map(ToString::to_string).collect();
-        assert!(
-            chain.iter().any(|link| link == "bootstrap failed"),
-            "the bootstrap error (root cause) must survive in the chain, got: {chain:?}"
-        );
-        assert!(
-            chain.iter().any(|link| link == "loop failed"),
-            "the loop error must be attached, not silently dropped, got: {chain:?}"
-        );
+        match &error {
+            PlatformError::Bootstrap { source, loop_error } => {
+                assert_eq!(
+                    source.to_string(),
+                    "bootstrap failed",
+                    "the bootstrap error (root cause) must survive as the source"
+                );
+                let loop_error = loop_error
+                    .as_deref()
+                    .expect("the loop error must be attached, not silently dropped");
+                assert!(
+                    loop_error.contains("loop failed"),
+                    "the loop error's own message must survive, got: {loop_error:?}"
+                );
+            }
+            other => panic!("expected PlatformError::Bootstrap, got: {other:?}"),
+        }
     }
 
     /// Polls (bounded, 2s) until the owner has reached `Running` — the point
@@ -3199,9 +3261,7 @@ mod tests {
 
         let mut app = WinitApp {
             platform: Arc::clone(&platform),
-            on_ready: Some(Box::new(|_owner| {
-                Err(anyhow::anyhow!("simulated bootstrap failure"))
-            })),
+            on_ready: Some(Box::new(|_owner| Err("simulated bootstrap failure".into()))),
             control: receiver,
             quit_notified: false,
             in_flight_replies: Vec::new(),
@@ -3209,7 +3269,11 @@ mod tests {
             self_close_deadline: None,
         };
 
-        let result = event_loop.run_app(&mut app).map_err(anyhow::Error::from);
+        let result = event_loop
+            .run_app(&mut app)
+            .map_err(|error| PlatformError::EventLoop {
+                message: error.to_string(),
+            });
         assert!(
             result.is_ok(),
             "on_ready's own Err requests a clean exit; the winit loop \

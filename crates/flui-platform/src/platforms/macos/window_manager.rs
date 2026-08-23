@@ -39,6 +39,12 @@ use flui_types::{
     geometry::{Point, Size},
 };
 
+// The platform-wide window identity: `crate::traits::WindowId` is the single
+// canonical definition (see `docs/runtime-contract.toml`); backends never
+// mint their own WindowId type. Re-exported because `macos::mod` surfaces
+// the window-manager API (including this ID type) as a group.
+pub use crate::traits::WindowId;
+
 // ============================================================================
 // Window Manager
 // ============================================================================
@@ -245,26 +251,6 @@ impl WindowManager {
 impl Default for WindowManager {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// ============================================================================
-// Window ID
-// ============================================================================
-
-/// Unique identifier for a window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-
-impl WindowId {
-    /// Create a new window ID (for testing).
-    pub fn new(id: u64) -> Self {
-        Self(id)
-    }
-
-    /// Get the raw ID value.
-    pub fn as_u64(self) -> u64 {
-        self.0
     }
 }
 

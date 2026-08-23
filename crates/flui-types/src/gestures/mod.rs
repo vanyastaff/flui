@@ -1,16 +1,18 @@
 //! Gesture detail types
 //!
-//! This module provides types that describe gesture events and their details,
-//! such as tap, drag, scale, and long press gestures.
+//! This module provides the recognizer-independent gesture vocabulary:
+//! pointer/velocity primitives plus the tap, long-press move/end, and
+//! force-press detail payloads. Drag, scale, and long-press down/start
+//! details are defined by their recognizers in `flui-interaction` — see
+//! the [`details`] module docs for why.
 
 pub mod details;
 pub mod pointer;
 pub mod velocity;
 
 pub use details::{
-    DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, ForcePressDetails,
-    LongPressDownDetails, LongPressEndDetails, LongPressMoveUpdateDetails, LongPressStartDetails,
-    ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails, TapDownDetails, TapUpDetails,
+    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
+    TapUpDetails,
 };
 pub use pointer::{OffsetPair, PointerData, PointerDeviceKind};
 pub use velocity::{Velocity, VelocityEstimate};

@@ -368,7 +368,7 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
 impl<A: Animation<f32> + 'static> AnimationExt for A {}
 ```
 
-### AnimatableExt (TweenAnimatableExt)
+### AnimatableExt
 
 ```rust
 pub trait AnimatableExt<T>: Animatable<T> {

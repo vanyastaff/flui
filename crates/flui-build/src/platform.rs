@@ -8,7 +8,7 @@ use crate::error::{BuildError, BuildResult};
 /// allowing us to add methods to the trait in the future without
 /// breaking changes.
 pub(crate) mod private {
-    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    pub trait Sealed {}
 }
 
 /// Build context containing configuration and paths.

@@ -2,7 +2,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{Context, Result};
 use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size, device_px, px};
 use parking_lot::Mutex;
@@ -41,8 +40,8 @@ use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device}
 use crate::{
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
-        CursorError, PlatformDisplay, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
-        WindowBounds, WindowId, WindowMode, WindowOptions,
+        CursorError, OpenWindowError, PlatformDisplay, PlatformWindow, WindowAppearance,
+        WindowBackgroundAppearance, WindowBounds, WindowId, WindowMode, WindowOptions,
     },
 };
 
@@ -150,12 +149,15 @@ impl std::fmt::Debug for WindowsWindow {
 
 impl WindowsWindow {
     /// Create a new Windows window
+    ///
+    /// # Errors
+    /// [`OpenWindowError::Backend`] when Win32 window creation fails.
     pub fn new(
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
         handlers: Arc<Mutex<PlatformHandlers>>,
         config: crate::config::WindowConfiguration,
-    ) -> Result<Arc<Self>> {
+    ) -> Result<Arc<Self>, OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
         // reads global state, no preconditions. `CreateWindowExW` requires
@@ -174,7 +176,9 @@ impl WindowsWindow {
         // allocation rather than double-frees or dangles it. `ShowWindow`/
         // `UpdateWindow` again only need a valid `hwnd`, which holds here.
         unsafe {
-            let hinstance = GetModuleHandleW(None).context("Failed to get module handle")?;
+            let hinstance = GetModuleHandleW(None).map_err(|e| OpenWindowError::Backend {
+                message: format!("Failed to get module handle: {e}"),
+            })?;
 
             // Get DPI for initial size calculation
             let dpi = GetDpiForSystem();
@@ -213,10 +217,14 @@ impl WindowsWindow {
                 Some(hinstance.into()),
                 None, // lpParam
             )
-            .context("Failed to create window")?;
+            .map_err(|e| OpenWindowError::Backend {
+                message: format!("Failed to create window: {e}"),
+            })?;
 
             if hwnd.is_invalid() {
-                return Err(windows::core::Error::from_thread().into());
+                return Err(OpenWindowError::Backend {
+                    message: windows::core::Error::from_thread().to_string(),
+                });
             }
 
             // Remove background brush to allow Mica backdrop

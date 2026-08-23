@@ -99,7 +99,7 @@ use core::marker::PhantomData;
 // ---------------------------------------------------------------------------
 
 mod sealed {
-    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    pub trait Sealed {}
 }
 
 /// Phase marker trait, sealed so only this crate can name phases.

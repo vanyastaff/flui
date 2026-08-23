@@ -2,7 +2,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{Context, Result};
 use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 use parking_lot::Mutex;
@@ -44,12 +43,13 @@ use super::{
 use crate::{
     config::WindowConfiguration,
     data_transfer::{DataTransferSource, NullDataTransferSource},
+    error::PlatformError,
     executor::BackgroundExecutor,
     shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::ContextLedger},
     traits::{
-        Clipboard, DesktopCapabilities, OwnerPlatform, Platform, PlatformCapabilities,
-        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowAppearance,
-        WindowEvent, WindowId, WindowMode, WindowOptions,
+        Clipboard, DesktopCapabilities, OpenWindowError, OwnerPlatform, Platform,
+        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
+        PlatformWindow, WindowAppearance, WindowEvent, WindowId, WindowMode, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -405,7 +405,7 @@ impl std::fmt::Debug for WindowsPlatform {
 
 impl WindowsPlatform {
     /// Create a new Windows platform instance with default configuration
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Self, PlatformError> {
         Self::with_config(WindowConfiguration::default())
     }
 
@@ -432,7 +432,7 @@ impl WindowsPlatform {
     /// };
     /// let platform = WindowsPlatform::with_config(config)?;
     /// ```
-    pub fn with_config(config: WindowConfiguration) -> Result<Self> {
+    pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
         // SAFETY: `CoInitializeEx` takes no pointer arguments (`None` for
         // the reserved parameter) and its `HRESULT` is checked before
         // anything downstream assumes COM is initialized on this thread —
@@ -444,7 +444,9 @@ impl WindowsPlatform {
             use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             if hr.is_err() {
-                return Err(anyhow::anyhow!("Failed to initialize COM: {hr:?}"));
+                return Err(PlatformError::Init {
+                    message: format!("Failed to initialize COM: {hr:?}"),
+                });
             }
         }
 
@@ -477,8 +479,9 @@ impl WindowsPlatform {
         //
         // Create message-only window for platform messages
         let message_window = unsafe {
-            let hinstance = GetModuleHandleW(None)
-                .map_err(|e| anyhow::anyhow!("Failed to get module handle: {e:?}"))?;
+            let hinstance = GetModuleHandleW(None).map_err(|e| PlatformError::Init {
+                message: format!("Failed to get module handle: {e:?}"),
+            })?;
 
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
@@ -494,7 +497,9 @@ impl WindowsPlatform {
                 Some(hinstance.into()),
                 None,
             )
-            .map_err(|e| anyhow::anyhow!("Failed to create message window: {e:?}"))?
+            .map_err(|e| PlatformError::Init {
+                message: format!("Failed to create message window: {e:?}"),
+            })?
         };
 
         // Create executors
@@ -531,7 +536,7 @@ impl WindowsPlatform {
     /// the same `WINDOW_CLASS_NAME` afterward — `REGISTER_WINDOW_CLASS: Once`
     /// enforces that this body runs at most once per process, so subsequent
     /// calls are no-ops rather than a re-registration race.
-    unsafe fn register_window_class() -> Result<()> {
+    unsafe fn register_window_class() -> Result<(), PlatformError> {
         // SAFETY: per the `# Safety` contract above, `Self::window_proc`'s
         // signature matches `WNDPROC`. `GetModuleHandleW(None)` takes no
         // pointer arguments. `wc.lpszClassName`/`wc.hCursor` reference
@@ -541,12 +546,13 @@ impl WindowsPlatform {
         // guarantees this body executes at most once, so there is no
         // concurrent registration to race.
         unsafe {
-            let mut result: Result<()> = Ok(());
+            let mut result: Result<(), PlatformError> = Ok(());
 
             REGISTER_WINDOW_CLASS.call_once(|| {
-                let reg = (|| -> Result<()> {
-                    let hinstance =
-                        GetModuleHandleW(None).context("Failed to get module handle")?;
+                let reg = (|| -> Result<(), PlatformError> {
+                    let hinstance = GetModuleHandleW(None).map_err(|e| PlatformError::Init {
+                        message: format!("Failed to get module handle: {e}"),
+                    })?;
 
                     let wc = WNDCLASSW {
                         style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
@@ -555,7 +561,9 @@ impl WindowsPlatform {
                         cbWndExtra: 0,
                         hInstance: hinstance.into(),
                         hIcon: HICON::default(),
-                        hCursor: load_cursor_style(IDC_ARROW)?,
+                        hCursor: load_cursor_style(IDC_ARROW).map_err(|e| PlatformError::Init {
+                            message: format!("Failed to load the default cursor: {e}"),
+                        })?,
                         hbrBackground: HBRUSH(std::ptr::null_mut()),
                         lpszMenuName: PCWSTR::null(),
                         lpszClassName: WINDOW_CLASS_NAME,
@@ -563,7 +571,12 @@ impl WindowsPlatform {
 
                     let atom = RegisterClassW(&raw const wc);
                     if atom == 0 {
-                        return Err(windows::core::Error::from_thread().into());
+                        return Err(PlatformError::Init {
+                            message: format!(
+                                "Failed to register the window class: {}",
+                                windows::core::Error::from_thread()
+                            ),
+                        });
                     }
 
                     tracing::info!("Registered Windows window class");
@@ -1429,7 +1442,7 @@ impl Platform for WindowsPlatform {
 
     // ==================== Lifecycle ====================
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
         tracing::info!("Running Windows platform");
 
         // Idempotent from the constructing thread; a `run` migrated to a
@@ -1446,7 +1459,7 @@ impl Platform for WindowsPlatform {
         // `on_ready` runs before the message pump starts: on `Err`, skip
         // the pump entirely and return rather than servicing messages for a
         // half-built app.
-        on_ready(OwnerPlatform::new(platform, hooks))?;
+        on_ready(OwnerPlatform::new(platform, hooks)).map_err(PlatformError::bootstrap)?;
 
         Self::run_message_loop();
         Ok(())
@@ -1494,7 +1507,10 @@ impl Platform for WindowsPlatform {
         enumerate_displays().into_iter().find(|d| d.is_primary())
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+    fn open_window(
+        &self,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         // An HWND's message queue belongs to the creating thread; a window
         // minted off the owner thread is silently mis-affined (ADR-0039).
         self.affinity
@@ -1701,75 +1717,85 @@ impl Platform for WindowsPlatform {
     fn prompt_for_paths(
         &self,
         options: crate::traits::PathPromptOptions,
-    ) -> crate::task::Task<Result<Option<Vec<std::path::PathBuf>>>> {
+    ) -> crate::task::Task<Result<Option<Vec<std::path::PathBuf>>, PlatformError>> {
         let executor = self.background_executor.clone();
         executor.spawn(async move {
-            // COM file dialogs must run on an STA thread
-            let result = std::thread::spawn(move || -> Result<Option<Vec<std::path::PathBuf>>> {
-                // SAFETY: this whole body runs on the freshly `std::thread::spawn`ed
-                // thread, which owns no other window state — `CoInitializeEx`
-                // makes it an STA for the `IFileOpenDialog` COM object, as
-                // that interface requires. Every `windows-rs` COM call
-                // (`CoCreateInstance`, `dialog.Show`/`SetOptions`, `results.*`,
-                // `item.GetDisplayName`) is a checked, typed FFI wrapper with
-                // no raw pointer of ours to validate. `CoTaskMemFree` below
-                // frees the `PWSTR` `name` owns from COM — it is only used
-                // (via `name.to_string()`, which copies the string out) before
-                // this free, and each loop iteration gets its own `name` from
-                // `GetDisplayName`, so there is no double-free or use-after-free
-                // across iterations.
-                unsafe {
-                    use windows::Win32::{
-                        System::Com::{
-                            CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-                            CoTaskMemFree,
-                        },
-                        UI::Shell::{
-                            FOS_ALLOWMULTISELECT, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
-                            FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
-                        },
-                    };
+            // COM file dialogs must run on an STA thread. The closure keeps
+            // the raw `windows::core::Result` so the COM `?`s inside stay
+            // untouched; the typed mapping happens once, at the join below.
+            let result = std::thread::spawn(
+                move || -> windows::core::Result<Option<Vec<std::path::PathBuf>>> {
+                    // SAFETY: this whole body runs on the freshly `std::thread::spawn`ed
+                    // thread, which owns no other window state — `CoInitializeEx`
+                    // makes it an STA for the `IFileOpenDialog` COM object, as
+                    // that interface requires. Every `windows-rs` COM call
+                    // (`CoCreateInstance`, `dialog.Show`/`SetOptions`, `results.*`,
+                    // `item.GetDisplayName`) is a checked, typed FFI wrapper with
+                    // no raw pointer of ours to validate. `CoTaskMemFree` below
+                    // frees the `PWSTR` `name` owns from COM — it is only used
+                    // (via `name.to_string()`, which copies the string out) before
+                    // this free, and each loop iteration gets its own `name` from
+                    // `GetDisplayName`, so there is no double-free or use-after-free
+                    // across iterations.
+                    unsafe {
+                        use windows::Win32::{
+                            System::Com::{
+                                CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance,
+                                CoInitializeEx, CoTaskMemFree,
+                            },
+                            UI::Shell::{
+                                FOS_ALLOWMULTISELECT, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
+                                FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog,
+                                SIGDN_FILESYSPATH,
+                            },
+                        };
 
-                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-                    let dialog: IFileOpenDialog =
-                        CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
+                        let dialog: IFileOpenDialog =
+                            CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
 
-                    let mut flags = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
-                    if options.multiple {
-                        flags |= FOS_ALLOWMULTISELECT;
-                    }
-                    if options.directories {
-                        flags |= FOS_PICKFOLDERS;
-                    }
-                    dialog.SetOptions(flags)?;
-
-                    match dialog.Show(None) {
-                        Ok(()) => {}
-                        Err(e)
-                            if e.code()
-                                == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
-                        {
-                            return Ok(None);
+                        let mut flags = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
+                        if options.multiple {
+                            flags |= FOS_ALLOWMULTISELECT;
                         }
-                        Err(e) => return Err(e.into()),
-                    }
+                        if options.directories {
+                            flags |= FOS_PICKFOLDERS;
+                        }
+                        dialog.SetOptions(flags)?;
 
-                    let results = dialog.GetResults()?;
-                    let count = results.GetCount()?;
-                    let mut paths = Vec::with_capacity(count as usize);
-                    for i in 0..count {
-                        let item = results.GetItemAt(i)?;
-                        let name = item.GetDisplayName(SIGDN_FILESYSPATH)?;
-                        let path_str = name.to_string()?;
-                        paths.push(std::path::PathBuf::from(path_str));
-                        CoTaskMemFree(Some(name.as_ptr() as *const _));
+                        match dialog.Show(None) {
+                            Ok(()) => {}
+                            Err(e)
+                                if e.code()
+                                    == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
+                            {
+                                return Ok(None);
+                            }
+                            Err(e) => return Err(e),
+                        }
+
+                        let results = dialog.GetResults()?;
+                        let count = results.GetCount()?;
+                        let mut paths = Vec::with_capacity(count as usize);
+                        for i in 0..count {
+                            let item = results.GetItemAt(i)?;
+                            let name = item.GetDisplayName(SIGDN_FILESYSPATH)?;
+                            let path_str = name.to_string()?;
+                            paths.push(std::path::PathBuf::from(path_str));
+                            CoTaskMemFree(Some(name.as_ptr() as *const _));
+                        }
+                        Ok(Some(paths))
                     }
-                    Ok(Some(paths))
-                }
-            })
+                },
+            )
             .join()
-            .map_err(|_| anyhow::anyhow!("File dialog thread panicked"))??;
+            .map_err(|_| PlatformError::Dialog {
+                message: "File dialog thread panicked".to_string(),
+            })?
+            .map_err(|error| PlatformError::Dialog {
+                message: error.to_string(),
+            })?;
             Ok(result)
         })
     }
@@ -1778,82 +1804,91 @@ impl Platform for WindowsPlatform {
         &self,
         directory: &std::path::Path,
         suggested_name: Option<&str>,
-    ) -> crate::task::Task<Result<Option<std::path::PathBuf>>> {
+    ) -> crate::task::Task<Result<Option<std::path::PathBuf>, PlatformError>> {
         let dir = directory.to_path_buf();
         let name = suggested_name.map(std::string::ToString::to_string);
         let executor = self.background_executor.clone();
         executor.spawn(async move {
-            let result = std::thread::spawn(move || -> Result<Option<std::path::PathBuf>> {
-                // SAFETY: see `prompt_for_paths` above — same
-                // dedicated-STA-thread, checked-COM-wrapper reasoning.
-                // `dir_wide` is explicitly NUL-terminated and outlives the
-                // `SHCreateItemFromParsingName` call that borrows its
-                // pointer; the single `CoTaskMemFree` below frees the one
-                // `name` this function's single `IFileSaveDialog::GetResult`
-                // path produces, after `name.to_string()` has already copied
-                // the string out.
-                unsafe {
-                    use windows::Win32::{
-                        System::Com::{
-                            CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-                            CoTaskMemFree,
-                        },
-                        UI::Shell::{
-                            FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
-                            FileSaveDialog, IFileSaveDialog, IShellItem,
-                            SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
-                        },
-                    };
+            // Same raw-`windows::core::Result` closure + single typed
+            // mapping shape as `prompt_for_paths` above.
+            let result = std::thread::spawn(
+                move || -> windows::core::Result<Option<std::path::PathBuf>> {
+                    // SAFETY: see `prompt_for_paths` above — same
+                    // dedicated-STA-thread, checked-COM-wrapper reasoning.
+                    // `dir_wide` is explicitly NUL-terminated and outlives the
+                    // `SHCreateItemFromParsingName` call that borrows its
+                    // pointer; the single `CoTaskMemFree` below frees the one
+                    // `name` this function's single `IFileSaveDialog::GetResult`
+                    // path produces, after `name.to_string()` has already copied
+                    // the string out.
+                    unsafe {
+                        use windows::Win32::{
+                            System::Com::{
+                                CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance,
+                                CoInitializeEx, CoTaskMemFree,
+                            },
+                            UI::Shell::{
+                                FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
+                                FileSaveDialog, IFileSaveDialog, IShellItem,
+                                SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+                            },
+                        };
 
-                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-                    let dialog: IFileSaveDialog =
-                        CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)?;
+                        let dialog: IFileSaveDialog =
+                            CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)?;
 
-                    dialog.SetOptions(
-                        FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT,
-                    )?;
+                        dialog.SetOptions(
+                            FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT,
+                        )?;
 
-                    // Set initial directory
-                    let dir_wide: Vec<u16> = dir
-                        .to_string_lossy()
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
-                    if let Ok(folder) = SHCreateItemFromParsingName::<PCWSTR, _, IShellItem>(
-                        PCWSTR(dir_wide.as_ptr()),
-                        None,
-                    ) {
-                        let _ = dialog.SetFolder(&folder);
-                    }
-
-                    // Set suggested file name
-                    if let Some(ref name) = name {
-                        let name_hstring = windows::core::HSTRING::from(name.as_str());
-                        let _ = dialog.SetFileName(&name_hstring);
-                    }
-
-                    match dialog.Show(None) {
-                        Ok(()) => {}
-                        Err(e)
-                            if e.code()
-                                == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
-                        {
-                            return Ok(None);
+                        // Set initial directory
+                        let dir_wide: Vec<u16> = dir
+                            .to_string_lossy()
+                            .encode_utf16()
+                            .chain(std::iter::once(0))
+                            .collect();
+                        if let Ok(folder) = SHCreateItemFromParsingName::<PCWSTR, _, IShellItem>(
+                            PCWSTR(dir_wide.as_ptr()),
+                            None,
+                        ) {
+                            let _ = dialog.SetFolder(&folder);
                         }
-                        Err(e) => return Err(e.into()),
-                    }
 
-                    let result = dialog.GetResult()?;
-                    let name = result.GetDisplayName(SIGDN_FILESYSPATH)?;
-                    let path_str = name.to_string()?;
-                    let path = std::path::PathBuf::from(path_str);
-                    CoTaskMemFree(Some(name.as_ptr() as *const _));
-                    Ok(Some(path))
-                }
-            })
+                        // Set suggested file name
+                        if let Some(ref name) = name {
+                            let name_hstring = windows::core::HSTRING::from(name.as_str());
+                            let _ = dialog.SetFileName(&name_hstring);
+                        }
+
+                        match dialog.Show(None) {
+                            Ok(()) => {}
+                            Err(e)
+                                if e.code()
+                                    == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
+                            {
+                                return Ok(None);
+                            }
+                            Err(e) => return Err(e),
+                        }
+
+                        let result = dialog.GetResult()?;
+                        let name = result.GetDisplayName(SIGDN_FILESYSPATH)?;
+                        let path_str = name.to_string()?;
+                        let path = std::path::PathBuf::from(path_str);
+                        CoTaskMemFree(Some(name.as_ptr() as *const _));
+                        Ok(Some(path))
+                    }
+                },
+            )
             .join()
-            .map_err(|_| anyhow::anyhow!("File dialog thread panicked"))??;
+            .map_err(|_| PlatformError::Dialog {
+                message: "File dialog thread panicked".to_string(),
+            })?
+            .map_err(|error| PlatformError::Dialog {
+                message: error.to_string(),
+            })?;
             Ok(result)
         })
     }
@@ -1880,7 +1915,7 @@ impl Platform for WindowsPlatform {
 
     // ==================== File System Integration ====================
 
-    fn app_path(&self) -> Result<std::path::PathBuf> {
+    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
         // SAFETY: `buffer` is a stack-local `[u16; MAX_PATH]`; `&mut buffer`
         // gives `GetModuleFileNameW` a valid, correctly-sized out-parameter,
         // and only the first `len` code units it reports writing are read
@@ -1889,7 +1924,9 @@ impl Platform for WindowsPlatform {
             let mut buffer = [0u16; 260]; // MAX_PATH, stack-allocated
             let len = GetModuleFileNameW(None, &mut buffer);
             if len == 0 {
-                return Err(windows::core::Error::from_thread().into());
+                return Err(PlatformError::AppPath {
+                    message: windows::core::Error::from_thread().to_string(),
+                });
             }
             Ok(std::path::PathBuf::from(String::from_utf16_lossy(
                 &buffer[..len as usize],

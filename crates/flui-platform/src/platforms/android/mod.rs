@@ -36,7 +36,6 @@ use std::{
 };
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
-use anyhow::Result;
 pub use memory::{
     PageAlignedVec, PageAllocError, align_to_page_size, align_to_page_size_u64, get_page_size,
     is_16kb_page_size,
@@ -46,11 +45,12 @@ pub use window::AndroidWindow;
 
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
+    error::{BootstrapError, PlatformError},
     shared::PlatformHandlers,
     traits::{
-        Clipboard, DisplayId, MobileCapabilities, OwnerPlatform, Platform, PlatformCapabilities,
-        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
-        WindowId, WindowOptions,
+        Clipboard, DisplayId, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
+        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
+        PlatformWindow, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -246,7 +246,7 @@ impl Platform for AndroidPlatform {
         self.background_executor.clone()
     }
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
         tracing::info!("Starting Android platform event loop");
 
         // Converted once, up front: `on_ready` needs an `Arc<dyn Platform>`
@@ -263,7 +263,7 @@ impl Platform for AndroidPlatform {
         // `continue`-ing to the loop's top-of-iteration check exits
         // promptly instead of continuing to pump input/frame dispatch for
         // an app that never finished bootstrapping.
-        let mut bootstrap_error: Option<anyhow::Error> = None;
+        let mut bootstrap_error: Option<BootstrapError> = None;
         // Relaxed everywhere on `running`: it is a bare stop-signal with no
         // data published through it. The loop re-reads it every iteration,
         // the Destroy store happens on the loop thread itself, and a
@@ -415,8 +415,8 @@ impl Platform for AndroidPlatform {
         platform.handlers.lock().invoke_quit();
         tracing::info!("Android platform event loop finished");
 
-        if let Some(error) = bootstrap_error {
-            return Err(error);
+        if let Some(source) = bootstrap_error {
+            return Err(PlatformError::bootstrap(source));
         }
         Ok(())
     }
@@ -426,7 +426,10 @@ impl Platform for AndroidPlatform {
         self.running.store(false, Ordering::Relaxed);
     }
 
-    fn open_window(&self, _options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+    fn open_window(
+        &self,
+        _options: WindowOptions,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         let window = Arc::new(AndroidWindow::new(self.app.clone()));
         *self.window.lock() = Some(Arc::clone(&window));
         tracing::info!("Android window created (wrapping ANativeWindow)");
@@ -484,7 +487,7 @@ impl Platform for AndroidPlatform {
         self.handlers.lock().wake_deadline = Some(Arc::from(hook));
     }
 
-    fn app_path(&self) -> Result<PathBuf> {
+    fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::from("/data/local/tmp"))
     }
 }

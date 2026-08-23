@@ -80,12 +80,12 @@ use std::sync::Arc;
 
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 pub use accessibility::UnixAccessibility;
-use anyhow::Result;
 pub use window_ext::*;
 
 use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
+use crate::error::PlatformError;
 use crate::traits::{
-    Clipboard, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor,
+    Clipboard, OpenWindowError, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor,
     PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
 };
 
@@ -113,7 +113,7 @@ impl LinuxPlatform {
     /// # Panics
     ///
     /// Always panics with "Linux platform not yet implemented"
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Self, PlatformError> {
         unimplemented!(
             "Linux platform not yet implemented - use winit backend or wait for native Wayland/X11 implementation"
         )
@@ -143,7 +143,10 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux Tokio executor integration not implemented")
     }
 
-    fn run(self: Box<Self>, _on_finish_launching: PlatformReadyCallback) -> anyhow::Result<()> {
+    fn run(
+        self: Box<Self>,
+        _on_finish_launching: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         unimplemented!("Linux event loop (Wayland/X11) not implemented")
     }
 
@@ -163,7 +166,10 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux primary display query not implemented")
     }
 
-    fn open_window(&self, _options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+    fn open_window(
+        &self,
+        _options: WindowOptions,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         unimplemented!("Linux window creation (Wayland/X11) not implemented")
     }
 
@@ -192,7 +198,7 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux window event callback not implemented")
     }
 
-    fn app_path(&self) -> Result<std::path::PathBuf> {
+    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
         unimplemented!("Linux app path query (/proc/self/exe) not implemented")
     }
 }

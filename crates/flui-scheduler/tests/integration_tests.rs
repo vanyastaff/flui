@@ -1466,40 +1466,40 @@ fn test_frame_duration_display() {
 
 #[test]
 fn test_percentage() {
-    use flui_scheduler::duration::Percentage;
+    use flui_scheduler::duration::BudgetPercentage;
 
     // Constants
-    assert_eq!(Percentage::ZERO.value(), 0.0);
-    assert_eq!(Percentage::HUNDRED.value(), 100.0);
+    assert_eq!(BudgetPercentage::ZERO.value(), 0.0);
+    assert_eq!(BudgetPercentage::HUNDRED.value(), 100.0);
 
     // from_ratio
-    let p = Percentage::from_ratio(0.5);
+    let p = BudgetPercentage::from_ratio(0.5);
     assert_eq!(p.value(), 50.0);
 
     // as_ratio
     assert_eq!(p.as_ratio(), 0.5);
 
     // clamped
-    let over = Percentage::new(150.0).clamped();
+    let over = BudgetPercentage::new(150.0).clamped();
     assert_eq!(over.value(), 100.0);
 
-    let under = Percentage::new(-10.0).clamped();
+    let under = BudgetPercentage::new(-10.0).clamped();
     assert_eq!(under.value(), 0.0);
 }
 
 #[test]
 fn test_percentage_from_f64() {
-    use flui_scheduler::duration::Percentage;
+    use flui_scheduler::duration::BudgetPercentage;
 
-    let p: Percentage = 75.0.into();
+    let p: BudgetPercentage = 75.0.into();
     assert_eq!(p.value(), 75.0);
 }
 
 #[test]
 fn test_percentage_display() {
-    use flui_scheduler::duration::Percentage;
+    use flui_scheduler::duration::BudgetPercentage;
 
-    let p = Percentage::new(75.5);
+    let p = BudgetPercentage::new(75.5);
     let display = format!("{p}");
 
     assert_eq!(display, "75.5%");
@@ -1970,9 +1970,9 @@ fn test_budget_policy_all() {
 
 #[test]
 fn test_phase_stats() {
-    use flui_scheduler::{budget::PhaseStats, duration::Percentage};
+    use flui_scheduler::{budget::PhaseStats, duration::BudgetPercentage};
 
-    let stats = PhaseStats::new(Milliseconds::new(5.0), Percentage::new(30.0));
+    let stats = PhaseStats::new(Milliseconds::new(5.0), BudgetPercentage::new(30.0));
 
     assert_eq!(stats.duration_ms(), 5.0);
     assert_eq!(stats.budget_percent.value(), 30.0);

@@ -42,8 +42,9 @@ winit = { workspace = true, optional = true }
 # Clipboard (for winit backend)
 arboard = { workspace = true, optional = true }
 
-# Error handling & logging
-anyhow = { workspace = true }
+# Error handling & logging. `anyhow` is deliberately absent here: the
+# public API is typed (`PlatformError`/`OpenWindowError`, thiserror), and
+# only tests/examples still consume `anyhow` (see [dev-dependencies]).
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -206,6 +207,9 @@ x11 = []
 workspace = true
 
 [dev-dependencies]
+# Application-side error handling in tests/examples only — never a normal
+# dependency again: no `anyhow` token may appear in this crate's public API.
+anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [[test]]

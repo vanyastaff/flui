@@ -121,9 +121,8 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
-
 use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
+use crate::error::PlatformError;
 use crate::traits::*;
 
 /// iOS platform implementation (stub)
@@ -156,7 +155,7 @@ impl IOSPlatform {
     /// # Panics
     ///
     /// Always panics with "iOS platform not yet implemented"
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Self, PlatformError> {
         unimplemented!(
             "iOS platform not yet implemented - use winit backend or wait for native UIKit implementation"
         )
@@ -167,7 +166,7 @@ impl IOSPlatform {
     /// # Panics
     ///
     /// Always panics (stub implementation)
-    pub fn from_application(_app: ()) -> Result<Self> {
+    pub fn from_application(_app: ()) -> Result<Self, PlatformError> {
         unimplemented!("iOS UIApplication initialization not implemented")
     }
 }
@@ -177,7 +176,10 @@ impl Platform for IOSPlatform {
         unimplemented!("iOS GCD executor not implemented")
     }
 
-    fn run(self: Box<Self>, _on_finish_launching: PlatformReadyCallback) -> anyhow::Result<()> {
+    fn run(
+        self: Box<Self>,
+        _on_finish_launching: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         // Pre-existing signature mismatch fixed by the callback flip
         // (ADR-0039 slice 2): this stub never compiled under any CI target
         // before (`target_os = "ios"` has no CI compile job) and still
@@ -204,7 +206,10 @@ impl Platform for IOSPlatform {
         unimplemented!("iOS main screen query not implemented")
     }
 
-    fn open_window(&self, _options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+    fn open_window(
+        &self,
+        _options: WindowOptions,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         unimplemented!("iOS UIWindow creation not implemented")
     }
 
@@ -233,7 +238,7 @@ impl Platform for IOSPlatform {
         unimplemented!("iOS window event callback not implemented")
     }
 
-    fn app_path(&self) -> Result<std::path::PathBuf> {
+    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
         unimplemented!("iOS app bundle path query not implemented")
     }
 }

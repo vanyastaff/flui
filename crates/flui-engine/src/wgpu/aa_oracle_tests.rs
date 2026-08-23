@@ -3953,14 +3953,16 @@ mod gpu_tests {
     ///
     /// `Xor` on a transparent destination is equivalent to `SrcOver` (both give
     /// `src * 1 + 0 * (1-src_a) = src`), so the pixel output is identical to the
-    /// SrcOver SSAA path.  This makes Xor the ideal probe for routing: the SSAA
-    /// tile is rendered with the SrcOver pipeline (a known-correct path), and the
-    /// composite is also effectively SrcOver — so the test validates that Xor IS
-    /// routed through the SSAA tile without requiring a per-mode texture composite
-    /// pipeline (TODO T12, deferred).
+    /// SrcOver SSAA path.  This makes Xor the ideal probe for routing: the
+    /// expected pixels are the same regardless of which blend factors the tile
+    /// composite applies, so the assertion isolates "was the fill routed through
+    /// the SSAA tile at all?" from per-mode composite correctness.
     ///
-    /// Other tile-safe modes (DstOut, DstOver, Plus) composite differently and
-    /// their correct pixel output requires TODO T12.
+    /// Other tile-safe modes (DstOut, DstOver, Plus) composite with their own
+    /// blend factors (`flush_texture_batch_premultiplied_with_mode` selects a
+    /// pipeline whose `wgpu::BlendState` matches the mode exactly), so probing
+    /// with one of them would need a mode-specific pixel oracle and would
+    /// conflate composite math with routing; Xor-on-transparent needs neither.
     ///
     /// ## Routing proof (what this test guards)
     ///
@@ -3995,8 +3997,9 @@ mod gpu_tests {
         }
         path.close();
 
-        // Xor on transparent background = SrcOver (same pixel output, different mode
-        // tag). Proves tile-safe routing fires without needing TODO T12 blend fix.
+        // Xor on transparent background = SrcOver (same pixel output, different
+        // mode tag), so the assertion below proves routing alone — it holds
+        // independent of the blend factors the tile composite applies.
         let paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Xor);
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -4037,9 +4040,9 @@ mod gpu_tests {
     /// ## Blend-mode selection rationale (same as PD1)
     ///
     /// `Xor` on a transparent destination equals `SrcOver` pixel-output-wise,
-    /// so the composite step does not need the per-mode pipeline (TODO T12).
-    /// The test validates that the shapes SSAA routing fires and the rounded
-    /// corner pixels receive genuine sub-pixel coverage.
+    /// so the oracle is independent of which blend factors the tile composite
+    /// applies. The test validates that the shapes SSAA routing fires and the
+    /// rounded corner pixels receive genuine sub-pixel coverage.
     ///
     /// Uses an unrotated rrect with 10 px corner radii — the curved corner
     /// band is the best probe for SSAA sub-pixel coverage vs hard aliasing.
@@ -4063,7 +4066,8 @@ mod gpu_tests {
             px(10.0),
         );
 
-        // Xor on transparent = SrcOver; proves routing fires without TODO T12.
+        // Xor on transparent = SrcOver; the oracle proves routing, not
+        // per-mode composite math.
         let paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Xor);
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));

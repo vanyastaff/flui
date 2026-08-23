@@ -53,7 +53,6 @@ pub enum DragStartBehavior {
 /// Details about drag down (pointer contact before drag starts)
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragDownDetails {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Global position where pointer contacted the screen
     pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
@@ -65,7 +64,6 @@ pub struct DragDownDetails {
 /// Details about drag start
 #[derive(Debug, Clone)]
 pub struct DragStartDetails {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Global position where drag started
     pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
@@ -79,7 +77,6 @@ pub struct DragStartDetails {
 /// Details about drag update
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragUpdateDetails {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Current global position
     pub global_position: Offset<Pixels>,
     /// Current local position
@@ -98,7 +95,6 @@ pub struct DragUpdateDetails {
 /// Details about drag end
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragEndDetails {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Velocity at end of drag (pixels per second)
     pub velocity: Velocity,
     /// Final global position

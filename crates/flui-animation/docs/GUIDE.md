@@ -280,7 +280,7 @@ let sequence = TweenSequence::new(vec![
 ### Chaining and Composition
 
 ```rust,ignore
-use flui_animation::TweenAnimatableExt;
+use flui_animation::AnimatableExt;
 
 // Apply curve
 let eased = tween.with_curve(Curves::EaseIn);

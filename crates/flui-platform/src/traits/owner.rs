@@ -42,6 +42,7 @@ use super::{
     window::WindowAppearance,
 };
 use crate::data_transfer::DataTransferSource;
+use crate::error::PlatformError;
 use crate::task::Task;
 
 // ============================================================================
@@ -230,8 +231,9 @@ impl SharedPlatform {
     /// The application's executable path.
     ///
     /// # Errors
-    /// Propagates the backend's own lookup failure.
-    pub fn app_path(&self) -> anyhow::Result<PathBuf> {
+    /// Propagates the backend's own lookup failure as
+    /// [`PlatformError::AppPath`].
+    pub fn app_path(&self) -> Result<PathBuf, PlatformError> {
         self.platform.app_path()
     }
 
@@ -317,22 +319,25 @@ impl SharedPlatform {
     }
 
     /// Shows a file/directory picker dialog. Returns selected paths, or
-    /// `None` if the user cancelled. Runs asynchronously on a background
-    /// thread.
+    /// `None` if the user cancelled (cancelling is not an error); a dialog
+    /// that could not run resolves to [`PlatformError::Dialog`]. Runs
+    /// asynchronously on a background thread.
     pub fn prompt_for_paths(
         &self,
         options: PathPromptOptions,
-    ) -> Task<anyhow::Result<Option<Vec<PathBuf>>>> {
+    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
         self.platform.prompt_for_paths(options)
     }
 
     /// Shows a "Save As" dialog for selecting a new file path. Returns the
-    /// selected path, or `None` if the user cancelled.
+    /// selected path, or `None` if the user cancelled (cancelling is not an
+    /// error); a dialog that could not run resolves to
+    /// [`PlatformError::Dialog`].
     pub fn prompt_for_new_path(
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
-    ) -> Task<anyhow::Result<Option<PathBuf>>> {
+    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
         self.platform.prompt_for_new_path(directory, suggested_name)
     }
 
@@ -393,11 +398,13 @@ impl WindowOpen {
     }
 }
 
-/// Failure to open a window through [`OwnerPlatform`] or [`PlatformProxy`].
+/// Failure to open a window through [`OwnerPlatform`], [`PlatformProxy`],
+/// or [`Platform::open_window`] itself — the trait method adopted this
+/// typed taxonomy when `anyhow` was retired from the crate's public API
+/// (the growth the ADR forecast for slice 3's moved methods).
 ///
-/// `#[non_exhaustive]`: the ADR forecasts variant growth when slice 3's
-/// moved methods adopt this typed taxonomy in place of today's `anyhow`
-/// surface.
+/// `#[non_exhaustive]`: the taxonomy still grows as backends gain
+/// capabilities; additions are not breaks.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum OpenWindowError {
@@ -423,6 +430,19 @@ pub enum OpenWindowError {
     #[error("the backend could not create the window: {message}")]
     Backend {
         /// The backend's own error message.
+        message: String,
+    },
+    /// The event loop cannot service window creation from this call site in
+    /// its current lifecycle state: called before `Platform::run` started
+    /// the loop, from another thread while bootstrap (`on_ready`) is still
+    /// running, or on the owner thread where blocking on the very lane the
+    /// owner drains would deadlock. Distinct from
+    /// [`OwnerGone`](Self::OwnerGone) — the loop has not died; this call
+    /// site simply cannot be serviced right now. The message names the
+    /// exact condition and the sanctioned alternative.
+    #[error("window creation is unavailable from this call site: {message}")]
+    Unavailable {
+        /// The exact lifecycle condition, in the backend's own words.
         message: String,
     },
     /// Window creation was deferred; this call site requires `Ready`.
@@ -708,10 +728,9 @@ pub(crate) trait OwnerHooks: Send + Sync {
 /// Direct-creation [`OwnerHooks`] for backends without an owner lane
 /// (windows/macos/headless/web/android): every `open_owner_window` call
 /// creates synchronously via the wrapped [`Platform`] and is always
-/// `Ready` — there is no deferral without a lane to defer onto. The
-/// backend's own `anyhow` error maps onto the typed
-/// [`OpenWindowError::Backend`] arm; the trait method itself keeps its
-/// untyped `anyhow` signature until slice 3.
+/// `Ready` — there is no deferral without a lane to defer onto.
+/// [`Platform::open_window`] itself returns the typed [`OpenWindowError`]
+/// taxonomy, so its failure passes through unmapped.
 pub(crate) struct DirectOwnerHooks {
     platform: Arc<dyn Platform>,
     owner_thread: ThreadId,
@@ -730,12 +749,7 @@ impl DirectOwnerHooks {
 
 impl OwnerHooks for DirectOwnerHooks {
     fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
-        self.platform
-            .open_window(options)
-            .map(WindowOpen::Ready)
-            .map_err(|error| OpenWindowError::Backend {
-                message: error.to_string(),
-            })
+        self.platform.open_window(options).map(WindowOpen::Ready)
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {

@@ -15,7 +15,7 @@
 //!   │   ├── presentation.rs - per-presentation window/haptics/frame-accounting state
 //!   │   ├── config.rs       - AppConfig
 //!   │   ├── direct.rs       - direct rendering mode (bypasses the widget tree)
-//!   │   └── runner.rs       - platform bootstrap (desktop/android/web run loops)
+//!   │   └── runner/         - platform bootstrap (desktop/android/web run loops)
 //!   │
 //!   ├── bindings/           - Re-exports from other crates
 //!   └── embedder/           - Platform embedder adapters (window handle, GPU surface)

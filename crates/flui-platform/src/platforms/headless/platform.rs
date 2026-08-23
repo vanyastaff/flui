@@ -12,7 +12,6 @@ use std::{
     thread::{self, ThreadId},
 };
 
-use anyhow::Result;
 use cursor_icon::CursorIcon;
 use flui_foundation::{ClaimSlot, claim_slot};
 use flui_types::{
@@ -23,6 +22,7 @@ use parking_lot::Mutex;
 
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
+    error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
         Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult,
@@ -179,7 +179,7 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.background_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
         tracing::info!("Starting headless platform (no event loop)");
 
         // Captured before `*self` moves into the `Arc` below -- same
@@ -216,7 +216,7 @@ impl Platform for HeadlessPlatform {
         // fallible bootstrap has nowhere else to go on this backend since
         // there is no loop to keep running with a half-built app --
         // propagate straight out of `run`.
-        on_ready(OwnerPlatform::new(platform, hooks))?;
+        on_ready(OwnerPlatform::new(platform, hooks)).map_err(PlatformError::bootstrap)?;
 
         tracing::info!("Headless platform ready");
         Ok(())
@@ -244,7 +244,10 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.exit_reevaluation_requested = true);
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+    fn open_window(
+        &self,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         tracing::info!(?options, "Creating mock window");
 
         let platform_state = Arc::downgrade(&self.state);
@@ -336,7 +339,7 @@ impl Platform for HeadlessPlatform {
         });
     }
 
-    fn app_path(&self) -> Result<PathBuf> {
+    fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::from("/mock/app/path"))
     }
 }

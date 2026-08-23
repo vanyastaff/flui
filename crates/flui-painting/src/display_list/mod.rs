@@ -50,10 +50,9 @@ pub use stats::DisplayListStats;
 // Re-exports from flui_types::painting that are part of the
 // `display_list` public API surface.
 //
-// REVIEW_BY: 2026-09-22 — scheduled re-check, mirrors the one
-// on `crates/flui-painting/src/lib.rs`. The canonical home of these
-// types is `flui_types::painting`; this re-export is a convenience
-// facade.
+// The canonical home of these types is `flui_types::painting`; this
+// re-export is a convenience facade. See the matching note on the
+// crate-root re-exports in `crates/flui-painting/src/lib.rs`.
 pub use flui_types::painting::{
     BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, Shader, TextureId,
     effects::ImageFilter,

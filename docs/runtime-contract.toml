@@ -128,6 +128,7 @@ file = "crates/flui-platform/src/lib.rs"
 declarations = [
     "pub mod config;",
     "pub mod data_transfer;",
+    "pub mod error;",
     "pub mod executor;",
     "pub mod platforms;",
     "pub mod shared;",
@@ -136,6 +137,7 @@ declarations = [
     "pub mod window;",
     "pub use config::{FullscreenMonitor, WindowConfiguration};",
     "pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};",
+    "pub use error::{BootstrapError, PlatformError, PlatformResult};",
     "pub use cursor_icon::CursorIcon;",
     "pub use executor::BackgroundExecutor;",
     "pub use platforms::AndroidPlatform;",
@@ -150,7 +152,7 @@ declarations = [
     "pub use task::{Priority, Task, TaskLabel};",
     "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, };",
     "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WindowOpen, };",
-    "pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {",
+    "pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {",
     "pub fn headless_platform() -> Box<dyn Platform> {",
 ]
 
@@ -178,7 +180,7 @@ declarations = [
     "pub use flui_foundation::PresentationId;",
     "pub use post_frame::{ LocalPostFrameHandle, LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle, };",
     "pub use web_time::Instant;",
-    "pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};",
+    "pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};",
     "pub use frame::{ AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder, LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback, SchedulerPhase, };",
     "pub use id::{CallbackId, Id, IdGenerator, Marker, markers};",
     "pub use scheduler::{ FrameCompletionFuture, IdleDeadline, SchedulerBuilder, UpdateScheduler, WeakUpdateScheduler, };",
@@ -342,7 +344,7 @@ unreachable in production.
 
 **The native-lifecycle gap this contract used to carry is now closed.** \
 `#[non_exhaustive] pub enum WindowPolicy` (default `SeparateRealms`) is the \
-embedder-facing knob at the install seam: `runner.rs::open_secondary_window` \
+embedder-facing knob at the install seam: `runner/secondary_window.rs::open_secondary_window` \
 is the production entry point that opens a genuine second native window and \
 installs it under the caller's policy -- `SeparateRealms` through \
 `install_realm_alongside` (its own independent realm, sharing nothing but \
@@ -353,7 +355,7 @@ membership and a real `WindowRegistry` mapping; \
 `one_realm_two_windows_policy_routes_by_presentation`). `ExitPolicy` is \
 LIVE-WIRED, not merely mechanism: `flui_platform::traits::Platform:: \
 set_exit_policy_hook` (a new default-no-op trait method, overridden by the \
-winit and headless backends only) lets `runner.rs::install_exit_policy_hook` \
+winit and headless backends only) lets `runner/host.rs::install_exit_policy_hook` \
 install a hook that consults `AppRuntime::should_exit` INSTEAD of a \
 backend's own unconditional "every window I track just closed -> exit" \
 bookkeeping -- proven through the REAL platform seam (not a direct \
@@ -501,7 +503,7 @@ pins that hot-restart's own visit primitive sees exactly what each policy \
 installed.
 
 It remains one TLS-scoped instance per owner thread (`APP_RUNTIME` in \
-`runner.rs`), not one per process -- unchanged by this slice, and not this \
+`runner/host.rs`), not one per process -- unchanged by this slice, and not this \
 contract's own claim to begin with. A REALM hosting more than one \
 PRESENTATION is no longer a still-unstarted claim: issue #555's \
 addressed-routing slice lifted `PresentationForest`'s former `len()<=1` \
@@ -583,45 +585,45 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(super) struct RealmSlot" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub enum ExitPolicy" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "dispatched_scheduler: Option<UpdateScheduler>" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn two_window_realms_share_no_ui_state_through_app_runtime" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn teardown_realm_a_mid_dispatch_leaves_realm_b_frame_producing" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_one_of_two_windows_does_not_exit_the_loop" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn close_splash_then_open_main_does_not_exit" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn frame_callback_opening_a_window_installs_second_realm_without_nested_dispatch" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn hot_restart_while_callback_mutates_realm_map_defers_mutation" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_accessor_fences_correctly_with_a_second_idle_realm_present" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_accessor_fences_the_installed_realms_frame_transaction_through_dispatch" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn two_window_realms_share_no_ui_state_through_app_runtime" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn teardown_realm_a_mid_dispatch_leaves_realm_b_frame_producing" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_one_of_two_windows_does_not_exit_the_loop" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn close_splash_then_open_main_does_not_exit" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn frame_callback_opening_a_window_installs_second_realm_without_nested_dispatch" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn hot_restart_while_callback_mutates_realm_map_defers_mutation" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn owner_platform_accessor_fences_correctly_with_a_second_idle_realm_present" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/mod.rs", contains = "fn owner_platform_accessor_fences_the_installed_realms_frame_transaction_through_dispatch" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn two_realms_coexist_same_thread" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn two_realms_two_threads_no_shared_state" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropping_realm_a_cannot_wake_realm_b" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_realm_duplicate_global_key_mounts_succeed_in_both" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub enum WindowPolicy" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "pub fn open_secondary_window" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_exit_policy_hook" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "pub fn open_secondary_window" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/host.rs", contains = "fn install_exit_policy_hook" },
     { kind = "symbol", file = "crates/flui-platform/src/traits/platform.rs", contains = "fn set_exit_policy_hook" },
     { kind = "symbol", file = "crates/flui-platform/src/shared/handlers.rs", contains = "pub exit_policy: Option<Box<dyn Fn() -> bool + Send>>" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn two_realms_via_separate_windows_policy_share_nothing" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn one_realm_two_windows_policy_routes_by_presentation" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_one_of_two_windows_does_not_exit_through_the_real_platform_hook_closing_both_does" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn hot_restart_with_two_realms_and_with_two_presentations" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn two_realms_via_separate_windows_policy_share_nothing" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn one_realm_two_windows_policy_routes_by_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_one_of_two_windows_does_not_exit_through_the_real_platform_hook_closing_both_does" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn hot_restart_with_two_realms_and_with_two_presentations" },
     { kind = "test", file = "crates/flui-platform/tests/headless.rs", contains = "fn closing_one_of_two_windows_does_not_consult_the_exit_policy_hook" },
     { kind = "test", file = "crates/flui-platform/tests/headless.rs", contains = "fn exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn close_this_window" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn separate_realms_secondary_window_close_tears_down_its_own_realm_and_allows_exit" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn shared_realm_secondary_presentation_close_removes_only_itself_and_keeps_the_realm_alive" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_the_sole_presentation_dispatches_detached_before_uninstalling" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn separate_realms_secondary_window_input_reaches_its_own_realm_not_the_primarys" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_exit_today" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn close_this_window" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn separate_realms_secondary_window_close_tears_down_its_own_realm_and_allows_exit" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn shared_realm_secondary_presentation_close_removes_only_itself_and_keeps_the_realm_alive" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_the_sole_presentation_dispatches_detached_before_uninstalling" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn separate_realms_secondary_window_input_reaches_its_own_realm_not_the_primarys" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_the_last_window_reentrantly_from_inside_a_dispatch_misses_the_exit_today" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn lease_exit_policy_hook" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn spawn_pending_secondary_window_completion" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn finish_open_secondary_window" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "fn spawn_pending_secondary_window_completion" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "fn finish_open_secondary_window" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn enable_deferred_window_open" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "pub struct HeadlessDeferredWindowOpens" },
     { kind = "test", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn deferred_window_open_resolves_via_the_pending_arm_like_the_real_winit_owner_lane" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn drain_pending_secondary_window_completions" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "fn drain_pending_secondary_window_completions" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing" },
 ]
 
 [[contract]]
@@ -724,13 +726,13 @@ same driver-loop work placed it. `mark_rendered()` unconditionally clears \
 `needs_redraw` to `false`; a `wake_frame()` call made earlier in the SAME \
 callback (inside `draw_frame_entered`) gets silently clobbered by that \
 clear before the callback returns. On the real desktop path, where the \
-NEXT platform callback's own dirty gate (`wake_action`, `runner.rs`) reads \
+NEXT platform callback's own dirty gate (`wake_action`, `runner/frame_pacing.rs`) reads \
 `needs_redraw()`/`has_pending_work()` fresh -- neither of which a bare \
 running controller with no other tree-visible effect keeps true -- that \
 clobber silently stalled the controller after its anchor frame: reproduced \
 with a production-sequence probe driving the exact `record_compositor_tick` \
 -> `wake_action` -> `render_frame_entered` sequence `bootstrap_desktop`'s \
-closure uses (`crates/flui-app/src/app/runner.rs`'s \
+closure uses (`crates/flui-app/src/app/runner/realm_dispatch.rs`'s \
 `a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate`, \
 which showed 1 render then 39 consecutive skips out of 40 simulated \
 callbacks, final animation value stuck at 0, before the fix; every \
@@ -800,7 +802,7 @@ evidence = [
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn record_compositor_tick_alone_marks_no_demand_and_never_produces" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_presentation_stays_idle_through_the_production_call_sequence_with_compositor_ticks" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn clear_demand_emptying_the_mask_disarms_the_latch" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate" },
 ]
 
 [[contract]]
@@ -850,14 +852,14 @@ owner_issue = 556
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn set_presentation_hidden(&self, presentation_id: PresentationId, hidden: bool)" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "realm.set_presentation_hidden(presentation_id, !visible);" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn window_visibility_gates_exactly_the_addressed_presentations_clock" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "realm.set_presentation_hidden(presentation_id, !visible);" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn window_visibility_gates_exactly_the_addressed_presentations_clock" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_and_animating_presentation_does_not_spin" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn unoccluding_an_undirtied_presentation_does_not_wake" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn unhide_wakes_on_retained_demand_even_when_the_latch_was_armed_before_the_hide" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
 ]
 
 [[contract]]
@@ -899,8 +901,8 @@ mechanical = true
 mechanism = "test existence pinned here; behavior verified by the cited tests"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "draining: bool" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn reentrant_frame_event_is_queued_fifo" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn nested_resize_and_window_focus_wait_until_frame_returns" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn reentrant_frame_event_is_queued_fifo" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn nested_resize_and_window_focus_wait_until_frame_returns" },
 ]
 
 [[contract]]
@@ -990,7 +992,7 @@ domain = "raster"
 owner_issue = 559
 mechanical = false
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "Arc<Mutex<Option<Renderer>>>" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/web.rs", contains = "Arc<Mutex<Option<Renderer>>>" },
 ]
 
 [[contract]]
@@ -1089,7 +1091,7 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn default_pools_start_lazily_on_first_spawn" },
     { kind = "test", file = "crates/flui-app/src/app/execution.rs", contains = "fn frame_lane_makes_progress_while_background_lanes_are_saturated" },
     { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn stashed_host_executors_win_over_default_pools" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_resolves_execution_services_and_teardown_shuts_them_down" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn install_resolves_execution_services_and_teardown_shuts_them_down" },
     { kind = "test", file = "crates/flui-platform/src/executor.rs", contains = "fn test_background_executor_starts_lazily_on_first_use" },
 ]
 
@@ -1175,8 +1177,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn shutdown_deadline_is_shared_not_per_service" },
     { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn publish_after_the_receiver_dies_is_owner_gone" },
     { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn keep_alive_service_vetoes_exit_until_it_completes" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn teardown_gives_services_their_flush_window_before_the_pools_close" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn keep_alive_completion_reopens_the_exit_question_after_the_last_window_closed" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn teardown_gives_services_their_flush_window_before_the_pools_close" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn keep_alive_completion_reopens_the_exit_question_after_the_last_window_closed" },
     { kind = "test", file = "crates/flui-app/src/app/lifecycle.rs", contains = "fn service_factory_panic_is_contained_into_a_start_error" },
     { kind = "test", file = "crates/flui-platform/src/platforms/headless/platform.rs", contains = "fn exit_reevaluation_parks_from_any_thread_and_drives_through_the_hook" },
     { kind = "test", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "fn winit_control_exit_reevaluation_is_nonstarvable_coalesced_and_consumed_once" },
@@ -1197,7 +1199,7 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "static NEXT_INCARNATION" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn recreated_runtime_gets_fresh_realm_id" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropped_runtime_yields_owner_gone" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn late_event_never_crosses_realm_incarnations" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn late_event_never_crosses_realm_incarnations" },
 ]
 
 [[contract]]
@@ -1246,7 +1248,7 @@ evidence = [
     { kind = "symbol", file = "crates/flui-view/src/key/registry.rs", contains = "pub(crate) fn build_composite" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn realm_id" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn realm_entry_activates_its_global_key_registry" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn whole_frame_event_keeps_realm_global_key_scope_active" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn whole_frame_event_keeps_realm_global_key_scope_active" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn composite_registry_resolves_keys_registered_in_either_presentation" },
     { kind = "test", file = "crates/flui-view/src/key/registry.rs", contains = "fn composite_routes_with_element_to_the_member_that_resolved_the_lookup" },
 ]
@@ -1267,11 +1269,11 @@ whichever presentation the event happens to be stamped for -- covering the \
 race/stray-event case where the two disagree \
 (`keyboard_routes_to_active_presentation_only`). \
 `FocusCoordinator::note_focus_gained` has TWO write sides, not one: \
-`PlatformToUi::WindowFocus(true)` handling (`runner.rs`) fires it with the \
+`PlatformToUi::WindowFocus(true)` handling (`runner/realm_dispatch.rs`) fires it with the \
 presentation that event's own dispatcher was addressed to, driven \
 end-to-end through the real `dispatch_platform_realm` seam (not a direct \
 call) by `window_focus_true_moves_active_presentation_end_to_end_and_false_\
-does_not` (`runner.rs`); `WindowFocus(false)` (focus LOST) never moves the \
+does_not` (`runner/realm_dispatch.rs`); `WindowFocus(false)` (focus LOST) never moves the \
 active presentation there -- losing focus names no new owner, matching \
 Flutter's own focus-retention model. The second write side is \
 `UiRealm::close_presentation_entered`, re-stamping active to the surviving \
@@ -1296,7 +1298,7 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn notify_presentation_focus_gained" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn presentation_and_widget_tree_share_the_exact_focus_owner" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn keyboard_routes_to_active_presentation_only" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn window_focus_true_moves_active_presentation_end_to_end_and_false_does_not" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn window_focus_true_moves_active_presentation_end_to_end_and_false_does_not" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn focus_gained_for_an_unknown_presentation_is_a_traced_no_op" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn keyboard_after_closing_the_active_presentation_routes_to_the_survivor" },
 ]
@@ -1388,7 +1390,7 @@ demux requires it: a window's captured `RealmDispatcher` is only ever valid \
 for as long as the registry still maps its exact address, so a reinstalled \
 window (the panic-recovery replace path) or a closed presentation's stale \
 dispatcher is refused at the SAME authority a fresh dispatch would resolve \
-against, never a second source of truth. `runner.rs::install_presentation_alongside` \
+against, never a second source of truth. `runner/realm_dispatch.rs::install_presentation_alongside` \
 is the production entry point that mints a NEW presentation's real \
 registry mapping alongside an existing one -- the "non-primary presentations \
 get real mappings when installed" residual the forest slice left open. \
@@ -1412,10 +1414,10 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "pub(crate) struct PresentationState" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(crate) struct AppRuntime" },
     { kind = "symbol", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn contains_address" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_presentation_alongside" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn install_presentation_alongside" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn install_presentation" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn assemble_presentation" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_presentation_alongside_leaves_the_forest_unchanged_on_registration_failure" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn install_presentation_alongside_leaves_the_forest_unchanged_on_registration_failure" },
 ]
 
 [[contract]]
@@ -1435,7 +1437,7 @@ reinstall) or removed (presentation close) is refused at the SAME authority \
 a fresh dispatch would resolve against. What remains open: this is not yet \
 lifted into a public multi-window `AppRuntime`, and no production embedder \
 call site opens a second presentation from a real second native window yet \
-(`runner.rs::install_presentation_alongside` exists and is exercised by \
+(`runner/realm_dispatch.rs::install_presentation_alongside` exists and is exercised by \
 tests, mirroring `install_realm_alongside`'s own precedent).\
 """
 state = "partial"
@@ -1470,10 +1472,10 @@ owner_issue = 552
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "enum UiCommand" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "enum PlatformToUi" },
-    { kind = "compile-time", file = "crates/flui-app/src/app/runner.rs", contains = "assert_impl_all!(PlatformToUi: Send)" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn stale_realm_dispatch_is_dropped" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn stale_presentation_with_live_realm_is_dropped" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "enum PlatformToUi" },
+    { kind = "compile-time", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "assert_impl_all!(PlatformToUi: Send)" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn stale_realm_dispatch_is_dropped" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn stale_presentation_with_live_realm_is_dropped" },
 ]
 
 [[contract]]
@@ -1539,7 +1541,7 @@ and a real id already closed). Keyboard is the documented exception -- see \
 `focus-coordination-per-realm`. `handle_input_entered` (no explicit id) is \
 the pre-addressed-routing convenience that still resolves to the primary, \
 kept for every single-presentation call site; production dispatch \
-(`runner.rs`'s `PlatformToUi::run`) always calls the addressed form with \
+(`runner/realm_dispatch.rs`'s `PlatformToUi::run`) always calls the addressed form with \
 the real stamped id.\
 """
 state = "implemented"
@@ -1659,7 +1661,7 @@ domain = "raster"
 owner_issue = 559
 mechanical = false
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn no_present_fallback_pace(presented: bool, keeps_gate_open: bool) -> Option<std::time::Duration> {" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn no_present_fallback_pace(" },
 ]
 
 [[contract]]
@@ -1703,15 +1705,15 @@ not a second source of truth — both are written only by \
 borrow, in that order: registry first on install, registry removal first on \
 teardown (so map removal stops new routing before queued old-generation \
 events drop). Issue #555's addressed-routing slice added the routing-demux \
-half: `dispatch_platform_realm` (`runner.rs`) checks `registry.contains_address` \
+half: `dispatch_platform_realm` (`runner/realm_dispatch.rs`) checks `registry.contains_address` \
 fresh at every dispatch, so a per-window closure's captured address is only \
 ever trusted as far as this registry currently backs it -- a replaced or \
 removed mapping is refused there, not silently honored from the closure's \
-own stale copy. `runner.rs::install_presentation_alongside` mints a second \
+own stale copy. `runner/realm_dispatch.rs::install_presentation_alongside` mints a second \
 presentation's registry mapping alongside an existing one, in the same call \
 that installs it into the forest (`UiRealm::install_presentation`), so no \
 hosted presentation is ever forest-resident without a registry mapping of \
-its own. `runner.rs::open_secondary_window` (issue #555's final slice) is \
+its own. `runner/secondary_window.rs::open_secondary_window` (issue #555's final slice) is \
 now that real embedder call site: it opens a genuine second native window and mints \
 its registry mapping in production, for both `install_realm_alongside` and \
 `install_presentation_alongside`, closing the "no real caller yet" half of \
@@ -1728,10 +1730,10 @@ mechanism = "forbidden_pattern scoped scan confines the WindowId token to window
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/window_registry.rs", contains = "pub(crate) struct WindowRegistry" },
     { kind = "symbol", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn contains_address" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_presentation_alongside" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn install_presentation_alongside" },
     { kind = "test", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn remove_realm_returns_the_installed_entry" },
     { kind = "test", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn try_register_rejects_duplicate_window" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_a_presentation_unregisters_its_window_mapping" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_a_presentation_unregisters_its_window_mapping" },
 ]
 
 [[contract]]
@@ -1759,7 +1761,7 @@ lifted (issue #555's addressed-routing slice, landed in the SAME commit as \
 the addressed entry points below):** `PresentationForest::install` no \
 longer panics past one presentation -- it is the production entry point \
 `UiRealm::install_presentation` calls to assemble and grow the forest, and \
-`runner.rs::install_presentation_alongside` is the caller that also mints \
+`runner/realm_dispatch.rs::install_presentation_alongside` is the caller that also mints \
 the fresh presentation's real `WindowRegistry` mapping in the same step \
 (mirroring `install_realm_alongside`'s own "no production embedder call \
 site opens a second window yet, exercised directly by this module's own \
@@ -1802,12 +1804,12 @@ mounted under and silently orphaned every descendant's `State::dispose`, \
 which would have made "teardown is total for that bundle" false for any \
 tree deeper than one node. \
 `close_presentation_entered` takes `&mut self` (it removes the closed \
-presentation from the forest), so it is reached only from `runner.rs`'s \
+presentation from the forest), so it is reached only from `runner/realm_dispatch.rs`'s \
 `dispatch_platform_realm`, which special-cases a dedicated `RealmTask::\
 ClosePresentation` variant in its own drain loop (the one place the realm \
 sits checked out of `AppRuntime` as an owned local, so `&mut` is naturally \
 available) rather than routing it through `RealmTask::run`'s shared-`&self` \
-receiver every other task variant uses. `runner.rs::close_presentation` is \
+receiver every other task variant uses. `runner/realm_dispatch.rs::close_presentation` is \
 the request-shaped public entry (enqueue via the existing dispatch seam, \
 never a direct call) -- teardown-at-Idle is enforced by the dispatch \
 drain point itself, the same discipline `install_realm_alongside`/\
@@ -1829,7 +1831,7 @@ a presentation cannot meaningfully resolve one of its OWN keys through a \
 registry that is mid-teardown anyway. \
 Flips to "implemented": the ratchet lift and the addressed routing it \
 unblocks are both real and exercised, and the native-lifecycle gap this \
-entry used to name is now closed by `runner.rs::open_secondary_window` \
+entry used to name is now closed by `runner/secondary_window.rs::open_secondary_window` \
 (issue #555's final slice) — a real production embedder call site that opens a \
 genuine second native window and installs a second presentation through \
 this exact path under `WindowPolicy::SharedRealm` \
@@ -1852,7 +1854,7 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "redraw_pending: Cell<bool>" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "pub(crate) fn install" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn install_presentation" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_presentation_alongside" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn install_presentation_alongside" },
     { kind = "test", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "fn install_accepts_any_number_of_presentations" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn install_presentation_grows_the_forest_past_one" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn reassemble_fans_out_to_all_presentations_in_mount_order" },
@@ -1861,16 +1863,16 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_presentation_dirty_during_a_segment_sets_wake_bit_and_lands_next_pump" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn close_presentation_entered" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn enter_for_close" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "ClosePresentation(flui_foundation::PresentationId)" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn close_presentation(" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "ClosePresentation(flui_foundation::PresentationId)" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn close_presentation(" },
     { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "element_tree.remove_subtree(root_id, &mut build_owner.element_owner_mut());" },
     { kind = "test", file = "crates/flui-view/src/binding.rs", contains = "fn detach_root_widget_disposes_every_descendant_not_just_the_root" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispose_during_teardown_cannot_reach_sibling_or_dead_services" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn closing_presentation_a_leaves_sibling_layer_tree_identical" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropped_presentations_surviving_pipeline_handles_fail_closed" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn closing_a_presentation_unregisters_its_window_mapping" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_a_presentation_unregisters_its_window_mapping" },
 ]
 
 [[contract]]
@@ -1954,9 +1956,9 @@ domain = "application"
 mechanical = true
 mechanism = "decision-function tests pinned here"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn no_present_fallback_pace" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn no_present_fallback_bounds_repeating_no_present_wakes" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn no_present_fallback_pace_requires_both_no_present_and_an_open_gate" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn no_present_fallback_pace" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn no_present_fallback_bounds_repeating_no_present_wakes" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn no_present_fallback_pace_requires_both_no_present_and_an_open_gate" },
 ]
 
 [[contract]]
@@ -1970,8 +1972,8 @@ domain = "application"
 mechanical = true
 mechanism = "gate tests pinned here"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn keeps_frame_gate_open" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn keeps_frame_gate_open" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle" },
 ]
 
@@ -2166,14 +2168,14 @@ evidence = [
     { kind = "symbol", file = "crates/flui-interaction/src/binding.rs", contains = "pub fn next_deadline(&self) -> Option<web_time::Instant>" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn next_wake(&self) -> Option<web_time::Instant>" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(super) fn next_wake(&self) -> Option<web_time::Instant>" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn install_wake_deadline_hook" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/host.rs", contains = "fn install_wake_deadline_hook" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_long_press_resolves_through_the_arenas_own_callback_with_zero_submits" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn next_wake_is_the_min_deadline_across_every_installed_realm" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn next_wake_is_the_min_deadline_across_every_installed_realm" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn next_wake_is_the_min_deadline_across_two_presentations_of_one_realm" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn new_events" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn next_wake_is_none_when_no_realm_owned_deadline_is_armed" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn next_wake_is_none_when_no_realm_owned_deadline_is_armed" },
 ]
 
 # Event-loop affinity capability
@@ -2244,8 +2246,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-platform/src/traits/owner.rs", contains = "pub enum OpenWindowError" },
     { kind = "compile-time", file = "crates/flui-platform/src/traits/owner.rs", contains = "assert_not_impl_any!(OwnerPlatform" },
     { kind = "compile-time", file = "crates/flui-platform/src/traits/owner.rs", contains = "assert_impl_all!(SharedPlatform" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_host_installs_and_clears_around_run" },
-    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_host_on_ready_error_propagates_and_still_clears" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/mod.rs", contains = "fn owner_platform_host_installs_and_clears_around_run" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/mod.rs", contains = "fn owner_platform_host_on_ready_error_propagates_and_still_clears" },
 ]
 
 [[contract]]
@@ -2376,7 +2378,7 @@ evidence = [
 path = "flui_app::run_app"
 crate = "flui-app"
 kind = "function"
-declared_in = "crates/flui-app/src/app/runner.rs"
+declared_in = "crates/flui-app/src/app/runner/mod.rs"
 contains = "pub fn run_app_impl"
 classification = "stable-candidate"
 thread_affinity = "call on the process main thread; blocks until the event loop exits (never returns on macOS)"
@@ -2388,7 +2390,7 @@ consumers = ["flui facade re-export", "examples"]
 path = "flui_app::run_app_with_config"
 crate = "flui-app"
 kind = "function"
-declared_in = "crates/flui-app/src/app/runner.rs"
+declared_in = "crates/flui-app/src/app/runner/mod.rs"
 contains = "pub fn run_app_with_config_impl"
 classification = "stable-candidate"
 thread_affinity = "call on the process main thread; blocks until the event loop exits"
@@ -2405,7 +2407,7 @@ contains = "pub fn run_direct"
 classification = "experimental"
 thread_affinity = "process main thread; window/GPU/callback bootstrap runs inside on_ready, so it now works on the winit backend too"
 owner = "application composition root (direct-engine escape hatch)"
-failure_semantics = "anyhow::Result, returned directly from Platform::run's own Result: on_ready is now fallible, so the old Rc<RefCell<Option<Error>>> bootstrap_error_slot side-channel is redundant and has been removed"
+failure_semantics = "anyhow::Result at the application boundary (flui-app is an application crate), converted via ? from Platform::run's typed Result<(), PlatformError>: on_ready is fallible, so the old Rc<RefCell<Option<Error>>> bootstrap_error_slot side-channel is redundant and has been removed"
 consumers = ["examples/direct_render.rs", "examples/aa_showcase.rs"]
 owner_issue = 551
 notes = "Graduating out of experimental is a separate post-slice-3 decision; the checker pins the experimental marking and the word appearing in direct.rs regardless of what the marking describes."
@@ -2414,7 +2416,7 @@ notes = "Graduating out of experimental is a separate post-slice-3 decision; the
 path = "flui_app::run_app_android / run_app_android_with_config"
 crate = "flui-app"
 kind = "function"
-declared_in = "crates/flui-app/src/app/runner.rs"
+declared_in = "crates/flui-app/src/app/runner/android.rs"
 contains = "pub fn run_app_android"
 classification = "experimental"
 thread_affinity = "android_main thread; window/GPU/realm mount now run inside on_ready, firing at the first Resume (module doc: Resumed -> on_ready() -> create surface); on-device validation is outstanding (no device, no CI compile target)"
@@ -2520,7 +2522,7 @@ contains = "pub trait Platform: Send + Sync + 'static"
 classification = "transitional"
 thread_affinity = "TRANSITIONAL, NOT thread-safe in full: the trait itself is still declared Send + Sync with every owner-affine method still on it (open_window/quit/activate/displays/primary_display/window_appearance/keyboard_layout/active_window) -- slice 2 narrowed only the CAPABILITY SURFACES built on top (OwnerPlatform's own methods, and SharedPlatform's deliberately restricted method list), not this trait. An owner-affine call through a raw &dyn Platform / Arc<dyn Platform> is still guarded only by the slice-1 OwnerAffinity debug_assert backstop, not a compile error, until slice 3 actually moves these methods off the trait. Do not read this entry (or OwnerPlatform's) as implying `dyn Platform` itself became thread-safe -- it did not."
 owner = "platform backend (one per process; consumed by run())"
-failure_semantics = "anyhow surface; owner-affinity on the trait's own methods is still a runtime debug_assert (OwnerAffinity), not a compile-time property, until slice 3 moves them off. The compile-time guarantee this issue actually delivers lives on the capability holders: OwnerPlatform is !Send, and its shared() escape hatch returns the restricted SharedPlatform (Clone + Send + Sync, no owner-affine method) rather than this trait's own &dyn Platform."
+failure_semantics = "typed thiserror surface, no anyhow token anywhere in the trait: run returns Result<(), PlatformError> (Bootstrap wraps on_ready's BootstrapError as source; EventLoop covers loop-level failure), open_window returns Result<Arc<dyn PlatformWindow>, OpenWindowError> (the same taxonomy the capability surfaces use), app_path/prompt_for_paths/prompt_for_new_path return PlatformError (AppPath/Dialog variants). Owner-affinity on the trait's own methods is still a runtime debug_assert (OwnerAffinity), not a compile-time property, until slice 3 moves them off. The compile-time guarantee this issue actually delivers lives on the capability holders: OwnerPlatform is !Send, and its shared() escape hatch returns the restricted SharedPlatform (Clone + Send + Sync, no owner-affine method) rather than this trait's own &dyn Platform."
 consumers = ["runner bootstrap", "run_direct", "examples"]
 owner_issue = 551
 notes = "De-facto crate-sealed post-flip: minting an OwnerPlatform requires the pub(crate) constructor in traits/owner.rs, so an out-of-crate impl Platform cannot supply what its own run() must hand to on_ready. An external-embedder minting seam is #560 design work, not this issue's scope. Same residual class, named on the owner-platform-capability contract rather than repeated here: headless_platform()'s Box<dyn Platform> return, and the publicly re-exported concrete backend types (WinitPlatform et al., whose own pub methods -- e.g. WinitPlatform::run_event_loop -- need no dyn Platform object at all to reach an owner-affine method off-thread)."
@@ -2534,13 +2536,13 @@ contains = "pub type PlatformReadyCallback"
 classification = "transitional"
 thread_affinity = "invoked once, synchronously, on the event-loop owner thread by every backend; carries OwnerPlatform by value"
 owner = "backend run() contract"
-failure_semantics = "fallible: Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result<()>>. Platform::run itself returns anyhow::Result<()> and propagates on_ready's Err out of it; every backend stops entering (or promptly exits) its loop on Err rather than continuing to run a half-built app."
+failure_semantics = "fallible: Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>> where BootstrapError = Box<dyn std::error::Error + Send + Sync> (opaque on purpose: embedder bootstrap is application-land and returns arbitrary errors). Platform::run itself returns Result<(), PlatformError> and propagates on_ready's Err out of it as PlatformError::Bootstrap with the embedder error as source; every backend stops entering (or promptly exits) its loop on Err rather than continuing to run a half-built app."
 consumers = [
     "all eight backends (winit, windows, macos, web, android, headless, linux stub, ios stub)",
     "runner",
 ]
 owner_issue = 551
-notes = "Flipped in issue #551 to Box<dyn FnOnce(OwnerPlatform)> -- a breaking change landed across every backend in one PR (pre-1.0, ADR-0027 §9 break-acknowledgement posture). Flipped a second time, to Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result<()>>, across the same eight backends -- a bootstrap failure (window creation, GPU init, root-widget attach) now propagates out of Platform::run instead of leaving the loop running with a broken app. flui-app's bootstrap_desktop/bootstrap_android/bootstrap_web/bootstrap_direct all return anyhow::Result<()>; the old bootstrap_error_slot Rc<RefCell<Option<anyhow::Error>>> side-channel pattern is now redundant everywhere it was used and has been removed."
+notes = "Flipped in issue #551 to Box<dyn FnOnce(OwnerPlatform)> -- a breaking change landed across every backend in one PR (pre-1.0, ADR-0027 §9 break-acknowledgement posture). Flipped a second time, to Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result<()>>, across the same eight backends -- a bootstrap failure (window creation, GPU init, root-widget attach) now propagates out of Platform::run instead of leaving the loop running with a broken app. flui-app's bootstrap_desktop/bootstrap_android/bootstrap_web/bootstrap_direct all return anyhow::Result<()>; the old bootstrap_error_slot Rc<RefCell<Option<anyhow::Error>>> side-channel pattern is now redundant everywhere it was used and has been removed. Flipped a third time when anyhow was retired from flui-platform's public API: the callback now returns the opaque Result<(), BootstrapError> (anyhow errors in flui-app still cross via ? through anyhow's own From impl into the boxed error)."
 
 [[surface]]
 path = "flui_platform::OwnerPlatform"
@@ -2626,7 +2628,7 @@ contains = "pub fn current_platform"
 classification = "transitional"
 thread_affinity = "callable anywhere; the returned Box<dyn Platform> carries the trait's misdeclared affinity"
 owner = "platform selection"
-failure_semantics = "anyhow::Result"
+failure_semantics = "Result<Box<dyn Platform>, PlatformError> — PlatformError::Init for every selection/initialization failure"
 consumers = ["runner", "run_direct", "examples"]
 owner_issue = 551
 
@@ -2639,7 +2641,7 @@ contains = "FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindo
 classification = "transitional"
 thread_affinity = "construct and run on the thread that owns (or will own) the event loop; MacOSPlatform carries unsafe impl Send/Sync by AppKit convention"
 owner = "per-OS event-loop backends"
-failure_semantics = "per-backend anyhow/typed mixes; winit returns typed OpenWindowStateError including OwnerWouldBlock"
+failure_semantics = "typed end-to-end: constructors return Result<Self, PlatformError> (Init), open_window paths return OpenWindowError (winit maps its internal OpenWindowStateError onto OwnerGone/Unavailable, including OwnerWouldBlock), run returns Result<(), PlatformError>"
 consumers = ["current_platform", "native examples"]
 owner_issue = 551
 
@@ -2686,7 +2688,7 @@ consumers = [
     "examples",
 ]
 owner_issue = 552
-notes = "PlatformWindow gained a required id() -> WindowId accessor across all 11 implementors. traits/platform.rs:139 is canonical; src/window.rs's identical parallel definition now re-exports it (`pub use crate::traits::WindowId;`); platforms/macos/window_manager.rs:257 is left as recorded consolidation debt (its own PORT-CHECK-OK-SP3 marker), not touched by this change."
+notes = "PlatformWindow gained a required id() -> WindowId accessor across all 11 implementors. traits/platform.rs is the canonical (and only) definition; src/window.rs and platforms/macos/window_manager.rs consume it via `use crate::traits::WindowId;` — no backend defines a parallel WindowId type."
 
 [[surface]]
 path = "flui_platform::{WindowCallbacks, PlatformHandlers}"
@@ -2851,7 +2853,7 @@ consumers = [
     "unit tests in gpu_services.rs and renderer.rs",
 ]
 owner_issue = 559
-notes = "This slice ships the value type, ONE resolution path (resolve_offscreen, mirroring Renderer::new_offscreen's adapter-selection policy field-for-field apart from the device label), and the offscreen sharing seam (Renderer::from_offscreen_services) that proves the device is actually shared, not merely shareable — pinned by Arc::ptr_eq tests on both the device and the device_lost flag, plus a test that recover() on a shared-services Renderer is rejected before touching any GPU state (GpuStackOrigin, in renderer.rs) rather than silently installing a second set_device_lost_callback. A windowed resolve_for_surface was drafted and cut: Instance::new builds a fresh wgpu-core Global with its own surface registry, and request_adapter resolves compatible_surface by raw id against the RECEIVING instance's registry, so a surface built from any other instance panics there — the instance and surface must be created together (Renderer::build_windowed_gpu_stack's own shape), which needs the raw-handle/surface-lifecycle plumbing ADR-0045 decision 1 ties to the raster lane. NOT wired into flui-app's AppRuntime yet, and Renderer::new's eight existing call sites (three in flui-app's runner.rs, one in direct.rs, the Android demo example, and three in the root package's own examples: scene_render.rs, filter_demo.rs, color_filter_demo.rs) are unmigrated — Renderer::new is #[doc(hidden)] this slice as the signal, not deleted. Recovery (ReplaceServices, the interior-mutable Option container decision 2 names) is also not built here: this slice's GpuServices values are immutable once constructed, and 'a re-settable container' is a property of whatever later slice stores one (e.g. a RefCell<Option<GpuServices>> on AppRuntime), not of this type itself. ADR-0045 decision 2's own prose calls the generation field 'ResourceGeneration'; it is named GpuResourceGeneration here instead because flui_foundation::epoch already declares a pub struct ResourceGeneration for a different domain (worker-cache freshness) and port-check trigger 10 (SP-3) mechanically forbids the collision. UPDATE (decision 4 slice): GpuResourceGeneration's DEFINITION moved to flui_foundation::epoch — the promotion gpu_services.rs's own doc named as 'expected and deferred' — because decision 4 gave it its first real cross-crate consumer: flui_foundation::FrameStamp now carries a gpu_resource_generation field, checked at the raster boundary's freshness gate alongside SurfaceGeneration, and FrameStamp (layer 1) cannot name a layer-4 flui-engine type without inverting docs/workspace-layers.toml's dependency direction. flui_engine::GpuResourceGeneration is now a re-export (`declared_in`/`contains` above still cite GpuServices, which did NOT move, so this citation stays valid); see flui_foundation::epoch::GpuResourceGeneration's own doc for the full reasoning, including why the epoch_counters! macro is still not used for it."
+notes = "This slice ships the value type, ONE resolution path (resolve_offscreen, mirroring Renderer::new_offscreen's adapter-selection policy field-for-field apart from the device label), and the offscreen sharing seam (Renderer::from_offscreen_services) that proves the device is actually shared, not merely shareable — pinned by Arc::ptr_eq tests on both the device and the device_lost flag, plus a test that recover() on a shared-services Renderer is rejected before touching any GPU state (GpuStackOrigin, in renderer.rs) rather than silently installing a second set_device_lost_callback. A windowed resolve_for_surface was drafted and cut: Instance::new builds a fresh wgpu-core Global with its own surface registry, and request_adapter resolves compatible_surface by raw id against the RECEIVING instance's registry, so a surface built from any other instance panics there — the instance and surface must be created together (Renderer::build_windowed_gpu_stack's own shape), which needs the raw-handle/surface-lifecycle plumbing ADR-0045 decision 1 ties to the raster lane. NOT wired into flui-app's AppRuntime yet, and Renderer::new's eight existing call sites (three in flui-app's runner module — desktop.rs, android.rs, web.rs — one in direct.rs, the Android demo example, and three in the root package's own examples: scene_render.rs, filter_demo.rs, color_filter_demo.rs) are unmigrated — Renderer::new is #[doc(hidden)] this slice as the signal, not deleted. Recovery (ReplaceServices, the interior-mutable Option container decision 2 names) is also not built here: this slice's GpuServices values are immutable once constructed, and 'a re-settable container' is a property of whatever later slice stores one (e.g. a RefCell<Option<GpuServices>> on AppRuntime), not of this type itself. ADR-0045 decision 2's own prose calls the generation field 'ResourceGeneration'; it is named GpuResourceGeneration here instead because flui_foundation::epoch already declares a pub struct ResourceGeneration for a different domain (worker-cache freshness) and port-check trigger 10 (SP-3) mechanically forbids the collision. UPDATE (decision 4 slice): GpuResourceGeneration's DEFINITION moved to flui_foundation::epoch — the promotion gpu_services.rs's own doc named as 'expected and deferred' — because decision 4 gave it its first real cross-crate consumer: flui_foundation::FrameStamp now carries a gpu_resource_generation field, checked at the raster boundary's freshness gate alongside SurfaceGeneration, and FrameStamp (layer 1) cannot name a layer-4 flui-engine type without inverting docs/workspace-layers.toml's dependency direction. flui_engine::GpuResourceGeneration is now a re-export (`declared_in`/`contains` above still cite GpuServices, which did NOT move, so this citation stays valid); see flui_foundation::epoch::GpuResourceGeneration's own doc for the full reasoning, including why the epoch_counters! macro is still not used for it."
 
 [[surface]]
 path = "flui_foundation::GpuResourceGeneration"
@@ -3329,7 +3331,7 @@ the single-authority window map contract: WindowId is the platform-internal \
 native-handle key; every routing/business-logic path in flui-app addresses \
 a presentation through PresentationAddress only, minted by window_registry.rs's \
 register_window/remove_realm (which take a window or a realm id, never a \
-bare WindowId, so runner.rs and friends never name the type). Proxy-gate \
+bare WindowId, so the runner/ module and friends never name the type). Proxy-gate \
 disclaimer: `let id = window.id();` with an inferred local type defeats a \
 substring scan on its own -- the manual backstop is that no flui-app \
 routing API outside window_registry.rs accepts or returns WindowId. \

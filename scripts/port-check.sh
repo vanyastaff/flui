@@ -559,6 +559,10 @@ fi
 #   - doc comments (`///`, `//!`, `//`)
 #   - tests (`tests/`, `test*.rs`, `#[cfg(test)]` files)
 #   - example crates (`examples/`)
+#   - `pub trait Sealed` — the idiomatic private-supertrait sealing
+#     pattern is one deliberately-empty trait per sealing module, not a
+#     parallel implementation of a shared concept; the name collision
+#     carries no consolidation debt.
 #   - `// PORT-CHECK-OK-SP3: <reason>` markers on the same line as
 #     the `pub <kind> Name` declaration sanction the duplicate.
 #
@@ -578,6 +582,7 @@ trigger10_defs_raw=$(rg --line-number --no-heading \
     --glob '!examples/**' \
     crates/ 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
+  | grep -Ev 'pub +trait +Sealed\b' \
   || true)
 
 # Marker scan: a PORT-CHECK-OK-SP3 marker is sanctioning if it appears

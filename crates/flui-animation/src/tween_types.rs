@@ -6,21 +6,22 @@
 //!
 //! # Extension Traits
 //!
-//! This module provides extension traits for fluent API composition:
-//!
-//! - [`AnimatableExt`] - adds `.reversed()` and `.chain()` methods to any `Animatable`
+//! This module provides [`CurveExt`] for converting curves into animatables.
+//! The fluent composition methods on animatables themselves (`.reversed()`,
+//! `.chain()`, `.with_curve()`, `.animate()`) live on
+//! [`AnimatableExt`](crate::ext::AnimatableExt).
 //!
 //! # Examples
 //!
 //! ```
-//! use flui_animation::{FloatTween, Animatable, TweenAnimatableExt};
+//! use flui_animation::{FloatTween, Animatable, AnimatableExt};
 //!
 //! let tween = FloatTween::new(0.0, 100.0);
 //!
 //! // Use the tween directly
 //! assert_eq!(tween.transform(0.5), 50.0);
 //!
-//! // Or reverse it using extension trait
+//! // Or reverse it using the extension trait
 //! let reversed = tween.reversed();
 //! assert_eq!(reversed.transform(0.0), 100.0);
 //! ```
@@ -587,67 +588,6 @@ where
 // Extension Traits
 // ============================================================================
 
-/// Extension trait for [`Animatable`] types.
-///
-/// Provides fluent methods for composing and transforming animatables.
-///
-/// # Examples
-///
-/// ```
-/// use flui_animation::{FloatTween, Animatable, TweenAnimatableExt, Curves};
-///
-/// let tween = FloatTween::new(0.0, 100.0);
-///
-/// // Reverse the tween
-/// let reversed = tween.reversed();
-/// assert_eq!(reversed.transform(0.0), 100.0);
-///
-/// // Chain with a curve
-/// let curved = tween.with_curve(Curves::EaseIn);
-/// assert!(curved.transform(0.5) < 50.0);
-/// ```
-pub trait AnimatableExt<T>: Animatable<T> + Sized {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// Returns a reversed version of this animatable.
-    ///
-    /// The reversed animatable transforms `t` to `1.0 - t` before passing
-    /// to the original animatable.
-    #[inline]
-    #[must_use]
-    fn reversed(self) -> ReverseTween<T, Self> {
-        ReverseTween::new(self)
-    }
-
-    /// Chains this animatable with another.
-    ///
-    /// The output of `self` is passed as input to `other`.
-    /// This is useful when `self` outputs `f32` (like a curve) and `other`
-    /// transforms that to the final type.
-    #[inline]
-    #[must_use]
-    fn chain<B>(self, other: B) -> ChainedTween<Self, B>
-    where
-        Self: Animatable<f32>,
-    {
-        ChainedTween::new(self, other)
-    }
-
-    /// Applies a curve to this animatable.
-    ///
-    /// This is a convenience method that chains a `CurveTween` before this animatable.
-    #[inline]
-    #[must_use]
-    fn with_curve<C: Curve>(self, curve: C) -> ChainedTween<CurveTween<C>, Self>
-    where
-        Self: Animatable<T>,
-    {
-        ChainedTween::new(CurveTween::new(curve), self)
-    }
-}
-
-// Blanket implementation for all Animatable types
-impl<T, A: Animatable<T>> AnimatableExt<T> for A {}
-
 /// Extension trait for [`Curve`] types.
 ///
 /// Provides fluent methods for converting curves to animatables.
@@ -692,6 +632,7 @@ mod tests {
     // `BorderRadius::circular` is a `BorderRadiusExt` method; the production code
     // no longer needs the trait (Lerp handles interpolation), only the tests do.
     use crate::curve::Curves;
+    use crate::ext::AnimatableExt;
     use flui_types::styling::BorderRadiusExt;
 
     #[test]

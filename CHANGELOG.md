@@ -106,6 +106,60 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **`anyhow` retired from `flui-platform`'s public API** — the last workspace
+  library exposing it. A new typed taxonomy (`flui_platform::PlatformError`:
+  `Init` / `EventLoop` / `Bootstrap` / `AppPath` / `Dialog`, thiserror,
+  `#[non_exhaustive]`) covers `current_platform()`, `Platform::run`,
+  `Platform::app_path`, and the file-dialog methods; `Platform::open_window`
+  adopts the existing `OpenWindowError` capability taxonomy (gaining an
+  `Unavailable` variant for event-loop lifecycle refusals — the growth
+  ADR-0039 forecast for the slice-3 method adoption), and
+  `PlatformReadyCallback` now returns the opaque
+  `BootstrapError = Box<dyn std::error::Error + Send + Sync>` (embedder
+  bootstrap is application-land; `Platform::run` wraps it as
+  `PlatformError::Bootstrap` with the embedder error as `source`, preserving
+  the loop-also-failed-while-unwinding case in a `loop_error` field).
+  `anyhow` is now a dev-dependency of `flui-platform` (tests/examples only);
+  `flui-app` keeps `anyhow` internally and converts via `?`.
+- **Structural refactor pass (round 4): the debts the repo's own docs named,
+  executed or honestly retired.** `flui-app`'s `runner.rs` — 11,616 lines,
+  66% of the crate together with `ui_realm.rs`, and the workspace's largest
+  file by a factor of five — is now the `app/runner/` module directory: ten
+  files split along the file's own region banners (platform entry points
+  per target, the loop-scoped host, realm install/dispatch/teardown,
+  lifecycle ladder, frame pacing, device recovery, the secondary-window
+  seam), move-only, every test module staying beside the code it pins, no
+  resulting file over ~630 non-test lines. The frame-ordering mechanical
+  guards now scan all ten sources; `docs/runtime-contract.toml`'s 64
+  runner-file evidence entries are re-pointed to the exact new homes. The
+  standing SP-3 parallel-type debt shrank by 35 markers: the nine
+  gesture-detail types double-defined across flui-types/flui-interaction
+  are consolidated on the interaction side — the flui-types copies had zero
+  consumers, and merging the live pipeline downward would have lost
+  observable callback payload (device kind, end positions, focal/scale/
+  rotation), so the split for the genuinely shared details is now a
+  documented invariant instead of an apology; `AnimatableExt`'s two
+  definitions inside flui-animation merged; the macOS backend's duplicate
+  `WindowId` became a re-export of the canonical `traits` definition;
+  flui-scheduler's `Percentage` (an `f64` 0–100 budget readout colliding
+  with flui-geometry's `f32` 0–1 layout fraction) is renamed
+  `BudgetPercentage`; and port-check trigger 10 gained a `Sealed` carve-out
+  for the eleven idiomatic per-module sealing traits that were never debt.
+  flui-engine's long-standing "audit the painter caches for deletion"
+  entry (budgeted at ~1,955 LOC) resolved the honest way: traced from the
+  Renderer/Backend entry points, all four subsystems (`texture_cache`,
+  `external_texture_registry`, `path_cache`, `multi_draw`) are live on
+  production paths — they had moved homes during the painter split, and
+  the entry's premise was stale — so the deletion is recorded as
+  won't-do-with-evidence, the one genuinely dead helper
+  (`ShaderCache::clear`) is gone, and the four audited areas now carry
+  zero `allow(dead_code)` at any scope. The eight dated debt markers due
+  2026-09-22 are each resolved per their own contract (verified-and-
+  deleted, or re-dated with fresh evidence); paint interning's three
+  stale doc twins now record the landed `Arc<Paint>` + structural-dedup
+  shape; ROADMAP-TRACKER's H10 row is narrowed to the truth (wgpu 30
+  done, winit 0.31 open); and the last banned process-marker comments in
+  flui-engine test files are rewritten as plain-English invariants.
 - **Workspace-wide dedup/refactor pass (round 3): every deferred item from
   round 2's assessment, closed.** flui-engine's `TexturePool` drops its
   `Arc<Mutex<TexturePoolInner>>` — the pool owns its inventory directly and
