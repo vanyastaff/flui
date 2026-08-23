@@ -43,7 +43,7 @@ written down:
 `HeadlessBinding::with_tree` deliberately does no bootstrap; it takes owners
 already mounted, rooted, and laid out. Getting them there is an eight-step
 sequence whose ordering is load-bearing at nearly every step. It used to be
-copied per harness, and the copies drifted in ways a green suite could not see
+copied per harness — eight times — and the copies drifted in ways a green suite could not see
 — one bootstrapped with a bare `PipelineOwner::run_frame` instead of the
 layout↔build fixpoint, so every `SliverAppBar` delegate child it captured was
 unbuilt; none ran the lazy-sliver service pass.

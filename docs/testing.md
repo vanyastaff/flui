@@ -38,9 +38,10 @@ Two structural rules hold across the stack:
   bootstrap whose ordering is load-bearing, and its contract is that the
   bootstrap frame is the same frame `pump_frame` runs (same layout↔build
   fixpoint, same lazy-sliver service pass). Hand-rolled copies of that sequence
-  have already drifted once, silently: one bootstrapped with a bare
-  `PipelineOwner::run_frame` and captured every `SliverAppBar` delegate child
-  unbuilt.
+  have already drifted once, silently: of the eight that existed, one
+  bootstrapped with a bare `PipelineOwner::run_frame` and captured every
+  `SliverAppBar` delegate child unbuilt, and none ran the lazy-sliver service
+  pass. All eight now go through `mount_root`.
 
 ## Quality Gates
 

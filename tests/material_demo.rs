@@ -41,9 +41,9 @@ use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
+use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
-use flui_view::{BuildOwner, ElementTree};
 use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
 
 /// The mounted root's logical width — wide enough for a card row, narrow
@@ -93,58 +93,22 @@ impl MountedDemo {
             Theme::new(ThemeData::light(), root_view),
         );
 
-        let mut build_owner = BuildOwner::new();
-        let mut tree = ElementTree::new();
         let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-
-        // Install the async-driver / post-frame / interaction-dispatch
-        // capabilities on this binding's owner BEFORE the mount build pass —
-        // `MaterialDemoHomeState::init_state` calls `ctx.rebuild_handle()`,
-        // which needs the owner already wired to `binding`'s scheduler.
-        binding.install_build_capabilities(&mut build_owner);
 
         let focused_root = FocusRoot::new(wrapped_root);
         let animated_root = VsyncScope::new(binding.vsync().clone(), focused_root);
         let scoped_root = GestureArenaScope::new(binding.arena().clone(), animated_root);
 
-        binding.enter_owner_scope(|| {
-            let root_element = tree.mount_root_with_pipeline_owner(
-                &scoped_root,
-                Some(pipeline_owner.clone()),
-                &mut build_owner.element_owner_mut(),
-            );
-            build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
-            build_owner.build_scope(&mut tree);
-        });
-
-        let root_render_id = pipeline_owner.with(|owner| {
-            let render_tree = owner.render_tree();
-            let mut roots = render_tree
-                .iter()
-                .map(|(id, _)| id)
-                .filter(|id| render_tree.parent(*id).is_none());
-            let root = roots
-                .next()
-                .expect("the mounted demo tree should have a render root");
-            assert!(
-                roots.next().is_none(),
-                "expected exactly one render-tree root after mount"
-            );
-            root
-        });
-
-        pipeline_owner.with_mut(|owner| {
-            owner.set_root_id(Some(root_render_id));
-            owner.set_root_constraints(Some(root_constraints()));
-        });
-
-        binding.enter_owner_scope(|| {
-            build_owner
-                .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
-                .expect("bootstrap frame over the demo tree should succeed");
-        });
-
-        binding.bind_tree(build_owner, tree, pipeline_owner.clone());
+        // Through `flui-testing`'s canonical bootstrap: it owns the ordering
+        // (capabilities before the mount — this tree's `init_state` calls
+        // `ctx.rebuild_handle()` — render-root discovery, the layout<->build
+        // fixpoint, the lazy-sliver service pass, then the bind). Copies of that
+        // sequence have drifted silently before.
+        binding.mount_root(
+            &scoped_root,
+            MountOwners::with_pipeline_owner(pipeline_owner.clone()),
+            MountOptions::new(root_constraints()),
+        );
 
         Self {
             binding,

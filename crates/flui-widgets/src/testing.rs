@@ -131,6 +131,18 @@ impl PointerContacts {
         PointerId::new(self.current.get())
             .expect("BUG: pointer Down must precede Move, Up, or Cancel")
     }
+
+    /// Retire the in-flight contact, so a stray Move/Up/Cancel after it trips
+    /// [`current`](Self::current)'s assertion instead of silently reusing a
+    /// completed contact's id.
+    ///
+    /// Without this the sentinel only ever caught the very first malformed
+    /// dispatch of a test — everything after the first completed contact
+    /// inherited a plausible-looking id and was routed as if the gesture were
+    /// still live.
+    pub fn end(&self) {
+        self.current.set(0);
+    }
 }
 
 /// Default spacing between the synthetic pointer samples that record a
@@ -1172,6 +1184,7 @@ impl LaidOut {
         let event = make_up_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.contacts.end();
     }
 
     /// A contact move to `(x, y)` — to drive slop / drag handling. Advances
@@ -1250,6 +1263,7 @@ impl LaidOut {
     pub fn dispatch_pointer_cancel(&self) {
         let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);
         self.dispatch_pointer_event(&event);
+        self.contacts.end();
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic secondary-button
@@ -1284,6 +1298,7 @@ impl LaidOut {
         );
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.contacts.end();
     }
 }
 

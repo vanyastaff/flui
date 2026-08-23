@@ -22,11 +22,10 @@
 
 use flui::prelude::*;
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
+use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_types::Size;
 use flui_types::geometry::px;
-use flui_view::{BuildOwner, ElementTree};
 
 /// A trivial tree authored entirely off `flui::prelude::*` — the same import
 /// shape `src/lib.rs`'s crate-level doc-test demonstrates.
@@ -47,49 +46,19 @@ fn root_constraints() -> BoxConstraints {
 
 #[test]
 fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
-    let binding = HeadlessBinding::new();
-    let mut build_owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-
-    binding.install_build_capabilities(&mut build_owner);
-
-    binding.enter_owner_scope(|| {
-        let root_element = tree.mount_root_with_pipeline_owner(
-            &FacadeSmokeApp,
-            Some(pipeline_owner.clone()),
-            &mut build_owner.element_owner_mut(),
-        );
-        build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
-        build_owner.build_scope(&mut tree);
-    });
-
-    let root_render_id = pipeline_owner.with(|owner| {
-        let render_tree = owner.render_tree();
-        let mut roots = render_tree
-            .iter()
-            .map(|(id, _)| id)
-            .filter(|id| render_tree.parent(*id).is_none());
-        let root = roots
-            .next()
-            .expect("the mounted facade smoke tree should have a render root");
-        assert!(
-            roots.next().is_none(),
-            "expected exactly one render-tree root after mount"
-        );
-        root
-    });
-
-    pipeline_owner.with_mut(|owner| {
-        owner.set_root_id(Some(root_render_id));
-        owner.set_root_constraints(Some(root_constraints()));
-    });
-
-    binding.enter_owner_scope(|| {
-        build_owner
-            .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
-            .expect("bootstrap frame over the facade smoke tree should succeed");
-    });
+    // Through `flui-testing`'s canonical bootstrap rather than a hand-rolled
+    // copy of it: the ordering is load-bearing at nearly every step, and copies
+    // of it have drifted silently before.
+    let mut binding = HeadlessBinding::new();
+    let mounted = binding.mount_root(
+        &FacadeSmokeApp,
+        MountOwners::fresh(),
+        MountOptions::new(root_constraints()),
+    );
+    assert!(
+        mounted.painted,
+        "a prelude-authored tree must commit a frame through the headless pipeline"
+    );
 }
 
 #[cfg(feature = "material")]

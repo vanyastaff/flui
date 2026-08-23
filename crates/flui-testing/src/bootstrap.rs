@@ -4,8 +4,9 @@
 //! [`HeadlessBinding::with_tree`] deliberately does *no* bootstrap — it takes
 //! owners that are already mounted, rooted, and laid out. Getting them into
 //! that state is an eight-step sequence whose ordering is load-bearing at
-//! nearly every step, and it used to be hand-rolled once per harness. The
-//! copies drifted, in ways a green test suite could not see:
+//! nearly every step, and it used to be hand-rolled once per harness — eight
+//! copies across flui-widgets, the facade examples, and the facade tests. They
+//! drifted, in ways a green test suite could not see:
 //!
 //! - the `flui` golden-screenshot suite bootstrapped with a bare
 //!   `PipelineOwner::run_frame` instead of the layout↔build fixpoint, so any
@@ -233,12 +234,32 @@ impl HeadlessBinding {
     /// 4. discover the single parentless render node;
     /// 5. install it as the pipeline root under
     ///    [`MountOptions::constraints`];
-    /// 6. drive the layout↔build fixpoint frame — the same
-    ///    `run_frame_with_layout_builders` helper `pump_frame` and the live
-    ///    `draw_frame` use, never a bare `PipelineOwner::run_frame`, which
-    ///    never services build-during-layout content;
-    /// 7. run the lazy-sliver service pass, as every pumped frame does;
-    /// 8. bind the owners, retaining the committed layer tree.
+    /// 6. run the layout↔build fixpoint — the same
+    ///    `run_frame_with_layout_builders` helper `pump_frame`'s pipeline step
+    ///    and the live `draw_frame` use, never a bare
+    ///    `PipelineOwner::run_frame`, which does not service
+    ///    build-during-layout content;
+    /// 7. run the lazy-sliver service pass, as every pumped frame's pipeline
+    ///    does;
+    /// 8. bind the owners under the requested capability policy, retaining the
+    ///    committed layer tree.
+    ///
+    /// # What the bootstrap is NOT
+    ///
+    /// It is a **pipeline step, not a whole scheduler frame.**
+    /// [`pump_frame`](Self::pump_frame) wraps the same pipeline in
+    /// [`flui_scheduler::UpdateScheduler::drive_frame_with_lane`], which adds begin-frame
+    /// work (transient callbacks, microtasks, the async-driver poll), the
+    /// stationary-device re-hit-test, and `end_frame`'s post-frame callbacks.
+    /// None of those run here. A post-frame callback scheduled from
+    /// `init_state`, and an async task queued there, both run on the first
+    /// [`pump_frame`](Self::pump_frame) instead.
+    ///
+    /// That is deliberate, and it is the production shape: `attach_root_widget`
+    /// mounts and lays out, and the first `draw_frame` comes after. Folding a
+    /// whole frame into the mount would make a harness *less* faithful — a
+    /// `StreamBuilder` would deliver an already-queued event before any test
+    /// could observe the `Waiting` state Flutter guarantees.
     ///
     /// # Panics
     ///
@@ -300,14 +321,18 @@ impl HeadlessBinding {
             owner.set_root_constraints(Some(options.constraints));
         });
 
+        // The PIPELINE step, deliberately not a whole scheduler frame — see
+        // this method's docs for exactly what that excludes and why. It mirrors
+        // production, where `attach_root_widget` mounts and lays out and the
+        // first `draw_frame` comes after.
         let committed_layer_tree = self.enter_owner_scope(|| {
             let layer_tree = build_owner
                 .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
                 .expect("the bootstrap frame must succeed");
-            // Same trailing step every pumped frame runs: drain the lazy-sliver
-            // build requests and retain bands layout emitted. A no-op when no
-            // lazy sliver is mounted; without it the bootstrap frame would not
-            // be the frame `pump_frame` runs.
+            // Same trailing step every pumped frame's pipeline runs: drain the
+            // lazy-sliver build requests and retain bands layout emitted. A
+            // no-op when no lazy sliver is mounted; without it the bootstrap's
+            // pipeline step would not be the one `pump_frame` runs.
             build_owner.service_child_requests(&mut tree, &pipeline_owner);
             layer_tree
         });

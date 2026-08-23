@@ -6,9 +6,17 @@
 //! `autotests = false` + `[[test]]` in `Cargo.toml`).
 //!
 //! Convention (mirrors `flui-view/tests/main.rs`): tests that WRITE
-//! process-global state get their own [[test]] target instead. None of
-//! flui-testing's integration tests do — both drive a per-test
-//! `HeadlessBinding` instance (no singletons, no env vars, no statics).
+//! process-global state get their own [[test]] target instead. The modules
+//! here each drive a per-test `HeadlessBinding` (no singletons, no env vars,
+//! no statics) — with one bounded exception worth naming, since it is exactly
+//! the kind of thing this convention exists to catch.
+//!
+//! `log_capture` registers two sentinel dispatchers that live for the process.
+//! They are process-wide by necessity — `tracing`'s per-callsite interest cache
+//! is — but they hold no state, receive no events, and never occupy the global
+//! default subscriber slot, so nothing here can observe another module's
+//! capture. The test that DOES claim that slot lives in its own target,
+//! `log_capture_global_subscriber.rs`.
 
 #[path = "a11y_query.rs"]
 mod a11y_query;

@@ -141,9 +141,13 @@ fn render_demo<V: IntoView + 'static>(root_view: V) -> Option<Vec<u8>> {
     )
 }
 
-/// Compare `actual` RGBA8 against `tests/goldens/<name>.png`. Writes the golden
-/// (and returns) when it is missing or `UPDATE_GOLDENS` is set; otherwise fails
-/// if more than [`MAX_CHANGED_FRACTION`] of pixels moved past the tolerance.
+/// Compare `actual` RGBA8 against `tests/goldens/<name>.png`.
+///
+/// Writes the golden (and returns) ONLY under `UPDATE_GOLDENS` — an explicit
+/// regeneration. A missing golden otherwise fails, so a deleted or
+/// never-committed one cannot heal itself into a pass. With a golden present,
+/// fails if more than [`MAX_CHANGED_FRACTION`] of pixels moved past the
+/// tolerance.
 fn assert_matches_golden(name: &str, actual: &[u8]) {
     let path = goldens_dir().join(format!("{name}.png"));
 

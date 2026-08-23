@@ -114,12 +114,21 @@ impl ScriptedPointer {
         self
     }
 
-    /// The production [`PointerEvent`] this scripts.
+    /// The production [`PointerEvent`] this entry scripts.
     ///
     /// Built through `flui_interaction`'s own event constructors — the same
     /// ones every synthetic-input test uses — rather than by assembling
     /// `PointerEventData` by hand, so a script cannot drift from the shape a
     /// real platform translation produces.
+    ///
+    /// One thing those constructors do not carry is [`at`](Self::at): they
+    /// stamp `PointerState.time` as zero, as every synthetic event in this
+    /// workspace does. A script's timing reaches recognisers through the
+    /// arena's clock, which the replay advances, not through this field — so
+    /// the one consumer that reads it (`pan_zoom`'s `timestamp_nanos`) sees
+    /// zero. Threading real timestamps through would mean changing those
+    /// shared constructors and every caller of them, which is not this API's
+    /// to do unilaterally.
     #[must_use]
     pub fn to_event(self) -> PointerEvent {
         match self.phase {
@@ -247,6 +256,15 @@ impl PointerScript {
     /// The gap is a parameter, not a constant, because it is exactly what a
     /// double-tap test is about: the same script decides the recognizer's
     /// verdict on either side of its window.
+    ///
+    /// The verdict itself is pinned at the recogniser, not here:
+    /// `DoubleTapGestureRecognizer`'s own `ManualClock`-driven tests cover both
+    /// sides of the window. A replay cannot stand in for them, because a bare
+    /// recogniser never *receives* routed events — only a hit-test result
+    /// naming it delivers those, which is a mounted tree's job. What the replay
+    /// suite pins instead is that the gap is genuinely spent in virtual time
+    /// (`replay_spends_exactly_the_scripts_duration_of_virtual_time`, and the
+    /// long-press pair, which flip on the clock alone).
     #[must_use]
     pub fn double_tap(position: Offset<Pixels>, gap: Duration) -> Self {
         let second = Duration::from_millis(50) + gap;

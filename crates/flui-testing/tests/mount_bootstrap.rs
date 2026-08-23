@@ -1,7 +1,7 @@
 //! The contract of [`HeadlessBinding::mount_root`]: the bootstrap frame is the
 //! same frame `pump_frame` runs.
 //!
-//! This is the property four hand-rolled copies of the bootstrap kept losing.
+//! This is the property eight hand-rolled copies of the bootstrap kept losing.
 //! The `flui` golden-screenshot suite drove its capture with a bare
 //! `PipelineOwner::run_frame`, which never services build-during-layout
 //! content, so every `SliverAppBar` delegate child it photographed was
@@ -12,6 +12,8 @@
 //! for the bootstrap. Both plant a registry entry by hand rather than mounting
 //! a real `LayoutBuilder`, so they stay pure wiring tests of the frame path.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::{ElementId, RenderId};
@@ -198,5 +200,49 @@ fn withholding_the_post_frame_capability_outlasts_the_mount() {
     assert!(
         build_owner.local_post_frame_handle().is_none(),
         "the owner-local post-frame handle is withheld together with the shared one",
+    );
+}
+
+/// The bootstrap is a pipeline step, not a whole scheduler frame — and the
+/// difference is observable, so it is pinned rather than merely documented.
+///
+/// `pump_frame` wraps the same pipeline in `drive_frame_with_lane`, which adds
+/// `end_frame`'s post-frame callbacks. A callback scheduled while the tree is
+/// mounting therefore waits for the first pump. That mirrors production, where
+/// `attach_root_widget` mounts and lays out and the first `draw_frame` follows.
+#[test]
+fn a_post_frame_callback_scheduled_during_mount_waits_for_the_first_pump() {
+    let mut binding = HeadlessBinding::new();
+    let ran = Arc::new(AtomicBool::new(false));
+
+    let mounted = binding.mount_root(
+        &leaf(10.0, 10.0),
+        MountOwners::fresh(),
+        MountOptions::tight(50.0, 50.0),
+    );
+    assert!(
+        mounted.painted,
+        "precondition: the bootstrap committed a frame"
+    );
+
+    // Scheduled after the bootstrap for the same reason a `ViewState` would
+    // schedule one from `init_state`: the capability is installed before the
+    // mount, so the queue is reachable that early. What is being pinned is
+    // WHEN it drains.
+    let flag = Arc::clone(&ran);
+    flui_scheduler::PostFrameHandle::new(binding.scheduler())
+        .schedule(move |_| flag.store(true, Ordering::SeqCst));
+
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "the bootstrap runs the pipeline, not `end_frame`, so nothing drains \
+         the post-frame queue yet",
+    );
+
+    binding.pump_frame(Duration::from_millis(16));
+
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "the first pump is a whole frame and drains the post-frame queue",
     );
 }
