@@ -4,13 +4,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use anyhow::Result;
 use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
+    error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
         owner::{DirectOwnerHooks, OwnerHooks},
@@ -51,7 +51,7 @@ impl std::fmt::Debug for WebPlatform {
 
 impl WebPlatform {
     /// Create a new Web platform instance
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Self, PlatformError> {
         console_error_panic_hook::set_once();
 
         let state = WebState {
@@ -125,7 +125,7 @@ impl Platform for WebPlatform {
         self.with_state(|s| s.background_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
         tracing::info!("Starting web platform");
 
         self.with_state(|s| s.is_running = true);
@@ -146,7 +146,8 @@ impl Platform for WebPlatform {
         on_ready(OwnerPlatform::new(
             Arc::clone(&platform) as Arc<dyn Platform>,
             hooks,
-        ))?;
+        ))
+        .map_err(PlatformError::bootstrap)?;
 
         // Start the RAF loop
         platform.start_raf_loop();
@@ -163,7 +164,10 @@ impl Platform for WebPlatform {
         });
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+    fn open_window(
+        &self,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
 
         let window = WebWindow::new(
@@ -259,7 +263,7 @@ impl Platform for WebPlatform {
         self.with_state(|s| s.handlers.window_event = Some(callback));
     }
 
-    fn app_path(&self) -> Result<std::path::PathBuf> {
+    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
         // web_sys::Window::location() returns Location, not Result
         // Location::origin() returns Result<String, JsValue>
         if let Some(w) = web_sys::window() {

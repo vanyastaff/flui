@@ -242,7 +242,7 @@ let sequence = TweenSequence::new(vec![
 ### Tween Composition
 
 ```rust,ignore
-use flui_animation::TweenAnimatableExt;
+use flui_animation::AnimatableExt;
 
 // Chain: first tween, then second
 let chained = tween1.chain(tween2);
@@ -387,7 +387,7 @@ let quot = anim.clone().divide(other);
 ### AnimatableExt (for tweens)
 
 ```rust,ignore
-use flui_animation::TweenAnimatableExt;
+use flui_animation::AnimatableExt;
 
 let tween = FloatTween::new(0.0, 100.0);
 

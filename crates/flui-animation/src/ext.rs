@@ -9,42 +9,48 @@ use crate::curve::Curve;
 use crate::curved::CurvedAnimation;
 use crate::reverse::ReverseAnimation;
 use crate::tween::TweenAnimation;
-use crate::tween_types::Animatable;
+use crate::tween_types::{Animatable, ChainedTween, CurveTween, ReverseTween};
 use std::fmt;
 use std::sync::Arc;
 
-/// Extension trait for creating animations from [`Animatable`] types.
+/// Extension trait for composing [`Animatable`] types and creating
+/// animations from them.
 ///
-/// This trait provides a fluent API for creating [`TweenAnimation`]s from any type
-/// that implements [`Animatable`].
+/// This trait provides a fluent API for transforming animatables
+/// ([`reversed`](Self::reversed), [`chain`](Self::chain),
+/// [`with_curve`](Self::with_curve)) and for driving them with a parent
+/// animation ([`animate`](Self::animate)).
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{AnimationController, Animation};
+/// use flui_animation::{AnimationController, Animation, Animatable, Curves};
 /// use flui_animation::ext::AnimatableExt;
 /// use flui_animation::FloatTween;
 /// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
+/// let tween = FloatTween::new(0.0, 100.0);
+///
+/// // Reverse the tween
+/// let reversed = tween.reversed();
+/// assert_eq!(reversed.transform(0.0), 100.0);
+///
+/// // Chain with a curve
+/// let curved = tween.with_curve(Curves::EaseIn);
+/// assert!(curved.transform(0.5) < 50.0);
+///
+/// // Drive with a controller
 /// let scheduler = UpdateScheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
 /// ));
-///
-/// // Fluent API using extension trait
-/// let tween = FloatTween::new(0.0, 100.0);
 /// let animation = tween.animate(controller as Arc<dyn Animation<f32>>);
-///
 /// assert_eq!(animation.value(), 0.0);
 /// ```
-pub trait AnimatableExt<T>: Animatable<T> + Clone + Send + Sync + 'static
-// PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-where
-    T: Clone + Send + Sync + fmt::Debug + 'static,
-{
+pub trait AnimatableExt<T>: Animatable<T> + Sized {
     /// Create a [`TweenAnimation`] from this animatable and a parent animation.
     ///
     /// This is a convenience method that is equivalent to calling
@@ -75,19 +81,48 @@ where
     /// ```
     fn animate(self, parent: Arc<dyn Animation<f32>>) -> TweenAnimation<T, Self>
     where
-        Self: fmt::Debug,
+        Self: fmt::Debug + Clone + Send + Sync + 'static,
+        T: Clone + Send + Sync + fmt::Debug + 'static,
     {
         TweenAnimation::new(self, parent)
+    }
+
+    /// Returns a reversed version of this animatable.
+    ///
+    /// The reversed animatable transforms `t` to `1.0 - t` before passing
+    /// to the original animatable.
+    #[inline]
+    #[must_use]
+    fn reversed(self) -> ReverseTween<T, Self> {
+        ReverseTween::new(self)
+    }
+
+    /// Chains this animatable with another.
+    ///
+    /// The output of `self` is passed as input to `other`.
+    /// This is useful when `self` outputs `f32` (like a curve) and `other`
+    /// transforms that to the final type.
+    #[inline]
+    #[must_use]
+    fn chain<B>(self, other: B) -> ChainedTween<Self, B>
+    where
+        Self: Animatable<f32>,
+    {
+        ChainedTween::new(self, other)
+    }
+
+    /// Applies a curve to this animatable.
+    ///
+    /// This is a convenience method that chains a `CurveTween` before this animatable.
+    #[inline]
+    #[must_use]
+    fn with_curve<C: Curve>(self, curve: C) -> ChainedTween<CurveTween<C>, Self> {
+        ChainedTween::new(CurveTween::new(curve), self)
     }
 }
 
 // Blanket implementation for all types that implement Animatable
-impl<T, A> AnimatableExt<T> for A
-where
-    T: Clone + Send + Sync + fmt::Debug + 'static,
-    A: Animatable<T> + Clone + Send + Sync + 'static,
-{
-}
+impl<T, A: Animatable<T>> AnimatableExt<T> for A {}
 
 /// Extension trait for composing animations.
 ///

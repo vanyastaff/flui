@@ -143,10 +143,10 @@ pub use curve::{
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
-    AlignmentTween, Animatable, AnimatableExt as TweenAnimatableExt, BorderRadiusTween,
-    ChainedTween, ColorTween, ConstantTween, CurveExt, CurveTween, EdgeInsetsTween, FloatTween,
-    IntTween, Matrix4Tween, OffsetTween, OklabColorTween, RectTween, ReverseTween, SizeTween,
-    StepTween, Tween, TweenSequence, TweenSequenceItem,
+    AlignmentTween, Animatable, BorderRadiusTween, ChainedTween, ColorTween, ConstantTween,
+    CurveExt, CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween,
+    OklabColorTween, RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence,
+    TweenSequenceItem,
 };
 
 // Re-export scheduler types for convenience.

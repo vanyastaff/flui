@@ -2,7 +2,8 @@
 //!
 //! # Why a source scan, and what it is *not* evidence of
 //!
-//! The three frame sites in `app/runner.rs` are `cfg`-gated: the desktop site
+//! The three frame sites in the `app/runner/` module (`desktop.rs`,
+//! `android.rs`, `web.rs`) are `cfg`-gated: the desktop site
 //! compiles on this host, the `wasm32` site compiles under
 //! `cargo check -p flui-app --target wasm32-unknown-unknown` (run for this
 //! change), and the **android site needs the NDK and was not compiled**. The
@@ -18,6 +19,23 @@
 //! regression guard, not a proof of the android body's runtime behavior. Stated
 //! rather than implied.
 
+/// Every source file of the `app/runner/` module, so the scans below cover
+/// the whole runner regardless of which file a frame site lives in — a
+/// fourth `drive_frame` site added anywhere in the module is counted, not
+/// just one appearing next to the existing three.
+const RUNNER_SOURCES: &[&str] = &[
+    include_str!("../src/app/runner/mod.rs"),
+    include_str!("../src/app/runner/android.rs"),
+    include_str!("../src/app/runner/desktop.rs"),
+    include_str!("../src/app/runner/device_recovery.rs"),
+    include_str!("../src/app/runner/frame_pacing.rs"),
+    include_str!("../src/app/runner/host.rs"),
+    include_str!("../src/app/runner/lifecycle_ladder.rs"),
+    include_str!("../src/app/runner/realm_dispatch.rs"),
+    include_str!("../src/app/runner/secondary_window.rs"),
+    include_str!("../src/app/runner/web.rs"),
+];
+
 /// Whether a (whitespace-concatenated) `#[cfg(...)]` attribute's text names
 /// `test` as one of its predicates — anchored on the `(test,`/`(test)`/
 /// `,test,`/`,test)` tokens a real `cfg` predicate list produces, not a bare
@@ -31,8 +49,8 @@ fn attr_names_test_predicate(attr_text: &str) -> bool {
         .any(|needle| attr_text.contains(needle))
 }
 
-/// Lines of `runner.rs`, excluding comments and excluding whole
-/// `#[cfg(test)]`-gated modules.
+/// Lines of one `app/runner/` source file, excluding comments and excluding
+/// whole `#[cfg(test)]`-gated modules.
 ///
 /// A unit test may legitimately drive a throwaway `UpdateScheduler` directly
 /// (`scheduler.drive_frame(...)`, `scheduler.drive_async_tasks()`) to prove
@@ -95,18 +113,21 @@ fn production_lines(source: &str) -> Vec<&str> {
     lines
 }
 
-/// `runner.rs` must reach the scheduler only through `drive_frame`.
+/// The `app/runner/` module must reach the scheduler only through `drive_frame`.
 ///
 /// Red-check: change any site back to `handle_begin_frame` + `handle_draw_frame`.
 #[test]
 fn every_runner_frame_site_uses_the_shared_drive_frame_helper() {
-    const RUNNER: &str = include_str!("../src/app/runner.rs");
-    let code_lines = production_lines(RUNNER);
+    let code_lines: Vec<&str> = RUNNER_SOURCES
+        .iter()
+        .flat_map(|source| production_lines(source))
+        .collect();
 
     for banned in ["handle_begin_frame", "handle_draw_frame", "end_frame("] {
         assert!(
             !code_lines.iter().any(|l| l.contains(banned)),
-            "runner.rs calls `{banned}` directly in production code; every frame site must go \
+            "the app/runner/ module calls `{banned}` directly in production code; every frame \
+             site must go \
              through `UpdateScheduler::drive_frame`, which orders begin → persistent → pipeline → \
              post-frame → idle"
         );
@@ -166,8 +187,10 @@ fn every_runner_frame_site_uses_the_shared_drive_frame_helper() {
 /// the suite, since nothing else exercises a real backgrounded frame loop.
 #[test]
 fn every_pump_async_arm_calls_finish_then_drive_async_tasks() {
-    const RUNNER: &str = include_str!("../src/app/runner.rs");
-    let code_lines = production_lines(RUNNER);
+    let code_lines: Vec<&str> = RUNNER_SOURCES
+        .iter()
+        .flat_map(|source| production_lines(source))
+        .collect();
 
     let finish_sites = code_lines
         .iter()

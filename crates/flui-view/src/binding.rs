@@ -277,12 +277,16 @@ pub trait WidgetsBindingObserver {
     // ========================================================================
     // Predictive Back Gesture (Android 13+)
     //
-    // REMOVE_BY: 2026-09-22 — scheduled cleanup reminder. These four trait
+    // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. These four trait
     // methods + the matching `WidgetsBinding::handle_*_back_gesture`
     // impls + the `back_gesture_observers` storage are Android-13+
     // infrastructure waiting on the `flui-platform` Android wire-up. No
     // in-workspace `impl WidgetsBindingObserver` overrides them today.
-    // By this date either delete the whole surface (no consumer
+    // Still deferred: the `flui-platform` Android backend is compiled
+    // and linted in CI but dispatches no back-gesture events — nothing
+    // in the workspace constructs a `PredictiveBackEvent` outside this
+    // crate — so there is still nothing to wire this surface to. By
+    // this date either delete the whole surface (no consumer
     // materialized) OR wire the platform side and drop this marker.
     // ========================================================================
 
@@ -464,13 +468,15 @@ struct WidgetsBindingInner {
 
     /// Observers currently handling a predictive back gesture (Android).
     ///
-    // REMOVE_BY: 2026-09-22 — scheduled cleanup reminder. The predictive-
+    // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. The predictive-
     // back-gesture surface (`handle_*_back_gesture` trait methods +
     // `back_gesture_observers` storage + `WidgetsBinding::handle_*_
     // back_gesture` impls) is Android-13+ infrastructure waiting on the
-    // `flui-platform` Android side. By this date either delete
-    // this surface (no consumer materialized) OR wire the platform side
-    // and drop this marker.
+    // `flui-platform` Android side, which still dispatches no such
+    // events — see the matching marker on the trait surface above for
+    // the verified detail. By this date either delete this surface (no
+    // consumer materialized) OR wire the platform side and drop this
+    // marker.
     back_gesture_observers: Vec<Arc<dyn WidgetsBindingObserver>>,
 
     /// Whether a build has been scheduled.
@@ -1450,7 +1456,7 @@ impl WidgetsBinding {
     // ========================================================================
     // Predictive Back Gesture (Android)
     //
-    // REMOVE_BY: 2026-09-22 — scheduled cleanup reminder. See the matching
+    // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. See the matching
     // marker on the `WidgetsBindingObserver::handle_*_back_gesture` trait
     // surface for the rationale and dispose-or-wire decision rule.
     // ========================================================================

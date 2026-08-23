@@ -8,7 +8,7 @@
 //! - [`Milliseconds`] - Time in milliseconds (f64)
 //! - [`Seconds`] - Time in seconds (f64)
 //! - [`Microseconds`] - Time in microseconds (i64, integer precision)
-//! - [`Percentage`] - Percentage value (0.0 to 100.0)
+//! - [`BudgetPercentage`] - share of a frame budget (0.0 to 100.0)
 //! - [`FrameDuration`] - Frame budget with FPS-based calculations
 //!
 //! ## Newtype Pattern
@@ -565,15 +565,20 @@ impl fmt::Display for FrameDuration {
 }
 
 // =============================================================================
-// Percentage Newtype
+// BudgetPercentage Newtype
 // =============================================================================
 
-/// Type-safe percentage wrapper (0.0 to 100.0)
+/// Type-safe share of a frame's time budget, on the 0.0–100.0 percent scale.
+///
+/// Used by the frame-budget instrumentation (utilization, per-phase budget
+/// share, jank rate). Distinct from `flui_geometry::Percentage`, which is a
+/// 0.0–1.0 `f32` layout fraction — the two share nothing but the percent
+/// concept, so they are deliberately separate types with distinct names.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Percentage(f64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub struct BudgetPercentage(f64);
 
-impl Percentage {
+impl BudgetPercentage {
     /// Zero percent
     pub const ZERO: Self = Self(0.0);
 
@@ -611,13 +616,13 @@ impl Percentage {
     }
 }
 
-impl fmt::Display for Percentage {
+impl fmt::Display for BudgetPercentage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:.1}%", self.0)
     }
 }
 
-impl From<f64> for Percentage {
+impl From<f64> for BudgetPercentage {
     #[inline]
     fn from(value: f64) -> Self {
         Self(value)
@@ -690,11 +695,11 @@ mod tests {
 
     #[test]
     fn test_percentage() {
-        let p = Percentage::from_ratio(0.5);
+        let p = BudgetPercentage::from_ratio(0.5);
         assert_eq!(p.value(), 50.0);
         assert_eq!(p.as_ratio(), 0.5);
 
-        let clamped = Percentage::new(150.0).clamped();
+        let clamped = BudgetPercentage::new(150.0).clamped();
         assert_eq!(clamped.value(), 100.0);
     }
 
@@ -703,7 +708,7 @@ mod tests {
         assert_eq!(format!("{}", Milliseconds::new(12.34)), "12.34ms");
         assert_eq!(format!("{}", Seconds::new(1.234)), "1.234s");
         assert_eq!(format!("{}", Microseconds::new(1000)), "1000μs");
-        assert_eq!(format!("{}", Percentage::new(75.5)), "75.5%");
+        assert_eq!(format!("{}", BudgetPercentage::new(75.5)), "75.5%");
     }
 
     #[test]

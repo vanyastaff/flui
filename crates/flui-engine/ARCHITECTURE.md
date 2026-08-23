@@ -410,21 +410,17 @@ texture-pool plumbing in `mod.rs`; the surface blit, Dual-Kawase blur, and shade
 paths in their own files). The morphological filter did not join this directory -- it
 lives in `wgpu/morphology/` as one of the format-matched filter pipelines.
 
-### Forward-looking helpers in `effects`, `instancing`, `pipeline`, `shader_compiler` modules
+### Forward-looking helpers in `effects`, `instancing`, `pipeline`, `shader_compiler` modules -- RESOLVED (helpers deleted per-item)
 
-**Sites:** [`src/wgpu/effects.rs`](src/wgpu/effects.rs) (`ShadowParams::elevation_*`, `BlurIntensity`, `LinearGradientBuilder`), [`src/wgpu/instancing.rs`](src/wgpu/instancing.rs) (`RectInstance::rounded_rect` / `with_transform`, `CircleInstance::ellipse`, `TextureInstance::with_rotation`), [`src/wgpu/pipeline.rs`](src/wgpu/pipeline.rs) (various constructor shortcuts), [`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs) (`ShaderCache::cached_count`, `ShaderCache::clear`).
+**Sites:** [`src/wgpu/effects.rs`](src/wgpu/effects.rs), [`src/wgpu/instancing.rs`](src/wgpu/instancing.rs), [`src/wgpu/pipeline.rs`](src/wgpu/pipeline.rs), [`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs).
 
-**Violation:** none; module-level `#[allow(dead_code)]` retained with documentation. These are forward-looking helpers with named eventual consumers (`painter.rs` and devtools introspection); per-item deletion is bandwidth-dependent.
+The module-level `#[allow(dead_code)]` masks are gone from all four files and the forward-looking helpers behind them were deleted per-item rather than kept against hypothetical consumers. See the DONE entry in [Outstanding refactors](#outstanding-refactors) for the item-by-item disposition.
 
-**Next planned step:** per-item audit + deletion -- see [Outstanding refactors](#outstanding-refactors).
+### `wgpu/texture_cache.rs` + `wgpu/external_texture_registry.rs` + `wgpu/path_cache.rs` + `wgpu/multi_draw.rs` -- RESOLVED (audited: all four live)
 
-### `wgpu/texture_cache.rs` (1,000 LOC) + `wgpu/external_texture_registry.rs` (315 LOC) + `wgpu/path_cache.rs` (336 LOC) + `wgpu/multi_draw.rs` (304 LOC) -- in-crate-only consumers via `painter/` fields
+**Sites:** [`src/wgpu/resources.rs`](src/wgpu/resources.rs) (`GpuResources` owns `texture_cache` + `external_texture_registry`), [`src/wgpu/batches/mod.rs`](src/wgpu/batches/mod.rs) (`DrawBatcher` owns `path_cache`), [`src/wgpu/replay/flush.rs`](src/wgpu/replay/flush.rs) (the `multi_draw` use site).
 
-**Sites:** [`src/wgpu/painter/mod.rs`](src/wgpu/painter/mod.rs) (`WgpuPainter` struct fields) + the `multi_draw` use site in the `painter/` submodules.
-
-**Violation:** none of the refusal triggers. An earlier cleanup proposed deleting all four modules because no external caller exists. Implementation surfaced `WgpuPainter` fields referencing each: `texture_cache: TextureCache`, `external_texture_registry: ExternalTextureRegistry`, `path_cache: PathCache`, `MultiDrawBatcher` import. Whether these fields are populated-and-queried in production paths or stored-but-never-read is interior to the `painter/` module; determining that requires a dedicated `painter/` internal audit.
-
-**Next planned step:** see [Outstanding refactors](#outstanding-refactors).
+An earlier cleanup proposed deleting all four modules because no external caller exists; the deferred per-field audit has since run and found each one populated **and** queried on a production path, so all four stay. Call paths are documented in the DONE audit entry in [Outstanding refactors](#outstanding-refactors).
 
 ### Doctest examples may use pre-`Pixels`-wrap `Offset::new(f32, f32)` shape
 
@@ -486,38 +482,20 @@ The move-only split of `wgpu/painter.rs` into `painter/{mod,draw,transform_clip,
 filter ended up in `wgpu/morphology/` with the other filter pipelines instead of an
 `offscreen/morph.rs`). See the Friction-log entry above.
 
-### Audit `painter/` consumers of `texture_cache`, `external_texture_registry`, `path_cache`, `multi_draw`
+### Audit `painter/` consumers of `texture_cache`, `external_texture_registry`, `path_cache`, `multi_draw` — DONE (all four live; nothing deleted)
 
-**Files:** [`src/wgpu/painter/`](src/wgpu/painter/mod.rs), [`src/wgpu/texture_cache.rs`](src/wgpu/texture_cache.rs), [`src/wgpu/external_texture_registry.rs`](src/wgpu/external_texture_registry.rs), [`src/wgpu/path_cache.rs`](src/wgpu/path_cache.rs), [`src/wgpu/multi_draw.rs`](src/wgpu/multi_draw.rs).
+The per-field audit ran and reached the opposite of the outcome the deletion budget anticipated: every one of the four modules is populated **and** queried on a production path, so per this entry's own decision rule ("populated + queried → document the path and leave the module") all four stay. The former `WgpuPainter` fields now live behind the borrow-seam facades — `GpuResources` ([`src/wgpu/resources.rs`](src/wgpu/resources.rs)) owns `texture_cache` and `external_texture_registry`; `DrawBatcher` ([`src/wgpu/batches/mod.rs`](src/wgpu/batches/mod.rs)) owns `path_cache`. The live paths, per module:
 
-**Goal:** determine whether `WgpuPainter` fields (`texture_cache: TextureCache`, `external_texture_registry: ExternalTextureRegistry`, `path_cache: PathCache`) and the `multi_draw::MultiDrawBatcher` import are populated-and-queried in production paths or stored-but-never-read.
+- **`texture_cache`** — populated at record time by the image-draw family (`WgpuPainter::draw_image*` → `batches/images.rs` → `TextureCache::load_from_rgba` via `GpuResources::texture_cache_mut`); queried at replay time (`replay/flush.rs::flush_segment_cached_images` resolves each `TextureId` to its view via `TextureCache::get`); maintained once per frame (`WgpuPainter` calls `end_frame_maintenance`: stale-atlas reset → budget eviction → use-counter reset).
+- **`external_texture_registry`** — the embedder-facing surface for platform textures (video, camera): registered/updated through `WgpuPainter::external_texture_registry_mut`, size-queried at record time in `draw_texture` (src-UV normalization), and resolved ID→view at replay time in `replay/flush.rs::flush_segment_external_images`. Reached from the layer tree via `TextureLayer` → `Backend` → `WgpuPainter::draw_texture`.
+- **`path_cache`** — hit on every arbitrary-path draw: `batches/paths.rs::draw_path` computes the path hash, queries `PathCache::get`, and inserts fresh tessellation on miss; `advance_frame` runs once per frame from `WgpuPainter::render`. Also measured by `benches/render_throughput.rs`.
+- **`multi_draw`** — an earlier pass already trimmed it to its live surface (~150 LOC; the module doc records what was cut). What remains is reachable, not dead: `MultiDrawBatcher` accumulates draw/instance counts inside `replay/flush.rs::flush_all_instanced_batches` and feeds the `debug_assertions`-gated trace log via `stats()`. Deleting it would remove observable (traced) telemetry, so it stays.
 
-**Shape:** read each field's use in the `painter/` submodules. For each:
-- If populated + queried via specific call paths -> document the path in ARCHITECTURE.md and leave the module.
-- If populated but never queried (zombie field) -> delete the field, then delete the module (if no other consumer).
-- If never populated (dead init) -> delete the field, then delete the module.
+Net deletion from these four modules: 0 LOC — the ~1,955 LOC budget was conditioned on "if all confirmed unused", and none were. One honest residue, named rather than silently kept: `TextureCache` carries public convenience surface with no in-workspace caller today (`get_or_load`/`from_path` file loading, the memory-budget constructor/setters, atlas introspection). That is exported API on a `pub mod` — reachable by embedders — not unreachable code; pruning it would be an API-design decision, out of scope for a dead-code audit.
 
-**Estimated deletion budget:** ~1,955 LOC (the four modules) if all confirmed unused. Substantial LOC win for an audit-only Mythos pass.
+### Per-item audit of `effects`, `instancing`, `pipeline`, `shader_compiler` dead helpers — DONE
 
-**Concrete blocker:** none remaining — the `painter/` directory split (above) has landed, so the per-field usage audit is now tractable across the focused submodules.
-
-**Dependencies:** none (the `painter/` split has landed).
-
-### Per-item audit of `effects`, `instancing`, `pipeline`, `shader_compiler` dead helpers
-
-**Files:** [`src/wgpu/effects.rs`](src/wgpu/effects.rs), [`src/wgpu/instancing.rs`](src/wgpu/instancing.rs), [`src/wgpu/pipeline.rs`](src/wgpu/pipeline.rs), [`src/wgpu/shader_compiler.rs`](src/wgpu/shader_compiler.rs).
-
-**Goal:** for each item flagged by removing the module-level `#[allow(dead_code)]`, decide keep-or-delete.
-
-**Item inventory (from `cargo check` output at chain end):**
-- `effects.rs`: `ShadowParams::elevation_1` through `elevation_5`, `BlurIntensity::iterations` / `radius`, `LinearGradientBuilder::new` / `add_stop` / `start` / `end` / `build` -- forward-looking shadow/blur/gradient builder helpers.
-- `instancing.rs`: `RectInstance::rounded_rect` / `with_transform`, `CircleInstance::ellipse`, `ArcInstance::ellipse`, `TextureInstance::with_rotation` / `with_uv` -- constructor shortcuts.
-- `pipeline.rs`: multiple items (TBD per audit).
-- `shader_compiler.rs`: `ShaderCache::cached_count` / `clear` -- devtools introspection.
-
-**Concrete blocker:** per-item audit requires reading each function's body + tracking caller search. Estimated 2-3 hours for ~20 items.
-
-**Dependencies:** none.
+The keep-or-delete audit is complete: **no module-wide `#[allow(dead_code)]` remains in any of the four files**, and no item-level one either. Most of the inventory fell in earlier cleanup passes (each recorded in the module docs in [`src/wgpu/mod.rs`](src/wgpu/mod.rs)): `effects.rs` lost `ShadowParams::elevation_1..5`, `BlurIntensity`, `LinearGradientBuilder`, and its parallel `BlurParams`; `instancing.rs` lost the six constructor shortcuts (`RectInstance::rounded_rect` / `with_clip_rsuperellipse` / `with_transform`, `CircleInstance::ellipse`, `ArcInstance::ellipse`, `TextureInstance::with_rotation` — `with_uv` from the inventory below turned out live, with multiple `batches`/`replay`/`opacity_layer` callers); `pipeline.rs` lost its unused constants/methods/cache helpers, keeping only the `PipelineKey`/`PipelineCache`/`pipeline_key_from_paint` surface `painter` consumes; `shader_compiler.rs` lost the four `*Uniforms` structs and the `create_uniforms_from_shader` dispatcher (and the `ShaderCache::cached_count` named in the old inventory never existed). The final residue — `ShaderCache::clear`, the one item still suppressed with an item-level `#[allow(dead_code)]` ("reserved for devtools", but no `devtools` feature exists in this crate, so it was unreachable in every build configuration) — is now deleted as well; a comment at the impl block records why no cache-flush entry point is needed.
 
 ### `catch_unwind` boundary on `Renderer::render_scene` (forward-looking)
 
@@ -546,7 +524,7 @@ The following pre-existing concerns are tracked outside this Outstanding refacto
 ## Notes
 
 - **Net unsafe delta for this chain: 0.** The single existing `unsafe { instance.create_surface_unsafe(...) }` block in `Renderer::new` is required by wgpu's API contract and stays; the chain consolidated the two unsafe calls into one block with a documented SAFETY comment. Zero new unsafe blocks were added.
-- **Net LOC reduction for this chain: ~-5,888 LOC of production code** (per `git show --stat` totals across the 10 substantive commits): -812 from `utils/`, -2,190 from the parallel scene/compositor stack, -2,188 from platform stubs, -1 from the commands shim/import cleanup, -429 from the Painter trait deletion, +23 from the `anyhow` → `EngineResult` migration, and -291 from deleting `text_renderer.rs` plus the dead-code audit. Original target was ≥6,000 LOC; **target missed by ~112 LOC** because the proposed 1,955 LOC of additional module deletions deferred (the four `wgpu/{texture_cache, external_texture_registry, path_cache, multi_draw}.rs` modules turned out to have in-crate consumers via `painter.rs` fields; deletion deferred to Outstanding refactor #6). `offscreen.rs` remained the one un-split god module at chain end (the `painter.rs` → `painter/` and `replay.rs` → `replay/` splits landed); it has since been split into `offscreen/{mod,blit,blur,mask}.rs` — see the Friction log.
+- **Net LOC reduction for this chain: ~-5,888 LOC of production code** (per `git show --stat` totals across the 10 substantive commits): -812 from `utils/`, -2,190 from the parallel scene/compositor stack, -2,188 from platform stubs, -1 from the commands shim/import cleanup, -429 from the Painter trait deletion, +23 from the `anyhow` → `EngineResult` migration, and -291 from deleting `text_renderer.rs` plus the dead-code audit. Original target was ≥6,000 LOC; **target missed by ~112 LOC** because the proposed 1,955 LOC of additional module deletions deferred (the four `wgpu/{texture_cache, external_texture_registry, path_cache, multi_draw}.rs` modules turned out to have in-crate consumers via `painter.rs` fields; the deferred audit has since confirmed all four live on production paths — that 1,955 LOC never materializes; see Outstanding refactors). `offscreen.rs` remained the one un-split god module at chain end (the `painter.rs` → `painter/` and `replay.rs` → `replay/` splits landed); it has since been split into `offscreen/{mod,blit,blur,mask}.rs` — see the Friction log.
 - **`port-check.sh` was extended during this chain** -- see [`docs/PORT.md`](../../docs/PORT.md) `## Refusal triggers` for the current trigger inventory.
 - **`Arc<Mutex<>>` shapes for `OffscreenRenderer` and `TexturePoolInner` survived the chain.** Documented in Friction log + Outstanding refactors with concrete blockers. The chain prioritised dead-code deletion (largest LOC wins) over lock-shape refactoring (substantial lifetime gymnastics for marginal runtime benefit).
 - **Two test counts** at chain end: `cargo test -p flui-engine --lib` shows 48 passed (down from 53 pre-chain, with 5 tests deleted alongside `text_renderer.rs`); `cargo test -p flui-engine --doc` count TBD per doctest fix Outstanding refactor.

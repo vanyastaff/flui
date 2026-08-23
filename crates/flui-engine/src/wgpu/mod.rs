@@ -152,9 +152,9 @@ pub mod path_cache;
 /// `PipelineCache` (get_or_create, viewport_bind_group_layout), and
 /// `pipeline_key_from_paint`. Unused constants/methods/cache helpers deleted.
 mod pipeline;
-// The parallel `pipelines.rs` (with its own `PipelineCache` +
+// An earlier, parallel `pipelines.rs` (with its own `PipelineCache` +
 // `PipelineBuilder` structs, name-colliding with `pipeline.rs`) was deleted.
-// The `pipelines.rs` introduced by T3 is distinct: it defines `PipelineSet`,
+// The `pipelines.rs` that exists today is distinct: it defines `PipelineSet`,
 // which *composes* the live `PipelineCache` from `pipeline.rs` (singular) and
 // adds the nine named pipelines previously scattered as painter fields.
 /// Shared per-owner-thread GPU services (ADR-0045 decision 2):
@@ -183,13 +183,13 @@ mod renderer;
 pub(super) mod replay;
 pub(crate) mod resources;
 /// Shader cache for offscreen pipelines (`OffscreenRenderer` mask /
-/// blur / morph). A cleanup pass dropped the module-level
-/// `#[allow(dead_code)]` mask: the only forward-looking helper
-/// (`ShaderCache::clear`) is now gated behind
-/// `#[cfg(feature = "devtools")]`, so default-build dead-code
-/// surfaces as an item-level lint rather than a broad module
-/// suppression. An earlier design-review pass had also mentioned a
-/// `cached_count` method, but no such method existed -- only `clear`.
+/// blur / morph). Carries no `#[allow(dead_code)]` at any scope: the
+/// surface is exactly what the offscreen pipelines call
+/// (`get_or_compile` / `precompile_all`), so any zombie surfaces as an
+/// item-level lint. The forward-looking `ShaderCache::clear` (devtools
+/// hot-reload, zero consumers in every build configuration) was deleted;
+/// see the note at the end of the impl block for why no flush entry
+/// point is needed.
 mod shader_compiler;
 /// naga_oil shader composition helper: resolves `#import` directives
 /// in WGSL at pipeline-init time via [`shader_composer::compose_wgsl_shader`].

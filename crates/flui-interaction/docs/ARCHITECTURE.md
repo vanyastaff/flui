@@ -111,7 +111,6 @@ the app boundary; the crate does not install one. Filter via
 
 ## Friction log
 
-- **`#[allow(deprecated)]` on `team` / `signal_resolver` back-compat shims** (`src/lib.rs:155-162`). Kept through 0.2.0+ to avoid rippling through `flui-rendering` and `flui-app`. Removal is the 1.0 milestone.
 - **`docs/ARCHITECTURE.md` (this file) is the template-driven version;** the pre-template `crates/flui-interaction/docs/ARCHITECTURE.md` body (gesture state-machine diagrams, hit testing walk) lives as a companion. Per [`docs/PORT.md` line 798](../docs/PORT.md), relocation to crate root is deferred to the doc-tidying PR.
 - **`is_resolved(pointer)` returns `bool` not `Result`.** Arena resolution can't fail in this design (the worst case is a `parking_lot::Mutex` poison — the `Deref` impl swallows it for ergonomics, and the arena entry is dropped). If you need poison-detection, wrap the call site in `catch_unwind` rather than changing the API.
 - **`make_*_event` test helpers are `#[cfg(any(test, feature = "testing"))]`.** The benches depend on the `testing` feature being enabled in `dev-dependencies`. Documented at `Cargo.toml`; the gates will surface any missing opt-in.

@@ -2,7 +2,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{Context, Result};
 use cocoa::{
     appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular},
     base::{YES, id, nil},
@@ -15,12 +14,13 @@ use super::{display, window::MacOSWindow};
 use crate::{
     config::WindowConfiguration,
     data_transfer::{DataTransferSource, NullDataTransferSource},
+    error::PlatformError,
     executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
-        Clipboard, DesktopCapabilities, OwnerPlatform, Platform, PlatformCapabilities,
-        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
-        WindowId, WindowOptions,
+        Clipboard, DesktopCapabilities, OpenWindowError, OwnerPlatform, Platform,
+        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
+        PlatformWindow, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -104,12 +104,12 @@ impl std::fmt::Debug for MacOSPlatform {
 
 impl MacOSPlatform {
     /// Create a new macOS platform with default configuration
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Self, PlatformError> {
         Self::with_config(WindowConfiguration::default())
     }
 
     /// Create a new macOS platform with custom configuration
-    pub fn with_config(config: WindowConfiguration) -> Result<Self> {
+    pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
         // AppKit is touched below (`NSApp()`, `setActivationPolicy_`), so
         // the main-thread requirement starts HERE, not at `run` — check it
         // before the first AppKit operation rather than after the fact.
@@ -121,7 +121,9 @@ impl MacOSPlatform {
             // Initialize NSApplication
             let app = NSApp();
             if app == nil {
-                return Err(anyhow::anyhow!("Failed to get NSApplication"));
+                return Err(PlatformError::Init {
+                    message: "Failed to get NSApplication".to_string(),
+                });
             }
 
             // Set activation policy to regular app (shows in Dock)
@@ -159,7 +161,10 @@ impl Platform for MacOSPlatform {
         Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
     }
 
-    fn run(self: Box<Self>, on_finish_launching: PlatformReadyCallback) -> anyhow::Result<()> {
+    fn run(
+        self: Box<Self>,
+        on_finish_launching: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         // Idempotent when `with_config` already bound on this thread; trips
         // a debug assertion if `run` somehow migrated threads (ADR-0039).
         self.affinity.bind_current();
@@ -182,7 +187,8 @@ impl Platform for MacOSPlatform {
         // than launching over a half-built app.
         let platform: Arc<dyn Platform> = Arc::new(*self);
         let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)));
-        on_finish_launching(OwnerPlatform::new(platform, hooks))?;
+        on_finish_launching(OwnerPlatform::new(platform, hooks))
+            .map_err(PlatformError::bootstrap)?;
 
         // SAFETY: runs on the main thread; `app` is the live NSApplication
         // singleton.
@@ -213,7 +219,10 @@ impl Platform for MacOSPlatform {
         }
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+    fn open_window(
+        &self,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
         self.affinity
             .debug_assert_owner("MacOSPlatform::open_window");
         debug_assert_appkit_main_thread("MacOSPlatform::open_window");
@@ -282,28 +291,36 @@ impl Platform for MacOSPlatform {
         handlers.window_event = Some(callback);
     }
 
-    fn app_path(&self) -> Result<std::path::PathBuf> {
+    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
         // SAFETY: `mainBundle` returns the shared NSBundle singleton; both it
         // and `bundlePath` are nil-checked, and the UTF8String buffer is
         // copied into an owned PathBuf before the autorelease pool drains.
         unsafe {
             let bundle: id = msg_send![class!(NSBundle), mainBundle];
             if bundle == nil {
-                return Err(anyhow::anyhow!("Failed to get main bundle"));
+                return Err(PlatformError::AppPath {
+                    message: "Failed to get main bundle".to_string(),
+                });
             }
 
             let path: id = msg_send![bundle, bundlePath];
             if path == nil {
-                return Err(anyhow::anyhow!("Failed to get bundle path"));
+                return Err(PlatformError::AppPath {
+                    message: "Failed to get bundle path".to_string(),
+                });
             }
 
             let c_str: *const i8 = msg_send![path, UTF8String];
             if c_str.is_null() {
-                return Err(anyhow::anyhow!("Bundle path has no UTF-8 representation"));
+                return Err(PlatformError::AppPath {
+                    message: "Bundle path has no UTF-8 representation".to_string(),
+                });
             }
-            let rust_str = std::ffi::CStr::from_ptr(c_str)
-                .to_str()
-                .context("Invalid UTF-8 in bundle path")?;
+            let rust_str = std::ffi::CStr::from_ptr(c_str).to_str().map_err(|error| {
+                PlatformError::AppPath {
+                    message: format!("Invalid UTF-8 in bundle path: {error}"),
+                }
+            })?;
 
             Ok(std::path::PathBuf::from(rust_str))
         }

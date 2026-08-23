@@ -10,8 +10,8 @@ use wasm_bindgen::JsCast;
 use crate::{
     shared::WindowCallbacks,
     traits::{
-        CursorError, PlatformDisplay, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
-        WindowBounds, WindowId,
+        CursorError, OpenWindowError, PlatformDisplay, PlatformWindow, WindowAppearance,
+        WindowBackgroundAppearance, WindowBounds, WindowId,
     },
 };
 
@@ -44,30 +44,44 @@ impl WebWindow {
     ///
     /// Looks for an existing `<canvas id="flui-canvas">` in the document,
     /// or creates one and appends it to `<body>`.
-    pub fn new(id: WindowId, title: &str, width: f32, height: f32) -> anyhow::Result<Self> {
-        let window = web_sys::window().ok_or_else(|| anyhow::anyhow!("no global window"))?;
-        let document = window
-            .document()
-            .ok_or_else(|| anyhow::anyhow!("no document"))?;
+    ///
+    /// # Errors
+    /// [`OpenWindowError::Backend`] when the browser environment lacks the
+    /// pieces this needs (no global window/document/body) or the canvas
+    /// element cannot be created.
+    pub fn new(
+        id: WindowId,
+        title: &str,
+        width: f32,
+        height: f32,
+    ) -> Result<Self, OpenWindowError> {
+        fn backend(message: impl Into<String>) -> OpenWindowError {
+            OpenWindowError::Backend {
+                message: message.into(),
+            }
+        }
+
+        let window = web_sys::window().ok_or_else(|| backend("no global window"))?;
+        let document = window.document().ok_or_else(|| backend("no document"))?;
         let scale_factor = window.device_pixel_ratio();
 
         // Find existing canvas or create a new one
         let canvas = match document.get_element_by_id("flui-canvas") {
             Some(el) => el
                 .dyn_into::<web_sys::HtmlCanvasElement>()
-                .map_err(|_| anyhow::anyhow!("element 'flui-canvas' is not a canvas"))?,
+                .map_err(|_| backend("element 'flui-canvas' is not a canvas"))?,
             None => {
                 let canvas = document
                     .create_element("canvas")
-                    .map_err(|e| anyhow::anyhow!("failed to create canvas: {e:?}"))?
+                    .map_err(|e| backend(format!("failed to create canvas: {e:?}")))?
                     .dyn_into::<web_sys::HtmlCanvasElement>()
-                    .map_err(|_| anyhow::anyhow!("failed to cast to HtmlCanvasElement"))?;
+                    .map_err(|_| backend("failed to cast to HtmlCanvasElement"))?;
                 canvas.set_id("flui-canvas");
                 document
                     .body()
-                    .ok_or_else(|| anyhow::anyhow!("no body element"))?
+                    .ok_or_else(|| backend("no body element"))?
                     .append_child(&canvas)
-                    .map_err(|e| anyhow::anyhow!("failed to append canvas: {e:?}"))?;
+                    .map_err(|e| backend(format!("failed to append canvas: {e:?}")))?;
                 canvas
             }
         };

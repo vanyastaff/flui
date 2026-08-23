@@ -96,7 +96,7 @@ This is not architecture. It is the visible cost of a year of "I'll wire this up
 - Cross-backend abstraction (no Skia, no Vello, no software path — the doc-string promise is removed).
 
 **Callers.** Two crates consume `flui-engine`:
-- `flui-app` (`binding.rs`, `direct.rs`, `runner.rs`) — uses `flui_engine::wgpu::Renderer` and `flui_engine::RenderError`.
+- `flui-app` (`binding.rs`, `direct.rs`, `runner/`) — uses `flui_engine::wgpu::Renderer` and `flui_engine::RenderError`.
 - `flui-rendering` — does NOT use `flui-engine` directly per grep; the only mention is `OffscreenRenderer` referenced in doc comments. Pipeline goes `flui-rendering::PipelineOwner::paint` → produces `Scene` → `flui-app` forwards `Scene` → `flui-engine::Renderer::render_scene`.
 
 External-public API surface today is much wider than what the two callers use. The Mythos cut trims the public API to what is actually consumed.

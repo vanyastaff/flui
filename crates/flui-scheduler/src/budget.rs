@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
 use crate::{
-    duration::{FrameDuration, Milliseconds, Percentage},
+    duration::{BudgetPercentage, FrameDuration, Milliseconds},
     frame::FramePhase,
 };
 
@@ -94,13 +94,13 @@ pub struct PhaseStats {
     /// Time spent in this phase
     pub duration: Milliseconds,
 
-    /// Percentage of frame budget used
-    pub budget_percent: Percentage,
+    /// Share of the frame budget used
+    pub budget_percent: BudgetPercentage,
 }
 
 impl PhaseStats {
     /// Create new phase stats
-    pub fn new(duration: Milliseconds, budget_percent: Percentage) -> Self {
+    pub fn new(duration: Milliseconds, budget_percent: BudgetPercentage) -> Self {
         Self {
             duration,
             budget_percent,
@@ -273,8 +273,8 @@ impl FrameBudget {
     }
 
     /// Get budget utilization as percentage
-    pub fn utilization_percent(&self) -> Percentage {
-        Percentage::from_ratio(self.utilization())
+    pub fn utilization_percent(&self) -> BudgetPercentage {
+        BudgetPercentage::from_ratio(self.utilization())
     }
 
     /// Set budget policy
@@ -358,7 +358,7 @@ impl FrameBudget {
     pub fn phase_stats(&self, phase: FramePhase) -> PhaseStats {
         let duration = self.phase_timing.get(phase);
         let budget_percent =
-            Percentage::from_ratio(duration.value() / self.frame_duration.as_ms().value());
+            BudgetPercentage::from_ratio(duration.value() / self.frame_duration.as_ms().value());
         PhaseStats::new(duration, budget_percent)
     }
 
@@ -507,11 +507,11 @@ impl FrameBudget {
     }
 
     /// Get jank percentage
-    pub fn jank_percentage(&self) -> Percentage {
+    pub fn jank_percentage(&self) -> BudgetPercentage {
         if self.frame_times.is_empty() {
-            return Percentage::ZERO;
+            return BudgetPercentage::ZERO;
         }
-        Percentage::from_ratio(self.jank_count() as f64 / self.frame_times.len() as f64)
+        BudgetPercentage::from_ratio(self.jank_count() as f64 / self.frame_times.len() as f64)
     }
 }
 
@@ -536,8 +536,8 @@ impl AllPhaseStats {
     }
 
     /// Total budget percentage used
-    pub fn total_budget_percent(&self) -> Percentage {
-        Percentage::new(
+    pub fn total_budget_percent(&self) -> BudgetPercentage {
+        BudgetPercentage::new(
             self.build.budget_percent.value()
                 + self.layout.budget_percent.value()
                 + self.paint.budget_percent.value()

@@ -224,19 +224,14 @@ impl ShaderCache {
         let _ = self.get_or_compile(ShaderType::RadialGradientMask);
         let _ = self.get_or_compile(ShaderType::SweepGradientMask);
     }
-
-    /// Clear the shader cache.
-    ///
-    /// Zero production call sites; reserved for devtools hot-reload / debug
-    /// flush flows. Suppressed from dead-code lint: the `devtools` feature
-    /// integration is deferred; re-enable this method when a concrete consumer
-    /// lands in `flui-devtools`.
-    #[allow(dead_code)]
-    pub fn clear(&self) {
-        let mut cache = self.cache.write();
-        cache.clear();
-    }
 }
+
+// `ShaderCache` deliberately exposes no `clear` method: compiled shader
+// modules are tiny, keyed by the small closed `ShaderType` enum, and valid
+// for the lifetime of the device, so nothing in the engine ever needs to
+// flush the cache. A hot-reload/devtools flow that recompiles shaders should
+// add a method next to its concrete consumer rather than keeping an unused
+// entry point suppressed from the dead-code lint here.
 
 impl Default for ShaderCache {
     fn default() -> Self {

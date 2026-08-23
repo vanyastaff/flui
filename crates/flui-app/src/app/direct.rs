@@ -267,5 +267,6 @@ pub fn run_direct(
         bootstrap_direct(config, render_fn)?;
         tracing::info!("FLUI direct render mode ready");
         Ok(())
-    }))
+    }))?;
+    Ok(())
 }

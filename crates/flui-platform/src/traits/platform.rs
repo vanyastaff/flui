@@ -9,13 +9,17 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
 use super::{
-    OwnerPlatform, PlatformCapabilities, PlatformDisplay, PlatformWindow, window::WindowAppearance,
+    OpenWindowError, OwnerPlatform, PlatformCapabilities, PlatformDisplay, PlatformWindow,
+    window::WindowAppearance,
 };
-use crate::{data_transfer::DataTransferSource, task::Task};
+use crate::{
+    data_transfer::DataTransferSource,
+    error::{BootstrapError, PlatformError},
+    task::Task,
+};
 
 /// Window creation options
 #[derive(Debug, Clone)]
@@ -136,12 +140,12 @@ impl WindowMode {
 
 /// Window identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub struct WindowId(pub u64);
 
 /// [`Platform::run`]'s ready callback: invoked once, synchronously, with the
 /// owner-thread capability (ADR-0039). Named to keep
-/// `Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result<()>>` out of every call
-/// site's signature.
+/// `Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>` out of
+/// every call site's signature.
 ///
 /// Replaces the pre-ADR-0039 `Box<dyn FnOnce(&dyn Platform)>` shape: the
 /// callback now receives [`OwnerPlatform`] by value instead of a borrowed
@@ -154,10 +158,15 @@ pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel defini
 /// that swallowed that failure would leave the loop running with a broken
 /// app — Android would keep pumping with no UI, web would install its RAF
 /// loop over a half-built page. Returning `Err` here propagates out of
-/// [`Platform::run`] itself instead: every backend stops entering (or
-/// promptly exits) its loop on `Err` and hands the error back to `run`'s own
-/// caller.
-pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result<()>>;
+/// [`Platform::run`] itself instead, as
+/// [`PlatformError::Bootstrap`] with the callback's own error as its
+/// `source`: every backend stops entering (or promptly exits) its loop on
+/// `Err` and hands the error back to `run`'s own caller. The error type is
+/// the opaque [`BootstrapError`] — embedder bootstrap code is
+/// application-land and returns arbitrary errors, so the boundary carries a
+/// boxed `std::error::Error` rather than committing the signature to any
+/// one error library.
+pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>;
 
 /// Core platform abstraction trait
 ///
@@ -179,9 +188,9 @@ pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_platform::{Platform, current_platform};
+/// use flui_platform::{Platform, PlatformError, current_platform};
 ///
-/// fn main() -> anyhow::Result<()> {
+/// fn main() -> Result<(), PlatformError> {
 ///     let platform = current_platform()?;
 ///     platform.run(Box::new(|owner| {
 ///         println!("Platform ready: {}", owner.shared().name());
@@ -232,14 +241,16 @@ pub trait Platform: Send + Sync + 'static {
     /// where `terminate:` exits the process).
     ///
     /// # Errors
-    /// Propagates `on_ready`'s own `Err` (a bootstrap failure — window
-    /// creation, GPU init, root-widget attach — has no other return path
-    /// back to `run`'s caller). Every backend stops entering, or promptly
-    /// exits, its loop on that `Err` rather than continuing with a broken
-    /// app: a returned error means the loop never ran a single iteration
-    /// with `on_ready`'s bootstrap incomplete. A backend may also return its
-    /// own `Err` for a platform-level failure unrelated to `on_ready`.
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()>;
+    /// Propagates `on_ready`'s own `Err` as [`PlatformError::Bootstrap`],
+    /// with the callback's error preserved as its `source` (a bootstrap
+    /// failure — window creation, GPU init, root-widget attach — has no
+    /// other return path back to `run`'s caller). Every backend stops
+    /// entering, or promptly exits, its loop on that `Err` rather than
+    /// continuing with a broken app: a returned error means the loop never
+    /// ran a single iteration with `on_ready`'s bootstrap incomplete. A
+    /// backend may also return [`PlatformError::EventLoop`] for a
+    /// platform-level failure unrelated to `on_ready`.
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError>;
 
     /// Request the application to quit
     ///
@@ -342,7 +353,20 @@ pub trait Platform: Send + Sync + 'static {
     /// Returns the canonical shared window identity. The platform event loop,
     /// presentation owner, and raster surface clone this same allocation; no
     /// boxed forwarding handle or duplicate window wrapper is created.
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>>;
+    ///
+    /// # Errors
+    /// [`OpenWindowError`] — the same typed taxonomy the
+    /// [`OwnerPlatform`]/`PlatformProxy` capability surfaces use (ADR-0039):
+    /// [`Backend`](OpenWindowError::Backend) when the OS-level creation
+    /// itself fails; backends with an owner lane (winit) additionally
+    /// surface [`LaneFull`](OpenWindowError::LaneFull) /
+    /// [`OwnerGone`](OpenWindowError::OwnerGone) /
+    /// [`Unavailable`](OpenWindowError::Unavailable) for cross-thread
+    /// lifecycle refusals.
+    fn open_window(
+        &self,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError>;
 
     /// Get the currently active (focused) window ID
     fn active_window(&self) -> Option<WindowId>;
@@ -445,21 +469,28 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Show a file/directory picker dialog
     ///
-    /// Returns selected paths, or `None` if the user cancelled.
-    /// The dialog runs asynchronously on a background thread.
-    fn prompt_for_paths(&self, options: PathPromptOptions) -> Task<Result<Option<Vec<PathBuf>>>> {
+    /// Returns selected paths, or `None` if the user cancelled (cancelling
+    /// is not an error). The dialog runs asynchronously on a background
+    /// thread; a dialog that could not run to completion resolves to
+    /// [`PlatformError::Dialog`].
+    fn prompt_for_paths(
+        &self,
+        options: PathPromptOptions,
+    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
         let _ = options;
         Task::ready(Ok(None))
     }
 
     /// Show a "Save As" dialog for selecting a new file path
     ///
-    /// Returns the selected path, or `None` if the user cancelled.
+    /// Returns the selected path, or `None` if the user cancelled
+    /// (cancelling is not an error); a dialog that could not run to
+    /// completion resolves to [`PlatformError::Dialog`].
     fn prompt_for_new_path(
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>>> {
+    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
         let _ = (directory, suggested_name);
         Task::ready(Ok(None))
     }
@@ -508,7 +539,10 @@ pub trait Platform: Send + Sync + 'static {
     }
 
     /// Get the application's executable path
-    fn app_path(&self) -> Result<PathBuf>;
+    ///
+    /// # Errors
+    /// [`PlatformError::AppPath`] when the backend's own lookup fails.
+    fn app_path(&self) -> Result<PathBuf, PlatformError>;
 }
 
 /// Window events that can be observed via Platform::on_window_event

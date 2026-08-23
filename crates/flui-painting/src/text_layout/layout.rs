@@ -37,14 +37,14 @@ use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
 /// are rare in practice, and (b) `std::sync::Mutex`'s poisoning would
 /// force every call site to `match` the lock result. A `catch_unwind`
 /// wrapper around `set_text` / `shape_until_scroll` is the
-/// principled fix and is tracked in
-/// `crates/flui-painting/docs/ARCHITECTURE.md ## Future Enhancements`.
+/// principled fix; the dated re-check marker below is what tracks it.
 //
-// REMOVE_BY: 2026-09-22 — this is a scheduled re-check. By this date the
-// `catch_unwind` wrapper around cosmic-text's `set_text` /
-// `shape_until_scroll` is the principled fix; if `cosmic-text` panics
-// are still not a today-problem, push the date out, but do not let the
-// "accept the corruption" footnote drift unverified.
+// REMOVE_BY: 2026-12-22 — scheduled re-check. Still deferred: the
+// `catch_unwind` wrapper remains unimplemented (no `catch_unwind` in
+// this crate) and no cosmic-text panic has surfaced in practice, so
+// the accept-the-corruption trade-off above still holds. By this date
+// either land the wrapper, or re-verify the trade-off and set a new
+// explicit date — do not let the footnote drift unverified.
 static FONT_SYSTEM: OnceLock<Arc<Mutex<FontSystem>>> = OnceLock::new();
 
 /// Gets or initializes the process-wide font system as a shared handle.

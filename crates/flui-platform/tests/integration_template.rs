@@ -74,7 +74,7 @@ fn create_test_window() -> Result<Arc<dyn flui_platform::PlatformWindow>, anyhow
         visible: false, // Hidden to avoid UI distraction
         ..Default::default()
     };
-    platform.open_window(options)
+    Ok(platform.open_window(options)?)
 }
 
 // ═══════════════════════════════════════════════════════════════

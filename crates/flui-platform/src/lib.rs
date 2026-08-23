@@ -167,6 +167,7 @@
 
 pub mod config;
 pub mod data_transfer;
+pub mod error;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
 pub mod platforms;
@@ -182,6 +183,10 @@ pub use config::{FullscreenMonitor, WindowConfiguration};
 // Data-transfer transport (ADR-0038): one source per platform instance,
 // reachable via `Platform::data_transfer()`.
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
+// The typed lifecycle/service error taxonomy — `anyhow` is retired from
+// this crate's public API (the window-open family lives with its
+// capability types in `traits`).
+pub use error::{BootstrapError, PlatformError, PlatformResult};
 // One cursor vocabulary is shared by widgets, interaction, and platforms.
 pub use cursor_icon::CursorIcon;
 // Re-export executor types
@@ -294,7 +299,7 @@ pub use traits::{
 ///
 /// # Errors
 ///
-/// Returns an error if:
+/// Returns [`PlatformError::Init`] if:
 /// - Platform initialization fails (e.g., COM failure on Windows)
 /// - Platform is not supported (should not happen with cfg guards)
 /// - Platform stub is called (macOS, Android, iOS, Web)
@@ -340,7 +345,7 @@ pub use traits::{
 ///     // Use Windows-specific features
 /// }
 /// ```
-pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {
+pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
     // Check for headless mode via environment variable (CI/testing)
     if std::env::var("FLUI_HEADLESS").is_ok() {
         tracing::info!("FLUI_HEADLESS detected, using headless platform");
@@ -370,9 +375,11 @@ pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {
 
         #[cfg(not(feature = "winit-backend"))]
         {
-            Err(anyhow::anyhow!(
-                "no Linux windowing backend enabled — flui-app enables `winit-backend` on Linux"
-            ))
+            Err(PlatformError::Init {
+                message: "no Linux windowing backend enabled — flui-app enables `winit-backend` \
+                          on Linux"
+                    .to_string(),
+            })
         }
     }
 
@@ -383,9 +390,11 @@ pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {
     {
         // On Android, use AndroidPlatform::new(app) directly from android_main().
         // current_platform() cannot be used because AndroidApp is required.
-        anyhow::bail!(
-            "On Android, use AndroidPlatform::new(app) from android_main() instead of current_platform()"
-        )
+        Err(PlatformError::Init {
+            message: "On Android, use AndroidPlatform::new(app) from android_main() instead of \
+                      current_platform()"
+                .to_string(),
+        })
     }
 
     #[cfg(all(
@@ -424,9 +433,10 @@ pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {
         target_arch = "wasm32"
     )))]
     {
-        Err(anyhow::anyhow!(
-            "Unsupported platform - no platform implementation available for this target"
-        ))
+        Err(PlatformError::Init {
+            message: "Unsupported platform - no platform implementation available for this target"
+                .to_string(),
+        })
     }
 }
 

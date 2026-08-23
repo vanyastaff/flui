@@ -1,12 +1,13 @@
 //! Windows utility functions and helpers
 #![allow(dead_code)]
 
-use anyhow::{Result, anyhow};
 use flui_types::geometry::{DevicePixels, Pixels, Point, Size, device_px, px};
 use windows::{
     Win32::{Foundation::LPARAM, UI::Input::KeyboardAndMouse::GetAsyncKeyState},
     core::{PCWSTR, w},
 };
+
+use crate::traits::CursorError;
 
 /// Windows platform window class name (shared across platform.rs and window.rs)
 pub const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
@@ -89,10 +90,13 @@ pub fn to_wide(s: &str) -> Vec<u16> {
 /// pointer) or a genuine NUL-terminated UTF-16 string pointer that stays
 /// valid for the duration of this call. Every call site in this crate
 /// passes a predefined `IDC_*` constant.
-pub unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR> {
+pub unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR, CursorError> {
     // SAFETY: per the `# Safety` contract above; `None` for `hinstance` is
     // required and documented for loading a predefined `IDC_*` cursor.
-    unsafe { LoadCursorW(None, style).map_err(|e| anyhow!("Failed to load cursor: {e}")) }
+    unsafe {
+        LoadCursorW(None, style)
+            .map_err(|e| CursorError::Backend(format!("Failed to load cursor: {e}")))
+    }
 }
 
 /// Check if a key is pressed
