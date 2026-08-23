@@ -582,7 +582,7 @@ trigger10_defs_raw=$(rg --line-number --no-heading \
     --glob '!examples/**' \
     crates/ 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
-  | grep -Ev 'pub +trait +Sealed\b' \
+  | grep -Ev 'pub +trait +Sealed($|[^A-Za-z0-9_])' \
   || true)
 
 # Marker scan: a PORT-CHECK-OK-SP3 marker is sanctioning if it appears
