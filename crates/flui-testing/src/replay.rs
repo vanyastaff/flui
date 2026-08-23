@@ -432,7 +432,7 @@ impl PointerScript {
 
 /// The second contact id used by the multi-contact presets.
 fn secondary_pointer() -> PointerId {
-    PointerId::new(2).expect("2 is a valid pointer id")
+    PointerId::new(2).expect("BUG: 2 is a nonzero pointer id")
 }
 
 /// Records the pointer events a test dispatches, stamped on a binding's
