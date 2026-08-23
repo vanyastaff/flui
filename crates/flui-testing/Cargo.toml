@@ -73,6 +73,12 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 static_assertions.workspace = true
+# `inspect::box_geometry` — the canonical committed-geometry accessor the
+# bootstrap contract test asserts against. Dev-only: the harness itself never
+# reads geometry, its consumers do.
+flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = [
+  "testing",
+] }
 # Enable flui-view's `test-utils` feature in test builds so the layout-builder
 # seam test can plant a registry entry (`register_layout_builder_for_test`).
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out

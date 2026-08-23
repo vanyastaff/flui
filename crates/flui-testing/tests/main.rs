@@ -20,6 +20,8 @@ mod controller_restart;
 mod layout_builder_seam;
 #[path = "long_press_via_pump_frame.rs"]
 mod long_press_via_pump_frame;
+#[path = "mount_bootstrap.rs"]
+mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]
 mod multi_presentation_clock;
 #[path = "owner_scope.rs"]
