@@ -28,7 +28,7 @@ pub(crate) mod measure;
 
 pub use detect::detect_text_direction;
 pub(crate) use layout::shared_font_system;
-pub use layout::{SharedFontSystem, TextLayout};
+pub use layout::{SharedFontSystem, TextLayout, init_font_system_with_faces};
 pub use measure::{measure_inline_span, measure_text};
 
 // ===== Shared types (identical between cosmic-text impl and fallback) =====

@@ -1,0 +1,7 @@
+---
+source: tests/demo_layer_snapshots.rs
+expression: "snapshot_of(text_app::App, 1)"
+---
+Offset dx=0.00 dy=0.00
+  Picture bounds=(0.00,0.00 0.00x0.00)
+    DrawTextSpan offset=(0.00,0.00) "Hello, FLUI!"

@@ -62,6 +62,69 @@ fn font_system_arc() -> &'static Arc<Mutex<FontSystem>> {
     })
 }
 
+/// Initializes the process-wide font system from an explicit face set,
+/// bypassing host-font discovery.
+///
+/// Returns `false` — changing nothing — if the font system has already been
+/// initialized, because a `FontSystem` freezes state at construction that no
+/// later mutation reaches.
+///
+/// # Why this exists rather than "clear the database and reload it"
+///
+/// `FontSystem::new()` loads the *host machine's* fonts, so text measurement —
+/// and the layout of everything sized to its text — differs between machines.
+/// Emptying the database afterwards and loading known faces into it does not
+/// undo that: `FontSystem` computes its fallback chain and its monospace face
+/// list once, at construction, from the environment and the database it was
+/// built with, and `db_mut` invalidates only the family-match cache. Measured
+/// on this repository's Cupertino demo, a database mutated down to three
+/// known faces still measured a button 61.18 px wide on a host with fonts
+/// installed and 129.55 px on a host without — same faces, same code. Building
+/// the font system *from* the pinned database is what makes the host stop
+/// mattering.
+///
+/// `faces` are raw font-file bytes; `default_family` must name a family one of
+/// them provides and becomes the target of every generic family, so text whose
+/// style names no family cannot fall through to a host font. `locale` fixes
+/// the language-dependent parts of shaping (`"en-US"` unless a caller needs
+/// otherwise).
+///
+/// # Panics
+///
+/// Panics if `faces` is empty or none of them load: an empty database makes
+/// every measurement zero-width and panics inside cosmic-text's shaper, which
+/// is a far more confusing failure than this one.
+pub fn init_font_system_with_faces(faces: &[&[u8]], default_family: &str, locale: &str) -> bool {
+    assert!(
+        !faces.is_empty(),
+        "init_font_system_with_faces: at least one face is required -- an empty \
+         font database makes every measurement zero-width and panics inside the \
+         shaper",
+    );
+
+    let mut db = cosmic_text::fontdb::Database::new();
+    for face in faces {
+        db.load_font_data((*face).to_vec());
+    }
+    assert!(
+        db.faces().next().is_some(),
+        "init_font_system_with_faces: none of the supplied faces loaded -- every \
+         measurement would be zero-width",
+    );
+
+    // Every generic family, not just sans-serif: a style that names no family
+    // resolves through one of these, and leaving any pointing at a family this
+    // database does not carry reopens the hole this function closes.
+    db.set_sans_serif_family(default_family);
+    db.set_serif_family(default_family);
+    db.set_monospace_family(default_family);
+    db.set_cursive_family(default_family);
+    db.set_fantasy_family(default_family);
+
+    let font_system = FontSystem::new_with_locale_and_db(locale.to_owned(), db);
+    FONT_SYSTEM.set(Arc::new(Mutex::new(font_system))).is_ok()
+}
+
 /// Gets or initializes the global font system for in-crate shaping.
 pub(super) fn font_system() -> &'static Mutex<FontSystem> {
     // Deref-coerces `&Arc<Mutex<_>>` → `&Mutex<_>` at the return site.

@@ -502,9 +502,10 @@ impl TextRenderer {
         // embedded Roboto. Idempotent via the face count — a system-provided or
         // previously-loaded DB is left untouched.
         if font_system.db().faces().count() == 0 {
-            const ROBOTO_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
             tracing::warn!("shared FontSystem has no faces; loading embedded Roboto-Regular");
-            font_system.db_mut().load_font_data(ROBOTO_REGULAR.to_vec());
+            font_system
+                .db_mut()
+                .load_font_data(crate::fonts::ROBOTO_REGULAR.to_vec());
             if font_system.db().faces().count() == 0 {
                 tracing::error!("failed to load any fonts; text rendering may be blank");
             }
@@ -542,12 +543,12 @@ impl TextRenderer {
         Self::ensure_embedded_font_loaded(
             font_system,
             "Material Icons",
-            include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf"),
+            crate::fonts::MATERIAL_ICONS_REGULAR,
         );
         Self::ensure_embedded_font_loaded(
             font_system,
             "CupertinoIcons",
-            include_bytes!("../../assets/fonts/CupertinoIcons.ttf"),
+            crate::fonts::CUPERTINO_ICONS,
         );
     }
 
@@ -1392,9 +1393,8 @@ mod tests {
         // is just a convenient real, loadable font with that exact family
         // name; nothing about this test depends on it being THE canonical
         // embedded copy.
-        fs.db_mut().load_font_data(
-            include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf").to_vec(),
-        );
+        fs.db_mut()
+            .load_font_data(crate::fonts::MATERIAL_ICONS_REGULAR.to_vec());
         assert!(
             has_family(&fs, "Material Icons"),
             "test setup must have seeded a Material Icons face"

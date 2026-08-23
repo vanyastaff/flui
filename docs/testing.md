@@ -9,7 +9,7 @@ This page documents the test, lint, format, and benchmark commands enforced for 
 FLUI's test support is a stack, not one harness. Each tier drives the machine at
 one depth; pick the **shallowest tier that can fail for the reason you care
 about** — a layout bug found by a `RenderTester` test names the render object,
-the same bug found by a golden names a PNG.
+the same bug found by a whole-demo snapshot names a demo.
 
 | Tier | Drives | Entry point | Enabled by |
 |------|--------|-------------|------------|
@@ -23,7 +23,7 @@ the same bug found by a golden names a PNG.
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
 | Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
 | GPU readback | Real pixels off a real device (WARP in CI) | `flui-engine`'s readback suite | `flui-engine/enable-wgpu-tests` |
-| Visual regression | Whole-demo pixels vs. committed PNGs | `tests/golden_screenshots.rs` | `flui/golden` |
+| Demo composition | A whole demo tree's committed `LayerTree`, as structured text | `tests/demo_layer_snapshots.rs` | `flui/material` + `flui/cupertino` |
 | Live E2E | A real window, real X11/Wayland input, real exit code | `tools/live-smoke` | `just live-smoke` |
 
 Two structural rules hold across the stack:
@@ -202,7 +202,7 @@ The constitution requires `///` doc comments on every public item and `//!` over
 - **Unit tests** live in the same file under `#[cfg(test)] mod tests { ... }`.
 - **Integration tests** live in `tests/` per crate. Cross-crate pipelines are tested in `flui-engine`.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
-- **Visual regression tests** live in `tests/golden_screenshots.rs`: each demo renders headless and is compared against a committed PNG in `tests/goldens/`. See [Visual regression](#visual-regression-goldens) below for the run/regenerate workflow and what counts as a pass.
+- **Demo composition tests** live in `tests/demo_layer_snapshots.rs`: each demo mounts headless and its committed `LayerTree` is compared, as structured text, against an `insta` snapshot. See [Demo composition snapshots](#demo-composition-snapshots) below for the run/review workflow and why they are structural rather than pixels.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.
 
 ## Test Harnesses (`testing` feature)
@@ -396,32 +396,72 @@ contract; `flui-foundation` is emission-only and may not construct a subscriber
 `flui-testing` rather than at the bottom of the DAG where every crate could
 reach it without an edge.
 
-## Visual regression (goldens)
+## Demo composition snapshots
 
 ```bash
-just golden          # compare against tests/goldens/ (needs a GPU)
-just golden-update   # regenerate after an intended visual change, then review the diff
+just demo-snapshots          # run
+just demo-snapshots-review   # review and accept intended changes (cargo-insta)
 ```
 
-Off by default (`--features golden` on the `flui` package) because the goldens
-are machine-specific: GPU and driver differences move anti-aliased edges, so
-they must be regenerated on one reference device.
+Each demo tree mounts headless at 900x760 through `flui-testing`'s canonical
+bootstrap, and the `LayerTree` its bootstrap frame commits is serialized to
+structured text — the layer structure plus every draw command, with geometry,
+colors, transforms, and text — and compared against a committed `insta`
+snapshot in `tests/snapshots/`. A widget that moves or resizes, a shadow that
+stops being emitted, a clip that disappears, a subtree that stops being built:
+each changes those lines and fails the matching test, naming the layer and the
+command.
 
-**What counts as a pass is only a pixel comparison against a committed golden.**
-Two paths that used to go green having compared nothing are now failures:
+No GPU, no device-specific baseline: CI's "facade non-default catalogs" step
+(`cargo nextest run -p flui --features cupertino,localizations`) runs the suite
+like any other test, and it takes about a tenth of a second.
 
-- a **missing golden fails** — writing the absent PNG and returning would let a
-  deleted or never-committed golden heal itself into a pass, so a golden is only
-  ever written under an explicit `UPDATE_GOLDENS=1` regeneration;
-- a **missing GPU fails** — set `FLUI_GOLDEN_ALLOW_NO_GPU=1` to skip explicitly
-  on a device-less machine, which reports each skip on stderr instead of
-  pretending to have run.
+### Why structural and not pixels
 
-No CI job runs this suite; it is a local gate on the reference device. The
-committed PNGs predate the bootstrap consolidation and were captured without
-the layout↔build fixpoint — regenerate them before trusting a comparison.
+This suite replaced a pixel-golden suite that compared the same six demos
+against committed PNGs. That suite ran on no CI job and could not be moved onto
+one, and its own documentation blamed the GPU: "the goldens are specific to the
+machine that generated them (GPU / driver differences move anti-aliased edges)".
+Measured against a completely different rasterizer (llvmpipe vs. the reference
+device), that was not where the binding was:
 
-To *look* at what a tree renders without a window, capture it instead:
+| Demo | Pixels past tolerance | Where |
+|------|----------------------|-------|
+| colored-box (flat fill) | 0 of 684 000 — bit-identical | — |
+| gallery (vector shapes) | 0.20%, max channel delta 48 | anti-aliased edges |
+| text, material, cupertino, vertical-slice | 0.52%–0.76%, against a 0.5% threshold, max delta 243–255 | **glyphs, and the widgets sized to them** |
+
+Shape, fill, and shadow raster carried across devices. The whole difference was
+text — the glyphs themselves, plus the button rectangles that hug them — and it
+was a *font* difference, not an anti-aliasing one: the same string measured
+24 px (9.4%) wider with a 2 px baseline shift, which a rasterizer cannot do.
+The real baseline was the host's font installation, and the suite's pass/fail
+line sat inside its own cross-machine noise.
+
+What the change gives up is the raster of a *composed* scene. Its pieces are
+covered elsewhere: blending, filters, gradients, and glyph raster per primitive
+by flui-engine's readback/oracle suite on WARP (merge-blocking `gpu-test`), and
+that a real window presents at all by `tools/live-smoke`. What is genuinely
+lost — the anti-aliased pixels of a whole demo — was guarded by nothing before,
+since the suite ran on no job.
+
+### Determinism
+
+Text measurement resolves against the host's fonts, and widgets sized to their
+text inherit that: the same Cupertino button measured 61.18 px wide on a host
+with fonts installed and 129.55 px on one without. `flui_testing::fonts::pin_font_faces`
+builds the process-wide `FontSystem` from the faces this repository ships
+(`flui_engine::fonts`), so the committed geometry is reproducible off any one
+machine.
+
+It *builds* the font system rather than editing it, and that distinction is
+load-bearing: `FontSystem` freezes its fallback chain and monospace face list
+at construction, so emptying its database afterwards and reloading known faces
+leaves stale construction-time state — which is exactly how the 61.18 px
+measurement arose. `flui_painting::text_layout::init_font_system_with_faces`
+carries the details.
+
+To *look* at what a tree renders without a window, capture it:
 
 ```bash
 cargo run -p flui --example screenshot --features "material cupertino" -- material 900 760 out.png

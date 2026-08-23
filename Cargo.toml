@@ -77,7 +77,7 @@ members = [
 # The root `flui` facade IS listed: it is neither an example nor a tool, and
 # leaving it out made `cargo hack --each-feature` unable to select it —
 # cargo-hack drives the root package via `--manifest-path`, which resolves to
-# default-members, so its `golden` feature failed with "none of the selected
+# default-members, so a facade-only feature failed with "none of the selected
 # packages contains this feature".
 default-members = [
     ".",
@@ -477,6 +477,8 @@ flui-hot-reload = { path = "crates/flui-hot-reload", version = "0.2.0" }
 
 # === Test support (for the vertical_slice_demo acceptance test) ===
 flui-testing = { path = "crates/flui-testing", version = "0.2.0" }
+# Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
+insta = { workspace = true }
 parking_lot.workspace = true
 
 # NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
@@ -530,15 +532,6 @@ localizations = ["dep:flui-localizations"]
 # Cargo feature unification cannot turn a cross-target build into an error.
 hot-reload = ["flui-app/hot-reload"]
 
-# Golden-image regression tests (`tests/golden_screenshots.rs`). Off by default:
-# they need a GPU and the committed goldens are reference-machine specific, so
-# the normal `cargo nextest` run must not attempt them. Run with
-# `--features golden` on a consistent GPU; regenerate with `UPDATE_GOLDENS=1`.
-# It enables both catalogs because the golden suite renders the Material and
-# Cupertino demo trees — a `golden` build without them would silently cover
-# less than its name claims.
-golden = ["material", "cupertino"]
-
 # === Core Features ===
 # Serialization support (flui-types only today; other crates' serde features
 # are opted into per-crate, not through the facade)
@@ -591,10 +584,15 @@ name = "cupertino_demo"
 path = "tests/cupertino_demo.rs"
 required-features = ["cupertino"]
 
+# Structural snapshots of the demo trees' painted layer trees. Needs both
+# catalogs because it snapshots the Material and Cupertino demos; both are
+# named directly rather than through an alias feature, so the target's
+# requirements are readable at the target. CI's "facade non-default catalogs"
+# step (`--features cupertino,localizations`, Material being default) runs it.
 [[test]]
-name = "golden_screenshots"
-path = "tests/golden_screenshots.rs"
-required-features = ["golden"]
+name = "demo_layer_snapshots"
+path = "tests/demo_layer_snapshots.rs"
+required-features = ["material", "cupertino"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles

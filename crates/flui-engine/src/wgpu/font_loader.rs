@@ -136,8 +136,7 @@ mod tests {
         let before = font_system.db().faces().count();
 
         // Load the Roboto font already bundled with the engine
-        let roboto_bytes = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
-        FontLoader::load_bytes(&mut font_system, roboto_bytes);
+        FontLoader::load_bytes(&mut font_system, crate::fonts::ROBOTO_REGULAR);
 
         let after = font_system.db().faces().count();
         assert!(
