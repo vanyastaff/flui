@@ -18,6 +18,8 @@ mod async_driver;
 mod controller_restart;
 #[path = "layout_builder_seam.rs"]
 mod layout_builder_seam;
+#[path = "log_capture.rs"]
+mod log_capture;
 #[path = "long_press_via_pump_frame.rs"]
 mod long_press_via_pump_frame;
 #[path = "mount_bootstrap.rs"]

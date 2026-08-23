@@ -20,6 +20,7 @@ Three surfaces, each owning one thing:
 | `bootstrap` | `mount_root` — the one canonical way to get from a root `View` to mounted, rooted, laid-out owners |
 | `replay` | `PointerScript` + `HeadlessBinding::replay` — scripted gestures replayed on the virtual clock |
 | `a11y` | `A11yTree` / `A11yQuery` — query the assembled semantics tree by role, through the same `flui_semantics::tree_to_update` a platform adapter uses |
+| `log_capture` | `capture` — race-free `tracing` capture for tests that assert on what was logged |
 
 ## The rule this crate exists to enforce
 
@@ -76,6 +77,18 @@ So: mount through it. If a harness needs something it does not offer, extend
   fires once per *contact*, not once per event — the real `GestureBinding`
   protocol. Give each contact its own `PointerId`; a platform never recycles an
   id into a still-tracked gesture.
+- **Never capture `tracing` with `subscriber::with_default`.** `tracing`
+  computes a callsite's interest **once**, on whichever thread reaches it
+  first, and caches it process-globally
+  (`tracing_core::callsite::Rebuilder::JustOne` → `dispatcher::get_default`).
+  A thread-local subscriber therefore loses every event from a callsite some
+  other test reached first — cached as `Interest::never()` and silent for the
+  rest of the process. That is not a hypothesis: it made a `flui-widgets`
+  parity test fail 4 times in 25 runs of its binary while passing 60/60 in
+  isolation. Use [`log_capture::capture`], which keeps every callsite's
+  interest permissive process-wide and gates per event on a thread-local sink.
+  Crates at or below `flui-interaction` cannot depend on this one and keep
+  their own technique — and their own caveat.
 - **`#![deny(missing_docs)]`.** Every public item, including test-facing ones.
 - **No process-global state.** Every test constructs its own binding, so
   nothing in this crate needs a test lock. If you find yourself wanting one,

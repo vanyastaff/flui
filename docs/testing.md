@@ -21,6 +21,7 @@ the same bug found by a golden names a PNG.
 | **Widget** | A mounted widget tree with geometry probes and synthetic input | `flui_widgets::testing::{lay_out, LaidOut}` | `flui-widgets/testing` |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
+| Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
 | GPU readback | Real pixels off a real device (WARP in CI) | `flui-engine`'s readback suite | `flui-engine/enable-wgpu-tests` |
 | Visual regression | Whole-demo pixels vs. committed PNGs | `tests/golden_screenshots.rs` | `flui/golden` |
 | Live E2E | A real window, real X11/Wayland input, real exit code | `tools/live-smoke` | `just live-smoke` |
@@ -346,6 +347,35 @@ round-trips to its own timing.
 AccessKit nodes, translated by the same `flui_semantics::tree_to_update` a
 platform adapter uses — so a test and a screen reader cannot disagree. Query by
 role rather than by node index.
+
+### Asserting on what was logged
+
+Some contracts are only observable as a diagnostic — a misconfiguration
+reported once rather than every frame, the text of a caught panic that
+`RenderError` does not carry. Capture those with
+`flui_testing::log_capture::capture`:
+
+```rust,ignore
+let (laid, log) = capture(|| harness::pump_widget(root, harness::screen()));
+assert!(!log.is_empty(), "vacuous-pass guard: the frame must have logged something");
+assert_eq!(log.count_containing("unbounded main axis declares"), 1, "{log}");
+```
+
+**Do not hand-roll this with `tracing::subscriber::with_default`.** `tracing`
+computes a callsite's interest once, on whichever thread reaches it first, and
+caches it process-globally, so a thread-local subscriber silently loses every
+event from a callsite another test reached first. This suite carried two
+hand-rolled copies of that technique, both documenting the caveat and neither
+able to fix it: one failed 4 times in 25 runs of the `parity` binary while
+passing 60/60 in isolation, and the other serialised its tests behind a mutex
+that could not help, because the poisoner is every other test in the binary,
+not the one it was serialised against.
+
+`capture` fixes it at the cause — one process-global subscriber that keeps every
+callsite permissive, deciding per event against a thread-local sink. Concurrent
+captures on different threads neither block nor see each other. Crates at or
+below `flui-interaction` cannot depend on `flui-testing` and keep their own
+technique.
 
 ## Visual regression (goldens)
 
