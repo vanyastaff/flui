@@ -1,0 +1,7 @@
+---
+source: tests/demo_layer_snapshots.rs
+expression: "snapshot_of(colored_box_app::App, 1)"
+---
+Offset dx=0.00 dy=0.00
+  Picture bounds=(0.00,0.00 900.00x760.00)
+    DrawRect rect=(0.00,0.00 900.00x760.00) fill #FF0000FF

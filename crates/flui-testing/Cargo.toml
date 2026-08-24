@@ -42,6 +42,15 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 flui-view = { path = "../flui-view", version = "0.2.0" }
 # The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
+# The process-wide `FontSystem` text measurement resolves against. `fonts`
+# pins its face set so a test can commit a layout that does not depend on the
+# host machine's installed fonts. `features = ["testing"]` because the
+# initializer that pin rides is deliberately off flui-painting's shipped
+# surface: claiming `FONT_SYSTEM` is irreversible for the process, so no
+# production caller should be able to win that race. This crate is itself test
+# support and never enters a production graph, so the feature travels nowhere
+# new.
+flui-painting = { path = "../flui-painting", version = "0.2.0", features = ["testing"] }
 # Registered `AnimationController`s the frame loop ticks on the virtual timeline,
 # restart-aware via the controller's `run_generation` counter.
 flui-animation = { path = "../flui-animation", version = "0.2.0" }

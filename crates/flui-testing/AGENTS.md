@@ -21,6 +21,7 @@ Three surfaces, each owning one thing:
 | `replay` | `PointerScript` + `HeadlessBinding::replay` — scripted gestures replayed on the virtual clock |
 | `a11y` | `A11yTree` / `A11yQuery` — query the assembled semantics tree by role, through the same `flui_semantics::tree_to_update` a platform adapter uses |
 | `log_capture` | `capture` — race-free `tracing` capture for tests that assert on what was logged |
+| `fonts` | `pin_font_faces` — build the process-wide font system from repository-shipped faces, so a test that commits layout does not commit its author's font installation |
 
 ## The rule this crate exists to enforce
 
@@ -96,13 +97,21 @@ So: mount through it. If a harness needs something it does not offer, extend
   rather than in `flui-foundation`, where every crate could reach it without an
   edge, because foundation is emission-only and may not construct a subscriber.
 - **`#![deny(missing_docs)]`.** Every public item, including test-facing ones.
-- **No process-global state, with one named exception.** Every test constructs
+- **No process-global state, with two named exceptions.** Every test constructs
   its own binding, so nothing in this crate needs a test lock. If you find
   yourself wanting one, check `docs/runtime-contract.toml`'s ambient-reach
   ratchet — the resource you are racing on is named there, and the lock belongs
-  beside that test. The exception is `log_capture`'s two sentinel dispatchers,
-  which are process-wide by necessity (`tracing`'s interest cache is), but hold
-  no state, receive no events, and never occupy the global default slot.
+  beside that test. The exceptions:
+  - `log_capture`'s two sentinel dispatchers, process-wide by necessity
+    (`tracing`'s interest cache is), but they hold no state, receive no events,
+    and never occupy the global default slot.
+  - `fonts::pin_font_faces` initializes flui-painting's `FONT_SYSTEM` — one of
+    the ambient residuals the ratchet names. It is a one-shot initializer, not
+    a mutation: it panics rather than proceed if the font system already
+    exists, because a pin that silently did nothing would leave a test
+    measuring against host fonts while reading as though it had been pinned.
+    Call it before the first text is shaped, once per process (nextest gives
+    each test its own).
 
 ## Dependency rule
 

@@ -219,17 +219,18 @@ test-doc:
     cargo test --workspace --locked --doc
 
 [group("test")]
-[doc("Golden-image regression tests: render each demo headless and compare to tests/goldens/ (needs a GPU)")]
-golden:
-    # A missing golden and a missing GPU both FAIL: only a pixel comparison
-    # against a committed PNG is a pass. On a device-less machine, skip
-    # explicitly with FLUI_GOLDEN_ALLOW_NO_GPU=1 (each skip is reported).
-    cargo nextest run -p flui --features golden --test golden_screenshots
+[doc("Structural snapshots of the demo trees' painted layer trees (no GPU; CI runs these in the facade non-default-catalogs step)")]
+demo-snapshots:
+    # Both catalogs: the suite snapshots the Material and the Cupertino demo,
+    # and Material is the facade default.
+    cargo nextest run -p flui --locked --features cupertino --test demo_layer_snapshots
 
 [group("test")]
-[doc("Regenerate the golden PNGs from the current render (run after an intended visual change; review the diff)")]
-golden-update:
-    UPDATE_GOLDENS=1 cargo nextest run -p flui --features golden --test golden_screenshots
+[doc("Review and accept changed demo snapshots interactively (needs cargo-insta: cargo install cargo-insta)")]
+demo-snapshots-review:
+    # Never blanket-accept: a snapshot diff is the regression report, so read
+    # it before blessing it. `cargo insta review` shows one diff at a time.
+    cargo insta review
 
 [group("test")]
 [doc("Run the flui-assets/Image feature-gated tests CI also runs (default = [] hides them otherwise)")]
@@ -317,7 +318,6 @@ facade-combos:
                  "--no-default-features --features cupertino,localizations" \
                  "--no-default-features --features material,cupertino,localizations" \
                  "--no-default-features --features hot-reload" \
-                 "--no-default-features --features golden" \
                  "--no-default-features --features serde" \
                  "--all-features" \
                  ""; do

@@ -128,6 +128,11 @@ pub mod raster_owner;
 /// Unconditional, like `raster_owner` itself.
 pub mod raster_options;
 
+/// The font faces embedded in this crate, as bytes.
+/// Unconditional: they are data, not a backend, and a caller pinning a
+/// deterministic face set needs them without the wgpu stack.
+pub mod fonts;
+
 // ============================================================================
 // BACKENDS
 // ============================================================================
