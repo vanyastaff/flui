@@ -47,9 +47,9 @@ use super::cache_key::ImageCacheKey;
 /// decide which path to take: `None` means synchronous-only, and it calls
 /// [`resolve`](Self::resolve) when creating or updating its render object;
 /// `Some(key)` means it probes the decode cache for `key` and, on a miss,
-/// awaits [`resolve_async`](Self::resolve_async) through a
-/// [`FutureBuilder`](crate::FutureBuilder). On error the widget renders an
-/// empty box — no panic, but a `tracing::warn!` so the failure is observable.
+/// awaits [`resolve_async`](Self::resolve_async) for as long as it stays
+/// mounted with that key. On error the widget renders an empty box — no
+/// panic, but a `tracing::warn!` so the failure is observable.
 ///
 /// # Object safety
 ///
@@ -93,11 +93,10 @@ pub trait ImageProvider: std::fmt::Debug + Send + Sync {
     /// never probes the decode cache, never spawns a load, and always calls
     /// [`resolve`](Self::resolve) directly. A provider backed by genuinely
     /// asynchronous I/O (disk via a background runtime, network) overrides
-    /// this to opt into the cached/coalesced/[`FutureBuilder`](crate::FutureBuilder)-driven
-    /// path.
+    /// this to opt into the cached, coalesced, subscription-driven path.
     ///
     /// Note: [`Image`](crate::Image) only *acts* on a `Some` key — probing
-    /// the decode cache and wrapping in a `FutureBuilder` — when the
+    /// the decode cache and holding a subscription — when the
     /// `asset-images` feature is enabled (the cache/coalescing engine's
     /// dependencies, `lru`/`futures-util`, are pulled in only by that
     /// feature). A custom provider overriding this method without

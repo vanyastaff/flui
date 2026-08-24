@@ -16,6 +16,8 @@ mod baseline;
 mod binding_animation;
 #[path = "box_extras.rs"]
 mod box_extras;
+#[path = "child_type_swap.rs"]
+mod child_type_swap;
 #[path = "clip.rs"]
 mod clip;
 #[path = "component_child_ordering.rs"]
