@@ -1,10 +1,10 @@
 //! [`ImageCacheKey`] — the typed identity an async [`ImageProvider`](super::ImageProvider)
-//! publishes for caching, in-flight coalescing, and the
-//! [`FutureBuilder`](crate::FutureBuilder) subscription key.
+//! publishes for caching, in-flight coalescing, and the subscription an
+//! [`Image`](super::Image) holds while it is mounted.
 
 /// Identifies a decoded image for the sync decode cache, in-flight load
-/// coalescing, and the [`FutureBuilder`](crate::FutureBuilder) key an async
-/// [`Image`](super::Image) subscribes with.
+/// coalescing, and the subscription an async [`Image`](super::Image) holds
+/// while it is mounted.
 ///
 /// A bare `String` cannot serve this role: `AssetImage("x")` and
 /// `NetworkImage("x")` must never alias the same cache slot even though their

@@ -7,7 +7,10 @@ use flui_objects::{ImageAlignment, ImageFit, RenderImage};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::geometry::px;
 use flui_types::{Pixels, Size, painting::Image as PixelImage};
+#[cfg(not(feature = "asset-images"))]
 use flui_view::prelude::StatelessView;
+#[cfg(feature = "asset-images")]
+use flui_view::prelude::{StatefulView, ViewState};
 use flui_view::{BoxedView, BuildContext, IntoView, RenderView, View, ViewExt, impl_render_view};
 
 use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, MemoryImage};
@@ -45,15 +48,31 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 ///
 /// # Async dispatch
 ///
-/// When [`ImageProvider::cache_key`] returns `Some(key)`, `Image` first
-/// probes the decode cache synchronously — a cache hit (e.g. after
-/// unmount+remount, or a second widget mounted with the same key) renders
-/// immediately with **no placeholder frame**. A miss wraps the render in a
-/// [`FutureBuilder`](crate::FutureBuilder) keyed by `key`: the first frame
-/// shows the same empty-box placeholder a sync failure would, and the render
-/// updates in place once [`ImageProvider::resolve_async`] completes. Two
-/// widgets mounted with the same key while a load is in flight share ONE load
+/// When [`ImageProvider::cache_key`] returns `Some(key)`, `Image` subscribes
+/// to that key for as long as it stays mounted. Subscribing first probes the
+/// decode cache synchronously — a hit (e.g. after unmount+remount, or a
+/// second widget mounted with the same key) renders immediately with **no
+/// placeholder frame**. A miss shows the same empty-box placeholder a sync
+/// failure would, and the render updates in place once
+/// [`ImageProvider::resolve_async`] completes. Two widgets mounted with the
+/// same key while a load is in flight share ONE load
 /// (`image::decode_cache`'s in-flight coalescing) rather than starting two.
+///
+/// The subscription is keyed on [`cache_key`](ImageProvider::cache_key), not
+/// on provider instance identity: rebuilding with a freshly constructed
+/// provider for the same path resolves nothing again. A rebuild that *does*
+/// change the key cancels the in-flight load and retires the generation it
+/// was issued under, so a result that settles afterwards can no longer reach
+/// this widget: an out-of-order pair of loads cannot show the loser.
+///
+/// # Gapless playback
+///
+/// Changing the provider key clears the displayed frame to the placeholder in
+/// the same frame the change lands, matching Flutter's default
+/// (`gaplessPlayback: false`) — a stale image under a changed caption is the
+/// failure that default exists to prevent.
+/// [`gapless_playback(true)`](Image::gapless_playback) keeps the last decoded
+/// frame on screen until the new one is ready instead.
 ///
 /// # Layout
 ///
@@ -72,9 +91,9 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 ///
 /// Deferred (tracked, not silently missing): `frameBuilder`, `loadingBuilder`,
 /// `errorBuilder` (an error renders the same empty box as no data, with a
-/// `tracing::warn!`), `gaplessPlayback`,
-/// `ImageConfiguration`/`devicePixelRatio`-based cache-key scaling, an
-/// `evict`/`clearLiveImages` cache-management API, and font unification.
+/// `tracing::warn!`), `ImageConfiguration`/`devicePixelRatio`-based cache-key
+/// scaling, an `evict`/`clearLiveImages` cache-management API, and font
+/// unification.
 ///
 /// [`from_image`]: Image::from_image
 /// [`memory`]: Image::memory
@@ -82,7 +101,14 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 /// [`new`]: Image::new
 /// [`width`]: Image::width
 /// [`height`]: Image::height
-#[derive(Clone, Debug, StatelessView)]
+#[derive(Clone, Debug)]
+// Async resolution is a subscription with lifecycle (start, cancel, retire),
+// so `Image` is stateful exactly where that subscription exists — Flutter's
+// `Image` is a `StatefulWidget` unconditionally, but without `asset-images`
+// there is no decode cache to subscribe to and every provider resolves inline
+// in `build`.
+#[cfg_attr(feature = "asset-images", derive(StatefulView))]
+#[cfg_attr(not(feature = "asset-images"), derive(StatelessView))]
 pub struct Image {
     // PORT-CHECK-OK-SP3: widget view type; `flui_types::painting::Image` is the pixel-data handle — distinct concepts at different crate layers
     provider: Arc<dyn ImageProvider + Send + Sync>,
@@ -90,6 +116,7 @@ pub struct Image {
     alignment: ImageAlignment,
     width: Option<Pixels>,
     height: Option<Pixels>,
+    gapless_playback: bool,
 }
 
 impl Image {
@@ -108,6 +135,7 @@ impl Image {
             alignment: ImageAlignment::Center,
             width: None,
             height: None,
+            gapless_playback: false,
         }
     }
 
@@ -204,8 +232,28 @@ impl Image {
         self
     }
 
+    /// Keeps the previously decoded frame on screen while a new provider
+    /// loads, instead of clearing to the placeholder the moment the provider
+    /// key changes.
+    ///
+    /// Defaults to `false` — Flutter's `gaplessPlayback` default, and for the
+    /// same reason: when the image is coupled to other content that has
+    /// already changed (an avatar beside a name), holding the old frame shows
+    /// a combination that was never true. Turn it on for a sequence of frames
+    /// that are all views of the same thing, where a placeholder flash is the
+    /// worse artifact.
+    ///
+    /// Only reached on the async path — a provider with no
+    /// [`cache_key`](ImageProvider::cache_key) resolves inline on every build
+    /// and has no frame to hold on to.
+    #[must_use]
+    pub fn gapless_playback(mut self, gapless: bool) -> Self {
+        self.gapless_playback = gapless;
+        self
+    }
+
     /// Resolves the provider synchronously, warns and clears on failure,
-    /// and builds the leaf [`RawImage`] view directly — no `FutureBuilder`.
+    /// and builds the leaf [`RawImage`] view directly — no subscription.
     fn build_sync(&self) -> BoxedView {
         let image = match self.provider.resolve() {
             Ok(decoded) => Some(decoded),
@@ -237,64 +285,68 @@ impl Image {
     }
 }
 
-/// Async dispatch path — only compiled under `asset-images`, since it needs
-/// `image::decode_cache`'s `lru`/`futures-util`-backed engine. Without this
-/// feature `Image` always takes the `build_sync` path, even for a custom
-/// provider that overrides [`ImageProvider::cache_key`] — see that method's
-/// doc for the honest fallback contract.
+/// Async dispatch — only compiled under `asset-images`, since the
+/// subscription needs `image::decode_cache`'s `lru`/`futures-util`-backed
+/// engine. Without this feature `Image` always takes the `build_sync` path,
+/// even for a custom provider that overrides [`ImageProvider::cache_key`] —
+/// see that method's doc for the honest fallback contract.
 #[cfg(feature = "asset-images")]
-impl Image {
-    fn build_dispatch(&self) -> BoxedView {
-        let Some(key) = self.provider.cache_key() else {
-            return self.build_sync();
-        };
-        if let Some(cached) = super::decode_cache::cached(&key) {
-            return self.raw(Some(cached));
+impl StatefulView for Image {
+    type State = ImageState;
+
+    fn create_state(&self) -> Self::State {
+        // `ViewState::init_state` is handed a `BuildContext` but NOT the view,
+        // so the provider the first resolve needs is copied here. Later
+        // rebuilds reach the fresh view through `did_update_view` / `build`.
+        ImageState {
+            resolver: super::resolve::ImageResolver::new(
+                Arc::clone(&self.provider),
+                self.gapless_playback,
+            ),
         }
-        self.build_async(key)
-    }
-
-    /// Wraps the leaf render in a [`FutureBuilder`](crate::FutureBuilder)
-    /// keyed by `key`, subscribing to [`ImageProvider::resolve_async`].
-    fn build_async(&self, key: super::ImageCacheKey) -> BoxedView {
-        use crate::{FutureBuilder, FutureFactory, SnapshotBuilder};
-
-        let provider = Arc::clone(&self.provider);
-        let factory: FutureFactory<PixelImage, crate::image::ImageProviderError> =
-            std::rc::Rc::new(move || provider.resolve_async());
-
-        let fit = self.fit;
-        let alignment = self.alignment;
-        let width = self.width;
-        let height = self.height;
-        let builder: SnapshotBuilder<PixelImage, crate::image::ImageProviderError> =
-            std::rc::Rc::new(move |_ctx, snapshot| {
-                if let Some(err) = snapshot.error() {
-                    // See `build_sync`: the error's `Display` carries the path.
-                    tracing::warn!(
-                        error_kind = err.kind(),
-                        "image provider failed to resolve asynchronously; showing empty \
-                         placeholder box"
-                    );
-                }
-                RawImage {
-                    image: snapshot.data().cloned(),
-                    fit,
-                    alignment,
-                    width,
-                    height,
-                }
-                .boxed()
-            });
-
-        FutureBuilder::keyed(Some(key), factory, builder).boxed()
     }
 }
 
+/// Persistent state for [`Image`] — **opaque**.
+///
+/// `pub` only because it is the `State` associated type of a public
+/// [`StatefulView`] impl and Rust forbids a crate-private type there. It has
+/// no public fields and no public methods; construct it only through
+/// `Image::create_state`.
 #[cfg(feature = "asset-images")]
-impl StatelessView for Image {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        self.build_dispatch()
+#[derive(Debug)]
+pub struct ImageState {
+    resolver: super::resolve::ImageResolver,
+}
+
+#[cfg(feature = "asset-images")]
+impl ViewState<Image> for ImageState {
+    /// `_ImageState.initState`: resolve the provider the widget mounted with.
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.resolver.init(ctx);
+    }
+
+    /// `_ImageState.build`: paint whatever frame the resolver has published.
+    ///
+    /// A provider that opted out of async resolution (no cache key) never
+    /// publishes anything, and resolves inline here instead — the same
+    /// `build_sync` path a build without `asset-images` takes.
+    fn build(&self, view: &Image, _ctx: &dyn BuildContext) -> impl IntoView {
+        if !self.resolver.is_subscribed() {
+            return view.build_sync();
+        }
+        view.raw(self.resolver.frame())
+    }
+
+    /// `_ImageState.didUpdateWidget`: re-resolve when the cache key changed.
+    fn did_update_view(&mut self, _old_view: &Image, new_view: &Image) {
+        self.resolver
+            .did_update(Arc::clone(&new_view.provider), new_view.gapless_playback);
+    }
+
+    /// `_ImageState.dispose`: cancel the load this widget owns.
+    fn dispose(&mut self) {
+        self.resolver.dispose();
     }
 }
 
@@ -354,10 +406,17 @@ impl RenderView for RawImage {
             | render.set_width(self.width)
             | render.set_height(self.height);
 
-        // `set_image(None)` on a since-cleared image keeps the previous
-        // `intrinsic_size` in the render object (so the box retains its
-        // size) but clears the painted pixel source — the box shows nothing
-        // until the next `Some`.
+        // The box is sized by the image it is showing, matching Flutter's
+        // `RenderImage._sizeForConstraints` (`constraints.smallest` while
+        // `_image == null`). `RenderImage` itself *retains* the last
+        // intrinsic size across `set_image(None)` — a deliberate superset so
+        // a caller can reserve space for a not-yet-loaded image — so the
+        // widget layer drives that dimension explicitly rather than
+        // inheriting a size from an image it is no longer showing.
+        impact |= render.set_intrinsic_size(match &self.image {
+            Some(decoded) => decoded.size(),
+            None => Size::ZERO,
+        });
         impact |= render.set_image(self.image.clone());
         impact
     }
@@ -443,8 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn update_render_object_clears_the_image_but_keeps_the_intrinsic_size_when_the_image_becomes_absent()
-     {
+    fn update_render_object_collapses_the_box_when_the_image_becomes_absent() {
         let with_image = RawImage {
             image: Some(PixelImage::from_rgba8(40, 30, vec![0u8; 40 * 30 * 4])),
             fit: ImageFit::Contain,
@@ -455,15 +513,14 @@ mod tests {
         let mut render = with_image.create_render_object(&detached_ctx());
 
         assert!(render.image().is_some());
-        let size_before = render.compute_size(&loose());
-        assert_eq!(size_before, Size::new(px(40.0), px(30.0)));
+        assert_eq!(render.compute_size(&loose()), Size::new(px(40.0), px(30.0)));
 
         let now_absent = RawImage {
             image: None,
             ..with_image
         };
         let impact = now_absent.update_render_object(&detached_ctx(), &mut render);
-        assert_eq!(impact, flui_rendering::RenderUpdateImpact::PAINT);
+        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
 
         assert!(
             render.image().is_none(),
@@ -471,9 +528,36 @@ mod tests {
         );
         assert_eq!(
             render.compute_size(&loose()),
-            size_before,
-            "clearing the image must NOT reset the intrinsic size -- the box \
-             keeps its prior layout size, only the painted content clears",
+            Size::ZERO,
+            "a cleared image collapses the box, matching Flutter's \
+             `RenderImage._sizeForConstraints` returning `constraints.smallest` \
+             while `_image == null` -- a widget that has stopped showing an \
+             image must not keep reserving that image's space",
+        );
+    }
+
+    #[test]
+    fn update_render_object_keeps_a_forced_dimension_when_the_image_becomes_absent() {
+        let with_image = RawImage {
+            image: Some(PixelImage::from_rgba8(40, 30, vec![0u8; 40 * 30 * 4])),
+            fit: ImageFit::Contain,
+            alignment: ImageAlignment::Center,
+            width: Some(px(100.0)),
+            height: None,
+        };
+        let mut render = with_image.create_render_object(&detached_ctx());
+
+        let now_absent = RawImage {
+            image: None,
+            ..with_image
+        };
+        let _ = now_absent.update_render_object(&detached_ctx(), &mut render);
+
+        assert_eq!(
+            render.compute_size(&loose()),
+            Size::new(px(100.0), px(0.0)),
+            "clearing the image collapses only the axes the image was sizing \
+             -- a forced width still reserves its width",
         );
     }
 

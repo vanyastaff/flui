@@ -166,6 +166,8 @@ pub use flui_objects::{ImageAlignment, ImageFit};
 pub use icon::{Icon, IconData, IconTheme, IconThemeData};
 #[cfg(feature = "asset-images")]
 pub use image::AssetImage;
+#[cfg(feature = "asset-images")]
+pub use image::ImageState;
 #[cfg(feature = "network-images")]
 pub use image::NetworkImage;
 pub use image::{

@@ -23,9 +23,13 @@ mod asset_image;
 mod decode_cache;
 #[cfg(feature = "network-images")]
 mod network_image;
+#[cfg(feature = "asset-images")]
+mod resolve;
 
 pub use cache_key::ImageCacheKey;
 pub use image::Image;
+#[cfg(feature = "asset-images")]
+pub use image::ImageState;
 pub use provider::{
     DirectImageProvider, FileImage, ImageProvider, ImageProviderError, MemoryImage,
 };
