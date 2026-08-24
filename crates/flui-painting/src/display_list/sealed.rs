@@ -173,7 +173,9 @@ impl DisplayListCore for DisplayList {
     }
 
     fn bounds(&self) -> Rect<Pixels> {
-        self.bounds
+        // A list that has recorded no bounds-carrying command reports the
+        // empty rect, which is the long-standing public contract here.
+        self.bounds.unwrap_or(Rect::ZERO)
     }
 
     fn len(&self) -> usize {

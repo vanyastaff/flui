@@ -96,6 +96,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
         DrawCommand::DrawTextSpan {
             span,
             offset,
+            size: _,
             text_scale_factor,
             wrap_width,
             transform,

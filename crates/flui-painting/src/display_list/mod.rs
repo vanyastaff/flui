@@ -70,14 +70,40 @@ pub struct DisplayList {
     /// Drawing commands in order.
     pub(crate) commands: Vec<DrawCommand>,
 
-    /// Cached bounds of all drawing.
-    pub(crate) bounds: Rect<Pixels>,
+    /// Cached union of every command that contributes bounds, or
+    /// `None` while no command has contributed one yet.
+    ///
+    /// `None` and "an empty rect" are different states, and collapsing
+    /// them is a bug: a list whose first bounds-carrying command sits at
+    /// (100, 100) must not report a rect reaching back to the origin just
+    /// because a clip or a `Save` was recorded ahead of it. Seeding is
+    /// therefore keyed on this being `None` — never on `commands` being
+    /// empty, which asks a different question, and never on the rect
+    /// comparing equal to `Rect::ZERO`, which a degenerate command can
+    /// legitimately produce.
+    pub(crate) bounds: Option<Rect<Pixels>>,
+}
+
+/// Folds one command's bounds into an accumulating union.
+///
+/// The single place that decides whether a rect *seeds* the union or
+/// *joins* it, so the recording path ([`DisplayList::push`]) and the
+/// recomputing path ([`DisplayList::recalculate_bounds`]) cannot answer
+/// that question differently for the same list -- which they previously
+/// did, the recording path treating "no command recorded yet" as a stand-in
+/// for "no bounds contributed yet" and folding the origin into any list
+/// whose first command was a clip.
+fn accumulate_bounds(acc: &mut Option<Rect<Pixels>>, cmd_bounds: Rect<Pixels>) {
+    *acc = Some(match *acc {
+        Some(current) => current.union(&cmd_bounds),
+        None => cmd_bounds,
+    });
 }
 
 impl Diagnosticable for DisplayList {
     fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
         properties.add("commands", self.commands.len());
-        properties.add("bounds", format!("{:?}", self.bounds));
+        properties.add("bounds", format!("{:?}", self.bounds.unwrap_or(Rect::ZERO)));
     }
 }
 
@@ -86,7 +112,7 @@ impl DisplayList {
     pub fn new() -> Self {
         Self {
             commands: Vec::new(),
-            bounds: Rect::ZERO,
+            bounds: None,
         }
     }
 
@@ -103,11 +129,7 @@ impl DisplayList {
     /// Adds a command to the display list (internal).
     pub(crate) fn push(&mut self, command: DrawCommand) {
         if let Some(cmd_bounds) = command.bounds() {
-            if self.commands.is_empty() {
-                self.bounds = cmd_bounds;
-            } else {
-                self.bounds = self.bounds.union(&cmd_bounds);
-            }
+            accumulate_bounds(&mut self.bounds, cmd_bounds);
         }
         self.commands.push(command);
     }
@@ -169,16 +191,13 @@ impl DisplayList {
 
     /// Recalculates the bounds from all commands.
     fn recalculate_bounds(&mut self) {
-        self.bounds = Rect::ZERO;
+        let mut acc = None;
         for cmd in &self.commands {
             if let Some(cmd_bounds) = cmd.bounds() {
-                if self.bounds == Rect::ZERO {
-                    self.bounds = cmd_bounds;
-                } else {
-                    self.bounds = self.bounds.union(&cmd_bounds);
-                }
+                accumulate_bounds(&mut acc, cmd_bounds);
             }
         }
+        self.bounds = acc;
     }
 
     /// Filters commands, keeping only those that satisfy the
@@ -197,7 +216,7 @@ impl DisplayList {
 
         let mut result = Self {
             commands,
-            bounds: Rect::ZERO,
+            bounds: None,
         };
         result.recalculate_bounds();
         result
@@ -213,7 +232,7 @@ impl DisplayList {
 
         let mut result = Self {
             commands,
-            bounds: Rect::ZERO,
+            bounds: None,
         };
         result.recalculate_bounds();
         result
@@ -222,7 +241,7 @@ impl DisplayList {
     /// Clears all commands (for pooling/reuse).
     pub fn clear(&mut self) {
         self.commands.clear();
-        self.bounds = Rect::ZERO;
+        self.bounds = None;
     }
 
     /// Appends all commands from another DisplayList (zero-copy
@@ -255,8 +274,10 @@ impl DisplayList {
             );
             self.commands.append(&mut other.commands);
 
-            if !other.bounds.is_empty() {
-                self.bounds = self.bounds.union(&other.bounds);
+            // Only a contributed union joins; `other` having recorded no
+            // bounds at all leaves ours untouched.
+            if let Some(other_bounds) = other.bounds {
+                accumulate_bounds(&mut self.bounds, other_bounds);
             }
         }
 

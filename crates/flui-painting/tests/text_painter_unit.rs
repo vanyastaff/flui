@@ -2,7 +2,7 @@
 //! `crates/flui-painting/src/text_painter/mod.rs` during the text-painter
 //! module split.
 
-use flui_painting::{DEFAULT_FONT_SIZE, TextBaseline, TextPainter};
+use flui_painting::{Canvas, DEFAULT_FONT_SIZE, DisplayListCore, TextBaseline, TextPainter};
 use flui_types::{
     geometry::{Offset, px},
     typography::{TextAlign, TextDirection, TextPosition, TextSpan},
@@ -150,4 +150,40 @@ fn test_get_word_boundary() {
     let boundary = painter.get_word_boundary(TextPosition::upstream(2));
     assert!(boundary.start <= 2);
     assert!(boundary.end >= 2);
+}
+
+/// A painted span must contribute its laid-out box to the display list's
+/// bounds.
+///
+/// `DrawTextSpan` used to report no bounds at all, so a picture whose only
+/// content was rich text claimed an empty rect: every consumer that culls,
+/// computes damage, or sizes a repaint boundary from those bounds would have
+/// dropped visible text, and the failure would have read as a culling bug.
+/// The rect is the laid-out size, not the ink extent — the same rect Flutter's
+/// `RenderBox.paintBounds` (`Offset.zero & size`) reports for a
+/// `RenderParagraph`.
+#[test]
+fn painted_span_contributes_its_laid_out_box_to_display_list_bounds() {
+    let mut painter = TextPainter::new()
+        .with_text(TextSpan::new("Hello, FLUI!"))
+        .with_text_direction(TextDirection::Ltr);
+    painter.layout(0.0, f32::INFINITY);
+
+    let size = painter.size();
+    assert!(
+        size.width > px(0.0) && size.height > px(0.0),
+        "precondition: the text must lay out to a non-empty box, got {size:?}"
+    );
+
+    let origin = Offset::new(px(7.0), px(11.0));
+    let mut canvas = Canvas::new();
+    painter.paint(&mut canvas, origin);
+    let bounds = canvas.finish().bounds();
+
+    // `TextAlign::Start` under an unbounded width leaves the alignment
+    // paint-offset at zero, so the box lands exactly at `origin`.
+    assert_eq!(bounds.left(), origin.dx);
+    assert_eq!(bounds.top(), origin.dy);
+    assert_eq!(bounds.width(), size.width);
+    assert_eq!(bounds.height(), size.height);
 }
