@@ -142,16 +142,22 @@ impl Canvas {
     }
 
     /// Draws rich text with inline spans.
+    ///
+    /// `size` is the laid-out size of the span, which the caller has
+    /// already measured; the command records it so bounds queries do not
+    /// have to reshape the text. See [`DrawCommand::DrawTextSpan`].
     pub fn draw_text_span(
         &mut self,
         span: &InlineSpan,
         offset: Offset<Pixels>,
+        size: Size<Pixels>,
         text_scale_factor: f64,
         wrap_width: Option<f32>,
     ) {
         self.display_list.push(DrawCommand::DrawTextSpan {
             span: span.clone(),
             offset,
+            size,
             text_scale_factor,
             wrap_width,
             transform: self.transform,

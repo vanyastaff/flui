@@ -602,7 +602,20 @@ impl DrawCommand {
             | DrawCommand::ClipRRect { .. }
             | DrawCommand::ClipRSuperellipse { .. }
             | DrawCommand::ClipPath { .. } => None,
+            // Both text commands report the laid-out box the recorder
+            // measured, not the ink extent of the glyphs — the same rect
+            // Flutter's `RenderBox.paintBounds` (`Offset.zero & size`)
+            // reports for a `RenderParagraph`. They must agree: a caller
+            // cannot see which of the two a `Text` widget painted, so a
+            // command that contributed nothing here would silently drop
+            // visible text from every bounds computation built on this.
             DrawCommand::DrawText {
+                offset,
+                size,
+                transform,
+                ..
+            }
+            | DrawCommand::DrawTextSpan {
                 offset,
                 size,
                 transform,
@@ -611,7 +624,6 @@ impl DrawCommand {
                 let local_bounds = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
                 Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawTextSpan { .. } => None,
             DrawCommand::SaveLayer {
                 bounds, transform, ..
             } => bounds.map(|b| transform.transform_rect(&b)),

@@ -192,6 +192,15 @@ pub enum DrawCommand {
         span: InlineSpan,
         /// Position offset.
         offset: Offset<Pixels>,
+        /// Laid-out size of the span, measured by the recorder.
+        ///
+        /// The span alone cannot answer this: computing it means shaping
+        /// the text, which needs the font system, and `bounds()` must stay
+        /// cheap and sync. So the caller — which has just laid the text out
+        /// — carries the measurement in, exactly as [`DrawCommand::DrawText`]
+        /// does. This is the laid-out size, not the ink extent, matching
+        /// Flutter's `RenderBox.paintBounds` (`Offset.zero & size`).
+        size: Size<Pixels>,
         /// Text scale factor for accessibility.
         text_scale_factor: f64,
         /// Wrap width for line breaking. `None` = unbounded (no wrapping).
