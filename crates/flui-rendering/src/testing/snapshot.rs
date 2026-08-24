@@ -21,6 +21,7 @@ use flui_types::{
     geometry::{Matrix4, Pixels, Point, RRect, Rect},
     painting::Clip,
     styling::Color,
+    typography::{InlineSpan, TextSpan, TextStyle},
 };
 
 /// Coarse category of a drawing command.
@@ -102,6 +103,74 @@ fn summarize_paint(paint: &Paint) -> String {
         format!("{style} {color} stroke={}", f(paint.stroke_width))
     } else {
         format!("{style} {color}")
+    }
+}
+
+/// Summarize the styles a span tree carries, as `" styles=[…]"`, or `""` when
+/// no node in it sets one.
+///
+/// Nodes are visited in the same pre-order `to_plain_text` concatenates, so the
+/// n-th entry is the style of the n-th styled run of the text beside it. Only
+/// nodes that actually set a style appear — an unstyled wrapper inherits and
+/// would add nothing but noise.
+fn summarize_span_styles(span: &InlineSpan) -> String {
+    fn walk(span: &TextSpan, out: &mut Vec<String>) {
+        if let Some(style) = span.style.as_ref() {
+            out.push(summarize_text_style(style));
+        }
+        for child in &span.children {
+            walk(child, out);
+        }
+    }
+
+    let mut styles = Vec::new();
+    match span {
+        InlineSpan::Text(text) => walk(text, &mut styles),
+        // A placeholder reserves space and paints nothing; its own style, when
+        // set, still rides the top-level accessor.
+        InlineSpan::Placeholder(_) => {
+            if let Some(style) = span.style() {
+                styles.push(summarize_text_style(style));
+            }
+        }
+    }
+
+    if styles.is_empty() {
+        String::new()
+    } else {
+        format!(" styles=[{}]", styles.join(", "))
+    }
+}
+
+/// Summarize the [`TextStyle`] fields a visual regression moves: the painted
+/// colors, and the metrics that change which glyphs are drawn and how wide.
+///
+/// Fields left out are either not paint-affecting or not yet exercised by any
+/// snapshot; add one here the moment a test needs to pin it.
+fn summarize_text_style(style: &TextStyle) -> String {
+    let mut parts = Vec::new();
+    if let Some(color) = style.color {
+        parts.push(hex_color(color));
+    }
+    if let Some(background) = style.background_color {
+        parts.push(format!("bg={}", hex_color(background)));
+    }
+    if let Some(size) = style.font_size {
+        parts.push(format!("size={}", f(size as f32)));
+    }
+    if let Some(weight) = style.font_weight {
+        parts.push(format!("weight={weight:?}"));
+    }
+    if let Some(font_style) = style.font_style {
+        parts.push(format!("style={font_style:?}"));
+    }
+    if let Some(family) = style.font_family.as_ref() {
+        parts.push(format!("family={family:?}"));
+    }
+    if parts.is_empty() {
+        "default".to_owned()
+    } else {
+        parts.join(" ")
     }
 }
 
@@ -446,16 +515,21 @@ pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
             transform,
             ..
         } => {
-            // Summarize via plain text (via to_plain_text). Glyph/run details
-            // are NOT needed — shaped content is Task 3's concern (layer walk).
+            // Plain text plus the styles the span tree carries. Glyph/run
+            // geometry is deliberately absent — that is the layer walk's
+            // concern — but the style is NOT optional detail: a regression that
+            // recolors, re-weights, or resizes a span moves no other field in
+            // this summary, so omitting it makes such a change invisible to
+            // every snapshot built on it.
             let plain = span.to_plain_text();
             DrawCommandSummary {
                 kind: DrawKind::Text,
                 line: format!(
-                    "DrawTextSpan offset=({},{}) {:?}{}",
+                    "DrawTextSpan offset=({},{}) {:?}{}{}",
                     f(offset.dx.get()),
                     f(offset.dy.get()),
                     plain,
+                    summarize_span_styles(span),
                     maybe_transform(transform),
                 ),
             }

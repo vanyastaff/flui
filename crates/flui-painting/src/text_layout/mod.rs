@@ -28,7 +28,11 @@ pub(crate) mod measure;
 
 pub use detect::detect_text_direction;
 pub(crate) use layout::shared_font_system;
-pub use layout::{SharedFontSystem, TextLayout, init_font_system_with_faces};
+pub use layout::{SharedFontSystem, TextLayout};
+// Test-support only: pinning the process-wide font system is irreversible, so
+// it stays off the shipped surface. See its docs.
+#[cfg(any(test, feature = "testing"))]
+pub use layout::init_font_system_with_faces;
 pub use measure::{measure_inline_span, measure_text};
 
 // ===== Shared types (identical between cosmic-text impl and fallback) =====

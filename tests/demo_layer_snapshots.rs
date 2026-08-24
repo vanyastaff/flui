@@ -5,9 +5,16 @@
 //! colors, transforms, and text — is serialized to text and compared against a
 //! committed `insta` snapshot. A visual regression that matters structurally
 //! (a widget that moves or resizes, a shadow that stops being emitted, a clip
-//! that disappears, a subtree that stops being built) changes those lines and
-//! fails the matching test, naming the layer and the command rather than a
-//! pixel count.
+//! that disappears, a subtree that stops being built, a label that changes
+//! color or weight) changes those lines and fails the matching test, naming the
+//! layer and the command rather than a pixel count.
+//!
+//! One limit worth knowing before trusting a green run: a text span's style is
+//! pinned only where the span itself carries one. `vertical_slice_demo` and
+//! `widgets_gallery` build bare `Text::new(…)` with no explicit style, so their
+//! spans serialize with no `styles=[…]` at all and a change to whatever
+//! resolves their color downstream would not move these snapshots. The Material
+//! and Cupertino demos do carry styles, and those are pinned.
 //!
 //! # Why structure and not pixels
 //!

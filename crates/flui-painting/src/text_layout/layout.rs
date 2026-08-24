@@ -94,6 +94,16 @@ fn font_system_arc() -> &'static Arc<Mutex<FontSystem>> {
 /// Panics if `faces` is empty or none of them load: an empty database makes
 /// every measurement zero-width and panics inside cosmic-text's shaper, which
 /// is a far more confusing failure than this one.
+///
+/// # Availability
+///
+/// Behind the `testing` feature, and deliberately so. Claiming `FONT_SYSTEM` is
+/// irreversible for the process, so on the shipped surface this would let any
+/// downstream caller win the race against `SharedEngineServices`' own
+/// construction and pin every later measurement to faces of its choosing. The
+/// only caller that needs it is test support, which reaches it through
+/// `flui_testing::fonts::pin_font_faces`.
+#[cfg(any(test, feature = "testing"))]
 pub fn init_font_system_with_faces(faces: &[&[u8]], default_family: &str, locale: &str) -> bool {
     assert!(
         !faces.is_empty(),
