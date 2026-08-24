@@ -2561,7 +2561,7 @@ mod realm_dispatch_tests {
         let element = flui_foundation::ElementId::new(91);
         realm
             .widgets()
-            .with_build_owner_mut(|owner| owner.register_global_key(key.id(), element));
+            .with_build_owner_mut(|owner| owner.register_global_key(&key, element));
         let dispatcher = install_platform_realm(realm, &test_window());
         let key_after_frame = key.clone();
 
@@ -4824,7 +4824,7 @@ mod realm_dispatch_tests {
             realm
                 .presentation_widgets_for_test(b_id)
                 .with_build_owner_mut(|owner| {
-                    owner.register_global_key(key_in_sibling.id(), element_in_sibling);
+                    owner.register_global_key(&key_in_sibling, element_in_sibling);
                 });
         });
 

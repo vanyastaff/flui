@@ -168,7 +168,7 @@ pub(crate) fn reconcile_children_by_id(
         if !can_update_by_id(tree, old_id, new_views[new_top].as_ref()) {
             break;
         }
-        update_child(tree, old_id, new_views[new_top].as_ref(), owner);
+        update_child(tree, parent_id, old_id, new_views[new_top].as_ref(), owner);
         scheduling_reasons.insert(old_id, crate::RebuildReason::ParentUpdate);
         // Top scan is same-slot (old_top == new_top throughout): the
         // child neither moved nor was recreated — a `Reuse` disposition.
@@ -235,7 +235,7 @@ pub(crate) fn reconcile_children_by_id(
             // is its OLD index (`idx`), the position it is leaving.
             let view_type = view_type_of(tree, old_id);
             *slot = None;
-            remove_child(tree, old_id, owner);
+            remove_child(tree, parent_id, old_id, owner);
             if let Some(view_type) = view_type {
                 emit_event(&ReconcileEvent::unmount(parent_id, idx, view_type, None));
             }
@@ -261,7 +261,7 @@ pub(crate) fn reconcile_children_by_id(
             // slot means it stayed put (`Reuse`); otherwise the keyed
             // match pulled it across slots (`Reorder`).
             let stayed = slot_of(tree, old_id) == Some(new_slot);
-            update_child(tree, old_id, new_view, owner);
+            update_child(tree, parent_id, old_id, new_view, owner);
             scheduling_reasons.insert(old_id, crate::RebuildReason::ParentUpdate);
             let key_hash = new_view.key().map(flui_foundation::ViewKey::key_hash);
             let view_type = new_view.view_type_id();
@@ -297,7 +297,7 @@ pub(crate) fn reconcile_children_by_id(
             .take()
             .expect("phase-2 bottom-scan recorded this slot as a match; it cannot be None");
         let new_idx = new_bottom + offset;
-        update_child(tree, old_id, new_views[new_idx].as_ref(), owner);
+        update_child(tree, parent_id, old_id, new_views[new_idx].as_ref(), owner);
         scheduling_reasons.insert(old_id, crate::RebuildReason::ParentUpdate);
         // The bottom slice stays at the tail of both lists; it shifts
         // slot only when the middle changed size, i.e. when the deltas
@@ -331,7 +331,7 @@ pub(crate) fn reconcile_children_by_id(
             // slot is the child's OLD index (`idx`).
             let view_type = view_type_of(tree, old_id);
             let key_hash = key_hash_of(tree, old_id);
-            remove_child(tree, old_id, owner);
+            remove_child(tree, parent_id, old_id, owner);
             if let Some(view_type) = view_type {
                 emit_event(&ReconcileEvent::unmount(
                     parent_id, idx, view_type, key_hash,
@@ -516,6 +516,7 @@ fn claim_old_for_new(
 /// this is safe to call unconditionally inside the phases.
 fn update_child(
     tree: &mut ElementTree,
+    parent_id: ElementId,
     id: ElementId,
     new: &dyn View,
     owner: &mut crate::ElementOwner<'_>,
@@ -524,6 +525,19 @@ fn update_child(
     // view, keeping the keyed-match field in lock-step — mirrors the box
     // reconciler's per-update key re-clone.
     tree.update(id, new, owner);
+
+    // Keeping a keyed child is a declaration of that key just as much as
+    // mounting one is: a parent that holds its `GlobalKey` child across a
+    // rebuild is still claiming the key this frame, and the frame boundary
+    // must see that claim or a second parent grafting the same element
+    // would look like a lone, legal reparent. Flutter records the same
+    // reservation from `Element.updateChild`'s reuse branch
+    // (`framework.dart:4086`), which covers update and inflate alike.
+    if let Some(key) = new.key()
+        && key.is_global_key()
+    {
+        owner.reserve_global_key(parent_id, id, key);
+    }
 }
 
 /// Remove the slab child `id` AND its whole subtree.
@@ -571,7 +585,21 @@ fn update_child(
 /// by the time the top's cascade would otherwise have reached it.
 ///
 /// Stale / absent ids are a no-op inside `remove` / `remove_finalized`.
-fn remove_child(tree: &mut ElementTree, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
+fn remove_child(
+    tree: &mut ElementTree,
+    parent_id: ElementId,
+    id: ElementId,
+    owner: &mut crate::ElementOwner<'_>,
+) {
+    // The parent is giving this child up, so whatever `GlobalKey` it
+    // declared for it earlier in the frame is withdrawn: a parent that no
+    // longer holds a keyed child is not a claimant on that key, and leaving
+    // the reservation in place would make the frame boundary report a
+    // duplicate against a claim nobody is making. Flutter withdraws the
+    // same way in `_debugRemoveGlobalKeyReservationFor`
+    // (`framework.dart:3188`).
+    owner.forget_global_key_reservation(parent_id, id);
+
     // A keyed top soft-removes into the inactive queue instead of freeing
     // outright, leaving descendants untouched for `finalize_tree`'s deferred
     // drain (same-frame GlobalKey retake window). Check this FIRST: it needs

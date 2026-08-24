@@ -17,7 +17,8 @@ name: CI
 #   deny           — advisories/bans/licenses/sources
 #   doc-test       — rustdoc examples executed as tests
 #   msrv           — cargo check on the declared 1.97 MSRV
-#   miri           — UB check on flui-rendering's subtree arena (advisory)
+#   miri           — UB check on flui-rendering's pipeline owner and
+#                    flui-view's GlobalKey plane (advisory)
 #   ci             — aggregator: the single required check for branch protection
 # Patterns borrowed from linebender/xilem (gated `checks` job, cargo-hack
 # feature matrix, Swatinem cache + taiki-e/install-action for pinned tool
@@ -657,9 +658,14 @@ jobs:
   # subtree_arena suite -- see the `miri` recipe's doc-comment in the
   # justfile for the full breakdown. Measured 55 tests / ~21s wall, in
   # budget.
+  #
+  # SCOPE widened again (ADR-0050): a second invocation runs flui-view's
+  # `owner::global_key` surface -- the identity registry, the cross-owner
+  # claim table, and the per-frame reservation ledger, including the
+  # tree-driving verification and repair tests. See that step's own comment.
   # ─────────────────────────────────────────────────────────────────────────
   miri:
-    name: miri (flui-rendering pipeline::owner)
+    name: miri (flui-rendering pipeline::owner, flui-view owner::global_key)
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -693,6 +699,15 @@ jobs:
       # miri component (first run failed exactly there).
       - name: cargo miri test (pipeline::owner)
         run: cargo +nightly miri test -p flui-rendering --lib --locked pipeline::owner
+
+      # The GlobalKey plane (ADR-0050): the identity registry, the cross-owner
+      # claim table, and the per-frame reservation ledger, plus the tree-driving
+      # verification and repair tests that run a real `ElementTree` through
+      # `BuildOwner::finalize_tree`. No `unsafe` of its own — the point is the
+      # slab-backed element arena and the reborrow chains it drives underneath.
+      # Measured 28 tests / ~7s wall, in budget.
+      - name: cargo miri test (owner::global_key)
+        run: cargo +nightly miri test -p flui-view --lib --locked owner::global_key
 
   # ─────────────────────────────────────────────────────────────────────────
   # feature-matrix — xilem-style per-feature clippy via cargo-hack. The plain

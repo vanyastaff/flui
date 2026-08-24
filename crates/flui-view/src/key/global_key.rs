@@ -100,12 +100,14 @@ impl<T: 'static> GlobalKey<T> {
     ///
     /// Flutter parity: `framework.dart:3163`
     /// `GlobalKey._currentElement` — reads `BuildOwner._globalKeyRegistry`
-    /// indexed by the key. We hash-key the registry instead because
-    /// `Box<dyn ViewKey>` would need `Hash + Eq` blanket-impls and
-    /// hash collisions are documented (§I4).
+    /// indexed by the key. FLUI resolves by key identity too: the
+    /// registries behind the handle bucket entries by
+    /// [`ViewKey::key_hash`] and then decide membership with
+    /// [`ViewKey::key_eq`], because `Box<dyn ViewKey>` has no blanket
+    /// `Hash + Eq` to hand a `HashMap` directly.
     #[must_use]
     pub fn current_element(&self) -> Option<ElementId> {
-        crate::key::registry::with_registry(|registry| registry.lookup_element(self.id)).flatten()
+        crate::key::registry::with_registry(|registry| registry.lookup_element(self)).flatten()
     }
 
     /// Run `f` against the current state of the element registered under

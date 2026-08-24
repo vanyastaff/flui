@@ -20,9 +20,11 @@
 //!
 //! # Split authority
 //!
-//! `BuildOwner::global_keys` stays the intra-tree retake authority (key hash
+//! `BuildOwner::global_keys` stays the intra-tree retake authority (key
 //! → `ElementId` *in this tree*); `GlobalKeyScope` is the cross-tree
-//! uniqueness authority (key hash → which owner currently holds it). The two
+//! uniqueness authority (key → which owner currently holds it). Both index
+//! by `ViewKey::key_hash` and decide by `ViewKey::key_eq`, so a hash is only
+//! ever an accelerator and never an identity. The two
 //! never merge: `ElementTree`'s retake machinery
 //! (`try_retake_global_key`/`retake_inactive_global_key`) reads and writes
 //! only the local map and is completely unaware a scope exists — this file,
@@ -57,7 +59,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, ViewKey};
+
+use super::GlobalKeyRegistry;
 
 /// Identifies one [`BuildOwner`](super::BuildOwner) for `GlobalKeyScope`
 /// claim tagging.
@@ -84,14 +88,37 @@ impl fmt::Display for OwnerTag {
     }
 }
 
-/// One live claim: which owner currently holds a `GlobalKey` hash.
+/// One live claim: which owner currently holds a given `GlobalKey`.
+///
+/// The key is stored by value so the claim can be identity-compared later.
+/// Its hash only picks the bucket — see [`ScopeState::claims`].
 struct Claim {
+    key: Box<dyn ViewKey>,
     owner: OwnerTag,
 }
 
 #[derive(Default)]
 struct ScopeState {
-    claims: HashMap<u64, Claim>,
+    /// `key hash -> the claims sharing that hash`.
+    ///
+    /// Bucketed by hash, decided by [`ViewKey::key_eq`]: two distinct keys
+    /// that collide are two claims in one bucket, never one claim standing
+    /// in for both. A bucket is dropped as soon as it empties, so
+    /// [`GlobalKeyScope::claim_count`] can sum bucket lengths without
+    /// counting corpses.
+    claims: HashMap<u64, Vec<Claim>>,
+}
+
+impl ScopeState {
+    fn position_of(&self, key: &dyn ViewKey) -> Option<(u64, usize)> {
+        let hash = key.key_hash();
+        let index = self
+            .claims
+            .get(&hash)?
+            .iter()
+            .position(|claim| claim.key.key_eq(key))?;
+        Some((hash, index))
+    }
 }
 
 /// A realm-agnostic shared uniqueness domain for `GlobalKey`s across
@@ -123,7 +150,7 @@ struct ScopeState {
 ///
 /// 1. **An eager panic naming both owners** — the ordinary case: a
 ///    cross-owner conflict is detected the moment a second owner tries to
-///    claim a hash the first still holds.
+///    claim a key the first still holds.
 /// 2. **A tag-checked no-op release** — a stale or duplicate release from an
 ///    owner that no longer holds the claim never disturbs whoever holds it
 ///    now (see this type's crate-internal `release` method).
@@ -132,7 +159,7 @@ struct ScopeState {
 ///    (e.g. a direct crate-internal `reclaim_owner` call, not the
 ///    normal unmount path) while its original owner still has an inactive,
 ///    unfinalized retake candidate for that same key: a second owner can
-///    then claim the hash fresh, and the first owner's later intra-tree
+///    then claim the key fresh, and the first owner's later intra-tree
 ///    retake — which never consults this scope, by design (see the module
 ///    docs' "Split authority" section) — still succeeds on its own terms,
 ///    reactivating its own candidate. This is confined, not a corruption in
@@ -171,85 +198,100 @@ impl GlobalKeyScope {
         }
     }
 
-    /// Number of `GlobalKey` hashes currently claimed in this scope.
+    /// Number of `GlobalKey`s currently claimed in this scope.
     ///
     /// Diagnostic/test surface — production code never scans the scope by
-    /// size, only by a single hash lookup through the claim/release path.
+    /// size, only by a single keyed lookup through the claim/release path.
     #[must_use]
     pub fn claim_count(&self) -> usize {
-        self.state.borrow().claims.len()
+        self.state
+            .borrow()
+            .claims
+            .values()
+            .map(Vec::len)
+            .sum::<usize>()
     }
 
-    /// Attempt to claim `hash` for `owner`.
+    /// Attempt to claim `key` for `owner`.
     ///
     /// Returns an RAII [`ClaimGuard`] on success — the claim is live the
     /// moment this call returns `Ok`, but the guard releases it again on
     /// drop unless [`ClaimGuard::commit`] runs first, so a caller that
     /// claims and then unwinds (build-error panic) before finishing its own
     /// owner-map insert never leaks a claim nobody will ever release.
-    /// Re-claiming a hash this SAME owner already holds is not a conflict —
+    /// Re-claiming a key this SAME owner already holds is not a conflict —
     /// it commits immediately, matching the existing last-write-wins
     /// re-registration behavior of a single owner's local map.
     ///
     /// Returns [`ClaimConflict`] when a DIFFERENT owner already holds
-    /// `hash`. The caller traces and panics — see
+    /// `key`. The caller traces and panics — see
     /// `global_key_scope::claim_and_register`, the sole production call site.
     pub(crate) fn try_claim(
         &self,
-        hash: u64,
+        key: &dyn ViewKey,
         owner: OwnerTag,
     ) -> Result<ClaimGuard<'_>, ClaimConflict> {
         let mut state = self.state.borrow_mut();
-        if let Some(existing) = state.claims.get(&hash) {
+        if let Some((hash, index)) = state.position_of(key) {
+            let existing = &state.claims[&hash][index];
             if existing.owner != owner {
                 return Err(ClaimConflict {
                     holder: existing.owner,
                 });
             }
-            // Same owner reclaiming its own hash: nothing new was taken, so
+            // Same owner reclaiming its own key: nothing new was taken, so
             // the guard has nothing to roll back — pre-committed.
             drop(state);
             return Ok(ClaimGuard {
                 scope: self,
-                hash,
+                key: key.clone_key(),
                 owner,
                 committed: true,
             });
         }
-        state.claims.insert(hash, Claim { owner });
+        state.claims.entry(key.key_hash()).or_default().push(Claim {
+            key: key.clone_key(),
+            owner,
+        });
         drop(state);
         Ok(ClaimGuard {
             scope: self,
-            hash,
+            key: key.clone_key(),
             owner,
             committed: false,
         })
     }
 
-    /// Tag-checked release: removes the claim on `hash` only if `owner` is
+    /// Tag-checked release: removes the claim on `key` only if `owner` is
     /// still its current holder.
     ///
     /// A release from an owner that no longer holds the claim (its own
     /// finalize ran late, after another owner already claimed the same
-    /// hash — the adversarial interleaving ADR-0043 names) is a
+    /// key — the adversarial interleaving ADR-0043 names) is a
     /// traced no-op, never a mutation of whoever holds the claim now. No-op,
-    /// untraced, if `hash` has no live claim at all.
-    pub(crate) fn release(&self, hash: u64, owner: OwnerTag) {
+    /// untraced, if `key` has no live claim at all.
+    pub(crate) fn release(&self, key: &dyn ViewKey, owner: OwnerTag) {
         let mut state = self.state.borrow_mut();
-        match state.claims.get(&hash) {
-            Some(claim) if claim.owner == owner => {
-                state.claims.remove(&hash);
-            }
-            Some(claim) => {
-                tracing::debug!(
-                    hash,
-                    releasing_owner = %owner,
-                    current_holder = %claim.owner,
-                    "GlobalKeyScope::release: tag mismatch, ignoring — the claim was \
-                     already reassigned to a different owner since this owner's release"
-                );
-            }
-            None => {}
+        let Some((hash, index)) = state.position_of(key) else {
+            return;
+        };
+        let bucket = state
+            .claims
+            .get_mut(&hash)
+            .expect("BUG: position_of resolved a bucket that is no longer present");
+        if bucket[index].owner != owner {
+            tracing::debug!(
+                hash,
+                releasing_owner = %owner,
+                current_holder = %bucket[index].owner,
+                "GlobalKeyScope::release: tag mismatch, ignoring — the claim was \
+                 already reassigned to a different owner since this owner's release"
+            );
+            return;
+        }
+        bucket.swap_remove(index);
+        if bucket.is_empty() {
+            state.claims.remove(&hash);
         }
     }
 
@@ -263,9 +305,13 @@ impl GlobalKeyScope {
     /// silently. Returns the number of claims reclaimed.
     pub(crate) fn reclaim_owner(&self, owner: OwnerTag) -> usize {
         let mut state = self.state.borrow_mut();
-        let before = state.claims.len();
-        state.claims.retain(|_, claim| claim.owner != owner);
-        let reclaimed = before - state.claims.len();
+        let mut reclaimed = 0;
+        state.claims.retain(|_, bucket| {
+            let before = bucket.len();
+            bucket.retain(|claim| claim.owner != owner);
+            reclaimed += before - bucket.len();
+            !bucket.is_empty()
+        });
         if reclaimed > 0 {
             tracing::debug!(
                 owner = %owner,
@@ -291,7 +337,7 @@ impl fmt::Debug for GlobalKeyScope {
     }
 }
 
-/// A different owner already holds the hash a [`GlobalKeyScope::try_claim`]
+/// A different owner already holds the key a [`GlobalKeyScope::try_claim`]
 /// call was attempting.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ClaimConflict {
@@ -310,7 +356,7 @@ pub(crate) struct ClaimConflict {
 #[derive(Debug)]
 pub(crate) struct ClaimGuard<'a> {
     scope: &'a GlobalKeyScope,
-    hash: u64,
+    key: Box<dyn ViewKey>,
     owner: OwnerTag,
     committed: bool,
 }
@@ -326,16 +372,16 @@ impl ClaimGuard<'_> {
 impl Drop for ClaimGuard<'_> {
     fn drop(&mut self) {
         if !self.committed {
-            self.scope.release(self.hash, self.owner);
+            self.scope.release(self.key.as_ref(), self.owner);
         }
     }
 }
 
-/// Claim `hash` for `owner` in `*scope` (lazily self-owning a private,
+/// Claim `key` for `owner` in `*scope` (lazily self-owning a private,
 /// single-tenant scope when `*scope` is `None` — standalone/test owners
 /// behave exactly as before this file existed, since a private scope with
-/// one tenant never conflicts with itself), then record `hash -> element`
-/// in the owner's own local map.
+/// one tenant never conflicts with itself), then record `key -> element`
+/// in the owner's own local registry.
 ///
 /// On a cross-owner conflict: traces at error level, then panics naming
 /// both owners — same verdict and timing as the existing intra-tree
@@ -352,17 +398,18 @@ impl Drop for ClaimGuard<'_> {
 pub(crate) fn claim_and_register(
     scope: &mut Option<GlobalKeyScope>,
     owner: OwnerTag,
-    hash: u64,
+    key: &dyn ViewKey,
     element: ElementId,
-    local: &mut HashMap<u64, ElementId>,
+    local: &mut GlobalKeyRegistry,
 ) {
     let scope_ref = scope.get_or_insert_with(GlobalKeyScope::new);
-    match scope_ref.try_claim(hash, owner) {
+    match scope_ref.try_claim(key, owner) {
         Ok(guard) => {
-            local.insert(hash, element);
+            local.insert(key, element);
             guard.commit();
         }
         Err(conflict) => {
+            let hash = key.key_hash();
             tracing::error!(
                 hash,
                 this_owner = %owner,
@@ -372,7 +419,7 @@ pub(crate) fn claim_and_register(
                  already holds this key while sharing a GlobalKeyScope"
             );
             panic!(
-                "GlobalKey hash {hash} is already claimed by {} in this GlobalKeyScope; \
+                "GlobalKey {key:?} is already claimed by {} in this GlobalKeyScope; \
                  {} cannot mount {element:?} with the same key while both owners share \
                  the scope",
                 conflict.holder, owner
@@ -381,7 +428,7 @@ pub(crate) fn claim_and_register(
     }
 }
 
-/// Release `hash` from the owner's local map and, tag-checked, from
+/// Release `key` from the owner's local registry and, tag-checked, from
 /// `scope` (when installed).
 ///
 /// The sole two call sites are [`BuildOwner::unregister_global_key`](super::BuildOwner::unregister_global_key)
@@ -392,18 +439,75 @@ pub(crate) fn claim_and_register(
 pub(crate) fn release_and_unregister(
     scope: Option<&GlobalKeyScope>,
     owner: OwnerTag,
-    hash: u64,
-    local: &mut HashMap<u64, ElementId>,
+    key: &dyn ViewKey,
+    local: &mut GlobalKeyRegistry,
 ) {
-    local.remove(&hash);
+    local.remove(key);
     if let Some(scope) = scope {
-        scope.release(hash, owner);
+        scope.release(key, owner);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use super::*;
+
+    /// A key with a test-chosen identity and hash, so a collision between
+    /// two *distinct* keys can be built on purpose. `is_global_key` is true
+    /// because that is the population a scope claims.
+    #[derive(Clone)]
+    struct StubKey {
+        identity: u32,
+        hash: u64,
+    }
+
+    impl StubKey {
+        fn new(identity: u32) -> Self {
+            Self {
+                identity,
+                hash: u64::from(identity),
+            }
+        }
+
+        /// A distinct key that deliberately hashes like `other`.
+        fn colliding_with(identity: u32, other: &Self) -> Self {
+            Self {
+                identity,
+                hash: other.hash,
+            }
+        }
+    }
+
+    impl ViewKey for StubKey {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn key_eq(&self, other: &dyn ViewKey) -> bool {
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|other| self.identity == other.identity)
+        }
+
+        fn key_hash(&self) -> u64 {
+            self.hash
+        }
+
+        fn clone_key(&self) -> Box<dyn ViewKey> {
+            Box::new(self.clone())
+        }
+
+        fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "StubKey({})", self.identity)
+        }
+
+        fn is_global_key(&self) -> bool {
+            true
+        }
+    }
 
     fn eid(n: usize) -> ElementId {
         ElementId::new(n)
@@ -432,8 +536,9 @@ mod tests {
     fn claim_then_commit_is_visible_and_reclaimable() {
         let scope = GlobalKeyScope::new();
         let a = OwnerTag::fresh();
+        let key = StubKey::new(1);
 
-        let guard = scope.try_claim(1, a).expect("fresh hash claims");
+        let guard = scope.try_claim(&key, a).expect("fresh key claims");
         guard.commit();
         assert_eq!(scope.claim_count(), 1);
 
@@ -442,36 +547,72 @@ mod tests {
     }
 
     #[test]
-    fn cross_owner_claim_on_a_live_hash_conflicts() {
+    fn cross_owner_claim_on_a_live_key_conflicts() {
         let scope = GlobalKeyScope::new();
         let a = OwnerTag::fresh();
         let b = OwnerTag::fresh();
+        let key = StubKey::new(1);
 
-        scope.try_claim(1, a).expect("fresh hash claims").commit();
+        scope.try_claim(&key, a).expect("fresh key claims").commit();
 
         let conflict = scope
-            .try_claim(1, b)
-            .expect_err("b must not claim a's live hash");
+            .try_claim(&key, b)
+            .expect_err("b must not claim a's live key");
         assert_eq!(conflict.holder, a);
         // The failed attempt must not have mutated the claim.
         assert_eq!(scope.claim_count(), 1);
     }
 
+    /// The property a hash-keyed claim table could not hold: a *different*
+    /// key that merely collides is not a cross-owner conflict, and both
+    /// claims stay live and independently releasable.
     #[test]
-    fn same_owner_reclaiming_its_own_hash_is_not_a_conflict() {
+    fn a_colliding_but_distinct_key_is_not_a_cross_owner_conflict() {
         let scope = GlobalKeyScope::new();
         let a = OwnerTag::fresh();
+        let b = OwnerTag::fresh();
+        let first = StubKey::new(1);
+        let second = StubKey::colliding_with(2, &first);
+        assert_eq!(first.key_hash(), second.key_hash());
 
-        scope.try_claim(1, a).expect("first claim").commit();
+        scope
+            .try_claim(&first, a)
+            .expect("a claims the first key")
+            .commit();
+        scope
+            .try_claim(&second, b)
+            .expect("a distinct key sharing a hash is claimable by another owner")
+            .commit();
+        assert_eq!(scope.claim_count(), 2);
+
+        scope.release(&first, a);
+        assert_eq!(
+            scope.claim_count(),
+            1,
+            "releasing one collision partner leaves the other claimed",
+        );
+        let conflict = scope
+            .try_claim(&second, OwnerTag::fresh())
+            .expect_err("b's claim on the colliding key must have survived");
+        assert_eq!(conflict.holder, b);
+    }
+
+    #[test]
+    fn same_owner_reclaiming_its_own_key_is_not_a_conflict() {
+        let scope = GlobalKeyScope::new();
+        let a = OwnerTag::fresh();
+        let key = StubKey::new(1);
+
+        scope.try_claim(&key, a).expect("first claim").commit();
         let guard = scope
-            .try_claim(1, a)
-            .expect("same owner re-claiming its own hash is not a conflict");
+            .try_claim(&key, a)
+            .expect("same owner re-claiming its own key is not a conflict");
         guard.commit();
         assert_eq!(scope.claim_count(), 1);
     }
 
     /// An unwind between a successful claim and the caller's own
-    /// commit (the local owner-map insert, in production always the very
+    /// commit (the local registry insert, in production always the very
     /// next infallible statement) must not leak the claim. This exercises
     /// the `ClaimGuard` contract directly and in isolation — the caller's
     /// commit never runs — proving the guard, not the surrounding
@@ -481,21 +622,22 @@ mod tests {
         let scope = GlobalKeyScope::new();
         let a = OwnerTag::fresh();
         let b = OwnerTag::fresh();
+        let key = StubKey::new(1);
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = scope.try_claim(1, a).expect("fresh hash claims");
+            let _guard = scope.try_claim(&key, a).expect("fresh key claims");
             // Simulate a build-error unwind landing before this owner's own
-            // `commit()` (the local-map insert) ever runs.
+            // `commit()` (the local registry insert) ever runs.
             panic!("simulated mid-mount build error");
         }));
         assert!(outcome.is_err());
 
         // The guard's `Drop` ran during unwind and released the claim —
         // nothing was ever committed, so a different owner can claim the
-        // same hash cleanly afterward.
+        // same key cleanly afterward.
         assert_eq!(scope.claim_count(), 0);
         scope
-            .try_claim(1, b)
+            .try_claim(&key, b)
             .expect("the aborted claim must not have leaked")
             .commit();
         assert_eq!(scope.claim_count(), 1);
@@ -506,14 +648,15 @@ mod tests {
         let scope = GlobalKeyScope::new();
         let a = OwnerTag::fresh();
         let b = OwnerTag::fresh();
+        let key = StubKey::new(1);
 
-        scope.try_claim(1, a).expect("a claims first").commit();
-        scope.release(1, a); // a releases normally.
-        scope.try_claim(1, b).expect("b claims fresh").commit();
+        scope.try_claim(&key, a).expect("a claims first").commit();
+        scope.release(&key, a); // a releases normally.
+        scope.try_claim(&key, b).expect("b claims fresh").commit();
 
         // A's late/duplicate release (e.g. a stray second unregister call)
         // must not touch b's now-live claim.
-        scope.release(1, a);
+        scope.release(&key, a);
         assert_eq!(
             scope.claim_count(),
             1,
@@ -521,7 +664,7 @@ mod tests {
         );
 
         let conflict = scope
-            .try_claim(1, OwnerTag::fresh())
+            .try_claim(&key, OwnerTag::fresh())
             .expect_err("the surviving claim must still be b's, not free");
         assert_eq!(conflict.holder, b);
     }
@@ -531,27 +674,51 @@ mod tests {
         let scope = GlobalKeyScope::new();
         let a = OwnerTag::fresh();
         let b = OwnerTag::fresh();
+        let first = StubKey::new(1);
+        let second = StubKey::new(2);
 
-        scope.try_claim(1, a).expect("a claims 1").commit();
-        scope.try_claim(2, b).expect("b claims 2").commit();
+        scope.try_claim(&first, a).expect("a claims 1").commit();
+        scope.try_claim(&second, b).expect("b claims 2").commit();
 
         assert_eq!(scope.reclaim_owner(a), 1);
         assert_eq!(scope.claim_count(), 1);
         // b's claim is untouched.
         let conflict = scope
-            .try_claim(2, OwnerTag::fresh())
+            .try_claim(&second, OwnerTag::fresh())
             .expect_err("b's claim must survive reclaiming a");
         assert_eq!(conflict.holder, b);
     }
 
+    /// `reclaim_owner` must reach claims that share a bucket with another
+    /// owner's, and must leave the bucket's survivors intact.
     #[test]
-    fn claim_and_register_records_local_map_on_success() {
+    fn reclaim_owner_reaches_into_a_shared_collision_bucket() {
+        let scope = GlobalKeyScope::new();
+        let a = OwnerTag::fresh();
+        let b = OwnerTag::fresh();
+        let first = StubKey::new(1);
+        let second = StubKey::colliding_with(2, &first);
+
+        scope.try_claim(&first, a).expect("a claims").commit();
+        scope.try_claim(&second, b).expect("b claims").commit();
+
+        assert_eq!(scope.reclaim_owner(a), 1);
+        assert_eq!(scope.claim_count(), 1);
+        let conflict = scope
+            .try_claim(&second, OwnerTag::fresh())
+            .expect_err("b's colliding claim must survive");
+        assert_eq!(conflict.holder, b);
+    }
+
+    #[test]
+    fn claim_and_register_records_the_registry_on_success() {
         let mut scope = None;
         let owner = OwnerTag::fresh();
-        let mut local = HashMap::new();
+        let mut local = GlobalKeyRegistry::new();
+        let key = StubKey::new(7);
 
-        claim_and_register(&mut scope, owner, 7, eid(1), &mut local);
-        assert_eq!(local.get(&7), Some(&eid(1)));
+        claim_and_register(&mut scope, owner, &key, eid(1), &mut local);
+        assert_eq!(local.get(&key), Some(eid(1)));
         assert_eq!(scope.as_ref().map(GlobalKeyScope::claim_count), Some(1));
     }
 
@@ -560,18 +727,19 @@ mod tests {
         let shared = GlobalKeyScope::new();
         let owner_a = OwnerTag::fresh();
         let owner_b = OwnerTag::fresh();
-        let mut local_a = HashMap::new();
-        let mut local_b = HashMap::new();
+        let mut local_a = GlobalKeyRegistry::new();
+        let mut local_b = GlobalKeyRegistry::new();
         let mut scope_a = Some(shared.clone());
         let mut scope_b = Some(shared);
+        let key = StubKey::new(3);
 
-        claim_and_register(&mut scope_a, owner_a, 3, eid(1), &mut local_a);
+        claim_and_register(&mut scope_a, owner_a, &key, eid(1), &mut local_a);
 
         // owner_b sharing the same scope must not silently alias owner_a's
         // claim; local_b stays untouched because the panic unwinds before
         // the insert.
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            claim_and_register(&mut scope_b, owner_b, 3, eid(2), &mut local_b);
+            claim_and_register(&mut scope_b, owner_b, &key, eid(2), &mut local_b);
         }));
         let payload = outcome.expect_err("owner_b must not silently alias owner_a's live claim");
         let message = panic_message(&*payload);
@@ -584,22 +752,23 @@ mod tests {
             "panic must name the rejected owner (owner_b): {message}"
         );
         assert_eq!(
-            local_b.get(&3),
+            local_b.get(&key),
             None,
             "local_b stays untouched because the panic unwinds before the insert"
         );
     }
 
     #[test]
-    fn release_and_unregister_clears_local_map_and_scope() {
+    fn release_and_unregister_clears_the_registry_and_the_scope() {
         let mut scope = None;
         let owner = OwnerTag::fresh();
-        let mut local = HashMap::new();
+        let mut local = GlobalKeyRegistry::new();
+        let key = StubKey::new(9);
 
-        claim_and_register(&mut scope, owner, 9, eid(1), &mut local);
-        release_and_unregister(scope.as_ref(), owner, 9, &mut local);
+        claim_and_register(&mut scope, owner, &key, eid(1), &mut local);
+        release_and_unregister(scope.as_ref(), owner, &key, &mut local);
 
-        assert_eq!(local.get(&9), None);
+        assert_eq!(local.get(&key), None);
         assert_eq!(scope.as_ref().map(GlobalKeyScope::claim_count), Some(0));
     }
 }

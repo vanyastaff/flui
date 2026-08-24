@@ -622,10 +622,10 @@ impl WidgetsBinding {
         let lookup_inner = Arc::downgrade(inner);
         let visit_inner = Arc::downgrade(inner);
         crate::key::registry::GlobalKeyRegistryHandle::new(
-            move |hash| {
+            move |key| {
                 let inner = lookup_inner.upgrade()?;
                 let inner = inner.read();
-                inner.build_owner.element_for_global_key(hash)
+                inner.build_owner.element_for_global_key(key)
             },
             move |id, f| {
                 let Some(inner) = visit_inner.upgrade() else {
@@ -1732,8 +1732,8 @@ mod tests {
         let key = crate::GlobalKey::<()>::new();
         let first_id = ElementId::new(21);
         let second_id = ElementId::new(22);
-        first.with_build_owner_mut(|owner| owner.register_global_key(key.id(), first_id));
-        second.with_build_owner_mut(|owner| owner.register_global_key(key.id(), second_id));
+        first.with_build_owner_mut(|owner| owner.register_global_key(&key, first_id));
+        second.with_build_owner_mut(|owner| owner.register_global_key(&key, second_id));
 
         assert_eq!(key.current_element(), None);
         first.with_global_key_registry(|| {

@@ -39,7 +39,7 @@ use std::{
     sync::Arc,
 };
 
-use flui_foundation::{ElementId, RenderId};
+use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_interaction::FocusManager;
 use parking_lot::Mutex;
 
@@ -47,6 +47,8 @@ use flui_objects::BuildDuringLayoutCell;
 
 use super::RebuildReason;
 use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
+use super::global_key_registry::GlobalKeyRegistry;
+use super::global_key_reservations::GlobalKeyReservations;
 use super::global_key_scope::{self, GlobalKeyScope, OwnerTag};
 use super::inherited_dependencies::{InheritedDependencies, ProviderIds};
 use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
@@ -104,12 +106,20 @@ pub(crate) struct BuildHandle<'a> {
 /// `flutter/lib/src/widgets/framework.dart:2901`.
 #[non_exhaustive]
 pub struct ElementOwner<'a> {
-    /// `GlobalKey` registry: key hash → element holding the key.
+    /// `GlobalKey` registry: key → element holding the key, indexed by
+    /// `ViewKey::key_hash` and decided by `ViewKey::key_eq` so a hash
+    /// collision between two distinct keys never conflates them.
     ///
-    /// Populated by `register_global_key`; consulted by the future
-    /// `find_global_key_target`. The current surface only exposes
-    /// register / unregister.
-    pub(crate) global_keys: &'a mut HashMap<u64, ElementId>,
+    /// Populated by `register_global_key`; read by the retake machinery in
+    /// `crate::tree::element_tree`.
+    pub(crate) global_keys: &'a mut GlobalKeyRegistry,
+
+    /// This frame's `GlobalKey` declarations (`parent -> child -> key`),
+    /// verified at the frame boundary by `BuildOwner::finalize_tree`.
+    ///
+    /// Recorded by `reserve_global_key`, which every path that attaches or
+    /// re-declares a keyed child funnels through.
+    pub(crate) global_key_reservations: &'a mut GlobalKeyReservations,
 
     /// Dirty heap, sorted by depth (shallowest first). Pushed by
     /// `schedule_build_for`, drained by `BuildOwner::build_scope` at
@@ -229,68 +239,86 @@ pub struct ElementOwner<'a> {
 }
 
 impl ElementOwner<'_> {
-    /// Register a `GlobalKey` hash → element mapping.
+    /// Register a `GlobalKey` → element mapping.
     ///
     /// Called by `Element::mount` when the mounted element carries a
-    /// `GlobalKey`. Idempotent for THIS owner: re-registering the same hash
+    /// `GlobalKey`. Idempotent for THIS owner: re-registering the same key
     /// with the same `id` is a no-op; with a different `id` the new mapping
     /// wins (last-write-wins). If a [`GlobalKeyScope`] is installed (or this
-    /// owner's lazily self-owned private one), this first claims `key_hash`
+    /// owner's lazily self-owned private one), this first claims `key`
     /// there: a DIFFERENT owner already holding it is a cross-owner
     /// collision, traced then panicked (ADR-0043) rather than silently
     /// aliased.
     ///
     /// # Panics
     ///
-    /// Panics if `key_hash` is already claimed, in the installed
+    /// Panics if `key` is already claimed, in the installed
     /// [`GlobalKeyScope`], by a *different* owner (see [`GlobalKeyScope`]'s
-    /// contract). Re-registering a hash this same owner already holds never
+    /// contract). Re-registering a key this same owner already holds never
     /// panics. This panic is fatal, not recoverable: it fires from a
     /// post-mount registration site, the same timing the pre-existing
     /// intra-tree duplicate-key panic already has, so this owner's tree is
     /// left with an incomplete mount. A host must not catch it and keep
     /// using this owner's tree.
-    pub fn register_global_key(&mut self, key_hash: u64, id: ElementId) {
+    pub fn register_global_key(&mut self, key: &dyn ViewKey, id: ElementId) {
         global_key_scope::claim_and_register(
             self.global_key_scope,
             self.owner_tag,
-            key_hash,
+            key,
             id,
             self.global_keys,
         );
     }
 
-    /// Unregister a `GlobalKey` hash mapping.
+    /// Unregister a `GlobalKey` mapping.
     ///
     /// Called by `Element::unmount` when an element carrying a
-    /// `GlobalKey` leaves the tree. No-op if the hash isn't present locally.
-    /// Also releases this owner's scope claim on `key_hash`, if one is
+    /// `GlobalKey` leaves the tree. No-op if the key isn't present locally.
+    /// Also releases this owner's scope claim on `key`, if one is
     /// installed — tag-checked, so this is a no-op against a claim a
     /// different owner has since taken (ADR-0043).
-    pub fn unregister_global_key(&mut self, key_hash: u64) {
+    pub fn unregister_global_key(&mut self, key: &dyn ViewKey) {
         global_key_scope::release_and_unregister(
             self.global_key_scope.as_ref(),
             self.owner_tag,
-            key_hash,
+            key,
             self.global_keys,
         );
     }
 
-    /// Look up the element holding a given `GlobalKey` hash.
+    /// Look up the element holding a given `GlobalKey`.
     ///
     /// Returned `None` means no element with that key is currently
-    /// mounted. A future change will layer reparenting on top of this lookup.
-    pub fn element_for_global_key(&self, key_hash: u64) -> Option<ElementId> {
-        self.global_keys.get(&key_hash).copied()
+    /// mounted. Resolution is by key identity: a different key that merely
+    /// hashes alike never answers this lookup.
+    pub fn element_for_global_key(&self, key: &dyn ViewKey) -> Option<ElementId> {
+        self.global_keys.get(key)
     }
 
     /// Atomically remove and return the element registered under
-    /// `key_hash` for a reparent operation. Wrapper around
+    /// `key` for a reparent operation. Wrapper around
     /// [`BuildOwner::take_global_key_for_reparent`](crate::BuildOwner::take_global_key_for_reparent)
     /// for the split-borrow `ElementOwner` handle that the
     /// reconciler holds.
-    pub fn take_global_key_for_reparent(&mut self, key_hash: u64) -> Option<ElementId> {
-        self.global_keys.remove(&key_hash)
+    pub fn take_global_key_for_reparent(&mut self, key: &dyn ViewKey) -> Option<ElementId> {
+        self.global_keys.remove(key)
+    }
+
+    /// Record that `parent` declared a child carrying `key` in this frame.
+    ///
+    /// Every path that attaches or re-declares a keyed child funnels through
+    /// here, so the frame boundary can tell an ordinary `GlobalKey` reparent
+    /// (one declaring parent) from a duplicate (two). Verified and cleared
+    /// by [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree).
+    pub fn reserve_global_key(&mut self, parent: ElementId, child: ElementId, key: &dyn ViewKey) {
+        self.global_key_reservations.reserve(parent, child, key);
+    }
+
+    /// Drop `parent`'s reservation on `child` — the parent gave the child up
+    /// mid-frame, so it is no longer a claimant on whatever key that child
+    /// carried.
+    pub fn forget_global_key_reservation(&mut self, parent: ElementId, child: ElementId) {
+        self.global_key_reservations.forget(parent, child);
     }
 
     /// Schedule an element for rebuild at the next frame.
@@ -446,6 +474,15 @@ impl ElementOwner<'_> {
         self.global_keys.len()
     }
 
+    /// Number of `GlobalKey` declarations recorded so far this frame.
+    ///
+    /// Diagnostic surface for tests that assert the reservation ledger is
+    /// being populated at all; the verification itself reads the ledger by
+    /// identity, never by size.
+    pub fn global_key_reservation_is_empty(&self) -> bool {
+        self.global_key_reservations.is_empty()
+    }
+
     /// Number of dirty elements pending rebuild.
     pub fn dirty_count(&self) -> usize {
         self.dirty_elements.len() + self.partitioned_dirty_count
@@ -536,12 +573,13 @@ mod tests {
         let mut handle = owner.element_owner_mut();
 
         let id = ElementId::new(1);
-        handle.register_global_key(0xABCD, id);
-        assert_eq!(handle.element_for_global_key(0xABCD), Some(id));
+        let key = crate::GlobalKey::<()>::new();
+        handle.register_global_key(&key, id);
+        assert_eq!(handle.element_for_global_key(&key), Some(id));
         assert_eq!(handle.global_key_count(), 1);
 
-        handle.unregister_global_key(0xABCD);
-        assert_eq!(handle.element_for_global_key(0xABCD), None);
+        handle.unregister_global_key(&key);
+        assert_eq!(handle.element_for_global_key(&key), None);
         assert_eq!(handle.global_key_count(), 0);
     }
 

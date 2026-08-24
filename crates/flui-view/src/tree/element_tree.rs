@@ -80,12 +80,10 @@ pub struct ElementNode {
     /// reconciler reads this field directly via `key()` / `key_hash()`
     /// — no `downcast::<V>()` needed.
     ///
-    /// Coexists with `registered_global_key_hash` for
-    /// backward compatibility; the side-index field is reduced to a
-    /// derived value and removed when the GlobalKey
-    /// registry consolidation lands.
+    /// Coexists with `registered_global_key`, which narrows this to just
+    /// the keys that are `GlobalKey`s and were actually registered.
     pub(crate) key: Option<Box<dyn ViewKey>>,
-    /// Hash of the `GlobalKey` registered for this element, if any.
+    /// The `GlobalKey` registered for this element, if any.
     ///
     /// Set at mount time by `ElementTree::insert` /
     /// `::mount_root_with_pipeline_owner` when the view's
@@ -93,12 +91,17 @@ pub struct ElementNode {
     /// `true`. Read at end-of-frame `BuildOwner::finalize_tree` to
     /// unregister the entry from `BuildOwner::global_keys`.
     ///
+    /// Stored by value rather than as a hash: the registry it unregisters
+    /// from resolves by key *identity* (`ViewKey::key_eq`), using the hash
+    /// only to pick a bucket, so a hash alone could unregister the wrong
+    /// entry whenever two distinct keys collide.
+    ///
     /// Flutter parity: keys are tracked on the
     /// element itself in `framework.dart:2884`-ish via `Element._widget`
-    ///   + `Widget.key`; we mirror the effect with a side-channel hash
+    ///   + `Widget.key`; we mirror the effect with a side channel
     ///     because our `View` value is owned by `ElementCore` and not
     ///     available at the dispatch boundary used for finalization.
-    pub(crate) registered_global_key_hash: Option<u64>,
+    pub(crate) registered_global_key: Option<Box<dyn ViewKey>>,
     /// This node's slab-id-based child list — the single, authoritative
     /// element child graph (E3 — atomic box→arena swap).
     ///
@@ -187,7 +190,7 @@ impl ElementNode {
             depth,
             slot,
             key: None,
-            registered_global_key_hash: None,
+            registered_global_key: None,
             child_ids: Vec::new(),
             // Empty until the tree sets the real scope against the parent's
             // map (insert / mount_root_*), mirroring how `key`/`depth` are
@@ -293,18 +296,33 @@ impl ElementNode {
         self.key = key;
     }
 
+    /// The `GlobalKey` registered for this element (if any).
+    pub fn registered_global_key(&self) -> Option<&dyn ViewKey> {
+        self.registered_global_key.as_deref()
+    }
+
     /// Hash of the `GlobalKey` registered for this element (if any).
+    ///
+    /// A derived convenience over [`Self::registered_global_key`] for
+    /// tracing and tests. Never an identity: the registry that owns the
+    /// registration resolves by `ViewKey::key_eq`.
     pub fn registered_global_key_hash(&self) -> Option<u64> {
-        self.registered_global_key_hash
+        self.registered_global_key.as_ref().map(|k| k.key_hash())
     }
 
     /// Borrow this node's parallel, id-based child list.
     ///
     /// The slice is ordered by child slot (entry `i` is slot `i`). It is
-    /// the read side of the id-based child model maintained by
-    /// [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id);
-    /// the single element graph (E3 — atomic box→arena swap).
-    pub(crate) fn child_ids(&self) -> &[ElementId] {
+    /// the read side of the id-based child model maintained by the id-based
+    /// reconciler (`super::id_reconcile::reconcile_children_by_id`); the
+    /// single element graph (E3 — atomic box→arena swap).
+    ///
+    /// Public because it is the only way to observe a parent's own view of
+    /// its children — [`Self::parent`] answers the child's side, and the two
+    /// disagreeing is exactly the dangling edge the duplicate-`GlobalKey`
+    /// repair exists to clear. Read-only: the write side stays crate-internal
+    /// to the reconciler.
+    pub fn child_ids(&self) -> &[ElementId] {
         &self.child_ids
     }
 
@@ -582,9 +600,14 @@ impl ElementTree {
         // there). Doing the check here keeps the wiring at the level
         // where both `view: &dyn View` and `id` are simultaneously in
         // scope.
-        if let Some(hash) = global_key_hash_of(view) {
-            register_global_key_with_collision_check(owner, hash, id);
-            self.nodes[slab_index].registered_global_key_hash = Some(hash);
+        //
+        // No reservation is recorded here: a reservation names the PARENT
+        // that declared the key, and a root has none. Flutter reaches the
+        // same place from the other direction — reservations are recorded
+        // in `Element.updateChild`, which a root mount never runs.
+        if let Some(key) = global_key_of(view) {
+            register_global_key_with_collision_check(owner, key, id);
+            self.nodes[slab_index].registered_global_key = Some(key.clone_key());
         }
 
         // ADR-0040: a fresh root was minted and mounted.
@@ -610,7 +633,7 @@ impl ElementTree {
     ///
     /// # GlobalKey state migration
     ///
-    /// If `view` carries a `GlobalKey` whose hash is already registered
+    /// If `view` carries a `GlobalKey` that is already registered
     /// to an element AND that element is currently in the inactive
     /// queue (from a prior soft-remove this frame), the inactive
     /// element is pulled back to the new parent/slot instead of a
@@ -625,13 +648,18 @@ impl ElementTree {
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
         // ADV-1 state migration. Before creating a fresh element,
-        // check whether `view` has a `GlobalKey` whose hash points at an
+        // check whether `view` has a `GlobalKey` that points at an
         // existing element. If it is inactive, pull it back; if it is still
         // active under a different parent, forget it from that parent and move
         // it here. In both cases the `ElementId` and state survive.
-        if let Some(hash) = global_key_hash_of(view)
-            && let Some(retaken_id) = try_retake_global_key(self, owner, hash, view, parent, slot)
+        if let Some(key) = global_key_of(view)
+            && let Some(retaken_id) = try_retake_global_key(self, owner, key, view, parent, slot)
         {
+            // A parent declaring a keyed child has made a claim on that key
+            // for this frame, whether the element was grafted or freshly
+            // mounted. The frame boundary reads the claims back to tell a
+            // legal reparent (one claimant) from a duplicate (two).
+            owner.reserve_global_key(parent, retaken_id, key);
             return retaken_id;
         }
 
@@ -694,10 +722,12 @@ impl ElementTree {
             .element_mut()
             .mount(Some(parent), slot, owner);
 
-        // Register the GlobalKey hash → id mapping.
-        if let Some(hash) = global_key_hash_of(view) {
-            register_global_key_with_collision_check(owner, hash, id);
-            self.nodes[slab_index].registered_global_key_hash = Some(hash);
+        // Register the GlobalKey → id mapping, and record the declaration
+        // for the frame boundary's duplicate check.
+        if let Some(key) = global_key_of(view) {
+            register_global_key_with_collision_check(owner, key, id);
+            self.nodes[slab_index].registered_global_key = Some(key.clone_key());
+            owner.reserve_global_key(parent, id, key);
         }
 
         // A fresh child node appeared at (parent, slot). Emit `Mount` HERE —
@@ -1209,7 +1239,7 @@ impl ElementTree {
     /// # Soft vs eager removal
     ///
     /// - **Soft (keyed):** If the element carries a `GlobalKey` (i.e.
-    ///   `ElementNode::registered_global_key_hash` is `Some`), the
+    ///   `ElementNode::registered_global_key` is `Some`), the
     ///   element is deactivated and pushed onto
     ///   `BuildOwner::inactive_elements` — the slab entry stays alive.
     ///   This enables same-frame state migration: a subsequent
@@ -1245,7 +1275,7 @@ impl ElementTree {
         // Soft-remove for keyed elements: push to inactive queue
         // without slab-removing. State stays intact for same-frame
         // remount.
-        if self.nodes[index].registered_global_key_hash.is_some() {
+        if self.nodes[index].registered_global_key.is_some() {
             let depth = self.nodes[index].depth;
             self.deactivate_subtree(id, owner);
             owner.push_inactive(id, depth);
@@ -1258,7 +1288,7 @@ impl ElementTree {
 
             tracing::debug!(
                 element_id = ?id,
-                hash = ?self.nodes[index].registered_global_key_hash,
+                key = ?self.nodes[index].registered_global_key,
                 "ElementTree::remove soft-removed keyed element into inactive queue"
             );
 
@@ -1304,7 +1334,7 @@ impl ElementTree {
     ///
     /// The algorithm mirrors `id_reconcile::remove_child` / `collect_subtree_preorder`:
     ///
-    /// 1. Peek whether the root is keyed (`registered_global_key_hash`),
+    /// 1. Peek whether the root is keyed (`registered_global_key`),
     ///    side-effect-free, before touching anything. A keyed root
     ///    soft-removes via `remove` and returns immediately — descendants
     ///    stay untouched, parked for `finalize_tree`'s deferred drain in
@@ -1336,13 +1366,13 @@ impl ElementTree {
     pub(crate) fn remove_subtree(&mut self, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
         // A keyed root soft-removes into the inactive queue instead of
         // freeing outright (`remove`'s own branch, keyed on
-        // `registered_global_key_hash`); descendants stay untouched. Check
+        // `registered_global_key`); descendants stay untouched. Check
         // this FIRST: it needs no subtree walk, and a keyed root never uses
         // the snapshot below, so paying for that walk before checking would
         // be wasted work for every keyed-root removal.
         let root_is_keyed = self
             .get(id)
-            .is_some_and(|node| node.registered_global_key_hash().is_some());
+            .is_some_and(|node| node.registered_global_key().is_some());
 
         if root_is_keyed {
             self.remove(id, owner);
@@ -1395,8 +1425,8 @@ impl ElementTree {
         // Unregister the GlobalKey if this element had one. We do it
         // BEFORE `unmount` so the registry doesn't briefly resolve to
         // a partially-unmounted element.
-        if let Some(hash) = self.nodes[index].registered_global_key_hash.take() {
-            owner.unregister_global_key(hash);
+        if let Some(key) = self.nodes[index].registered_global_key.take() {
+            owner.unregister_global_key(key.as_ref());
         }
 
         // Drop any stale `did_change_dependencies` flag —
@@ -1532,54 +1562,56 @@ fn slab_index_to_u32(index: usize) -> u32 {
 // GlobalKey helpers
 // ============================================================================
 
-/// Extract the `GlobalKey` hash from a view's `View::key()` result, if
-/// any. Returns `None` for un-keyed views and for keyed views whose
-/// `ViewKey::is_global_key()` is `false` (e.g. `ValueKey`,
-/// `UniqueKey`, `ObjectKey`).
+/// Borrow a view's `GlobalKey`, if it has one. Returns `None` for
+/// un-keyed views and for keyed views whose `ViewKey::is_global_key()` is
+/// `false` (e.g. `ValueKey`, `UniqueKey`, `ObjectKey`).
 ///
-/// Centralises the "is this a global key, what's its hash?" check so
-/// the mount / soft-remove / retake paths all read it the same way.
-fn global_key_hash_of(view: &dyn View) -> Option<u64> {
+/// Centralises the "is this a global key?" check so the mount /
+/// soft-remove / retake paths all read it the same way. The key is
+/// returned by reference rather than as a hash because every consumer
+/// resolves by identity — a hash would only be an index into a bucket.
+fn global_key_of(view: &dyn View) -> Option<&dyn ViewKey> {
     let key = view.key()?;
-    if key.is_global_key() {
-        Some(key.key_hash())
-    } else {
-        None
-    }
+    key.is_global_key().then_some(key)
 }
 
-/// Register the `(hash → id)` mapping on the owner. §I4 hash-collision
-/// policy: `debug_assert!` on collision in debug builds (matches
-/// Flutter's debug-panic-on-collision via the `assert(...)` inside
-/// `BuildOwner._registerGlobalKey` at `framework.dart:3160`). Release
-/// builds fall through to last-write-wins with a `tracing::error!` so
-/// the application doesn't crash on a stray collision.
+/// Register the `(key → id)` mapping on the owner.
+///
+/// Reaching this with the SAME key already registered to a DIFFERENT
+/// element means one key is live on two elements at once inside one tree —
+/// a real duplicate, not the hash accident the old hash-keyed registry
+/// could also produce here (two distinct keys that collide now hold two
+/// independent entries and never meet). Debug builds panic, matching
+/// Flutter's `assert` inside `BuildOwner._registerGlobalKey`
+/// (`framework.dart:3160`); release builds trace and fall through to
+/// last-write-wins so an application does not crash on it, and the frame
+/// boundary's reservation check reports the duplicate as data.
 fn register_global_key_with_collision_check(
     owner: &mut crate::ElementOwner<'_>,
-    hash: u64,
+    key: &dyn ViewKey,
     id: ElementId,
 ) {
-    if let Some(existing) = owner.element_for_global_key(hash)
+    if let Some(existing) = owner.element_for_global_key(key)
         && existing != id
     {
         tracing::error!(
-            ?hash,
+            key = ?key,
             existing = ?existing,
             new = ?id,
-            "GlobalKey hash collision: replacing existing registration"
+            "duplicate GlobalKey: replacing an existing registration in the same tree"
         );
         #[cfg(debug_assertions)]
         {
             panic!(
-                "GlobalKey hash collision: hash {hash} already registered to {existing:?} \
+                "duplicate GlobalKey: {key:?} is already registered to {existing:?} \
                  but new mount wants {id:?}"
             );
         }
     }
-    owner.register_global_key(hash, id);
+    owner.register_global_key(key, id);
 }
 
-/// State-migration entry point. If `hash` resolves to an existing element,
+/// State-migration entry point. If `key` resolves to an existing element,
 /// reuse that element instead of mounting a fresh one:
 ///
 /// - inactive candidate: pop it out of the inactive queue and re-attach;
@@ -1593,12 +1625,12 @@ fn register_global_key_with_collision_check(
 fn try_retake_global_key(
     tree: &mut ElementTree,
     owner: &mut crate::ElementOwner<'_>,
-    hash: u64,
+    key: &dyn ViewKey,
     view: &dyn View,
     new_parent: ElementId,
     new_slot: usize,
 ) -> Option<ElementId> {
-    let candidate_id = owner.element_for_global_key(hash)?;
+    let candidate_id = owner.element_for_global_key(key)?;
     if !can_retake_global_key_candidate(tree, candidate_id, view) {
         return None;
     }
@@ -1607,7 +1639,7 @@ fn try_retake_global_key(
         return retake_inactive_global_key(
             tree,
             owner,
-            hash,
+            key,
             view,
             candidate_id,
             new_parent,
@@ -1615,7 +1647,7 @@ fn try_retake_global_key(
         );
     }
 
-    retake_active_global_key(tree, owner, hash, view, candidate_id, new_parent, new_slot)
+    retake_active_global_key(tree, owner, key, view, candidate_id, new_parent, new_slot)
 }
 
 fn can_retake_global_key_candidate(
@@ -1641,7 +1673,7 @@ fn can_retake_global_key_candidate(
 fn retake_inactive_global_key(
     tree: &mut ElementTree,
     owner: &mut crate::ElementOwner<'_>,
-    hash: u64,
+    key: &dyn ViewKey,
     view: &dyn View,
     candidate_id: ElementId,
     new_parent: ElementId,
@@ -1714,7 +1746,7 @@ fn retake_inactive_global_key(
     super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent {
         kind: super::reconcile_event::ReconcileEventKind::Reparent,
         parent: new_parent,
-        child_key: Some(hash),
+        child_key: Some(key.key_hash()),
         slot: new_slot,
         view_type_id: view.view_type_id(),
         from_parent: None,
@@ -1735,7 +1767,7 @@ fn retake_inactive_global_key(
 fn retake_active_global_key(
     tree: &mut ElementTree,
     owner: &mut crate::ElementOwner<'_>,
-    hash: u64,
+    key: &dyn ViewKey,
     view: &dyn View,
     candidate_id: ElementId,
     new_parent: ElementId,
@@ -1744,7 +1776,7 @@ fn retake_active_global_key(
     let from_parent = tree.get(candidate_id)?.parent()?;
     if from_parent == new_parent {
         tracing::error!(
-            ?hash,
+            key = ?key,
             ?candidate_id,
             ?new_parent,
             "GlobalKey appears twice under the same active parent"
@@ -1752,7 +1784,7 @@ fn retake_active_global_key(
         #[cfg(debug_assertions)]
         {
             panic!(
-                "GlobalKey hash {hash} is already active under {new_parent:?}; \
+                "GlobalKey {key:?} is already active under {new_parent:?}; \
                  duplicate GlobalKey children are not allowed"
             );
         }
@@ -1818,7 +1850,7 @@ fn retake_active_global_key(
         new_parent,
         new_slot,
         view.view_type_id(),
-        hash,
+        key.key_hash(),
     ));
 
     // ADR-0040: cross-parent move of a live element.
