@@ -279,3 +279,48 @@ fn interning_distinguishes_paints_with_different_shaders() {
     assert!(p0.shader.is_none());
     assert!(p1.shader.is_some());
 }
+
+/// A bounds-less command recorded first must not drag the origin into the
+/// list's bounds.
+///
+/// The recording path used to seed its union on `commands.is_empty()`, which
+/// asks whether anything was *recorded* — not whether anything *contributed
+/// bounds*. A clip, a `Save`, or (until recently) a `DrawTextSpan` answers
+/// those two questions differently, so the next real command unioned against
+/// a still-unset `Rect::ZERO` and every such list claimed to reach back to
+/// (0, 0).
+#[test]
+fn bounds_less_leading_command_does_not_seed_the_origin() {
+    let far = Rect::from_ltrb(px(100.0), px(100.0), px(150.0), px(150.0));
+
+    let mut canvas = Canvas::new();
+    canvas.clip_rect(far);
+    canvas.draw_rect(far, &Paint::fill(Color::RED));
+
+    assert_eq!(canvas.finish().bounds(), far);
+}
+
+/// Recording and recomputing must agree on the same list.
+///
+/// These are two independent implementations of the same union — the
+/// incremental one in `push`, the batch one in `recalculate_bounds` — and
+/// they disagreed: only the batch one distinguished "no bounds contributed
+/// yet" from "the union so far is the empty rect".
+#[test]
+fn recorded_and_recomputed_bounds_agree() {
+    let far = Rect::from_ltrb(px(100.0), px(100.0), px(150.0), px(150.0));
+
+    let mut canvas = Canvas::new();
+    canvas.clip_rect(far);
+    canvas.draw_rect(far, &Paint::fill(Color::RED));
+    let mut list = canvas.finish();
+
+    let as_recorded = list.bounds();
+    // `apply_transform` recomputes the cached bounds from the commands;
+    // the identity leaves every command's own rect untouched, so any
+    // difference is the two paths disagreeing, not the transform.
+    list.apply_transform(Matrix4::IDENTITY);
+
+    assert_eq!(as_recorded, list.bounds());
+    assert_eq!(as_recorded, far);
+}
