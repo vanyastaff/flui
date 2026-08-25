@@ -34,7 +34,7 @@
 use std::{cell::RefCell, mem::ManuallyDrop, sync::Arc};
 
 use crate::view::ElementBase;
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, ViewKey};
 
 // `build_composite` (below) is the sole user of `HashMap`/`Rc` — both go
 // unused (and therefore unused-import-warn, `-D warnings`-fail under CI's
@@ -59,9 +59,14 @@ pub(crate) struct GlobalKeyRegistryHandle {
     inner: Arc<GlobalKeyRegistryInner>,
 }
 
-/// Lookup closure type — resolve a key hash back to an `ElementId`.
-/// Returns `None` when no element with that hash is currently mounted.
-type LookupFn = dyn Fn(u64) -> Option<ElementId>;
+/// Lookup closure type — resolve a `GlobalKey` back to an `ElementId`.
+/// Returns `None` when no element with that key is currently mounted.
+///
+/// Takes the key itself, not its hash: the registries behind this closure
+/// index by `ViewKey::key_hash` but decide by `ViewKey::key_eq`, so passing
+/// only a hash would make two distinct keys that collide indistinguishable
+/// at exactly the boundary a caller reaches through `GlobalKey::current_*`.
+type LookupFn = dyn Fn(&dyn ViewKey) -> Option<ElementId>;
 
 /// Visit closure type — call the inner `FnMut` once with the
 /// `&dyn ElementBase` at the given id. Type-erased here because trait
@@ -90,7 +95,7 @@ impl GlobalKeyRegistryHandle {
     /// not called and `with_element` returns `None`.
     pub(crate) fn new<L, V>(lookup: L, visit: V) -> Self
     where
-        L: Fn(u64) -> Option<ElementId> + 'static,
+        L: Fn(&dyn ViewKey) -> Option<ElementId> + 'static,
         V: Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) + 'static,
     {
         Self {
@@ -101,9 +106,9 @@ impl GlobalKeyRegistryHandle {
         }
     }
 
-    /// Resolve a key hash back to the `ElementId` currently holding it.
-    pub(crate) fn lookup_element(&self, key_hash: u64) -> Option<ElementId> {
-        (self.inner.lookup)(key_hash)
+    /// Resolve a `GlobalKey` back to the `ElementId` currently holding it.
+    pub(crate) fn lookup_element(&self, key: &dyn ViewKey) -> Option<ElementId> {
+        (self.inner.lookup)(key)
     }
 
     /// Apply `f` to the `&dyn ElementBase` at the given id, returning
@@ -130,7 +135,7 @@ impl GlobalKeyRegistryHandle {
 /// `WidgetsBinding` registries).
 ///
 /// `GlobalKeyScope`'s uniqueness invariant guarantees at most one member ever
-/// answers a given hash, so `lookup` trying each member in turn and
+/// answers a given key, so `lookup` trying each member in turn and
 /// returning the first hit is exact, not a heuristic. `with_element` cannot
 /// re-derive that same answer from an `ElementId` alone — two members' trees
 /// may validly reuse the same raw id for unrelated elements — so `lookup`
@@ -151,9 +156,9 @@ pub(crate) fn build_composite(members: Vec<GlobalKeyRegistryHandle>) -> GlobalKe
     let visit_members = members;
 
     GlobalKeyRegistryHandle::new(
-        move |hash| {
+        move |key| {
             for (index, member) in lookup_members.iter().enumerate() {
-                if let Some(id) = member.lookup_element(hash) {
+                if let Some(id) = member.lookup_element(key) {
                     lookup_cache.borrow_mut().insert(id, index);
                     return Some(id);
                 }
@@ -275,12 +280,47 @@ mod tests {
 
     use super::*;
 
+    /// A stand-in `GlobalKey` whose identity and hash are both the numeral
+    /// it was built from, so a test can name a key as compactly as it used
+    /// to name a hash while still going through the identity path.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct TestKey(u64);
+
+    impl ViewKey for TestKey {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn key_eq(&self, other: &dyn ViewKey) -> bool {
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|other| self.0 == other.0)
+        }
+
+        fn key_hash(&self) -> u64 {
+            self.0
+        }
+
+        fn clone_key(&self) -> Box<dyn ViewKey> {
+            Box::new(*self)
+        }
+
+        fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "TestKey({})", self.0)
+        }
+
+        fn is_global_key(&self) -> bool {
+            true
+        }
+    }
+
     fn handle(value: usize) -> GlobalKeyRegistryHandle {
         GlobalKeyRegistryHandle::new(move |_| Some(ElementId::new(value + 1)), |_, _| {})
     }
 
     fn current() -> Option<ElementId> {
-        with_registry(|registry| registry.lookup_element(0)).flatten()
+        with_registry(|registry| registry.lookup_element(&TestKey(0))).flatten()
     }
 
     #[test]
@@ -326,7 +366,10 @@ mod tests {
         let b = handle(6);
         with_active_registry(&a, || {
             let observed = with_registry(|registry| {
-                assert_eq!(registry.lookup_element(0), Some(ElementId::new(6)));
+                assert_eq!(
+                    registry.lookup_element(&TestKey(0)),
+                    Some(ElementId::new(6))
+                );
                 with_active_registry(&b, current)
             });
             assert_eq!(observed.flatten(), Some(ElementId::new(7)));
@@ -373,7 +416,7 @@ mod tests {
             .map(|(_, id, label)| (id, label))
             .collect();
         GlobalKeyRegistryHandle::new(
-            move |hash| by_hash.get(&hash).copied(),
+            move |key| by_hash.get(&key.key_hash()).copied(),
             move |id, f| {
                 if let Some(label) = by_id.get(&id) {
                     f(&LabeledElement(label));
@@ -455,9 +498,15 @@ mod tests {
         let b = member(vec![(2, ElementId::new(5), "b")]);
         let composite = build_composite(vec![a, b]);
 
-        assert_eq!(composite.lookup_element(1), Some(ElementId::new(5)));
-        assert_eq!(composite.lookup_element(2), Some(ElementId::new(5)));
-        assert_eq!(composite.lookup_element(3), None);
+        assert_eq!(
+            composite.lookup_element(&TestKey(1)),
+            Some(ElementId::new(5))
+        );
+        assert_eq!(
+            composite.lookup_element(&TestKey(2)),
+            Some(ElementId::new(5))
+        );
+        assert_eq!(composite.lookup_element(&TestKey(3)), None);
     }
 
     /// The correctness property `build_composite` exists for: two members
@@ -471,7 +520,10 @@ mod tests {
         let b = member(vec![(2, ElementId::new(5), "b")]);
         let composite = build_composite(vec![a, b]);
 
-        assert_eq!(composite.lookup_element(1), Some(ElementId::new(5)));
+        assert_eq!(
+            composite.lookup_element(&TestKey(1)),
+            Some(ElementId::new(5))
+        );
         assert_eq!(
             visited_label(&composite, ElementId::new(5)),
             Some("a"),
@@ -479,7 +531,10 @@ mod tests {
              colliding id 5"
         );
 
-        assert_eq!(composite.lookup_element(2), Some(ElementId::new(5)));
+        assert_eq!(
+            composite.lookup_element(&TestKey(2)),
+            Some(ElementId::new(5))
+        );
         assert_eq!(
             visited_label(&composite, ElementId::new(5)),
             Some("b"),
@@ -501,7 +556,7 @@ mod tests {
     #[test]
     fn composite_over_zero_members_resolves_nothing() {
         let composite = build_composite(vec![]);
-        assert_eq!(composite.lookup_element(1), None);
+        assert_eq!(composite.lookup_element(&TestKey(1)), None);
         assert_eq!(visited_label(&composite, ElementId::new(1)), None);
     }
 }

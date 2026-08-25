@@ -9,8 +9,8 @@ use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildOwner, ElementTree, RebuildReason, RenderObjectContext, RenderObjectContextError,
-    RenderView, View,
+    BuildOwner, ElementTree, GlobalKey, RebuildReason, RenderObjectContext,
+    RenderObjectContextError, RenderView, View,
 };
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -366,30 +366,30 @@ fn test_build_scope_empty_tree() {
 fn test_global_key_register() {
     let mut owner = BuildOwner::new();
     let id = ElementId::new(42);
-    let key_hash = 12345u64;
+    let key = GlobalKey::<()>::new();
 
-    owner.register_global_key(key_hash, id);
+    owner.register_global_key(&key, id);
 
-    assert_eq!(owner.element_for_global_key(key_hash), Some(id));
+    assert_eq!(owner.element_for_global_key(&key), Some(id));
 }
 
 #[test]
 fn test_global_key_unregister() {
     let mut owner = BuildOwner::new();
     let id = ElementId::new(42);
-    let key_hash = 12345u64;
+    let key = GlobalKey::<()>::new();
 
-    owner.register_global_key(key_hash, id);
-    owner.unregister_global_key(key_hash);
+    owner.register_global_key(&key, id);
+    owner.unregister_global_key(&key);
 
-    assert_eq!(owner.element_for_global_key(key_hash), None);
+    assert_eq!(owner.element_for_global_key(&key), None);
 }
 
 #[test]
 fn test_global_key_lookup_nonexistent() {
     let owner = BuildOwner::new();
 
-    assert_eq!(owner.element_for_global_key(99999), None);
+    assert_eq!(owner.element_for_global_key(&GlobalKey::<()>::new()), None);
 }
 
 #[test]
@@ -397,27 +397,71 @@ fn test_global_key_overwrite() {
     let mut owner = BuildOwner::new();
     let id1 = ElementId::new(1);
     let id2 = ElementId::new(2);
-    let key_hash = 12345u64;
+    let key = GlobalKey::<()>::new();
 
-    owner.register_global_key(key_hash, id1);
-    owner.register_global_key(key_hash, id2);
+    owner.register_global_key(&key, id1);
+    owner.register_global_key(&key, id2);
 
     // Second registration should overwrite
-    assert_eq!(owner.element_for_global_key(key_hash), Some(id2));
+    assert_eq!(owner.element_for_global_key(&key), Some(id2));
 }
 
 #[test]
 fn test_global_key_multiple_keys() {
     let mut owner = BuildOwner::new();
+    let first = GlobalKey::<()>::new();
+    let second = GlobalKey::<()>::new();
+    let third = GlobalKey::<()>::new();
 
-    owner.register_global_key(100, ElementId::new(1));
-    owner.register_global_key(200, ElementId::new(2));
-    owner.register_global_key(300, ElementId::new(3));
+    owner.register_global_key(&first, ElementId::new(1));
+    owner.register_global_key(&second, ElementId::new(2));
+    owner.register_global_key(&third, ElementId::new(3));
 
-    assert_eq!(owner.element_for_global_key(100), Some(ElementId::new(1)));
-    assert_eq!(owner.element_for_global_key(200), Some(ElementId::new(2)));
-    assert_eq!(owner.element_for_global_key(300), Some(ElementId::new(3)));
+    assert_eq!(
+        owner.element_for_global_key(&first),
+        Some(ElementId::new(1))
+    );
+    assert_eq!(
+        owner.element_for_global_key(&second),
+        Some(ElementId::new(2))
+    );
+    assert_eq!(
+        owner.element_for_global_key(&third),
+        Some(ElementId::new(3))
+    );
 }
+
+/// Two keys of DIFFERENT `T` can share a hash-space neighbourhood, and the
+/// registry must keep them apart by identity rather than by hash: a
+/// `GlobalKey<u8>` never answers a `GlobalKey<i64>`'s lookup even when both
+/// were minted adjacently.
+#[test]
+fn distinct_key_types_never_answer_each_others_lookups() {
+    let mut owner = BuildOwner::new();
+    let numeric = GlobalKey::<u8>::new();
+    let textual = GlobalKey::<String>::new();
+
+    owner.register_global_key(&numeric, ElementId::new(1));
+    owner.register_global_key(&textual, ElementId::new(2));
+
+    assert_eq!(
+        owner.element_for_global_key(&numeric),
+        Some(ElementId::new(1))
+    );
+    assert_eq!(
+        owner.element_for_global_key(&textual),
+        Some(ElementId::new(2))
+    );
+
+    owner.unregister_global_key(&numeric);
+    assert_eq!(owner.element_for_global_key(&numeric), None);
+    assert_eq!(
+        owner.element_for_global_key(&textual),
+        Some(ElementId::new(2)),
+        "unregistering one key must not disturb the other",
+    );
+}
+
 // ============================================================================
 // Depth Ordering Tests
 // ============================================================================
@@ -459,7 +503,7 @@ fn test_depth_ordering_shallowest_first() {
 fn test_build_owner_debug() {
     let mut owner = BuildOwner::new();
     owner.schedule_build_for(ElementId::new(1), 0, RebuildReason::StateChange);
-    owner.register_global_key(123, ElementId::new(2));
+    owner.register_global_key(&GlobalKey::<()>::new(), ElementId::new(2));
 
     let debug_str = format!("{owner:?}");
 
@@ -565,6 +609,15 @@ fn test_reassemble_marks_all_live_elements_dirty() {
 #[test]
 fn test_build_owner_memory_size() {
     let size = std::mem::size_of::<BuildOwner>();
-    // Should be reasonably sized (BinaryHeap + HashSet + HashMap + debug flags)
-    assert!(size < 512, "BuildOwner is too large: {size} bytes");
+    // A bloat tripwire, not a hard constraint: one `BuildOwner` exists per
+    // presentation, so this is measured in handfuls per process.
+    //
+    // It last moved from 512 when the owner took on the duplicate-`GlobalKey`
+    // machinery, for a measured +32 bytes: the diagnostic drain (a `Vec`, 24)
+    // and one pointer to the per-frame reservation ledger (8). The ledger's
+    // own four containers are deliberately behind that pointer — they are
+    // frame scratch, empty in any tree that uses no `GlobalKey`s, and do not
+    // belong in the owner's inline hot set. Without the box this would be
+    // 672.
+    assert!(size < 576, "BuildOwner is too large: {size} bytes");
 }

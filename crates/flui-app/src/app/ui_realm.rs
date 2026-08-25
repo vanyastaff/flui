@@ -3637,7 +3637,7 @@ mod tests {
         let element = flui_foundation::ElementId::new(17);
         realm
             .widgets()
-            .with_build_owner_mut(|owner| owner.register_global_key(key.id(), element));
+            .with_build_owner_mut(|owner| owner.register_global_key(&key, element));
 
         assert_eq!(
             key.current_element(),
@@ -6805,14 +6805,14 @@ mod tests {
                     .primary()
                     .widgets()
                     .with_build_owner_mut(|owner| {
-                        owner.register_global_key(key_in_primary.id(), element_in_primary);
+                        owner.register_global_key(&key_in_primary, element_in_primary);
                     });
                 let second = realm
                     .presentations
                     .get(second_id)
                     .expect("second presentation installed");
                 second.widgets().with_build_owner_mut(|owner| {
-                    owner.register_global_key(key_in_second.id(), element_in_second);
+                    owner.register_global_key(&key_in_second, element_in_second);
                 });
 
                 assert_eq!(
@@ -6861,7 +6861,7 @@ mod tests {
             let element_in_b = flui_foundation::ElementId::new(2);
 
             realm.widgets().with_build_owner_mut(|owner| {
-                owner.register_global_key(key.id(), element_in_a);
+                owner.register_global_key(&key, element_in_a);
             });
 
             // B shares A's realm's exact GlobalKeyScope
@@ -6872,7 +6872,7 @@ mod tests {
             realm
                 .presentation_widgets_for_test(b_id)
                 .with_build_owner_mut(|owner| {
-                    owner.register_global_key(key.id(), element_in_b);
+                    owner.register_global_key(&key, element_in_b);
                 });
         }
 

@@ -9,6 +9,8 @@
 
 mod build_owner;
 mod element_owner;
+mod global_key_registry;
+mod global_key_reservations;
 mod global_key_scope;
 mod inherited_dependencies;
 mod layout_builder;
@@ -20,7 +22,14 @@ pub use build_owner::BuildOwner;
 // `ElementOwner`'s register/unregister paths via the module path directly —
 // never part of the public surface: callers observe conflicts and
 // reclamation through tracing and panics, not by naming an owner's tag.
+pub use global_key_reservations::DuplicateGlobalKey;
 pub use global_key_scope::GlobalKeyScope;
+// The identity-preserving intra-tree registry and the per-frame reservation
+// ledger are implementation detail of the two owners: callers read them
+// through `BuildOwner`'s `element_for_global_key` / `take_global_key_diagnostics`,
+// never by naming the containers.
+pub(crate) use global_key_registry::GlobalKeyRegistry;
+pub(crate) use global_key_reservations::GlobalKeyReservations;
 pub use rebuild_handle::RebuildHandle;
 // Moved to flui-foundation (ADR-0040: observation events carry typed
 // causes, and foundation is the only crate below every emitter); re-exported

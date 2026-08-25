@@ -216,10 +216,9 @@ fn edge_remount_copy_preserves_key() {
 }
 
 /// Edge: `GlobalKey` round-trip surfaces `is_global_key() == true` so
-/// the registry-side code paths (`global_key_hash_of`,
+/// the registry-side code paths (`global_key_of`,
 /// `register_global_key_with_collision_check`) can route off the
-/// stored key as well as the side-index `registered_global_key_hash`
-/// field.
+/// stored key as well as the `registered_global_key` side channel.
 #[test]
 fn edge_global_key_is_global() {
     let mut tree = ElementTree::new();
@@ -241,14 +240,13 @@ fn edge_global_key_is_global() {
 }
 
 // ----------------------------------------------------------------------------
-// Negative regression: the side-index hash still aligns with the new
-// key field for global keys. Catches future drift
-// where the side-index gets populated but the new `key` field is
-// silently skipped.
+// Negative regression: the `registered_global_key` side channel still holds
+// the same key as the general-purpose `key` field for global keys. Catches
+// future drift where one gets populated but the other is silently skipped.
 // ----------------------------------------------------------------------------
 
 #[test]
-fn regression_global_key_side_index_matches_key_field() {
+fn regression_global_key_side_channel_matches_key_field() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let global = GlobalKey::<TestView>::new();
@@ -256,11 +254,16 @@ fn regression_global_key_side_index_matches_key_field() {
     let id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     let node = tree.get(id).expect("node present");
-    assert_eq!(
-        node.registered_global_key_hash(),
-        node.key_hash(),
-        "registered_global_key_hash side-index must equal node.key_hash() for a GlobalKey mount",
+    let side_channel = node
+        .registered_global_key()
+        .expect("a GlobalKey mount registers the key in the side channel");
+    let stored = node.key().expect("a keyed mount populates node.key()");
+    assert!(
+        side_channel.key_eq(stored),
+        "the registered GlobalKey must be identical to the node's stored key, \
+         not merely hash-equal to it",
     );
+    assert_eq!(node.registered_global_key_hash(), node.key_hash());
 }
 
 // Sanity-touch: `ObserverId` is exported from `flui_foundation` and is

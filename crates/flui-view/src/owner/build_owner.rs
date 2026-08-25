@@ -13,14 +13,15 @@ use std::{
     sync::Arc,
 };
 
-use flui_foundation::{ElementId, RebuildReasons, RenderId};
+use flui_foundation::{ElementId, RebuildReasons, RenderId, ViewKey};
 use flui_interaction::FocusManager;
 use parking_lot::Mutex;
 
 use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
     owner::{
-        RebuildReason, global_key_scope,
+        DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, RebuildReason,
+        global_key_reservations, global_key_scope,
         global_key_scope::{GlobalKeyScope, OwnerTag},
         inherited_dependencies::InheritedDependencies,
         layout_builder::LayoutBuilderRegistry,
@@ -223,7 +224,27 @@ pub struct BuildOwner {
     ///
     /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
     /// split-borrow.
-    pub(crate) global_keys: HashMap<u64, ElementId>,
+    pub(crate) global_keys: GlobalKeyRegistry,
+
+    /// This frame's `GlobalKey` declarations, verified and cleared by
+    /// [`Self::finalize_tree`].
+    ///
+    /// Boxed: this is per-frame scratch state, empty in every frame of every
+    /// tree that uses no `GlobalKey`s, and it is touched once per keyed
+    /// child rather than per element. Keeping its four containers behind one
+    /// pointer keeps them out of the owner's inline footprint, which is
+    /// otherwise the owner's hot working set (dirty heap, dependency maps,
+    /// capability handles).
+    pub(crate) global_key_reservations: Box<GlobalKeyReservations>,
+
+    /// Duplicate-`GlobalKey` reports produced by the most recent frame
+    /// boundaries, waiting to be drained by
+    /// [`Self::take_global_key_diagnostics`].
+    ///
+    /// A duplicate key is caller-controlled input, so it is surfaced as a
+    /// typed diagnostic rather than a panic; the frame that produced it
+    /// still completes.
+    pub(crate) global_key_diagnostics: Vec<DuplicateGlobalKey>,
 
     /// Elements that have been deactivated and are pending unmount.
     /// These are unmounted in `finalize_tree()`.
@@ -425,7 +446,9 @@ impl BuildOwner {
         Self {
             dirty_elements: BinaryHeap::new(),
             dirty_reasons: HashMap::new(),
-            global_keys: HashMap::new(),
+            global_keys: GlobalKeyRegistry::new(),
+            global_key_reservations: Box::new(GlobalKeyReservations::new()),
+            global_key_diagnostics: Vec::new(),
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
@@ -852,6 +875,7 @@ impl BuildOwner {
         let partitioned_dirty_count = self.partitioned_dirty_count();
         super::ElementOwner {
             global_keys: &mut self.global_keys,
+            global_key_reservations: &mut self.global_key_reservations,
             dirty_elements: &mut self.dirty_elements,
             partitioned_dirty_count,
             dirty_reasons: &mut self.dirty_reasons,
@@ -1225,6 +1249,16 @@ impl BuildOwner {
                 }
             }
 
+            // This element is about to re-state, from scratch, which keyed
+            // children it declares — so everything the frame recorded about
+            // it up to now is superseded. Clearing here rather than after
+            // the reconcile is what makes the newest build authoritative:
+            // the reconcile below immediately re-reserves whatever this
+            // build still declares, and anything it has dropped simply does
+            // not come back. Flutter clears the same two populations at this
+            // point in `buildScope`'s loop.
+            self.global_key_reservations.note_parent_rebuild(id);
+
             let rebuild_span = tracing::info_span!(
                 "element_rebuild",
                 element = ?id,
@@ -1264,6 +1298,7 @@ impl BuildOwner {
             let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
                     global_keys: &mut self.global_keys,
+                    global_key_reservations: &mut self.global_key_reservations,
                     dirty_elements: &mut self.dirty_elements,
                     partitioned_dirty_count,
                     dirty_reasons: &mut self.dirty_reasons,
@@ -1361,6 +1396,7 @@ impl BuildOwner {
             let partitioned_dirty_count = self.partitioned_dirty_count();
             let mut element_owner = super::ElementOwner {
                 global_keys: &mut self.global_keys,
+                global_key_reservations: &mut self.global_key_reservations,
                 dirty_elements: &mut self.dirty_elements,
                 partitioned_dirty_count,
                 dirty_reasons: &mut self.dirty_reasons,
@@ -1528,6 +1564,7 @@ impl BuildOwner {
             let partitioned_dirty_count = self.partitioned_dirty_count();
             let mut inline_owner = super::ElementOwner {
                 global_keys: &mut self.global_keys,
+                global_key_reservations: &mut self.global_key_reservations,
                 dirty_elements: &mut self.dirty_elements,
                 partitioned_dirty_count,
                 dirty_reasons: &mut self.dirty_reasons,
@@ -1629,6 +1666,34 @@ impl BuildOwner {
     /// Elements are unmounted in reverse depth order (deepest first) to ensure
     /// children are unmounted before parents.
     pub fn finalize_tree(&mut self, tree: &mut ElementTree) {
+        self.unmount_inactive_elements(tree);
+        self.verify_global_key_reservations(tree);
+    }
+
+    /// Verify this frame's `GlobalKey` declarations, then clear them.
+    ///
+    /// Runs at the very end of [`Self::finalize_tree`], AFTER the inactive
+    /// sweep, so a key whose only remaining claimant was unmounted this
+    /// frame is not reported. Flutter calls
+    /// `_debugVerifyGlobalKeyReservation` from the same point in
+    /// `finalizeTree` (`framework.dart:3364`), after
+    /// `_inactiveElements._unmountAll`.
+    ///
+    /// Reports are appended to the diagnostic drain rather than raised, and
+    /// each one has already had its losing parent's dangling child edge
+    /// repaired — see [`super::global_key_reservations`].
+    fn verify_global_key_reservations(&mut self, tree: &mut ElementTree) {
+        if self.global_key_reservations.is_empty() {
+            return;
+        }
+        let reports = global_key_reservations::verify(&mut self.global_key_reservations, tree);
+        self.global_key_diagnostics.extend(reports);
+    }
+
+    /// The inactive-element unmount sweep — [`Self::finalize_tree`]'s first
+    /// half, split out so the reservation verification after it runs on
+    /// every frame, including the frames with nothing to unmount.
+    fn unmount_inactive_elements(&mut self, tree: &mut ElementTree) {
         if self.inactive_elements.is_empty() {
             return;
         }
@@ -1664,6 +1729,7 @@ impl BuildOwner {
         let partitioned_dirty_count = self.partitioned_dirty_count();
         let mut element_owner = super::ElementOwner {
             global_keys: &mut self.global_keys,
+            global_key_reservations: &mut self.global_key_reservations,
             dirty_elements: &mut self.dirty_elements,
             partitioned_dirty_count,
             dirty_reasons: &mut self.dirty_reasons,
@@ -1698,7 +1764,7 @@ impl BuildOwner {
             tree.remove_finalized(*id, &mut element_owner);
         }
 
-        tracing::debug!("Finalize tree complete");
+        tracing::debug!("Inactive-element sweep complete");
     }
 
     /// Iteratively collect all element IDs to unmount, parent before
@@ -1755,25 +1821,25 @@ impl BuildOwner {
     /// GlobalKeys allow elements to be found and reparented across the tree.
     /// If a [`GlobalKeyScope`] is installed (or, absent that, this owner's
     /// lazily self-owned private one — see [`Self::set_global_key_scope`]),
-    /// this first claims `key_hash` in that scope: a different owner already
+    /// this first claims `key` in that scope: a different owner already
     /// holding the same hash there is a cross-owner collision, traced then
     /// panicked (ADR-0043) rather than silently recorded here.
     ///
     /// # Panics
     ///
-    /// Panics if `key_hash` is already claimed, in the installed
+    /// Panics if `key` is already claimed, in the installed
     /// [`GlobalKeyScope`], by a *different* owner (see
-    /// [`GlobalKeyScope`]'s contract). Re-registering a hash this same owner
+    /// [`GlobalKeyScope`]'s contract). Re-registering a key this same owner
     /// already holds never panics. This panic is fatal, not recoverable: it
     /// fires from a post-mount registration site, the same timing the
     /// pre-existing intra-tree duplicate-key panic already has, so this
     /// owner's tree is left with an incomplete mount. A host must not catch
     /// it and keep using this owner's tree.
-    pub fn register_global_key(&mut self, key_hash: u64, element: ElementId) {
+    pub fn register_global_key(&mut self, key: &dyn ViewKey, element: ElementId) {
         global_key_scope::claim_and_register(
             &mut self.global_key_scope,
             self.owner_tag,
-            key_hash,
+            key,
             element,
             &mut self.global_keys,
         );
@@ -1781,25 +1847,28 @@ impl BuildOwner {
 
     /// Unregister a GlobalKey.
     ///
-    /// Also releases this owner's scope claim on `key_hash`, if one is
+    /// Also releases this owner's scope claim on `key`, if one is
     /// installed — tag-checked, so this is a no-op against a claim a
     /// different owner has since taken (ADR-0043).
-    pub fn unregister_global_key(&mut self, key_hash: u64) {
+    pub fn unregister_global_key(&mut self, key: &dyn ViewKey) {
         global_key_scope::release_and_unregister(
             self.global_key_scope.as_ref(),
             self.owner_tag,
-            key_hash,
+            key,
             &mut self.global_keys,
         );
     }
 
     /// Look up an element by GlobalKey.
-    pub fn element_for_global_key(&self, key_hash: u64) -> Option<ElementId> {
-        self.global_keys.get(&key_hash).copied()
+    ///
+    /// Resolution is by key identity — a different key that merely hashes
+    /// alike never answers this lookup.
+    pub fn element_for_global_key(&self, key: &dyn ViewKey) -> Option<ElementId> {
+        self.global_keys.get(key)
     }
 
     /// Atomically remove and return the element registered under
-    /// `key_hash` for a reparent operation.
+    /// `key` for a reparent operation.
     ///
     /// Closes the race window that a
     /// two-call sequence (`element_for_global_key` followed by
@@ -1819,14 +1888,38 @@ impl BuildOwner {
     /// responsibility — typically through the standard
     /// [`Self::register_global_key`] path after the element is
     /// re-attached to its new slot.
-    pub fn take_global_key_for_reparent(&mut self, key_hash: u64) -> Option<ElementId> {
-        self.global_keys.remove(&key_hash)
+    pub fn take_global_key_for_reparent(&mut self, key: &dyn ViewKey) -> Option<ElementId> {
+        self.global_keys.remove(key)
+    }
+
+    /// Drain the duplicate-`GlobalKey` reports the frame boundaries since
+    /// the last drain produced.
+    ///
+    /// A duplicate `GlobalKey` is caller-controlled input, so
+    /// [`Self::finalize_tree`] reports it as data rather than panicking:
+    /// the offending frame still completes, with the losing parent's
+    /// dangling child edge already repaired. Hosts that want the Flutter
+    /// behaviour — a hard failure — can drain this and escalate; tests
+    /// assert on it directly.
+    ///
+    /// Flutter parity: `_debugVerifyGlobalKeyReservation`
+    /// (`framework.dart:3228`) throws a `FlutterError` out of
+    /// `finalizeTree` instead, and only in debug builds. Same verdict, and
+    /// FLUI reaches it in every profile; the channel is what differs.
+    pub fn take_global_key_diagnostics(&mut self) -> Vec<DuplicateGlobalKey> {
+        std::mem::take(&mut self.global_key_diagnostics)
+    }
+
+    /// The duplicate-`GlobalKey` reports currently pending, without
+    /// draining them.
+    pub fn global_key_diagnostics(&self) -> &[DuplicateGlobalKey] {
+        &self.global_key_diagnostics
     }
 
     /// Number of `GlobalKey`s currently registered.
     ///
     /// Test surface — production code reads
-    /// [`BuildOwner::element_for_global_key`] on a single hash rather
+    /// [`BuildOwner::element_for_global_key`] on a single key rather
     /// than scanning size. Tests use this to confirm the registry
     /// stays at the expected size across mount / unmount cycles.
     pub fn global_keys_len(&self) -> usize {
@@ -2322,34 +2415,34 @@ mod tests {
     fn test_global_key_registry() {
         let mut owner = BuildOwner::new();
         let id = ElementId::new(42);
-        let key_hash = 12345u64;
+        let key = crate::GlobalKey::<()>::new();
 
-        owner.register_global_key(key_hash, id);
-        assert_eq!(owner.element_for_global_key(key_hash), Some(id));
+        owner.register_global_key(&key, id);
+        assert_eq!(owner.element_for_global_key(&key), Some(id));
 
-        owner.unregister_global_key(key_hash);
-        assert_eq!(owner.element_for_global_key(key_hash), None);
+        owner.unregister_global_key(&key);
+        assert_eq!(owner.element_for_global_key(&key), None);
     }
 
     /// `take_global_key_for_reparent` returns
     /// the registered id AND removes it atomically. A second call for
-    /// the same hash returns `None` — proving the second of two
+    /// the same key returns `None` — proving the second of two
     /// concurrent reparent claims (the rare same-frame collision)
     /// cannot stale-read.
     #[test]
     fn test_take_global_key_for_reparent_is_atomic() {
         let mut owner = BuildOwner::new();
         let id = ElementId::new(7);
-        let hash = 0x00C0_FFEE_u64;
+        let key = crate::GlobalKey::<()>::new();
 
-        owner.register_global_key(hash, id);
+        owner.register_global_key(&key, id);
 
         // First caller wins.
-        assert_eq!(owner.take_global_key_for_reparent(hash), Some(id));
+        assert_eq!(owner.take_global_key_for_reparent(&key), Some(id));
 
         // Second caller sees None — the entry was removed atomically.
-        assert_eq!(owner.take_global_key_for_reparent(hash), None);
-        assert_eq!(owner.element_for_global_key(hash), None);
+        assert_eq!(owner.take_global_key_for_reparent(&key), None);
+        assert_eq!(owner.element_for_global_key(&key), None);
     }
 
     /// Deep-tree stack-safety: `finalize_tree`'s subtree collection must
@@ -2410,14 +2503,14 @@ mod tests {
     fn test_take_global_key_for_reparent_unknown_hash() {
         let mut owner = BuildOwner::new();
         let id = ElementId::new(7);
-        let known = 1_u64;
-        let unknown = 99_u64;
+        let known = crate::GlobalKey::<()>::new();
+        let unknown = crate::GlobalKey::<()>::new();
 
-        owner.register_global_key(known, id);
-        assert_eq!(owner.take_global_key_for_reparent(unknown), None);
+        owner.register_global_key(&known, id);
+        assert_eq!(owner.take_global_key_for_reparent(&unknown), None);
         // Known mapping unaffected by the failed claim on a different
         // hash.
-        assert_eq!(owner.element_for_global_key(known), Some(id));
+        assert_eq!(owner.element_for_global_key(&known), Some(id));
     }
 
     /// A keyed stateless view used to drive the REAL GlobalKey retake path
@@ -2583,7 +2676,7 @@ mod tests {
         ));
         assert!(owner.service_layout_builders(&mut tree, &pipeline));
         let moved = owner
-            .element_for_global_key(key.id())
+            .element_for_global_key(&key)
             .expect("keyed descendant mounted below LayoutBuilder");
         let builds_after_mount = build_calls.load(Ordering::Relaxed);
 
@@ -2606,7 +2699,7 @@ mod tests {
             0,
             "the final scope was removed"
         );
-        assert_eq!(owner.element_for_global_key(key.id()), Some(moved));
+        assert_eq!(owner.element_for_global_key(&key), Some(moved));
 
         assert!(
             owner.service_layout_builders(&mut tree, &pipeline),
@@ -2899,7 +2992,7 @@ mod tests {
 
         // a's tree is exactly as it was before b's rejected mount attempt.
         assert_eq!(tree_a.len(), 1);
-        assert_eq!(owner_a.element_for_global_key(keyed.key.id()), Some(root_a));
+        assert_eq!(owner_a.element_for_global_key(&keyed.key), Some(root_a));
     }
 
     /// Once a fully releases a key (unmount + finalize, not merely a
@@ -2915,7 +3008,7 @@ mod tests {
         let keyed = KeyedView {
             key: crate::GlobalKey::new(),
         };
-        let hash = keyed.key.id();
+        let key = keyed.key.clone();
 
         let mut tree_a = ElementTree::new();
         let mut owner_a = BuildOwner::new();
@@ -2928,7 +3021,7 @@ mod tests {
         tree_a.remove(child_a, &mut owner_a.element_owner_mut());
         owner_a.finalize_tree(&mut tree_a);
         assert_eq!(
-            owner_a.element_for_global_key(hash),
+            owner_a.element_for_global_key(&key),
             None,
             "a released the key locally, not just in the shared scope"
         );
@@ -2937,10 +3030,10 @@ mod tests {
         let mut owner_b = BuildOwner::new();
         owner_b.set_global_key_scope(scope);
 
-        assert_eq!(owner_b.element_for_global_key(hash), None);
+        assert_eq!(owner_b.element_for_global_key(&key), None);
         let root_b = tree_b.mount_root(&keyed, &mut owner_b.element_owner_mut());
         assert_eq!(tree_b.len(), 1);
-        assert_eq!(owner_b.element_for_global_key(hash), Some(root_b));
+        assert_eq!(owner_b.element_for_global_key(&key), Some(root_b));
     }
 
     /// Dropping an owner without ever unmounting its tree must not wedge the
@@ -2993,8 +3086,8 @@ mod tests {
         let root_a = tree_a.mount_root(&keyed, &mut owner_a.element_owner_mut());
         let root_b = tree_b.mount_root(&keyed, &mut owner_b.element_owner_mut());
 
-        assert_eq!(owner_a.element_for_global_key(keyed.key.id()), Some(root_a));
-        assert_eq!(owner_b.element_for_global_key(keyed.key.id()), Some(root_b));
+        assert_eq!(owner_a.element_for_global_key(&keyed.key), Some(root_a));
+        assert_eq!(owner_b.element_for_global_key(&keyed.key), Some(root_b));
     }
 
     /// Adversarial interleaving: a's finalize releases its own claim
@@ -3005,7 +3098,7 @@ mod tests {
     #[test]
     fn a_finalize_after_b_claim_does_not_release_bs_claim() {
         let scope = GlobalKeyScope::new();
-        let hash = 0x00B_00B_u64;
+        let key = crate::GlobalKey::<()>::new();
         let id_a = ElementId::new(1);
         let id_b = ElementId::new(2);
 
@@ -3014,15 +3107,15 @@ mod tests {
         let mut owner_b = BuildOwner::new();
         owner_b.set_global_key_scope(scope.clone());
 
-        owner_a.register_global_key(hash, id_a);
-        owner_a.unregister_global_key(hash); // a's normal, on-time release.
-        owner_b.register_global_key(hash, id_b); // b claims fresh — succeeds.
+        owner_a.register_global_key(&key, id_a);
+        owner_a.unregister_global_key(&key); // a's normal, on-time release.
+        owner_b.register_global_key(&key, id_b); // b claims fresh — succeeds.
 
         // a's late/duplicate unregister must not touch b's live claim.
-        owner_a.unregister_global_key(hash);
+        owner_a.unregister_global_key(&key);
 
         assert_eq!(
-            owner_b.element_for_global_key(hash),
+            owner_b.element_for_global_key(&key),
             Some(id_b),
             "b's local map is untouched"
         );
@@ -3038,7 +3131,7 @@ mod tests {
         owner_c.set_global_key_scope(scope);
         let tag_c = owner_c.owner_tag();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            owner_c.register_global_key(hash, ElementId::new(3));
+            owner_c.register_global_key(&key, ElementId::new(3));
         }));
         let payload = outcome.expect_err("the hash is still b's, not free");
         let message = panic_message(&*payload);
@@ -3074,7 +3167,7 @@ mod tests {
         let keyed = KeyedView {
             key: crate::GlobalKey::new(),
         };
-        let hash = keyed.key.id();
+        let key = keyed.key.clone();
 
         let mut tree_a = ElementTree::new();
         let mut owner_a = BuildOwner::new();
@@ -3116,8 +3209,8 @@ mod tests {
         // live elements under one key, one per owner's own tree. Each
         // resolves correctly within its own owner — this is confined, not a
         // cross-tree corruption.
-        assert_eq!(owner_a.element_for_global_key(hash), Some(retaken));
-        assert_eq!(owner_b.element_for_global_key(hash), Some(root_b));
+        assert_eq!(owner_a.element_for_global_key(&key), Some(retaken));
+        assert_eq!(owner_b.element_for_global_key(&key), Some(root_b));
 
         // When a's retaken element is eventually unmounted for real, a's
         // release is a tag-checked no-op against b's now-live claim.
@@ -3129,7 +3222,7 @@ mod tests {
             "a's belated release must not touch b's live claim"
         );
         assert_eq!(
-            owner_b.element_for_global_key(hash),
+            owner_b.element_for_global_key(&key),
             Some(root_b),
             "b was never the one who paid for a's stale bookkeeping"
         );
@@ -3143,7 +3236,7 @@ mod tests {
         owner_d.set_global_key_scope(scope);
         let tag_d = owner_d.owner_tag();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            owner_d.register_global_key(hash, ElementId::new(99));
+            owner_d.register_global_key(&key, ElementId::new(99));
         }));
         let payload = outcome.expect_err("the surviving claim is still b's, not free");
         let message = panic_message(&*payload);
@@ -3170,7 +3263,7 @@ mod tests {
         let keyed = KeyedView {
             key: crate::GlobalKey::new(),
         };
-        let hash = keyed.key.id();
+        let key = keyed.key.clone();
 
         let mut tree_a = ElementTree::new();
         let mut owner_a = BuildOwner::new();
@@ -3201,7 +3294,7 @@ mod tests {
             "panic must name b as the rejected owner: {message}"
         );
         assert_eq!(tree_a.len(), 1);
-        assert_eq!(owner_a.element_for_global_key(hash), Some(root_a1));
+        assert_eq!(owner_a.element_for_global_key(&key), Some(root_a1));
 
         // 3. a releases for real (unmount + finalize).
         tree_a.remove(root_a1, &mut owner_a.element_owner_mut());
@@ -3217,9 +3310,9 @@ mod tests {
 
         // 5. a's late, stale release (a duplicated unmount call) must not
         //    touch b's now-live claim.
-        owner_a.unregister_global_key(hash);
+        owner_a.unregister_global_key(&key);
         assert_eq!(scope.claim_count(), 1);
-        assert_eq!(owner_b.element_for_global_key(hash), Some(root_b));
+        assert_eq!(owner_b.element_for_global_key(&key), Some(root_b));
 
         // 6. b releases for real.
         tree_b.remove(root_b, &mut owner_b.element_owner_mut());
@@ -3230,7 +3323,7 @@ mod tests {
         //    scope exactly as clean as it started.
         let mut tree_a2 = ElementTree::new();
         let root_a2 = tree_a2.mount_root(&keyed, &mut owner_a.element_owner_mut());
-        assert_eq!(owner_a.element_for_global_key(hash), Some(root_a2));
+        assert_eq!(owner_a.element_for_global_key(&key), Some(root_a2));
         assert_eq!(scope.claim_count(), 1);
     }
 }

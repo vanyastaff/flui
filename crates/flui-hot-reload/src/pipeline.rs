@@ -241,10 +241,7 @@ mod tests {
                 // its binding lock. This observes the real mount activation
                 // without manually activating TLS or exporting a test API.
                 widgets.with_build_owner_mut(|owner| {
-                    owner.register_global_key(
-                        key_at_mount.id(),
-                        flui_foundation::ElementId::new(73),
-                    );
+                    owner.register_global_key(&key_at_mount, flui_foundation::ElementId::new(73));
                 });
                 mount_observed_in_probe
                     .store(key_at_mount.current_element().is_some(), Ordering::Relaxed);

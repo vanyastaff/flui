@@ -20,24 +20,22 @@
 //!   the parent now asking for it; FLUI panics in debug from
 //!   `retake_active_global_key` under the same condition. Same verdict, same
 //!   timing, different channel.
-//! - **Two different parents — Flutter re-checks, FLUI does not.** Flutter
-//!   records the loser via
-//!   `_debugTrackElementThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans` and
-//!   verifies at the end of the frame
-//!   (`_debugVerifyGlobalKeyReservation` after `buildScope`,
-//!   `_debugVerifyIllFatedPopulation` in `finalizeTree`), raising `'Multiple
-//!   widgets used the same GlobalKey.'` if the first parent still claims the
-//!   child. It also repairs the tree (`forgetChild` on the losing parent) so
-//!   teardown does not cascade. **FLUI has no end-of-frame verification at
-//!   all**, so a genuine cross-parent duplicate is never reported: the two
-//!   parents simply take turns grafting the one element.
+//! - **Two different parents — both re-check at the frame boundary.**
+//!   Flutter records each declaration in `_debugGlobalKeyReservations` and
+//!   verifies at the end of the frame (`_debugVerifyGlobalKeyReservation`
+//!   inside `finalizeTree`), raising `'Multiple widgets used the same
+//!   GlobalKey.'` when two parents reserved one key. It also repairs the
+//!   tree (`forgetChild` on the losing parent) so teardown does not cascade.
+//!   FLUI now does the same, with two deliberate differences: the
+//!   verification is not debug-only, and the duplicate arrives as a typed
+//!   [`DuplicateGlobalKey`](flui_view::DuplicateGlobalKey) on
+//!   `BuildOwner::take_global_key_diagnostics` instead of being thrown —
+//!   a duplicate key is caller-controlled input, so the frame completes.
 //!
 //! What is ported is therefore the *verdict* on each tree shape, not the
-//! oracle's message text or its diagnostic machinery. Where FLUI's verdict
+//! oracle's message text or its diagnostic machinery. Where FLUI's channel
 //! differs, the test says so and asserts what FLUI actually does — never a
-//! narrowed version of the oracle's expectation. The gap is filed in
-//! `docs/ROADMAP.md` under the foundation-hardening gaps (search
-//! `_debugVerifyGlobalKeyReservation`).
+//! narrowed version of the oracle's expectation.
 //!
 //! Structural substitution: the oracle expresses its trees as
 //! `Stack`/`Container` hierarchies through `pumpWidget`. These ports drive
@@ -299,9 +297,9 @@ fn the_relocation_verdict_is_the_same_whichever_parent_claims_the_key_first() {
     }
 }
 
-/// **Divergence, pinned.** When the first parent claims the key *back* — a
-/// tree the oracle rejects outright — FLUI grafts it again and never reports
-/// anything.
+/// The graft itself, pinned in isolation: when the first parent claims the
+/// key *back*, the element moves again and the intermediate steps report
+/// nothing on their own.
 ///
 /// Flutter parity: `framework_test.dart` `'GlobalKey duplication 1 - double
 /// appearance'` and the ordering variants `'7 - appearing later'`, `'8 -
@@ -312,26 +310,18 @@ fn the_relocation_verdict_is_the_same_whichever_parent_claims_the_key_first() {
 /// `_debugTrackElementThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`, and
 /// `_debugVerifyGlobalKeyReservation` sees both parents reserving the same key.
 ///
-/// FLUI has no end-of-frame verification, so each claim is just another graft:
-/// the element ping-pongs between the parents and the tree is silently left
-/// with whichever parent asked last. Filed in `docs/ROADMAP.md` (search
-/// `_debugVerifyGlobalKeyReservation`).
-///
-/// What this pins is the graft, not the absent verification — and the two must
-/// not be conflated. `retake_active_global_key` unlinks the element from the
+/// What this pins is the graft, not the verification — and the two must not
+/// be conflated. `retake_active_global_key` unlinks the element from the
 /// previous parent before relinking it, so no two parents' child lists ever
-/// name it at once, and a bare sequence of inserts crosses no build/finalize
-/// boundary. A reservation check modelled on Flutter's records the *declaring*
-/// parent during build and verifies at the frame boundary, so it would not
-/// necessarily fire on this shape: treat this as a description of today's
-/// relocation semantics, not as a canary that goes red when the verification
-/// lands.
-/// The canary is
-/// [`two_parents_declaring_one_key_survive_a_whole_frame_unreported`] below,
-/// which drives the frame boundary a reservation check would hook into.
+/// name it at once, and a bare sequence of inserts crosses no
+/// build/finalize boundary. The reservation check verifies at the frame
+/// boundary, which this test deliberately never reaches; the sequence below
+/// records three declarations and asks nothing of them.
+/// [`two_parents_declaring_one_key_in_one_frame_are_reported`] below drives
+/// that boundary and is where the duplicate verdict is pinned.
 #[test]
 #[serial_test::serial(global_key_registry)]
-fn two_parents_claiming_the_key_in_turn_are_never_reported_as_a_duplicate() {
+fn two_parents_claiming_the_key_in_turn_keep_grafting_the_one_element() {
     let (tree, owner) = fresh_tree();
     let parents = tree_with_parents(&tree, &owner, 2);
     let key = GlobalKey::<KeyedState>::new();
@@ -344,7 +334,7 @@ fn two_parents_claiming_the_key_in_turn_are_never_reported_as_a_duplicate() {
 
     assert_eq!(
         back, original,
-        "the same element is grafted a second time, with no complaint",
+        "the same element is grafted a second time, not duplicated",
     );
     assert_eq!(
         children_of(&tree, parents[0]),
@@ -353,7 +343,11 @@ fn two_parents_claiming_the_key_in_turn_are_never_reported_as_a_duplicate() {
     );
     assert!(
         children_of(&tree, parents[1]).is_empty(),
-        "and the other is left empty — no duplicate is ever reported",
+        "and the other is left empty — the graft unlinks before it relinks",
+    );
+    assert!(
+        owner.read().global_key_diagnostics().is_empty(),
+        "no frame boundary ran, so nothing has been verified yet",
     );
 
     flui_view::test_only_clear_global_key_registry();
@@ -385,32 +379,26 @@ impl View for KeyedParent {
     }
 }
 
-/// **The canary for the missing end-of-frame duplicate-key verification.**
-/// Two parents each *build* a child carrying the same
-/// key; a whole frame runs — `build_scope` then `finalize_tree` — and nothing
-/// is reported. The oracle rejects exactly this tree.
+/// **The oracle behaviour, end to end.** Two parents each *build* a child
+/// carrying the same key; a whole frame runs — `build_scope` then
+/// `finalize_tree` — and the duplicate is reported.
 ///
 /// Flutter parity: `framework_test.dart` `'GlobalKey duplication 1 - double
 /// appearance'` and the ordering variants `'7'`–`'10'` (3.44.0), all of which
-/// expect a `FlutterError`. Flutter records the losing parent during build
-/// (`_debugTrackElementThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`) and
-/// verifies at the frame boundary (`_debugVerifyGlobalKeyReservation` after
-/// `buildScope`, `_debugVerifyIllFatedPopulation` in `finalizeTree`).
+/// expect a `FlutterError`. Flutter records each declaration during build
+/// (`_debugReserveGlobalKeyFor`) and verifies at the frame boundary
+/// (`_debugVerifyGlobalKeyReservation` in `finalizeTree`). FLUI records and
+/// verifies at the same two points; the verdict arrives as a typed
+/// diagnostic rather than a throw, so the frame still completes.
 ///
 /// Why this shape rather than a sequence of inserts: the graft
 /// (`retake_active_global_key`) unlinks the child from its previous parent
 /// before relinking it, so raw inserts never leave two parents claiming the
-/// key and never cross a frame boundary — a reservation check need not fire on
-/// them at all. Here both parents genuinely declare the key in one frame, so a
-/// check placed where Flutter places it *must* see the conflict.
-///
-/// The assertions describe today's behaviour: exactly one keyed element
-/// survives, held by whichever parent built last, and the frame completes
-/// without a panic. Once the verification lands, the frame will instead report a
-/// duplicate and this test goes red — which is the point of keeping it.
+/// key and never cross a frame boundary. Here both parents genuinely declare
+/// the key in one frame, so the check must see the conflict.
 #[test]
 #[serial_test::serial(global_key_registry)]
-fn two_parents_declaring_one_key_survive_a_whole_frame_unreported() {
+fn two_parents_declaring_one_key_in_one_frame_are_reported() {
     let (tree, owner) = fresh_tree();
     flui_view::test_only_set_global_key_registry(&tree, &owner);
     let key = GlobalKey::<KeyedState>::new();
@@ -437,7 +425,7 @@ fn two_parents_declaring_one_key_survive_a_whole_frame_unreported() {
         &mut owner.write().element_owner_mut(),
     );
 
-    // Drive the boundary a reservation check would hook into. Both guards must
+    // Drive the boundary the reservation check hooks into. Both guards must
     // be held across the call — `build_scope` takes `&mut` to each — which is
     // why nothing inside may re-enter these locks.
     {
@@ -455,8 +443,8 @@ fn two_parents_declaring_one_key_survive_a_whole_frame_unreported() {
     assert_eq!(
         a_children.len() + b_children.len(),
         1,
-        "one keyed element for two declarations — the duplicate is real and \
-         unreported (a: {a_children:?}, b: {b_children:?})",
+        "one keyed element for two declarations — the graft is unchanged \
+         (a: {a_children:?}, b: {b_children:?})",
     );
 
     // That count alone would also hold if only ONE parent had ever built, so
@@ -469,8 +457,7 @@ fn two_parents_declaring_one_key_survive_a_whole_frame_unreported() {
     // Deliberately not asserting *which* parent wins: `DirtyElement::cmp`
     // orders the dirty heap by depth alone, so two siblings at the same depth
     // have no defined build order. Pinning one would be pinning heap
-    // incidentals, and would break on a change that leaves this gap exactly as
-    // it is.
+    // incidentals.
     let creator_tag = key
         .with_current_state(|state: &KeyedState| state.tag)
         .expect("the surviving element still carries state");
@@ -480,6 +467,217 @@ fn two_parents_declaring_one_key_survive_a_whole_frame_unreported() {
         "both parents built: one created the keyed element (tag {creator_tag}) \
          and the other took it over (tag {holder_tag}) — a frame in which only \
          one parent built would leave these equal",
+    );
+
+    let reports = owner.write().take_global_key_diagnostics();
+    assert_eq!(
+        reports.len(),
+        1,
+        "one key, two declaring parents, one report: {reports:?}",
+    );
+    let report = &reports[0];
+    assert_eq!(report.key_hash, key.id());
+    let surviving = a_children
+        .first()
+        .or_else(|| b_children.first())
+        .copied()
+        .expect("exactly one keyed element survives");
+    assert_eq!(
+        (report.first_child, report.second_child),
+        (surviving, surviving),
+        "both parents fought over the one element, so the report names it twice",
+    );
+    assert_ne!(
+        report.first_parent, report.second_parent,
+        "a duplicate is by definition two DIFFERENT parents",
+    );
+    assert!(
+        [parent_a, parent_b].contains(&report.first_parent)
+            && [parent_a, parent_b].contains(&report.second_parent),
+        "both named parents are the two that declared the key: {report:?}",
+    );
+
+    // The reservations were consumed by the verification, so a second,
+    // conflict-free frame reports nothing — the ledger is per-frame, not
+    // cumulative.
+    {
+        let mut owner_guard = owner.write();
+        let mut tree_guard = tree.write();
+        owner_guard.finalize_tree(&mut tree_guard);
+    }
+    assert!(
+        owner.write().take_global_key_diagnostics().is_empty(),
+        "the duplicate must not be re-reported every subsequent frame",
+    );
+
+    flui_view::test_only_clear_global_key_registry();
+}
+
+/// The repair half of the verdict: whichever parent lost the child must not
+/// still list it, so tearing the tree down cannot cascade off a dangling
+/// edge.
+///
+/// Flutter repairs with `forgetChild` on the losing parent for the same
+/// stated reason (`framework.dart:3272`).
+#[test]
+#[serial_test::serial(global_key_registry)]
+fn the_losing_parent_holds_no_dangling_edge_to_the_contested_child() {
+    let (tree, owner) = fresh_tree();
+    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let key = GlobalKey::<KeyedState>::new();
+
+    let root = tree
+        .write()
+        .mount_root(&Filler, &mut owner.write().element_owner_mut());
+    let parent_a = tree.write().insert(
+        &KeyedParent {
+            key: key.clone(),
+            tag: 1,
+        },
+        root,
+        0,
+        &mut owner.write().element_owner_mut(),
+    );
+    let parent_b = tree.write().insert(
+        &KeyedParent {
+            key: key.clone(),
+            tag: 2,
+        },
+        root,
+        1,
+        &mut owner.write().element_owner_mut(),
+    );
+    {
+        let mut owner_guard = owner.write();
+        owner_guard.schedule_build_for(parent_a, 1, flui_view::RebuildReason::InitialMount);
+        owner_guard.schedule_build_for(parent_b, 1, flui_view::RebuildReason::InitialMount);
+        let mut tree_guard = tree.write();
+        owner_guard.build_scope(&mut tree_guard);
+        owner_guard.finalize_tree(&mut tree_guard);
+    }
+
+    let reports = owner.write().take_global_key_diagnostics();
+    let report = reports.first().expect("the duplicate is reported");
+    let child = report.first_child;
+
+    let tree_guard = tree.read();
+    for parent in [parent_a, parent_b] {
+        let listed = tree_guard
+            .get(parent)
+            .expect("both parents are still mounted")
+            .child_ids()
+            .contains(&child);
+        let is_real_parent = tree_guard
+            .get(child)
+            .expect("the contested child survives")
+            .parent()
+            == Some(parent);
+        assert_eq!(
+            listed, is_real_parent,
+            "parent {parent:?} lists the contested child exactly when it is \
+             actually its parent",
+        );
+    }
+    drop(tree_guard);
+
+    flui_view::test_only_clear_global_key_registry();
+}
+
+/// A key moving from one parent to another **across frames** is the legal
+/// `GlobalKey` reparent, and must not be reported.
+///
+/// The old parent gives the child up first — a real soft-remove, the way
+/// `id_reconcile::remove_child` does it — so the second attachment takes the
+/// inactive-retake path. That detail is the whole difference between this
+/// and a duplicate: grafting a child out of a parent that is still holding
+/// it, and never rebuilds to say otherwise, is reported (see
+/// [`the_parent_a_graft_robs_is_reported_when_it_never_rebuilds`]).
+#[test]
+#[serial_test::serial(global_key_registry)]
+fn a_reparent_the_old_parent_consented_to_is_not_a_duplicate() {
+    let (tree, owner) = fresh_tree();
+    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let parents = tree_with_parents(&tree, &owner, 2);
+    let key = GlobalKey::<KeyedState>::new();
+
+    let first = attach_keyed(&tree, &owner, parents[0], &key, 1);
+    {
+        let mut owner_guard = owner.write();
+        let mut tree_guard = tree.write();
+        owner_guard.finalize_tree(&mut tree_guard);
+    }
+    assert!(
+        owner.write().take_global_key_diagnostics().is_empty(),
+        "one parent declaring the key is not a duplicate",
+    );
+
+    // The first parent lets the child go: soft-removed into the inactive
+    // queue, still retakeable this frame.
+    tree.write()
+        .remove(first, &mut owner.write().element_owner_mut());
+
+    let moved = attach_keyed(&tree, &owner, parents[1], &key, 2);
+    assert_eq!(moved, first, "the element is relocated, not duplicated");
+    {
+        let mut owner_guard = owner.write();
+        let mut tree_guard = tree.write();
+        owner_guard.finalize_tree(&mut tree_guard);
+    }
+    assert!(
+        owner.write().take_global_key_diagnostics().is_empty(),
+        "the old parent had already given the child up, so the new parent \
+         is the only claimant — an ordinary reparent",
+    );
+
+    flui_view::test_only_clear_global_key_registry();
+}
+
+/// The counterpart: grafting the child out of a parent that is still holding
+/// it, where that parent never rebuilds to consent, IS a duplicate.
+///
+/// The reservation ledger alone cannot see this one — the robbed parent
+/// never ran, so it never reserved. Flutter reports the same population from
+/// `_debugElementsThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`, recorded
+/// by `_retakeInactiveElement` when it takes an element from a live parent.
+#[test]
+#[serial_test::serial(global_key_registry)]
+fn the_parent_a_graft_robs_is_reported_when_it_never_rebuilds() {
+    let (tree, owner) = fresh_tree();
+    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let parents = tree_with_parents(&tree, &owner, 2);
+    let key = GlobalKey::<KeyedState>::new();
+
+    let first = attach_keyed(&tree, &owner, parents[0], &key, 1);
+    {
+        let mut owner_guard = owner.write();
+        let mut tree_guard = tree.write();
+        owner_guard.finalize_tree(&mut tree_guard);
+    }
+    assert!(owner.write().take_global_key_diagnostics().is_empty());
+
+    // No give-up this time — the second parent takes it out from under the
+    // first, which never rebuilds.
+    attach_keyed(&tree, &owner, parents[1], &key, 2);
+    {
+        let mut owner_guard = owner.write();
+        let mut tree_guard = tree.write();
+        owner_guard.finalize_tree(&mut tree_guard);
+    }
+
+    let reports = owner.write().take_global_key_diagnostics();
+    assert_eq!(
+        reports.len(),
+        1,
+        "the robbed parent is reported: {reports:?}"
+    );
+    assert_eq!(
+        (reports[0].first_parent, reports[0].second_parent),
+        (parents[0], parents[1]),
+        "the robbed parent is named first, the grafter second",
+    );
+    assert_eq!(
+        (reports[0].first_child, reports[0].second_child),
+        (first, first)
     );
 
     flui_view::test_only_clear_global_key_registry();

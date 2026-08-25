@@ -262,10 +262,16 @@ deny:
 # only `pipeline::owner`, only box + leaf-sliver
 # layout — deeper sliver walks and intrinsics queries are not interpreted
 # here.
+#
+# The second invocation covers flui-view's GlobalKey plane (ADR-0050): the
+# identity registry, the cross-owner claim table, the per-frame reservation
+# ledger, and the tree-driving verification/repair tests that put a real
+# `ElementTree` through `BuildOwner::finalize_tree`. Measured 28 tests / ~7s.
 [group("test")]
-[doc("Run miri on flui-rendering's pipeline::owner tests, incl. real layout walks + PipelineCell checkouts (requires nightly + miri)")]
+[doc("Run miri on flui-rendering's pipeline::owner and flui-view's owner::global_key tests (requires nightly + miri)")]
 miri:
     cargo +nightly miri test -p flui-rendering --lib pipeline::owner
+    cargo +nightly miri test -p flui-view --lib owner::global_key
 
 [group("test")]
 [doc("Generate an HTML coverage report (requires cargo-llvm-cov)")]
