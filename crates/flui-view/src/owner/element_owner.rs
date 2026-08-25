@@ -321,6 +321,25 @@ impl ElementOwner<'_> {
         self.global_key_reservations.forget(parent, child);
     }
 
+    /// Record that `taken_by` grafted `child` — carrying `key` — out of
+    /// `losing_parent`, which has not itself declared anything this frame.
+    ///
+    /// A graft out of a *live* parent is only legitimate if that parent
+    /// agrees, which it does by rebuilding without the child. One that never
+    /// rebuilds ends the frame describing a child it no longer has, and the
+    /// reservation ledger cannot see it because it never reserved. This is
+    /// the record that closes that hole.
+    pub fn displace_global_key(
+        &mut self,
+        losing_parent: ElementId,
+        child: ElementId,
+        key: &dyn ViewKey,
+        taken_by: ElementId,
+    ) {
+        self.global_key_reservations
+            .displace(losing_parent, child, key, taken_by);
+    }
+
     /// Schedule an element for rebuild at the next frame.
     ///
     /// Pushed onto the depth-sorted heap so parents rebuild before

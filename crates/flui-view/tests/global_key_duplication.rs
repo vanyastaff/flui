@@ -483,8 +483,9 @@ fn two_parents_declaring_one_key_in_one_frame_are_reported() {
         .copied()
         .expect("exactly one keyed element survives");
     assert_eq!(
-        report.child, surviving,
-        "the report names the element both parents fought over",
+        (report.first_child, report.second_child),
+        (surviving, surviving),
+        "both parents fought over the one element, so the report names it twice",
     );
     assert_ne!(
         report.first_parent, report.second_parent,
@@ -557,7 +558,7 @@ fn the_losing_parent_holds_no_dangling_edge_to_the_contested_child() {
 
     let reports = owner.write().take_global_key_diagnostics();
     let report = reports.first().expect("the duplicate is reported");
-    let child = report.child;
+    let child = report.first_child;
 
     let tree_guard = tree.read();
     for parent in [parent_a, parent_b] {
@@ -585,12 +586,15 @@ fn the_losing_parent_holds_no_dangling_edge_to_the_contested_child() {
 /// A key moving from one parent to another **across frames** is the legal
 /// `GlobalKey` reparent, and must not be reported.
 ///
-/// This is the property that makes the reservation ledger per-frame rather
-/// than cumulative: the same two parents that would be a duplicate inside
-/// one frame are an ordinary move when a frame boundary separates them.
+/// The old parent gives the child up first — a real soft-remove, the way
+/// `id_reconcile::remove_child` does it — so the second attachment takes the
+/// inactive-retake path. That detail is the whole difference between this
+/// and a duplicate: grafting a child out of a parent that is still holding
+/// it, and never rebuilds to say otherwise, is reported (see
+/// [`the_parent_a_graft_robs_is_reported_when_it_never_rebuilds`]).
 #[test]
 #[serial_test::serial(global_key_registry)]
-fn a_reparent_across_two_frames_is_not_a_duplicate() {
+fn a_reparent_the_old_parent_consented_to_is_not_a_duplicate() {
     let (tree, owner) = fresh_tree();
     flui_view::test_only_set_global_key_registry(&tree, &owner);
     let parents = tree_with_parents(&tree, &owner, 2);
@@ -607,6 +611,11 @@ fn a_reparent_across_two_frames_is_not_a_duplicate() {
         "one parent declaring the key is not a duplicate",
     );
 
+    // The first parent lets the child go: soft-removed into the inactive
+    // queue, still retakeable this frame.
+    tree.write()
+        .remove(first, &mut owner.write().element_owner_mut());
+
     let moved = attach_keyed(&tree, &owner, parents[1], &key, 2);
     assert_eq!(moved, first, "the element is relocated, not duplicated");
     {
@@ -616,8 +625,59 @@ fn a_reparent_across_two_frames_is_not_a_duplicate() {
     }
     assert!(
         owner.write().take_global_key_diagnostics().is_empty(),
-        "the first parent's claim belonged to the previous frame, so the \
-         second frame sees a single claimant — an ordinary reparent",
+        "the old parent had already given the child up, so the new parent \
+         is the only claimant — an ordinary reparent",
+    );
+
+    flui_view::test_only_clear_global_key_registry();
+}
+
+/// The counterpart: grafting the child out of a parent that is still holding
+/// it, where that parent never rebuilds to consent, IS a duplicate.
+///
+/// The reservation ledger alone cannot see this one — the robbed parent
+/// never ran, so it never reserved. Flutter reports the same population from
+/// `_debugElementsThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`, recorded
+/// by `_retakeInactiveElement` when it takes an element from a live parent.
+#[test]
+#[serial_test::serial(global_key_registry)]
+fn the_parent_a_graft_robs_is_reported_when_it_never_rebuilds() {
+    let (tree, owner) = fresh_tree();
+    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let parents = tree_with_parents(&tree, &owner, 2);
+    let key = GlobalKey::<KeyedState>::new();
+
+    let first = attach_keyed(&tree, &owner, parents[0], &key, 1);
+    {
+        let mut owner_guard = owner.write();
+        let mut tree_guard = tree.write();
+        owner_guard.finalize_tree(&mut tree_guard);
+    }
+    assert!(owner.write().take_global_key_diagnostics().is_empty());
+
+    // No give-up this time — the second parent takes it out from under the
+    // first, which never rebuilds.
+    attach_keyed(&tree, &owner, parents[1], &key, 2);
+    {
+        let mut owner_guard = owner.write();
+        let mut tree_guard = tree.write();
+        owner_guard.finalize_tree(&mut tree_guard);
+    }
+
+    let reports = owner.write().take_global_key_diagnostics();
+    assert_eq!(
+        reports.len(),
+        1,
+        "the robbed parent is reported: {reports:?}"
+    );
+    assert_eq!(
+        (reports[0].first_parent, reports[0].second_parent),
+        (parents[0], parents[1]),
+        "the robbed parent is named first, the grafter second",
+    );
+    assert_eq!(
+        (reports[0].first_child, reports[0].second_child),
+        (first, first)
     );
 
     flui_view::test_only_clear_global_key_registry();

@@ -609,11 +609,15 @@ fn test_reassemble_marks_all_live_elements_dirty() {
 #[test]
 fn test_build_owner_memory_size() {
     let size = std::mem::size_of::<BuildOwner>();
-    // Should be reasonably sized (BinaryHeap + HashSet + the GlobalKey plane
-    // + debug flags). The budget is a bloat tripwire, not a hard constraint:
-    // one `BuildOwner` exists per presentation, so this is measured in
-    // handfuls per process. It last moved when the owner took on the
-    // duplicate-`GlobalKey` machinery — the per-frame reservation ledger
-    // (an ordered parent list plus a map) and the diagnostic drain.
-    assert!(size < 640, "BuildOwner is too large: {size} bytes");
+    // A bloat tripwire, not a hard constraint: one `BuildOwner` exists per
+    // presentation, so this is measured in handfuls per process.
+    //
+    // It last moved from 512 when the owner took on the duplicate-`GlobalKey`
+    // machinery, for a measured +32 bytes: the diagnostic drain (a `Vec`, 24)
+    // and one pointer to the per-frame reservation ledger (8). The ledger's
+    // own four containers are deliberately behind that pointer — they are
+    // frame scratch, empty in any tree that uses no `GlobalKey`s, and do not
+    // belong in the owner's inline hot set. Without the box this would be
+    // 672.
+    assert!(size < 576, "BuildOwner is too large: {size} bytes");
 }

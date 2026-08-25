@@ -1794,6 +1794,14 @@ fn retake_active_global_key(
         }
     }
 
+    // The graft is about to pull this child out from under a parent that is
+    // still live. That is a legitimate reparent only if `from_parent` goes on
+    // to rebuild without the child; if it never rebuilds, it ends the frame
+    // describing a child it no longer has. Record it so the frame boundary
+    // can tell the two apart — `note_parent_rebuild` drops this the moment
+    // `from_parent` rebuilds.
+    owner.displace_global_key(from_parent, candidate_id, key, new_parent);
+
     if let Some(old_parent) = tree.get_mut(from_parent) {
         if let Some(pos) = old_parent
             .child_ids

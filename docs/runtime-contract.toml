@@ -1237,12 +1237,15 @@ reparent/retake machinery reads and writes only this map and is scope-blind \
 by design). `GlobalKeyScope` is the cross-tree UNIQUENESS authority shared \
 by every presentation in a realm (key -> which owner currently holds it) -- a \
 cross-owner duplicate mount fails eagerly, traced before the panic, naming \
-both owners. `GlobalKeyReservations` is the PER-FRAME declaration ledger \
-(parent -> child -> key), verified and cleared by `BuildOwner::finalize_tree`: \
-one key declared by two different parents in one frame is repaired (the \
-losing parent's dangling child edge is dropped) and reported as a typed \
-`DuplicateGlobalKey` on the owner's diagnostic drain rather than panicking, \
-since a duplicate key is caller-controlled input. All three index by \
+both owners. `GlobalKeyReservations` holds the two PER-FRAME ledgers -- each parent's \
+keyed-child declarations, and each parent a graft robbed of a keyed child \
+without that parent rebuilding to consent -- verified and cleared by \
+`BuildOwner::finalize_tree` after its inactive sweep: one key claimed twice \
+is repaired (the losing parent's dangling child edge is dropped) and \
+reported as a typed `DuplicateGlobalKey` on the owner's diagnostic drain \
+rather than panicking, since a duplicate key is caller-controlled input. \
+Reported in every profile, including the one-parent-two-children shape whose \
+eager check is debug-only. All three index by \
 `ViewKey::key_hash` and decide by `ViewKey::key_eq`, so a hash is an \
 accelerator and never an identity. RESOLUTION for \
 `GlobalKey::current_element`/`with_current_state` \
@@ -1264,7 +1267,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-view/src/owner/global_key_registry.rs", contains = "pub(crate) struct GlobalKeyRegistry" },
     { kind = "symbol", file = "crates/flui-view/src/owner/global_key_reservations.rs", contains = "pub struct DuplicateGlobalKey" },
     { kind = "test", file = "crates/flui-view/tests/global_key_duplication.rs", contains = "fn two_parents_declaring_one_key_in_one_frame_are_reported" },
-    { kind = "test", file = "crates/flui-view/tests/global_key_duplication.rs", contains = "fn a_reparent_across_two_frames_is_not_a_duplicate" },
+    { kind = "test", file = "crates/flui-view/tests/global_key_duplication.rs", contains = "fn a_reparent_the_old_parent_consented_to_is_not_a_duplicate" },
+    { kind = "test", file = "crates/flui-view/tests/global_key_duplication.rs", contains = "fn the_parent_a_graft_robs_is_reported_when_it_never_rebuilds" },
     { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "pub struct GlobalKeyRegistryComposite" },
     { kind = "symbol", file = "crates/flui-view/src/key/registry.rs", contains = "pub(crate) fn build_composite" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn realm_id" },

@@ -228,7 +228,14 @@ pub struct BuildOwner {
 
     /// This frame's `GlobalKey` declarations, verified and cleared by
     /// [`Self::finalize_tree`].
-    pub(crate) global_key_reservations: GlobalKeyReservations,
+    ///
+    /// Boxed: this is per-frame scratch state, empty in every frame of every
+    /// tree that uses no `GlobalKey`s, and it is touched once per keyed
+    /// child rather than per element. Keeping its four containers behind one
+    /// pointer keeps them out of the owner's inline footprint, which is
+    /// otherwise the owner's hot working set (dirty heap, dependency maps,
+    /// capability handles).
+    pub(crate) global_key_reservations: Box<GlobalKeyReservations>,
 
     /// Duplicate-`GlobalKey` reports produced by the most recent frame
     /// boundaries, waiting to be drained by
@@ -440,7 +447,7 @@ impl BuildOwner {
             dirty_elements: BinaryHeap::new(),
             dirty_reasons: HashMap::new(),
             global_keys: GlobalKeyRegistry::new(),
-            global_key_reservations: GlobalKeyReservations::new(),
+            global_key_reservations: Box::new(GlobalKeyReservations::new()),
             global_key_diagnostics: Vec::new(),
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
@@ -1241,6 +1248,16 @@ impl BuildOwner {
                     continue;
                 }
             }
+
+            // This element is about to re-state, from scratch, which keyed
+            // children it declares — so everything the frame recorded about
+            // it up to now is superseded. Clearing here rather than after
+            // the reconcile is what makes the newest build authoritative:
+            // the reconcile below immediately re-reserves whatever this
+            // build still declares, and anything it has dropped simply does
+            // not come back. Flutter clears the same two populations at this
+            // point in `buildScope`'s loop.
+            self.global_key_reservations.note_parent_rebuild(id);
 
             let rebuild_span = tracing::info_span!(
                 "element_rebuild",
