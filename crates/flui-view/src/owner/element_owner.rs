@@ -493,15 +493,6 @@ impl ElementOwner<'_> {
         self.global_keys.len()
     }
 
-    /// Number of `GlobalKey` declarations recorded so far this frame.
-    ///
-    /// Diagnostic surface for tests that assert the reservation ledger is
-    /// being populated at all; the verification itself reads the ledger by
-    /// identity, never by size.
-    pub fn global_key_reservation_is_empty(&self) -> bool {
-        self.global_key_reservations.is_empty()
-    }
-
     /// Number of dirty elements pending rebuild.
     pub fn dirty_count(&self) -> usize {
         self.dirty_elements.len() + self.partitioned_dirty_count

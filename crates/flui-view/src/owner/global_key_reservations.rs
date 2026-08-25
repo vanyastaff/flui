@@ -489,15 +489,33 @@ fn report_duplicate(
     report
 }
 
-/// Drop `child` from `parent`'s child list when `parent` is not actually
-/// the child's parent any more.
+/// Leave `parent`'s child list internally consistent after it lost `child`
+/// to someone else's graft.
 ///
-/// A no-op in the common case — the graft already unlinked the child when
-/// it moved it — but the check costs one lookup and closes the window in
-/// which a reservation outlives an edge the graft did not clean up.
+/// Two things can be wrong, and the second is the one that actually bites:
+///
+/// 1. `parent` may still *list* a child that is no longer its child. The
+///    graft normally unlinks it on the way past, but a reservation can
+///    outlive an edge the graft did not clean up, and a dangling edge makes
+///    teardown cascade secondary failures on top of the real one.
+/// 2. Whether the graft removed the entry or this function does, every
+///    later sibling shifts down one index — and the reconciler keeps
+///    `ElementNode::slot` in lockstep with a child's index in its parent's
+///    `child_ids`. Neither removal restamps. Slot is read by
+///    reconcile-event dispositions, tree observers, and render-child
+///    ordering, all well before the parent's next rebuild would restamp
+///    them itself.
+///
+/// So the whole list is restamped, not just the tail after a removal this
+/// function performed: by the time a duplicate is being reported, the graft
+/// has usually already done the removing. Restamping is idempotent and runs
+/// only for parents named in a report, so an ordinary frame never pays for
+/// it.
 ///
 /// Flutter parity: the `forgetChild` calls in
-/// `_debugVerifyGlobalKeyReservation` (`framework.dart:3272`).
+/// `_debugVerifyGlobalKeyReservation` (`framework.dart:3272`). Flutter needs
+/// no restamp because its child links are per-element fields rather than an
+/// index-addressed list.
 fn repair_losing_parent(tree: &mut ElementTree, parent: ElementId, child: ElementId) {
     if tree
         .get(child)
@@ -509,19 +527,25 @@ fn repair_losing_parent(tree: &mut ElementTree, parent: ElementId, child: Elemen
     let Some(parent_node) = tree.get_mut(parent) else {
         return;
     };
-    let Some(position) = parent_node
+    if let Some(position) = parent_node
         .child_ids
         .iter()
         .position(|&existing| existing == child)
-    else {
-        return;
-    };
-    parent_node.child_ids.remove(position);
-    tracing::warn!(
-        ?parent,
-        ?child,
-        "duplicate GlobalKey repair: dropped a child edge from a parent that no longer holds it"
-    );
+    {
+        parent_node.child_ids.remove(position);
+        tracing::warn!(
+            ?parent,
+            ?child,
+            "duplicate GlobalKey repair: dropped a child edge from a parent that no longer \
+             holds it"
+        );
+    }
+    let siblings: Vec<ElementId> = parent_node.child_ids.clone();
+    for (slot, sibling) in siblings.into_iter().enumerate() {
+        if let Some(node) = tree.get_mut(sibling) {
+            node.slot = slot;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1001,6 +1025,58 @@ mod tree_tests {
             (first, second),
             "the report names both live elements sharing the key",
         );
+    }
+
+    /// The repair must leave the losing parent's child list internally
+    /// consistent, not merely shorter: `id_reconcile` keeps each child's
+    /// `slot` in lockstep with its index in the parent's `child_ids`, and a
+    /// bare `Vec::remove` shifts every later sibling down one index without
+    /// touching its `slot`.
+    #[test]
+    fn the_repair_restamps_the_slots_it_shifts() {
+        let (mut tree, mut owner, parent_a, parent_b) = two_parents();
+        let keyed = Keyed {
+            key: GlobalKey::<()>::new(),
+        };
+
+        // `a` holds the keyed child at slot 0 and two plain children after
+        // it, so removing the keyed one shifts both.
+        let child = tree.insert(&keyed, parent_a, 0, &mut owner.element_owner_mut());
+        let after_one = tree.insert(&Plain, parent_a, 1, &mut owner.element_owner_mut());
+        let after_two = tree.insert(&Plain, parent_a, 2, &mut owner.element_owner_mut());
+        for (slot, id) in [child, after_one, after_two].into_iter().enumerate() {
+            tree.get_mut(parent_a)
+                .expect("parent a is mounted")
+                .child_ids
+                .push(id);
+            assert_eq!(tree.get(id).expect("child is mounted").slot(), slot);
+        }
+
+        tree.insert(&keyed, parent_b, 0, &mut owner.element_owner_mut());
+        owner.finalize_tree(&mut tree);
+        assert_eq!(
+            owner.take_global_key_diagnostics().len(),
+            1,
+            "the duplicate is reported",
+        );
+
+        let remaining = tree
+            .get(parent_a)
+            .expect("parent a is still mounted")
+            .child_ids()
+            .to_vec();
+        assert_eq!(
+            remaining,
+            vec![after_one, after_two],
+            "the contested child is gone from the losing parent",
+        );
+        for (slot, id) in remaining.into_iter().enumerate() {
+            assert_eq!(
+                tree.get(id).expect("sibling is mounted").slot(),
+                slot,
+                "every surviving sibling's slot must match its new index",
+            );
+        }
     }
 
     /// A parent unmounted later in the same frame is not a live claimant, so
