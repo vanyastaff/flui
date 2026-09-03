@@ -14,7 +14,7 @@
 
 #[cfg(test)]
 use std::collections::btree_map::Keys;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::panic::AssertUnwindSafe;
 
 use flui_foundation::{ElementId, RenderId, SaltedKey, ViewKey};
@@ -286,7 +286,20 @@ impl SparseChildren {
             .collect();
 
         // ── Phase 2: match built views to residents ──
-        // `matched[k] = Some(resident position)` for built entry `k`.
+        // `matched[k] = Some(resident position)` for built entry `k`. Keyed
+        // residents are bucketed by key hash (decided by `key_eq` inside the
+        // bucket, as the dense reconciler does) and keyless ones by index, so
+        // each built view costs O(1) expected rather than a scan of the band.
+        let mut keyed_by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut keyless_by_index: HashMap<usize, usize> = HashMap::new();
+        for (pos, resident) in residents.iter().enumerate() {
+            match &resident.key {
+                Some(key) => keyed_by_hash.entry(key.key_hash()).or_default().push(pos),
+                None => {
+                    keyless_by_index.insert(resident.index, pos);
+                }
+            }
+        }
         let mut matched: Vec<Option<usize>> = vec![None; built.len()];
         for (k, (index, view)) in built.iter().enumerate() {
             let Some(view) = view else {
@@ -294,13 +307,18 @@ impl SparseChildren {
             };
             let view: &dyn View = view.0.as_ref();
             let candidate = if let Some(key) = view.key() {
-                residents
-                    .iter()
-                    .position(|r| !r.claimed && r.key.as_deref().is_some_and(|rk| rk.key_eq(key)))
+                keyed_by_hash.get(&key.key_hash()).and_then(|bucket| {
+                    bucket.iter().copied().find(|&pos| {
+                        let resident = &residents[pos];
+                        !resident.claimed
+                            && resident.key.as_deref().is_some_and(|rk| rk.key_eq(key))
+                    })
+                })
             } else {
-                residents
-                    .iter()
-                    .position(|r| !r.claimed && r.index == *index && r.key.is_none())
+                keyless_by_index
+                    .get(index)
+                    .copied()
+                    .filter(|&pos| !residents[pos].claimed)
             };
             if let Some(pos) = candidate
                 && resident_type_matches(tree, residents[pos].id, view)

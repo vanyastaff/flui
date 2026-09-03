@@ -30,6 +30,9 @@ pub struct RepaintBoundary {
     /// exactly once. A sliver looking an item up by key sees through the salt
     /// (`SaltedKey::unsalt`).
     salted_child_key: Option<SaltedKey>,
+    /// Whether this boundary carries its child's key at all (the scrolling
+    /// delegates ask for it; a plain `RepaintBoundary` stays keyless).
+    salts_child_key: bool,
 }
 
 impl RepaintBoundary {
@@ -42,19 +45,29 @@ impl RepaintBoundary {
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
         self.child = Child::some(child.into_view());
+        self.refresh_salted_key();
         self
     }
 
     /// Carry the child's key, salted, as this boundary's own — see
-    /// [`Self::salted_child_key`]. Call after [`Self::child`].
+    /// [`Self::salted_child_key`]. Order-independent with [`Self::child`]:
+    /// whichever is set last re-derives the salt.
     #[must_use]
-    pub(crate) fn forwarding_child_key(mut self) -> Self {
-        self.salted_child_key = self
-            .child
-            .as_ref()
-            .and_then(|c| c.key())
-            .map(SaltedKey::new);
+    pub(crate) fn salting_child_key(mut self) -> Self {
+        self.salts_child_key = true;
+        self.refresh_salted_key();
         self
+    }
+
+    fn refresh_salted_key(&mut self) {
+        self.salted_child_key = if self.salts_child_key {
+            self.child
+                .as_ref()
+                .and_then(|c| c.key())
+                .map(SaltedKey::new)
+        } else {
+            None
+        };
     }
 }
 
