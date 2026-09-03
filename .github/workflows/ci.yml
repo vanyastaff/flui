@@ -184,12 +184,15 @@ jobs:
           # near-identical per-job caches were counting against the repo's
           # 10 GB Actions cache cap (12 caches, 10.9 GB on 2026-09-03 —
           # over the cap, so GitHub was evicting and jobs were restoring
-          # cold). The last writer wins on a shared key. That is safe here
-          # because rust-cache stores DEPENDENCY artifacts (workspace crates
-          # are always evicted) and cargo keys those by feature hash, so a
-          # job that saves a smaller feature set costs the others a partial
-          # rebuild of the missing deps on the next run — never a cold one.
-          shared-key: stable-dev-host
+          # cold). GitHub cache entries are immutable per key, so on a shared
+          # key the FIRST job to save wins for good and rust-cache never
+          # replaces it (an exact restore hit skips the save). That is why
+          # only `test` — the `--workspace --all-targets` superset builder —
+          # saves this key, everyone else restores. The `-v2` suffix retires
+          # the first version of the key, which clippy had won with
+          # check-mode artifacts that carry no codegen; a key can only be
+          # replaced by rotating it, never by overwriting.
+          shared-key: stable-dev-host-v2
           cache-on-failure: true
           # Caches are WRITTEN only by runs on main; every PR run is a
           # read-only consumer that restores main's cache (rust-cache falls
@@ -269,8 +272,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Shared with clippy / test / test-features / live-smoke / doc-test;
-          # the rationale lives on the `clippy` job's cache step.
-          shared-key: stable-dev-host
+          # the rationale lives on the `clippy` job's cache step. Only `test` saves.
+          shared-key: stable-dev-host-v2
           cache-on-failure: true
           # The ONE writer of `stable-dev-host`: this job builds
           # `--workspace --all-targets`, a superset of what clippy,
@@ -439,8 +442,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Shared with clippy / test / test-features / live-smoke / doc-test;
-          # the rationale lives on the `clippy` job's cache step.
-          shared-key: stable-dev-host
+          # the rationale lives on the `clippy` job's cache step. Only `test` saves.
+          shared-key: stable-dev-host-v2
           cache-on-failure: true
           # Restore-only. GitHub cache entries are immutable per key, so of
           # the five jobs on `stable-dev-host` the FIRST to finish would win
@@ -528,8 +531,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Shared with clippy / test / test-features / live-smoke / doc-test;
-          # the rationale lives on the `clippy` job's cache step.
-          shared-key: stable-dev-host
+          # the rationale lives on the `clippy` job's cache step. Only `test` saves.
+          shared-key: stable-dev-host-v2
           cache-on-failure: true
           # Restore-only. GitHub cache entries are immutable per key, so of
           # the five jobs on `stable-dev-host` the FIRST to finish would win
@@ -757,8 +760,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Shared with clippy / test / test-features / live-smoke / doc-test;
-          # the rationale lives on the `clippy` job's cache step.
-          shared-key: stable-dev-host
+          # the rationale lives on the `clippy` job's cache step. Only `test` saves.
+          shared-key: stable-dev-host-v2
           cache-on-failure: true
           # Restore-only. GitHub cache entries are immutable per key, so of
           # the five jobs on `stable-dev-host` the FIRST to finish would win

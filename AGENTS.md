@@ -229,7 +229,9 @@ workflow file does *not* tell you, and what you will misjudge without it:
   not the last, as this note first claimed. On a shared key that means the fastest job (clippy,
   check-mode, no codegen) would write a 0.36 GB metadata-only cache and every other job would
   rebuild its code each run. So `test` — `--workspace --all-targets`, the superset — is the sole
-  writer of `stable-dev-host`; clippy, test-features, live-smoke and doc-test are `save-if: false`.
+  writer of `stable-dev-host-v2`; clippy, test-features, live-smoke and doc-test are `save-if: false`.
+  Changing the writer or the contents of a shared key means ROTATING the key (the `-vN` suffix):
+  an existing entry is never replaced, and an exact restore hit skips the save.
   A job that saves a smaller set is not "a partial rebuild for the others", it is the permanent
   contents of the key until the lockfile or a `CARGO_*` env value changes. Jobs whose
   artifacts genuinely differ (release profile, MSRV toolchain, miri/nightly, wasm32, cross
