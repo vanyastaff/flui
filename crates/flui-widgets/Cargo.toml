@@ -93,6 +93,9 @@ flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["t
 flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
 flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
 flui-types = { path = "../flui-types", version = "0.2.0" }
+# A paint oracle: a widget test walks the composited layer tree's display
+# lists to assert what a frame did and did not draw.
+flui-painting = { path = "../flui-painting", version = "0.2.0" }
 # Drives a real `AnimationController` in the `FadeTransition` integration test.
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # Constructs `PointerEvent`s (make_down_event, behind the `testing` feature) for

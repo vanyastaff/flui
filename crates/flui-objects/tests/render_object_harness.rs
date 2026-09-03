@@ -7262,6 +7262,49 @@ fn harness_sliver_list_scroll_extent_equals_virtualizer_estimate() {
     );
 }
 
+/// A resident the widening pulls into the band is laid out in that pass.
+///
+/// Items 0–3 are 5 px, items 4–11 are 30 px, the seed estimate is 200 px.
+/// The first query (650 px window at 200 px hints) covers items 0–3 only;
+/// measuring them adapts the hint to 5 px and the re-query widens the band
+/// over the attached items 4–11. Those must be laid out and measured in
+/// the same pass: positioned from the 5 px hint instead, item 11 would sit
+/// at 20 + 7 × 5 = 55 px this frame — and everything after it with it —
+/// where its measured neighbours put it at 20 + 7 × 30 = 230 px.
+#[test]
+fn harness_sliver_list_lays_out_attached_children_the_widening_pulls_into_band() {
+    const LABELS: [&str; 12] = [
+        "item0", "item1", "item2", "item3", "item4", "item5", "item6", "item7", "item8", "item9",
+        "item10", "item11",
+    ];
+    let mut list = sliver_node(RenderSliverList::new(60, 200.0)).label("list");
+    for (index, label) in LABELS.into_iter().enumerate() {
+        let height = if index < 4 { 5.0 } else { 30.0 };
+        list = list.child(
+            box_node(RenderColoredBox::red(300.0, height))
+                .label(label)
+                .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                    SliverMultiBoxAdaptorParentData::new(index),
+                )),
+        );
+    }
+    let run = RenderTester::mount(viewport_with_scroll(0.0, list))
+        .with_size(Size::new(px(300.0), px(400.0)))
+        .run_layout();
+
+    assert_eq!(
+        run.offset(run.id("item4")).dy,
+        px(20.0),
+        "item 4 follows the four measured 5 px items"
+    );
+    assert_eq!(
+        run.offset(run.id("item11")).dy,
+        px(230.0),
+        "item 11 is positioned from the measured 30 px extents of items 4–10, \
+         not from the adapted 5 px hint the first query left them with"
+    );
+}
+
 #[test]
 fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
     // Two-pass test for the anchor-correction state machine.

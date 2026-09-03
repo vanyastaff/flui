@@ -460,6 +460,13 @@ impl BuildOwner {
                 "lazy sliver band did not settle within the frame's pass budget; \
                  the remaining requests are deferred to the next frame"
             );
+            // Evict before paint. The last pass's bands are applied with
+            // no builds, and the slivers they touched are marked for the
+            // final `run_frame`'s layout — so a resident the band dropped
+            // is gone before anything paints, hit-tests, or assembles
+            // semantics over it. The requests stay queued for the
+            // post-frame service, as the deferral intends.
+            self.service_child_requests_evict_only(tree, pipeline);
         }
         tracing::debug!(lazy_passes, "layout<->build fixpoint settled");
 

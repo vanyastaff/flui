@@ -321,13 +321,28 @@ where
     // this layout at the corrected offset in the same pass and that run
     // re-queries on its own; a request against the pre-correction window
     // is at worst a child the re-run evicts next pass, never a lost one.
+    //
+    // An index the widening pulls in that is ALREADY attached is laid out
+    // here, exactly as step 4 lays out the first query's residents: step 10
+    // positions every in-band child from the virtualizer's extents, and a
+    // resident positioned from an extent this pass never measured (its
+    // view changed size, or the pass adapted the hint under it) would be
+    // painted at a stale offset — and everything after it with it — until
+    // the next frame's first query happened to cover it.
     let widened = virtualizer.query(&window);
     for logical_i in widened.cache_first..widened.cache_last {
         if logical_i >= *item_count {
             break;
         }
         let already_visited = logical_i >= cache_first && logical_i < cache_last;
-        if already_visited || logical_to_slot.contains_key(&logical_i) {
+        if already_visited {
+            continue;
+        }
+        if let Some(&slot) = logical_to_slot.get(&logical_i) {
+            let size = ctx.layout_box_child(slot, box_constraints);
+            let extent = main_axis_extent(size, constraints.axis_direction);
+            let correction = virtualizer.set_measured(logical_i, extent, anchor);
+            accumulate_anchor_correction(pending_correction, correction);
             continue;
         }
         match on_absent(logical_i, dense_count, box_constraints, ctx) {
