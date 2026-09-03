@@ -21,6 +21,7 @@ pub(crate) mod logging;
 pub(crate) mod media_query_root;
 pub(crate) mod presentation;
 pub(crate) mod presentation_forest;
+pub(crate) mod raster_lane;
 #[cfg(test)]
 pub(crate) mod raster_test_support;
 pub mod runner;
