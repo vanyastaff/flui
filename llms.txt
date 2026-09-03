@@ -1,0 +1,72 @@
+# FLUI
+
+> A Flutter-inspired declarative UI framework for Rust: immutable `View` → mutable `Element` → layout/paint `Render` trees, Flutter's box and sliver layout protocols, and a `wgpu` renderer. Pre-release; consumed from a git clone as a Cargo workspace (`MIT OR Apache-2.0`, MSRV 1.97).
+
+FLUI takes Flutter as its behavioral reference (the three-tree model, lifecycle ordering, the layout/paint/hit-test protocol, and Flutter's test corpus are the floor it must meet) while structure, mechanisms, and code style are designed for Rust: type-safe child arity (`Leaf`/`Single`/`Optional`/`Variable`) checked at compile time, `Result` instead of exceptions, field-granular inherited dependencies, capability-scoped `BuildContext`, and per-window `UiRealm`s. See `NOTICE` for the Flutter attribution.
+
+## Start here
+
+- [README](README.md): status, quick start, why FLUI, hello world, MSRV, license.
+- [Getting started](docs/getting-started.md): platform setup (Windows / macOS / Android NDK / WASM) and the `just` recipes.
+- [Architecture](docs/architecture.md): the three-tree pipeline in one page.
+- [Foundations](docs/FOUNDATIONS.md): the architecture contract and locked contracts.
+- [Crates](docs/crates.md): the layered crate map and per-crate status.
+- [Testing](docs/testing.md): the headless frame driver, snapshots, the render-object harness, the live smoke suite.
+- [Hot reload](docs/hot-reload.md): the `dlopen` plugin host for desktop iteration.
+
+## Writing a view
+
+An app is a `View` that builds other views — the widget layer drives the whole
+pipeline (element tree → render objects → layout → paint → `wgpu`):
+
+```rust
+//! examples/widgets_gallery.rs (excerpt)
+use flui_app::run_app;
+use flui_widgets::prelude::*;
+use flui_widgets::{column, row};
+
+/// A circular colour avatar: a coloured box clipped to an inscribed oval.
+fn avatar(color: Color) -> ClipOval {
+    ClipOval::new().child(ColoredBox::new(color).child(SizedBox::square(64.0)))
+}
+
+#[derive(Clone, StatelessView)]
+struct Gallery;
+
+impl StatelessView for Gallery {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Container::new()
+            .color(Color::rgb(18, 18, 24))
+            .padding(EdgeInsets::all(px(24.0)))
+            .child(Column::new(column![
+                Text::new("FLUI widget gallery"),
+                SizedBox::height(16.0),
+                Row::new(row![
+                    avatar(Color::rgb(229, 57, 53)),
+                    SizedBox::width(12.0),
+                    avatar(Color::rgb(30, 136, 229)),
+                ]),
+                Container::new()
+                    .color(Color::rgb(38, 38, 48))
+                    .padding(EdgeInsets::all(px(16.0)))
+                    .child(Center::new().child(Text::new("centered in a card"))),
+            ]))
+    }
+}
+
+fn main() {
+    run_app(Gallery);
+}
+```
+
+A stateless view is `#[derive(Clone, StatelessView)]` plus `impl StatelessView for T { fn build(&self, ctx: &dyn BuildContext) -> impl IntoView }`; a stateful one names its state with `impl StatefulView for T { type State = S; fn create_state(&self) -> S }` and implements `ViewState<T>` on `S`. Inherited data is published with `InheritedView` and read with `ctx.depend_on::<T>()`. The compiler error for a missing impl names the exact derive or impl to write.
+
+## For contributors and agents
+
+- [AGENTS.md](AGENTS.md): the guide every agent runtime loads — prime directive, code navigation, build and CI commands, testing quirks, definition of done.
+- [STYLE.md](STYLE.md): toolchain policy and the lint baseline.
+- [STRATEGY.md](STRATEGY.md): product strategy and why Flutter is the reference and the oracle, not the ceiling.
+- [Port methodology](docs/PORT.md): the mapping rules and the refusal triggers `just port-check` enforces.
+- [Roadmap](docs/ROADMAP.md): dependency-ordered phases and what lands next.
+- [Panic policy](docs/PANIC-POLICY.md): `expect("BUG: …")` for invariants, `Result` for everything else.
+- [Contributing](docs/contributing.md): the `just ci` gate to run before any commit.
