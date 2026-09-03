@@ -1,7 +1,6 @@
 //! Interned asset keys for efficient hashing and comparison.
 
-use lasso::{Rodeo, Spur};
-use parking_lot::RwLock;
+use lasso::{Spur, ThreadedRodeo};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
@@ -9,8 +8,13 @@ use std::hash::{Hash, Hasher};
 ///
 /// This uses `lasso` for efficient string interning. Strings are stored once
 /// and referenced by a 32-bit integer (`Spur`), making keys only 4 bytes.
-static INTERNER: std::sync::LazyLock<RwLock<Rodeo>> =
-    std::sync::LazyLock::new(|| RwLock::new(Rodeo::new()));
+///
+/// `ThreadedRodeo` is internally synchronised (sharded, lock-free reads), so
+/// interning from many threads needs no lock of our own — the previous
+/// `RwLock<Rodeo>` serialised every `AssetKey::new` behind one write lock.
+/// Interned strings are never removed, so a resolved `&str` borrows from the
+/// `static` for `'static`.
+static INTERNER: std::sync::LazyLock<ThreadedRodeo> = std::sync::LazyLock::new(ThreadedRodeo::new);
 
 /// An interned asset key.
 ///
@@ -65,13 +69,13 @@ impl AssetKey {
     #[inline]
     pub fn new(s: &str) -> Self {
         assert!(!s.is_empty(), "Asset key cannot be empty");
-        let mut interner = INTERNER.write();
-        Self(interner.get_or_intern(s))
+        Self(INTERNER.get_or_intern(s))
     }
 
     /// Returns the string value of this key.
     ///
-    /// This performs a lookup in the global interner and clones the string.
+    /// This is a lookup in the global interner; no allocation. The result is
+    /// `'static` because interned strings are never removed.
     ///
     /// # Examples
     ///
@@ -82,9 +86,8 @@ impl AssetKey {
     /// assert_eq!(key.as_str(), "icon.png");
     /// ```
     #[inline]
-    pub fn as_str(&self) -> String {
-        let interner = INTERNER.read();
-        interner.resolve(&self.0).to_string()
+    pub fn as_str(&self) -> &'static str {
+        INTERNER.resolve(&self.0)
     }
 
     /// Returns the internal integer representation.
@@ -106,7 +109,7 @@ impl Hash for AssetKey {
 
 impl fmt::Display for AssetKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
+        f.write_str(self.as_str())
     }
 }
 
