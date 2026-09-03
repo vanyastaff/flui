@@ -193,8 +193,8 @@ jobs:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
-    # Complements the `Free disk space` reclaim below by shrinking the build
-    # itself. DWARF is the single largest contributor to debug-target size; the
+    # Shrinks the build itself, which is what keeps this job inside the
+    # runner's disk. DWARF is the single largest contributor to debug-target size; the
     # full workspace (~28 crates + the wgpu/glyphon/lyon/naga stack + dev-deps)
     # built with full debuginfo is what crept toward the runner's disk ceiling
     # (PRs #236/#242). `line-tables-only` drops the bulk of DWARF while keeping
@@ -215,15 +215,6 @@ jobs:
       # No space left on device` mid-build (PRs #236/#242). Reclaim ~25 GB of
       # preinstalled bloat we don't use BEFORE building. Linux-only guard so the
       # step is a no-op if Windows/macOS rejoin the matrix.
-      - name: Free disk space (ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          sudo docker image prune --all --force || true
-          df -h /
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
@@ -243,9 +234,13 @@ jobs:
       - name: cargo build --workspace
         run: cargo build --workspace --all-targets --locked
 
-      # Confirm the heavy compile (disk peak) left headroom — the reclaim above
-      # measures only around itself, not after the build. If this trends toward
-      # 0, raise the runner or trim further targets.
+      # Confirm the heavy compile (disk peak) left headroom. This is now the
+      # ONLY disk guard on this job: the pre-build reclaim it used to
+      # complement was removed once the runner image outgrew the constraint
+      # that justified it (measured 2026-09-03: 86 GB free before the reclaim,
+      # ~14 GB consumed by the build, so ~72 GB would remain without it — it
+      # was spending 81 s on the critical path to defend headroom that is no
+      # longer scarce). If this trends toward 0, restore the reclaim.
       - name: Disk usage after build (ubuntu)
         if: runner.os == 'Linux'
         run: df -h /
@@ -327,68 +322,6 @@ jobs:
       # close exits 0 within a timeout (catches teardown hangs and
       # post-quit crashes); wheel ticks scroll. X11 input/pixels only — the
       # Wayland-specific teardown ordering is the next step's job.
-      - name: live-smoke (real window, real input, real teardown)
-        if: runner.os == 'Linux'
-        run: |
-          # The hosted runner has no GPU: mesa-vulkan-drivers provides the
-          # lavapipe software Vulkan adapter the demo's wgpu init needs
-          # (without it the app panics before a window ever exists).
-          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
-          cargo build -p flui --features material --example sliver_demo --locked
-          cargo build -p flui-live-smoke --locked
-          xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo
-
-      # Wayland variant of the live smoke: the ONLY executing coverage of
-      # the Wayland close-path teardown ordering, which segfaulted post-quit
-      # (a wgpu swapchain destroyed after its wl_surface — issue #713) while
-      # the X11 close check above stayed green, because Xlib tolerates the
-      # same out-of-order teardown that is a use-after-free on Wayland's
-      # client-side proxies. Runs the demo under a headless weston
-      # compositor; the app closes itself via the platform's harness
-      # self-close hook (FLUI_SELF_CLOSE_AFTER_MS — the exact CloseRequested
-      # arm a compositor close takes), five cycles, each must exit 0.
-      # Weston is installed explicitly so the harness's weston-absent SKIP
-      # path can never silently fire here. Reuses the demo/harness binaries
-      # built by the X11 step above.
-      - name: live-smoke-wayland (teardown ordering under headless weston)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y --no-install-recommends weston
-          target/debug/flui-live-smoke target/debug/examples/sliver_demo wayland
-
-      # flui-assets and flui-widgets both default to `default = []`, so the
-      # workspace-default run above never compiles their `images`/`network`
-      # decode-and-cache paths or the Image widget's own file-decode test —
-      # exactly the gap that let the Business.1 flui-assets↔Image
-      # verification tests go CI-dead once. Explicit feature-gated run, same
-      # precedent as `cargo clippy -p flui-engine --features
-      # enable-wgpu-tests` above.
-      #
-      # `asset-images`/`network-images` extend the same gap to the
-      # flui-assets↔Image ASYNC bridge (`AssetImage`/`NetworkImage`,
-      # `image::decode_cache`): those tests only compile under their own
-      # feature, so they need their own explicit run too, or they are as
-      # CI-dead as the sync path was before this block existed.
-      - name: cargo nextest run (flui-assets full, flui-widgets images)
-        run: |
-          cargo nextest run -p flui-assets --locked --features full
-          cargo nextest run -p flui-widgets --locked --features images --test image
-          cargo nextest run -p flui-widgets --locked --features asset-images --lib
-          cargo nextest run -p flui-widgets --locked --features asset-images --test image_async
-          cargo nextest run -p flui-widgets --locked --features network-images --test image_network
-
-      # The facade is Material-first by default, so the workspace run above
-      # never compiles `tests/cupertino_demo.rs` (gated by
-      # `required-features = ["cupertino"]`) or the facade smoke test's
-      # localizations assertions. Same precedent as the block above: a test
-      # behind a non-default feature needs its own explicit run, or it is
-      # CI-dead.
-      - name: cargo nextest run (facade non-default catalogs)
-        run: cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
-
-      # insta writes `<name>.snap.new` next to the snapshot on mismatch.
-      # Upload them so a CI-only snapshot failure is debuggable without a
-      # local repro (same pattern as egui/xilem snapshot artifacts).
       - name: Upload insta snapshot candidates on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -424,6 +357,145 @@ jobs:
   # workflow's run — the dev machine is hardware DX12, so the WARP software
   # path cannot be exercised locally.
   # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
+  # test-features — the feature-gated test runs, split out of `test` so they
+  # stop extending the critical path. They are the runs that compile crates
+  # under NON-default features, so cargo rebuilds those crates and their
+  # dependents regardless of what `test` already built; sharing a runner with
+  # it bought nothing but serialisation (measured 2026-09-03: 203 s of the
+  # `test` job's 17 min). Same coverage, now concurrent.
+  # ─────────────────────────────────────────────────────────────────────────
+  test-features:
+    name: test-features (non-default feature runs)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
+        with:
+          tool: cargo-nextest@0.9
+
+      # flui-assets and flui-widgets both default to `default = []`, so the
+      # workspace-default run above never compiles their `images`/`network`
+      # decode-and-cache paths or the Image widget's own file-decode test —
+      # exactly the gap that let the Business.1 flui-assets↔Image
+      # verification tests go CI-dead once. Explicit feature-gated run, same
+      # precedent as `cargo clippy -p flui-engine --features
+      # enable-wgpu-tests` above.
+      #
+      # `asset-images`/`network-images` extend the same gap to the
+      # flui-assets↔Image ASYNC bridge (`AssetImage`/`NetworkImage`,
+      # `image::decode_cache`): those tests only compile under their own
+      # feature, so they need their own explicit run too, or they are as
+      # CI-dead as the sync path was before this block existed.
+      - name: cargo nextest run (flui-assets full, flui-widgets images)
+        run: |
+          cargo nextest run -p flui-assets --locked --features full
+          cargo nextest run -p flui-widgets --locked --features images --test image
+          cargo nextest run -p flui-widgets --locked --features asset-images --lib
+          cargo nextest run -p flui-widgets --locked --features asset-images --test image_async
+          cargo nextest run -p flui-widgets --locked --features network-images --test image_network
+
+      # The facade is Material-first by default, so the workspace run above
+      # never compiles `tests/cupertino_demo.rs` (gated by
+      # `required-features = ["cupertino"]`) or the facade smoke test's
+      # localizations assertions. Same precedent as the block above: a test
+      # behind a non-default feature needs its own explicit run, or it is
+      # CI-dead.
+      - name: cargo nextest run (facade non-default catalogs)
+        run: cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
+
+      # The facade run above drives the insta demo-snapshot suite, so this job
+      # needs the same candidate upload `test` has — otherwise a snapshot diff
+      # here is only readable as a log tail.
+      - name: Upload insta snapshot candidates on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: insta-snap-new-features
+          path: "**/*.snap.new"
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # insta writes `<name>.snap.new` next to the snapshot on mismatch.
+      # Upload them so a CI-only snapshot failure is debuggable without a
+      # local repro (same pattern as egui/xilem snapshot artifacts).
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # live-smoke — the real-window smoke suites, split out of `test` for the
+  # same reason: they need only the demo example and the harness binary, not
+  # the workspace's test targets, so they were serialising ~100 s behind a
+  # build they do not use. Both variants stay in ONE job because the Wayland
+  # run reuses the binaries the X11 run builds.
+  # ─────────────────────────────────────────────────────────────────────────
+  live-smoke:
+    name: live-smoke (X11 + Wayland, real window)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: Ensure Xvfb is available
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb
+
+      - name: live-smoke (real window, real input, real teardown)
+        if: runner.os == 'Linux'
+        run: |
+          # The hosted runner has no GPU: mesa-vulkan-drivers provides the
+          # lavapipe software Vulkan adapter the demo's wgpu init needs
+          # (without it the app panics before a window ever exists).
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
+          cargo build -p flui --features material --example sliver_demo --locked
+          cargo build -p flui-live-smoke --locked
+          xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo
+
+      # Wayland variant of the live smoke: the ONLY executing coverage of
+      # the Wayland close-path teardown ordering, which segfaulted post-quit
+      # (a wgpu swapchain destroyed after its wl_surface — issue #713) while
+      # the X11 close check above stayed green, because Xlib tolerates the
+      # same out-of-order teardown that is a use-after-free on Wayland's
+      # client-side proxies. Runs the demo under a headless weston
+      # compositor; the app closes itself via the platform's harness
+      # self-close hook (FLUI_SELF_CLOSE_AFTER_MS — the exact CloseRequested
+      # arm a compositor close takes), five cycles, each must exit 0.
+      # Weston is installed explicitly so the harness's weston-absent SKIP
+      # path can never silently fire here. Reuses the demo/harness binaries
+      # built by the X11 step above.
+      - name: live-smoke-wayland (teardown ordering under headless weston)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends weston
+          target/debug/flui-live-smoke target/debug/examples/sliver_demo wayland
+
   gpu-test:
     name: gpu-test (wgpu readback, WARP)
     needs: checks
@@ -943,7 +1015,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, clippy, feature-matrix, wasm-check, cross-typecheck, test, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
+    needs: [checks, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -210,6 +210,17 @@ workflow file does *not* tell you, and what you will misjudge without it:
   **on its own**, against the `flui` package alone — a `--workspace` build is not evidence about
   the facade surface — and asserts via `cargo tree` that `flui-hot-reload` is *absent* from
   `flui-app`'s default normal graph rather than merely unused by it.
+- **The `test` job is split three ways.** `test` builds the workspace and runs the
+  default-feature lib+integration suite plus flui-platform's headless run;
+  `test-features` runs everything that needs NON-default features (flui-assets
+  `full`, flui-widgets' image features, the facade's cupertino/localizations
+  catalogs); `live-smoke` runs the two real-window suites. They were one job
+  until 2026-09-03, when it was the critical path at 17 min of an 18 min run —
+  the feature runs rebuild their crates under different features regardless of
+  what `test` compiled, and the smoke suites need only the demo binary, so
+  sharing a runner bought serialisation and nothing else. Adding a step to the
+  wrong one of the three is how coverage goes missing: put a default-feature
+  test in `test`, anything feature-gated in `test-features`.
 - **wasm-check excludes 7 crates** — the mio/uuid CLI stack and the dlopen-based hot-reload path,
   none of which can work on wasm32. It runs `cargo clippy` as well as `cargo check` (lib/bin targets — test targets pull native-only dev-deps): the web backend of flui-platform is wasm32-only, so this is the only lint pass that ever sees it.
 - **gpu-test runs the readback suite on WARP** (windows-latest) and is merge-blocking. On an oracle
