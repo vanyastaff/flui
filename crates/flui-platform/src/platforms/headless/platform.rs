@@ -50,7 +50,7 @@ static NEXT_HEADLESS_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
 
 fn next_headless_window_id() -> WindowId {
     let raw = NEXT_HEADLESS_WINDOW_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .expect("BUG: exhausted the process-wide headless WindowId space");

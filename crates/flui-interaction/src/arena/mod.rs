@@ -325,7 +325,7 @@ impl DeadlineRegistry {
     ) -> GestureDeadlineRegistration {
         let id = self
             .next_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .unwrap_or_else(|_| panic!("BUG: gesture deadline registration ID exhausted"));
         self.watchers.lock().push(DeadlineWatcher {
             id,
@@ -849,7 +849,7 @@ impl GestureArena {
     fn allocate_slot(&self, pointer: PointerId) -> Arc<ArenaSlot> {
         let generation = ArenaGeneration(
             self.next_generation
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
                     generation.checked_add(1)
                 })
                 .unwrap_or_else(|_| panic!("BUG: gesture arena generation exhausted")),

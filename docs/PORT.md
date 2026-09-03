@@ -359,7 +359,7 @@ was chosen deliberately over splitting them across two mechanisms.
 
 ### 18. `new_unchecked` in `flui-foundation/src/key.rs`
 
-**F2 (P0 UB) — key counter off the checked path.** F2 replaced `NonZeroU64::new_unchecked` in `Key::new` with the `fetch_update` sentinel pattern (counter = 0 is the permanent-exhaustion sentinel; retries panic without mutation or duplicate keys), eliminating the UB-on-counter-wrap hazard. This trigger guards against reintroducing any `new_unchecked` call into `crates/flui-foundation/src/key.rs` — the key counter must stay on the safe checked path.
+**F2 (P0 UB) — key counter off the checked path.** F2 replaced `NonZeroU64::new_unchecked` in `Key::new` with the `Atomic::try_update` sentinel pattern (counter = 0 is the permanent-exhaustion sentinel; retries panic without mutation or duplicate keys), eliminating the UB-on-counter-wrap hazard. This trigger guards against reintroducing any `new_unchecked` call into `crates/flui-foundation/src/key.rs` — the key counter must stay on the safe checked path.
 
 **Scope:** `crates/flui-foundation/src/key.rs` only.
 
