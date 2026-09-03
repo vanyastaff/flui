@@ -59,7 +59,6 @@ fn assert_generated_project_compiles(template: &str) {
     // failure (`run_cargo_check` returns `Ok(false)`, the scaffold itself
     // having succeeded), so this cannot turn the assertion below red; it just
     // stops the test reaching the network at all.
-    let t_create = std::time::Instant::now();
     flui()
         .env("CARGO_NET_OFFLINE", "true")
         .args([
@@ -72,7 +71,7 @@ fn assert_generated_project_compiles(template: &str) {
             "--local",
             // The scaffold's own post-create `cargo check` is a full cold
             // build into the scaffold's private target dir — measured at
-            // 236 s on the CI runner, per template. This test's check
+            // 236 s on the CI runner, per template. This test's own check
             // below is the oracle; the internal one only reports.
             "--no-check",
         ])
@@ -80,11 +79,6 @@ fn assert_generated_project_compiles(template: &str) {
         .arg(&target)
         .assert()
         .success();
-    eprintln!(
-        "[timing] flui create ({template}): {:.1}s; scaffold-local target present: {}",
-        t_create.elapsed().as_secs_f64(),
-        project.join("target").is_dir()
-    );
 
     // Seed the generated project with this workspace's own resolved versions
     // before checking it, and forbid the network.
@@ -113,69 +107,25 @@ fn assert_generated_project_compiles(template: &str) {
     std::fs::copy(root.join("Cargo.lock"), project.join("Cargo.lock"))
         .expect("seed the generated project with the workspace's resolved versions");
 
-    // Check the generated project INTO THIS WORKSPACE'S TARGET DIR, under
-    // this workspace's exact dev profile.
-    //
-    // Its dependency graph is, by construction, a subset of ours (`--local`
-    // path deps plus the copied lock), so every dependency artifact it
-    // needs already exists in `target/` — the workspace build that precedes
-    // this test in CI just produced them. What kept cargo from reusing them
-    // was the profile: the scaffold has no `[profile]`, so it checked under
-    // cargo's defaults (opt-level 0, incremental on, full debuginfo) while
-    // the workspace builds with `opt-level = 1`, `incremental = false`,
-    // `debug = "line-tables-only"` and `opt-level = 2` for dependencies.
-    // Cargo hashes the resolved profile into every artifact, so nothing
-    // matched and the test cold-compiled ~300 crates into its own scratch
-    // target — 128 s on the CI runner, twice, for the two templates, and
-    // 47 % of the entire suite's test-seconds.
-    //
-    // Pinning the same values through a project-local `.cargo/config.toml`
-    // makes the hashes identical, so only the generated root crate is
-    // actually checked. The oracle is unchanged: cargo still resolves the
-    // scaffold's manifest, unifies its features, and type-checks its source
-    // against the real crates. The profile only affects codegen, which
-    // `check` never reaches. (Keep these values in step with the root
-    // `Cargo.toml` `[profile.dev]` — a drift costs only speed, never
-    // correctness, and shows up as this test getting slow again.)
-    let cargo_config_dir = project.join(".cargo");
-    std::fs::create_dir_all(&cargo_config_dir).expect("create the scaffold's .cargo directory");
-    std::fs::write(
-        cargo_config_dir.join("config.toml"),
-        "[profile.dev]\nopt-level = 1\nincremental = false\ndebug = \"line-tables-only\"\n\n\
-         [profile.dev.package.\"*\"]\nopt-level = 2\ndebug = false\n",
-    )
-    .expect("write the scaffold's profile config");
-    // `CARGO_TARGET_DIR` may be relative (`just nightly-check` sets
-    // `target/nightly`), and it is relative to the invoking cargo's cwd —
-    // the workspace root — not to the scaffold we `current_dir` into
-    // below. Resolve it against the root, or a relative value would land
-    // the whole check under the scaffold and rebuild everything cold.
-    let workspace_target = std::env::var_os("CARGO_TARGET_DIR")
-        .map_or_else(|| root.join("target"), |dir| root.join(PathBuf::from(dir)));
-
+    // The scaffold is checked into a scratch target under `target/`, shared
+    // by the two template tests (cargo's build-directory lock serialises
+    // them, so the second finds the first's artifacts). Checking it into the
+    // workspace's own target instead was tried and measured on the CI
+    // runner: the check compiles nothing there, and still takes ~180 s per
+    // test — cargo's freshness scan over a 549-crate `--all-targets` target
+    // on a busy disk — which is slower than this cold build at opt-level 0.
+    // The scaffold's OWN post-create check is what used to dominate (236 s
+    // per template, a full cold build into the scaffold's private target);
+    // `--no-check` above removes that entirely.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let t_check = std::time::Instant::now();
     let output = std::process::Command::new(cargo)
         .arg("check")
         .arg("--offline")
-        .arg("-v")
         .arg("--target-dir")
-        .arg(&workspace_target)
+        .arg(target.join("cli-template-check"))
         .current_dir(&project)
         .output()
         .expect("run cargo check on the generated project");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let compiled = stderr
-        .lines()
-        .filter(|l| {
-            l.trim_start().starts_with("Checking ") || l.trim_start().starts_with("Compiling ")
-        })
-        .count();
-    eprintln!(
-        "[timing] scaffold check ({template}): {:.1}s; crates compiled: {compiled}; target-dir: {}",
-        t_check.elapsed().as_secs_f64(),
-        workspace_target.display()
-    );
 
     assert!(
         output.status.success(),
