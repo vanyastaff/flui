@@ -89,7 +89,7 @@ jobs:
   # Ubuntu only — pure source analysis. clippy lives in its own parallel job.
   # ─────────────────────────────────────────────────────────────────────────
   checks:
-    name: checks (fmt, conformance, port-check, typos, taplo, actionlint, zizmor)
+    name: checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -103,7 +103,7 @@ jobs:
           components: rustfmt
 
       - name: Install CI tools (typos, taplo, ripgrep, zizmor)
-        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately. `ripgrep` is required by
@@ -114,11 +114,11 @@ jobs:
           # falls back to cargo-binstall, which cannot resolve a Go tool that
           # is not on crates.io ("actionlint is not found", exit 76). It is
           # fetched from its own release below.
-          tool: typos-cli@1.28,taplo-cli@0.10,ripgrep@14,zizmor@1
+          tool: typos-cli@1.48,taplo-cli@0.10,ripgrep@15,zizmor@1
 
       - name: Install actionlint
         env:
-          ACTIONLINT_VERSION: 1.7.7
+          ACTIONLINT_VERSION: 1.7.12
         run: |
           set -euo pipefail
           curl -fsSL -o actionlint.tar.gz \
@@ -255,7 +255,7 @@ jobs:
           cache-bin: ${{ matrix.os != 'macos-latest' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
           tool: cargo-nextest@0.9
 
@@ -394,7 +394,7 @@ jobs:
   # `test` job's 17 min). Same coverage, now concurrent.
   # ─────────────────────────────────────────────────────────────────────────
   test-features:
-    name: test-features (non-default feature runs)
+    name: test-features
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -474,7 +474,7 @@ jobs:
   # run reuses the binaries the X11 run builds.
   # ─────────────────────────────────────────────────────────────────────────
   live-smoke:
-    name: live-smoke (X11 + Wayland, real window)
+    name: live-smoke
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -532,7 +532,7 @@ jobs:
           target/debug/flui-live-smoke target/debug/examples/sliver_demo wayland
 
   gpu-test:
-    name: gpu-test (wgpu readback, WARP)
+    name: gpu-test
     needs: checks
     runs-on: windows-latest
     # Generous headroom: ~440 readback tests on a software rasterizer, each
@@ -563,7 +563,7 @@ jobs:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
           tool: cargo-nextest@0.9
 
@@ -665,7 +665,7 @@ jobs:
   # Merge-blocking: it was green at wiring time and every ignore is argued.
   # ─────────────────────────────────────────────────────────────────────────
   deny:
-    name: deny (advisories, bans, licenses, sources)
+    name: deny
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -675,7 +675,7 @@ jobs:
           persist-credentials: false
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
           tool: cargo-deny@0.19
 
@@ -727,7 +727,7 @@ jobs:
   # jobs' concern. Bump procedure lives in rust-toolchain.toml's header.
   # ─────────────────────────────────────────────────────────────────────────
   msrv:
-    name: msrv (1.97)
+    name: msrv
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -772,7 +772,7 @@ jobs:
   # tree-driving verification and repair tests. See that step's own comment.
   # ─────────────────────────────────────────────────────────────────────────
   miri:
-    name: miri (flui-rendering pipeline::owner, flui-view owner::global_key)
+    name: miri
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -882,7 +882,7 @@ jobs:
       # `just` carries the facade combination list, so CI and `just
       # feature-matrix` cannot drift into testing different sets.
       - name: Install cargo-hack + just
-        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
           tool: cargo-hack@0.6,just@1
 
@@ -979,7 +979,7 @@ jobs:
   # test targets pull native-only dev-deps (tokio) that do not build here.
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
-    name: wasm-check (wasm32-unknown-unknown)
+    name: wasm-check
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1036,7 +1036,7 @@ jobs:
         run: cargo build --locked --target wasm32-unknown-unknown -p flui-web-demo -p flui-painting-demo
 
       - name: Install wasm-tools
-        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
           tool: wasm-tools@1
 
@@ -1079,7 +1079,7 @@ jobs:
   # `--all-targets` so per-OS test targets compile too.
   # ─────────────────────────────────────────────────────────────────────────
   cross-typecheck:
-    name: cross-typecheck (windows + macos + android backends)
+    name: cross-typecheck
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1134,18 +1134,57 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify every job succeeded
+      # The aggregator reads its own workflow file so it can prove the
+      # `needs` list above is complete. Sparse, credential-free checkout:
+      # only this file is needed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/workflows/ci.yml
+          sparse-checkout-cone-mode: false
+
+      # Two rules, each closing a hole that used to be documented as open:
+      #
+      # 1. COMPLETENESS — every job in this workflow except `ci` itself must
+      #    appear in `needs`. Without this, a job ADDED without editing the
+      #    list above ran, passed or failed, and gated nothing. Renaming was
+      #    already safe (`needs` stops resolving); adding was not.
+      #
+      # 2. NO SILENT SKIPS — `skipped` is a failure. No job in this workflow
+      #    is conditional, so a skipped job means someone gave it an `if:`
+      #    (or it was cancelled), and the old rule counted that as green,
+      #    turning the job into a no-op nobody would notice. The day a job
+      #    legitimately needs an `if:`, list it in ALLOWED_SKIPS with the
+      #    reason — that is the reviewable decision, not an accident.
+      - name: Verify every job is gated and every gated job succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
+          ALLOWED_SKIPS: ""
         run: |
           python3 - <<'EOF'
-          import json, os, sys
+          import json, os, re, sys
           needs = json.loads(os.environ["NEEDS"])
+          allowed_skips = set(os.environ["ALLOWED_SKIPS"].split())
+          # Job keys are the 2-space-indented `key:` lines directly under `jobs:`.
+          text = open(".github/workflows/ci.yml", encoding="utf-8").read()
+          body = text[text.index("\njobs:\n") + len("\njobs:\n"):]
+          declared = set(re.findall(r"^  ([A-Za-z0-9_-]+):\s*$", body, re.M)) - {"ci"}
           for job, data in sorted(needs.items()):
               print(f"{job}: {data['result']}")
-          bad = {j: d["result"] for j, d in needs.items()
-                 if d["result"] not in ("success", "skipped")}
+          missing = sorted(declared - set(needs))
+          if missing:
+              print(f"::error::jobs declared in ci.yml but absent from the ci aggregator's needs: {missing}")
+          bad = {}
+          for job, data in needs.items():
+              r = data["result"]
+              if r == "success":
+                  continue
+              if r == "skipped" and job in allowed_skips:
+                  continue
+              bad[job] = r
           if bad:
-              print(f"::error::required jobs not green: {bad}")
+              print(f"::error::required jobs not green (skipped counts as red): {bad}")
+          if missing or bad:
               sys.exit(1)
+          print(f"ok: {len(declared)} jobs, all gated, all green")
           EOF
