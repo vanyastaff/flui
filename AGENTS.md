@@ -221,32 +221,17 @@ workflow file does *not* tell you, and what you will misjudge without it:
   without placing it is loud. Rebalance by cargo-hack command count (the regeneration command is
   in the `env` comment). cargo-hack's own `--partition` was rejected after measurement: with
   `--print-command-list`, `1/2` printed the full list, so it cannot be trusted to partition.
-- **Five jobs share one Actions cache (`shared-key: stable-dev-host`)** — clippy, test,
-  test-features, live-smoke, doc-test all build the same configuration (stable, dev profile,
-  host, default features). Before 2026-09-03 each had its own near-identical cache and the repo
-  sat at 12 caches / 10.9 GB against GitHub's 10 GB cap, so caches were being evicted and jobs
-  restored cold (gpu-test swung 6.7 → 12.3 min on a cold restore). **GitHub cache entries are immutable per key, so the FIRST job to save wins, permanently** —
-  not the last, as this note first claimed. On a shared key that means the fastest job (clippy,
-  check-mode, no codegen) would write a 0.36 GB metadata-only cache and every other job would
-  rebuild its code each run. So `test` — `--workspace --all-targets`, the superset — is the sole
-  writer of `stable-dev-host-v2`; clippy, test-features, live-smoke and doc-test are `save-if: false`.
-  Changing the writer or the contents of a shared key means ROTATING the key (the `-vN` suffix):
-  an existing entry is never replaced, and an exact restore hit skips the save.
-  A job that saves a smaller set is not "a partial rebuild for the others", it is the permanent
-  contents of the key until the lockfile or a `CARGO_*` env value changes. Jobs whose
-  artifacts genuinely differ (release profile, MSRV toolchain, miri/nightly, wasm32, cross
-  targets, Windows, the per-feature slices) keep their own keys on purpose. The same job also runs `just facade-combos`, which compiles every supported `flui`
-  **Caches are saved only by runs on `main`; PR runs restore and never save** (`save-if:
-  github.ref == 'refs/heads/main'` on every rust-cache step). With ~13 key families, per-PR saves
-  overshot the 10 GB cap as soon as two PRs were open (27 caches / 11.9 GB measured on
-  2026-09-03) and the largest — the shared `stable-dev-host` — was evicted first. A PR's second
-  push therefore reuses `main`'s build rather than its own first push; that is the trade. If a
-  cold PR run looks wrong, check `gh api repos/vanyastaff/flui/actions/cache/usage` before
-  blaming the workflow.
-  facade feature combination (`material` / `cupertino` / `localizations` / `hot-reload` / `serde`)
-  **on its own**, against the `flui` package alone — a `--workspace` build is not evidence about
-  the facade surface — and asserts via `cargo tree` that `flui-hot-reload` is *absent* from
-  `flui-app`'s default normal graph rather than merely unused by it.
+- **Every job has its own cache key; caches are saved only by runs on `main`** (`save-if:
+  github.ref == 'refs/heads/main'`, from #822). A shared key across clippy / test / test-features /
+  live-smoke / doc-test was tried on 2026-09-03 (#819, #823) and measured on a warm re-run of
+  `main`: it lost time on every run. GitHub keeps one immutable entry per key, so only one job
+  can write it; with `test` as the writer, clippy restored build-mode artifacts that cannot serve
+  check-mode and re-checked 428 crates (3.3 min vs 1.2), and test-features could never save its
+  non-default-feature dependencies (10.5 min vs 4.9). The 10 GB-cap pressure that motivated
+  sharing came from per-PR saves, which #822 removed; five main-only per-job entries are ~4 GB.
+  If a cold PR run looks wrong, check `gh api repos/vanyastaff/flui/actions/cache/usage` before
+  blaming the workflow. A PR run restores by the keys in the workflow file *it carries*, so a
+  branch cut before a key change is cold until rebased.
 - **The `test` job is split three ways.** `test` builds the workspace and runs the
   default-feature lib+integration suite plus flui-platform's headless run;
   `test-features` runs everything that needs NON-default features (flui-assets

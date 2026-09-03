@@ -71,11 +71,10 @@ env:
   # Debuginfo trimmed to line tables in EVERY job, for two reasons that
   # must hold together. Disk: DWARF is the largest part of a debug target
   # (see the `test` job). Cache sharing: rust-cache hashes CARGO_* env
-  # into its key, and the artifacts themselves carry the profile, so the
-  # five jobs sharing `stable-dev-host` only actually share if their
-  # profile env is identical. Set per job it had drifted — clippy had
-  # none, live-smoke half of it — which silently split the "shared" cache
-  # into three keys with incompatible contents. Set once here, it cannot.
+  # into its key, and the artifacts themselves carry the profile, so
+  # every job's cache key and contents depend on it. Set per job it had
+  # drifted (clippy had none, live-smoke half of it); set once here, it
+  # cannot, and a change to it is visibly a change to every key at once.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
@@ -179,45 +178,19 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # One cache for every job that builds the same thing — stable
-          # toolchain, dev profile, host target, default features. Five
-          # near-identical per-job caches were counting against the repo's
-          # 10 GB Actions cache cap (12 caches, 10.9 GB on 2026-09-03 —
-          # over the cap, so GitHub was evicting and jobs were restoring
-          # cold). GitHub cache entries are immutable per key, so on a shared
-          # key the FIRST job to save wins for good and rust-cache never
-          # replaces it (an exact restore hit skips the save). That is why
-          # only `test` — the `--workspace --all-targets` superset builder —
-          # saves this key, everyone else restores. The `-v2` suffix retires
-          # the first version of the key, which clippy had won with
-          # check-mode artifacts that carry no codegen; a key can only be
-          # replaced by rotating it, never by overwriting.
-          shared-key: stable-dev-host-v2
+          # Per-job key, saved only from main (#822). A shared key across
+          # clippy / test / test-features / live-smoke / doc-test was tried
+          # (#819, #823) and measured on a warm re-run of main: it LOST time
+          # on every run. GitHub keeps one immutable entry per key, so only
+          # one job can write it; with `test` as the writer, clippy restored
+          # build-mode artifacts that cannot serve check-mode and re-checked
+          # 428 crates (3.3 min vs 1.2 with its own cache), and test-features
+          # could never save its non-default-feature dependencies (10.5 min
+          # vs 4.9). The cap pressure that motivated sharing came from
+          # per-PR saves, which #822 already removed; five main-only per-job
+          # entries are ~4 GB and fit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-          # Caches are WRITTEN only by runs on main; every PR run is a
-          # read-only consumer that restores main's cache (rust-cache falls
-          # back to the base branch's key when a PR-ref key is absent).
-          # Before this, every PR run saved its own copies under its own
-          # ref, so with ~13 key families the repo overshot GitHub's 10 GB
-          # cap as soon as two PRs were open — measured 2026-09-03: 27
-          # caches, 11.9 GB, with the shared `stable-dev-host` entries
-          # evicted first because they are the largest, turning "warm" jobs
-          # cold on exactly the runs that mattered. One set of caches, from
-          # main, is ~5-6 GB and stays under the cap. What a PR gives up:
-          # its second push cannot reuse its first push's build — it
-          # reuses main's instead, which is usually as good. Merge-queue
-          # runs never saved (the previous `save-if` excluded them) and
-          # still do not, since their ref is not main.
-          # Restore-only. GitHub cache entries are immutable per key, so of
-          # the five jobs on `stable-dev-host` the FIRST to finish would win
-          # the write — clippy, in 1-3 minutes, with check-mode artifacts
-          # that carry no codegen. Everyone else then restored metadata-only
-          # dependencies and rebuilt their code every run (measured: the
-          # shared entry on main was 0.36 GB, clippy's exact size, against
-          # the 1.9 GB `test` used to keep). `test` builds `--workspace
-          # --all-targets`, a superset of what this job needs, so it is the
-          # one writer; this job only reads.
-          save-if: false
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -271,16 +244,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # Shared with clippy / test / test-features / live-smoke / doc-test;
-          # the rationale lives on the `clippy` job's cache step. Only `test` saves.
-          shared-key: stable-dev-host-v2
           cache-on-failure: true
-          # The ONE writer of `stable-dev-host`: this job builds
-          # `--workspace --all-targets`, a superset of what clippy,
-          # test-features, live-smoke and doc-test need, and GitHub cache
-          # entries are immutable per key — whichever job saves first wins
-          # for good, so the superset builder must be the only one saving.
-          # The other four are `save-if: false`.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # Per tokio: binary caching breaks on macOS — guard for when macOS
           # joins the matrix.
@@ -441,20 +405,8 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # Shared with clippy / test / test-features / live-smoke / doc-test;
-          # the rationale lives on the `clippy` job's cache step. Only `test` saves.
-          shared-key: stable-dev-host-v2
           cache-on-failure: true
-          # Restore-only. GitHub cache entries are immutable per key, so of
-          # the five jobs on `stable-dev-host` the FIRST to finish would win
-          # the write — clippy, in 1-3 minutes, with check-mode artifacts
-          # that carry no codegen. Everyone else then restored metadata-only
-          # dependencies and rebuilt their code every run (measured: the
-          # shared entry on main was 0.36 GB, clippy's exact size, against
-          # the 1.9 GB `test` used to keep). `test` builds `--workspace
-          # --all-targets`, a superset of what this job needs, so it is the
-          # one writer; this job only reads.
-          save-if: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
@@ -530,20 +482,8 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # Shared with clippy / test / test-features / live-smoke / doc-test;
-          # the rationale lives on the `clippy` job's cache step. Only `test` saves.
-          shared-key: stable-dev-host-v2
           cache-on-failure: true
-          # Restore-only. GitHub cache entries are immutable per key, so of
-          # the five jobs on `stable-dev-host` the FIRST to finish would win
-          # the write — clippy, in 1-3 minutes, with check-mode artifacts
-          # that carry no codegen. Everyone else then restored metadata-only
-          # dependencies and rebuilt their code every run (measured: the
-          # shared entry on main was 0.36 GB, clippy's exact size, against
-          # the 1.9 GB `test` used to keep). `test` builds `--workspace
-          # --all-targets`, a superset of what this job needs, so it is the
-          # one writer; this job only reads.
-          save-if: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
       # backend dlopens it at startup (`xkbcommon-dl` panics without it, so
@@ -759,20 +699,8 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # Shared with clippy / test / test-features / live-smoke / doc-test;
-          # the rationale lives on the `clippy` job's cache step. Only `test` saves.
-          shared-key: stable-dev-host-v2
           cache-on-failure: true
-          # Restore-only. GitHub cache entries are immutable per key, so of
-          # the five jobs on `stable-dev-host` the FIRST to finish would win
-          # the write — clippy, in 1-3 minutes, with check-mode artifacts
-          # that carry no codegen. Everyone else then restored metadata-only
-          # dependencies and rebuilt their code every run (measured: the
-          # shared entry on main was 0.36 GB, clippy's exact size, against
-          # the 1.9 GB `test` used to keep). `test` builds `--workspace
-          # --all-targets`, a superset of what this job needs, so it is the
-          # one writer; this job only reads.
-          save-if: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo test --doc
         run: cargo test --workspace --locked --doc
