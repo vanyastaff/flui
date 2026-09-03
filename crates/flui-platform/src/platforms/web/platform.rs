@@ -13,14 +13,21 @@ use crate::{
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
+        Clipboard, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities, PlatformDisplay,
+        PlatformExecutor, PlatformReadyCallback, PlatformWindow, WebCapabilities, WindowAppearance,
+        WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
-        *,
     },
 };
 
 use super::{
     clipboard::WebClipboard, display::WebDisplay, executor::WebExecutor, window::WebWindow,
 };
+
+/// The self-referencing `requestAnimationFrame` callback slot: the closure
+/// re-schedules itself through this handle, so it is created empty and filled
+/// once the closure exists.
+type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
 /// Web/WASM platform implementation
 pub struct WebPlatform {
@@ -79,7 +86,7 @@ impl WebPlatform {
         let state = Arc::clone(&self.state);
 
         // Recursive RAF pattern: closure references itself via Rc<RefCell>
-        let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+        let f: RafClosureSlot = Rc::new(RefCell::new(None));
         let g = Rc::clone(&f);
 
         let window = web_sys::window().expect("no global window");
@@ -109,14 +116,24 @@ impl WebPlatform {
 
             // Request next frame after work (ensures smooth loop)
             if let Some(w) = web_sys::window() {
-                let _ = w
-                    .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref());
+                let _ = w.request_animation_frame(
+                    f.borrow()
+                        .as_ref()
+                        .expect("BUG: the RAF closure slot is filled before any frame runs")
+                        .as_ref()
+                        .unchecked_ref(),
+                );
             }
         }));
 
         // Kick off the first frame
-        let _ =
-            window.request_animation_frame(g.borrow().as_ref().unwrap().as_ref().unchecked_ref());
+        let _ = window.request_animation_frame(
+            g.borrow()
+                .as_ref()
+                .expect("BUG: the RAF closure slot was filled on the line above")
+                .as_ref()
+                .unchecked_ref(),
+        );
     }
 }
 
@@ -235,12 +252,11 @@ impl Platform for WebPlatform {
     }
 
     fn window_appearance(&self) -> WindowAppearance {
-        if let Some(w) = web_sys::window() {
-            if let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)") {
-                if mql.matches() {
-                    return WindowAppearance::Dark;
-                }
-            }
+        if let Some(w) = web_sys::window()
+            && let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)")
+            && mql.matches()
+        {
+            return WindowAppearance::Dark;
         }
         WindowAppearance::Light
     }
@@ -266,10 +282,10 @@ impl Platform for WebPlatform {
     fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
         // web_sys::Window::location() returns Location, not Result
         // Location::origin() returns Result<String, JsValue>
-        if let Some(w) = web_sys::window() {
-            if let Ok(origin) = w.location().href() {
-                return Ok(std::path::PathBuf::from(origin));
-            }
+        if let Some(w) = web_sys::window()
+            && let Ok(origin) = w.location().href()
+        {
+            return Ok(std::path::PathBuf::from(origin));
         }
         Ok(std::path::PathBuf::from("/"))
     }
