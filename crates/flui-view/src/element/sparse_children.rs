@@ -12,11 +12,12 @@
 //! from parent-data alone (ADR-0003), so children may be attached in any order —
 //! FLUI has no equivalent of Flutter's `_currentBeforeChild` insertion cursor.
 
-use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::btree_map::Keys;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::panic::AssertUnwindSafe;
 
-use flui_foundation::{ElementId, RenderId};
+use flui_foundation::{ElementId, RenderId, SaltedKey, ViewKey};
 use flui_rendering::pipeline::PipelineCell;
 
 use crate::BoxedView;
@@ -113,38 +114,28 @@ impl SparseChildren {
         if let Some(&existing) = self.by_logical_index.get(&logical_index) {
             return existing;
         }
-        // Declare `host` as the parent being reconciled for the duration of
-        // this insert. `ElementTree::insert` refuses to relocate an active
-        // GlobalKey onto a parent that is not the one currently reconciling,
-        // and its rejection arm panics — so without this, a keyed item
-        // scrolling from one lazy list into another aborted the process
-        // instead of moving. `service_child_requests` calls `service` (and so
-        // `ensure`) outside any other reconcile, before its own `build_scope`,
-        // so this never nests inside the guard `reconcile_children_by_id`
-        // installs — which `begin_reconcile` asserts against.
-        let child = {
-            let _reconcile_guard = tree.begin_reconcile(host);
-            tree.insert(view, host, logical_index, owner)
-        };
-        stamp_logical_index(tree, pipeline, child, logical_index);
+        let child = mount_sparse_child(logical_index, view, host, tree, owner, pipeline);
         self.by_logical_index.insert(logical_index, child);
-
-        // `ElementTree::insert` (via `ElementCore::mount`) sets the child's
-        // `dirty = true` but does NOT push it onto the build heap — only
-        // `id_reconcile.rs` does that through `schedule_build_for`.  Without
-        // this explicit push the second `build_scope` in
-        // `BuildOwner::service_child_requests` drains an empty heap and the
-        // child's own subtree (e.g. Padding(Text)) never expands.
-        let child_depth = tree.get(child).map_or(0, ElementNode::depth);
-        owner.schedule_build_for(child, child_depth, crate::RebuildReason::ChildListChange);
-
-        tracing::trace!(
-            logical_index,
-            ?child,
-            ?host,
-            "SparseChildren mounted lazy child"
-        );
         child
+    }
+
+    /// Drop the bookkeeping for `child` without touching the tree — the
+    /// child was grafted to another parent by a `GlobalKey` retake and is
+    /// no longer this sliver's to evict or refresh (Flutter's
+    /// `SliverMultiBoxAdaptorElement.forgetChild`). Returns the logical
+    /// index it held, if it was resident.
+    pub(crate) fn forget(&mut self, child: ElementId) -> Option<usize> {
+        let index = self
+            .by_logical_index
+            .iter()
+            .find_map(|(&index, &id)| (id == child).then_some(index))?;
+        self.by_logical_index.remove(&index);
+        tracing::trace!(
+            logical_index = index,
+            ?child,
+            "SparseChildren forgot a grafted child"
+        );
+        Some(index)
     }
 
     /// Evict the child at `logical_index`, unmounting its element subtree (and
@@ -195,97 +186,404 @@ impl SparseChildren {
         any_evicted
     }
 
-    /// Re-invoke `builder` for every currently-resident logical index and
-    /// reconcile the result against that index's existing child.
+    /// Reconcile the resident children against a (possibly changed) data
+    /// source — the sparse counterpart of Flutter's
+    /// `SliverMultiBoxAdaptorElement.performRebuild`
+    /// (`widgets/sliver.dart`, tag `3.44.0`), and the mechanism behind
+    /// `SliverChildBuilderDelegate.shouldRebuild => true`: a new delegate
+    /// re-consults the builder for every resident index, not only the
+    /// newly-visible ones.
     ///
-    /// Mirrors Flutter's `SliverChildBuilderDelegate.shouldRebuild` contract
-    /// (`widgets/scroll_delegate.dart`, tag `3.44.0`): the default
-    /// implementation returns `true` unconditionally, so a new delegate (a
-    /// new `SliverList` view reaching the adaptor element) re-consults the
-    /// builder for every resident child, not only newly-visible ones.
-    /// `Self::ensure` is otherwise idempotent for an already-built index (see
-    /// its own doc) — this is the mechanism that closes that gap for a
-    /// caller that has just learned its builder changed.
+    /// Two-phase, into a fresh map, so that a shift or swap of several keyed
+    /// residents can never overwrite one of them (Flutter's separate
+    /// `newChildren` map is load-bearing for the same reason):
     ///
-    /// A same-type result reconciles the existing child in place via
-    /// [`ElementTree::update`] (preserving its identity/state — Flutter's
-    /// `Element.updateChild`); a type change, or the index falling out of
-    /// the (possibly-shrunk) data source, evicts and — if the builder still
-    /// returns a view — remounts a fresh child (Flutter's dispose-and-
-    /// remount on an incompatible widget). Sparse children never carry a
-    /// key (no lazy-sliver call site attaches one), so the compatibility
-    /// check is type-only — the same reduction [`View::can_update`] makes
-    /// when both sides are keyless.
+    /// 1. **Snapshot and build.** Record every resident `(index, element,
+    ///    key)`. The indices to build are the resident ones plus, for every
+    ///    keyed resident, the index `find_index_by_key` reports for its key —
+    ///    that is how a keyed child whose data moved *out of the resident
+    ///    band* is still found (Flutter's `findChildIndexCallback`; a
+    ///    `SliverChildListDelegate` derives the map from its children). Every
+    ///    index is built through [`build_item_or_error`], so a panicking
+    ///    builder yields an error child at that index and nothing else.
+    /// 2. **Match and apply.** A built view with a key claims the first
+    ///    unclaimed resident carrying an equal key (first wins on duplicate
+    ///    keys, as the dense reconciler does) — wherever that resident sat,
+    ///    so a keyed child moving *within* the band needs no callback at all;
+    ///    a keyless view claims the resident at its own index when the types
+    ///    agree. A claimed resident is updated in place, relocated first if
+    ///    its index changed ([`ElementTree::relocate_sparse_child`] re-slots
+    ///    it and re-derives the `sliver_slot` chain, then its render
+    ///    descendants are re-stamped); an unclaimed resident is evicted; an
+    ///    unclaimed view is mounted fresh. Keys are compared as the
+    ///    residents carry them (a per-item wrapper carries the item's key
+    ///    salted, and so does the freshly built wrapper); the callback sees
+    ///    the item's own key through [`SaltedKey::unsalt`].
     ///
-    /// `host` is the adaptor element's own id, needed only for the
-    /// remount-on-type-change fallback (`Self::ensure` already requires it).
+    /// `item_count` bounds the indices worth building. A builder answering
+    /// `None` below it means the data source shrank: the index is left
+    /// empty and reported in [`ReconcileOutcome::end_reached_at`] so the
+    /// caller can clamp the render object's count.
     ///
-    /// Returns `true` if any resident child was updated, evicted, or
-    /// remounted — callers use this the same way as [`Self::retain_band`],
-    /// to decide whether to mark the sliver dirty for re-layout.
-    pub(crate) fn refresh_resident(
+    /// `retain_band` bounds the work: a keyless resident outside the band the
+    /// layout pass retained is neither built nor evicted here — it is carried
+    /// over for the band eviction that follows, so a scroll that rebuilds the
+    /// host never calls the builder for an item it is about to drop (Flutter
+    /// rebuilds every resident and collects the garbage afterwards). A view
+    /// built for an out-of-band index that claims no resident is dropped, not
+    /// mounted.
+    ///
+    /// `host` is the adaptor element's own id (the parent for fresh mounts).
+    pub(crate) fn reconcile(
         &mut self,
-        builder: &dyn Fn(usize) -> Option<BoxedView>,
+        source: ReconcileSource<'_>,
         host: ElementId,
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
         pipeline: &PipelineCell,
-    ) -> bool {
-        let resident: Vec<(usize, ElementId)> = self.iter_built().collect();
-        let mut any_work = false;
-        for (logical_index, existing) in resident {
-            match builder(logical_index) {
-                None => {
-                    // Past the end of a data source that shrank. The render
-                    // object's own item_count already narrows independently
-                    // (`RenderSliverList::set_item_count`, a separate path
-                    // this method does not touch), so `retain_band` ordinarily
-                    // evicts this index before `refresh_resident` ever sees
-                    // it; handled here too so a surviving stale index cannot
-                    // leak rather than silently persist.
-                    self.evict(logical_index, tree, owner);
-                    any_work = true;
+    ) -> ReconcileOutcome {
+        let ReconcileSource {
+            builder,
+            find_index_by_key,
+            item_count,
+            retain_band: (band_first, band_last),
+        } = source;
+        let in_band = |index: usize| index >= band_first && index < band_last;
+        // ── Phase 1: snapshot the residents, decide what to build, build ──
+        struct Resident {
+            index: usize,
+            id: ElementId,
+            key: Option<Box<dyn ViewKey>>,
+            claimed: bool,
+            /// Keyless and outside the band: left to the band eviction.
+            carried_over: bool,
+        }
+        let mut residents: Vec<Resident> = self
+            .by_logical_index
+            .iter()
+            .map(|(&index, &id)| {
+                let key = tree
+                    .get(id)
+                    .and_then(|node| node.key().map(ViewKey::clone_key));
+                let carried_over = key.is_none() && !in_band(index);
+                Resident {
+                    index,
+                    id,
+                    key,
+                    claimed: false,
+                    carried_over,
                 }
-                Some(view) => {
-                    if resident_type_matches(tree, existing, view.0.as_ref()) {
-                        tree.update(existing, view.0.as_ref(), owner);
-                        // Mirrors the dense reconciler's post-update scheduling
-                        // (`tree/id_reconcile.rs`): an update that left the
-                        // child clean (its own `should_skip_rebuild`
-                        // memoization fired) must not be pushed onto the
-                        // build heap.
-                        if let Some(node) = tree.get(existing)
-                            && node.element().is_dirty()
-                        {
-                            let depth = node.depth();
-                            owner.schedule_build_for(
-                                existing,
-                                depth,
-                                crate::RebuildReason::ParentUpdate,
-                            );
-                        }
-                    } else {
-                        self.evict(logical_index, tree, owner);
-                        self.ensure(logical_index, view.0.as_ref(), host, tree, owner, pipeline);
-                    }
-                    any_work = true;
+            })
+            .collect();
+        let mut targets: BTreeSet<usize> = residents
+            .iter()
+            .filter(|r| !r.carried_over)
+            .map(|r| r.index)
+            .collect();
+        if let Some(find) = find_index_by_key {
+            for resident in &residents {
+                if let Some(key) = &resident.key
+                    && let Some(new_index) = find_index_or_none(find, SaltedKey::unsalt(&**key))
+                    && new_index < item_count
+                {
+                    targets.insert(new_index);
                 }
             }
         }
-        any_work
+        let mut end_reached_at: Option<usize> = None;
+        let built: Vec<(usize, Option<BoxedView>)> = targets
+            .into_iter()
+            .map(|index| {
+                let view = if index < item_count {
+                    build_item_or_error(builder, index)
+                } else {
+                    None
+                };
+                if view.is_none() && index < item_count {
+                    end_reached_at = Some(end_reached_at.map_or(index, |end| end.min(index)));
+                }
+                (index, view)
+            })
+            .collect();
+
+        // ── Phase 2: match built views to residents ──
+        // `matched[k] = Some(resident position)` for built entry `k`. Keyed
+        // residents are bucketed by key hash (decided by `key_eq` inside the
+        // bucket, as the dense reconciler does) and keyless ones by index, so
+        // each built view costs O(1) expected rather than a scan of the band.
+        let mut keyed_by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut keyless_by_index: HashMap<usize, usize> = HashMap::new();
+        for (pos, resident) in residents.iter().enumerate() {
+            match &resident.key {
+                Some(key) => keyed_by_hash.entry(key.key_hash()).or_default().push(pos),
+                None => {
+                    keyless_by_index.insert(resident.index, pos);
+                }
+            }
+        }
+        let mut matched: Vec<Option<usize>> = vec![None; built.len()];
+        for (k, (index, view)) in built.iter().enumerate() {
+            let Some(view) = view else {
+                continue;
+            };
+            let view: &dyn View = view.0.as_ref();
+            let candidate = if let Some(key) = view.key() {
+                keyed_by_hash.get(&key.key_hash()).and_then(|bucket| {
+                    bucket.iter().copied().find(|&pos| {
+                        let resident = &residents[pos];
+                        !resident.claimed
+                            && resident.key.as_deref().is_some_and(|rk| rk.key_eq(key))
+                    })
+                })
+            } else {
+                keyless_by_index
+                    .get(index)
+                    .copied()
+                    .filter(|&pos| !residents[pos].claimed)
+            };
+            if let Some(pos) = candidate
+                && resident_type_matches(tree, residents[pos].id, view)
+            {
+                residents[pos].claimed = true;
+                matched[k] = Some(pos);
+            }
+        }
+
+        // ── Apply into a fresh map: evict, relocate, update, mount ──
+        let mut any_work = false;
+        let mut next: BTreeMap<usize, ElementId> = BTreeMap::new();
+        for resident in residents.iter().filter(|r| r.carried_over) {
+            next.insert(resident.index, resident.id);
+        }
+        for resident in residents.iter().filter(|r| !r.claimed && !r.carried_over) {
+            tree.remove_subtree(resident.id, owner);
+            tracing::trace!(
+                logical_index = resident.index,
+                child = ?resident.id,
+                "SparseChildren evicted an unclaimed resident"
+            );
+            any_work = true;
+        }
+        for (k, (index, view)) in built.iter().enumerate() {
+            let Some(view) = view else {
+                continue;
+            };
+            let view: &dyn View = view.0.as_ref();
+            if let Some(pos) = matched[k] {
+                {
+                    let resident = &residents[pos];
+                    if resident.index != *index {
+                        tree.relocate_sparse_child(resident.id, *index);
+                        stamp_logical_index(tree, pipeline, resident.id, *index);
+                        tracing::trace!(
+                            from = resident.index,
+                            to = *index,
+                            child = ?resident.id,
+                            "SparseChildren relocated a keyed resident"
+                        );
+                        any_work = true;
+                    }
+                    tree.update(resident.id, view, owner);
+                    // Mirrors the dense reconciler's post-update scheduling
+                    // (`tree/id_reconcile.rs`): an update that left the child
+                    // clean (its own `should_skip_rebuild` memoization fired)
+                    // must not be pushed onto the build heap.
+                    if let Some(node) = tree.get(resident.id)
+                        && node.element().is_dirty()
+                    {
+                        let depth = node.depth();
+                        owner.schedule_build_for(
+                            resident.id,
+                            depth,
+                            crate::RebuildReason::ParentUpdate,
+                        );
+                        any_work = true;
+                    }
+                    next.insert(*index, resident.id);
+                }
+            } else if in_band(*index) {
+                let child = mount_sparse_child(*index, view, host, tree, owner, pipeline);
+                next.insert(*index, child);
+                any_work = true;
+            }
+            // An unclaimed view outside the band would be evicted by the
+            // band before it was ever laid out: not mounted.
+        }
+        self.by_logical_index = next;
+        ReconcileOutcome {
+            did_work: any_work,
+            end_reached_at,
+        }
+    }
+}
+
+/// A borrowed key → index callback (Flutter's `findChildIndexCallback`).
+pub(crate) type FindIndexByKeyRef<'a> = &'a dyn Fn(&dyn ViewKey) -> Option<usize>;
+
+/// The data source [`SparseChildren::reconcile`] reconciles against.
+pub(crate) struct ReconcileSource<'a> {
+    /// The delegate's item builder.
+    pub(crate) builder: &'a dyn Fn(usize) -> Option<BoxedView>,
+    /// The delegate's key → index callback, if it has one.
+    pub(crate) find_index_by_key: Option<FindIndexByKeyRef<'a>>,
+    /// The data source length as the render object currently knows it.
+    pub(crate) item_count: usize,
+    /// The `[first, last)` band the layout pass retained. A keyless resident
+    /// outside it is about to be evicted by the band and is carried over
+    /// untouched rather than rebuilt; nothing is mounted fresh outside it.
+    /// Keyed residents are always reconciled — their data may have moved
+    /// into the band.
+    pub(crate) retain_band: (usize, usize),
+}
+
+/// What [`SparseChildren::reconcile`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReconcileOutcome {
+    /// Whether any child was evicted, relocated, remounted, or left dirty —
+    /// callers mark the sliver for re-layout on `true`.
+    pub(crate) did_work: bool,
+    /// The lowest index below `item_count` for which the builder answered
+    /// `None`: the data source shrank and the render object's count should
+    /// be clamped to it.
+    pub(crate) end_reached_at: Option<usize>,
+}
+
+/// Mount `view` at `logical_index` under `host` and stamp its render node(s).
+fn mount_sparse_child(
+    logical_index: usize,
+    view: &dyn View,
+    host: ElementId,
+    tree: &mut ElementTree,
+    owner: &mut ElementOwner<'_>,
+    pipeline: &PipelineCell,
+) -> ElementId {
+    // Declare `host` as the parent being reconciled for the duration of
+    // this insert. `ElementTree::insert` refuses to relocate an active
+    // GlobalKey onto a parent that is not the one currently reconciling,
+    // and its rejection arm panics — so without this, a keyed item
+    // scrolling from one lazy list into another aborted the process
+    // instead of moving. `service_child_requests` calls `service` (and so
+    // this) outside any other reconcile, before its own `build_scope`,
+    // so this never nests inside the guard `reconcile_children_by_id`
+    // installs — which `begin_reconcile` asserts against.
+    let child = {
+        let _reconcile_guard = tree.begin_reconcile(host);
+        tree.insert(view, host, logical_index, owner)
+    };
+    stamp_logical_index(tree, pipeline, child, logical_index);
+
+    // `ElementTree::insert` (via `ElementCore::mount`) sets the child's
+    // `dirty = true` but does NOT push it onto the build heap — only
+    // `id_reconcile.rs` does that through `schedule_build_for`.  Without
+    // this explicit push the follow-up `build_scope` in
+    // `BuildOwner::service_child_requests` drains an empty heap and the
+    // child's own subtree (e.g. Padding(Text)) never expands.
+    let child_depth = tree.get(child).map_or(0, ElementNode::depth);
+    owner.schedule_build_for(child, child_depth, crate::RebuildReason::ChildListChange);
+
+    tracing::trace!(
+        logical_index,
+        ?child,
+        ?host,
+        "SparseChildren mounted lazy child"
+    );
+    child
+}
+
+/// Build the item at `index` through `builder`, substituting the registered
+/// `ErrorView` when the builder panics — the lazy-sliver counterpart of
+/// [`build_or_recover`](super::behavior_commons::build_or_recover), and the
+/// port of `SliverChildBuilderDelegate.build`'s `try { builder(context,
+/// index) } catch { _createErrorWidget(...) }`.
+///
+/// Recovery is per item, as in Flutter: the error child takes exactly the
+/// panicking index, is unkeyed (so it can never be mistaken for a user's
+/// keyed item by `find_index_by_key`), and updates in place while the panic
+/// persists. Everything the caller had already done for other indices
+/// stands.
+///
+/// The closure captures only the builder — the tree, the owner, and this
+/// bookkeeping are all outside it — so a half-finished builder leaves no
+/// shared state behind; `AssertUnwindSafe` restates that, it does not hide
+/// anything.
+pub(crate) fn build_item_or_error(
+    builder: &dyn Fn(usize) -> Option<BoxedView>,
+    index: usize,
+) -> Option<BoxedView> {
+    match std::panic::catch_unwind(AssertUnwindSafe(|| builder(index))) {
+        Ok(view) => view,
+        Err(payload) => {
+            let error = crate::view::FlutterError::from_panic(
+                payload.as_ref(),
+                format!("building lazy sliver child {index}"),
+            );
+            tracing::error!(
+                index,
+                "lazy sliver builder panicked; substituting ErrorView: {}",
+                error.message
+            );
+            let recovered = crate::view::ErrorView::build_error_view(&error);
+            // A recovered item must be unkeyed, whatever the registered
+            // error-view factory returned: a keyed one would take part in the
+            // reconcile's key matching, and a `GlobalKey` would trigger a
+            // retake, instead of staying isolated to the failed index.
+            if recovered.key().is_some() {
+                Some(BoxedView(Box::new(UnkeyedRecovery {
+                    inner: BoxedView(recovered),
+                })))
+            } else {
+                Some(BoxedView(recovered))
+            }
+        }
+    }
+}
+
+/// A keyless composite around a custom error view that carried a key. Its
+/// render descendant is stamped at adoption like any composite item's.
+#[derive(Clone)]
+struct UnkeyedRecovery {
+    inner: BoxedView,
+}
+
+impl crate::view::StatelessView for UnkeyedRecovery {
+    fn build(&self, _ctx: &dyn crate::BuildContext) -> impl crate::view::IntoView {
+        self.inner.clone()
+    }
+}
+
+impl View for UnkeyedRecovery {
+    fn create_element(&self) -> crate::element::ElementKind {
+        crate::element::ElementKind::stateless(self)
+    }
+}
+
+/// Consult a user `find_index_by_key` callback under the same panic boundary
+/// as the builder; a panicking callback answers `None` (no move) and is
+/// reported once.
+fn find_index_or_none(
+    find: &dyn Fn(&dyn ViewKey) -> Option<usize>,
+    key: &dyn ViewKey,
+) -> Option<usize> {
+    match std::panic::catch_unwind(AssertUnwindSafe(|| find(key))) {
+        Ok(index) => index,
+        Err(payload) => {
+            let error = crate::view::FlutterError::from_panic(
+                payload.as_ref(),
+                "resolving a lazy sliver child index by key".to_string(),
+            );
+            tracing::error!(?key, "find_index_by_key panicked: {}", error.message);
+            None
+        }
     }
 }
 
 /// Whether `existing`'s live element can be updated in place by `new`.
 ///
 /// Delegates to `tree/id_reconcile.rs`'s `can_update_by_id` — the same
-/// type-then-key predicate the dense reconciler uses. Sparse-lazy children
-/// never carry a [`ViewKey`] today (no call site in this module attaches
-/// one, and `Keyed<V>` has no `View` impl to reach one), so the key stage
-/// is a no-op for every current input; routing through the shared check
-/// keeps the correct semantics — Flutter remounts on a key mismatch even
-/// when the type matches — the day a keyed view can reach a lazy child,
-/// rather than relying on a debug-only guard.
+/// type-then-key predicate the dense reconciler uses, so a keyed lazy child
+/// (an item wrapper carrying the item's salted key, or an item answering
+/// `View::key` itself) remounts on a key mismatch exactly as Flutter's
+/// `Widget.canUpdate` demands, and a keyless one reconciles by type alone.
 ///
 /// [`ViewKey`]: flui_foundation::ViewKey
 fn resident_type_matches(tree: &ElementTree, existing: ElementId, new: &dyn View) -> bool {
@@ -913,5 +1211,406 @@ mod tests {
             tree.get(child_id).is_none(),
             "the element must no longer be accessible in the tree after finalize_tree"
         );
+    }
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    //! The two-phase reconcile's bookkeeping, at the element tier: the
+    //! scenarios the in-place remap could not survive (a shift of two keyed
+    //! residents, a swap), plus the panic boundary.
+
+    use std::rc::Rc;
+
+    use flui_foundation::{ValueKey, ViewKey};
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
+    use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+    use flui_types::geometry::px;
+
+    use super::{ReconcileSource, SparseChildren, build_item_or_error};
+    use crate::view::{RenderView, View};
+    use crate::{BoxedView, BuildOwner, ElementTree};
+
+    #[derive(Clone)]
+    struct KeyedBox {
+        key: ValueKey<u32>,
+    }
+
+    impl KeyedBox {
+        fn new(id: u32) -> Self {
+            Self {
+                key: ValueKey::new(id),
+            }
+        }
+    }
+
+    impl RenderView for KeyedBox {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::new(Some(px(10.0)), Some(px(10.0)))
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    impl View for KeyedBox {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+        fn key(&self) -> Option<&dyn ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    #[derive(Clone)]
+    struct HostBox;
+    impl RenderView for HostBox {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::new(Some(px(100.0)), Some(px(100.0)))
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+    impl View for HostBox {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    struct Fixture {
+        tree: ElementTree,
+        owner: BuildOwner,
+        pipeline: PipelineCell,
+        host: flui_foundation::ElementId,
+        sparse: SparseChildren,
+    }
+
+    fn fixture() -> Fixture {
+        let pipeline = PipelineCell::new(PipelineOwner::new());
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let host = tree.mount_root_with_pipeline_owner(
+            &HostBox,
+            Some(pipeline.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        Fixture {
+            tree,
+            owner,
+            pipeline,
+            host,
+            sparse: SparseChildren::new(),
+        }
+    }
+
+    fn index_of(fx: &Fixture, id: flui_foundation::ElementId) -> Option<usize> {
+        let render_id = fx.tree.get(id)?.element().render_id()?;
+        fx.pipeline.with(|owner| {
+            owner
+                .render_tree()
+                .get(render_id)?
+                .parent_data()?
+                .downcast_ref::<SliverMultiBoxAdaptorParentData>()
+                .map(|pd| pd.index)
+        })
+    }
+
+    fn builder_over(ids: Vec<u32>) -> Rc<dyn Fn(usize) -> Option<BoxedView>> {
+        Rc::new(move |i| ids.get(i).map(|&id| BoxedView(Box::new(KeyedBox::new(id)))))
+    }
+
+    fn seed(fx: &mut Fixture, ids: &[(usize, u32)]) -> Vec<flui_foundation::ElementId> {
+        let mut out = Vec::new();
+        for &(index, id) in ids {
+            let mut element_owner = fx.owner.element_owner_mut();
+            out.push(fx.sparse.ensure(
+                index,
+                &KeyedBox::new(id),
+                fx.host,
+                &mut fx.tree,
+                &mut element_owner,
+                &fx.pipeline,
+            ));
+        }
+        out
+    }
+
+    #[derive(Clone)]
+    struct PlainBox;
+    impl RenderView for PlainBox {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::new(Some(px(10.0)), Some(px(10.0)))
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+    impl View for PlainBox {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    /// A scroll that rebuilds the host must not call the builder for the
+    /// keyless residents the band is about to drop: they are carried over
+    /// for the band eviction, untouched. A keyed resident outside the band
+    /// is still reconciled — here its data moved into the band, so it is
+    /// relocated rather than rebuilt fresh. Nothing is mounted outside the
+    /// band, even when the builder has a view for the index.
+    #[test]
+    fn keyless_residents_outside_the_band_are_carried_over_not_rebuilt() {
+        let mut fx = fixture();
+        // Keyless residents at 0 and 1, a keyed one (id 7) at 2; the band
+        // moves to [4, 8) and the keyed item's data moves to index 5.
+        let plain = {
+            let mut element_owner = fx.owner.element_owner_mut();
+            [0usize, 1].map(|index| {
+                fx.sparse.ensure(
+                    index,
+                    &PlainBox,
+                    fx.host,
+                    &mut fx.tree,
+                    &mut element_owner,
+                    &fx.pipeline,
+                )
+            })
+        };
+        let keyed = seed(&mut fx, &[(2, 7)])[0];
+        let built = Rc::new(std::cell::RefCell::new(Vec::<usize>::new()));
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = {
+            let built = Rc::clone(&built);
+            Rc::new(move |i| {
+                built.borrow_mut().push(i);
+                match i {
+                    5 => Some(BoxedView(Box::new(KeyedBox::new(7)))),
+                    _ => Some(BoxedView(Box::new(PlainBox))),
+                }
+            })
+        };
+        let find = |key: &dyn ViewKey| (key.key_eq(&ValueKey::new(7u32))).then_some(5);
+        let outcome = {
+            let mut element_owner = fx.owner.element_owner_mut();
+            fx.sparse.reconcile(
+                ReconcileSource {
+                    builder: &*builder,
+                    find_index_by_key: Some(&find),
+                    item_count: 100,
+                    retain_band: (4, 8),
+                },
+                fx.host,
+                &mut fx.tree,
+                &mut element_owner,
+                &fx.pipeline,
+            )
+        };
+        assert!(outcome.did_work);
+        let built = built.borrow();
+        assert!(
+            !built.contains(&0) && !built.contains(&1),
+            "the builder must not run for keyless residents outside the band; built={built:?}"
+        );
+        assert_eq!(
+            fx.sparse.get(0),
+            Some(plain[0]),
+            "carried over, not evicted here"
+        );
+        assert_eq!(
+            fx.sparse.get(1),
+            Some(plain[1]),
+            "carried over, not evicted here"
+        );
+        assert_eq!(fx.sparse.get(2), None, "the keyed resident left index 2");
+        assert_eq!(
+            fx.sparse.get(5),
+            Some(keyed),
+            "the keyed resident moved into the band"
+        );
+        assert_eq!(index_of(&fx, keyed), Some(5));
+        assert_eq!(
+            fx.sparse.len(),
+            3,
+            "nothing mounted fresh: index 2 was out of band"
+        );
+    }
+
+    /// Residents at 3 and 4 both shift to 4 and 5 (an insert at the head,
+    /// reported by the callback): both elements survive, at their new
+    /// indices, with their render parent data re-stamped — the in-place
+    /// remap orphaned one of them here.
+    #[test]
+    fn shifting_two_keyed_residents_keeps_both_elements() {
+        let mut fx = fixture();
+        let seeded = seed(&mut fx, &[(3, 30), (4, 40)]);
+        // New data: 99 inserted at the head → 30 is now index 4, 40 index 5.
+        let data = vec![0, 1, 2, 99, 30, 40];
+        let builder = builder_over(data.clone());
+        let find = move |key: &dyn ViewKey| {
+            key.as_any()
+                .downcast_ref::<ValueKey<u32>>()
+                .and_then(|k| data.iter().position(|id| id == k.value()))
+        };
+        let outcome = {
+            let mut element_owner = fx.owner.element_owner_mut();
+            fx.sparse.reconcile(
+                ReconcileSource {
+                    builder: &*builder,
+                    find_index_by_key: Some(&find),
+                    item_count: 6,
+                    retain_band: (0, usize::MAX),
+                },
+                fx.host,
+                &mut fx.tree,
+                &mut element_owner,
+                &fx.pipeline,
+            )
+        };
+        assert!(outcome.did_work);
+        assert_eq!(outcome.end_reached_at, None);
+        assert_eq!(
+            fx.sparse.get(4),
+            Some(seeded[0]),
+            "30 moved to 4, same element"
+        );
+        assert_eq!(
+            fx.sparse.get(5),
+            Some(seeded[1]),
+            "40 moved to 5, same element"
+        );
+        assert!(
+            fx.sparse
+                .get(3)
+                .is_some_and(|id| id != seeded[0] && id != seeded[1]),
+            "99 mounted fresh at 3"
+        );
+        assert_eq!(
+            index_of(&fx, seeded[0]),
+            Some(4),
+            "render parent data re-stamped"
+        );
+        assert_eq!(index_of(&fx, seeded[1]), Some(5));
+        assert_eq!(
+            fx.tree.get(seeded[0]).map(crate::tree::ElementNode::slot),
+            Some(4)
+        );
+    }
+
+    /// A swap within the band, with no callback at all: matched by key.
+    #[test]
+    fn swapping_two_keyed_residents_needs_no_callback() {
+        let mut fx = fixture();
+        let seeded = seed(&mut fx, &[(1, 10), (2, 20), (3, 30)]);
+        let builder = builder_over(vec![0, 30, 20, 10]);
+        let outcome = {
+            let mut element_owner = fx.owner.element_owner_mut();
+            fx.sparse.reconcile(
+                ReconcileSource {
+                    builder: &*builder,
+                    find_index_by_key: None,
+                    item_count: 4,
+                    retain_band: (0, usize::MAX),
+                },
+                fx.host,
+                &mut fx.tree,
+                &mut element_owner,
+                &fx.pipeline,
+            )
+        };
+        assert!(outcome.did_work);
+        assert_eq!(fx.sparse.get(1), Some(seeded[2]));
+        assert_eq!(fx.sparse.get(2), Some(seeded[1]));
+        assert_eq!(fx.sparse.get(3), Some(seeded[0]));
+        assert_eq!(index_of(&fx, seeded[0]), Some(3));
+        assert_eq!(index_of(&fx, seeded[2]), Some(1));
+        assert_eq!(fx.sparse.len(), 3);
+    }
+
+    /// A builder that declines an index below the count reports it, and the
+    /// resident there is evicted.
+    #[test]
+    fn a_declined_index_is_reported_and_its_resident_evicted() {
+        let mut fx = fixture();
+        seed(&mut fx, &[(0, 10), (1, 20)]);
+        let builder = builder_over(vec![10]);
+        let outcome = {
+            let mut element_owner = fx.owner.element_owner_mut();
+            fx.sparse.reconcile(
+                ReconcileSource {
+                    builder: &*builder,
+                    find_index_by_key: None,
+                    item_count: 2,
+                    retain_band: (0, usize::MAX),
+                },
+                fx.host,
+                &mut fx.tree,
+                &mut element_owner,
+                &fx.pipeline,
+            )
+        };
+        assert_eq!(outcome.end_reached_at, Some(1));
+        assert_eq!(fx.sparse.len(), 1);
+        assert!(fx.sparse.get(1).is_none());
+    }
+
+    /// A registered error-view factory that answers with a keyed view is
+    /// wrapped keyless: the recovered item may never join key matching.
+    #[test]
+    fn a_keyed_custom_error_view_is_recovered_unkeyed() {
+        use crate::view::{FlutterError, clear_error_view_builder, set_error_view_builder};
+        fn keyed_error_view(_error: &FlutterError) -> Box<dyn View> {
+            Box::new(KeyedBox::new(7))
+        }
+        // The factory is process-global; this test owns it for its duration.
+        set_error_view_builder(keyed_error_view);
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|_| panic!("boom"));
+        let recovered = build_item_or_error(&*builder, 0).expect("an error view");
+        clear_error_view_builder();
+        assert!(
+            recovered.0.key().is_none(),
+            "the recovered item must be unkeyed"
+        );
+    }
+
+    #[test]
+    fn a_panicking_builder_yields_the_error_view_for_that_index_only() {
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|i| {
+            assert!(i != 1, "boom");
+            Some(BoxedView(Box::new(KeyedBox::new(i as u32))))
+        });
+        assert!(build_item_or_error(&*builder, 0).is_some());
+        let recovered = build_item_or_error(&*builder, 1).expect("an error view, not None");
+        assert_eq!(
+            recovered.0.view_type_id(),
+            std::any::TypeId::of::<crate::view::ErrorView>()
+        );
+        assert!(recovered.0.key().is_none(), "the error view is unkeyed");
     }
 }

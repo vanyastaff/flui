@@ -8,6 +8,7 @@
 //! |------|-----------------|--------|----------|-------|-------------|---------|
 //! | `RenderSizedBox` | `harness_sized_box_*` | yes | — | — | yes | queries |
 //! | `RenderColoredBox` | `harness_colored_box_*` | yes | yes | yes | yes | — |
+//! | `RenderErrorBox` | `harness_render_error_box_*` | yes | — | — | yes | — |
 //! | `RenderCustomPaint` | `harness_custom_paint_*` | yes | yes | yes | yes | order, paint size, poison |
 //! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
 //! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
@@ -150,6 +151,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderAlign",
     "RenderSizedBox",
     "RenderColoredBox",
+    "RenderErrorBox",
     "RenderCustomPaint",
     "RenderImage",
     "RenderParagraph",
@@ -713,6 +715,61 @@ fn harness_colored_box_self_describes_and_paints() {
         tree.find_descendant("RenderColoredBox")
             .expect("colored box"),
     );
+}
+
+#[test]
+fn harness_render_error_box_fills_bounded_constraints_and_paints() {
+    let run = RenderTester::mount(box_node(RenderErrorBox::new("boom", None)))
+        .with_size(Size::new(px(100.0), px(60.0)))
+        .run_frame();
+    assert!(run.painted(), "an error box must paint something visible");
+    let tree = run.diagnostics();
+    let node = tree.find_descendant("RenderErrorBox").expect("error box");
+    assert_has_committed_size(node);
+    assert_eq!(
+        run.descendant_property("RenderErrorBox", "message")
+            .as_deref(),
+        Some("boom"),
+        "the caught message reaches diagnostics in every build"
+    );
+    assert_eq!(error_box_size(&run), (100.0, 60.0));
+}
+
+/// The committed size of the mounted `RenderErrorBox`, read back from its
+/// diagnostics (`Size { width: 200px, height: 48px }`).
+fn error_box_size(run: &flui_rendering::testing::FrameRun) -> (f32, f32) {
+    let raw = run
+        .descendant_property("RenderErrorBox", "size")
+        .expect("committed size");
+    let field = |name: &str| -> f32 {
+        let start = raw
+            .find(name)
+            .unwrap_or_else(|| panic!("{name} in {raw:?}"))
+            + name.len();
+        raw[start..]
+            .trim_start_matches([':', ' '])
+            .trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.')
+            .split(|c: char| !c.is_ascii_digit() && c != '.')
+            .next()
+            .and_then(|n| n.parse::<f32>().ok())
+            .unwrap_or_else(|| panic!("{name} in {raw:?}"))
+    };
+    (field("width"), field("height"))
+}
+
+#[test]
+fn harness_render_error_box_falls_back_to_a_finite_extent_on_an_unbounded_axis() {
+    // A lazy list's main axis is unbounded: the box must take a finite row,
+    // not the whole scroll extent (Flutter's 100000 px would).
+    let run = RenderTester::mount(box_node(RenderErrorBox::new("boom", None)))
+        .with_constraints(BoxConstraints::new(
+            px(0.0),
+            px(200.0),
+            px(0.0),
+            px(f32::INFINITY),
+        ))
+        .run_frame();
+    assert_eq!(error_box_size(&run), (200.0, ERROR_BOX_FALLBACK_EXTENT));
 }
 
 #[test]

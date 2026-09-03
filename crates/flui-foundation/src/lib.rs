@@ -249,7 +249,7 @@ pub use id::{
     // Marker types module
     markers,
 };
-pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
+pub use key::{Key, KeyRef, Keyed, SaltedKey, UniqueKey, ValueKey, ViewKey, WithKey};
 // Change notification (Listenable pattern)
 pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
 pub use rebuild_reason::{RebuildReason, RebuildReasons};

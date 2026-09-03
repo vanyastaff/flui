@@ -1,5 +1,6 @@
 //! [`RepaintBoundary`] — isolates its child's painting into its own layer.
 
+use flui_foundation::SaltedKey;
 use flui_objects::RenderRepaintBoundary;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, IntoView, RenderView, View};
@@ -13,22 +14,25 @@ use flui_view::{Child, IntoView, RenderView, View};
 #[derive(Clone, Debug, Default)]
 pub struct RepaintBoundary {
     child: Child,
-    /// Report the child's key as this boundary's own.
+    /// The item's key, salted, when this boundary is the per-item wrapper of
+    /// a lazy sliver.
     ///
-    /// Off by default: a boundary that borrowed its child's key would change
-    /// which element a `GlobalKey` resolves to for every direct user of this
-    /// widget.
-    ///
-    /// The scrolling delegates turn it on. Flutter keeps the boundary keyless
-    /// and restores the key OUTSIDE it with `KeyedSubtree`
-    /// (`widgets/scroll_delegate.dart:559`, `:572`), which FLUI cannot copy
-    /// verbatim: a lazy sliver requires every child element to own a render
-    /// node (`sparse_children.rs`'s "a lazy sliver child must own a render
-    /// node to carry its logical index"), and a `KeyedSubtree` equivalent is a
-    /// stateless view with none. Carrying the key on the boundary — which does
-    /// own one — puts it at the same level Flutter puts it: the outermost
-    /// element the parent reconciles.
-    forwards_child_key: bool,
+    /// The scrolling delegates set it. Flutter keeps the boundary keyless and
+    /// restores the item's key OUTSIDE it with a `KeyedSubtree` carrying a
+    /// `_SaltedValueKey` (`widgets/scroll_delegate.dart:559`, `:572`). FLUI
+    /// cannot copy the wrapper: a lazy sliver requires every child element to
+    /// own a render node, and a `KeyedSubtree` equivalent is a stateless view
+    /// with none. So the boundary — which does own one — carries the key at
+    /// the level Flutter puts it, and carries it *salted* for the same two
+    /// reasons Flutter does: it is not the item's key (two elements may not
+    /// answer to one key in one parent), and it is never a `GlobalKey`, so the
+    /// boundary registers nothing and the item inside registers its own key
+    /// exactly once. A sliver looking an item up by key sees through the salt
+    /// (`SaltedKey::unsalt`).
+    salted_child_key: Option<SaltedKey>,
+    /// Whether this boundary carries its child's key at all (the scrolling
+    /// delegates ask for it; a plain `RepaintBoundary` stays keyless).
+    salts_child_key: bool,
 }
 
 impl RepaintBoundary {
@@ -41,15 +45,29 @@ impl RepaintBoundary {
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
         self.child = Child::some(child.into_view());
+        self.refresh_salted_key();
         self
     }
 
-    /// Report the child's key as this boundary's own — see
-    /// [`Self::forwards_child_key`].
+    /// Carry the child's key, salted, as this boundary's own — see
+    /// [`Self::salted_child_key`]. Order-independent with [`Self::child`]:
+    /// whichever is set last re-derives the salt.
     #[must_use]
-    pub(crate) fn forwarding_child_key(mut self) -> Self {
-        self.forwards_child_key = true;
+    pub(crate) fn salting_child_key(mut self) -> Self {
+        self.salts_child_key = true;
+        self.refresh_salted_key();
         self
+    }
+
+    fn refresh_salted_key(&mut self) {
+        self.salted_child_key = if self.salts_child_key {
+            self.child
+                .as_ref()
+                .and_then(|c| c.key())
+                .map(SaltedKey::new)
+        } else {
+            None
+        };
     }
 }
 
@@ -84,10 +102,8 @@ impl View for RepaintBoundary {
     }
 
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        if self.forwards_child_key {
-            self.child.as_ref()?.key()
-        } else {
-            None
-        }
+        self.salted_child_key
+            .as_ref()
+            .map(|key| key as &dyn flui_foundation::ViewKey)
     }
 }

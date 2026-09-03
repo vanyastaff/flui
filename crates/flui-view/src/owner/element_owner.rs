@@ -554,6 +554,40 @@ impl ElementOwner<'_> {
     /// generic `RenderBehavior::on_mount`).  Idempotent: re-registering the
     /// same `render_id` with a new manager replaces the old entry (last-write
     /// wins; a single sliver has exactly one live manager at a time).
+    /// Tell the lazy sliver whose render node is `host_render_id` — if one is
+    /// registered — that `child` was grafted away by a `GlobalKey` retake.
+    ///
+    /// The manager `Arc` is cloned out first so the registry lock is not
+    /// held across the call. The manager's own lock is taken with
+    /// `try_lock`: the only way it can already be held is a retake running
+    /// *inside* that same manager's `service` (a child moving within one
+    /// list, which the retake path rejects earlier as a duplicate), so a
+    /// contended lock here is a bug worth a loud debug failure, never a
+    /// hang.
+    pub(crate) fn forget_sparse_child(&self, host_render_id: RenderId, child: ElementId) {
+        let manager = self
+            .child_manager_registry
+            .lock()
+            .get(&host_render_id)
+            .map(Arc::clone);
+        let Some(manager) = manager else {
+            return;
+        };
+        if let Some(mut manager) = manager.try_lock() {
+            manager.forget_child(child);
+        } else {
+            debug_assert!(
+                false,
+                "BUG: forget_sparse_child re-entered a lazy sliver's own service pass"
+            );
+            tracing::error!(
+                ?host_render_id,
+                ?child,
+                "a GlobalKey retake could not notify the losing lazy sliver (manager busy)"
+            );
+        }
+    }
+
     pub(crate) fn register_child_manager(
         &mut self,
         render_id: RenderId,

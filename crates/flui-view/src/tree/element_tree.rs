@@ -1297,6 +1297,21 @@ impl ElementTree {
     /// equivalent of Flutter's recursive `_updateDepth` plus the
     /// `_updateInheritance` work performed while reactivating a subtree.
     /// Average/worst case O(subtree size), paid only for a reparent.
+    /// Move a lazy sliver's resident child to a new logical index without
+    /// remounting it: the node's slot becomes `new_slot`, and the inherited
+    /// `sliver_slot` is re-derived down its composite chain (the same walk a
+    /// GlobalKey relocation runs). The caller re-stamps the render
+    /// descendants afterwards — `stamp_sliver_logical_index` reads the new
+    /// index, the walk cannot. Ordering is load-bearing: the ancestry walk
+    /// derives each child's `sliver_slot` from its parent's slot, so the
+    /// slot must be written first.
+    pub(crate) fn relocate_sparse_child(&mut self, id: ElementId, new_slot: usize) {
+        if let Some(node) = self.get_mut(id) {
+            node.slot = new_slot;
+        }
+        self.recompute_subtree_ancestry(id);
+    }
+
     fn recompute_subtree_ancestry(&mut self, root_id: ElementId) {
         // A `visited` set bounds the walk to each node once. The element tree
         // is acyclic by construction (`child_ids` come from the reconciler),
@@ -2231,6 +2246,15 @@ fn retake_active_global_key(
     // longer has. Record it so the frame boundary can tell the two apart —
     // `note_parent_rebuild` drops this the moment `from_parent` rebuilds.
     owner.displace_global_key(from_parent, candidate_id, key, new_parent);
+    // A lazy sliver that loses a child this way must forget it too, or its
+    // next band eviction / delegate refresh would reach into another
+    // parent's subtree (Flutter's `forgetChild` on the losing element).
+    if let Some(losing_render_id) = tree
+        .get(from_parent)
+        .and_then(|node| node.element().render_id())
+    {
+        owner.forget_sparse_child(losing_render_id, candidate_id);
+    }
 
     // A candidate registered under a parent that no longer lists it is
     // tolerated, not refused: the registry is the authority on where a

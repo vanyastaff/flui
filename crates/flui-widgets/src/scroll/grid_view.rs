@@ -162,6 +162,20 @@ impl GridView {
         self
     }
 
+    /// Map an item's key to its current index in the data source — see
+    /// [`ListView::find_index_by_key`](crate::ListView::find_index_by_key).
+    /// Only meaningful for [`GridView::builder`].
+    #[must_use]
+    pub fn find_index_by_key(
+        mut self,
+        find: impl Fn(&dyn flui_foundation::ViewKey) -> Option<usize> + 'static,
+    ) -> Self {
+        if let Some(delegate) = &mut self.builder_source {
+            delegate.find_index_by_key = Some(Rc::new(find));
+        }
+        self
+    }
+
     /// Set the scroll axis (default [`Axis::Vertical`]).
     #[must_use]
     pub fn scroll_direction(mut self, scroll_direction: Axis) -> Self {
@@ -239,11 +253,20 @@ impl StatelessView for GridView {
             } else {
                 Rc::clone(&delegate.builder)
             };
-            SliverGridLazy::new(
-                Arc::clone(&self.grid_delegate),
-                delegate.item_count,
-                builder,
-            )
+            {
+                let sliver = SliverGridLazy::new(
+                    Arc::clone(&self.grid_delegate),
+                    delegate.item_count,
+                    builder,
+                );
+                match &delegate.find_index_by_key {
+                    Some(find) => {
+                        let find = Rc::clone(find);
+                        sliver.find_index_by_key(move |key| find(key))
+                    }
+                    None => sliver,
+                }
+            }
             .boxed()
         } else {
             // Eager variant: all children pre-attached.

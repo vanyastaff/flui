@@ -195,12 +195,12 @@ pub use owner::{
 };
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
-    AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement,
-    ErrorView, ErrorViewBuilder, FlutterError, InheritedElement, InheritedView, IntoElement,
-    IntoView, Memo, ParentDataConfig, ParentDataElement, ParentDataView, ProxyElement, ProxyView,
-    RenderElement, RenderObjectContext, RenderObjectContextError, RenderView, RootRenderElement,
-    RootRenderView, StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt,
-    ViewState, clear_error_view_builder, set_error_view_builder,
+    AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementExt, ErrorView,
+    ErrorViewBuilder, FlutterError, InheritedElement, InheritedView, IntoElement, IntoView, Memo,
+    ParentDataConfig, ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement,
+    RenderObjectContext, RenderObjectContextError, RenderView, RootRenderElement, RootRenderView,
+    StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
+    clear_error_view_builder, set_error_view_builder,
 };
 
 // ============================================================================

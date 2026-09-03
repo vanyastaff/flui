@@ -715,9 +715,14 @@ mod tests {
         assert!(element.render_id().is_none()); // No PipelineOwner, so no render_id
     }
 
+    /// A render element mounted with no `PipelineOwner` minted no render
+    /// object (`on_mount` warns and continues), so updating it is a no-op —
+    /// the same render-less tree that mounted it can keep driving it. This
+    /// is what lets a view whose element owns a render node (`ErrorView`
+    /// over `RenderErrorBox`, say) be built and rebuilt in a unit test that
+    /// never installs a pipeline. The two half-states below stay panics.
     #[test]
-    #[should_panic(expected = "BUG: active RenderBehavior must have a PipelineOwner during update")]
-    fn active_render_element_update_without_pipeline_owner_panics() {
+    fn render_element_update_without_pipeline_owner_is_a_no_op() {
         let view = SizedBoxView {
             width: 100.0,
             height: 100.0,
@@ -725,7 +730,6 @@ mod tests {
         let mut element = RenderElement::new(&view, RenderBehavior::new());
         let mut build_owner = crate::BuildOwner::new();
         element.mount(None, 0, &mut build_owner.element_owner_mut());
-
         element.update(
             &SizedBoxView {
                 width: 120.0,
@@ -733,6 +737,8 @@ mod tests {
             },
             &mut build_owner.element_owner_mut(),
         );
+        assert!(element.render_id().is_none());
+        assert_eq!(element.lifecycle(), Lifecycle::Active);
     }
 
     #[test]

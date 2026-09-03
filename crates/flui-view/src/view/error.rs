@@ -22,12 +22,9 @@
 //! );
 //! ```
 
-use std::{any::TypeId, sync::RwLock};
+use std::sync::RwLock;
 
-use flui_foundation::ElementId;
-
-use super::view::{ElementBase, View};
-use crate::element::Lifecycle;
+use super::view::View;
 
 /// Factory function type for creating custom error widgets.
 ///
@@ -202,118 +199,33 @@ impl std::fmt::Debug for ErrorView {
     }
 }
 
+impl crate::view::RenderView for ErrorView {
+    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type RenderObject = flui_objects::RenderErrorBox;
+
+    fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
+        flui_objects::RenderErrorBox::new(self.message.clone(), self.details.clone())
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &crate::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_error(self.message.clone(), self.details.clone())
+    }
+}
+
 impl View for ErrorView {
+    /// A render element over [`RenderErrorBox`](flui_objects::RenderErrorBox).
+    ///
+    /// The error view owns a render node on purpose: it stands in for a
+    /// subtree that failed to build, and every place that subtree could sit
+    /// — a lazy sliver child in particular, which must carry a render node to
+    /// be laid out at all — needs something with size and paint there.
+    /// Flutter's `ErrorWidget` is a `RenderErrorBox` for the same reason.
     fn create_element(&self) -> crate::element::ElementKind {
-        crate::element::ElementKind::Error(Box::new(ErrorElement::new(self)))
-    }
-}
-
-// ============================================================================
-// ErrorElement
-// ============================================================================
-
-/// Element for ErrorView.
-///
-/// This is a leaf element that doesn't have children.
-pub struct ErrorElement {
-    /// The current View configuration.
-    view: ErrorView,
-    /// Current lifecycle state.
-    lifecycle: Lifecycle,
-    /// Depth in tree.
-    depth: usize,
-}
-
-impl ErrorElement {
-    /// Create a new ErrorElement.
-    pub fn new(view: &ErrorView) -> Self {
-        Self {
-            view: view.clone(),
-            lifecycle: Lifecycle::Initial,
-            depth: 0,
-        }
-    }
-
-    /// Get the error message.
-    pub fn message(&self) -> &str {
-        &self.view.message
-    }
-
-    /// Get the error details.
-    pub fn details(&self) -> Option<&str> {
-        self.view.details.as_deref()
-    }
-}
-
-impl std::fmt::Debug for ErrorElement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ErrorElement")
-            .field("message", &self.view.message)
-            .field("lifecycle", &self.lifecycle)
-            .field("depth", &self.depth)
-            .finish()
-    }
-}
-
-impl ElementBase for ErrorElement {
-    fn view_type_id(&self) -> TypeId {
-        TypeId::of::<ErrorView>()
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
-    }
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn update(&mut self, new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {
-        if let Some(v) = new_view.as_any().downcast_ref::<ErrorView>() {
-            self.view = v.clone();
-        }
-    }
-
-    fn mark_needs_build(&mut self) {
-        // ErrorElement is a leaf - nothing to rebuild
-    }
-
-    fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-        // ErrorElement is a leaf — no child views.
-        Vec::new()
-    }
-
-    fn mount(
-        &mut self,
-        _parent: Option<ElementId>,
-        _slot: usize,
-        _owner: &mut crate::ElementOwner<'_>,
-    ) {
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn deactivate(&mut self) {
-        debug_assert!(
-            self.lifecycle.can_deactivate(),
-            "BUG: deactivate from {:?} — only an Active element may be \
-             deactivated",
-            self.lifecycle
-        );
-        self.lifecycle = Lifecycle::Inactive;
-    }
-
-    fn activate(&mut self) {
-        debug_assert!(
-            self.lifecycle.can_activate(),
-            "BUG: activate from {:?} — only an Inactive element may be \
-             reactivated; Defunct in particular has disposed its state",
-            self.lifecycle
-        );
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
-        self.lifecycle = Lifecycle::Defunct;
+        crate::element::ElementKind::render_variable(self)
     }
 }
 
@@ -336,37 +248,18 @@ mod tests {
     }
 
     #[test]
-    fn test_flutter_error() {
-        let error = FlutterError::with_details("Build failed", "at widget XYZ");
-        assert_eq!(error.message, "Build failed");
-        assert_eq!(error.details.as_deref(), Some("at widget XYZ"));
-    }
-
-    #[test]
-    fn test_error_element_creation() {
-        let view = ErrorView::new("Test error");
-        let element = ErrorElement::new(&view);
-
-        assert_eq!(element.lifecycle(), Lifecycle::Initial);
-        assert_eq!(element.message(), "Test error");
-    }
-
-    #[test]
-    fn test_error_element_mount() {
-        let view = ErrorView::new("Test error");
-        let mut element = ErrorElement::new(&view);
-
-        let mut owner = crate::BuildOwner::new();
-        element.mount(None, 0, &mut owner.element_owner_mut());
-        assert_eq!(element.lifecycle(), Lifecycle::Active);
-    }
-
-    #[test]
-    fn test_build_error_view_default() {
-        let error = FlutterError::new("Test error");
-        let view = ErrorView::build_error_view(&error);
-
-        // Should return a boxed ErrorView
-        assert!(view.as_any().downcast_ref::<ErrorView>().is_some());
+    fn error_view_is_a_render_element_over_an_error_box() {
+        let view = ErrorView::new("boom");
+        assert!(
+            matches!(
+                view.create_element(),
+                crate::element::ElementKind::RenderVariable(_)
+            ),
+            "the error view must own a render node so a failed subtree still has size and paint"
+        );
+        let ctx = crate::RenderObjectContext::new(None);
+        let render_object =
+            <ErrorView as crate::view::RenderView>::create_render_object(&view, &ctx);
+        assert_eq!(render_object.message(), "boom");
     }
 }

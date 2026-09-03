@@ -81,18 +81,17 @@
 //! any `perform_layout`. Confirmed empirically, not just by inspection: an
 //! initial `harness::pump_widget` alone never invokes the item builder at
 //! all (`RenderSliverList` commits its first geometry from the item-extent
-//! ESTIMATE, with zero builder calls — checked with an instrumented probe
-//! before writing the test below); the builder only runs once the lazy
-//! children are settled (`settle_lazy`'s `tick()` calls, which drive
-//! `service_child_requests`), and THAT is where the uncaught panic actually
-//! surfaces. So a panicking sliver item builder unwinds straight out of the
-//! settle pass — a materially worse failure mode than Flutter's, where
-//! `SliverChildBuilderDelegate.build`'s own dedicated try/catch keeps the
-//! frame alive. [`sliver_list_item_builder_panic_is_not_caught_and_unwinds_layout`]
-//! pins this as a `#[should_panic]` canary (real, currently-passing evidence
-//! of the gap — not `#[ignore]`d, since it documents CURRENT behavior;
-//! it is *expected* to start failing the day this gap closes, forcing an
-//! update). Filed as a new Cross.H entry in `docs/ROADMAP.md`.
+//! ESTIMATE, with zero builder calls); the builder only runs once the lazy
+//! children are serviced (inside the frame's layout↔build fixpoint), and
+//! that service pass runs every builder call under a per-item
+//! `catch_unwind` (`build_item_or_error`) — the same boundary Flutter's
+//! `SliverChildBuilderDelegate.build` puts around `builder(context, index)`.
+//! A panicking item builder therefore yields the registered error view at
+//! exactly that index, as a render-owning `RenderErrorBox` row, and leaves
+//! every other index untouched;
+//! [`sliver_list_item_builder_panic_becomes_an_error_box_at_that_index`]
+//! is the oracle of that recovery (it replaced the `#[should_panic]` canary
+//! that pinned the earlier gap, where the builder was called bare).
 //!
 //! ## Disposition
 //!
@@ -112,7 +111,7 @@ use flui_view::{
     BuildContext, FlutterError, IntoView, StatelessView, View, clear_error_view_builder,
     set_error_view_builder,
 };
-use flui_widgets::SizedBox;
+use flui_widgets::{SizedBox, Text};
 
 use crate::common;
 use crate::harness;
@@ -249,41 +248,68 @@ fn panicking_build_survives_a_full_pump_and_lays_out_the_registered_error_view()
 }
 
 // ============================================================================
-// The gap the oracle's specific mechanism exposes — pinned, not ported
+// The oracle's own mechanism: a panicking item builder becomes an error child
 // ============================================================================
 
-/// Demonstrates the divergence named in this file's module doc: a lazy
-/// `SliverList` item-builder closure that panics is NOT caught anywhere in
-/// FLUI today (no `catch_unwind` on this path at all), unlike Flutter's
-/// `SliverChildBuilderDelegate.build`, whose own dedicated try/catch is the
-/// literal mechanism `'Can override ErrorWidget.build'` pins.
+/// The mechanism `'Can override ErrorWidget.build'` pins, on the lazy path:
+/// `SliverChildBuilderDelegate.build`'s own try/catch turns a throwing item
+/// builder into an `ErrorWidget` at that index. FLUI's lazy child manager
+/// runs every builder call under the same per-item boundary
+/// (`build_item_or_error`): the panicking index gets the registered error
+/// view — a render-owning `RenderErrorBox`, so it occupies a visible, finite
+/// row — and every other index is untouched.
 ///
-/// This is a `#[should_panic]` CANARY of current (undesired) behavior, not
-/// an `#[ignore]`d pin of the oracle's expected behavior: it is expected to
-/// stay green until the gap closes, at which point it starts failing (no
-/// panic occurs), forcing whoever closes the gap to update or remove it —
-/// see the Cross.H entry this test backs in `docs/ROADMAP.md`.
+/// This used to be a `#[should_panic]` canary of the gap (the builder was
+/// called bare and unwound the whole service pass); it is now the oracle of
+/// the recovery.
 #[test]
-#[should_panic(expected = "boom in a sliver item builder")]
-fn sliver_list_item_builder_panic_is_not_caught_and_unwinds_layout() {
+fn sliver_list_item_builder_panic_becomes_an_error_box_at_that_index() {
     use std::rc::Rc;
 
-    use flui_view::BoxedView;
+    use flui_objects::ERROR_BOX_FALLBACK_EXTENT;
+    use flui_view::{BoxedView, ViewExt};
     use flui_widgets::{CustomScrollView, SliverList};
 
-    let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> =
-        Rc::new(|_index: usize| panic!("boom in a sliver item builder"));
-
-    let root = CustomScrollView::new((SliverList::new(10, 48.0, builder),));
-    // The initial `pump_widget` alone does NOT trigger this: `RenderSliverList`
-    // commits its first geometry from the item-extent ESTIMATE without
-    // requesting any child (confirmed empirically -- a probe build recorded
-    // zero builder invocations after a bare `pump_widget`). The child-manager
-    // request pass (`ChildManager::service`, driven by
-    // `BuildOwner::service_child_requests` -- a BUILD-phase operation, not
-    // the layout-level walk) runs on the settle ticks below, which is where
-    // the unguarded `(self.builder)(logical_index)` call this file's module
-    // doc names actually fires.
+    const ITEM_EXTENT: f32 = 48.0;
+    let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|index: usize| {
+        assert!(index != 2, "boom in a sliver item builder");
+        (index < 10).then(|| Text::new(format!("item{index}")).boxed())
+    });
+    let root = CustomScrollView::new((SliverList::new(10, ITEM_EXTENT, builder),));
     let mut laid = harness::pump_widget(root, harness::screen());
     crate::common::settle_lazy(&mut laid);
+
+    let error_boxes = laid.find_all_by_render_type("RenderErrorBox");
+    assert_eq!(
+        error_boxes.len(),
+        1,
+        "exactly the panicking index gets an error child"
+    );
+    let error_size = laid
+        .try_size(error_boxes[0])
+        .expect("the error child must be laid out like any other item");
+    assert_eq!(
+        error_size.height.get(),
+        ERROR_BOX_FALLBACK_EXTENT,
+        "under the list's unbounded main axis the error box takes its finite fallback row"
+    );
+    for text in ["item0", "item1", "item3", "item4"] {
+        let id = laid
+            .find_text(text)
+            .unwrap_or_else(|| panic!("{text} must still be built"));
+        assert!(
+            laid.try_size(id).is_some_and(|s| s.height.get() > 0.0),
+            "{text} must be laid out; a panic at one index does not unwind its neighbours"
+        );
+    }
+    // The error row sits where item 2 would: after items 0 and 1.
+    let item3_top = laid
+        .absolute_offset(laid.find_text("item3").expect("item3"))
+        .dy
+        .get();
+    let error_top = laid.absolute_offset(error_boxes[0]).dy.get();
+    assert!(
+        error_top < item3_top,
+        "the error child keeps the panicking index's place in the list"
+    );
 }
