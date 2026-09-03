@@ -18,8 +18,9 @@
 //!    (`#[ignore]`d, pinning the oracle's literal expectation). Regression
 //!    test for `flutter/flutter#59888`. See "Case 1 — a real, confirmed
 //!    divergence" below — this is NOT a drag-fidelity/settle-timing issue;
-//!    it is a virtualizer-estimate architecture difference, filed as a
-//!    Cross.H entry in `docs/ROADMAP.md`.
+//!    it is a correction-model difference FLUI decided to keep — see
+//!    ADR-0051 and the FLUI oracle
+//!    [`inaccurate_scroll_offset_keeps_the_anchor_stationary_and_still_reaches_the_start`].
 //! 2. `'SliverList handles 0 scrollOffsetCorrection'` — **ported, real
 //!    green, faithful-route substitution (disposition (c))**:
 //!    [`bouncing_fling_over_zero_size_leading_child_does_not_panic`].
@@ -144,12 +145,17 @@
 //! negative → `-firstChildScrollOffset`) — `performLayout`'s
 //! `earliestUsefulChild` loop, `rendering/sliver_list.dart`, tag `3.44.0`.
 //! The stable 192px gap is exactly the two zero-size odd items between
-//! Flutter's retained band start and FLUI's anchor. Filed as a Cross.H
-//! "Known gap" entry in `docs/ROADMAP.md` (mechanism, the exact windows
-//! above as evidence, and this file as the tracking reference) — aligning
-//! the correction model is a production algorithm change to a module
-//! shared by `SliverList` AND `SliverGrid`, out of scope for a
-//! test-porting pass.
+//! Flutter's retained band start and FLUI's anchor. **Decided, not a gap
+//! (ADR-0051, 2026-09-03):** FLUI keeps the first visible item
+//! pixel-stationary when items above it change size — the Compose/GPUI
+//! anchor behaviour — where Flutter lets that growth shift the visible
+//! content by 192 px with no user input. Traced pass by pass, both models
+//! are self-consistent and FLUI is exactly those 192 px further from the
+//! top at every later checkpoint; the backward-scroll suppression the
+//! earlier analysis blamed changed nothing (suppression on and off gave
+//! identical windows) and has since been removed. The oracle's literal
+//! windows stay pinned below as the declined behaviour; the FLUI oracle
+//! beside it asserts the replacement contract.
 //!
 //! # Case 2 — disposition: (c), faithful-route substitution
 //!
@@ -434,17 +440,22 @@ fn inaccurate_scroll_offset_self_corrects_but_settles_two_items_off_the_oracle_w
 }
 
 /// Pins the oracle's LITERAL expectation for `'SliverList can handle
-/// inaccurate scroll offset due to changes in children list'` — the same case
-/// [`inaccurate_scroll_offset_self_corrects_but_settles_two_items_off_the_oracle_window`]
-/// ported above — every assertion here is the oracle's own window,
-/// unmodified. `#[ignore]`d because it currently fails on the exact,
-/// confirmed 2-item divergence that test's own doc and this module's "Case
-/// 1" doc describe; un-ignore when the correction-model gap
-/// (`docs/ROADMAP.md`, Cross.H) closes.
+/// inaccurate scroll offset due to changes in children list'` — every
+/// assertion here is the oracle's own window, unmodified. `#[ignore]`d as a
+/// **decided** divergence, not a gap: FLUI keeps the first visible item
+/// pixel-stationary when off-screen items above it change size (ADR-0051),
+/// where Flutter lets that growth shift the visible content. The windows
+/// FLUI produces instead, and the arithmetic tying every checkpoint to the
+/// oracle's, are asserted by
+/// [`inaccurate_scroll_offset_keeps_the_anchor_stationary_and_still_reaches_the_start`]
+/// below. This pin stays in-tree, red, as the executable statement of what
+/// the oracle would have asserted; it is never counted as parity (manifest
+/// `decision = "ADR-0051"`).
 #[test]
-#[ignore = "known gap: FLUI shifts pixels via eager anchor corrections where \
-            Flutter defers to boundary-hit corrections over retained stale \
-            offsets — docs/ROADMAP.md Cross.H, this module's Case 1 doc"]
+#[ignore = "decided divergence (ADR-0051): FLUI keeps the first visible item \
+            pixel-stationary across off-screen remeasures; Flutter lets the \
+            growth of retained children above the viewport shift the content. \
+            The FLUI oracle beside this test asserts the replacement contract."]
 fn inaccurate_scroll_offset_converges_to_the_oracles_exact_windows_over_multiple_drags() {
     let controller = ScrollController::new();
     let mut laid = lay_out(
@@ -499,6 +510,107 @@ fn inaccurate_scroll_offset_converges_to_the_oracles_exact_windows_over_multiple
     assert!(is_onstage_text(&laid, "item0", CASE1_VIEWPORT_HEIGHT));
     assert!(is_onstage_text(&laid, "item6", CASE1_VIEWPORT_HEIGHT));
     assert!(!is_onstage_text(&laid, "item7", CASE1_VIEWPORT_HEIGHT));
+}
+
+/// FLUI's replacement oracle for the case above (ADR-0051). Same scene, same
+/// gestures; three properties Flutter's model does not have, plus the
+/// arithmetic that ties every FLUI window to the oracle's.
+///
+/// 1. **Anchor stationarity.** At the swap the first visible item (14) is
+///    exactly where it was on screen; the two odd items above it that grew
+///    (11 and 13, 0 → 96 each) moved the offset, not the content:
+///    `pixels` 750 → 942. Flutter shows the same 192 px as a downward shift
+///    of everything on screen, which is why its window is `[12,19]`.
+/// 2. **Windows at accurate offsets.** After each 250 px drag the window is
+///    the one the accurate offset predicts; every difference from the
+///    oracle's is the same 192 px, charged once at the swap.
+/// 3. **Convergence.** The list reaches its start — `pixels == 0`, window
+///    `[0,6]` — one 250 px drag after the oracle does, that drag being the
+///    192 px the swap charged (942 + 480 of odd-item growth on the way up −
+///    1250 = 172 remaining after the oracle's five drags).
+///
+/// The per-pass trace behind these numbers is in ADR-0051. Every checkpoint
+/// fails if a correction is withheld on a backward scroll (the anchor would
+/// drift), if the swap-time correction is missing (window `[12,19]` instead
+/// of `[14,21]`), or if the accumulator over-counts (the final `[0,6]`
+/// would be reached a drag early).
+#[test]
+fn inaccurate_scroll_offset_keeps_the_anchor_stationary_and_still_reaches_the_start() {
+    fn window(laid: &LaidOut) -> (usize, usize) {
+        let onstage: Vec<usize> = (0..30)
+            .filter(|i| is_onstage_text(laid, &format!("item{i}"), CASE1_VIEWPORT_HEIGHT))
+            .collect();
+        (
+            *onstage.first().expect("something is on stage"),
+            *onstage.last().expect("something is on stage"),
+        )
+    }
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        scene(&controller, true),
+        tight(CASE1_VIEWPORT_WIDTH, CASE1_VIEWPORT_HEIGHT),
+    );
+    settle_dense(&mut laid);
+    assert_eq!(window(&laid), (0, 12), "mount: the oracle's own window");
+
+    drag_vertical(&laid, -750.0);
+    settle_dense(&mut laid);
+    assert_eq!(controller.pixels(), 750.0);
+    // Item 14 (672..768) is the first visible item; the oracle asserts 16
+    // and 28 and is silent about 14, which is on screen in Flutter too.
+    assert_eq!(window(&laid), (14, 28));
+    let anchor_before = laid
+        .absolute_offset(laid.find_text("item14").expect("item14 resident"))
+        .dy;
+
+    laid.pump_widget(scene(&controller, false));
+    settle_dense(&mut laid);
+    // Property 1: items 11 and 13 grew above the anchor → offset +192,
+    // anchor unmoved on screen.
+    assert_eq!(
+        controller.pixels(),
+        942.0,
+        "swap: +2 × 96 charged to the offset"
+    );
+    let anchor_after = laid
+        .absolute_offset(laid.find_text("item14").expect("item14 resident"))
+        .dy;
+    assert_eq!(
+        anchor_after, anchor_before,
+        "the first visible item must not move on screen when items above it grow"
+    );
+    assert_eq!(
+        window(&laid),
+        (14, 21),
+        "swap: the stationary-anchor window (oracle: [12,19])"
+    );
+
+    // Property 2: each drag lands on the accurate-offset window; the odd
+    // items entering the band above the anchor (9, then 7, then 5 and 3,
+    // then 1) are charged as they are measured.
+    let checkpoints: [(f32, (usize, usize)); 5] = [
+        (788.0, (12, 18)),
+        (634.0, (9, 15)),
+        (576.0, (7, 13)),
+        (422.0, (4, 10)),
+        (172.0, (1, 8)),
+    ];
+    for (expected_pixels, expected_window) in checkpoints {
+        drag_vertical(&laid, 250.0);
+        settle_dense(&mut laid);
+        assert_eq!(controller.pixels(), expected_pixels);
+        assert_eq!(window(&laid), expected_window);
+    }
+
+    // Property 3: one more drag reaches the start exactly.
+    drag_vertical(&laid, 250.0);
+    settle_dense(&mut laid);
+    assert_eq!(controller.pixels(), 0.0, "the list must reach its start");
+    assert_eq!(
+        window(&laid),
+        (0, 6),
+        "the oracle's final window, one drag later"
+    );
 }
 
 // ============================================================================

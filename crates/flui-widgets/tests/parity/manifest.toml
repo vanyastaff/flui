@@ -911,7 +911,7 @@ cases = [
 rust = "sliver_list_correction_test"
 family = "sliver"
 oracles = ["widgets/slivers_test.dart"]
-tests = 3
+tests = 4
 
 [[targets.claims]]
 oracle = "widgets/slivers_test.dart"
@@ -919,8 +919,8 @@ cases = ["SliverList handles 0 scrollOffsetCorrection"]
 
 [[targets.pins]]
 test = "inaccurate_scroll_offset_converges_to_the_oracles_exact_windows_over_multiple_drags"
-capability = "viewport-applied scroll-offset correction instead of eager per-item pixel shifts"
-issue = 530
+capability = "anchor-stationary scroll correction: FLUI keeps the first visible item in place when off-screen items above it change size, where Flutter lets the growth shift the content; the FLUI oracle beside the pin asserts the replacement contract"
+decision = "ADR-0051"
 oracle = "widgets/slivers_test.dart"
 cases = ["SliverList can handle inaccurate scroll offset due to changes in children list"]
 
@@ -1571,7 +1571,7 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 90
-rust_tests = 649
+rust_tests = 650
 pins = 3
 oracle_files = 389
 oracle_cases = 5696
@@ -1655,7 +1655,7 @@ pins = 0
 
 [summary.families."sliver"]
 targets = 15
-rust_tests = 82
+rust_tests = 83
 cases_claimed = 34
 cases_diverged = 2
 pins = 2

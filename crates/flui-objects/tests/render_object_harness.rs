@@ -7207,7 +7207,7 @@ fn harness_sliver_list_scroll_extent_equals_virtualizer_estimate() {
 }
 
 #[test]
-fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
+fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
     // Two-pass test for the anchor-correction state machine.
     //
     // Setup: 10-item list (48 px seed estimate), item 0 pre-seeded at 60 px.
@@ -7232,12 +7232,16 @@ fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
     // 60 px hint, visible range starts at item 1 (item 0 ends at 60 < 72) →
     // anchor=(1,0).  set_measured(0, 84, (1,0)) accumulates pending=24; the
     // hint adapts 60 → 84 but nothing unmeasured sits above the anchor, so no
-    // further correction.  Backward scroll (72 < 124 = last_scroll_offset) →
-    // SUPPRESSED.  Viewport keeps scroll=72.  Item 0 paint dy = 0 − 72 = −72 px.
+    // further correction.  The correction is emitted regardless of scroll
+    // direction (ADR-0051 — the old backward suppression was itself a
+    // one-frame jump): correct_by(24) → pixels=96, accepted (max_scroll =
+    // 840 − 400 = 440).  Item 1 (the anchor, at 84) keeps its screen position
+    // 84 − 96 = −12 = 60 − 72; item 0 paint dy = 0 − 96 = −96 px.
     //
-    // Fails when anchor-correction is not wired, when forward/backward
-    // detection is inverted, when the adaptive hint stops feeding the
-    // accumulator, or when the viewport's correction loop is broken.
+    // Fails when anchor-correction is not wired, when a backward scroll
+    // withholds the correction (the anchor would drift by the 24 px growth),
+    // when the adaptive hint stops feeding the accumulator, or when the
+    // viewport's correction loop is broken.
     let mut run = RenderTester::mount(viewport_with_scroll(
         100.0,
         sliver_node(RenderSliverList::new(10, 48.0))
@@ -7280,14 +7284,15 @@ fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
     });
     run.relayout();
 
-    // Pass 2 check: backward scroll (72 < 124 = last_scroll_offset) suppresses
-    // the 24 px correction → viewport stays at scroll=72.  Item 0 at
-    // layout_offset=0 gets paint dy = 0 - 72 = -72 px.
+    // Pass 2 check: the 24 px correction is emitted on the backward scroll
+    // too → scroll 72→96.  Item 0 at layout_offset=0 gets paint dy = -96 px,
+    // and the anchor (item 1) is exactly where it was on screen before the
+    // remeasure.
     assert_eq!(
         run.offset(item0_id).dy,
-        px(-72.0),
-        "backward suppression: viewport stays at scroll=72; \
-         item 0 (layout_offset=0) must have dy=0-72=-72; got {:?}",
+        px(-96.0),
+        "direction-independent correction: scroll 72→96; \
+         item 0 (layout_offset=0) must have dy=0-96=-96; got {:?}",
         run.offset(item0_id).dy,
     );
 }

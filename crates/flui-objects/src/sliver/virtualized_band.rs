@@ -135,29 +135,24 @@ pub(super) fn accumulate_anchor_correction(
     }
 }
 
-/// Applies the anchor-correction state machine.
+/// Takes the accumulated anchor correction for this pass.
 ///
-/// Policy:
-/// - **Backward scroll** (`current < last`): suppress emission and preserve
-///   the accumulator — apply it when the user scrolls forward again.
-/// - **Forward / idle / stationary**: if `pending_correction != 0`, emit and
-///   reset.
-///
-/// Always updates `last_scroll_offset` to `current_scroll_offset`.
+/// Emitted whenever it is non-zero, in either scroll direction. The anchor
+/// (the first visible item) stays pixel-stationary only if the offset moves
+/// by exactly the growth above it in the same pass; deferring the correction
+/// on a backward scroll — what this used to do, after ADR-0003's consumer
+/// note — is itself the one-frame content jump it meant to prevent, and with
+/// requests serviced inside the frame every build re-runs layout at an
+/// unchanged offset anyway, so the deferral could only ever last one pass.
+/// The direction-independent rule is recorded in ADR-0051.
 ///
 /// # Returns
 ///
 /// `Some(delta)` to emit as `SliverGeometry::scroll_offset_correction`;
-/// `None` when the correction is suppressed.
+/// `None` when nothing is pending.
 #[inline]
-pub(super) fn resolve_anchor_correction(
-    pending_correction: &mut f32,
-    last_scroll_offset: &mut f32,
-    current_scroll_offset: f32,
-) -> Option<f32> {
-    let is_backward = current_scroll_offset < *last_scroll_offset;
-    *last_scroll_offset = current_scroll_offset;
-    if is_backward || *pending_correction == 0.0 {
+pub(super) fn take_anchor_correction(pending_correction: &mut f32) -> Option<f32> {
+    if *pending_correction == 0.0 {
         None
     } else {
         let out = *pending_correction;
@@ -205,8 +200,8 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 ///   on each pass.  Kept on the caller to reuse the `BTreeMap` allocation.
 /// - `item_count`: total known item count.  May be shrunken mid-pass by the
 ///   `NoChild` outcome of `on_absent`.
-/// - `pending_correction` / `last_scroll_offset`: anchor-correction state
-///   machine (see [`super::sliver_list_lazy`] module doc).
+/// - `pending_correction`: the anchor-correction accumulator (see
+///   [`super::sliver_list_lazy`] module doc).
 /// - `attached_child_count`: written with the post-layout dense child count
 ///   so the `&self` hit-test walk can reverse-iterate without re-querying.
 /// - `constraints`: sliver constraints for this layout pass.
@@ -243,7 +238,6 @@ pub(super) fn walk_virtualizer_band<'ctx, F, G, H>(
     logical_to_slot: &mut BTreeMap<usize, usize>,
     item_count: &mut usize,
     pending_correction: &mut f32,
-    last_scroll_offset: &mut f32,
     attached_child_count: &mut usize,
     constraints: &SliverConstraints,
     ctx: &mut SliverLayoutContext<'ctx, Variable, SliverMultiBoxAdaptorParentData>,
@@ -262,8 +256,6 @@ where
     ) -> ChildLayout<BoxChildRef>,
     H: FnMut(usize), // logical_i of each off-band disposed child (RenderOwned only)
 {
-    let scroll_offset = constraints.scroll_offset;
-
     // ── 1. Sync virtualizer count ──────────────────────────────────────────
     virtualizer.set_count(*item_count);
 
@@ -508,8 +500,7 @@ where
     }
 
     // ── 11. Anchor correction ──────────────────────────────────────────────
-    let scroll_offset_correction =
-        resolve_anchor_correction(pending_correction, last_scroll_offset, scroll_offset);
+    let scroll_offset_correction = take_anchor_correction(pending_correction);
 
     let geometry = SliverGeometry {
         scroll_offset_correction,
@@ -587,49 +578,28 @@ mod tests {
         assert_eq!(w.cache_after, 0.0);
     }
 
-    // ── resolve_anchor_correction ─────────────────────────────────────────────
-
+    // ── take_anchor_correction ────────────────────────────────────────────
     #[test]
-    fn correction_idle_forward_emits_and_resets() {
+    fn correction_emits_whatever_is_pending_and_resets() {
         let mut correction = 10.0_f32;
-        let mut last = 200.0_f32;
-        let result = resolve_anchor_correction(&mut correction, &mut last, 200.0);
-        assert_eq!(result, Some(10.0));
+        assert_eq!(take_anchor_correction(&mut correction), Some(10.0));
         assert_eq!(correction, 0.0);
-        assert_eq!(last, 200.0);
     }
-
-    #[test]
-    fn correction_backward_suppresses_and_preserves_accumulator() {
-        let mut correction = 5.0_f32;
-        let mut last = 200.0_f32;
-        let result = resolve_anchor_correction(&mut correction, &mut last, 100.0);
-        assert_eq!(result, None);
-        assert_eq!(correction, 5.0, "accumulator must be preserved");
-        assert_eq!(last, 100.0);
-    }
-
     #[test]
     fn correction_zero_pending_emits_none() {
         let mut correction = 0.0_f32;
-        let mut last = 100.0_f32;
-        let result = resolve_anchor_correction(&mut correction, &mut last, 200.0);
-        assert_eq!(result, None);
+        assert_eq!(take_anchor_correction(&mut correction), None);
     }
-
     #[test]
-    fn correction_forward_after_backward_emits() {
-        let mut correction = 8.0_f32;
-        let mut last = 200.0_f32;
-        // backward: suppress
-        resolve_anchor_correction(&mut correction, &mut last, 100.0);
-        assert_eq!(correction, 8.0);
-        // forward: emit
-        let result = resolve_anchor_correction(&mut correction, &mut last, 300.0);
-        assert_eq!(result, Some(8.0));
+    fn correction_is_direction_independent() {
+        // The old state machine withheld a pending correction on a backward
+        // scroll; the accumulator is now drained on every pass, so the
+        // caller's scroll direction is not even an input.
+        let mut correction = -8.0_f32;
+        assert_eq!(take_anchor_correction(&mut correction), Some(-8.0));
         assert_eq!(correction, 0.0);
+        assert_eq!(take_anchor_correction(&mut correction), None);
     }
-
     // ── accumulate_anchor_correction ─────────────────────────────────────────
 
     #[test]
