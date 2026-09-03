@@ -4,6 +4,7 @@
 //! `widgets/indexed_stack.dart`).
 
 use crate::common::{lay_out, lay_out_animated, loose, size};
+#[cfg(debug_assertions)]
 use std::any::TypeId;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -13,9 +14,11 @@ use std::time::Duration;
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_interaction::FocusNode;
 use flui_view::prelude::{BuildContext, StatefulView, StatelessView};
-use flui_view::{
-    BoxedView, BuildContextExt, BuildOwner, ElementTree, ErrorView, IntoView, ViewExt, ViewState,
-};
+use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
+// Only the `#[cfg(debug_assertions)]` invalid-configuration tests drive a tree
+// by hand and assert on the ErrorView substitution, which is debug-only.
+#[cfg(debug_assertions)]
+use flui_view::{BuildOwner, ElementTree, ErrorView};
 use flui_widgets::{Focus, SizedBox, TickerMode, Visibility, VsyncScope};
 use parking_lot::Mutex;
 

@@ -986,6 +986,17 @@ impl AppRuntime {
     /// forbids: a frame transaction genuinely in flight, as opposed to
     /// `Idle`/`PostFrameCallbacks`, both of which are legitimate times to
     /// acquire owner-platform capability (ADR-0021-style post-frame work).
+    // Reachable only from `with_owner_platform`'s `#[cfg(debug_assertions)]`
+    // fence, so in a release build both helpers are dead. They stay compiled
+    // in both profiles (a future release-profile caller must not find them
+    // missing) and the attribute states why the lint is expected there.
+    #[cfg_attr(
+        not(debug_assertions),
+        expect(
+            dead_code,
+            reason = "only the debug-only owner-platform fence calls this"
+        )
+    )]
     fn is_frame_transaction_phase(phase: flui_scheduler::SchedulerPhase) -> bool {
         matches!(
             phase,
@@ -1022,6 +1033,17 @@ impl AppRuntime {
     /// pre-registry single-slot behavior for the common one-realm case (a
     /// realm being installed reads back its own real phase, not a
     /// vacuous "nothing installed" `None`).
+    // Reachable only from `with_owner_platform`'s `#[cfg(debug_assertions)]`
+    // fence, so in a release build both helpers are dead. They stay compiled
+    // in both profiles (a future release-profile caller must not find them
+    // missing) and the attribute states why the lint is expected there.
+    #[cfg_attr(
+        not(debug_assertions),
+        expect(
+            dead_code,
+            reason = "only the debug-only owner-platform fence calls this"
+        )
+    )]
     pub(super) fn installed_realm_phase(&self) -> Option<flui_scheduler::SchedulerPhase> {
         if let Some(scheduler) = self.dispatched_scheduler.as_ref() {
             return Some(scheduler.phase());

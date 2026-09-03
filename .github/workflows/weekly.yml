@@ -11,6 +11,13 @@ name: Weekly
 #                 are noisy, so the numbers support "did this drift over
 #                 weeks", not "did this PR regress" — real A/B comparisons
 #                 happen locally via `just bench-save` / `just bench-compare`.
+#   release-lints — clippy over the workspace in the RELEASE profile. PR CI
+#                 only ever compiles release through `cargo bench -p
+#                 flui-rendering --no-run`, so every crate outside that one
+#                 dependency graph is linted with `debug_assertions` on and
+#                 nothing else. Release turns it off, which deletes
+#                 `cfg(debug_assertions)` code and can strand imports, make
+#                 a receiver unused, or unfulfil an expectation. Advisory.
 #   nightly-canary — `cargo +nightly check` + `clippy` over the workspace,
 #                 then the future-incompatibility report and a duplicate-
 #                 versions metric. ADVISORY: nightly is where the next
@@ -172,3 +179,33 @@ jobs:
       # patching — this step only makes the count visible week over week.
       - name: Duplicate dependency versions (metric, informational)
         run: cargo tree --workspace --duplicates --edges normal
+
+  release-lints:
+    name: release-profile clippy (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Advisory: nothing in PR CI compiles most of the workspace in release,
+    # so a finding here is latent debt to schedule, not a broken build. It is
+    # what `just test-release` would hit.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space (ubuntu)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: cargo clippy --release (workspace, all targets)
+        run: cargo clippy --workspace --all-targets --release --locked --keep-going -- -D warnings
