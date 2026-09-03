@@ -926,14 +926,18 @@ jobs:
       # from a normal dependency; see the resolver-v2 note above.
       - name: cargo hack clippy (libs/bins, per feature)
         if: matrix.slice != 'combinations'
-        run: cargo hack clippy $PKG_ARGS --locked --each-feature --optional-deps --keep-going -- -D warnings
+        run: |
+          read -ra pkg_args <<< "$PKG_ARGS"
+          cargo hack clippy "${pkg_args[@]}" --locked --each-feature --optional-deps --keep-going -- -D warnings
 
       # Pass 2 — tests/benches/examples, per feature: lints the dev targets
       # themselves (a missing `required-features` on an example, a test that
       # only compiles under one feature).
       - name: cargo hack clippy (tests/benches/examples, per feature)
         if: matrix.slice != 'combinations'
-        run: cargo hack clippy $PKG_ARGS --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
+        run: |
+          read -ra pkg_args <<< "$PKG_ARGS"
+          cargo hack clippy "${pkg_args[@]}" --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
 
       # --each-feature can never see a defect that only appears when two
       # features combine. flui-engine is the one crate where combinations
