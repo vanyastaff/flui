@@ -957,6 +957,99 @@ fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_fram
     );
 }
 
+/// A frame whose lazy budget trips evicts before it paints.
+///
+/// The band is settled at the head, then the pass budget is forced to zero
+/// and the list jumps 500 rows down. That frame cannot build the new band
+/// (the budget is gone) — the deferral path — but the residents of the
+/// head band are outside the band the jump's layout retained, so they must
+/// be gone before the frame paints: the band walk positions in-band
+/// children only, and a stale resident would be painted at whatever offset
+/// it last had. The oracle is the frame's own display lists: no head row's
+/// colour is drawn after the jump; the deferred band is drawn on the next
+/// frame. Red without the evict-before-paint step of the fixpoint.
+#[test]
+fn lazy_list_view_builder_exhausted_budget_evicts_stale_residents_before_paint() {
+    const ITEM_COUNT: usize = 1000;
+    const EXTENT: f32 = 10.0;
+    const JUMP_ROW: usize = 500;
+    fn row_color(i: usize) -> Color {
+        Color::rgb((i % 256) as u8, ((i / 256) % 256) as u8, 7)
+    }
+    let list = |offset: f32| {
+        ListView::builder(ITEM_COUNT, EXTENT, |i| {
+            (i < ITEM_COUNT).then(|| {
+                SizedBox::new(200.0, EXTENT)
+                    .child(ColoredBox::new(row_color(i)))
+                    .boxed()
+            })
+        })
+        .repaint_boundaries(false)
+        .offset(offset)
+    };
+    let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
+    laid.pump();
+    let head = painted_rect_colors(&laid);
+    assert!(
+        head.contains(&row_color(0)) && head.contains(&row_color(10)),
+        "the head band is painted before the jump"
+    );
+
+    laid.build_owner_mut().set_lazy_band_pass_budget_for_test(0);
+    laid.pump_widget(list(JUMP_ROW as f32 * EXTENT));
+    let after_jump = painted_rect_colors(&laid);
+    let stale: Vec<usize> = (0..JUMP_ROW)
+        .filter(|&i| after_jump.contains(&row_color(i)))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "rows the jump's band no longer covers must not be painted in the frame \
+         that deferred the new band; painted head rows: {stale:?}"
+    );
+
+    laid.tick();
+    let next = painted_rect_colors(&laid);
+    assert!(
+        next.contains(&row_color(JUMP_ROW)),
+        "the deferred band is built after the frame and painted on the next one"
+    );
+}
+
+/// Every `DrawRect` colour in the most recent frame's composited layer tree,
+/// in paint order.
+fn painted_rect_colors(laid: &LaidOut) -> Vec<Color> {
+    use flui_painting::DrawCommand;
+    use flui_rendering::layer::Layer;
+    let mut colors = Vec::new();
+    let Some(tree) = laid.layer_tree() else {
+        return colors;
+    };
+    let Some(root) = tree.root() else {
+        return colors;
+    };
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        let Some(layer) = tree.get_layer(id) else {
+            continue;
+        };
+        let commands = match layer {
+            Layer::Picture(picture) => Some(picture.picture()),
+            Layer::Canvas(canvas) => Some(canvas.display_list()),
+            _ => None,
+        };
+        if let Some(commands) = commands {
+            colors.extend(commands.iter().filter_map(|command| match command {
+                DrawCommand::DrawRect { paint, .. } => Some(paint.color),
+                _ => None,
+            }));
+        }
+        if let Some(children) = tree.children(id) {
+            stack.extend(children.iter().rev().copied());
+        }
+    }
+    colors
+}
+
 /// The reviewer's scenario for the in-frame fixpoint: a 1000 px seed over
 /// 1 px items in a 200 px viewport. The first pass requests one item; that
 /// single measurement must be enough for the same frame to request, build,

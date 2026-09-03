@@ -137,6 +137,18 @@ enum ServiceFinalize {
     UnmountOnly,
 }
 
+/// What a lazy-sliver service pass does with the child-build requests the
+/// last layout pass recorded — see
+/// [`BuildOwner::service_child_requests_evict_only`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServiceRequests {
+    /// Build the requested children (and evict by the retain bands).
+    Build,
+    /// Evict by the retain bands only; the requests stay queued on the
+    /// pipeline for the frame's post-`run_frame` service to build.
+    Leave,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuildScopeTarget {
     /// Drain every dirty element. Used when no layout-builder scopes exist.
@@ -1531,7 +1543,12 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &flui_rendering::pipeline::PipelineCell,
     ) -> bool {
-        self.service_child_requests_impl(tree, pipeline, ServiceFinalize::Frame)
+        self.service_child_requests_impl(
+            tree,
+            pipeline,
+            ServiceFinalize::Frame,
+            ServiceRequests::Build,
+        )
     }
 
     /// [`Self::service_child_requests`] as run between two layout passes of
@@ -1549,7 +1566,42 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &flui_rendering::pipeline::PipelineCell,
     ) -> bool {
-        self.service_child_requests_impl(tree, pipeline, ServiceFinalize::UnmountOnly)
+        self.service_child_requests_impl(
+            tree,
+            pipeline,
+            ServiceFinalize::UnmountOnly,
+            ServiceRequests::Build,
+        )
+    }
+
+    /// Apply the retain bands the last layout pass recorded and leave its
+    /// build requests queued: the evict-before-paint step of a frame whose
+    /// lazy band did not settle within its pass budget.
+    ///
+    /// The fixpoint stops servicing when the budget trips, so the residents
+    /// the last pass's band no longer covers would otherwise stay attached
+    /// through the frame's final layout and paint — positioned nowhere by
+    /// that layout (the walk positions in-band children only) yet painted,
+    /// hit-tested, and assembled into semantics at whatever offset they
+    /// last had. Evicting them here, and marking their sliver for the
+    /// final layout, means nothing outside the committed band exists when
+    /// the frame paints. The requests are not touched: they stay queued
+    /// for the post-frame service, which builds them for the next frame —
+    /// the deferral the budget asked for, without the stale residents.
+    /// (Taking them here would cost that band a frame: a sliver the
+    /// eviction left clean is not laid out again before the frame ends,
+    /// so nothing would re-record them.)
+    pub(crate) fn service_child_requests_evict_only(
+        &mut self,
+        tree: &mut ElementTree,
+        pipeline: &flui_rendering::pipeline::PipelineCell,
+    ) -> bool {
+        self.service_child_requests_impl(
+            tree,
+            pipeline,
+            ServiceFinalize::UnmountOnly,
+            ServiceRequests::Leave,
+        )
     }
 
     fn service_child_requests_impl(
@@ -1557,6 +1609,7 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &flui_rendering::pipeline::PipelineCell,
         finalize: ServiceFinalize,
+        requests: ServiceRequests,
     ) -> bool {
         let finalize = |owner: &mut Self, tree: &mut ElementTree| match finalize {
             ServiceFinalize::Frame => owner.finalize_tree(tree),
@@ -1564,7 +1617,10 @@ impl BuildOwner {
         };
         // 1. Drain pending buffers from the pipeline (a brief checkout).
         let (pending_requests, retain_bands) = pipeline.with_mut(|guard| {
-            let requests = guard.take_pending_child_requests();
+            let requests = match requests {
+                ServiceRequests::Build => guard.take_pending_child_requests(),
+                ServiceRequests::Leave => Vec::new(),
+            };
             let bands = guard.take_pending_retain_bands();
             (requests, bands)
         });

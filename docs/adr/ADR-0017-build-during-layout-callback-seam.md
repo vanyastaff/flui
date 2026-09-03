@@ -476,3 +476,32 @@ Closing this would mean teaching `build_into_views` to defer to the fixpoint whe
 its render object is already scheduled for re-layout, and retaining the previous
 child view meanwhile. Not attempted: it adds element state for no observable
 gain.
+
+---
+
+## Amendment (2026-09-03) — a frame whose lazy band did not settle evicts before it paints
+
+The lazy-sliver requests are serviced *inside* the fixpoint, between layout passes, under a
+budget of their own (`MAX_LAZY_BAND_PASSES`; a band that keeps growing is content, not a bug, so it
+must not trip the fixpoint's `BUG:` bound). When that budget trips the loop stops servicing and the
+frame's final `run_frame` lays out and paints what it has. Left alone, that frame carried a hole:
+the residents the last pass's retain band no longer covered stayed attached — the band walk
+positions in-band children only, so they kept whatever offset they last had — and were painted,
+hit-tested, and assembled into semantics there, until the post-frame service evicted them for the
+*next* frame. No per-render-object gate can close it: `PaintCx` and the sliver hit-test context
+expose neither parent data nor the logical index of a slot, and the semantics assembler
+enumerates every child of a node unconditionally.
+
+So the frame closes it: when the budget trips, `BuildOwner::service_child_requests_evict_only`
+applies the last pass's retain bands with no builds (the requests stay queued for the post-frame
+service, which builds them for the next frame — the deferral the budget asked for; taking them
+would cost that band a frame, since a sliver the eviction left clean is not laid out again before
+the frame ends) and marks the touched slivers, so the
+final `run_frame`'s layout positions only what the band kept and nothing outside the committed
+band exists when the frame paints. The band walk, in the same change, lays out any already-attached
+child that a measurement-driven re-query pulls into the band, so no in-band child is ever
+positioned from an extent the pass did not measure.
+
+The pipeline-level shape — a "positioned this pass" generation stamp on every node, read by the
+paint driver, the hit-test walk, and the semantics assembler — would make this and every similar
+multi-child hole structural; it is recorded as the follow-up, not folded in here.

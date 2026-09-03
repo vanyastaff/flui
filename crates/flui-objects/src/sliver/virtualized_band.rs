@@ -309,11 +309,11 @@ where
         }
     }
 
-    // ── 4a'. Re-query the band the measurements just moved ──────────────────
+    // ── 4a'. Re-query the band until the measurements stop moving it ───────
     // Steps 2–4 sized the band with pre-measure hints. Measuring (and any
     // re-hint above) moves every offset after the first changed item, so
     // the window now covers indices the first query did not see. Those must
-    // be requested in THIS pass: the frame's fixpoint only runs another
+    // be handled in THIS pass: the frame's fixpoint only runs another
     // pass when the manager built or evicted something, so an item that
     // came into band purely through measurement would otherwise wait for
     // the next frame — with a 1000 px seed over 1 px items, the whole
@@ -321,27 +321,58 @@ where
     // this layout at the corrected offset in the same pass and that run
     // re-queries on its own; a request against the pre-correction window
     // is at worst a child the re-run evicts next pass, never a lost one.
-    let widened = virtualizer.query(&window);
-    for logical_i in widened.cache_first..widened.cache_last {
-        if logical_i >= *item_count {
+    //
+    // An index the widening pulls in that is ALREADY attached is laid out
+    // here, exactly as step 4 lays out the first query's residents: step 10
+    // positions every in-band child from the virtualizer's extents, and a
+    // resident positioned from an extent this pass never measured (its
+    // view changed size, or the pass adapted the hint under it) would be
+    // painted at a stale offset — and everything after it with it — until
+    // the next frame's first query happened to cover it. Measuring those
+    // residents can move the window once more, so the query repeats until
+    // the covered range stops growing: a band whose newly covered indices
+    // were all attached and all measured smaller than their hints builds
+    // and evicts nothing, so nothing else would schedule the pass that
+    // requests what the last widening exposed. The covered range only ever
+    // grows and is bounded by the item count, so the loop terminates.
+    let mut covered_first = cache_first;
+    let mut covered_last = cache_last;
+    let mut stop = false;
+    while !stop {
+        let widened = virtualizer.query(&window);
+        let next_first = widened.cache_first.min(covered_first);
+        let next_last = widened.cache_last.max(covered_last).min(*item_count);
+        if next_first == covered_first && next_last == covered_last {
             break;
         }
-        let already_visited = logical_i >= cache_first && logical_i < cache_last;
-        if already_visited || logical_to_slot.contains_key(&logical_i) {
-            continue;
-        }
-        match on_absent(logical_i, dense_count, box_constraints, ctx) {
-            ChildLayout::NoChild => {
-                *item_count = logical_i;
-                virtualizer.set_count(logical_i);
-                break;
+        let newly_covered = (next_first..covered_first).chain(covered_last..next_last);
+        for logical_i in newly_covered {
+            if let Some(&slot) = logical_to_slot.get(&logical_i) {
+                let size = ctx.layout_box_child(slot, box_constraints);
+                let extent = main_axis_extent(size, constraints.axis_direction);
+                let correction = virtualizer.set_measured(logical_i, extent, anchor);
+                accumulate_anchor_correction(pending_correction, correction);
+                continue;
             }
-            ChildLayout::Unwired => break,
-            _ => {}
+            match on_absent(logical_i, dense_count, box_constraints, ctx) {
+                ChildLayout::NoChild => {
+                    *item_count = logical_i;
+                    virtualizer.set_count(logical_i);
+                    stop = true;
+                    break;
+                }
+                ChildLayout::Unwired => {
+                    stop = true;
+                    break;
+                }
+                _ => {}
+            }
         }
+        covered_first = next_first;
+        covered_last = next_last;
     }
-    let cache_first = cache_first.min(widened.cache_first);
-    let cache_last = cache_last.max(widened.cache_last);
+    let cache_first = covered_first;
+    let cache_last = covered_last;
 
     // ── 4b. Clamp cache_last after possible mid-pass item_count shrink ──────
     // The NoChild branch above may call `virtualizer.set_count(logical_i)`,
