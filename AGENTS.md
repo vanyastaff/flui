@@ -225,9 +225,13 @@ workflow file does *not* tell you, and what you will misjudge without it:
   test-features, live-smoke, doc-test all build the same configuration (stable, dev profile,
   host, default features). Before 2026-09-03 each had its own near-identical cache and the repo
   sat at 12 caches / 10.9 GB against GitHub's 10 GB cap, so caches were being evicted and jobs
-  restored cold (gpu-test swung 6.7 → 12.3 min on a cold restore). Last writer wins on a shared
-  key; that is safe because rust-cache stores dependency artifacts keyed by feature hash, so a
-  smaller-feature-set save costs the others a partial dep rebuild, never a cold one. Jobs whose
+  restored cold (gpu-test swung 6.7 → 12.3 min on a cold restore). **GitHub cache entries are immutable per key, so the FIRST job to save wins, permanently** —
+  not the last, as this note first claimed. On a shared key that means the fastest job (clippy,
+  check-mode, no codegen) would write a 0.36 GB metadata-only cache and every other job would
+  rebuild its code each run. So `test` — `--workspace --all-targets`, the superset — is the sole
+  writer of `stable-dev-host`; clippy, test-features, live-smoke and doc-test are `save-if: false`.
+  A job that saves a smaller set is not "a partial rebuild for the others", it is the permanent
+  contents of the key until the lockfile or a `CARGO_*` env value changes. Jobs whose
   artifacts genuinely differ (release profile, MSRV toolchain, miri/nightly, wasm32, cross
   targets, Windows, the per-feature slices) keep their own keys on purpose. The same job also runs `just facade-combos`, which compiles every supported `flui`
   **Caches are saved only by runs on `main`; PR runs restore and never save** (`save-if:

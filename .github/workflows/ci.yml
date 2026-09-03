@@ -205,7 +205,16 @@ jobs:
           # reuses main's instead, which is usually as good. Merge-queue
           # runs never saved (the previous `save-if` excluded them) and
           # still do not, since their ref is not main.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Restore-only. GitHub cache entries are immutable per key, so of
+          # the five jobs on `stable-dev-host` the FIRST to finish would win
+          # the write — clippy, in 1-3 minutes, with check-mode artifacts
+          # that carry no codegen. Everyone else then restored metadata-only
+          # dependencies and rebuilt their code every run (measured: the
+          # shared entry on main was 0.36 GB, clippy's exact size, against
+          # the 1.9 GB `test` used to keep). `test` builds `--workspace
+          # --all-targets`, a superset of what this job needs, so it is the
+          # one writer; this job only reads.
+          save-if: false
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -263,6 +272,12 @@ jobs:
           # the rationale lives on the `clippy` job's cache step.
           shared-key: stable-dev-host
           cache-on-failure: true
+          # The ONE writer of `stable-dev-host`: this job builds
+          # `--workspace --all-targets`, a superset of what clippy,
+          # test-features, live-smoke and doc-test need, and GitHub cache
+          # entries are immutable per key — whichever job saves first wins
+          # for good, so the superset builder must be the only one saving.
+          # The other four are `save-if: false`.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # Per tokio: binary caching breaks on macOS — guard for when macOS
           # joins the matrix.
@@ -427,7 +442,16 @@ jobs:
           # the rationale lives on the `clippy` job's cache step.
           shared-key: stable-dev-host
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Restore-only. GitHub cache entries are immutable per key, so of
+          # the five jobs on `stable-dev-host` the FIRST to finish would win
+          # the write — clippy, in 1-3 minutes, with check-mode artifacts
+          # that carry no codegen. Everyone else then restored metadata-only
+          # dependencies and rebuilt their code every run (measured: the
+          # shared entry on main was 0.36 GB, clippy's exact size, against
+          # the 1.9 GB `test` used to keep). `test` builds `--workspace
+          # --all-targets`, a superset of what this job needs, so it is the
+          # one writer; this job only reads.
+          save-if: false
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
@@ -507,7 +531,16 @@ jobs:
           # the rationale lives on the `clippy` job's cache step.
           shared-key: stable-dev-host
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Restore-only. GitHub cache entries are immutable per key, so of
+          # the five jobs on `stable-dev-host` the FIRST to finish would win
+          # the write — clippy, in 1-3 minutes, with check-mode artifacts
+          # that carry no codegen. Everyone else then restored metadata-only
+          # dependencies and rebuilt their code every run (measured: the
+          # shared entry on main was 0.36 GB, clippy's exact size, against
+          # the 1.9 GB `test` used to keep). `test` builds `--workspace
+          # --all-targets`, a superset of what this job needs, so it is the
+          # one writer; this job only reads.
+          save-if: false
 
       # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
       # backend dlopens it at startup (`xkbcommon-dl` panics without it, so
@@ -727,7 +760,16 @@ jobs:
           # the rationale lives on the `clippy` job's cache step.
           shared-key: stable-dev-host
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Restore-only. GitHub cache entries are immutable per key, so of
+          # the five jobs on `stable-dev-host` the FIRST to finish would win
+          # the write — clippy, in 1-3 minutes, with check-mode artifacts
+          # that carry no codegen. Everyone else then restored metadata-only
+          # dependencies and rebuilt their code every run (measured: the
+          # shared entry on main was 0.36 GB, clippy's exact size, against
+          # the 1.9 GB `test` used to keep). `test` builds `--workspace
+          # --all-targets`, a superset of what this job needs, so it is the
+          # one writer; this job only reads.
+          save-if: false
 
       - name: cargo test --doc
         run: cargo test --workspace --locked --doc
