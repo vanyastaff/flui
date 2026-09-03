@@ -81,7 +81,7 @@ use flui_rendering::{
 /// ~0.3 s, 40 000 in ~1.5 s, 160 000 in ~10 s — a grid an order of magnitude
 /// past that is already unusable for reasons this constant has no part in,
 /// while `usize::MAX` is thirteen orders of magnitude beyond it.
-const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
+pub(super) const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
 
 /// How many children the sentinel case actually lays out.
 ///
@@ -98,7 +98,7 @@ const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
 /// stable across frames, and large enough to fill any viewport it is asked to
 /// fill. A thousand tiles clears the last by a wide margin, and it converges:
 /// the requests are serviced once and every later frame finds them resident.
-const UNBOUNDED_SENTINEL_WINDOW: usize = 1_000;
+pub(super) const UNBOUNDED_SENTINEL_WINDOW: usize = 1_000;
 
 /// A request-strategy lazily-virtualized 2-D grid sliver.
 ///

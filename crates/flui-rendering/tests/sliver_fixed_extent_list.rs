@@ -4,7 +4,7 @@ use flui_objects::RenderSliverFixedExtentList;
 use flui_rendering::{
     constraints::SliverConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    parent_data::BoxParentData,
+    parent_data::{BoxParentData, SliverMultiBoxAdaptorParentData},
     pipeline::PipelineOwner,
     testing::inspect,
     traits::RenderBox,
@@ -115,11 +115,12 @@ fn fixed_extent_tree(
         .render_tree_mut()
         .insert_sliver_child(
             root_id,
-            Box::new(RenderSliverFixedExtentList::new(item_extent)) as BoxedSliverObject,
+            Box::new(RenderSliverFixedExtentList::new(item_extent, child_count))
+                as BoxedSliverObject,
         )
         .expect("fixed extent sliver");
     let mut child_ids = Vec::with_capacity(child_count);
-    for _ in 0..child_count {
+    for index in 0..child_count {
         let child_id = owner
             .render_tree_mut()
             .insert_box_child(
@@ -127,6 +128,12 @@ fn fixed_extent_tree(
                 Box::new(FixedHitBox::new(1000.0, 1000.0)) as BoxedRenderObject,
             )
             .expect("box child");
+        // The logical index the element tree stamps at adoption.
+        owner
+            .render_tree_mut()
+            .get_mut(child_id)
+            .expect("just inserted")
+            .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(index)));
         child_ids.push(child_id);
     }
 
