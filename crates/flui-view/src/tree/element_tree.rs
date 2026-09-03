@@ -742,9 +742,23 @@ impl ElementTree {
                     owner.reserve_global_key(parent, retaken_id, key);
                     return retaken_id;
                 }
-                GlobalKeyRetake::Rejected => panic!(
-                    "BUG: existing GlobalKey candidate failed relocation preflight; refusing to mount a duplicate"
-                ),
+                GlobalKeyRetake::Rejected => {
+                    // The candidate exists but could not be relocated (it is
+                    // not idle, has no render frontier to move, or lives in
+                    // another pipeline). Fall through to a fresh mount rather
+                    // than panicking here: a second live element for one key
+                    // is exactly the condition the reservation ledger below
+                    // records, and the frame boundary reports it with the
+                    // claimants named. Panicking at this point would turn a
+                    // reportable duplicate into a crash and would lose that
+                    // diagnostic entirely.
+                    tracing::debug!(
+                        key = ?key,
+                        ?parent,
+                        "GlobalKey candidate failed the relocation preflight; mounting fresh and \
+                         leaving the duplicate to the frame boundary"
+                    );
+                }
             }
         }
 
@@ -2160,9 +2174,6 @@ fn retake_active_global_key(
 ) -> Option<ElementId> {
     let new_parent = destination.parent;
     let new_slot = destination.slot;
-    if !tree.is_reconciling_parent(new_parent) {
-        return None;
-    }
     let from_parent = tree.get(candidate_id)?.parent()?;
     if from_parent == new_parent {
         tracing::error!(
@@ -2184,36 +2195,48 @@ fn retake_active_global_key(
         }
     }
 
-    // Fail closed before mutating anything: if the old parent no longer
-    // lists this child, the relocation preflight has not been satisfied and
-    // the caller must not graft (it reports `Rejected`).
-    if !tree
-        .get(from_parent)
-        .is_some_and(|parent| parent.child_ids.contains(&candidate_id))
-    {
+    // Preflight BEFORE any mutation: a rejected relocation must leave the
+    // donor, the registry and the epoch exactly as it found them.
+    let mut relocation = preflight_render_relocation(tree, candidate_id, new_parent)?;
+
+    // Reconciliation is required only when this graft actually MOVES render
+    // nodes — that is the hazard this gate exists for. A keyed element with
+    // no render frontier carries nothing to relocate, and its graft is the
+    // ordinary cross-parent declaration whose ambiguity the reservation
+    // ledger already resolves: it records both claimants and the frame
+    // boundary reports a real duplicate. Refusing that case here would turn
+    // a reported duplicate into a silent fresh mount.
+    if !relocation.frontier.is_empty() && !tree.is_reconciling_parent(new_parent) {
         return None;
     }
 
-    // The graft is about to pull this child out from under a parent that is
-    // still live. That is a legitimate reparent only if `from_parent` goes on
-    // to rebuild without the child; if it never rebuilds, it ends the frame
-    // describing a child it no longer has. Record it so the frame boundary
-    // can tell the two apart — `note_parent_rebuild` drops this the moment
-    // `from_parent` rebuilds.
+    // Past the preflight the graft is going to happen. It pulls this child
+    // out from under a parent that is still live, which is a legitimate
+    // reparent only if `from_parent` goes on to rebuild without the child;
+    // if it never rebuilds, it ends the frame describing a child it no
+    // longer has. Record it so the frame boundary can tell the two apart —
+    // `note_parent_rebuild` drops this the moment `from_parent` rebuilds.
     owner.displace_global_key(from_parent, candidate_id, key, new_parent);
 
-    if let Some(old_parent) = tree.get_mut(from_parent)
-        && let Some(pos) = old_parent
+    // A candidate registered under a parent that no longer lists it is
+    // tolerated, not refused: the registry is the authority on where a
+    // GlobalKey lives, and the frame boundary reports a genuine duplicate
+    // through the reservation ledger. Refusing here would convert that
+    // report into a fresh mount and lose it.
+    if let Some(old_parent) = tree.get_mut(from_parent) {
+        if let Some(pos) = old_parent
             .child_ids
             .iter()
             .position(|&child| child == candidate_id)
-    {
-        old_parent.child_ids.remove(pos);
-    }
-    let mut relocation = preflight_render_relocation(tree, candidate_id, new_parent)?;
-
-    if let Some(old_parent) = tree.get_mut(from_parent) {
-        old_parent.child_ids.retain(|child| *child != candidate_id);
+        {
+            old_parent.child_ids.remove(pos);
+        } else {
+            tracing::warn!(
+                ?candidate_id,
+                ?from_parent,
+                "active GlobalKey candidate was registered under a parent that no longer lists it"
+            );
+        }
     }
     detach_render_relocation(&mut relocation);
 
@@ -2840,10 +2863,7 @@ mod tests {
         assert_eq!(tree.get(donor).unwrap().child_ids(), before_donor_children);
         assert!(tree.get(destination).unwrap().child_ids().is_empty());
         assert_eq!(tree.get(candidate).unwrap().parent(), Some(donor));
-        assert_eq!(
-            owner.element_for_global_key(&key),
-            before_registry
-        );
+        assert_eq!(owner.element_for_global_key(&key), before_registry);
         assert_eq!(
             pipeline_a.with(|pipeline| pipeline.render_tree().parent(render_id)),
             before_parent,
@@ -2951,10 +2971,7 @@ mod tests {
             before_candidate_children
         );
         assert_eq!(tree.get(candidate).unwrap().parent(), Some(host));
-        assert_eq!(
-            owner.element_for_global_key(&key),
-            before_registry
-        );
+        assert_eq!(owner.element_for_global_key(&key), before_registry);
         assert_eq!(
             pipeline.with(|owner| owner.render_tree().parent(destination_render)),
             Some(moved_render),
@@ -3043,10 +3060,7 @@ mod tests {
             tree.get(candidate).unwrap().child_ids(),
             before_candidate_children
         );
-        assert_eq!(
-            owner.element_for_global_key(&key),
-            before_registry
-        );
+        assert_eq!(owner.element_for_global_key(&key), before_registry);
         assert_eq!(
             pipeline.with(|owner| owner.render_tree().parent(second_render)),
             Some(first_render),
@@ -3099,10 +3113,7 @@ mod tests {
         assert_eq!(tree.get(candidate).unwrap().child_ids(), before_children);
         assert_eq!(tree.get(descendant).unwrap().parent(), Some(candidate));
         assert!(tree.get(descendant).unwrap().child_ids().is_empty());
-        assert_eq!(
-            owner.element_for_global_key(&key),
-            before_registry
-        );
+        assert_eq!(owner.element_for_global_key(&key), before_registry);
     }
 
     #[test]

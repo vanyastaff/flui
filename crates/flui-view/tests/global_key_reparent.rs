@@ -492,11 +492,20 @@ fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
     flui_view::test_only_clear_global_key_registry();
 }
 
+/// An active retake outside reconciliation, for a keyed element that owns
+/// NO render frontier, is a legitimate graft — not a refusal.
+///
+/// The relocation work originally failed this closed for every active
+/// retake. The duplicate-GlobalKey reservation ledger (#806) supersedes that
+/// rule for the render-free case: it records both claimants and the frame
+/// boundary names them, which is strictly more informative than a panic and
+/// is what `owner::global_key_reservations`' own tests pin. The fail-closed
+/// rule survives exactly where the hazard it was written for lives — a graft
+/// that would MOVE render nodes outside reconciliation, pinned in-crate by
+/// `element_tree::tests::production_retake_rejects_cross_pipeline_without_mutating_identity_or_epoch`.
 #[test]
 #[serial_test::serial(global_key_registry)]
-fn active_retake_outside_reconcile_fails_closed_without_mutation() {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-
+fn active_retake_outside_reconcile_grafts_when_no_render_moves() {
     let (tree, owner) = fresh_tree();
     let parent_a = tree
         .write()
@@ -518,29 +527,37 @@ fn active_retake_outside_reconcile_fails_closed_without_mutation() {
     let keyed_id = before_children[1];
     let before_count = tree.read().iter_nodes().count();
 
-    let rejected = catch_unwind(AssertUnwindSafe(|| {
-        tree.write().insert(
-            &keyed,
-            destination,
-            0,
-            &mut owner.write().element_owner_mut(),
-        );
-    }));
-    assert!(
-        rejected.is_err(),
-        "active retake outside reconcile must reject"
+    let grafted = tree.write().insert(
+        &keyed,
+        destination,
+        0,
+        &mut owner.write().element_owner_mut(),
     );
-    assert_eq!(tree.read().iter_nodes().count(), before_count);
+
     assert_eq!(
-        direct_children_in_slot_order(&tree.read(), parent_a),
-        before_children
+        grafted, keyed_id,
+        "the declaration grafts the existing element; it does not mount a second one"
     );
-    assert!(direct_children_in_slot_order(&tree.read(), destination).is_empty());
+    assert_eq!(
+        tree.read().iter_nodes().count(),
+        before_count,
+        "a graft moves an element, it never adds one"
+    );
+    assert_eq!(
+        direct_children_in_slot_order(&tree.read(), destination),
+        vec![keyed_id],
+        "the destination now lists the keyed child"
+    );
     assert_eq!(
         owner.read().element_for_global_key(&key),
-        Some(keyed_id)
+        Some(keyed_id),
+        "identity is preserved across the graft"
     );
-    assert_eq!(key.with_current_state::<i32>(CounterState::count), Some(23));
+    assert_eq!(
+        key.with_current_state::<i32>(CounterState::count),
+        Some(23),
+        "state rides along with the grafted element"
+    );
 
     flui_view::test_only_clear_global_key_registry();
 }
