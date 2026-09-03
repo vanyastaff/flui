@@ -102,12 +102,47 @@ fn assert_generated_project_compiles(template: &str) {
     std::fs::copy(root.join("Cargo.lock"), project.join("Cargo.lock"))
         .expect("seed the generated project with the workspace's resolved versions");
 
+    // Check the generated project INTO THIS WORKSPACE'S TARGET DIR, under
+    // this workspace's exact dev profile.
+    //
+    // Its dependency graph is, by construction, a subset of ours (`--local`
+    // path deps plus the copied lock), so every dependency artifact it
+    // needs already exists in `target/` — the workspace build that precedes
+    // this test in CI just produced them. What kept cargo from reusing them
+    // was the profile: the scaffold has no `[profile]`, so it checked under
+    // cargo's defaults (opt-level 0, incremental on, full debuginfo) while
+    // the workspace builds with `opt-level = 1`, `incremental = false`,
+    // `debug = "line-tables-only"` and `opt-level = 2` for dependencies.
+    // Cargo hashes the resolved profile into every artifact, so nothing
+    // matched and the test cold-compiled ~300 crates into its own scratch
+    // target — 128 s on the CI runner, twice, for the two templates, and
+    // 47 % of the entire suite's test-seconds.
+    //
+    // Pinning the same values through a project-local `.cargo/config.toml`
+    // makes the hashes identical, so only the generated root crate is
+    // actually checked. The oracle is unchanged: cargo still resolves the
+    // scaffold's manifest, unifies its features, and type-checks its source
+    // against the real crates. The profile only affects codegen, which
+    // `check` never reaches. (Keep these values in step with the root
+    // `Cargo.toml` `[profile.dev]` — a drift costs only speed, never
+    // correctness, and shows up as this test getting slow again.)
+    let cargo_config_dir = project.join(".cargo");
+    std::fs::create_dir_all(&cargo_config_dir).expect("create the scaffold's .cargo directory");
+    std::fs::write(
+        cargo_config_dir.join("config.toml"),
+        "[profile.dev]\nopt-level = 1\nincremental = false\ndebug = \"line-tables-only\"\n\n\
+         [profile.dev.package.\"*\"]\nopt-level = 2\ndebug = false\n",
+    )
+    .expect("write the scaffold's profile config");
+    let workspace_target =
+        std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
+
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = std::process::Command::new(cargo)
         .arg("check")
         .arg("--offline")
         .arg("--target-dir")
-        .arg(target.join("cli-template-check"))
+        .arg(&workspace_target)
         .current_dir(&project)
         .output()
         .expect("run cargo check on the generated project");
