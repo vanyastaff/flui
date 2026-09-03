@@ -206,10 +206,16 @@ workflow file does *not* tell you, and what you will misjudge without it:
 - **feature-matrix exists because workspace feature unification hides broken per-crate wiring.** A
   crate whose features only resolve thanks to a sibling's dependency passes a normal build and
   fails here. It runs as a **four-slice matrix**: three balanced package groups (`FM_GROUP_1..3`
-  in the workflow's top-level `env`, one `cargo hack clippy --each-feature --optional-deps
-  --all-targets` pass each) plus a `combinations` slice for the flui-engine backend powerset and
-  the facade combos. It was one job doing the whole workspace in two passes — 640 s of cargo-hack
-  on one runner, 15–16 min, the workflow's critical path — until 2026-09-03. **Every workspace
+  in the workflow's top-level `env`, each running the same TWO `cargo hack clippy --each-feature
+  --optional-deps` passes the single job ran — a targetless libs/bins pass and a
+  `--tests --benches --examples` pass) plus a `combinations` slice for the flui-engine backend
+  powerset and the facade combos. It was one job doing the whole workspace — 640 s of cargo-hack on
+  one runner, 15–16 min, the workflow's critical path — until 2026-09-03. **Do not fold the two
+  passes into `--all-targets`**: under resolver v2, dev-dependency features unify with normal
+  dependencies only while dev targets are built, so a single all-targets pass can pass a
+  per-feature library configuration on a feature a dev-dep dragged in (flui-testing enabling
+  `flui-rendering/testing`) that a consumer of the library alone would not have. The targetless
+  pass is the one that sees the library as consumers do; the split buys runners, not fewer passes. **Every workspace
   member must be in exactly one group**: each slice asserts the union of the three groups against
   `cargo metadata` and fails on a missing, duplicated, or unknown package, so adding a crate
   without placing it is loud. Rebalance by cargo-hack command count (the regeneration command is

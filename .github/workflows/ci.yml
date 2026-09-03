@@ -232,13 +232,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # The full-workspace debug build of all lib+test targets (incl. the wgpu/
-      # glyphon/lyon/naga GPU stack and criterion/proptest/insta/trybuild dev-
-      # deps, with debug-assertions + debuginfo) exhausted the ~14 GB free on the
-      # default ubuntu runner — `rustc-LLVM ERROR: IO failure on output stream:
-      # No space left on device` mid-build (PRs #236/#242). Reclaim ~25 GB of
-      # preinstalled bloat we don't use BEFORE building. Linux-only guard so the
-      # step is a no-op if Windows/macOS rejoin the matrix.
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
@@ -849,11 +842,16 @@ jobs:
         # in two passes (libs/bins, then tests/benches/examples): 640 s of
         # cargo-hack serialised on one runner, 15-16 min wall, the critical
         # path of the entire workflow once `test` was split. Same commands,
-        # same features, same `-D warnings`; the per-feature work is now
-        # one `--all-targets` pass per slice — clippy lints every target of
-        # the package in one invocation, which is what the two passes
-        # together achieved, minus 157 redundant cargo start-ups and lib
-        # rebuilds between them.
+        # same features, same `-D warnings`, same TWO passes per package —
+        # the passes are not a redundancy to fold away. Under resolver v2,
+        # dev-dependency features unify with normal dependencies only while
+        # dev targets are being built; a single `--all-targets` pass builds
+        # them, so a per-feature LIBRARY configuration could pass on a
+        # feature that a dev-dep (e.g. flui-testing enabling
+        # `flui-rendering/testing`) dragged in, while a downstream consumer
+        # of that library alone would fail. The targetless pass is the one
+        # that sees the library exactly as consumers do. What the split buys
+        # is three runners instead of one, not fewer passes.
         #
         # cargo-hack's own `--partition M/N` was measured and rejected:
         # `--print-command-list --partition 1/2` on flui-engine printed the
@@ -912,7 +910,7 @@ jobs:
           print(f"ok: {len(members)} members, each in exactly one group")
           EOF
 
-      - name: cargo hack clippy (all targets, per feature)
+      - name: Resolve this slice's package list
         if: matrix.slice != 'combinations'
         run: |
           case "${{ matrix.slice }}" in
@@ -920,8 +918,22 @@ jobs:
             group-2) pkgs="$FM_GROUP_2" ;;
             group-3) pkgs="$FM_GROUP_3" ;;
           esac
-          set -- ; for p in $pkgs; do set -- "$@" -p "$p"; done
-          cargo hack clippy "$@" --locked --each-feature --optional-deps --keep-going --all-targets -- -D warnings
+          args=""; for p in $pkgs; do args="$args -p $p"; done
+          echo "PKG_ARGS=$args" >> "$GITHUB_ENV"
+
+      # Pass 1 — libs/bins, NO dev targets: the library as its consumers see
+      # it, per feature. This is the pass that catches a feature edge missing
+      # from a normal dependency; see the resolver-v2 note above.
+      - name: cargo hack clippy (libs/bins, per feature)
+        if: matrix.slice != 'combinations'
+        run: cargo hack clippy $PKG_ARGS --locked --each-feature --optional-deps --keep-going -- -D warnings
+
+      # Pass 2 — tests/benches/examples, per feature: lints the dev targets
+      # themselves (a missing `required-features` on an example, a test that
+      # only compiles under one feature).
+      - name: cargo hack clippy (tests/benches/examples, per feature)
+        if: matrix.slice != 'combinations'
+        run: cargo hack clippy $PKG_ARGS --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
 
       # --each-feature can never see a defect that only appears when two
       # features combine. flui-engine is the one crate where combinations
