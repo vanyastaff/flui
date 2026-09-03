@@ -1210,7 +1210,7 @@ fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state() {
         .dy
         .get();
     assert!(
-        top >= 0.0 && top < 200.0,
+        (0.0..200.0).contains(&top),
         "row 1 is on screen at its new index; top={top}"
     );
     // Its state is the one it was born with: the element moved, it was not
