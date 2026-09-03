@@ -124,7 +124,17 @@ struct Claim {
 struct Pin {
     test: String,
     capability: String,
-    issue: u64,
+    /// The issue that owns closing this gap. Exactly one of `issue` and
+    /// `decision` is set: a pin either waits on a capability or records a
+    /// divergence FLUI chose and wrote down.
+    #[serde(default)]
+    issue: Option<u64>,
+    /// The ADR (`"ADR-NNNN"`) that records this divergence as a decision —
+    /// a better contract than the oracle's, with a FLUI test standing in for
+    /// the Flutter case. The `#[ignore]`d pin then stays in-tree as the
+    /// executable statement of exactly what the oracle would have asserted.
+    #[serde(default)]
+    decision: Option<String>,
     /// The oracle file whose case(s) this pin diverges from. Required when
     /// `cases` is non-empty.
     oracle: Option<String>,
@@ -543,11 +553,38 @@ fn targets_match_the_tree_and_pins_are_owned() {
         let oracle_set: BTreeSet<&str> = t.oracles.iter().map(String::as_str).collect();
         for p in &t.pins {
             assert!(
-                p.issue > 0 && !p.capability.trim().is_empty(),
-                "target `{}`: pin `{}` must name a missing capability and an owning issue",
+                !p.capability.trim().is_empty(),
+                "target `{}`: pin `{}` must name the capability it diverges on",
                 t.rust,
                 p.test
             );
+            let decision_ok = p.decision.as_deref().is_some_and(|d| {
+                d.starts_with("ADR-") && d.len() == 8 && d[4..].chars().all(|c| c.is_ascii_digit())
+            });
+            assert!(
+                matches!((p.issue, &p.decision), (Some(n), None) if n > 0)
+                    || matches!((p.issue, &p.decision), (None, Some(_)) if decision_ok),
+                "target `{}`: pin `{}` must name exactly one owner — an open issue (`issue = N`) \
+                 or a recorded decision (`decision = \"ADR-NNNN\"`)",
+                t.rust,
+                p.test
+            );
+            if let Some(adr) = &p.decision {
+                let path = format!("{}/../../docs/adr", env!("CARGO_MANIFEST_DIR"));
+                let exists = std::fs::read_dir(&path).is_ok_and(|dir| {
+                    dir.flatten().any(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(&format!("{adr}-"))
+                    })
+                });
+                assert!(
+                    exists,
+                    "target `{}`: pin `{}` cites {adr}, but no docs/adr/{adr}-*.md exists",
+                    t.rust, p.test
+                );
+            }
             match (&p.oracle, p.cases.is_empty()) {
                 (None, true) => {}
                 (None, false) => panic!(

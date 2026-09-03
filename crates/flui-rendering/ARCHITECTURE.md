@@ -35,6 +35,16 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### Lazy-sliver scroll correction keeps the first visible item stationary
+
+**Rule:** Prime Directive rule 1 ("improve where a Flutter contract can be improved, record it, replace the oracle"); [ADR-0051](../../docs/adr/ADR-0051-anchor-stationary-scroll-correction.md).
+
+**Choice:** `Virtualizer::set_measured` / `adapt_default_estimate` report the offset delta of the anchor (the first visible item) whenever an extent above it changes; the consumer sliver accumulates the deltas and emits them as `SliverGeometry::scroll_offset_correction` at the end of the pass, in either scroll direction. The viewport applies the correction and re-runs layout in the same pass, so the anchor never moves on screen.
+
+**Alternatives:** Flutter's `RenderSliverList` retains each resident child's stale `layoutOffset`, walks forward from the first retained child with current sizes, and corrects only at a boundary — growth of a retained-but-invisible child shifts visible content. ADR-0003's original consumer note additionally withheld corrections during a backward scroll; measured on the oracle scene it changed nothing and, where it can act, it is a one-frame anchor drift.
+
+**Accepted trade-off:** the `slivers_test.dart` 'inaccurate scroll offset' windows differ from the oracle's by exactly the growth Flutter shows as a jump (192 px in that scene); the pinned oracle stays `#[ignore]`d as the statement of the declined behaviour and a FLUI oracle stands beside it. Items above a jump that were never resident stay hinted until they enter the band (O(band) layout, ADR-0003), where Flutter's O(distance) walk would be exact.
+
 ### Render-tree storage uses a `Slab<RenderNode>` with `RenderId` (NonZeroUsize) keys
 
 **Rule:** strategy clause "Behavior as floor, everything else designed for Rust"; constitution Anti-Patterns list ("`Arc<Mutex<>>` for tree structures — use arena/slotmap"); the ID-offset pattern documented in [`docs/architecture.md`](../../docs/architecture.md).

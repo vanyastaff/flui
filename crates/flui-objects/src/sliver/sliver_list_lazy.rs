@@ -21,7 +21,7 @@
 //! 3. For children NOT in the cache band: honour `keep_alive` and otherwise
 //!    enqueue render-owned disposal through the layout context.
 //! 4. Compute [`SliverGeometry`] with `scroll_offset_correction` from the
-//!    accumulated anchor-correction state machine.
+//!    accumulated anchor correction.
 //!
 //! # Anchor-correction state machine
 //!
@@ -65,10 +65,10 @@ use flui_rendering::{
 use super::virtualized_band::{OffBandDisposal, walk_virtualizer_band};
 
 // Only used by the test-only helper methods `accumulate_correction` /
-// `resolve_correction`, which exist so test code can exercise the
+// `take_correction`, which exist so test code can exercise the
 // correction state-machine without running a full layout pass.
 #[cfg(test)]
-use super::virtualized_band::{accumulate_anchor_correction, resolve_anchor_correction};
+use super::virtualized_band::{accumulate_anchor_correction, take_anchor_correction};
 #[cfg(test)]
 use flui_rendering::virtualization::AnchorCorrection;
 
@@ -133,13 +133,9 @@ pub struct RenderSliverListLazy {
     /// Kept as a field to reuse the allocation across passes.
     logical_to_slot: BTreeMap<usize, usize>,
 
-    // ── anchor-correction state machine ─────────────────────────────────────
+    // ── anchor correction ─────────────────────────────────────────────
     /// Accumulated anchor-correction delta not yet emitted to the viewport.
     pending_correction: f32,
-
-    /// Scroll offset at the end of the previous layout pass; used to detect
-    /// backward scrolling (offset decreased → suppress emission).
-    last_scroll_offset: f32,
 
     // ── hit-test support ────────────────────────────────────────────────────
     /// Dense child count committed after the last layout pass. Used by the
@@ -153,7 +149,6 @@ impl fmt::Debug for RenderSliverListLazy {
             .field("item_count", &self.item_count)
             .field("attached_child_count", &self.attached_child_count)
             .field("pending_correction", &self.pending_correction)
-            .field("last_scroll_offset", &self.last_scroll_offset)
             // closures intentionally omitted — not Debug
             .finish_non_exhaustive()
     }
@@ -169,7 +164,6 @@ impl Clone for RenderSliverListLazy {
             virtualizer: self.virtualizer.clone(),
             logical_to_slot: self.logical_to_slot.clone(),
             pending_correction: self.pending_correction,
-            last_scroll_offset: self.last_scroll_offset,
             attached_child_count: self.attached_child_count,
         }
     }
@@ -209,7 +203,6 @@ impl RenderSliverListLazy {
             virtualizer: Virtualizer::new(item_count, default_extent_estimate),
             logical_to_slot: BTreeMap::new(),
             pending_correction: 0.0,
-            last_scroll_offset: 0.0,
             attached_child_count: 0,
         }
     }
@@ -255,27 +248,12 @@ impl RenderSliverListLazy {
         accumulate_anchor_correction(&mut self.pending_correction, correction);
     }
 
-    /// Applies the correction state machine and returns the
-    /// `scroll_offset_correction` value for [`SliverGeometry`].
-    ///
-    /// Policy:
-    /// - **Backward scroll** (`scroll_offset < last_scroll_offset`): suppress
-    ///   emission and preserve the accumulator — the correction will be applied
-    ///   once the user scrolls forward again.
-    /// - **Forward / idle / stationary**: if `pending_correction != 0`, emit
-    ///   it and reset.
-    ///
-    /// Always updates `last_scroll_offset`. Test-only companion to
-    /// [`accumulate_correction`]; production code goes through
-    /// [`walk_virtualizer_band`].
+    /// Drains the accumulated correction. Test-only companion to
+    /// `accumulate_correction`; production drains it at the end of
+    /// `perform_layout`'s band walk.
     #[cfg(test)]
-    #[inline]
-    fn resolve_correction(&mut self, scroll_offset: f32) -> Option<f32> {
-        resolve_anchor_correction(
-            &mut self.pending_correction,
-            &mut self.last_scroll_offset,
-            scroll_offset,
-        )
+    fn take_correction(&mut self) -> Option<f32> {
+        take_anchor_correction(&mut self.pending_correction)
     }
 }
 
@@ -320,7 +298,6 @@ impl RenderSliver for RenderSliverListLazy {
             &mut self.logical_to_slot,
             &mut self.item_count,
             &mut self.pending_correction,
-            &mut self.last_scroll_offset,
             &mut self.attached_child_count,
             &constraints,
             ctx,
@@ -384,85 +361,41 @@ mod tests {
     // module tests the methods on `RenderSliverListLazy` that delegate to the
     // shared helpers.
 
-    // ── anchor-correction state machine ───────────────────────────────────────
-
     fn make_list() -> RenderSliverListLazy {
         RenderSliverListLazy::new(1000, 48.0, Arc::new(|_| None))
     }
 
+    // ── anchor correction ────────────────────────────────────────────
     #[test]
-    fn correction_idle_forward_emits_and_resets() {
+    fn correction_emits_and_resets() {
         let mut list = make_list();
         list.pending_correction = 16.0;
-        list.last_scroll_offset = 100.0;
-
-        // Offset increased → not backward → should emit.
-        let out = list.resolve_correction(200.0);
-        assert_eq!(out, Some(16.0), "should emit the accumulated correction");
-        assert_eq!(list.pending_correction, 0.0, "should reset after emission");
-        assert_eq!(list.last_scroll_offset, 200.0);
-    }
-
-    #[test]
-    fn correction_backward_suppresses_and_preserves_accumulator() {
-        let mut list = make_list();
-        list.pending_correction = 16.0;
-        list.last_scroll_offset = 200.0;
-
-        // Offset decreased → backward scroll → suppress.
-        let out = list.resolve_correction(100.0);
-        assert_eq!(out, None, "backward scroll must suppress correction");
-        // Accumulator is preserved so it can be emitted on the next forward pass.
         assert_eq!(
-            list.pending_correction, 16.0,
-            "accumulator must survive backward scroll"
+            list.take_correction(),
+            Some(16.0),
+            "should emit the accumulated correction"
         );
-        assert_eq!(list.last_scroll_offset, 100.0);
+        assert_eq!(list.pending_correction, 0.0, "should reset after emission");
     }
 
     #[test]
     fn correction_zero_pending_emits_none() {
         let mut list = make_list();
         list.pending_correction = 0.0;
-        list.last_scroll_offset = 0.0;
-
-        let out = list.resolve_correction(100.0);
-        assert_eq!(out, None);
+        assert_eq!(list.take_correction(), None);
     }
 
     #[test]
-    fn correction_stationary_offset_emits_if_pending() {
-        // Offset did not change (equal) → not backward → emit.
+    fn correction_accumulates_until_taken() {
         let mut list = make_list();
-        list.pending_correction = 16.0;
-        list.last_scroll_offset = 100.0;
-
-        let out = list.resolve_correction(100.0);
-        assert_eq!(out, Some(16.0));
-    }
-
-    #[test]
-    fn correction_backward_then_forward_emits_accumulated() {
-        let mut list = make_list();
-        list.pending_correction = 0.0;
-        list.last_scroll_offset = 200.0;
-
-        // Accumulate during backward pass.
         list.accumulate_correction(Some(AnchorCorrection { delta: 8.0 }));
-        let suppressed = list.resolve_correction(100.0); // backward
-        assert_eq!(suppressed, None);
-        assert_eq!(
-            list.pending_correction, 8.0,
-            "accumulator survives backward"
-        );
-
-        // Forward pass emits the correction.
+        list.accumulate_correction(None);
         list.accumulate_correction(Some(AnchorCorrection { delta: 4.0 }));
-        let emitted = list.resolve_correction(150.0); // forward
+        assert_eq!(list.pending_correction, 12.0);
         assert_eq!(
-            emitted,
+            list.take_correction(),
             Some(12.0),
-            "forward pass emits total accumulated delta"
+            "one emission carries the whole sum"
         );
         assert_eq!(list.pending_correction, 0.0);
     }
@@ -505,10 +438,8 @@ mod tests {
     fn clone_preserves_state() {
         let mut list = make_list();
         list.pending_correction = 12.5;
-        list.last_scroll_offset = 500.0;
         let cloned = list.clone();
         assert_eq!(cloned.pending_correction, 12.5);
-        assert_eq!(cloned.last_scroll_offset, 500.0);
         assert_eq!(cloned.item_count, 1000);
     }
 }
