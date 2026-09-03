@@ -41,8 +41,40 @@ FLUI's lazy list is built on a prefix-sum `Virtualizer` (ADR-0003) that knows
 every item's measured or hinted extent. Its scroll offset is always the sum of
 the extents above, so it can do what Flutter cannot: when an item above the
 anchor changes size, shift the offset by the delta and leave the anchor where
-it was. Compose's `LazyListState` (`firstVisibleItemIndex` +
-`firstVisibleItemScrollOffset`) and GPUI's `ListState` anchor the same way.
+it was.
+
+### Market evidence (verified 2026-09-03 against the upstream sources)
+
+Both Rust-adjacent references that ship a variable-height lazy list represent
+the scroll position as **an item plus an offset within it**, which makes the
+first visible item stationary under any change above it *by construction*:
+
+- **GPUI** — `crates/gpui/src/elements/list.rs` (zed-industries/zed, `main`):
+  `pub struct ListOffset { pub item_ix: usize, pub offset_in_item: Pixels }`,
+  held as `logical_scroll_top: Option<ListOffset>`. `splice` adjusts `item_ix`
+  only for edits *before* it, and the element's header states the contract
+  outright: *"Clients of this API need to ensure that elements outside of the
+  scrolled area do not change their height for this element to function
+  correctly."* — GPUI never moves the anchor for a change above it; it declares
+  such changes out of contract. FLUI keeps the same on-screen result while
+  still accounting for the change (the offset is corrected, the total stays
+  accurate).
+- **Jetpack Compose** — `compose/foundation/.../lazy/LazyListScrollPosition.kt`
+  (androidx, `androidx-main`): class doc *"Contains the current scroll position
+  represented by the first visible item index and the first visible item scroll
+  offset."*, with `updateScrollPositionIfTheFirstItemWasMoved`: *"In addition
+  to keeping the first visible item index we also store the key of this item.
+  When the user provided custom keys for the items this mechanism allows us to
+  detect when there were items added or removed before our current first
+  visible item and keep this item as the first visible one even given that its
+  index has been changed."*
+
+Flutter is the outlier: its `RenderSliverList` has no per-item extent model and
+its scroll offset is absolute pixels, so the only way it can express a size
+change above the viewport is to let the content move or to correct at a
+boundary. FLUI's absolute offset is a *derived* quantity over an exact/hinted
+extent model, which is what lets it keep the anchor contract of the
+item-relative designs while still exposing `ScrollPosition.pixels`.
 
 Two things were unsettled when #530 opened:
 
@@ -102,7 +134,8 @@ Two things were unsettled when #530 opened:
 
 - **Port Flutter's retained-stale-offset walk.** Rejected: it gives up the
   Virtualizer's O(log n) offset queries and exact-when-measured totals to
-  reproduce a content jump that Compose, SwiftUI and GPUI all avoid.
+  reproduce a content jump that Compose and GPUI avoid by construction (see
+  the market evidence above).
 - **Keep the backward suppression.** Rejected on the measurement above: no
   observable effect in the oracle scene, and a one-frame anchor drift in the
   only case it can act on (a resident item remeasured during a backward drag
