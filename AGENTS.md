@@ -205,7 +205,25 @@ workflow file does *not* tell you, and what you will misjudge without it:
   intrinsics queries are still not interpreted. Advisory while stabilizing.
 - **feature-matrix exists because workspace feature unification hides broken per-crate wiring.** A
   crate whose features only resolve thanks to a sibling's dependency passes a normal build and
-  fails here. The same job also runs `just facade-combos`, which compiles every supported `flui`
+  fails here. It runs as a **four-slice matrix**: three balanced package groups (`FM_GROUP_1..3`
+  in the workflow's top-level `env`, one `cargo hack clippy --each-feature --optional-deps
+  --all-targets` pass each) plus a `combinations` slice for the flui-engine backend powerset and
+  the facade combos. It was one job doing the whole workspace in two passes — 640 s of cargo-hack
+  on one runner, 15–16 min, the workflow's critical path — until 2026-09-03. **Every workspace
+  member must be in exactly one group**: each slice asserts the union of the three groups against
+  `cargo metadata` and fails on a missing, duplicated, or unknown package, so adding a crate
+  without placing it is loud. Rebalance by cargo-hack command count (the regeneration command is
+  in the `env` comment). cargo-hack's own `--partition` was rejected after measurement: with
+  `--print-command-list`, `1/2` printed the full list, so it cannot be trusted to partition.
+- **Five jobs share one Actions cache (`shared-key: stable-dev-host`)** — clippy, test,
+  test-features, live-smoke, doc-test all build the same configuration (stable, dev profile,
+  host, default features). Before 2026-09-03 each had its own near-identical cache and the repo
+  sat at 12 caches / 10.9 GB against GitHub's 10 GB cap, so caches were being evicted and jobs
+  restored cold (gpu-test swung 6.7 → 12.3 min on a cold restore). Last writer wins on a shared
+  key; that is safe because rust-cache stores dependency artifacts keyed by feature hash, so a
+  smaller-feature-set save costs the others a partial dep rebuild, never a cold one. Jobs whose
+  artifacts genuinely differ (release profile, MSRV toolchain, miri/nightly, wasm32, cross
+  targets, Windows, the per-feature slices) keep their own keys on purpose. The same job also runs `just facade-combos`, which compiles every supported `flui`
   facade feature combination (`material` / `cupertino` / `localizations` / `hot-reload` / `serde`)
   **on its own**, against the `flui` package alone — a `--workspace` build is not evidence about
   the facade surface — and asserts via `cargo tree` that `flui-hot-reload` is *absent* from

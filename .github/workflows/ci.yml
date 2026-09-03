@@ -3,7 +3,7 @@ name: CI
 # Job graph (every job is gated on the fast `checks` source gate):
 #   checks         — fmt + taplo + typos + inventory + runtime-conformance + panic-policy + port-check + actionlint + zizmor (seconds, no compile)
 #   clippy         — workspace lint with -D warnings
-#   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps), xilem-style,
+#   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps --all-targets), xilem-style, as a 4-slice matrix: three balanced package groups + the combination checks
 #                    plus a bounded backend-feature-pair powerset for flui-engine, plus every
 #                    supported `flui` facade feature combination compiled in isolation
 #   wasm-check     — cargo check for the wasm-capable crates + real cdylib link of the two web
@@ -42,6 +42,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # feature-matrix package groups. Balanced by cargo-hack command count
+  # (`--each-feature --optional-deps` = features + optional deps + the
+  # no-default/all-features pair, per package): 50 / 49 / 58 of 157 as of
+  # 2026-09-03. Every workspace member MUST appear in exactly one group —
+  # each matrix entry asserts the union against `cargo metadata` and fails
+  # on a crate that is missing or duplicated, so adding a crate without
+  # placing it here is loud, not silent. Rebalance with:
+  #   cargo hack clippy --workspace --each-feature --optional-deps --print-command-list \
+  #     | grep -oE -- '--manifest-path [^ ]+' | sort | uniq -c | sort -rn
+  FM_GROUP_1: flui-engine flui-app flui-platform flui-widgets flui-devtools
+  FM_GROUP_2: flui flui-types flui-geometry flui-rendering flui-assets flui-view flui-objects flui-log
+  FM_GROUP_3: flui-interaction flui-hot-reload flui-tree flui-semantics flui-scheduler flui-painting flui-layer flui-foundation flui-cli flui-animation flui-macros flui-testing flui-material flui-localizations flui-cupertino flui-build flui-desktop-scene flui-live-smoke flui-web-demo flui-web-server flui-painting-demo flui-hot-reload-lifecycle-fixture hot-reload-counter-host hot-reload-counter-logic hot-reload-counter-types
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   # Strict workspace-wide; matches the local `just ci` gate.
@@ -157,6 +169,18 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # One cache for every job that builds the same thing — stable
+          # toolchain, dev profile, host target, default features. Five
+          # near-identical per-job caches were counting against the repo's
+          # 10 GB Actions cache cap (12 caches, 10.9 GB on 2026-09-03 —
+          # over the cap, so GitHub was evicting and jobs were restoring
+          # cold). The last writer wins on a shared key. That is safe here
+          # because rust-cache stores DEPENDENCY artifacts (workspace crates
+          # are always evicted) and cargo keys those by feature hash, so a
+          # job that saves a smaller feature set costs the others a partial
+          # rebuild of the missing deps on the next run — never a cold one.
+          shared-key: stable-dev-host
+          cache-on-failure: true
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: cargo clippy
@@ -221,6 +245,10 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Shared with clippy / test / test-features / live-smoke / doc-test;
+          # the rationale lives on the `clippy` job's cache step.
+          shared-key: stable-dev-host
+          cache-on-failure: true
           save-if: ${{ github.event_name != 'merge_group' }}
           # Per tokio: binary caching breaks on macOS — guard for when macOS
           # joins the matrix.
@@ -384,6 +412,10 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Shared with clippy / test / test-features / live-smoke / doc-test;
+          # the rationale lives on the `clippy` job's cache step.
+          shared-key: stable-dev-host
+          cache-on-failure: true
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: Install cargo-nextest
@@ -462,6 +494,10 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Shared with clippy / test / test-features / live-smoke / doc-test;
+          # the rationale lives on the `clippy` job's cache step.
+          shared-key: stable-dev-host
+          cache-on-failure: true
           save-if: ${{ github.event_name != 'merge_group' }}
 
       # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
@@ -682,6 +718,10 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Shared with clippy / test / test-features / live-smoke / doc-test;
+          # the rationale lives on the `clippy` job's cache step.
+          shared-key: stable-dev-host
+          cache-on-failure: true
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: cargo test --doc
@@ -797,10 +837,30 @@ jobs:
   # libs with dev-dependencies enabled and mask missing feature requirements.
   # ─────────────────────────────────────────────────────────────────────────
   feature-matrix:
-    name: feature-matrix (cargo-hack per-feature clippy)
+    name: feature-matrix (${{ matrix.slice }})
     needs: checks
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Three balanced per-feature clippy slices plus the two short
+        # combination checks. Formerly ONE job running the whole workspace
+        # in two passes (libs/bins, then tests/benches/examples): 640 s of
+        # cargo-hack serialised on one runner, 15-16 min wall, the critical
+        # path of the entire workflow once `test` was split. Same commands,
+        # same features, same `-D warnings`; the per-feature work is now
+        # one `--all-targets` pass per slice — clippy lints every target of
+        # the package in one invocation, which is what the two passes
+        # together achieved, minus 157 redundant cargo start-ups and lib
+        # rebuilds between them.
+        #
+        # cargo-hack's own `--partition M/N` was measured and rejected:
+        # `--print-command-list --partition 1/2` on flui-engine printed the
+        # FULL 15-command list and 2/2 printed 7, so it is not a clean
+        # partition and could silently double or drop work. Explicit groups
+        # + the completeness guard below are transparent and checkable.
+        slice: [group-1, group-2, group-3, combinations]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -811,10 +871,16 @@ jobs:
         with:
           components: clippy
 
+      # Each slice compiles a disjoint set of packages under many feature
+      # sets, so the slices do NOT share a target cache (a shared key would
+      # be overwritten by whichever slice finishes last, discarding the other
+      # three's artifacts). They do share the registry via the common prefix.
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          prefix-key: v1-rust-feature-matrix-${{ matrix.slice }}
           save-if: ${{ github.event_name != 'merge_group' }}
+          cache-on-failure: true
 
       # `just` carries the facade combination list, so CI and `just
       # feature-matrix` cannot drift into testing different sets.
@@ -823,11 +889,39 @@ jobs:
         with:
           tool: cargo-hack@0.6,just@1
 
-      - name: cargo hack clippy (libs/bins, per feature)
-        run: cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings
+      # The one guard that makes explicit groups safe: the union of the three
+      # groups must equal the workspace, with no package in two groups. Runs
+      # in every slice so a stale group list fails the whole matrix, not one
+      # corner of it.
+      - name: Assert the package groups cover the workspace exactly once
+        run: |
+          python3 - <<'EOF'
+          import json, os, subprocess, sys
+          members = {p["name"] for p in json.loads(subprocess.check_output(
+              ["cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"]))["packages"]}
+          groups = {k: os.environ[k].split() for k in ("FM_GROUP_1", "FM_GROUP_2", "FM_GROUP_3")}
+          listed = [p for g in groups.values() for p in g]
+          dup = sorted({p for p in listed if listed.count(p) > 1})
+          missing = sorted(members - set(listed))
+          unknown = sorted(set(listed) - members)
+          for label, bad in (("in two groups", dup), ("not in any group", missing), ("not a workspace member", unknown)):
+              if bad:
+                  print(f"::error::feature-matrix groups: {label}: {bad}")
+          if dup or missing or unknown:
+              sys.exit(1)
+          print(f"ok: {len(members)} members, each in exactly one group")
+          EOF
 
-      - name: cargo hack clippy (tests/benches/examples, per feature)
-        run: cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
+      - name: cargo hack clippy (all targets, per feature)
+        if: matrix.slice != 'combinations'
+        run: |
+          case "${{ matrix.slice }}" in
+            group-1) pkgs="$FM_GROUP_1" ;;
+            group-2) pkgs="$FM_GROUP_2" ;;
+            group-3) pkgs="$FM_GROUP_3" ;;
+          esac
+          set -- ; for p in $pkgs; do set -- "$@" -p "$p"; done
+          cargo hack clippy "$@" --locked --each-feature --optional-deps --keep-going --all-targets -- -D warnings
 
       # --each-feature can never see a defect that only appears when two
       # features combine. flui-engine is the one crate where combinations
@@ -837,6 +931,7 @@ jobs:
       # configurations, minutes not hours. The full workspace powerset stays
       # deliberately out (2^N explosion for no known failure mode).
       - name: cargo hack check flui-engine (backend-feature pairs)
+        if: matrix.slice == 'combinations'
         run: cargo hack check -p flui-engine --locked --feature-powerset --include-features vulkan,metal,dx12,webgpu,gles,wgpu-backend --depth 2
 
       # The facade's catalog/localization/hot-reload features are the public
@@ -849,6 +944,7 @@ jobs:
       # the end prove hot reload is *absent* from an ordinary production graph,
       # not merely unused by it.
       - name: facade feature combinations (isolated) + hot-reload absence
+        if: matrix.slice == 'combinations'
         run: just facade-combos
 
   # ─────────────────────────────────────────────────────────────────────────
