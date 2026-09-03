@@ -30,6 +30,11 @@ use super::view::{ElementBase, View};
 ///     fn into_view(self) -> Self::View { self }
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be used where a view is expected",
+    label = "not a `View`, and has no `IntoView` conversion",
+    note = "every `View` is `IntoView` through a blanket impl: make `{Self}` a view (`#[derive(Clone, StatelessView)]` + `impl StatelessView for {Self}`), or implement `IntoView` for a value that converts into one"
+)]
 pub trait IntoView {
     /// The View type this converts into.
     type View: View;

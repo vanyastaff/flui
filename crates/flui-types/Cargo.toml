@@ -38,7 +38,7 @@ smallvec = { workspace = true }
 criterion = { workspace = true }
 # Property-based tests in tests/geometry_property_tests.rs
 proptest = "1.5"
-trybuild = "1.0"
+trybuild = { workspace = true }
 # `serde` feature round-trip tests (platform::locale's canonicalizing
 # `Deserialize` impl) — a real JSON round-trip, not a hand-built `Value`.
 serde_json = { workspace = true }

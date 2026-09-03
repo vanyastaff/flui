@@ -50,6 +50,11 @@ use crate::context::BuildContext;
 ///
 /// Types implementing `StatelessView` must also implement `Clone`.
 /// Use the derive macro: `#[derive(Clone)]`
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `StatelessView`",
+    label = "missing `impl StatelessView for {Self}`",
+    note = "`#[derive(StatelessView)]` only generates the `View` plumbing; the `build` method lives in a hand-written `impl StatelessView for {Self} {{ fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {{ .. }} }}`"
+)]
 pub trait StatelessView: Clone + 'static {
     /// Build the child View tree.
     ///

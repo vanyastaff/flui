@@ -68,6 +68,11 @@ use crate::context::BuildContext;
 ///     }
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `StatefulView`",
+    label = "missing `impl StatefulView for {Self}`",
+    note = "a stateful view names its state and creates it: `impl StatefulView for {Self} {{ type State = MyState; fn create_state(&self) -> MyState {{ .. }} }}`, where `MyState: ViewState<{Self}>`"
+)]
 pub trait StatefulView: Clone + 'static + Sized {
     /// The State type for this View.
     type State: ViewState<Self>;
@@ -93,6 +98,11 @@ pub trait StatefulView: Clone + 'static + Sized {
 /// 5. `deactivate()` - Called when temporarily removed
 /// 6. `activate()` - Called when re-inserted
 /// 7. `dispose()` - Called before permanent removal
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not the state type of the view `{V}`",
+    label = "missing `impl ViewState<{V}> for {Self}`",
+    note = "`ViewState<V>` is implemented for the type named as `type State` in `impl StatefulView for {V}`; its `build(&self, view: &{V}, ctx: &dyn BuildContext)` returns the child view"
+)]
 pub trait ViewState<V: StatefulView>: 'static {
     /// Called once after the state is created.
     ///

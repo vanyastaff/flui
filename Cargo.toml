@@ -299,6 +299,10 @@ bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 static_assertions = "1.1"
+# Compile-fail suites (flui-types, flui-view, flui-engine, flui-rendering):
+# each drives `tests/<dir>/*.rs` fixtures and pins the diagnostic text a
+# wrong program receives, not merely that it fails.
+trybuild = "1.0"
 
 # FAST HASHING - Used by flui-rendering (FxHashSet for layout cycle guard;
 # deterministic + faster than std SipHash for small keys like RenderId)

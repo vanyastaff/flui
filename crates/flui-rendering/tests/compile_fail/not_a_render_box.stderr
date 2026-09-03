@@ -1,0 +1,25 @@
+error[E0277]: `NotABox` is not a render object for the `BoxProtocol` protocol
+  --> tests/compile_fail/not_a_render_box.rs:11:18
+   |
+11 |     requires_box(NotABox);
+   |     ------------ ^^^^^^^ no `RenderObject<BoxProtocol>` for `NotABox`
+   |     |
+   |     required by a bound introduced by this call
+   |
+help: the trait `RenderBox` is not implemented for `NotABox`
+  --> tests/compile_fail/not_a_render_box.rs:6:1
+   |
+ 6 | struct NotABox;
+   | ^^^^^^^^^^^^^^
+   = note: render objects implement the protocol trait instead: `RenderBox` (box protocol) or `RenderSliver` (sliver protocol), plus `flui_foundation::Diagnosticable`; `RenderObject<P>` then follows from a blanket impl
+help: the trait `RenderObject<BoxProtocol>` is implemented for `RenderViewAdapter`
+  --> src/view/render_view.rs
+   |
+   | impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewAdapter {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for `NotABox` to implement `RenderObject<BoxProtocol>`
+note: required by a bound in `requires_box`
+  --> tests/compile_fail/not_a_render_box.rs:8:20
+   |
+ 8 | fn requires_box<T: RenderObject<BoxProtocol>>(_render_object: T) {}
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `requires_box`

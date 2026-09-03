@@ -58,6 +58,11 @@ use crate::{
 ///
 /// Implementations are automatically bridged to `RenderObject<SliverProtocol>`
 /// via blanket impl.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a `RenderSliver`",
+    label = "missing `impl RenderSliver for {Self}`",
+    note = "a sliver-protocol render object implements `RenderSliver` (its `Arity`, `perform_layout` against `SliverConstraints`, `paint`, hit-testing) and `flui_foundation::Diagnosticable`; `RenderObject<SliverProtocol>` is then derived automatically"
+)]
 pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
     type Arity: Arity;

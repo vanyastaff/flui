@@ -138,7 +138,7 @@ image = { workspace = true }
 # cannot implement `RasterBackend` now that `Send` is a supertrait. Same
 # crate/version flui-types already uses for its unit-mixing compile-fail
 # suite (`crates/flui-types/tests/unit_mixing_compile_fail.rs`).
-trybuild = "1.0"
+trybuild = { workspace = true }
 
 [[bench]]
 name = "render_throughput"

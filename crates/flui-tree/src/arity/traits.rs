@@ -35,6 +35,11 @@ use std::fmt::Debug;
 /// Default + 'static` super-bounds let arity markers cross thread
 /// boundaries, derive Debug, and be plugged into generic code that
 /// expects a zero-sized type.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an arity marker",
+    label = "expected `Leaf`, `Optional`, `Variable`, `Exact<N>`, `AtLeast<N>`, `Range<MIN, MAX>`, or `Never`",
+    note = "`Arity` is sealed: only the markers in `flui_tree::arity` implement it, so a node's child count is checked at compile time rather than at layout"
+)]
 pub trait Arity: sealed::Sealed + Send + Sync + Debug + Copy + Default + 'static {
     /// Static description of this arity (e.g. `"Leaf"`, `"Single"`,
     /// `"Exact<3>"`). Used by `ArityError` messages so consumers

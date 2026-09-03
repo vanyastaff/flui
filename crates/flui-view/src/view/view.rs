@@ -46,6 +46,12 @@ use dyn_clone::{DynClone, clone_trait_object};
 /// This trait corresponds to Flutter's `Widget` abstract class:
 /// - `create_element()` → `Widget.createElement()`
 /// - `can_update()` → `Widget.canUpdate()` static method
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a FLUI view",
+    label = "not a `View`",
+    note = "a view is normally declared with `#[derive(Clone, StatelessView)]` plus `impl StatelessView for {Self}` (or the `StatefulView` / `InheritedView` equivalents), which generates this impl",
+    note = "implement `View` by hand only for a render-object-backed view"
+)]
 pub trait View: Downcast + DynClone + 'static {
     /// Create a new Element for this View.
     ///
