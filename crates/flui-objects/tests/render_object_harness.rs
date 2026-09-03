@@ -7305,6 +7305,58 @@ fn harness_sliver_list_lays_out_attached_children_the_widening_pulls_into_band()
     );
 }
 
+/// Measuring the residents one widening pulled in can widen the band again,
+/// and what that second widening exposes must be requested in the same pass.
+///
+/// Estimate 100 px, a 650 px window (400 px viewport plus the cache).
+/// Items 0–6 are 50 px: the first query covers exactly them, measuring
+/// them adapts the hint to 50 px and re-queries to 13 items; items 7–12
+/// are attached at 10 px, so laying them out leaves 240 px of window that
+/// the 50 px hint fills with five more indices, 13–17. Those are absent,
+/// so they must be requested here: every index the first widening covered
+/// was attached, nothing was built or evicted, and no later pass would
+/// have asked for them — the window past item 12 stayed blank.
+#[test]
+fn harness_sliver_list_requests_what_a_second_widening_exposes() {
+    const LABELS: [&str; 13] = [
+        "item0", "item1", "item2", "item3", "item4", "item5", "item6", "item7", "item8", "item9",
+        "item10", "item11", "item12",
+    ];
+    let mut list = sliver_node(RenderSliverList::new(100, 100.0)).label("list");
+    for (index, label) in LABELS.into_iter().enumerate() {
+        let height = if index < 7 { 50.0 } else { 10.0 };
+        list = list.child(
+            box_node(RenderColoredBox::red(300.0, height))
+                .label(label)
+                .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                    SliverMultiBoxAdaptorParentData::new(index),
+                )),
+        );
+    }
+    let mut run = RenderTester::mount(viewport_with_scroll(0.0, list))
+        .with_size(Size::new(px(300.0), px(400.0)))
+        .run_layout();
+
+    assert_eq!(
+        run.offset(run.id("item12")).dy,
+        px(400.0),
+        "item 12 sits after 7 × 50 px and 5 × 10 px of measured residents"
+    );
+    let mut requested: Vec<usize> = run
+        .owner_mut()
+        .take_pending_child_requests()
+        .into_iter()
+        .map(|(_sliver, logical_index)| logical_index)
+        .collect();
+    requested.sort_unstable();
+    requested.dedup();
+    assert_eq!(
+        requested,
+        vec![13, 14, 15, 16, 17],
+        "the second widening's indices are requested in the same pass"
+    );
+}
+
 #[test]
 fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
     // Two-pass test for the anchor-correction state machine.
