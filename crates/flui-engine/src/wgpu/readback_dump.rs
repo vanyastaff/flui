@@ -92,7 +92,7 @@ mod tests {
     // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; every
     // access to `FLUI_READBACK_DUMP_DIR` in the process goes through
     // `ENV_LOCK`, so the mutations below cannot race a concurrent read.
-    #![allow(unsafe_code)]
+    #![expect(unsafe_code)]
 
     use super::*;
 

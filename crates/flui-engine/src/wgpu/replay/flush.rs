@@ -98,12 +98,7 @@ fn set_clamped_scissor(
 // GPU rendering routinely converts between numeric types for pixel coordinates,
 // color channels, buffer indices, and instance counts; flush methods also carry
 // many GPU-handle parameters.
-#[allow(
-    clippy::too_many_arguments,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
+#[expect(clippy::too_many_arguments)]
 impl GpuReplay {
     // =========================================================================
     // Segment-flush entry point
@@ -656,10 +651,6 @@ impl GpuReplay {
         // into an oversized pool-bucket texture (e.g. SSAA bucket-aligned tiles).
         // Setting it explicitly is a no-op for the normal case where attachment ==
         // viewport, but is load-bearing for SSAA bucket rendering.
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "full_w/full_h are small surface dimensions; f32 is sufficient"
-        )]
         render_pass.set_viewport(0.0, 0.0, full_w as f32, full_h as f32, 0.0, 1.0);
 
         let mut active_key: Option<PipelineKey> = None;

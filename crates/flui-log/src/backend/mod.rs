@@ -88,7 +88,7 @@ enum Sink<S> {
     #[cfg(target_arch = "wasm32")]
     WebConsole(tracing_wasm::WASMLayer),
 
-    #[allow(
+    #[expect(
         dead_code,
         reason = "uninhabited by construction; it exists to carry `S` on targets whose sink does not"
     )]
@@ -438,7 +438,7 @@ where
         dispatch_sink!(&self.sink, sink => Layer::<S>::on_id_change(sink, old, new, context));
     }
 
-    #[allow(
+    #[expect(
         unsafe_code,
         reason = "forwards tracing-subscriber's type-erased layer lookup without changing the pointer"
     )]

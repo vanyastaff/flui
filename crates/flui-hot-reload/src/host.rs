@@ -76,7 +76,7 @@ pub enum PluginKind {
 ///     ↓
 /// plugin.unload()  —or—  drop(plugin)
 /// ```
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct ScenePlugin {
     lib: DynLib,
     build_fn: BuildSceneFn,
@@ -89,7 +89,7 @@ pub struct ScenePlugin {
     /// decides not to consume. Currently every host path consumes, so this is
     /// resolved-but-idle; kept because it is the correct disposal for an
     /// unconsumed pointer.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     drop_fn: Option<SceneDropFn>,
     kind: PluginKind,
     version: u32,
@@ -112,7 +112,7 @@ impl ScenePlugin {
         // is `try_resolve`'s stated requirement. The symbol-name/type pairs
         // below are the plugin ABI this crate defines, so a library built by
         // the matching macro exports them with these signatures.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe {
             // Try app_plugin! symbols first (flui_app_build)
             if let Some(resolved) = Self::try_resolve(&lib, "flui_app") {
@@ -169,7 +169,7 @@ impl ScenePlugin {
     /// # Safety
     ///
     /// Caller must ensure `lib` is a valid loaded library.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     unsafe fn try_resolve(lib: &DynLib, family: &str) -> Option<ResolvedSceneFamily> {
         // SAFETY: edition 2024 makes unsafe-fn bodies safe by default, so the
         // calls still need their own block. The caller guarantees `lib` is a
@@ -273,7 +273,7 @@ impl ScenePlugin {
     /// use-after-free of code. Development-only tooling either way. This
     /// obligation applies only to a `Some` return — a `None` (skipped frame)
     /// owns nothing.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     pub unsafe fn build_scene(&self, width: f32, height: f32) -> Option<Scene> {
         // SAFETY: `build_fn`/`free_fn` were resolved from the `DynLib` this
         // struct owns, which outlives the call. The plugin macro returns
@@ -285,7 +285,7 @@ impl ScenePlugin {
         // reads the slot as `MaybeUninit<Scene>`), in the image that
         // allocated it — no cross-image allocator or drop-glue mismatch
         // remains. A null `ptr` never reaches `ptr::read`/`free_fn` at all.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe {
             let ptr = (self.build_fn)(width, height);
             if ptr.is_null() {

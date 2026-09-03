@@ -140,7 +140,7 @@ pub trait CommandRenderer {
     );
 
     /// Render a texture atlas with sprites
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn render_atlas(
         &mut self,
         image: &Image,

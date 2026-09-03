@@ -148,7 +148,6 @@ impl<T> RouteResult<T> {
     /// The nesting is meaningful, not accidental: the **outer** `Option` is
     /// "has it completed?", the **inner** one is the result, which is
     /// legitimately absent (Dart's `T?`).
-    #[allow(clippy::option_option)]
     #[must_use]
     pub fn try_take(&self) -> Option<Option<T>> {
         match core::mem::replace(&mut self.shared.lock().value, Completion::Pending) {

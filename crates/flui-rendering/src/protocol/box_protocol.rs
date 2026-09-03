@@ -217,7 +217,7 @@ pub struct BoxLayout;
 // The `_bits` postfix is load-bearing: each field is the `f32::to_bits` image
 // of the same-named `BoxConstraints` field, and dropping it would suggest the
 // fields hold pixel values.
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 pub struct BoxConstraintsCacheKey {
     min_width_bits: u32,
     max_width_bits: u32,

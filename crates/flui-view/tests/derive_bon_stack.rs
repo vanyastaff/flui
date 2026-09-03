@@ -30,22 +30,18 @@ struct Card {
     title: String,
     /// Body copy — present for arity > 3 (the threshold where
     /// FR-011's `bon` convention applies). Carries no test assertion.
-    #[allow(
+    #[expect(
         dead_code,
         reason = "field arity drives FR-011 convention; not asserted"
     )]
     body: String,
     /// Material elevation level — same as `body`.
-    #[allow(
-        dead_code,
-        reason = "field arity drives FR-011 convention; not asserted"
-    )]
     elevation: u32,
     /// Optional callback — locks that `bon::Builder` supports
     /// `Option<_>`-fielded shapes alongside the view derive. Stored as
     /// `Option<()>` here to keep the test self-contained (no callback
     /// machinery in scope).
-    #[allow(
+    #[expect(
         dead_code,
         reason = "field arity drives FR-011 convention; not asserted"
     )]

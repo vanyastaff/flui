@@ -127,7 +127,7 @@ impl std::fmt::Debug for ScaleGestureRecognizer {
 }
 
 // Field names keep Flutter's `onScaleStart`-style callback names (parity).
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct ScaleCallbacks {
     on_start: Option<ScaleStartCallback>,

@@ -39,7 +39,6 @@ use flui_view::element::ElementKind;
 /// because the test below only references its address, not the
 /// body — the compile-time check the function performs is on the
 /// `match` arms themselves.
-#[allow(dead_code, reason = "compile-time match-arm enumeration is the test")]
 fn classify_compile_check(kind: &ElementKind) -> &'static str {
     match kind {
         ElementKind::Stateless(_) => "Stateless",

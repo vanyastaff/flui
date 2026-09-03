@@ -388,7 +388,6 @@ impl PersistentHeaderCore {
     ///
     /// Returns the child's post-layout main-axis extent (`0.0` if there is no
     /// child, matching the oracle's `childExtent` getter for a `null` child).
-    #[allow(clippy::too_many_arguments)]
     /// Attaches the build-during-layout mailbox this header publishes into.
     ///
     /// Set once by the element that owns the delegate, at mount. A header with

@@ -32,7 +32,7 @@
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![allow(clippy::unwrap_used)]
+#![expect(clippy::unwrap_used)]
 // `Renderer: Send` is re-proved here for the frame callback; see the
 // `recursion_limit` rationale at the top of flui-engine's `lib.rs`.
 #![recursion_limit = "256"]
@@ -171,7 +171,7 @@ fn main() {
             // allocator, and the returned scene is dropped at the end of this
             // frame while `driver` (owning the library) lives on. See
             // `HotReloadDriver::build_scene`'s `# Safety`.
-            #[allow(unsafe_code)]
+            #[expect(unsafe_code)]
             let built = unsafe { driver.build_scene_or(w, h, build_test_scene) };
             built
         } else {

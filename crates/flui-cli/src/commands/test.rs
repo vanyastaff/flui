@@ -19,10 +19,6 @@ use console::style;
 /// # Errors
 ///
 /// Returns `CliError::TestsFailed` if any tests fail.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "mirrors clap argument structure"
-)]
 pub fn execute(
     filter: Option<String>,
     unit: bool,

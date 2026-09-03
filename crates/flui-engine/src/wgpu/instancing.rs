@@ -761,10 +761,6 @@ impl TextureInstance {
 ///
 /// Returns the all-zero "no clip" sentinel unchanged.
 pub(crate) fn reduce_superellipse_clip(c: [f32; 12]) -> [f32; 8] {
-    #[expect(
-        clippy::float_cmp,
-        reason = "exact comparison against the bit-exact `[0.0; 12]` 'no clip' sentinel"
-    )]
     let is_empty = c == [0.0; 12];
     if is_empty {
         return [0.0; 8];
@@ -1121,10 +1117,6 @@ impl<T> Default for InstanceBatch<T> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::float_cmp,
-    reason = "tests assert exact expected values produced by exact arithmetic"
-)]
 mod tests {
     use flui_types::geometry::px;
 

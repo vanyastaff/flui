@@ -42,7 +42,7 @@ use keyboard_types::{Code, Key, NamedKey};
 /// the keycode itself is layout-independent. Raw `u16` (the width of
 /// `NSEvent.keyCode`) rather than a binding crate's type so this module
 /// compiles on every host.
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub mod kvk {
     pub const ANSI_A: u16 = 0x00;
     pub const ANSI_S: u16 = 0x01;

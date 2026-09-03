@@ -41,7 +41,6 @@ use crate::layout::Padding;
 // (left/top/right/bottom as separate constructor params). There is no semantic
 // grouping that warrants a state machine or enum — each edge is truly
 // independent. Suppress the lint rather than invent an artificial abstraction.
-#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, StatelessView)]
 pub struct SafeArea {
     left: bool,

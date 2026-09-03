@@ -42,7 +42,7 @@
 // `just miri`, which runs this module's tests as part of a wider
 // `pipeline::owner` sweep (cell.rs's PipelineCell checkout tests and the
 // rest of the owner module's unit tests ride along in the same filter).
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -510,7 +510,7 @@ impl<'tree> SubtreeArena<'tree> {
     /// Called from the sliver-child callback inside `layout_subtree_borrowed_impl`
     /// (Box parent → Sliver child cross-protocol path) — not called directly
     /// from `owner/mod.rs`.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(super) fn layout_sliver_child(
         &self,
         id: RenderId,
@@ -529,7 +529,7 @@ impl<'tree> SubtreeArena<'tree> {
     /// Called from the box-intrinsic callback inside `layout_sliver_subtree_borrowed_impl`
     /// (Sliver parent querying Box child intrinsics) — not called directly from
     /// `owner/mod.rs`, so the dead_code lint fires through `dyn Fn` indirection.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(super) fn box_intrinsic(
         &self,
         id: RenderId,

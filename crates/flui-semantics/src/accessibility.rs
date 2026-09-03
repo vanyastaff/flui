@@ -14,7 +14,7 @@
 /// # Flutter Equivalence
 ///
 /// Corresponds to Flutter's `AccessibilityFeatures` from dart:ui.
-#[allow(clippy::struct_excessive_bools)] // Mirrors Flutter's AccessibilityFeatures flags
+#[expect(clippy::struct_excessive_bools)] // Mirrors Flutter's AccessibilityFeatures flags
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AccessibilityFeatures {
     /// Whether accessible navigation is enabled.

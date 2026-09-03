@@ -161,11 +161,6 @@ mod gpu_tests {
         let out_g = srgb_to_linear(straight_g).clamp(0.0, 1.0);
         let out_b = srgb_to_linear(straight_b).clamp(0.0, 1.0);
         // Repremultiply and quantise.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "values clamped to [0,1]*255 then rounded; truncation is safe"
-        )]
         let to_u8 = |x: f32| (x * 255.0).round() as u8;
         [
             to_u8(out_r * alpha),
@@ -186,11 +181,6 @@ mod gpu_tests {
         let out_r = linear_to_srgb(straight_r).clamp(0.0, 1.0);
         let out_g = linear_to_srgb(straight_g).clamp(0.0, 1.0);
         let out_b = linear_to_srgb(straight_b).clamp(0.0, 1.0);
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "values clamped to [0,1]*255 then rounded; truncation is safe"
-        )]
         let to_u8 = |x: f32| (x * 255.0).round() as u8;
         [
             to_u8(out_r * alpha),
@@ -273,11 +263,6 @@ mod gpu_tests {
         // Verify oracle value is in the expected ballpark before asserting GPU.
         // srgb_to_linear is defined on [0,1] and maps it to [0,1]; multiplying by
         // 255 and rounding yields a value in [0, 255] — truncation to u8 is safe.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "srgb_to_linear([0,1])*255 rounds to [0,255]; truncation to u8 is safe"
-        )]
         let linear_of_mid_gray = (srgb_to_linear(128.0 / 255.0) * 255.0).round() as u8;
         assert!(
             linear_of_mid_gray < 80,

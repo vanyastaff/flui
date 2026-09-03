@@ -984,16 +984,16 @@ mod tests {
     // itself, in the listener list), but it never actually crosses a
     // thread, so the type-level `Send` this test's `Arc<dyn Fn + Send +
     // Sync>` listener signature demands is never exercised for real.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     unsafe impl Send for BindingPtr {}
     // SAFETY: same as `Send` above — no genuine cross-thread share occurs.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     unsafe impl Sync for BindingPtr {}
     impl BindingPtr {
         // SAFETY: see the struct's doc — valid only while the `binding`
         // local this test constructs it from is still alive and has not
         // been moved since `&raw const binding` was taken.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe fn get(&self) -> &RenderingFlutterBinding {
             unsafe { &*self.0 }
         }
@@ -1069,7 +1069,7 @@ mod tests {
         let reentrant_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
             // SAFETY: see `BindingPtr`'s doc — invoked synchronously, inline,
             // on the same thread as (and within the lifetime of) `binding`.
-            #[allow(unsafe_code)]
+            #[expect(unsafe_code)]
             unsafe { binding_ptr.get() }
                 .add_semantics_enabled_listener(late_listener_for_reentrant.clone());
         });

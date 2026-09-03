@@ -29,7 +29,6 @@
 // Benchmark harness functions are internal measurement scaffolding, not a
 // public API surface — exempt from the crate's missing-docs lint, matching
 // this crate's other bench targets.
-#![allow(missing_docs)]
 
 use std::hint::black_box;
 use std::sync::Arc;

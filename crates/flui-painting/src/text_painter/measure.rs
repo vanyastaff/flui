@@ -20,7 +20,7 @@ impl TextPainter {
     /// # Panics
     ///
     /// Panics if `text` or `text_direction` is not set.
-    #[allow(clippy::expect_used)] // Documented precondition: text and text_direction must be set
+    #[expect(clippy::expect_used)] // Documented precondition: text and text_direction must be set
     pub fn layout(&mut self, min_width: f32, max_width: f32) {
         // NaN is forbidden, but `+INFINITY` is the documented "no max
         // width" sentinel — `compute_paint_offset` and the cosmic-text
@@ -77,13 +77,7 @@ impl TextPainter {
     ) -> (LayoutMetrics, TextLayout) {
         let font_size = text
             .style()
-            .and_then(|s| {
-                s.font_size.map(|f| {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let size = f as f32;
-                    size
-                })
-            })
+            .and_then(|s| s.font_size.map(|f| f as f32))
             .unwrap_or(DEFAULT_FONT_SIZE);
 
         let scaled_font_size = font_size * self.text_scale_factor;
@@ -179,7 +173,7 @@ impl TextPainter {
     ///
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
-    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
+    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn size(&self) -> Size<Pixels> {
         self.layout_cache
             .as_ref()
@@ -205,7 +199,7 @@ impl TextPainter {
     ///
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
-    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
+    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> f32 {
         let cache = self
             .layout_cache
@@ -224,7 +218,7 @@ impl TextPainter {
     ///
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
-    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
+    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn did_exceed_max_lines(&self) -> bool {
         self.layout_cache
             .as_ref()

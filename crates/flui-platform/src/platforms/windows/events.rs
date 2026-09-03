@@ -6,7 +6,7 @@
 //! (Phase 2: event dispatch integration).
 
 // All items in this module are prepared for Phase 2 integration.
-#![allow(dead_code)]
+#![cfg_attr(not(target_os = "windows"), expect(dead_code))]
 
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::Modifiers as KeyboardModifiers;

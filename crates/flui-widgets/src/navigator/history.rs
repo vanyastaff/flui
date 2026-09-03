@@ -976,7 +976,7 @@ impl RouteHistory {
         outcome
     }
 
-    #[allow(clippy::too_many_lines)] // A 1:1 transcription; splitting it would scramble the mapping.
+    #[expect(clippy::too_many_lines)] // A 1:1 transcription; splitting it would scramble the mapping.
     fn flush_inner(&mut self, rearrange_overlay: bool) -> FlushOutcome {
         let mut index: isize = self.entries.len() as isize - 1;
         let mut next: Option<RouteId> = None;

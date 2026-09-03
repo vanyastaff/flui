@@ -88,7 +88,11 @@
 // Math-crate idiom shared with flui-geometry (see its lib.rs): permanent
 // crate-specific relaxations of workspace pedantic lints for math-heavy code.
 // (The float-comparison / numeric-cast family is allowed workspace-wide.)
-#![allow(clippy::many_single_char_names, clippy::wildcard_imports)]
+#![expect(clippy::many_single_char_names)]
+#![cfg_attr(
+    not(any(test, target_arch = "wasm32")),
+    expect(clippy::wildcard_imports)
+)]
 // Geometry primitives split out into flui-geometry crate.
 // Re-exported here under the original `geometry` namespace so existing consumers
 // of `flui_types::geometry::*` continue to compile unchanged during the transition.

@@ -18,7 +18,7 @@
 // ADR-0027: ElementBuildContext's current test/prod seam still takes
 // Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
 // Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
-#![allow(clippy::arc_with_non_send_sync)]
+#![expect(clippy::arc_with_non_send_sync)]
 
 use std::sync::Arc;
 
@@ -79,6 +79,10 @@ impl CounterState {
     fn count(&self) -> i32 {
         self.count
     }
+    #[expect(
+        dead_code,
+        reason = "the fixture keeps a mutating accessor for tests that exercise mutable state; none does yet"
+    )]
     fn bump(&mut self, by: i32) {
         self.count += by;
     }
@@ -467,11 +471,4 @@ fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
     );
 
     flui_view::test_only_clear_global_key_registry();
-}
-
-// Suppress the unused-import warning for bump (the field exists in
-// the fixture for future tests that exercise mutable state).
-#[allow(dead_code)]
-fn _force_use(state: &mut CounterState) {
-    state.bump(1);
 }

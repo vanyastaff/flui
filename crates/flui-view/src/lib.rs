@@ -68,12 +68,12 @@
 #![deny(missing_docs)]
 // `element/element.rs`, `view/view.rs`: a one-type family module named after
 // its type is the catalog's house style (matches flui-widgets/flui-objects).
-#![allow(clippy::module_inception)]
+#![expect(clippy::module_inception)]
 // ADR-0027: the owner-plane view/element/build/global-key graph is intentionally
 // `!Send`, while existing internal handles are still `Arc`-shaped. Do not restore
 // `Send + Sync` to UI callbacks or tree owners to satisfy this lint; a focused
 // owner-local handle migration can replace these with `Rc` later.
-#![allow(clippy::arc_with_non_send_sync)]
+#![expect(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Modules

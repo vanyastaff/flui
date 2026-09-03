@@ -26,7 +26,7 @@
 //! `InputDecorator`'s `focused`/`is_empty` are `TextField`-level build
 //! inputs, not something `EditableText` itself exposes upward.
 
-#![allow(clippy::unwrap_used)] // a panic IS the failure report in test code (docs/PANIC-POLICY.md)
+// a panic IS the failure report in test code (docs/PANIC-POLICY.md)
 
 mod common;
 

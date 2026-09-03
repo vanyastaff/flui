@@ -14,8 +14,6 @@
 //! cargo bench -p flui-interaction --bench pointer_route_bench
 //! ```
 
-#![allow(missing_docs)]
-
 use std::cell::Cell;
 use std::hint::black_box;
 use std::rc::Rc;

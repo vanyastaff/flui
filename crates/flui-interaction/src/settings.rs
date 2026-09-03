@@ -161,7 +161,7 @@ impl Default for GestureSettings {
 
 impl GestureSettings {
     /// Create settings with custom values.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         touch_slop: f32,
         pan_slop: f32,

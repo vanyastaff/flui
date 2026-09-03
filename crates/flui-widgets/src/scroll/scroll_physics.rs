@@ -395,7 +395,7 @@ impl ScrollPhysics for BouncingScrollPhysics {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::float_cmp)] // unit tests assert exact clamping/pass-through values, not computed floats
+    #![expect(clippy::float_cmp)] // unit tests assert exact clamping/pass-through values, not computed floats
     use flui_rendering::view::ViewportOffset;
 
     use super::*;

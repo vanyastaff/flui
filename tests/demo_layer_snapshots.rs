@@ -58,19 +58,31 @@
 
 #![cfg(all(feature = "material", feature = "cupertino"))]
 
-#[allow(dead_code, unused_imports)]
+#[expect(dead_code)]
+#[allow(
+    unused_imports,
+    reason = "demo source included by path: which of its imports are live depends on the enabled catalog features"
+)]
 #[path = "../examples/colored_box_app.rs"]
 mod colored_box_app;
 #[path = "../examples/cupertino_demo/tree.rs"]
 mod cupertino_demo;
 #[path = "../examples/material_demo/tree.rs"]
 mod material_demo;
-#[allow(dead_code, unused_imports)]
+#[expect(dead_code)]
+#[allow(
+    unused_imports,
+    reason = "demo source included by path: which of its imports are live depends on the enabled catalog features"
+)]
 #[path = "../examples/text_app.rs"]
 mod text_app;
 #[path = "../examples/vertical_slice_demo/tree.rs"]
 mod vertical_slice_demo;
-#[allow(dead_code, unused_imports)]
+#[expect(dead_code)]
+#[allow(
+    unused_imports,
+    reason = "demo source included by path: which of its imports are live depends on the enabled catalog features"
+)]
 #[path = "../examples/widgets_gallery.rs"]
 mod widgets_gallery;
 

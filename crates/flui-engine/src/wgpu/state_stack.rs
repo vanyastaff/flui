@@ -413,12 +413,6 @@ impl GpuStateStack {
     /// used to clamp the scissor to the surface bounds. It is passed as a
     /// parameter rather than stored on the stack so the painter remains the
     /// single owner of the surface dimensions.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel-space truncation: values are clamped to ≥0.0 before cast so sign loss \
-                  is impossible; truncation is intentional floor-to-pixel behaviour"
-    )]
     pub(super) fn clip_rect(&mut self, rect: Rect<Pixels>, surface_size: (u32, u32)) {
         let transform = self.current_transform;
 
@@ -504,10 +498,6 @@ impl GpuStateStack {
     /// clip (the two kinds are mutually exclusive per-instance).
     ///
     /// Also applies a bounding-box `clip_rect` for early rasterizer rejection.
-    #[allow(
-        clippy::similar_names,
-        reason = "r_tl/r_tr/r_br/r_bl mirror the rrect-corner field names; renaming would obscure intent"
-    )]
     pub(super) fn clip_rrect(&mut self, rrect: RRect, surface_size: (u32, u32)) {
         let rect = rrect.rect;
 
@@ -642,10 +632,6 @@ impl GpuStateStack {
         // Exact equality against the all-zero "no clip active" sentinel is
         // intentional: the field is set bit-exact whenever the clip is
         // cleared, never via arithmetic that would introduce ULP noise.
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact 'no clip' sentinels"
-        )]
         let superellipse_active = self.current_rsuperellipse_clip != [0.0; 12];
         if superellipse_active {
             return ResolvedClip {
@@ -654,10 +640,6 @@ impl GpuStateStack {
                 device_to_local: self.current_clip_inv,
             };
         }
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact 'no clip' sentinels"
-        )]
         let rrect_active = self.current_rrect_clip != [0.0; 8];
         if rrect_active {
             ResolvedClip {

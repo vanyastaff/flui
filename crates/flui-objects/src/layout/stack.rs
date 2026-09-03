@@ -470,12 +470,6 @@ impl RenderBox for RenderStack {
         // Pass 2 — position non-positioned children (align inside size)
         // and lay out + position the positioned ones.
         // -----------------------------------------------------------------
-        #[allow(
-            clippy::needless_range_loop,
-            reason = "`ctx.layout_child(i, _)` / `ctx.position_child(i, _)` \
-                      both consume the index; an .enumerate() iterator would \
-                      not help readability and would still need the index."
-        )]
         for i in 0..child_count {
             match specs[i] {
                 None => {

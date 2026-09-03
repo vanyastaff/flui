@@ -886,7 +886,7 @@ fn header_cell(
 /// [`InkWell`] when the cell or its row is tappable. Flutter parity:
 /// `_buildDataCell` (edit-icon/placeholder omitted — see the module docs).
 /// `data_table.dart`, oracle tag `3.44.0`.
-#[allow(clippy::too_many_arguments)] // mirrors the oracle's own per-cell parameter list; a patch struct would only relocate this
+#[expect(clippy::too_many_arguments)] // mirrors the oracle's own per-cell parameter list; a patch struct would only relocate this
 fn data_cell(
     cell: &DataCell,
     numeric: bool,

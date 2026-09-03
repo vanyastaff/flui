@@ -7,7 +7,7 @@
 // `unsafe` FFI islands — `wasm-bindgen`'s JS interop requires it. The
 // workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary, rather than for the whole crate (see `lib.rs`).
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 mod clipboard;
 mod display;

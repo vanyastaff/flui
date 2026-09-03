@@ -140,7 +140,7 @@
 // exposes `Arc`-shaped handles at the arena/member seams. Do not restore
 // `Send + Sync` to executable callbacks to satisfy this lint; a future focused
 // pass can migrate the owner-local handle graph to `Rc`.
-#![allow(clippy::arc_with_non_send_sync)]
+#![expect(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Core infrastructure modules
@@ -309,7 +309,6 @@ pub mod prelude {
     pub use flui_types::geometry::{Offset, Rect};
 
     // Gesture recognition
-    #[allow(ambiguous_glob_reexports)]
     pub use crate::arena::*;
     // Events (W3C-compliant)
     pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent};
@@ -358,7 +357,7 @@ mod static_assertions {
     use super::*;
 
     // Helper trait for static assertions
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     trait AssertSendSync: Send + Sync {}
 
     // IDs should be Send + Sync (they are Copy)

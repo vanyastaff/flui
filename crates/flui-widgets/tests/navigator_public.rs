@@ -16,7 +16,7 @@
 // ADR-0027: these public API tests capture owner-local `NavigatorHandle`s in
 // test cells. The production crate has the same lint allowance; integration
 // tests are separate crates, so repeat it here.
-#![allow(clippy::arc_with_non_send_sync)]
+#![expect(clippy::arc_with_non_send_sync)]
 
 use std::rc::Rc;
 use std::sync::Arc;

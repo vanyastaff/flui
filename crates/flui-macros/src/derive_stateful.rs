@@ -42,7 +42,7 @@ use syn::{DeriveInput, parse_quote};
 ///
 /// See [`crate::derive_stateless::expand`] for the rationale behind the
 /// `&DeriveInput` shape and the `syn::Result` future-proofing wrap.
-#[allow(
+#[expect(
     clippy::unnecessary_wraps,
     reason = "future-proof against attribute parsing"
 )]

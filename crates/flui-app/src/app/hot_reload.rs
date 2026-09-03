@@ -128,7 +128,7 @@ mod enabled {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    pub(crate) struct RebuildHookGuard(#[allow(dead_code)] Option<RebuildHookRegistration>);
+    pub(crate) struct RebuildHookGuard(#[expect(dead_code)] Option<RebuildHookRegistration>);
 
     /// The desktop worker-plugin driver, shared between the bootstrap and the
     /// per-frame callback. `Clone` shares the underlying driver.
@@ -222,7 +222,7 @@ mod enabled {
             // and dropped inside this block, while `driver` (owning the
             // library) outlives it. See that method's `# Safety` for why this
             // cannot be a safe call.
-            #[allow(unsafe_code)]
+            #[expect(unsafe_code)]
             let built = unsafe { driver.build_scene(width, height) };
 
             let Some(scene) = built else {

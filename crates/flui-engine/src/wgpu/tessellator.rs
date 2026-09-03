@@ -103,7 +103,6 @@ impl lyon::tessellation::StrokeVertexConstructor<Vertex> for StrokeVertexConstru
 ///
 /// Converts vector paths into triangle meshes using Lyon.
 /// Provides both fill and stroke tessellation.
-#[allow(missing_debug_implementations)]
 pub struct Tessellator {
     /// Lyon fill tessellator
     fill_tessellator: FillTessellator,
@@ -436,7 +435,7 @@ impl Tessellator {
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
-    #[allow(clippy::similar_names)] // tl_x/tl_y, tr_x/tr_y, etc. are intentional corner names
+    #[expect(clippy::similar_names)] // tl_x/tl_y, tr_x/tr_y, etc. are intentional corner names
     pub fn tessellate_drrect(
         &mut self,
         outer: &RRect,
@@ -592,7 +591,6 @@ impl Tessellator {
     ///
     /// Builds a lyon path with independent corner arcs, supporting
     /// different radii for each corner of the rectangle.
-    #[allow(clippy::similar_names)]
     pub fn tessellate_rrect(
         &mut self,
         rrect: RRect,
@@ -950,7 +948,6 @@ impl Tessellator {
                 .map_err(|e| TessellationError::StrokeFailed(e.to_string()))?;
 
             // Offset indices for combined buffer
-            #[allow(clippy::cast_possible_truncation)]
             let base_vertex = all_vertices.len() as u32;
             all_vertices.extend_from_slice(&self.geometry.vertices);
             all_indices.extend(self.geometry.indices.iter().map(|i| i + base_vertex));

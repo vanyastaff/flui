@@ -6,7 +6,6 @@
 
 // Bench harness, not public API; `criterion_group!` generates the
 // undocumentable entry fn.
-#![allow(missing_docs)]
 
 use std::hint::black_box;
 

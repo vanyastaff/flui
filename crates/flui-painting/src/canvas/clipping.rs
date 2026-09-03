@@ -186,8 +186,7 @@ impl Canvas {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
+#[expect(
     clippy::panic,
     reason = "test code: expect/panic IS the assertion path"
 )]

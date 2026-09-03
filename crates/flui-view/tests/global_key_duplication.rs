@@ -47,7 +47,7 @@
 // around, and the owner graph is `!Send`. Do not restore `Send + Sync` to
 // satisfy clippy — the sibling `global_key.rs` carries the same waiver for the
 // same reason, and a future UiRealm/`Rc` migration removes both.
-#![allow(clippy::arc_with_non_send_sync)]
+#![expect(clippy::arc_with_non_send_sync)]
 
 use std::sync::Arc;
 

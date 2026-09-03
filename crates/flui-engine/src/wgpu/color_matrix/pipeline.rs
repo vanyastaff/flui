@@ -126,7 +126,6 @@ pub(crate) fn color_matrix_uniform_from_values(
 ///
 /// `REPLACE` (no fixed-function blending): the fragment shader emits the full
 /// premultiplied filtered texel directly.
-#[allow(missing_debug_implementations)]
 pub(crate) struct ColorMatrixPipeline {
     /// The single render pipeline (format-parametric at construction time).
     pub(crate) pipeline: wgpu::RenderPipeline,
@@ -205,7 +204,6 @@ impl ColorMatrixPipeline {
 // `float_cmp` fires on `assert_eq!` of f32 arrays; these tests verify exact
 // bit-identity of literals stored and read back through a struct — no arithmetic,
 // so equality is bit-exact and the comparison is correct.
-#[allow(clippy::float_cmp)]
 mod cpu_tests {
     use super::{color_matrix, color_matrix_uniform_from_values};
 

@@ -33,8 +33,8 @@
 // Ship bar (wave 3): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 // Crate-specific relaxations (same rationale as flui-rendering):
-#![allow(clippy::type_complexity)]
-#![allow(clippy::too_many_arguments)]
+#![expect(clippy::type_complexity)]
+#![expect(clippy::too_many_arguments)]
 
 mod image;
 mod interaction;

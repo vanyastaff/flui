@@ -54,7 +54,7 @@ impl DisplayListStats {
     }
 
     /// Creates a new statistics object with the specified counts.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub const fn new(
         total: usize,
         draw: usize,

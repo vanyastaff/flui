@@ -701,7 +701,6 @@ impl ScaffoldState {
     /// reschedule this `Scaffold`'s own rebuild (so the dynamic slot order
     /// and `on_drawer_changed` relay both react), and forward to the app
     /// author's callback.
-    #[allow(clippy::too_many_arguments, reason = "internal helper, not public API")]
     fn build_drawer_controller(
         &self,
         alignment: DrawerAlignment,

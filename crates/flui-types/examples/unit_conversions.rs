@@ -1,4 +1,4 @@
-#![allow(deprecated)]
+#![expect(deprecated)]
 // This target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
 //! Unit conversion example for flui_types
 //!

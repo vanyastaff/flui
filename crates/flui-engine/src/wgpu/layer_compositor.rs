@@ -33,7 +33,6 @@ use super::command_ir::{DrawItem, DrawSegment, ImageFilterSpec, LayerFilterChain
 /// GPU-emission path to follow.  All payloads are owned values so the painter
 /// can mutate its own fields after the compositor call returns — no aliasing.
 // `DrawSegment` / `Vec<DrawItem>` contain `wgpu::TextureView` which is not `Debug`.
-#[allow(missing_debug_implementations)]
 pub(super) enum RestoreOutcome {
     /// The layer had content AND needs a premultiplied offscreen composite
     /// (opacity ≠ 1.0, non-white tint, or advanced blend mode).  The painter
@@ -113,7 +112,6 @@ pub(super) enum RestoreOutcome {
 /// book-keeping: snapshot into `SavedLayer` on push, restore + branch decision
 /// on pop.  Never touches GPU, `draw_order`, or `current_segment` directly.
 // `Vec<SavedLayer>` contains `DrawSegment` → `wgpu::TextureView` which is not `Debug`.
-#[allow(missing_debug_implementations)]
 pub(super) struct LayerCompositor {
     /// Vestigial legacy opacity stack.
     ///
@@ -202,7 +200,7 @@ impl LayerCompositor {
     ///
     /// After this call `current_opacity` is `1.0`; children inside the layer
     /// draw at full opacity and group opacity is applied during compositing.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "all arguments are load-bearing: draw-order snapshot, opacity, tint, blend, \
                   bounds, and filter must all be stored on the SavedLayer; the alternative \

@@ -368,7 +368,7 @@ where
         self.inner.on_id_change(old, new, context);
     }
 
-    #[allow(
+    #[expect(
         unsafe_code,
         reason = "forwards tracing-subscriber's type-erased layer lookup without changing the pointer"
     )]

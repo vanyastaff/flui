@@ -110,11 +110,6 @@ mod gpu_tests {
     /// 2. `output = M × straight + offset`, clamped per-channel to `[0, 1]`.
     /// 3. Repremultiply: `(r×a, g×a, b×a, a)`.
     /// 4. Quantise via `round(x × 255)`.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "values are clamped to [0,1] and multiplied by 255 before rounding; fits u8"
-    )]
     fn color_matrix_oracle(matrix: &[f32; 20], straight_rgba: [f32; 4]) -> [u8; 4] {
         let m = matrix;
         let [sr, sg, sb, sa] = straight_rgba;
@@ -288,11 +283,6 @@ mod gpu_tests {
 
         // Named halo pixel: 3 px outside the left edge of the content rect, at mid-height.
         // Content rect left = CONTENT_MARGIN_PX (=20 px). Halo pixel col = 20-3 = 17.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "CONTENT_MARGIN_PX=20 and offset=3 are small positive consts; fits usize"
-        )]
         let halo_col = CONTENT_MARGIN_PX as usize - 3;
         let halo_row = (SURFACE_H / 2) as usize;
         let halo_pixel_idx = halo_row * row_stride + halo_col;

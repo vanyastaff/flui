@@ -14,7 +14,7 @@
 //! republish → `ThemeMode::System` re-resolution).
 
 // `unwrap` in test code: a panic IS the failure report (docs/PANIC-POLICY.md).
-#![allow(clippy::unwrap_used)]
+#![expect(clippy::unwrap_used)]
 
 mod common;
 

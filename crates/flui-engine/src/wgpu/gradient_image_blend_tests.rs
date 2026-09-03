@@ -114,11 +114,6 @@ mod gpu_tests {
     fn oracle_premultiplied(src: Color, dst: Color, mode: BlendMode) -> [u8; 4] {
         let blended = src.blend(dst, mode);
         let [r, g, b, a] = blended.to_f32_array();
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value is clamped to [0,1]*255 then rounded — truncation is safe"
-        )]
         let to_u8 = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
         [to_u8(r * a), to_u8(g * a), to_u8(b * a), to_u8(a)]
     }

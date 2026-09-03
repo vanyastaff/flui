@@ -1130,10 +1130,6 @@ impl ElementTree {
     /// of the rest of the slab without aliasing, then puts it back in the
     /// same iteration. Returns `None` for a stale/absent id or an
     /// already-empty slot (a re-entrant take is a framework bug).
-    #[allow(
-        dead_code,
-        reason = "consumed by the build-context wiring (PR-K wire-real)"
-    )]
     pub(crate) fn take_element(&mut self, id: ElementId) -> Option<ElementKind> {
         let index = self.resolve_index(id)?;
         self.nodes.get_mut(index)?.kind.take()
@@ -1143,10 +1139,6 @@ impl ElementTree {
     /// node `id`'s slot. No-op for a stale/absent id (cannot happen on the
     /// build path: the node is re-addressed by the same id taken moments
     /// earlier).
-    #[allow(
-        dead_code,
-        reason = "consumed by the build-context wiring (PR-K wire-real)"
-    )]
     pub(crate) fn put_element(&mut self, id: ElementId, kind: ElementKind) {
         if let Some(index) = self.resolve_index(id)
             && let Some(node) = self.nodes.get_mut(index)

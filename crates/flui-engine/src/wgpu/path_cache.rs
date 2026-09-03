@@ -145,13 +145,7 @@ impl PathCache {
             1.0
         };
         // Two-decimal bucket; `round` keeps adjacent sub-pixel scales together.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "s>0 and bounded by texture limits; product is a small non-negative integer"
-        )]
-        let bucket = (s * 100.0).round() as u64;
-        bucket
+        (s * 100.0).round() as u64
     }
 
     /// Compute a hash for a path combined with paint properties AND the world

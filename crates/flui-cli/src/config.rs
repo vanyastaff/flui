@@ -224,7 +224,6 @@ pub struct BuildConfig {
 
 /// Build mode specific configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[expect(clippy::struct_excessive_bools, reason = "mirrors TOML config schema")]
 pub struct BuildModeConfig {
     /// Enable incremental compilation.
     #[serde(default)]

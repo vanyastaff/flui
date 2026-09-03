@@ -48,7 +48,7 @@
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![allow(clippy::struct_field_names)]
+#![expect(clippy::struct_field_names)]
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -171,7 +171,7 @@ impl KeyInterner {
 
     /// Mint the next `KeyId`. Bench-only — the production interner would
     /// either reuse `Key::new()`'s atomic counter or carry its own.
-    #[allow(dead_code)] // kept on the impl surface; intern() now uses mint_impl
+    #[expect(dead_code)] // kept on the impl surface; intern() now uses mint_impl
     fn mint(&mut self) -> KeyId {
         Self::mint_impl(&mut self.next_id)
     }
@@ -198,7 +198,7 @@ impl KeyInterner {
     /// this field so accounting stays a pure function of `NODE_COUNT`.
     #[inline]
     #[must_use]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn len(&self) -> usize {
         self.reverse.len()
     }
@@ -222,10 +222,10 @@ pub struct MockNode {
     /// Per-node id. `usize` not `ElementId` — the mock skips the production
     /// `NonZeroUsize` discipline because the bench never threads ids back
     /// through a real lifecycle.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub id: usize,
     /// 0..=7 in the production enum.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub kind: u8,
     /// `Option<Box<dyn ViewKey>>` — 16 bytes, fat pointer, heap-backed when
     /// `Some`. This is the baseline shape spec FR-022 commits to, pending
@@ -235,7 +235,7 @@ pub struct MockNode {
     /// `Vec` so the mock matches the production `Variable`-arity shape — the
     /// keyed reconciler's hot path walks a `&[ElementId]` slice over this
     /// vector's contents.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub child_indices: Vec<usize>,
 }
 
@@ -267,13 +267,13 @@ impl MockNode {
 /// has been hoisted into the [`KeyInterner`].
 #[derive(Debug)]
 pub struct MockNodeInterned {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub id: usize,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub kind: u8,
     /// `Option<KeyId>` — 8 bytes via `NonZeroU64` niche.
     pub key: Option<KeyId>,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub child_indices: Vec<usize>,
 }
 

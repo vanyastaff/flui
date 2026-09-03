@@ -156,7 +156,7 @@ enum Phase {
 
 // Field names keep Flutter's `onTapDown`/`onDragStart`-style callback names
 // (parity with `BaseTapAndDragGestureRecognizer`).
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct TapDragCallbacks {
     on_tap_down: Option<TapDragDownCallback>,

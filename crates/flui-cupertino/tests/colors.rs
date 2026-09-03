@@ -9,7 +9,7 @@
 //! actual tag-3.44.0 value is `(10, 132, 255)`, one digit away from the
 //! superficially-plausible `(9, 132, 255)`.
 
-#![allow(clippy::unwrap_used)]
+#![expect(clippy::unwrap_used)]
 
 mod common;
 

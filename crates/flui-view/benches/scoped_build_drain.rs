@@ -2,7 +2,6 @@
 //! of foreign scope/heap combinations.
 
 // Bench harness, not public API; Criterion generates the entry function.
-#![allow(missing_docs)]
 
 use std::sync::Arc;
 

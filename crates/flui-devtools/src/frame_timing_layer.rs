@@ -73,7 +73,7 @@ fn phase_for(name: &str) -> Option<FramePhase> {
 /// collide with another layer storing the same type in the same extensions map.
 // The field is never read on purpose: the guard records the phase duration when
 // it is *dropped*, which is the whole mechanism.
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct ActivePhase(PhaseGuard);
 
 /// Subscriber layer that turns the framework's frame spans into

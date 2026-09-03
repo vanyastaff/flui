@@ -2,7 +2,7 @@
 //!
 //! This module is part of the widgets layer, matching Flutter's architecture
 //! where `ObjectKey` is defined in `widgets/framework.dart`.
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::{any::Any, fmt, sync::Arc};
 

@@ -245,7 +245,7 @@ mod tests {
         data: u32,
         // The callback cannot implement `PartialEq`; equality is computed
         // only on `data`, silently ignoring the handler — the trap.
-        #[allow(dead_code)] // held to model a real callback-carrying view
+        #[expect(dead_code)] // held to model a real callback-carrying view
         handler: std::rc::Rc<dyn Fn()>,
     }
 

@@ -21,13 +21,12 @@ use flui_view::{StatelessView, View, WidgetsBinding};
 /// The tracing subscriber from the host doesn't propagate into dlopen'd
 /// plugins, so we use `android_log_sys` directly on Android and `eprintln`
 /// elsewhere.
-#[allow(unused_variables)]
 fn log(msg: &str) {
     #[cfg(target_os = "android")]
     {
         let tag = c"PluginPipeline";
         let msg_c = std::ffi::CString::new(msg).unwrap_or_default();
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe {
             android_log_sys::__android_log_write(
                 android_log_sys::LogPriority::INFO as i32,
@@ -57,7 +56,7 @@ fn log(msg: &str) {
 /// 1. `mount()` — Creates pipeline, mounts root widget
 /// 2. `draw_frame()` — Build → Layout → Paint → Scene (called per frame)
 /// 3. Drop — Cleans up element and render trees
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct PluginPipeline {
     widgets: WidgetsBinding,
     pipeline_owner: PipelineCell,

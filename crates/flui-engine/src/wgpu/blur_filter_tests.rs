@@ -143,15 +143,6 @@ mod gpu_tests {
     /// - B1 (dark-halo) would FAIL if the oracle used unpremul/repremul.
     /// - B3 (oracle match) would FAIL if the GPU diverged from the oracle.
     /// - B4 (zero-sigma) is verified with ABSOLUTE values, not oracle comparison.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss,
-        clippy::cast_possible_wrap,
-        reason = "sigma is small positive float; i32 offset fits for 64px grid; \
-                  u32→i32 casts are safe for the 64px test surface; \
-                  u8 clamping via f32 → u8::try_from is intentional"
-    )]
     fn blur_oracle_premul(
         source_pixels: &[[u8; 4]],
         surface_width: u32,
@@ -388,11 +379,6 @@ mod gpu_tests {
         // Ring pixel — at exactly DISC_RADIUS_PX - ceil(sigma) from the centre.
         // This is where the dark halo would manifest with an unpremul implementation.
         // With premul-direct the ring brightness is close to the centre.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "DISC_RADIUS_PX and SIGMA are small positive consts; result fits usize"
-        )]
         let ring_offset = (DISC_RADIUS_PX - SIGMA.ceil()) as usize;
         let ring_col = disc_center.0 as usize - ring_offset;
         let ring_pixel = pixels[disc_center.1 as usize * w + ring_col];
@@ -534,11 +520,6 @@ mod gpu_tests {
     /// **Fails if:** the shader uses the wrong sigma constant, wrong weight formula,
     /// wrong renormalisation, or diverges from the oracle premul contract.
     #[test]
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "test constants (CONTENT_MARGIN_PX=12, SURFACE_WIDTH=64) are far below u32::MAX; \
-                  usize→u32 casts for oracle call are safe here"
-    )]
     fn blur_oracle_match_within_3_lsb() {
         const SIGMA: f32 = 4.0;
         const CONTENT_MARGIN_PX: u32 = 12;
@@ -924,12 +905,6 @@ mod gpu_tests {
     /// **Fails if:** the vertex denominator is float grown width (bug #2), the composite
     /// shifts by `frac(grown_left)` (bug #1), or the decal UV forgets `fb_origin` (bug #3).
     #[test]
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss,
-        reason = "test geometry uses small integer constants; all casts are safe on a 64×64 surface"
-    )]
     fn blur_off_origin_halo_centred_on_content() {
         const SIGMA: f32 = 4.0;
 
@@ -1714,11 +1689,6 @@ mod gpu_tests {
     /// the sentinel path fires (nothing drawn → ASSERT B fails), or the clip is applied
     /// in full-frame coords against the fb-local attachment (wrong pixels clipped).
     #[test]
-    #[allow(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        reason = "constants are small positive u32/usize; all casts are safe on a 64×64 surface"
-    )]
     fn blur_clipped_rect_scissor_rebased_non_identity() {
         const SIGMA: f32 = 2.0;
         // kernel_radius(2.0) = ceil(2.0 × √3) = ceil(3.464) = 4

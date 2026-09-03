@@ -671,7 +671,7 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
     // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
     // (Single's zero-arg overload vs the indexed variant on other arities), so the
     // closure cannot be replaced by a method reference.
-    #[allow(clippy::redundant_closure_for_method_calls)]
+    #[expect(clippy::redundant_closure_for_method_calls)]
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         // The clip is a LAYER scope so it covers the child subtree —
         // canvas clips are run-local in the fragment paint model and

@@ -11,10 +11,6 @@ use std::path::PathBuf;
 
 /// Build options collected into a struct to avoid excessive bool parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "structured options for build configuration flags"
-)]
 pub struct BuildOptions {
     /// Build in release mode.
     pub release: bool,
@@ -35,10 +31,6 @@ pub struct BuildOptions {
 /// Returns an error if the build fails for the target platform.
 #[expect(
     clippy::fn_params_excessive_bools,
-    reason = "mirrors clap argument structure"
-)]
-#[expect(
-    clippy::needless_pass_by_value,
     reason = "mirrors clap argument structure"
 )]
 pub fn execute(
@@ -92,10 +84,6 @@ pub fn execute(
 #[expect(dead_code, reason = "progress-based build for future verbose mode")]
 #[expect(
     clippy::fn_params_excessive_bools,
-    reason = "mirrors clap argument structure"
-)]
-#[expect(
-    clippy::needless_pass_by_value,
     reason = "mirrors clap argument structure"
 )]
 pub fn execute_with_progress(

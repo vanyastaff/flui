@@ -132,7 +132,7 @@ impl WebWindow {
     /// Update tracked size (called from resize observer / events)
     // Unused until the web backend registers a ResizeObserver; the platform
     // currently dispatches only `Created` and `RedrawRequested`.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn update_size(&self, width: f32, height: f32) {
         let mut state = self.state.lock();
         state.width = width;
@@ -141,7 +141,7 @@ impl WebWindow {
 
     /// Update focus state (called from focus/blur events)
     // Unused until the web backend subscribes to focus/blur on the canvas.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn update_focus(&self, focused: bool) {
         self.state.lock().focused = focused;
     }

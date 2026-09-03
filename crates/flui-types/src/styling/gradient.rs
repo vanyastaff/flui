@@ -257,7 +257,6 @@ pub struct RadialGradient {
 
 impl RadialGradient {
     /// Creates a radial gradient.
-    #[allow(clippy::too_many_arguments)]
     #[inline]
     pub fn new(
         center: Alignment,

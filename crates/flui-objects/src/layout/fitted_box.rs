@@ -546,7 +546,7 @@ impl RenderBox for RenderFittedBox {
                 // Not a redundant closure: `paint_child` is inherent on PaintCx
                 // for both `Exact<1>` and `Variable`, so the bare path is
                 // ambiguous (E0034) and the lint's rewrite does not compile.
-                #[allow(clippy::redundant_closure_for_method_calls)]
+                #[expect(clippy::redundant_closure_for_method_calls)]
                 ctx.with_transform(transform, |ctx| ctx.paint_child());
             }
         };

@@ -204,11 +204,6 @@ mod gpu_tests {
         // filter_color = SRC; dst_straight = DST (straight-alpha input from layer).
         let blended = filter_color.blend(dst_straight, mode);
         // `blended` is straight-alpha; convert to premultiplied u8.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "values clamped to [0,1]*255 then rounded; truncation is safe"
-        )]
         let to_premul_u8 = |channel: u8, alpha: u8| -> u8 {
             let straight = f32::from(channel) / 255.0;
             let a = f32::from(alpha) / 255.0;
@@ -233,13 +228,7 @@ mod gpu_tests {
         } else {
             1.055 * linear.powf(1.0 / 2.4) - 0.055
         };
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value clamped to [0,1]*255 then rounded; truncation is safe"
-        )]
-        let result = (srgb.clamp(0.0, 1.0) * 255.0).round() as u8;
-        result
+        (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
     }
 
     /// SrgbToLinear oracle: sRGB → linear per channel; alpha unchanged.
@@ -250,13 +239,7 @@ mod gpu_tests {
         } else {
             ((srgb + 0.055) / 1.055).powf(2.4)
         };
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value clamped to [0,1]*255 then rounded; truncation is safe"
-        )]
-        let result = (linear.clamp(0.0, 1.0) * 255.0).round() as u8;
-        result
+        (linear.clamp(0.0, 1.0) * 255.0).round() as u8
     }
 
     // ── P1: Mode filter via producer path ─────────────────────────────────────

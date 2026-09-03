@@ -69,7 +69,7 @@ pub struct ExternalTextureEntry {
 /// Registry for external GPU textures
 ///
 /// Maps `flui_types::painting::TextureId` to GPU textures that can be rendered.
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct ExternalTextureRegistry {
     /// Registered textures by ID
     textures: HashMap<u64, ExternalTextureEntry>,

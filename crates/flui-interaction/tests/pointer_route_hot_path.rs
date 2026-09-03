@@ -1,6 +1,6 @@
 //! Hot-path regression tests for owner-routed pointer delivery.
 
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

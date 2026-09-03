@@ -687,7 +687,7 @@ impl ViewState<TabBar> for TabBarState {
 /// dispatches taps to `controller`/`on_tap`. Flutter parity: the relevant
 /// slice of `_TabBarState.build` (label wrapping, `_TabStyle`, `InkWell`,
 /// `Expanded`) — see the module docs for what is and is not ported.
-#[allow(clippy::too_many_arguments, reason = "internal helper, not public API")]
+#[expect(clippy::too_many_arguments, reason = "internal helper, not public API")]
 fn build_tab_cell(
     index: usize,
     tab: &Tab,

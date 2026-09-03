@@ -385,7 +385,7 @@ mod tests {
     fn test_build_result() {
         // Intentionally always-Ok: paired with `failure()` to exercise both
         // arms of `BuildResult`; the wrap is the point, not a smell.
-        #[allow(clippy::unnecessary_wraps)]
+        #[expect(clippy::unnecessary_wraps)]
         fn success() -> BuildResult<i32> {
             Ok(42)
         }

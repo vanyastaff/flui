@@ -241,11 +241,6 @@ impl std::fmt::Debug for SuperellipsePathCache {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test code: expect/panic IS the assertion path"
-)]
 mod tests {
     use flui_types::geometry::{Radius, Rect, px};
     use flui_types::painting::Path;

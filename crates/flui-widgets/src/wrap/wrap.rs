@@ -174,7 +174,7 @@ generic_render_view_element!(Wrap);
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
+    #![expect(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
 
     use flui_view::RenderView;
     use flui_view::ViewExt;

@@ -47,7 +47,7 @@ use crate::{
 ///
 /// When no plugin is loaded, [`build_scene()`](Self::build_scene) returns
 /// `None`, allowing the caller to fall back to a built-in scene.
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct HotReloadDriver {
     plugin: Option<ScenePlugin>,
     lib_path: PathBuf,
@@ -124,7 +124,7 @@ impl HotReloadDriver {
                         self.reload_count
                     );
                     // SAFETY: forwarded from this fn's own contract.
-                    #[allow(unsafe_code)]
+                    #[expect(unsafe_code)]
                     return unsafe { self.build_scene(width, height) };
                 }
                 tracing::warn!("HotReloadDriver: reload failed — plugin not available");
@@ -138,7 +138,7 @@ impl HotReloadDriver {
                     self.lib_path.display()
                 );
                 // SAFETY: forwarded from this fn's own contract.
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code)]
                 return unsafe { self.build_scene(width, height) };
             }
         }
@@ -159,7 +159,7 @@ impl HotReloadDriver {
     /// Forwards [`ScenePlugin::build_scene`]'s contract unchanged — see it for
     /// the obligations the caller must establish about host/plugin agreement
     /// and about dropping the `Scene` before the library is unloaded.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     pub unsafe fn build_scene(&self, width: f32, height: f32) -> Option<Scene> {
         // SAFETY: the caller of this fn has assumed the same obligations.
         self.plugin
@@ -200,7 +200,7 @@ impl HotReloadDriver {
     /// # Safety
     ///
     /// Forwards [`Self::build_scene`]'s contract unchanged.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     pub unsafe fn build_scene_or<F>(&self, width: f32, height: f32, fallback: F) -> Scene
     where
         F: FnOnce(f32, f32) -> Scene,

@@ -978,7 +978,7 @@ mod lifecycle_tests {
     // `drop_marks_node_disposed` observes the AtomicBool disposed flag through
     // a raw pointer after `drop_in_place` — deliberate, SAFETY-commented, and
     // confined to this test module.
-    #![allow(unsafe_code)]
+    #![expect(unsafe_code)]
 
     use crate::layer::{CanvasLayer, Layer};
 

@@ -48,7 +48,7 @@ static TICK: AtomicU32 = AtomicU32::new(0);
 // This IS the crate's whole point (a symbol `reload_lifecycle.rs` resolves
 // via `dlsym` after each dlopen) — the crate-type is `cdylib` specifically
 // to export it.
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 #[unsafe(no_mangle)]
 pub extern "C" fn fixture_tick() -> u32 {
     TICK.fetch_add(1, Ordering::SeqCst) + 1

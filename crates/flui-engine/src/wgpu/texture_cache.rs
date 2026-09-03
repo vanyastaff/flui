@@ -238,7 +238,7 @@ pub struct FrameMaintenance {
 /// // Next frame - reuse (cache hit, instant!)
 /// let texture = cache.get_or_load(texture_id).unwrap();
 /// ```
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct TextureCache {
     /// Cached textures by ID
     textures: HashMap<TextureId, CachedTexture>,
@@ -1055,10 +1055,6 @@ mod unit_tests {
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
-#[allow(
-    clippy::float_cmp,
-    reason = "tests assert exact expected values produced by exact arithmetic"
-)]
 mod tests {
     use super::*;
 

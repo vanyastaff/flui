@@ -133,7 +133,7 @@ mod android {
         let message = logcat_message(rendered);
 
         // The workspace warns on `unsafe_code`; logcat has no safe binding.
-        #[allow(unsafe_code, reason = "logcat is only reachable through NDK FFI")]
+        #[expect(unsafe_code, reason = "logcat is only reachable through NDK FFI")]
         // SAFETY: `__android_log_write` takes a priority integer and two
         // NUL-terminated C strings, reads them, and returns. `tag` and
         // `message` are owned `CString`s that outlive the call, so both

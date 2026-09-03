@@ -41,7 +41,7 @@
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![allow(clippy::ignore_without_reason)]
+#![expect(clippy::ignore_without_reason)]
 
 use std::sync::Arc;
 
@@ -329,7 +329,7 @@ fn test_full_integration() {
 // ═══════════════════════════════════════════════════════════════
 
 /// Helper: Run a test with platform cleanup
-#[allow(dead_code)]
+#[expect(dead_code)]
 fn with_platform<F>(test_fn: F)
 where
     F: FnOnce(Box<dyn flui_platform::Platform>),
@@ -341,7 +341,7 @@ where
 }
 
 /// Helper: Run a test with window cleanup
-#[allow(dead_code)]
+#[expect(dead_code)]
 fn with_window<F>(test_fn: F) -> Result<(), anyhow::Error>
 where
     F: FnOnce(Arc<dyn flui_platform::PlatformWindow>) -> Result<(), anyhow::Error>,

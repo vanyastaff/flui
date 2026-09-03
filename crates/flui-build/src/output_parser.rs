@@ -75,7 +75,6 @@ impl OutputParser for CargoParser {
         {
             let time_str = time_str.trim_end_matches('s');
             if let Ok(seconds) = time_str.parse::<f64>() {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let duration = (seconds * 1000.0) as u64;
                 return Some(BuildEvent::Completed {
                     task: "Rust compilation".to_string(),
@@ -208,7 +207,6 @@ impl OutputParser for WasmPackParser {
         {
             let time_str = time_str.trim_end_matches('s');
             if let Ok(seconds) = time_str.parse::<f64>() {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let duration = (seconds * 1000.0) as u64;
                 return Some(BuildEvent::Completed {
                     task: "WASM build".to_string(),
@@ -343,7 +341,6 @@ impl OutputParser for XcodeParser {
         {
             let time_str = time_str.trim_end_matches(']').trim_end_matches(" sec");
             if let Ok(seconds) = time_str.parse::<f64>() {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let duration = (seconds * 1000.0) as u64;
                 return Some(BuildEvent::Completed {
                     task: "Xcode build".to_string(),

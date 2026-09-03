@@ -222,11 +222,6 @@ mod gpu_tests {
     /// Mode oracle: `Color::blend(filter_color, dst_straight, mode)` → premul u8.
     fn mode_oracle(filter_color: Color, dst: Color, mode: BlendMode) -> [u8; 4] {
         let blended = filter_color.blend(dst, mode);
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "values clamped to [0,1]*255 then rounded; truncation is safe"
-        )]
         let to_premul = |ch: u8, alpha: u8| -> u8 {
             ((f32::from(ch) / 255.0) * (f32::from(alpha) / 255.0) * 255.0).round() as u8
         };
@@ -245,13 +240,7 @@ mod gpu_tests {
         } else {
             1.055 * linear.powf(1.0 / 2.4) - 0.055
         };
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value clamped to [0,1]*255 then rounded; truncation is safe"
-        )]
-        let result = (srgb.clamp(0.0, 1.0) * 255.0).round() as u8;
-        result
+        (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
     }
 
     fn srgb_to_linear_oracle(channel_srgb: u8) -> u8 {
@@ -261,13 +250,7 @@ mod gpu_tests {
         } else {
             ((srgb + 0.055) / 1.055).powf(2.4)
         };
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value clamped to [0,1]*255 then rounded; truncation is safe"
-        )]
-        let result = (linear.clamp(0.0, 1.0) * 255.0).round() as u8;
-        result
+        (linear.clamp(0.0, 1.0) * 255.0).round() as u8
     }
 
     // ── SC1: SceneBuilder → blur → pixels ─────────────────────────────────────
@@ -547,11 +530,6 @@ mod gpu_tests {
 
         // Luminance = 0.2126*R + 0.7152*G + 0.0722*B (ITU-R BT.709).
         // For opaque input, premul == straight.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "luminance in [0,1]*255; truncation is safe"
-        )]
         let luminance = (0.2126 * f32::from(layer_color.r)
             + 0.7152 * f32::from(layer_color.g)
             + 0.0722 * f32::from(layer_color.b)) as u8;

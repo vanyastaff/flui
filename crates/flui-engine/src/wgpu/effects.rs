@@ -481,7 +481,7 @@ const KERNEL_RADIUS_PER_SIGMA: f32 = 1.732_050_8;
 /// Single authoritative home for the blur-pass driver (`apply_blur`) and the
 /// CPU oracle in `blur_filter_tests` — do NOT compute `ceil(sigma * N)` inline
 /// at other call sites.
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     // non-negative result: sigma > 0.0 guard ensures (sigma * √3).ceil() ≥ 0;
@@ -496,10 +496,6 @@ pub(crate) fn kernel_radius(sigma: f32) -> u32 {
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
-#[allow(
-    clippy::float_cmp,
-    reason = "tests assert exact expected values produced by exact arithmetic"
-)]
 mod tests {
     use super::*;
 

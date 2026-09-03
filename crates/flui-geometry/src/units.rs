@@ -1143,7 +1143,6 @@ impl From<i32> for DevicePixels {
 
 impl From<u32> for DevicePixels {
     #[inline]
-    #[allow(clippy::cast_possible_wrap)]
     fn from(value: u32) -> Self {
         Self(value as i32)
     }
@@ -1151,7 +1150,6 @@ impl From<u32> for DevicePixels {
 
 impl From<usize> for DevicePixels {
     #[inline]
-    #[allow(clippy::cast_possible_wrap)]
     fn from(value: usize) -> Self {
         Self(value as i32)
     }

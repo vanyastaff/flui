@@ -29,19 +29,39 @@ mod material_demo;
 #[path = "vertical_slice_demo/tree.rs"]
 mod vertical_slice_demo;
 
-#[allow(dead_code, unused_imports)]
+#[expect(dead_code)]
+#[allow(
+    unused_imports,
+    reason = "demo source included by path: which of its imports are live depends on the enabled catalog features"
+)]
 #[path = "animated_box_app.rs"]
 mod animated_box_app;
-#[allow(dead_code, unused_imports)]
+#[expect(dead_code)]
+#[allow(
+    unused_imports,
+    reason = "demo source included by path: which of its imports are live depends on the enabled catalog features"
+)]
 #[path = "colored_box_app.rs"]
 mod colored_box_app;
-#[allow(dead_code, unused_imports)]
+#[expect(dead_code)]
+#[allow(
+    unused_imports,
+    reason = "demo source included by path: which of its imports are live depends on the enabled catalog features"
+)]
 #[path = "sliver_demo.rs"]
 mod sliver_demo_app;
-#[allow(dead_code, unused_imports)]
+#[expect(dead_code)]
+#[allow(
+    unused_imports,
+    reason = "demo source included by path: which of its imports are live depends on the enabled catalog features"
+)]
 #[path = "text_app.rs"]
 mod text_app;
-#[allow(dead_code, unused_imports)]
+#[expect(dead_code)]
+#[allow(
+    unused_imports,
+    reason = "demo source included by path: which of its imports are live depends on the enabled catalog features"
+)]
 #[path = "widgets_gallery.rs"]
 mod widgets_gallery;
 

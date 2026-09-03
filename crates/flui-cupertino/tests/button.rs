@@ -2,8 +2,6 @@
 //! swallow, the press-opacity timeline under a real vsync, and per-size
 //! geometry reaching the mounted render tree.
 
-#![allow(clippy::unwrap_used)]
-
 mod common;
 
 use std::cell::Cell;

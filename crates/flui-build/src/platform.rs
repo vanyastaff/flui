@@ -173,7 +173,7 @@ pub struct FinalArtifacts {
 /// External crates cannot implement this trait, which allows us to add methods
 /// in the future without breaking changes.
 // Sealed trait — only implemented within this crate, so Send bounds on futures are guaranteed.
-#[allow(async_fn_in_trait)]
+#[expect(async_fn_in_trait)]
 pub trait PlatformBuilder: private::Sealed + Send + Sync {
     /// Platform name
     fn platform_name(&self) -> &str;

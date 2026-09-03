@@ -145,11 +145,6 @@ mod gpu_tests {
         let out_b = (v[10] * sr + v[11] * sg + v[12] * sb + v[13] * sa + v[14]).clamp(0.0, 1.0);
         let out_a = (v[15] * sr + v[16] * sg + v[17] * sb + v[18] * sa + v[19]).clamp(0.0, 1.0);
         // Re-premultiply.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "values clamped to [0,1]*255 then rounded; truncation is safe"
-        )]
         let to_u8 = |x: f32| (x * 255.0).round() as u8;
         [
             to_u8(out_r * out_a),

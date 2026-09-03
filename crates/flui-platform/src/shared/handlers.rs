@@ -204,7 +204,7 @@ impl std::fmt::Debug for PlatformHandlers {
 // Per-Window Callbacks
 // ============================================================================
 
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 /// Per-window callback storage with one causal reentry queue.
 ///
 /// Each callback is stored in a `Mutex<Option<Box<dyn FnMut/FnOnce + Send>>>`.

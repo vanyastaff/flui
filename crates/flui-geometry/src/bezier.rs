@@ -213,7 +213,7 @@ impl QuadBez<Pixels> {
 
     /// Finds the nearest point on the curve to the given point using binary
     /// search. Reserved for future curve operations API.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     #[must_use]
     fn nearest_t(&self, point: Point<Pixels>, t0: f32, t1: f32, iterations: u32) -> Point<Pixels> {
         if iterations == 0 {
@@ -505,7 +505,7 @@ impl CubicBez<Pixels> {
 
     /// Finds the nearest point on the curve using subdivision.
     /// Reserved for future curve operations API.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     #[must_use]
     fn nearest_point_subdivision(
         &self,

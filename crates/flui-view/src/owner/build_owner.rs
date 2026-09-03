@@ -168,7 +168,7 @@ impl DirtyElement {
     /// `self.depth` directly (private field access from the same `impl`
     /// block), so the accessor stays on the surface for future
     /// `ElementOwner` consumers.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn depth(&self) -> usize {
         self.depth
     }
@@ -297,7 +297,6 @@ pub struct BuildOwner {
     /// re-borrowing the owner. Stored as `Arc` (not `Box`) so an
     /// `ExternalBuildScheduler` captured by an animation listener can clone
     /// and fire it as a frame request from outside a frame.
-    #[allow(clippy::type_complexity)]
     pub(crate) on_build_scheduled: Option<Arc<dyn Fn() + Send + Sync>>,
 
     /// Inbox of element ids and causes scheduled from *outside* a frame — an
@@ -420,7 +419,7 @@ impl InactiveElement {
     }
 
     /// Depth used to order finalization (deepest first).
-    #[allow(dead_code)] // Used by finalize_tree's sort, kept for symmetry.
+    // Used by finalize_tree's sort, kept for symmetry.
     pub(crate) fn depth(&self) -> usize {
         self.depth
     }

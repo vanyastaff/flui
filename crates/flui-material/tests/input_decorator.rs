@@ -18,7 +18,7 @@
 //! unit tests (`hover_blend_*`); this file only proves the `MouseRegion` is
 //! actually composed around the container, structurally.
 
-#![allow(clippy::unwrap_used)] // a panic IS the failure report in test code (docs/PANIC-POLICY.md)
+// a panic IS the failure report in test code (docs/PANIC-POLICY.md)
 
 mod common;
 

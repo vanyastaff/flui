@@ -16,11 +16,6 @@ use super::{
 
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
 // color channels, and buffer indices. These truncations are intentional.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 impl DrawBatcher {
     /// Record a filled rectangle or a stroked rectangle.
     //
@@ -379,7 +374,7 @@ impl DrawBatcher {
     /// `[radius; 4]` corner radii and the center±radius bounding rect, then
     /// returns early. The non-shader fill and stroke paths preserve the
     /// pre-extraction behavior.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/opacity are disjoint WgpuPainter \
                   fields passed as separate borrows; merging them into a context struct defeats \
@@ -721,7 +716,7 @@ impl DrawBatcher {
     ///
     /// Compositor layer opacity is folded into the color alpha before submission
     /// (the instanced pipeline has no opacity uniform), mirroring `oval`/`circle`.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state are disjoint WgpuPainter fields \
                   passed as separate borrows; arc geometry parameters are all necessary"

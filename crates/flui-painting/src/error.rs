@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn test_cow_string_static() {
         let err = PaintingError::invalid_gradient("static");
-        #[allow(clippy::panic)] // Test assertion
+        #[expect(clippy::panic)] // Test assertion
         let PaintingError::InvalidGradient { reason } = err else {
             panic!("Expected InvalidGradient variant");
         };
@@ -175,7 +175,7 @@ mod tests {
     fn test_cow_string_dynamic() {
         let dynamic = format!("dynamic {}", 42);
         let err = PaintingError::invalid_gradient(dynamic.clone());
-        #[allow(clippy::panic)] // Test assertion
+        #[expect(clippy::panic)] // Test assertion
         let PaintingError::InvalidGradient { reason } = err else {
             panic!("Expected InvalidGradient variant");
         };

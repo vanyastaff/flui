@@ -146,7 +146,7 @@ impl crate::parent_data::base::LogicalIndexParentData for SliverMultiBoxAdaptorP
 impl crate::parent_data::base::ParentData for SliverMultiBoxAdaptorParentData {
     // `private_interfaces`: `LogicalIndexParentData` is `pub(crate)` by design;
     // this method is pipeline-internal plumbing, not part of the public contract.
-    #[allow(private_interfaces)]
+    #[expect(private_interfaces)]
     fn as_logical_index_mut(
         &mut self,
     ) -> Option<&mut dyn crate::parent_data::base::LogicalIndexParentData> {
@@ -229,7 +229,7 @@ impl crate::parent_data::base::LogicalIndexParentData for SliverGridParentData {
 impl crate::parent_data::base::ParentData for SliverGridParentData {
     // `private_interfaces`: `LogicalIndexParentData` is `pub(crate)` by design;
     // this method is pipeline-internal plumbing, not part of the public contract.
-    #[allow(private_interfaces)]
+    #[expect(private_interfaces)]
     fn as_logical_index_mut(
         &mut self,
     ) -> Option<&mut dyn crate::parent_data::base::LogicalIndexParentData> {
@@ -312,7 +312,7 @@ impl crate::parent_data::base::LogicalIndexParentData for TreeSliverNodeParentDa
 impl crate::parent_data::base::ParentData for TreeSliverNodeParentData {
     // `private_interfaces`: `LogicalIndexParentData` is `pub(crate)` by design;
     // this method is pipeline-internal plumbing, not part of the public contract.
-    #[allow(private_interfaces)]
+    #[expect(private_interfaces)]
     fn as_logical_index_mut(
         &mut self,
     ) -> Option<&mut dyn crate::parent_data::base::LogicalIndexParentData> {

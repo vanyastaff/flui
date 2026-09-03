@@ -88,7 +88,6 @@ const _GENERATED_BLUR_CONTENT_RECT_UV_OFFSET_CHECK: () = {
 /// max/min and matrix operations are exact on texel-aligned samples.  Blur uses
 /// `Filtering` (bilinear): the Gaussian kernel naturally composes with bilinear
 /// interpolation without artefact.
-#[allow(missing_debug_implementations)]
 pub(crate) struct BlurPipeline {
     /// The single render pipeline (format-parametric at construction time).
     pub(crate) pipeline: wgpu::RenderPipeline,
@@ -205,10 +204,6 @@ mod cpu_tests {
 
     /// Round-trip: values written into the struct are readable from the same
     /// byte positions — proves the generated layout has no hidden reordering.
-    #[allow(
-        clippy::float_cmp,
-        reason = "comparing floats we just assigned from exact literals — bit identity is the invariant"
-    )]
     #[test]
     fn blur_uniforms_field_round_trips() {
         let u = blur::BlurUniforms::new([640.0, 480.0], 4.0, 1.0, [0.1, 0.2, 0.9, 0.8]);

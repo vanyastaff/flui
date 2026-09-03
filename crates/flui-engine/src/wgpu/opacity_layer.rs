@@ -52,7 +52,7 @@ use super::{
     texture_pool::PooledTexture,
 };
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 impl GpuReplay {
     /// Render a single [`DrawSegment`] into a fresh full-viewport pooled
     /// offscreen texture.
@@ -338,16 +338,7 @@ impl GpuReplay {
         // Denominator = INTEGER fb_dim, NOT grown.width() — using float grown width
         // gives the wrong scale when grown_bounds is fractional (the SSAA-tile bug
         // class). The integer fb_dim is exactly what the pool acquired.
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "fb_w/fb_h/vp_w/vp_h are u32 texture dims ≤ 16 M px; f32 precision \
-                      is sufficient for device-pixel coordinate remapping"
-        )]
         let scale_x = vp_w as f32 / fb_w as f32;
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "fb_h/vp_h are u32 texture dims ≤ 16 M px; f32 precision is sufficient"
-        )]
         let scale_y = vp_h as f32 / fb_h as f32;
         let origin_x = fb_x as f32;
         let origin_y = fb_y as f32;
@@ -697,11 +688,6 @@ impl GpuReplay {
                             resources,
                             encoder,
                         );
-                        #[allow(
-                            clippy::cast_precision_loss,
-                            reason = "vp_w/vp_h are u32 viewport dims; \
-                                      precision loss at >16 M pixels is acceptable"
-                        )]
                         let viewport_width_f32 = vp_w as f32;
                         let viewport_height_f32 = vp_h as f32;
                         let blend_op = AdvancedBlendOp {
@@ -807,10 +793,6 @@ impl GpuReplay {
                     //    frac(grown_left) (the composite-grid shift).
                     let (fb_origin_x, fb_origin_y) = op.fb_origin;
                     let (fb_w, fb_h) = op.fb_dim;
-                    #[allow(
-                        clippy::cast_precision_loss,
-                        reason = "fb coords are u32 pixel dims ≤ viewport; f32 precision is sufficient"
-                    )]
                     let dst_rect = flui_types::Rect::from_xywh(
                         flui_types::geometry::px(fb_origin_x as f32),
                         flui_types::geometry::px(fb_origin_y as f32),
@@ -935,11 +917,7 @@ impl GpuReplay {
     /// call drains and clears `self.texture_batch` before returning, so a
     /// depth-N+1 flush cannot leave instances that appear in the depth-N
     /// composite.
-    #[allow(
-        clippy::too_many_arguments,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
+    #[expect(clippy::too_many_arguments)]
     pub(in crate::wgpu) fn flush_opacity_layer(
         &mut self,
         mut layer: PendingOpacityLayer,
@@ -1017,25 +995,9 @@ impl GpuReplay {
             if let Some(surface_texture) = main_target.texture {
                 let o = layer.opacity.clamp(0.0, 1.0);
                 // UV remap: layer.bounds → [0,1] in viewport space.
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-                )]
                 let uv_left = layer.bounds.left().0 / vp_w as f32;
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-                )]
                 let uv_top = layer.bounds.top().0 / vp_h as f32;
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-                )]
                 let uv_right = layer.bounds.right().0 / vp_w as f32;
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-                )]
                 let uv_bottom = layer.bounds.bottom().0 / vp_h as f32;
 
                 let op = AdvancedBlendOp {
@@ -1103,25 +1065,9 @@ impl GpuReplay {
 
         // Use layer bounds as the destination rect; UV coordinates map the
         // bounds region from the full-viewport texture.
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-        )]
         let uv_left = layer.bounds.left().0 / vp_w as f32;
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-        )]
         let uv_top = layer.bounds.top().0 / vp_h as f32;
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-        )]
         let uv_right = layer.bounds.right().0 / vp_w as f32;
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-        )]
         let uv_bottom = layer.bounds.bottom().0 / vp_h as f32;
 
         let instance = super::instancing::TextureInstance::with_uv_tint_f32(
@@ -1175,7 +1121,7 @@ impl GpuReplay {
 ///
 /// No `_ =>` catch-all arm: the compiler forces a new match arm when Slice 2/3
 /// add `LayerFilter::Mode`/`LayerFilter::Gamma` variants.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn fold_layer_filter_chain(
     filters: &LayerFilterChain,
     input_tex: PooledTexture,
@@ -1271,7 +1217,7 @@ fn fold_layer_filter_chain(
 ///   `grown.width()`).
 /// - `viewport_size`, `surface_format`, `pipelines`, `resources`, `device`,
 ///   `encoder` — GPU context forwarded unchanged to every GPU pass arm.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "GPU pass fold threads device/encoder/pipeline/resources to every arm; \
               a context struct would add indirection without a semantic boundary"

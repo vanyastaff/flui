@@ -51,8 +51,6 @@
 //!   coarse "everything rebuilds" regression is caught, not silently
 //!   absorbed by an assertion that only checks the dependent side.
 
-#![allow(clippy::unwrap_used)]
-
 mod common;
 
 use std::cell::Cell;

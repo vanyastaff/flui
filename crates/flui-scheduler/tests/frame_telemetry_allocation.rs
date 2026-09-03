@@ -72,7 +72,7 @@ struct CountingAllocator;
 // thread drives everything), so the `Relaxed` counters are sound: program
 // order plus per-location coherence make the post-loop load observe every
 // bump.
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         bump(&ALLOC_COUNT, 1);

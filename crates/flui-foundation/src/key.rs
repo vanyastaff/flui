@@ -155,7 +155,7 @@ impl Key {
     // counter so every call returns a different value. Construction
     // routes through `Key::new()` (unique) or `Key::from_u64`
     // (deterministic).
-    #[allow(clippy::new_without_default)]
+    #[expect(clippy::new_without_default)]
     #[inline]
     pub fn new() -> Self {
         Self::new_with_counter(&KEY_COUNTER)
@@ -251,7 +251,7 @@ impl Key {
 
     /// Get the inner `NonZeroU64`
     #[inline]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) const fn inner(self) -> NonZeroU64 {
         self.0
     }
@@ -548,7 +548,7 @@ impl UniqueKey {
     // `Key::new` gets `#[must_use]` from the `Key` type's attribute;
     // `UniqueKey` has no type-level attribute, so mark the constructor
     // directly — a discarded freshly-minted key only burns counter space.
-    #[allow(clippy::new_without_default)]
+    #[expect(clippy::new_without_default)]
     #[must_use = "keys should be used for widget identification"]
     pub fn new() -> Self {
         Self::new_with_counter(&UNIQUE_KEY_COUNTER)

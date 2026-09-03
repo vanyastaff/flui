@@ -51,7 +51,7 @@ use generated::gamma;
 /// - `source_tex` — premultiplied RGBA offscreen from `render_layer_to_offscreen`.
 /// - `viewport_size` — `(width, height)` in physical pixels; the output texture
 ///   is the same size as the source.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "GPU pass functions require device/encoder/pipeline/resources plus the operation inputs"
 )]

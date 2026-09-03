@@ -6,7 +6,7 @@
 // ADR-0027: ElementBuildContext's current test/prod seam still takes
 // Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
 // Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
-#![allow(clippy::arc_with_non_send_sync)]
+#![expect(clippy::arc_with_non_send_sync)]
 
 use std::{any::TypeId, rc::Rc, sync::Arc};
 
@@ -24,7 +24,7 @@ use static_assertions::assert_not_impl_any;
 
 #[derive(Clone)]
 struct SimpleView {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     name: String,
 }
 
@@ -42,7 +42,7 @@ impl View for SimpleView {
 
 #[derive(Clone)]
 struct ChildView {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     parent_name: String,
 }
 

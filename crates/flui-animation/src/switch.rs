@@ -77,7 +77,7 @@ struct AnimationSwitchInner {
     /// Callback when switched.
     on_switched: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Last reported value (for change detection).
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     last_value: Option<f32>,
     /// Last reported status.
     last_status: Option<AnimationStatus>,

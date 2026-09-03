@@ -156,13 +156,8 @@
 #![warn(clippy::expect_used)]
 #![warn(clippy::panic)]
 // Crate-specific exceptions (beyond workspace allows)
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::return_self_not_must_use)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::match_same_arms)]
+#![expect(clippy::uninlined_format_args)]
+#![expect(clippy::match_same_arms)]
 
 // Core modules
 pub mod binding;

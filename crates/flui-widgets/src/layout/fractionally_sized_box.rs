@@ -103,7 +103,7 @@ impl_render_view!(FractionallySizedBox);
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
+    // unit tests assert exact set-then-read values, not computed floats
 
     use flui_objects::FractionFactor;
     use flui_types::Alignment;

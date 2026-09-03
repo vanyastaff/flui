@@ -113,7 +113,7 @@
 // `[workspace.lints]`; crate-specific relaxations live here where they are
 // visible next to the code they cover. (The float-comparison / numeric-cast
 // family is allowed workspace-wide — see `[workspace.lints.clippy]`.)
-#![allow(clippy::many_single_char_names, clippy::wildcard_imports)]
+#![expect(clippy::many_single_char_names)]
 // Ship bar (wave 1): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 

@@ -48,9 +48,9 @@
 // Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
 // Crate-specific relaxations:
 // Rendering crate uses complex generic types for type-safe protocols
-#![allow(clippy::type_complexity)]
+#![expect(clippy::type_complexity)]
 // Some render objects have many configuration parameters
-#![allow(clippy::too_many_arguments)]
+#![expect(clippy::too_many_arguments)]
 // Ship bar (wave 3): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 

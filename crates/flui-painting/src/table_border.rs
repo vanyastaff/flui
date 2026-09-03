@@ -119,7 +119,7 @@ mod tests {
         assert_eq!(list.len(), 3, "commands: {list:?}");
 
         let cmds: Vec<_> = list.iter().collect();
-        #[allow(clippy::panic)] // Test assertion
+        #[expect(clippy::panic)] // Test assertion
         let DrawCommand::DrawPath { path, .. } = &cmds[0] else {
             panic!("expected the first command to be the vertical interior line path");
         };
@@ -131,7 +131,7 @@ mod tests {
             ][..]
         );
 
-        #[allow(clippy::panic)] // Test assertion
+        #[expect(clippy::panic)] // Test assertion
         let DrawCommand::DrawPath { path, .. } = &cmds[1] else {
             panic!("expected the second command to be the horizontal interior line path");
         };
@@ -164,7 +164,7 @@ mod tests {
 
         // The single (uniform) outer border rounds its OUTER rrect to the
         // requested 8px corners — the deferred-edge feature working end to end.
-        #[allow(clippy::panic)] // Test assertion
+        #[expect(clippy::panic)] // Test assertion
         let DrawCommand::DrawDRRect { outer, .. } = &cmds[0] else {
             panic!("expected a single uniform outer DrawDRRect; got {:?}", cmds);
         };
@@ -183,7 +183,7 @@ mod tests {
         let list = canvas.finish();
         let cmds: Vec<_> = list.iter().collect();
 
-        #[allow(clippy::panic)] // Test assertion
+        #[expect(clippy::panic)] // Test assertion
         let DrawCommand::DrawDRRect { outer, .. } = &cmds[0] else {
             panic!("expected a single uniform outer DrawDRRect; got {:?}", cmds);
         };

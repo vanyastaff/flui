@@ -10,7 +10,6 @@
 
 // Bench binary: criterion's generated main has no docs (house precedent:
 // the flui-view benches carry the same allow).
-#![allow(missing_docs)]
 
 use std::hint::black_box;
 use std::sync::Arc;

@@ -245,7 +245,7 @@ enum FocusNodeOwnership {
 #[derive(Clone)]
 // Ported property names (`autofocus`, `can_request_focus`) end with the widget's
 // own name; keeping Flutter's names beats a lint-driven rename.
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 pub struct Focus {
     child: BoxedView,
     node_ownership: FocusNodeOwnership,

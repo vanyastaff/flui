@@ -281,7 +281,7 @@ struct ResolvedDividerStyle {
 /// cascade, per field. Flutter parity: `this.height ?? dividerTheme.space ??
 /// defaults.space!` (and the `thickness`/`indent`/`endIndent`/`color`
 /// equivalents), `divider.dart`, oracle tag `3.44.0`.
-#[allow(clippy::too_many_arguments)] // mirrors the oracle's own per-field cascade; a patch struct would only relocate this
+// mirrors the oracle's own per-field cascade; a patch struct would only relocate this
 fn resolve_style(
     theme: &ThemeData,
     space: Option<f32>,

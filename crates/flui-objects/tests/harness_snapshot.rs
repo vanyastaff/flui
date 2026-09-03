@@ -321,7 +321,7 @@ fn snapshot_opacity_layer() {
 /// Each live child is a `RenderColoredBox` that paints exactly one `DrawRect`.
 /// Counting `DrawRect` lines in the snapshot gives the painted child count.
 #[test]
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn snapshot_lazy_sliver_visible_band() {
     use std::sync::Arc;
 
@@ -400,7 +400,7 @@ fn snapshot_lazy_sliver_visible_band() {
 /// Companion to [`snapshot_lazy_sliver_visible_band`], which only proves
 /// laziness at a fixed offset=0; this proves it holds across a scroll.
 #[test]
-#[allow(clippy::type_complexity)] // matches snapshot_lazy_sliver_visible_band's own item source type
+#[expect(clippy::type_complexity)] // matches snapshot_lazy_sliver_visible_band's own item source type
 fn scrolling_lazy_sliver_keeps_materialized_band_bounded_and_windowed() {
     use std::sync::Arc;
 

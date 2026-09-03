@@ -44,7 +44,7 @@ mod history;
 mod lifecycle;
 mod local_history;
 mod modal_route;
-#[allow(clippy::module_inception)]
+#[expect(clippy::module_inception)]
 mod navigator;
 mod observer;
 mod overlay_route;

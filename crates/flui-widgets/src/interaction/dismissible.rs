@@ -1042,7 +1042,7 @@ fn handle_drag_update(
 }
 
 /// Flutter parity: `_handleDragEnd` (`dismissible.dart:500`).
-#[allow(clippy::too_many_arguments)] // mirrors the oracle's own `_handleDragEnd`, which reaches the same seven pieces of state via `widget`/instance fields rather than parameters
+#[expect(clippy::too_many_arguments)] // mirrors the oracle's own `_handleDragEnd`, which reaches the same seven pieces of state via `widget`/instance fields rather than parameters
 fn handle_drag_end(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
@@ -1127,7 +1127,7 @@ fn handle_drag_end(
 /// site only ever observes a completion the direct-bypass site did not
 /// already consume (see `discard_transient_move_completion`'s doc for why a
 /// mid-drag `Completed` never reaches the deferred path's counter at all).
-#[allow(clippy::too_many_arguments)] // mirrors the oracle's own `_handleMoveCompleted`, which reaches the same six pieces of state via `widget`/instance fields rather than parameters
+// mirrors the oracle's own `_handleMoveCompleted`, which reaches the same six pieces of state via `widget`/instance fields rather than parameters
 fn run_move_completion(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
@@ -1174,7 +1174,7 @@ fn run_move_completion(
 /// `drag_underway` check for that reason: by the time this runs,
 /// `move_completed_runs` only ever counts completions the drag was not
 /// underway for.
-#[allow(clippy::too_many_arguments)] // mirrors `run_move_completion`'s arity — see its own note
+// mirrors `run_move_completion`'s arity — see its own note
 fn deliver_move_completion(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,

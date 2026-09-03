@@ -66,12 +66,6 @@ impl WgpuPainter {
     /// `(fb_origin, fb_dim)` where both components are `(u32, u32)` integer pixel
     /// coordinates.  `fb_dim` is clamped to `[1, viewport]` per axis so the pool
     /// acquire is always valid.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "grown_bounds coords are in [0, vp_dim] after viewport intersection; \
-                  floor/ceil of non-negative f32 ≤ u32::MAX fits safely in u32"
-    )]
     fn filter_fb_rect(&self, grown_bounds: Rect<Pixels>) -> ((u32, u32), (u32, u32)) {
         let (vp_w, vp_h) = self.size;
 
@@ -213,12 +207,6 @@ impl WgpuPainter {
             // These are the only values written by `RectInstance::rect` and
             // `::rounded_rect_corners` — never computed via arithmetic, so
             // ULP slop is not a concern.
-            #[expect(
-                clippy::float_cmp,
-                reason = "exact comparison against the bit-exact identity matrix [1,0,0,1] \
-                          written by RectInstance::rect / ::rounded_rect_corners; \
-                          never produced by arithmetic"
-            )]
             let is_identity_m = a == 1.0 && b == 0.0 && c == 0.0 && d == 1.0;
 
             // Exact bit comparison against zero is clippy-exempt (literal `0.0`).

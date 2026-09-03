@@ -97,7 +97,7 @@ impl RenderBox for SimpleRow {
         let constraints = *ctx.constraints();
         for i in 0..ctx.child_count() {
             let _ = ctx.layout_child(i, constraints);
-            #[allow(clippy::cast_precision_loss)] // test fixture, i < 3
+            #[expect(clippy::cast_precision_loss)] // test fixture, i < 3
             ctx.position_child(i, Offset::new(px(i as f32 * 50.0), px(0.0)));
         }
         constraints.constrain(Size::new(px(150.0), px(50.0)))

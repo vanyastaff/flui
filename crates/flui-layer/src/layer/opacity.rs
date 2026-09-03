@@ -168,7 +168,6 @@ impl OpacityLayer {
     ///
     /// Useful for GPU operations that expect integer alpha.
     #[inline]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn alpha_byte(&self) -> u8 {
         (self.alpha * 255.0).round() as u8
     }
@@ -214,10 +213,6 @@ impl OpacityLayer {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::float_cmp,
-    reason = "tests compare exact f32 values they just set; ULP slop would mask real regressions"
-)]
 mod tests {
     use flui_types::geometry::px;
 

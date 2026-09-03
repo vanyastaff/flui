@@ -272,9 +272,12 @@ impl Color {
     }
 
     #[inline]
-    #[allow(
-        dead_code,
-        reason = "scalar fallback for `lerp`; unused when a SIMD path is compiled in (e.g. --features simd on x86_64), used on every other target"
+    #[cfg_attr(
+        all(feature = "simd", target_arch = "x86_64", not(target_family = "wasm")),
+        expect(
+            dead_code,
+            reason = "scalar fallback for `lerp`; unused when the SIMD path is compiled in, used on every other target"
+        )
     )]
     fn lerp_scalar(a: Color, b: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
@@ -294,11 +297,14 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(
-        dead_code,
-        unsafe_code,
-        reason = "SIMD twin of `lerp_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `lerp`; SSE2 intrinsics require unsafe"
+    #[cfg_attr(
+        not(feature = "simd"),
+        expect(
+            dead_code,
+            reason = "SIMD twin of `lerp_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `lerp`"
+        )
     )]
+    #[expect(unsafe_code, reason = "SSE2 intrinsics require unsafe")]
     fn lerp_simd_sse(a: Color, b: Color, t: f32) -> Color {
         // SAFETY: gated on `target_feature = "sse2"`, so the intrinsics are
         // available; `_mm_storeu_ps` is an unaligned store into a live 4-f32
@@ -334,7 +340,7 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
-    #[allow(
+    #[expect(
         dead_code,
         unsafe_code,
         reason = "SIMD twin of `lerp_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `lerp`; NEON intrinsics require unsafe"
@@ -533,9 +539,12 @@ impl Color {
     }
 
     #[inline]
-    #[allow(
-        dead_code,
-        reason = "scalar fallback for `blend_over`; unused when a SIMD path is compiled in (e.g. --features simd on x86_64), used on every other target"
+    #[cfg_attr(
+        all(feature = "simd", target_arch = "x86_64", not(target_family = "wasm")),
+        expect(
+            dead_code,
+            reason = "scalar fallback for `blend_over`; unused when the SIMD path is compiled in, used on every other target"
+        )
     )]
     fn blend_over_scalar(&self, background: Color) -> Color {
         let alpha_src = self.a as f32 / 255.0;
@@ -559,11 +568,14 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(
-        dead_code,
-        unsafe_code,
-        reason = "SIMD twin of `blend_over_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `blend_over`; SSE2 intrinsics require unsafe"
+    #[cfg_attr(
+        not(feature = "simd"),
+        expect(
+            dead_code,
+            reason = "SIMD twin of `blend_over_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `blend_over`"
+        )
     )]
+    #[expect(unsafe_code, reason = "SSE2 intrinsics require unsafe")]
     fn blend_over_simd_sse(&self, background: Color) -> Color {
         // SAFETY: gated on `target_feature = "sse2"`, so the intrinsics are
         // available; `_mm_storeu_ps` is an unaligned store into a live 4-f32
@@ -620,7 +632,7 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
-    #[allow(
+    #[expect(
         dead_code,
         unsafe_code,
         reason = "SIMD twin of `blend_over_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `blend_over`; NEON intrinsics require unsafe"
@@ -799,7 +811,7 @@ impl Color {
     #[must_use]
     pub fn from_oklab(lab: Oklab, alpha: u8) -> Color {
         // `.round() as u8` saturates: clamping out-of-gamut channels.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
         #[inline]
         fn to_channel(c: f32) -> u8 {
             (linear_to_srgb(c).clamp(0.0, 1.0) * 255.0).round() as u8
@@ -841,7 +853,7 @@ impl Color {
             b: la.b + (lb.b - la.b) * t,
         };
         // Alpha is linear, same rounding contract as `lerp_scalar`.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
         let alpha = (f32::from(a.a) + (f32::from(b.a) - f32::from(a.a)) * t).round() as u8;
         Color::from_oklab(mixed, alpha)
     }

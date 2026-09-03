@@ -180,7 +180,7 @@ impl std::fmt::Debug for DragGestureRecognizer {
 }
 
 // Field names keep Flutter's `onDragStart`-style callback names (parity).
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct DragCallbacks {
     on_down: Option<DragDownCallback>,

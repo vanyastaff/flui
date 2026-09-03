@@ -140,7 +140,7 @@ impl BufferPool {
     /// `current_frame` is the recency-clock value stamped onto the acquired
     /// entry (taken by value, so the split-borrow accessor can hand it to both
     /// calls without an extra borrow).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn get_buffer_internal<'a>(
         device: &Device,
         queue: &wgpu::Queue,
@@ -191,7 +191,6 @@ impl BufferPool {
         #[cfg(debug_assertions)]
         {
             let total = *allocations + *reuses;
-            #[allow(clippy::cast_precision_loss)]
             let reuse_rate = if total == 0 {
                 0.0
             } else {
@@ -388,9 +387,7 @@ impl BufferPool {
         if total == 0 {
             0.0
         } else {
-            #[allow(clippy::cast_precision_loss)]
-            let rate = self.reuses as f32 / total as f32;
-            rate
+            self.reuses as f32 / total as f32
         }
     }
 
@@ -418,10 +415,6 @@ pub struct BufferPoolStats {
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
-#[allow(
-    clippy::float_cmp,
-    reason = "tests assert exact expected values produced by exact arithmetic"
-)]
 mod tests {
     use super::*;
 

@@ -337,7 +337,7 @@ pub(crate) struct FilterOp {
     // Retained for diagnostics: the composite arms now use fb_origin/fb_dim but
     // grown_bounds documents the fractional halo extent pre-quantisation and will
     // be needed by damage-tracking or future floating-point halo assertions.
-    #[allow(dead_code)]
+    #[cfg_attr(not(all(test, feature = "enable-wgpu-tests")), expect(dead_code))]
     pub(crate) grown_bounds: Rect<Pixels>,
     /// Integer-grid top-left of the offscreen intermediate in device pixels.
     ///
@@ -436,7 +436,6 @@ pub(crate) struct TessellatedBatch {
 /// Created by [`super::painter::WgpuPainter::queue_offscreen_result`] and consumed
 /// during [`super::painter::WgpuPainter::render`] after all other drawing is complete.
 // `wgpu::TextureView` and `PooledTexture` are not `Debug`; no derive possible.
-#[allow(missing_debug_implementations)]
 pub(crate) struct PendingOffscreenTexture {
     pub(crate) texture: PooledTexture,
     pub(crate) bounds: Rect<Pixels>,
@@ -450,7 +449,6 @@ pub(crate) struct PendingOffscreenTexture {
 /// the parent surface with the layer's opacity applied as a group.
 // `saved_draw_order: Vec<DrawItem>` is not `Debug` because `DrawItem::OffscreenTexture`
 // wraps `PooledTexture` which wraps a non-`Debug` `wgpu::Texture`.
-#[allow(missing_debug_implementations)]
 pub(crate) struct SavedLayer {
     /// Previous draw order (restored on pop)
     pub(crate) saved_draw_order: Vec<DrawItem>,
@@ -855,7 +853,6 @@ pub(crate) struct SsaaPathOp {
 /// or an SSAA-supersampled path tile.
 // `PendingOffscreenTexture` (via `OffscreenTexture` variant) is not `Debug`
 // because `PooledTexture` wraps a `wgpu::Texture`.
-#[allow(missing_debug_implementations)]
 pub(crate) enum DrawItem {
     /// A segment of instanced/tessellated/gradient draw commands.
     Segment(DrawSegment),
@@ -906,7 +903,6 @@ pub(crate) enum DrawItem {
 /// flushed to a pooled offscreen texture, then that texture is composited onto
 /// the main surface with the layer opacity applied as tint alpha.
 // `DrawItem` (via the `OffscreenTexture` variant containing `PooledTexture`) is not `Debug`.
-#[allow(missing_debug_implementations)]
 pub(crate) struct PendingOpacityLayer {
     /// Draw items accumulated between save_layer and restore_layer
     pub(crate) items: Vec<DrawItem>,

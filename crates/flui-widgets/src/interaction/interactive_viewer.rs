@@ -487,7 +487,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         self.pipeline_cell = ctx.pipeline_owner();
     }
 
-    #[allow(clippy::too_many_lines)] // one gesture-wiring build(); splitting fragments the callback capture set
+    #[expect(clippy::too_many_lines)] // one gesture-wiring build(); splitting fragments the callback capture set
     fn build(&self, view: &InteractiveViewer, _ctx: &dyn BuildContext) -> impl IntoView {
         let controller = view.controller.clone();
         let anchor = self.subtree_anchor.clone();
@@ -750,7 +750,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         local_focal_point: position,
                     });
                 }
-                #[allow(clippy::cast_possible_truncation)] // per-tick factors are near 1.0
+                #[expect(clippy::cast_possible_truncation)] // per-tick factors are near 1.0
                 let scale_change = scale as f32;
                 let value_before_zoom = controller_pinch.value();
                 if scale_enabled

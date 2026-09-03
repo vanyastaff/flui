@@ -264,7 +264,7 @@ pub enum Layer {
 
 impl Layer {
     /// Returns the bounds of this layer.
-    #[allow(clippy::match_same_arms)] // Each arm is documented separately for clarity
+    #[expect(clippy::match_same_arms)] // Each arm is documented separately for clarity
     pub fn bounds(&self) -> Option<Rect<Pixels>> {
         match self {
             Layer::Canvas(layer) => Some(layer.bounds()),
@@ -292,7 +292,7 @@ impl Layer {
     /// Returns true if this layer needs compositing.
     ///
     /// Compositing requires offscreen rendering and is more expensive.
-    #[allow(clippy::match_same_arms)] // Each arm is documented separately for clarity
+    #[expect(clippy::match_same_arms)] // Each arm is documented separately for clarity
     pub fn needs_compositing(&self) -> bool {
         match self {
             Layer::Canvas(_) => false,
@@ -352,7 +352,7 @@ impl Layer {
     ///
     /// Container/effect layers (clips, transforms, opacity, filters) return
     /// `false` because their visual output depends on their children.
-    #[allow(clippy::match_same_arms)]
+    #[expect(clippy::match_same_arms)]
     pub fn is_opaque(&self) -> bool {
         match self {
             // Canvas and Picture layers draw solid content into their bounds

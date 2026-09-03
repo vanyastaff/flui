@@ -25,7 +25,7 @@ impl TextPainter {
     /// Panics if [`layout`](super::TextPainter::layout) has not been
     /// called.
     #[must_use]
-    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
+    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_offset_for_caret(&mut self, position: TextPosition) -> Offset<Pixels> {
         let cache = self
             .layout_cache
@@ -44,7 +44,7 @@ impl TextPainter {
     /// Panics if [`layout`](super::TextPainter::layout) has not been
     /// called.
     #[must_use]
-    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
+    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_position_for_offset(&self, offset: Offset<Pixels>) -> TextPosition {
         let cache = self
             .layout_cache
@@ -62,7 +62,7 @@ impl TextPainter {
     /// Panics if [`layout`](super::TextPainter::layout) has not been
     /// called.
     #[must_use]
-    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
+    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_line_metrics(&self) -> Vec<LineMetrics> {
         let cache = self
             .layout_cache
@@ -79,7 +79,7 @@ impl TextPainter {
     /// Panics if [`layout`](super::TextPainter::layout) has not been
     /// called.
     #[must_use]
-    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
+    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_boxes_for_selection(&self, start: usize, end: usize) -> Vec<TextBox> {
         let cache = self
             .layout_cache
@@ -102,7 +102,7 @@ impl TextPainter {
     /// Panics if [`layout`](super::TextPainter::layout) has not been
     /// called.
     #[must_use]
-    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
+    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_word_boundary(&self, position: TextPosition) -> TextRange {
         let cache = self
             .layout_cache
@@ -120,7 +120,7 @@ impl TextPainter {
     ///
     /// Panics if [`layout`](super::TextPainter::layout) has not been
     /// called.
-    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first, text must be set
+    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first, text must be set
     pub fn paint(&self, canvas: &mut Canvas, offset: Offset<Pixels>) {
         // Check `text` first: it is the *root-cause* precondition.
         // If both `text` and `layout_cache` are unset, "text must be

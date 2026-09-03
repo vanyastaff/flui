@@ -111,7 +111,7 @@ struct PointerInfo {
     /// Current position
     current_position: Offset<Pixels>,
     /// Time when pointer went down
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     down_time: Instant,
     /// Whether pointer is still down
     is_down: bool,

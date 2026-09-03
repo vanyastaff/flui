@@ -86,7 +86,7 @@ impl RSuperellipse {
 
     /// Creates a rounded superellipse from edge coordinates with independent
     /// corner radii.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[inline]
     pub fn from_ltrb_and_corners(
         left: Pixels,
@@ -380,7 +380,7 @@ impl RSuperellipse {
     // ========================================================================
 
     #[inline]
-    #[allow(dead_code, clippy::unused_self)] // Helper for future contains() implementation
+    #[expect(dead_code, clippy::unused_self)] // Helper for future contains() implementation
     fn point_in_corner(&self, dx: f32, dy: f32, radius: Radius<Pixels>) -> bool {
         // Superellipse exponent (2.5 approximates iOS squircle)
         const N: f32 = 2.5;

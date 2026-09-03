@@ -244,8 +244,10 @@ impl ChangeNotifier {
                  called, the notifier can no longer be used"
             );
             // The release-only block is unreachable in debug builds because the
-            // `panic!` above diverges; `allow(unreachable_code)` documents that.
-            #[allow(unreachable_code)]
+            // `panic!` above diverges; the attribute below documents that. In release the
+            // `panic!` is compiled out, the block IS reachable, and no lint
+            // fires — hence `cfg_attr`, not a bare `expect`.
+            #[cfg_attr(debug_assertions, expect(unreachable_code))]
             {
                 tracing::warn!("ChangeNotifier used after dispose");
                 return true;
