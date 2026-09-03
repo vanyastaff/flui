@@ -109,14 +109,6 @@ pub trait RenderElementBase<A: ElementArity>: ElementBase {}
 /// it out of the behavior taxonomy without an unsealed `Box<dyn ElementBase>`.
 pub trait RootElementBase: ElementBase {}
 
-/// `ElementBase`-equivalent surface tagging an error-boundary element.
-///
-/// Companion to [`ElementKind::Error`]. `ErrorElement` is the leaf substituted
-/// when `build()` panics (C7 `catch_unwind` → `ErrorView`); it renders its
-/// message directly and has no children, so it is its own element kind rather
-/// than a behavior-family element.
-pub trait ErrorElementBase: ElementBase {}
-
 /// `ElementBase`-equivalent surface tagging an element that handles bubbling
 /// notifications.
 ///
@@ -219,8 +211,6 @@ where
     crate::view::RootRenderElement<V>: ElementBase,
 {
 }
-
-impl ErrorElementBase for crate::view::ErrorElement {}
 
 // ============================================================================
 // AnimationListener (Stateful variant extension)
@@ -366,10 +356,6 @@ pub enum ElementKind {
     /// bootstrap; a first-class kind distinct from the behavior families.
     /// See [`RootElementBase`].
     Root(Box<dyn RootElementBase>),
-    /// The error-boundary leaf substituted when `build()` panics
-    /// (`ErrorElement` over `ErrorView`, C7 `catch_unwind`). Renders its
-    /// message directly, no children. See [`ErrorElementBase`].
-    Error(Box<dyn ErrorElementBase>),
 }
 
 impl ElementKind {
@@ -498,7 +484,6 @@ impl ElementKind {
             Self::RenderOptional(e) => &**e,
             Self::RenderVariable(e) => &**e,
             Self::Root(e) => &**e,
-            Self::Error(e) => &**e,
         }
     }
 
@@ -520,7 +505,6 @@ impl ElementKind {
             Self::RenderOptional(e) => &mut **e,
             Self::RenderVariable(e) => &mut **e,
             Self::Root(e) => &mut **e,
-            Self::Error(e) => &mut **e,
         }
     }
 
@@ -543,7 +527,6 @@ impl ElementKind {
             Self::RenderOptional(e) => e,
             Self::RenderVariable(e) => e,
             Self::Root(e) => e,
-            Self::Error(e) => e,
         }
     }
 
@@ -560,7 +543,6 @@ impl ElementKind {
             Self::RenderOptional(_) => "RenderOptional",
             Self::RenderVariable(_) => "RenderVariable",
             Self::Root(_) => "Root",
-            Self::Error(_) => "Error",
         }
     }
 }
@@ -744,7 +726,6 @@ mod tests {
             ElementKind::RenderOptional(_) => 7,
             ElementKind::RenderVariable(_) => 8,
             ElementKind::Root(_) => 9,
-            ElementKind::Error(_) => 10,
         }
     }
 

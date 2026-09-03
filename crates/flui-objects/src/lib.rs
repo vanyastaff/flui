@@ -63,12 +63,13 @@ pub use layout::{
 
 // --- flat re-exports (proxy) ---
 pub use proxy::{
-    ClipGeometry, DecorationPosition, Oval, PathClipConfiguration, PathClipSourceToken,
-    RenderAnimatedOpacity, RenderBackdropFilter, RenderClip, RenderClipOval, RenderClipPath,
-    RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint, RenderDecoratedBox,
-    RenderFollowerLayer, RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity,
-    RenderPhysicalModel, RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations,
-    RenderShaderMask, RenderSubtreeAnchor, RenderVisibility, SubtreeAnchor,
+    ClipGeometry, DecorationPosition, ERROR_BOX_FALLBACK_EXTENT, Oval, PathClipConfiguration,
+    PathClipSourceToken, RenderAnimatedOpacity, RenderBackdropFilter, RenderClip, RenderClipOval,
+    RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint,
+    RenderDecoratedBox, RenderErrorBox, RenderFollowerLayer, RenderIgnoreBaseline,
+    RenderLeaderLayer, RenderOpacity, RenderPhysicalModel, RenderPhysicalShape,
+    RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask, RenderSubtreeAnchor,
+    RenderVisibility, SubtreeAnchor,
 };
 pub use proxy::{RenderExcludeSemantics, RenderMergeSemantics};
 

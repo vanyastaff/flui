@@ -988,3 +988,427 @@ fn lazy_list_view_builder_thousandfold_overestimate_fills_the_viewport_in_the_bo
         "every 1 px item across the 200 px viewport must be resident; got {resident_items}"
     );
 }
+
+// ============================================================================
+// GlobalKey'd items — the per-item repaint boundary must not claim the key
+// ============================================================================
+
+#[derive(Clone)]
+struct GlobalKeyedItem {
+    key: flui_view::GlobalKey<GlobalKeyedItemState>,
+    height: f32,
+}
+
+struct GlobalKeyedItemState {
+    height: f32,
+}
+
+impl StatefulView for GlobalKeyedItem {
+    type State = GlobalKeyedItemState;
+    fn create_state(&self) -> GlobalKeyedItemState {
+        GlobalKeyedItemState {
+            height: self.height,
+        }
+    }
+}
+
+impl ViewState<GlobalKeyedItem> for GlobalKeyedItemState {
+    fn build(&self, _view: &GlobalKeyedItem, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(200.0, self.height)
+    }
+}
+
+impl flui_view::View for GlobalKeyedItem {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        Some(&self.key)
+    }
+}
+
+/// An item carrying a `GlobalKey` mounts under the default per-item
+/// `RepaintBoundary`. The boundary forwards the item's key so the sliver can
+/// reconcile by it, but it must forward a *salted* key (Flutter's
+/// `_SaltedValueKey`): forwarding the raw `GlobalKey` made the boundary and
+/// the item both register it — a debug panic in
+/// `register_global_key_with_collision_check` on the item's own mount, and a
+/// duplicate report in release — so no lazy item could carry a `GlobalKey`
+/// at all.
+#[test]
+fn lazy_list_view_builder_mounts_a_global_keyed_item_under_the_repaint_boundary() {
+    let keys: Vec<flui_view::GlobalKey<GlobalKeyedItemState>> =
+        (0..3).map(|_| flui_view::GlobalKey::new()).collect();
+    let laid = lay_out(
+        ListView::builder(3, 48.0, move |i| {
+            (i < 3).then(|| {
+                GlobalKeyedItem {
+                    key: keys[i].clone(),
+                    height: 48.0,
+                }
+                .boxed()
+            })
+        }),
+        tight(200.0, 200.0),
+    );
+    // viewport + sliver + 3 × (boundary + item box)
+    assert_eq!(laid.render_node_count(), 2 + 3 * 2);
+}
+
+// ============================================================================
+// Keyed identity — insert, reorder, duplicate keys, and a GlobalKey graft
+// ============================================================================
+
+/// A keyed item whose state records which data id it was created for and
+/// how many times `init_state` ran across the whole test.
+#[derive(Clone)]
+struct KeyedRow {
+    id: u32,
+    key: flui_foundation::ValueKey<u32>,
+    inits: Arc<parking_lot::Mutex<Vec<u32>>>,
+}
+
+struct KeyedRowState {
+    born_as: u32,
+}
+
+impl StatefulView for KeyedRow {
+    type State = KeyedRowState;
+    fn create_state(&self) -> KeyedRowState {
+        KeyedRowState { born_as: self.id }
+    }
+}
+
+impl ViewState<KeyedRow> for KeyedRowState {
+    fn init_state(&mut self, _ctx: &dyn BuildContext) {}
+    fn build(&self, view: &KeyedRow, _ctx: &dyn BuildContext) -> impl IntoView {
+        // The paragraph carries the STATE's id (what the element was born as),
+        // so a remounted element reads differently from a preserved one.
+        view.inits.lock().push(view.id);
+        SizedBox::new(200.0, 48.0).child(Text::new(format!("row{}", self.born_as)))
+    }
+}
+
+impl flui_view::View for KeyedRow {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        Some(&self.key)
+    }
+}
+
+type Data = Arc<parking_lot::Mutex<Vec<u32>>>;
+
+fn keyed_list(
+    data: &Data,
+    inits: &Arc<parking_lot::Mutex<Vec<u32>>>,
+    with_callback: bool,
+) -> ListView {
+    let snapshot: Vec<u32> = data.lock().clone();
+    let count = snapshot.len();
+    let inits = Arc::clone(inits);
+    let rows = snapshot.clone();
+    let list = ListView::builder(count, 48.0, move |i| {
+        rows.get(i).map(|&id| {
+            KeyedRow {
+                id,
+                key: flui_foundation::ValueKey::new(id),
+                inits: Arc::clone(&inits),
+            }
+            .boxed()
+        })
+    });
+    if with_callback {
+        let rows = snapshot;
+        list.find_index_by_key(move |key| {
+            key.as_any()
+                .downcast_ref::<flui_foundation::ValueKey<u32>>()
+                .and_then(|k| rows.iter().position(|id| id == k.value()))
+        })
+    } else {
+        list
+    }
+}
+
+/// The id every on-stage row's STATE was born as, in list order.
+fn born_ids(laid: &LaidOut, ids: &[u32]) -> Vec<u32> {
+    let mut found: Vec<(f32, u32)> = ids
+        .iter()
+        .filter_map(|&id| {
+            laid.find_text(&format!("row{id}"))
+                .map(|node| (laid.absolute_offset(node).dy.get(), id))
+        })
+        .collect();
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    found.into_iter().map(|(_, id)| id).collect()
+}
+
+/// Insert at the head with `find_index_by_key`: every resident keyed row
+/// keeps its element (its state still reports the id it was born as), only
+/// the new row is created. Flutter needs `findChildIndexCallback` for the
+/// same guarantee; FLUI's callback only *widens* the set of indices to
+/// rebuild — the match itself is by key, so the rows that stayed in the
+/// band would have been preserved even without it (the next test).
+#[test]
+fn lazy_list_view_builder_keyed_insert_at_head_preserves_resident_state() {
+    let data: Data = Arc::new(parking_lot::Mutex::new((10..16).collect()));
+    let inits = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let mut laid = lay_out(keyed_list(&data, &inits, true), tight(200.0, 200.0));
+    assert_eq!(born_ids(&laid, &[10, 11, 12, 13]), vec![10, 11, 12, 13]);
+    let nodes_before = laid.render_node_count();
+
+    data.lock().insert(0, 99);
+    laid.pump_widget(keyed_list(&data, &inits, true));
+    assert_eq!(
+        born_ids(&laid, &[99, 10, 11, 12]),
+        vec![99, 10, 11, 12],
+        "rows shift down by one and keep the state they were born with"
+    );
+    // No row was remounted: every resident element is still the one it was
+    // born as (asserted above), and there is exactly one element per data
+    // row that is resident — no leaked duplicates from a remount.
+    let resident_rows = laid.count_elements_by_view_type::<KeyedRow>();
+    assert!(
+        resident_rows <= data.lock().len(),
+        "an insert must not leave duplicate row elements behind; got {resident_rows}"
+    );
+    let _ = nodes_before;
+}
+
+/// A swap inside the band without any callback: the two rows keep their
+/// elements (states born as their ids) and paint at each other's former
+/// offsets, and the render parent-data stamps follow — the sliver lays the
+/// list out with no duplicate-index assertion and evicts cleanly afterwards.
+#[test]
+fn lazy_list_view_builder_keyed_swap_within_the_band_preserves_state_without_a_callback() {
+    let data: Data = Arc::new(parking_lot::Mutex::new((10..16).collect()));
+    let inits = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let mut laid = lay_out(keyed_list(&data, &inits, false), tight(200.0, 200.0));
+    let top_of = |laid: &LaidOut, id: u32| {
+        laid.absolute_offset(laid.find_text(&format!("row{id}")).expect("resident"))
+            .dy
+            .get()
+    };
+    let (y11, y13) = (top_of(&laid, 11), top_of(&laid, 13));
+
+    data.lock().swap(1, 3);
+    laid.pump_widget(keyed_list(&data, &inits, false));
+    assert_eq!(born_ids(&laid, &[10, 13, 12, 11]), vec![10, 13, 12, 11]);
+    assert_eq!(top_of(&laid, 13), y11, "row 13 now paints where row 11 was");
+    assert_eq!(top_of(&laid, 11), y13, "row 11 now paints where row 13 was");
+    // A `set_state` inside a moved row replaces its render child: the fresh
+    // node must be stamped with the NEW index, or it paints at the old one.
+    laid.tick();
+    assert_eq!(top_of(&laid, 13), y11);
+
+    // Everything still evicts: jump far away and back.
+    laid.pump_widget(keyed_list(&data, &inits, false).offset(48.0 * 100.0));
+    laid.pump_widget(keyed_list(&data, &inits, false));
+    assert_eq!(born_ids(&laid, &[10, 13, 12, 11]).len(), 4);
+}
+
+/// Two items answering to the same local key in one band: the first claims
+/// the resident, the second is mounted fresh — no panic, no teleport.
+#[test]
+fn lazy_list_view_builder_duplicate_local_keys_first_wins_second_remounts() {
+    let inits = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let make = {
+        let inits = Arc::clone(&inits);
+        move || {
+            let inits = Arc::clone(&inits);
+            ListView::builder(4, 48.0, move |i| {
+                (i < 4).then(|| {
+                    KeyedRow {
+                        id: i as u32,
+                        // indices 1 and 2 share a key
+                        key: flui_foundation::ValueKey::new(if i == 2 { 1 } else { i as u32 }),
+                        inits: Arc::clone(&inits),
+                    }
+                    .boxed()
+                })
+            })
+        }
+    };
+    let mut laid = lay_out(make(), tight(200.0, 200.0));
+    assert_eq!(born_ids(&laid, &[0, 1, 2, 3]), vec![0, 1, 2, 3]);
+    laid.pump_widget(make());
+    assert_eq!(
+        born_ids(&laid, &[0, 1, 2, 3]),
+        vec![0, 1, 2, 3],
+        "a duplicate key remounts the second item in place instead of moving the first"
+    );
+}
+
+/// A `GlobalKey`'d item that one lazy list stops building and another starts
+/// building in the same frame moves between them — the second list's mount
+/// retakes it (from the first list's still-active resident, or from the
+/// inactive queue if the first list already let it go) — and the first list
+/// forgets it (Flutter's `forgetChild`), so its later band eviction never
+/// reaches into the other list's subtree. Observable: exactly one element,
+/// its state intact, and both lists still evicting cleanly afterwards.
+///
+/// The lists run without the per-item repaint boundary so the keyed item
+/// *is* the resident root. With the boundary on, the root is the boundary
+/// (carrying a salted, non-global key) and an eviction unmounts its whole
+/// subtree at once — FLUI has no equivalent of Flutter's deactivate-then-
+/// retake for a `GlobalKey`'d *descendant* of a removed unkeyed subtree, in
+/// lazy and dense trees alike. That gap is recorded in the design notes
+/// for #530; it is not this slice's.
+#[derive(Clone)]
+struct TwoLists {
+    keyed_in_second: Arc<AtomicBool>,
+    key: flui_view::GlobalKey<CountingItemState>,
+    log: Arc<parking_lot::Mutex<Vec<&'static str>>>,
+}
+
+struct TwoListsState {
+    keyed_in_second: Arc<AtomicBool>,
+    key: flui_view::GlobalKey<CountingItemState>,
+    log: Arc<parking_lot::Mutex<Vec<&'static str>>>,
+}
+
+#[derive(Clone)]
+struct CountingItem {
+    key: flui_view::GlobalKey<CountingItemState>,
+    log: Arc<parking_lot::Mutex<Vec<&'static str>>>,
+}
+
+struct CountingItemState {
+    log: Arc<parking_lot::Mutex<Vec<&'static str>>>,
+}
+
+impl StatefulView for CountingItem {
+    type State = CountingItemState;
+    fn create_state(&self) -> CountingItemState {
+        CountingItemState {
+            log: Arc::clone(&self.log),
+        }
+    }
+}
+
+impl ViewState<CountingItem> for CountingItemState {
+    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+        self.log.lock().push("init");
+    }
+    fn build(&self, _view: &CountingItem, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(200.0, 48.0).child(Text::new("keyed"))
+    }
+    fn dispose(&mut self) {
+        self.log.lock().push("dispose");
+    }
+}
+
+impl flui_view::View for CountingItem {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        Some(&self.key)
+    }
+}
+
+impl StatefulView for TwoLists {
+    type State = TwoListsState;
+    fn create_state(&self) -> TwoListsState {
+        TwoListsState {
+            keyed_in_second: Arc::clone(&self.keyed_in_second),
+            key: self.key.clone(),
+            log: Arc::clone(&self.log),
+        }
+    }
+}
+
+impl ViewState<TwoLists> for TwoListsState {
+    fn build(&self, _view: &TwoLists, _ctx: &dyn BuildContext) -> impl IntoView {
+        let in_second = self.keyed_in_second.load(Ordering::SeqCst);
+        let list = |holds_keyed: bool,
+                    key: flui_view::GlobalKey<CountingItemState>,
+                    log: Arc<parking_lot::Mutex<Vec<&'static str>>>| {
+            ListView::builder(3, 48.0, move |i| {
+                (i < 3).then(|| {
+                    if i == 1 && holds_keyed {
+                        CountingItem {
+                            key: key.clone(),
+                            log: Arc::clone(&log),
+                        }
+                        .boxed()
+                    } else {
+                        SizedBox::new(200.0, 48.0).boxed()
+                    }
+                })
+            })
+            .repaint_boundaries(false)
+        };
+        Column::new((
+            SizedBox::new(200.0, 100.0).child(list(
+                !in_second,
+                self.key.clone(),
+                Arc::clone(&self.log),
+            )),
+            SizedBox::new(200.0, 100.0).child(list(
+                in_second,
+                self.key.clone(),
+                Arc::clone(&self.log),
+            )),
+        ))
+    }
+}
+
+impl flui_view::View for TwoLists {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+#[test]
+fn lazy_list_view_builder_forgets_a_global_keyed_item_grafted_to_another_list() {
+    let keyed_in_second = Arc::new(AtomicBool::new(false));
+    let log: Arc<parking_lot::Mutex<Vec<&'static str>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let mut laid = lay_out(
+        TwoLists {
+            keyed_in_second: Arc::clone(&keyed_in_second),
+            key: flui_view::GlobalKey::new(),
+            log: Arc::clone(&log),
+        },
+        tight(200.0, 200.0),
+    );
+    assert_eq!(laid.count_elements_by_view_type::<CountingItem>(), 1);
+    assert_eq!(log.lock().as_slice(), ["init"]);
+    let first_top = laid
+        .absolute_offset(laid.find_text("keyed").expect("keyed item"))
+        .dy
+        .get();
+
+    // Move the keyed item from the first list to the second.
+    keyed_in_second.store(true, Ordering::SeqCst);
+    laid.pump();
+    laid.tick();
+    assert_eq!(
+        laid.count_elements_by_view_type::<CountingItem>(),
+        1,
+        "one element: grafted, not duplicated"
+    );
+    assert_eq!(
+        log.lock().as_slice(),
+        ["init"],
+        "the element moved with its state: no dispose, no second init"
+    );
+    let second_top = laid
+        .absolute_offset(laid.find_text("keyed").expect("keyed item"))
+        .dy
+        .get();
+    assert!(
+        second_top > first_top,
+        "the item now sits in the second list"
+    );
+
+    // Both lists still own only what they built: a later frame that
+    // rebuilds and evicts must not reach the grafted element from the first
+    // list's stale bookkeeping.
+    laid.pump();
+    laid.tick();
+    assert_eq!(laid.count_elements_by_view_type::<CountingItem>(), 1);
+    assert_eq!(log.lock().as_slice(), ["init"]);
+}

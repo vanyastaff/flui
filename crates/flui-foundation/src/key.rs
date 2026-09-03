@@ -509,6 +509,105 @@ impl<T: Clone + Hash + Eq + Send + Sync + fmt::Debug + 'static> ViewKey for Valu
 }
 
 // ============================================================================
+// SALTED KEY
+// ============================================================================
+
+/// A key that a *wrapper* element carries on behalf of the child it wraps.
+///
+/// A lazy sliver reconciles its children by key, and Flutter restores each
+/// item's key outside the per-item `RepaintBoundary` with a `KeyedSubtree`
+/// carrying a `_SaltedValueKey` (`widgets/scroll_delegate.dart`). FLUI's
+/// wrapper owns the render node the sliver needs, so the wrapper carries the
+/// key itself — salted, for the same two reasons Flutter salts it:
+///
+/// - **it is not the item's key.** Two elements may not answer to the same
+///   key in one parent; the salt makes the wrapper's key equal only to another
+///   wrapper's salt of an equal inner key.
+/// - **it is never a `GlobalKey`.** [`ViewKey::is_global_key`] is `false`
+///   whatever the inner key is, so the wrapper registers nothing in the
+///   GlobalKey registry and the item inside registers its own key exactly
+///   once. Forwarding a raw `GlobalKey` made the wrapper and the item both
+///   claim it: a debug panic at mount, a duplicate report in release.
+///
+/// A lazy sliver looking an item up by key ([`SaltedKey::unsalt`]) sees
+/// through the salt to the item's own key, which is what a delegate's
+/// `find_index_by_key` is written against.
+pub struct SaltedKey {
+    inner: Box<dyn ViewKey>,
+}
+
+impl SaltedKey {
+    /// Salt `inner` for the wrapper that will carry it.
+    #[must_use]
+    pub fn new(inner: &dyn ViewKey) -> Self {
+        Self {
+            inner: inner.clone_key(),
+        }
+    }
+
+    /// The item's own key.
+    #[must_use]
+    pub fn inner(&self) -> &dyn ViewKey {
+        &*self.inner
+    }
+
+    /// `key` itself, or the item key inside it when `key` is a salt.
+    #[must_use]
+    pub fn unsalt(key: &dyn ViewKey) -> &dyn ViewKey {
+        key.as_any()
+            .downcast_ref::<Self>()
+            .map_or(key, SaltedKey::inner)
+    }
+}
+
+impl Clone for SaltedKey {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone_key(),
+        }
+    }
+}
+
+impl fmt::Debug for SaltedKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SaltedKey({:?})", &*self.inner)
+    }
+}
+
+impl ViewKey for SaltedKey {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn key_eq(&self, other: &dyn ViewKey) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.inner.key_eq(&*other.inner))
+    }
+
+    fn key_hash(&self) -> u64 {
+        // A fixed salt keeps a wrapper's hash apart from its item's, so the
+        // reconciler's hash pre-check never pairs the two.
+        const SALT: u64 = 0x5a17_ed4b_1e9c_7f03;
+        self.inner.key_hash() ^ SALT
+    }
+
+    fn clone_key(&self) -> Box<dyn ViewKey> {
+        Box::new(Self {
+            inner: self.inner.clone_key(),
+        })
+    }
+
+    fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SaltedKey({:?})", &*self.inner)
+    }
+
+    // `is_global_key` keeps the trait default `false` on purpose: the salt
+    // exists so the wrapper never registers the item's GlobalKey.
+}
+
+// ============================================================================
 // UNIQUE KEY
 // ============================================================================
 
@@ -1171,5 +1270,64 @@ mod tests {
 
         let deserialized: KeyRef = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.as_u64(), key_ref.as_u64());
+    }
+}
+
+#[cfg(test)]
+mod salted_key_tests {
+    use super::*;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Marker;
+
+    #[test]
+    fn salt_equals_only_another_salt_of_an_equal_inner_key() {
+        let a = SaltedKey::new(&ValueKey::new(7_u32));
+        let b = SaltedKey::new(&ValueKey::new(7_u32));
+        let c = SaltedKey::new(&ValueKey::new(8_u32));
+        assert!(a.key_eq(&b));
+        assert!(!a.key_eq(&c));
+        // The salt is not the inner key, in either direction.
+        assert!(!a.key_eq(&ValueKey::new(7_u32)));
+        assert!(!ValueKey::new(7_u32).key_eq(&a));
+        assert_eq!(a.key_hash(), b.key_hash());
+        assert_ne!(a.key_hash(), ValueKey::new(7_u32).key_hash());
+    }
+
+    #[test]
+    fn unsalt_sees_through_to_the_item_key_and_is_identity_otherwise() {
+        let inner = ValueKey::new("row");
+        let salted = SaltedKey::new(&inner);
+        assert!(SaltedKey::unsalt(&salted).key_eq(&inner));
+        assert!(SaltedKey::unsalt(&inner).key_eq(&inner));
+    }
+
+    #[test]
+    fn a_salted_key_is_never_global() {
+        struct GlobalLike;
+        impl ViewKey for GlobalLike {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn key_eq(&self, other: &dyn ViewKey) -> bool {
+                other.as_any().downcast_ref::<Self>().is_some()
+            }
+            fn key_hash(&self) -> u64 {
+                1
+            }
+            fn clone_key(&self) -> Box<dyn ViewKey> {
+                Box::new(Self)
+            }
+            fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "GlobalLike")
+            }
+            fn is_global_key(&self) -> bool {
+                true
+            }
+        }
+        let salted = SaltedKey::new(&GlobalLike);
+        assert!(salted.inner().is_global_key());
+        assert!(!salted.is_global_key());
+        assert!(salted.clone_key().key_eq(&salted));
     }
 }

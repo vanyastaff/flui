@@ -31,8 +31,7 @@ mod view;
 
 pub use animated::AnimatedView;
 pub use error::{
-    ErrorElement, ErrorView, ErrorViewBuilder, FlutterError, clear_error_view_builder,
-    set_error_view_builder,
+    ErrorView, ErrorViewBuilder, FlutterError, clear_error_view_builder, set_error_view_builder,
 };
 pub use inherited::InheritedView;
 pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};

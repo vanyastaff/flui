@@ -905,12 +905,29 @@ where
         // render object keeps its `create_render_object()` configuration and a
         // `setState` that changes a render-object widget (padding, size, text,
         // colour, …) would never be reflected after the first frame.
-        let pipeline_owner = core
-            .pipeline_owner()
-            .expect("BUG: active RenderBehavior must have a PipelineOwner during update");
-        let render_id = self
-            .render_id
-            .expect("BUG: RenderBehavior with a PipelineOwner must own a RenderId during update");
+        // An element mounted with no `PipelineOwner` in scope (a render-less
+        // unit-test tree) minted no render object in `on_mount` — that path
+        // warns and continues — so there is nothing here to update either.
+        // The symmetric tolerance keeps such a tree usable. Every other
+        // half-state is still the invariant violation it always was: an owner
+        // without a render id means `on_mount` failed to mint, a render id
+        // without an owner means the owner was withdrawn under a live node.
+        let (render_id, pipeline_owner) = match (self.render_id, core.pipeline_owner()) {
+            (Some(render_id), Some(owner)) => (render_id, owner),
+            (None, None) => {
+                tracing::trace!(
+                    "RenderBehavior::on_update skipped: mounted without a PipelineOwner, \
+                     no render object to update"
+                );
+                return;
+            }
+            (None, Some(_)) => {
+                panic!("BUG: RenderBehavior with a PipelineOwner must own a RenderId during update")
+            }
+            (Some(_), None) => {
+                panic!("BUG: active RenderBehavior must have a PipelineOwner during update")
+            }
+        };
         let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
         let impact = pipeline_owner.with_mut(|pipeline_owner| {
             let node = pipeline_owner

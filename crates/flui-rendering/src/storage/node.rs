@@ -811,6 +811,13 @@ impl RenderNode {
         with_entry!(self, entry => entry.render_object_mut().as_any_mut().downcast_mut::<T>())
     }
 
+    /// Shared-reference counterpart of [`Self::downcast_render_object_mut`]:
+    /// a read of the live render object's own state (a lazy sliver's item
+    /// count, a configuration knob) without checking the node out mutably.
+    pub fn downcast_render_object<T: std::any::Any>(&self) -> Option<&T> {
+        with_entry!(self, entry => entry.render_object().as_any().downcast_ref::<T>())
+    }
+
     /// Clears the needs_paint flag.
     #[inline]
     pub fn clear_needs_paint(&self) {

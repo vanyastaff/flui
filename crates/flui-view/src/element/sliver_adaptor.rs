@@ -44,11 +44,12 @@
 
 use std::{rc::Rc, sync::Arc};
 
-use flui_foundation::{ElementId, RenderId};
+use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_objects::{RenderSliverGridLazy, RenderSliverList};
 use flui_rendering::{pipeline::PipelineCell, protocol::SliverProtocol};
 use parking_lot::Mutex;
 
+use super::sparse_children::build_item_or_error;
 use super::{
     Variable,
     behavior::{ElementBehavior, RenderBehavior},
@@ -90,6 +91,12 @@ pub struct SliverList {
     /// Given a logical index, produces the item's view. Returns `None` when
     /// the index is past the end of the data source.
     pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    /// Maps an item's key to its current index in the data source, so a
+    /// keyed child whose data moved *out of the resident band* is still
+    /// found and its state kept — Flutter's `findChildIndexCallback`. Keyed
+    /// moves *within* the band need no callback: the reconcile matches
+    /// residents by key on its own.
+    pub(crate) find_index_by_key: Option<Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>>,
 }
 
 impl SliverList {
@@ -112,7 +119,18 @@ impl SliverList {
             item_count,
             item_extent_estimate,
             builder,
+            find_index_by_key: None,
         }
+    }
+
+    /// Install the key → index callback (see the field doc).
+    #[must_use]
+    pub fn find_index_by_key(
+        mut self,
+        find: impl Fn(&dyn ViewKey) -> Option<usize> + 'static,
+    ) -> Self {
+        self.find_index_by_key = Some(Rc::new(find));
+        self
     }
 
     /// Construct a lazy-sliver adaptor that interleaves `item_count` items
@@ -291,10 +309,15 @@ pub(crate) struct SliverListAdaptorManager {
     /// Item factory. `Rc` so it's shared with `SliverList` and the
     /// behavior without cloning the closure.
     builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    /// The view's key → index callback, if any (see `SliverList`).
+    find_index_by_key: Option<Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>>,
+    /// The sliver's render id, for clamping its item count when the builder
+    /// declines an index below it (the data source shrank).
+    render_id: Option<RenderId>,
     /// Set by `SliverListAdaptorBehavior::on_view_updated` whenever the
     /// parent hands this element a new `SliverList` view; consumed (and
     /// cleared) by the next `service` call, which re-consults `builder` for
-    /// every currently-resident index via `SparseChildren::refresh_resident`.
+    /// every currently-resident index via `SparseChildren::reconcile`.
     /// Mirrors Flutter's `SliverChildBuilderDelegate.shouldRebuild => true`
     /// default (`widgets/scroll_delegate.dart`, tag `3.44.0`): a delegate
     /// change re-builds every resident child, not only newly-visible ones.
@@ -353,40 +376,110 @@ impl ChildManager for SliverListAdaptorManager {
         // re-diffed against a new view (`SparseChildren::ensure`'s own doc).
         let refresh_did_work = if self.needs_resident_refresh {
             self.needs_resident_refresh = false;
-            self.sparse_children
-                .refresh_resident(&*self.builder, host, tree, owner, pipeline)
+            let outcome = self.sparse_children.reconcile(
+                &*self.builder,
+                self.find_index_by_key.as_deref(),
+                self.item_count(pipeline),
+                host,
+                tree,
+                owner,
+                pipeline,
+            );
+            let clamped = outcome
+                .end_reached_at
+                .is_some_and(|end| self.clamp_render_item_count(end, pipeline));
+            outcome.did_work || clamped
         } else {
             false
         };
-
         // Build each requested index that is (a) within the retain band and
         // (b) not already built. We check first to avoid calling the builder
         // for already-present indices (idempotency without closure overhead)
         // and to accurately track whether any new child was mounted.
         let mut any_new_build = false;
+        let mut reached_end_at: Option<usize> = None;
         for &logical_index in requested_indices {
             if logical_index < retain_first || logical_index >= retain_last {
                 // Fell outside the band we just retained — skip.
+                continue;
+            }
+            if reached_end_at.is_some_and(|end| logical_index >= end) {
                 continue;
             }
             if self.sparse_children.get(logical_index).is_some() {
                 // Already built — no work needed.
                 continue;
             }
-            if let Some(view) = (self.builder)(logical_index) {
-                self.sparse_children.ensure(
-                    logical_index,
-                    view.0.as_ref(),
-                    host,
-                    tree,
-                    owner,
-                    pipeline,
-                );
-                any_new_build = true;
+            match build_item_or_error(&*self.builder, logical_index) {
+                Some(view) => {
+                    self.sparse_children.ensure(
+                        logical_index,
+                        view.0.as_ref(),
+                        host,
+                        tree,
+                        owner,
+                        pipeline,
+                    );
+                    any_new_build = true;
+                }
+                None => {
+                    // The builder declined: the data source ends here. The
+                    // render object's count follows, so the next pass reports
+                    // the real extent and the viewport clamps (Flutter's
+                    // `childCount` / `addInitialChild` failing → max extent).
+                    reached_end_at =
+                        Some(reached_end_at.map_or(logical_index, |end| end.min(logical_index)));
+                }
             }
         }
+        let count_clamped = reached_end_at
+            .is_some_and(|end_index| self.clamp_render_item_count(end_index, pipeline));
+        retain_did_work || refresh_did_work || any_new_build || count_clamped
+    }
 
-        retain_did_work || refresh_did_work || any_new_build
+    fn forget_child(&mut self, child: ElementId) {
+        self.sparse_children.forget(child);
+    }
+}
+
+impl SliverListAdaptorManager {
+    /// The render object's current item count (the manager's view of the
+    /// data source length).
+    fn item_count(&self, pipeline: &PipelineCell) -> usize {
+        let Some(render_id) = self.render_id else {
+            return usize::MAX;
+        };
+        pipeline.with(|owner| {
+            owner
+                .render_tree()
+                .get(render_id)
+                .and_then(|node| node.downcast_render_object::<RenderSliverList>())
+                .map_or(usize::MAX, RenderSliverList::item_count)
+        })
+    }
+
+    /// Clamp the render object's item count to `end_index` when the builder
+    /// declined that index. Returns whether the count changed.
+    fn clamp_render_item_count(&mut self, end_index: usize, pipeline: &PipelineCell) -> bool {
+        let Some(render_id) = self.render_id else {
+            return false;
+        };
+        pipeline.with_mut(|owner| {
+            let Some(render_object) = owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderSliverList>())
+            else {
+                return false;
+            };
+            let impact = if end_index < render_object.item_count() {
+                render_object.set_item_count(end_index)
+            } else {
+                flui_rendering::RenderUpdateImpact::NONE
+            };
+            owner.apply_render_update_impact(render_id, impact);
+            !impact.is_none()
+        })
     }
 }
 
@@ -432,6 +525,8 @@ impl SliverListAdaptorBehavior {
                 sparse_children: SparseChildren::new(),
                 host_element_id: None,
                 builder: Rc::clone(&view.builder),
+                find_index_by_key: view.find_index_by_key.clone(),
+                render_id: None,
                 needs_resident_refresh: false,
             })),
         }
@@ -473,7 +568,9 @@ where
         // Step 2: stamp the host element id on the manager now that the element
         // is slab-stamped (set_self_id fires before on_mount in ElementTree::insert).
         if let Some(self_id) = core.self_id() {
-            self.manager.lock().host_element_id = Some(self_id);
+            let mut manager = self.manager.lock();
+            manager.host_element_id = Some(self_id);
+            manager.render_id = self.inner.render_id;
         } else {
             tracing::warn!(
                 "SliverListAdaptorBehavior::on_mount: no self_id stamped — \
@@ -595,6 +692,7 @@ where
         // that changes the backing item list/builder).
         let mut manager = self.manager.lock();
         manager.builder = Rc::clone(&core.view().builder);
+        manager.find_index_by_key = core.view().find_index_by_key.clone();
         manager.needs_resident_refresh = true;
     }
 
@@ -661,6 +759,8 @@ pub struct SliverGridLazy {
     /// Given a logical index, produces the item's view.  Returns `None` when
     /// the index is past the end of the data source.
     pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    /// See `SliverList::find_index_by_key`.
+    pub(crate) find_index_by_key: Option<Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>>,
 }
 
 impl SliverGridLazy {
@@ -674,7 +774,18 @@ impl SliverGridLazy {
             grid_delegate,
             item_count,
             builder,
+            find_index_by_key: None,
         }
+    }
+
+    /// Install the key → index callback — see `SliverList::find_index_by_key`.
+    #[must_use]
+    pub fn find_index_by_key(
+        mut self,
+        find: impl Fn(&dyn ViewKey) -> Option<usize> + 'static,
+    ) -> Self {
+        self.find_index_by_key = Some(Rc::new(find));
+        self
     }
 }
 
@@ -745,10 +856,12 @@ pub(crate) struct SliverGridLazyAdaptorManager {
     host_element_id: Option<ElementId>,
     render_id: Option<RenderId>,
     builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    /// See `SliverList::find_index_by_key`.
+    find_index_by_key: Option<Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>>,
     /// Set by `SliverGridLazyAdaptorBehavior::on_view_updated` whenever the
     /// parent hands this element a new `SliverGridLazy` view; consumed (and
     /// cleared) by the next `service` call, which re-consults `builder` for
-    /// every currently-resident index via `SparseChildren::refresh_resident`.
+    /// every currently-resident index via `SparseChildren::reconcile`.
     /// Mirrors Flutter's `SliverChildBuilderDelegate.shouldRebuild => true`
     /// default (`widgets/scroll_delegate.dart`, tag `3.44.0`) — the same
     /// mechanism `SliverListAdaptorManager` uses; see its own doc comment for
@@ -778,6 +891,20 @@ impl std::fmt::Debug for SliverGridLazyAdaptorManager {
 }
 
 impl SliverGridLazyAdaptorManager {
+    /// The render object's current item count.
+    fn item_count(&self, pipeline: &PipelineCell) -> usize {
+        let Some(render_id) = self.render_id else {
+            return usize::MAX;
+        };
+        pipeline.with(|owner| {
+            owner
+                .render_tree()
+                .get(render_id)
+                .and_then(|node| node.downcast_render_object::<RenderSliverGridLazy>())
+                .map_or(usize::MAX, RenderSliverGridLazy::item_count)
+        })
+    }
+
     fn clamp_render_item_count(&mut self, end_index: usize, pipeline: &PipelineCell) -> bool {
         let Some(render_id) = self.render_id else {
             return false;
@@ -832,8 +959,20 @@ impl ChildManager for SliverGridLazyAdaptorManager {
         // re-diffed against a new view (`SparseChildren::ensure`'s own doc).
         let refresh_did_work = if self.needs_resident_refresh {
             self.needs_resident_refresh = false;
-            self.sparse_children
-                .refresh_resident(&*self.builder, host, tree, owner, pipeline)
+            let item_count = self.item_count(pipeline);
+            let outcome = self.sparse_children.reconcile(
+                &*self.builder,
+                self.find_index_by_key.as_deref(),
+                item_count,
+                host,
+                tree,
+                owner,
+                pipeline,
+            );
+            let clamped = outcome
+                .end_reached_at
+                .is_some_and(|end| self.clamp_render_item_count(end, pipeline));
+            outcome.did_work || clamped
         } else {
             false
         };
@@ -850,7 +989,7 @@ impl ChildManager for SliverGridLazyAdaptorManager {
             if self.sparse_children.get(logical_index).is_some() {
                 continue;
             }
-            if let Some(view) = (self.builder)(logical_index) {
+            if let Some(view) = build_item_or_error(&*self.builder, logical_index) {
                 self.sparse_children.ensure(
                     logical_index,
                     view.0.as_ref(),
@@ -871,6 +1010,10 @@ impl ChildManager for SliverGridLazyAdaptorManager {
             .is_some_and(|end_index| self.clamp_render_item_count(end_index, pipeline));
 
         eviction_did_work || refresh_did_work || any_new_build || count_clamped
+    }
+
+    fn forget_child(&mut self, child: ElementId) {
+        self.sparse_children.forget(child);
     }
 }
 
@@ -904,6 +1047,7 @@ impl SliverGridLazyAdaptorBehavior {
                 host_element_id: None,
                 render_id: None,
                 builder: Rc::clone(&view.builder),
+                find_index_by_key: view.find_index_by_key.clone(),
                 needs_resident_refresh: false,
             })),
         }
@@ -1040,6 +1184,7 @@ where
         // gap `SliverListAdaptorManager` had, fixed identically here.
         let mut manager = self.manager.lock();
         manager.builder = Rc::clone(&core.view().builder);
+        manager.find_index_by_key = core.view().find_index_by_key.clone();
         manager.needs_resident_refresh = true;
     }
 
@@ -1396,6 +1541,8 @@ mod tests {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
             builder: make_builder(5),
+            find_index_by_key: None,
+            render_id: None,
             needs_resident_refresh: false,
         };
 
@@ -1425,6 +1572,8 @@ mod tests {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
             builder: make_builder(5),
+            find_index_by_key: None,
+            render_id: None,
             needs_resident_refresh: false,
         };
 
@@ -1459,6 +1608,8 @@ mod tests {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
             builder: make_builder(5),
+            find_index_by_key: None,
+            render_id: None,
             needs_resident_refresh: false,
         };
 
@@ -1515,6 +1666,8 @@ mod tests {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
             builder: make_builder(3),
+            find_index_by_key: None,
+            render_id: None,
             needs_resident_refresh: false,
         };
 
@@ -1579,6 +1732,8 @@ mod tests {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
             builder: make_builder(3),
+            find_index_by_key: None,
+            render_id: None,
             needs_resident_refresh: false,
         };
 
@@ -1646,6 +1801,7 @@ mod tests {
             host_element_id: Some(host),
             render_id: None,
             builder: make_builder(3),
+            find_index_by_key: None,
             needs_resident_refresh: false,
         };
 
@@ -1711,6 +1867,7 @@ mod tests {
             host_element_id: Some(host),
             render_id: None,
             builder: make_builder(3),
+            find_index_by_key: None,
             needs_resident_refresh: false,
         };
 

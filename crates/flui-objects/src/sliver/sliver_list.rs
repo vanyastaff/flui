@@ -123,6 +123,12 @@ impl RenderSliverList {
         }
     }
 
+    /// The known item count (the data source length as last told).
+    #[must_use]
+    pub fn item_count(&self) -> usize {
+        self.item_count
+    }
+
     /// Updates the known item count.  Call when the data source length changes.
     pub fn set_item_count(&mut self, count: usize) -> flui_rendering::RenderUpdateImpact {
         if self.item_count == count {

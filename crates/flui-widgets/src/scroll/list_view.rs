@@ -146,6 +146,24 @@ impl ListView {
         self
     }
 
+    /// Map an item's key to its current index in the data source, so a keyed
+    /// item whose data moved out of the built band keeps its element state
+    /// across insert, remove, and reorder (Flutter's `findChildIndexCallback`).
+    /// Items moving *within* the band are matched by key without it.
+    ///
+    /// Only meaningful for [`ListView::builder`]; the key handed to `find`
+    /// is the item's own key (never the per-item repaint boundary's).
+    #[must_use]
+    pub fn find_index_by_key(
+        mut self,
+        find: impl Fn(&dyn flui_foundation::ViewKey) -> Option<usize> + 'static,
+    ) -> Self {
+        if let Some(delegate) = &mut self.builder_source {
+            delegate.find_index_by_key = Some(Rc::new(find));
+        }
+        self
+    }
+
     /// Set the scroll axis (default [`Axis::Vertical`]).
     #[must_use]
     pub fn scroll_direction(mut self, scroll_direction: Axis) -> Self {
@@ -230,7 +248,18 @@ impl StatelessView for ListView {
             } else {
                 Rc::clone(&delegate.builder)
             };
-            SliverList::new(delegate.item_count, self.item_extent_estimate, builder).boxed()
+            {
+                let sliver =
+                    SliverList::new(delegate.item_count, self.item_extent_estimate, builder);
+                match &delegate.find_index_by_key {
+                    Some(find) => {
+                        let find = Rc::clone(find);
+                        sliver.find_index_by_key(move |key| find(key))
+                    }
+                    None => sliver,
+                }
+            }
+            .boxed()
         } else {
             let children = if self.add_repaint_boundaries {
                 super::sliver_list::wrap_in_repaint_boundaries(self.children.clone())

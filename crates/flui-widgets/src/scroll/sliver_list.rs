@@ -42,6 +42,12 @@ pub use flui_view::element::SliverList;
 pub struct SliverChildBuilderDelegate {
     pub(crate) item_count: usize,
     pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    /// Maps an item's key to its current index (Flutter's
+    /// `findChildIndexCallback`), so a keyed item whose data moved out of
+    /// the resident band keeps its state. Moves within the band need no
+    /// callback.
+    pub(crate) find_index_by_key:
+        Option<Rc<dyn Fn(&dyn flui_foundation::ViewKey) -> Option<usize>>>,
 }
 
 impl SliverChildBuilderDelegate {
@@ -59,6 +65,7 @@ impl SliverChildBuilderDelegate {
         Self {
             item_count,
             builder: Rc::new(builder),
+            find_index_by_key: None,
         }
     }
 }
@@ -95,7 +102,7 @@ pub(crate) fn wrap_builder_in_repaint_boundaries(
 /// insert, remove, and reorder. Flutter restores the key outside the boundary
 /// with `KeyedSubtree`; FLUI carries it on the boundary itself, because a lazy
 /// sliver child must own a render node and a stateless `KeyedSubtree`
-/// equivalent has none — see `RepaintBoundary::forwards_child_key`.
+/// equivalent has none — see `RepaintBoundary::salted_child_key`.
 fn wrap_in_repaint_boundary(child: BoxedView) -> BoxedView {
     BoxedView(Box::new(
         crate::paint::RepaintBoundary::new()
@@ -118,17 +125,22 @@ mod tests {
 
     use super::*;
 
-    /// The repaint-boundary wrap keeps the item's own key visible.
+    /// The repaint-boundary wrap keeps the item's own key visible — salted.
     ///
     /// A lazy sliver reconciles its children by key. An unkeyed wrapper hides
     /// the item's key from the parent, which then treats every insert, remove,
-    /// or reorder as a fresh child and drops its element state. Flutter avoids
-    /// this by restoring the key OUTSIDE the boundary with `KeyedSubtree`
-    /// (`widgets/scroll_delegate.dart:559`, `:572`); FLUI carries it on the
-    /// boundary, which is the outermost element the parent reconciles either
-    /// way.
+    /// or reorder as a fresh child and drops its element state. Flutter
+    /// restores the key OUTSIDE the boundary with a `KeyedSubtree` carrying a
+    /// `_SaltedValueKey` (`widgets/scroll_delegate.dart:559`, `:572`); FLUI
+    /// carries it on the boundary, which is the outermost element the parent
+    /// reconciles either way, and salts it for the same reasons: the wrapper's
+    /// key equals another wrapper's salt of an equal item key, never the raw
+    /// item key, and it is never a `GlobalKey` — the item inside registers its
+    /// own key exactly once.
     ///
-    /// Reverted (drop `forwarding_child_key`) the wrapper reports `None`.
+    /// Reverted (drop `forwarding_child_key`) the wrapper reports `None`;
+    /// forwarding the raw key instead makes a `GlobalKey`'d item panic at
+    /// mount (`lazy_list.rs`'s GlobalKey test).
     #[test]
     fn the_repaint_boundary_wrap_keeps_the_items_key() {
         use flui_foundation::ValueKey;
@@ -156,13 +168,22 @@ mod tests {
         let wrapped =
             wrap_in_repaint_boundary(BoxedView(Box::new(KeyedItem(ValueKey::new(7_u32)))));
         let expected = ValueKey::new(7_u32);
-
         let actual = wrapped
             .key()
             .expect("the wrapper must expose the item's key, not swallow it");
         assert!(
-            actual.key_eq(&expected),
-            "the wrapper's key must BE the item's key, not merely present"
+            flui_foundation::SaltedKey::unsalt(actual).key_eq(&expected),
+            "the wrapper's key must unsalt to the item's key; got {actual:?}"
+        );
+        assert!(
+            !actual.key_eq(&expected),
+            "the wrapper's key must be the salt, not the raw item key; got {actual:?}"
+        );
+        assert!(!actual.is_global_key(), "a salted key is never global");
+        let twin = wrap_in_repaint_boundary(BoxedView(Box::new(KeyedItem(ValueKey::new(7_u32)))));
+        assert!(
+            twin.key().is_some_and(|k| k.key_eq(actual)),
+            "two wrappers of equal item keys must reconcile as the same child"
         );
     }
 
