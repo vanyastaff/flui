@@ -469,8 +469,8 @@ fn lazy_list_view_builder_convergence_stabilizes() {
 /// A large list where the viewport shows only a few items. After settling,
 /// the render tree must contain only the visible + cache-band items, not all
 /// N — confirming that off-band children are evicted correctly via the
-/// retain-band channel (not `dispose_box_child`, which would double-remove
-/// render nodes owned by the element tree — an ABA-style bug).
+/// retain-band channel. The render side never disposes a child itself, which
+/// is what avoids an ABA double-remove of nodes owned by the element tree.
 ///
 /// A post-settle relayout tick must not grow the node count (no leak) and
 /// must not panic (the ABA would surface as a slab-index panic).

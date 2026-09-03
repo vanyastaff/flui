@@ -497,8 +497,13 @@ fn repeated_churn_cycles_stay_clean_and_generations_protect_every_round() {
 // Deferred mutations integration tests
 // ====================================================================
 
+/// Removing a child directly (the production `remove_render_object` call —
+/// no render object anywhere still enqueues a deferred remove; the
+/// deferred-mutation queue that used to sit between "layout wants to remove
+/// a child" and "the tree actually loses it" is gone) disposes the subtree
+/// and the parent reflows clean once re-dirtied.
 #[test]
-fn deferred_remove_during_layout_removes_child_after_pass() {
+fn removing_a_child_directly_disposes_it_and_the_parent_reflows_clean() {
     let mut run = RenderTester::mount(
         box_node(RenderPadding::all(5.0))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
@@ -510,76 +515,31 @@ fn deferred_remove_during_layout_removes_child_after_pass() {
     let child = run.id("child");
     assert!(run.owner().render_tree().get(child).is_some());
 
-    // Enqueue deferred remove during "layout" (simulated)
-    run.owner_mut().defer_remove(root, child);
-    assert_eq!(run.owner().deferred_mutation_count(), 1);
-
-    // Pump triggers layout → drain → apply
+    // Direct removal: production callers (the element tree's child manager)
+    // do this between frames, never mid-phase.
+    run.owner_mut().remove_render_object(child);
     run.owner_mut().mark_needs_layout(root);
     run.pump();
 
-    // Child should be removed
     assert!(
         run.owner().render_tree().get(child).is_none(),
-        "deferred remove should have removed the child after layout pass"
+        "the removed child must be gone after the settle pump"
     );
-    assert_eq!(run.owner().deferred_mutation_count(), 0);
-}
-
-#[test]
-fn deferred_update_on_nonexistent_target_is_silent_noop() {
-    // Update targeting a non-existent RenderId should not panic
-    let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_constraints(loose(200.0, 200.0))
-        .run_frame();
-
-    let fake_id = flui_foundation::RenderId::new(9999);
-    run.owner_mut().defer_update(
-        fake_id,
-        Box::new(|_obj: &mut dyn std::any::Any| {
-            panic!("should not be called for non-existent target");
-        }),
+    assert!(
+        run.is_clean(),
+        "no stale dirty entries survive the disposed child"
     );
-
-    let root = run.root();
-    run.owner_mut().mark_needs_layout(root);
-    run.pump(); // should not panic
 }
 
+/// `insert_child_render_object` schedules the child and the full
+/// parent-membership invalidation without an immediate parent paint — the
+/// same canonical membership impact the deleted deferred-insert queue used
+/// to apply after a layout pass, now applied immediately since no render
+/// object builds a child mid-layout any more (the request-strategy sliver
+/// only records a request; the element tree's child manager inserts the
+/// real child between frames, through this same call).
 #[test]
-fn deferred_mutations_preserved_across_drain() {
-    // After drain, new mutations can be enqueued
-    let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_constraints(loose(200.0, 200.0))
-        .run_frame();
-
-    let root = run.root();
-    let fake = flui_foundation::RenderId::new(9999);
-
-    // First batch
-    run.owner_mut().defer_remove(root, fake);
-    assert_eq!(run.owner().deferred_mutation_count(), 1);
-
-    // Drain via pump
-    run.owner_mut().mark_needs_layout(root);
-    run.pump();
-    assert_eq!(run.owner().deferred_mutation_count(), 0);
-
-    // Second batch — reuse is fine
-    run.owner_mut().defer_remove(root, fake);
-    assert_eq!(run.owner().deferred_mutation_count(), 1);
-}
-
-/// A deferred `Insert` schedules the child and the full parent-membership
-/// invalidation without an immediate parent paint.
-///
-/// Regression: the apply path previously inserted the node but never
-/// enqueued it, so it carried `NEEDS_LAYOUT` while being absent from every
-/// dirty queue — laid out never, painted never (an invisible child forever).
-/// The queue drains after the layout pass, so the child appears in the tree
-/// this frame and settles (lays out + paints) on the next.
-#[test]
-fn deferred_insert_box_schedules_exact_membership_work_for_new_child() {
+fn inserting_a_child_directly_schedules_exact_membership_work_for_new_child() {
     let mut run = RenderTester::mount(
         box_node(RenderFlex::row())
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("first")),
@@ -596,16 +556,10 @@ fn deferred_insert_box_schedules_exact_membership_work_for_new_child() {
         .to_vec();
     assert_eq!(before.len(), 1);
 
-    // Enqueue an append and run a frame: the drain inserts + schedules.
-    run.owner_mut().defer_insert_box(
-        root,
-        Box::new(RenderColoredBox::blue(40.0, 40.0)),
-        None,
-        None,
-        None,
-    );
-    run.owner_mut().mark_needs_layout(root);
-    run.pump();
+    let new_child = run
+        .owner_mut()
+        .insert_child_render_object(root, Box::new(RenderColoredBox::blue(40.0, 40.0)))
+        .expect("root_id was just inserted and is valid");
 
     let after = run
         .owner()
@@ -614,19 +568,14 @@ fn deferred_insert_box_schedules_exact_membership_work_for_new_child() {
         .expect("root node")
         .children()
         .to_vec();
-    assert_eq!(
-        after.len(),
-        2,
-        "deferred insert appended a child to the row"
+    assert_eq!(after.len(), 2, "insert appended a child to the row");
+    assert!(
+        after.contains(&new_child) && !before.contains(&new_child),
+        "the appended child has a fresh id",
     );
-    let new_child = *after
-        .iter()
-        .find(|id| !before.contains(id))
-        .expect("the appended child has a fresh id");
 
     // The child was scheduled, not orphaned: a settle frame lays it out into
-    // the row's second slot and drains every dirty queue. Before the fix the
-    // child was never enqueued, so it stayed at the origin and unpainted.
+    // the row's second slot and drains every dirty queue.
     run.pump();
     assert!(
         run.owner().render_tree().get(new_child).is_some(),
@@ -640,56 +589,15 @@ fn deferred_insert_box_schedules_exact_membership_work_for_new_child() {
     assert!(run.is_clean(), "queues drain fully once the insert settles");
 }
 
-/// A deferred `Insert` with an explicit index lands at that position, not
-/// appended. Regression: the apply path discarded `index` and always pushed.
-#[test]
-fn deferred_insert_box_honors_requested_index() {
-    let mut run = RenderTester::mount(
-        box_node(RenderFlex::row())
-            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("a"))
-            .child(box_node(RenderColoredBox::green(10.0, 10.0)).label("b")),
-    )
-    .with_constraints(loose(300.0, 100.0))
-    .run_frame();
-    let root = run.root();
-    let a = run.id("a");
-    let b = run.id("b");
-
-    // Insert between the two existing children.
-    run.owner_mut().defer_insert_box(
-        root,
-        Box::new(RenderColoredBox::blue(10.0, 10.0)),
-        Some(1),
-        None,
-        None,
-    );
-    run.owner_mut().mark_needs_layout(root);
-    run.pump();
-
-    let children = run
-        .owner()
-        .render_tree()
-        .get(root)
-        .expect("root node")
-        .children()
-        .to_vec();
-    assert_eq!(children.len(), 3);
-    assert_eq!(children[0], a, "first sibling stays first");
-    assert_eq!(children[2], b, "second sibling shifts right");
-    assert!(
-        children[1] != a && children[1] != b,
-        "the inserted child occupies the middle slot, not the tail",
-    );
-}
-
-/// A deferred `Remove` of a non-leaf must dispose the whole subtree.
+/// Removing a non-leaf directly must dispose the whole subtree, not just the
+/// removed node's own slot.
 ///
-/// Regression: the apply path used `remove_shallow`, which freed only the
-/// child's slot and orphaned every descendant in the slab (leak) while
-/// leaving their dirty entries behind. The cascade dispose frees the subtree
-/// and evicts its dirty entries; the parent reflows clean.
+/// Regression this guards: an earlier remove path freed only the child's
+/// slot and orphaned every descendant in the slab (leak) while leaving their
+/// dirty entries behind. The cascade dispose frees the subtree and evicts
+/// its dirty entries; the parent reflows clean.
 #[test]
-fn deferred_remove_non_leaf_disposes_subtree_without_leaking() {
+fn removing_a_non_leaf_directly_disposes_the_subtree_without_leaking() {
     let mut run = RenderTester::mount(
         box_node(RenderFlex::row()).child(
             box_node(RenderPadding::all(5.0))
@@ -705,7 +613,7 @@ fn deferred_remove_non_leaf_disposes_subtree_without_leaking() {
     assert!(run.owner().render_tree().get(branch).is_some());
     assert!(run.owner().render_tree().get(leaf).is_some());
 
-    run.owner_mut().defer_remove(root, branch);
+    run.owner_mut().remove_render_object(branch);
     run.owner_mut().mark_needs_layout(root);
     run.pump();
 

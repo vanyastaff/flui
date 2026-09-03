@@ -36,9 +36,8 @@ use flui_types::{Pixels, Size, geometry::Offset};
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::ParentData,
-    protocol::{BoxChildRef, BoxLayout, ChildLayout, LayoutCapability, LayoutContextApi, Protocol},
+    protocol::{BoxLayout, ChildLayout, LayoutCapability, LayoutContextApi, Protocol},
     storage::IntrinsicDimension,
-    traits::RenderObject,
 };
 
 // ============================================================================
@@ -455,39 +454,6 @@ where
         )
     }
 
-    /// On-demand build + layout of a **Box** child at `index`, materializing it
-    /// via `build` when it does not yet exist — the re-entrant build contract
-    /// (ADR-0003 Decision 2). A lazy sliver (e.g. a virtualized `SliverList`)
-    /// drives this during its own layout to build only the visible-plus-cache
-    /// band rather than every child up front.
-    ///
-    /// `logical_index` is the item index in the data source (e.g. position in the
-    /// virtual list). Distinct from `index` (the dense child-slot). The backend
-    /// stamps `logical_index` into the freshly-inserted child's parent-data so
-    /// the consumer can reconcile it on the next pass.
-    ///
-    /// Returns a [`ChildLayout<BoxChildRef>`]: `Ready(handle)` when the child is
-    /// laid out in this pass (the handle carries its id + size), `Scheduled` when
-    /// queued for a later pass (the v1 next-frame backend), `NoChild` when `build`
-    /// declines (end of an unknown-length source), or `Unwired` when this context
-    /// has no build backend. `build(index)` is called at most once, only when a
-    /// child must be created, and may return `None` to decline.
-    pub fn build_and_layout_box_child(
-        &mut self,
-        index: usize,
-        logical_index: usize,
-        constraints: BoxConstraints,
-        build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
-    ) -> ChildLayout<BoxChildRef> {
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased::build_and_layout_box_child(
-            &mut self.inner,
-            index,
-            logical_index,
-            constraints,
-            build,
-        )
-    }
-
     /// Queries a **Box** child intrinsic dimension from a Sliver parent.
     pub fn box_child_intrinsic(
         &mut self,
@@ -513,46 +479,20 @@ where
         self.box_child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
-    /// Enqueues a deferred removal for the Box child with the given
-    /// [`RenderId`](flui_foundation::RenderId). Applied after the current layout
-    /// walk releases its borrows (same discipline as
-    /// [`Self::build_and_layout_box_child`]). No-op when the context carries no
-    /// remove sink (Direct storage / test contexts).
-    pub fn dispose_box_child(&mut self, id: flui_foundation::RenderId) {
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased::dispose_box_child(
-            &mut self.inner,
-            id,
-        );
-    }
-
-    /// Returns the [`RenderId`](flui_foundation::RenderId) of the Box child at
-    /// dense slot `index`, if it exists. Used together with
-    /// [`Self::dispose_box_child`] to evict off-band children by id.
-    pub fn child_id(&self, index: usize) -> Option<flui_foundation::RenderId> {
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased::child_id(&self.inner, index)
-    }
-
     /// Records a child-build request for `logical_index` under this sliver
     /// — the producer half of the request-strategy seam.
     ///
-    /// Unlike [`Self::build_and_layout_box_child`], no render object is
-    /// supplied — the element tree decides what to build and where to
-    /// insert it, once the consumer half (child-manager wiring) lands; until
-    /// then the request is simply parked.  The request is deposited into the
-    /// arena's `pending_child_requests` sink; after the walk releases its borrows,
-    /// the pipeline moves it to
+    /// No render object is supplied — the element tree decides what to build
+    /// and where to insert it. The request is deposited into the arena's
+    /// `pending_child_requests` sink; after the walk releases its borrows, the
+    /// pipeline moves it to
     /// [`PipelineOwner::take_pending_child_requests`](crate::pipeline::PipelineOwner::take_pending_child_requests)
-    /// for the binding layer.
+    /// for the binding layer, which services it inside the same frame's
+    /// layout↔build fixpoint.
     ///
-    /// Return type is [`ChildLayout<BoxChildRef>`]: `Scheduled` in v1
-    /// (next-frame policy); a true-mid-pass backend may return
-    /// `Ready(BoxChildRef)` without a breaking change — ADR-0003 Decision 2(c)
-    /// forbids narrowing the return type to `Infallible`/`Scheduled` only.
-    /// Returns `Unwired` when this context carries no request sink.
-    pub fn request_child_build(
-        &mut self,
-        logical_index: usize,
-    ) -> crate::protocol::ChildLayout<crate::protocol::BoxChildRef> {
+    /// Returns [`ChildLayout::Scheduled`] once the request is recorded, or
+    /// [`ChildLayout::Unwired`] when this context carries no request sink.
+    pub fn request_child_build(&mut self, logical_index: usize) -> ChildLayout {
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::request_child_build(
             &mut self.inner,
             logical_index,
@@ -564,11 +504,10 @@ where
     ///
     /// `RenderSliverList` calls this once per layout pass after
     /// `walk_virtualizer_band` returns. The pipeline moves the signal to
-    /// `PipelineOwner::take_pending_retain_bands`; the binding layer, once
-    /// the consumer half (child-manager wiring) lands, drives
+    /// `PipelineOwner::take_pending_retain_bands`; the binding layer drives
     /// `SparseChildren::retain_band` from it, evicting out-of-band lazy
-    /// children on the element side and bypassing `dispose_box_child` to avoid
-    /// the ABA double-remove.
+    /// children on the element side. The render side never disposes a child
+    /// itself, which is what avoids an ABA double-remove between the two.
     pub fn emit_retain_band(&mut self, first: usize, last: usize) {
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::emit_retain_band(
             &mut self.inner,
@@ -843,24 +782,10 @@ mod tests {
         );
         assert_eq!(ctx.box_child_max_intrinsic_height(0, 5.0), 0.0);
         assert_eq!(ctx.box_child_max_intrinsic_width(0, 5.0), 0.0);
-        assert_eq!(ctx.child_id(0), None);
 
-        // No-op / no-panic without a wired backend.
-        ctx.dispose_box_child(RenderId::new(1));
+        // No-op / no-panic without a wired request sink.
         ctx.emit_retain_band(0, 1);
 
-        let mut never_builds = |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> {
-            panic!("no build backend is wired -- this must not run")
-        };
-        assert_eq!(
-            ctx.build_and_layout_box_child(
-                0,
-                0,
-                BoxConstraints::tight(Size::ZERO),
-                &mut never_builds
-            ),
-            ChildLayout::Unwired
-        );
         assert_eq!(ctx.request_child_build(0), ChildLayout::Unwired);
     }
 }

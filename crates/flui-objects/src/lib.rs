@@ -33,7 +33,6 @@
 // Ship bar (wave 3): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 // Crate-specific relaxations (same rationale as flui-rendering):
-#![expect(clippy::type_complexity)]
 #![expect(clippy::too_many_arguments)]
 
 mod image;
@@ -92,8 +91,8 @@ pub use sliver::{
     RenderSliverFillRemainingAndOverscroll, RenderSliverFillRemainingWithScrollable,
     RenderSliverFillViewport, RenderSliverFixedExtentList, RenderSliverFloatingPersistentHeader,
     RenderSliverFloatingPinnedPersistentHeader, RenderSliverGrid, RenderSliverGridLazy,
-    RenderSliverIgnorePointer, RenderSliverList, RenderSliverListLazy, RenderSliverMainAxisGroup,
-    RenderSliverOffstage, RenderSliverOpacity, RenderSliverPadding,
-    RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader,
-    RenderSliverToBoxAdapter, RenderViewport, SnapAction, SnapCommand, StretchTriggerSignal,
+    RenderSliverIgnorePointer, RenderSliverList, RenderSliverMainAxisGroup, RenderSliverOffstage,
+    RenderSliverOpacity, RenderSliverPadding, RenderSliverPinnedPersistentHeader,
+    RenderSliverScrollingPersistentHeader, RenderSliverToBoxAdapter, RenderViewport, SnapAction,
+    SnapCommand, StretchTriggerSignal,
 };

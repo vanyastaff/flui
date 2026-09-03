@@ -56,7 +56,6 @@ impl PipelineOwner<Idle> {
             retained_boundaries: FxHashMap::default(),
             last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,
-            deferred_mutations: crate::pipeline::deferred::DeferredMutations::new(),
             dirty_sender,
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]
@@ -121,7 +120,6 @@ impl PipelineOwner<Idle> {
             retained_boundaries: FxHashMap::default(),
             last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,
-            deferred_mutations: crate::pipeline::deferred::DeferredMutations::new(),
             dirty_sender,
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]

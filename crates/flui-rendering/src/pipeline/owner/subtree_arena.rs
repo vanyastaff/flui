@@ -153,53 +153,25 @@ pub(super) struct SubtreeArena<'tree> {
     ///
     /// `AtomicBool` is `Sync` and needs no new `unsafe impl` of its own
     /// here -- `SubtreeArena` as a whole is `!Send + !Sync` regardless
-    /// (see the pin in `tests`), transitively via `pending_builds`'s
-    /// `Box<dyn ParentData>`, not via this field. `Relaxed` ordering
-    /// suffices because the arena's structural `!Send + !Sync` already
-    /// confines every access to one thread; no cross-thread
-    /// synchronisation is needed.
+    /// (see the pin in `tests`), transitively via the raw `NodePtr`s this
+    /// map holds, not via this field. `Relaxed` ordering suffices because
+    /// the arena's structural `!Send + !Sync` already confines every
+    /// access to one thread; no cross-thread synchronisation is needed.
     by_id: HashMap<RenderId, (NodePtr, AtomicBool)>,
     #[cfg(any(test, feature = "testing"))]
     parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
-    /// On-demand child builds requested during this walk that the frozen
-    /// mid-pass borrows could not insert synchronously — the re-entrant
-    /// build contract's v1 next-frame backend (ADR-0003 Decision 2).
-    /// `layout_dirty_root` drains this into the deferred-mutation queue
-    /// after the walk releases its borrows.  `Mutex`, not `RefCell`: at the
-    /// time this shipped, the layout-child closure required
-    /// `&SubtreeArena: Send + Sync` (no longer true after the `PipelineCell`
-    /// port dropped that bound -- `SubtreeArena` itself is `!Send + !Sync`
-    /// now, transitively via this very field's `Box<dyn ParentData>`; see
-    /// the pin in `tests`). Downgrading to `RefCell` now that
-    /// nothing requires the lock is a follow-up, not done here. Empty
-    /// unless a lazy sliver requests a not-yet-built child.
-    pending_builds: Mutex<Vec<crate::protocol::sliver_protocol::PendingBuild>>,
-    /// Symmetric remove sink pairing the deferred-build queue above with a
-    /// deferred-dispose path (ADR-0003 Decision 2's re-entrant build contract
-    /// needed both halves to keep a lazy sliver's child band bounded, not
-    /// just growing on build): `(parent, child)` pairs of children
-    /// the consumer wants evicted from the tree.  The `parent` is the
-    /// sliver's own `node_id` — **not** the walk root `id` passed to
-    /// `layout_dirty_root`.  For a real `viewport → sliver → lazy →
-    /// child` chain the walk root is the viewport, but `defer_remove` /
-    /// `mark_needs_layout` must target the lazy sliver so it reflows after
-    /// its child list changes.
-    ///
-    /// Drained before `pending_builds` in `layout_dirty_root` (dispose
-    /// before build, matching ADR-0003 Decision 3's recycling policy),
-    /// post-drop of the subtree borrows,
-    /// so no aliased `NodePtr` is live when the `defer_remove` calls touch
-    /// `&mut self`.  `Mutex` for the same historical reason as
-    /// `pending_builds` (see its doc) -- no longer load-bearing for
-    /// thread-safety, since `SubtreeArena` is `!Send + !Sync` regardless.
-    pending_removes: Mutex<Vec<(flui_foundation::RenderId, flui_foundation::RenderId)>>,
     /// Child-build requests from `RenderSliverList`: `(sliver_id,
     /// logical_index)` pairs recorded when an absent in-band child is
-    /// encountered.  Unlike `pending_builds`, no render object is pre-built
-    /// here — the element tree decides what to build.  Drained after
-    /// `pending_builds` in `layout_dirty_root` and moved into
-    /// `PipelineOwner::pending_child_requests` for the binding layer.  Same
-    /// `Mutex` discipline.
+    /// encountered.  No render object is pre-built here — the element tree
+    /// decides what to build.  Drained in `layout_dirty_root` and moved into
+    /// `PipelineOwner::pending_child_requests` for the binding layer, which
+    /// services it between layout passes of the same frame's fixpoint.
+    /// `Mutex`, not `RefCell`: at the time this shipped, the layout-child
+    /// closure required `&SubtreeArena: Send + Sync` (no longer true after
+    /// the `PipelineCell` port dropped that bound -- `SubtreeArena` itself
+    /// is `!Send + !Sync` now, transitively via its `NodePtr`s; see the pin
+    /// in `tests`). Downgrading to `RefCell` now that nothing requires the
+    /// lock is a follow-up, not done here.
     pending_child_requests: Mutex<Vec<(flui_foundation::RenderId, usize)>>,
     /// Retain-band signals from element-owned slivers.
     ///
@@ -313,8 +285,6 @@ impl<'tree> SubtreeArena<'tree> {
             by_id,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds,
-            pending_builds: Mutex::new(Vec::new()),
-            pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
             laid_out: Mutex::new(Vec::new()),
@@ -369,37 +339,10 @@ impl<'tree> SubtreeArena<'tree> {
             .is_some_and(|(_, flag)| flag.load(Ordering::Relaxed))
     }
 
-    /// Takes the on-demand child builds recorded during this walk, leaving
-    /// the sink empty.  Called by [`super::PipelineOwner::layout_dirty_root`]
-    /// once the walk has returned, so the requests can be enqueued on the
-    /// deferred-mutation queue (which needs `&mut PipelineOwner`).  Touches
-    /// only the sink — never a [`NodePtr`] — so it does not interact with
-    /// the raw-pointer aliasing.
-    pub(super) fn take_pending_builds(
-        &self,
-    ) -> Vec<crate::protocol::sliver_protocol::PendingBuild> {
-        std::mem::take(&mut *self.pending_builds.lock())
-    }
-
-    /// Takes the deferred child removals recorded during this walk.
-    /// Returns `(parent, child)` pairs — the parent is the sliver's
-    /// `node_id`, not the walk root — so `defer_remove` targets the correct
-    /// ancestor.  Symmetric to [`Self::take_pending_builds`]; called in
-    /// `layout_dirty_root` BEFORE `take_pending_builds` (dispose before
-    /// build, matching ADR-0003 Decision 3's recycling policy) and AFTER
-    /// `drop(arena)` so no `NodePtr` alias is live
-    /// when the removes are applied.
-    pub(super) fn take_pending_removes(
-        &self,
-    ) -> Vec<(flui_foundation::RenderId, flui_foundation::RenderId)> {
-        std::mem::take(&mut *self.pending_removes.lock())
-    }
-
     /// Takes the child-build requests recorded by request-strategy slivers
     /// during this walk.  Returns `(sliver_id, logical_index)` pairs
     /// for the binding layer to service after the frame.  Called in
-    /// `layout_dirty_root` AFTER `take_pending_builds` (Remove → Insert →
-    /// Request ordering) and AFTER `drop(arena)` so no `NodePtr` alias is
+    /// `layout_dirty_root` AFTER `drop(arena)` so no `NodePtr` alias is
     /// live.
     pub(super) fn take_pending_child_requests(&self) -> Vec<(flui_foundation::RenderId, usize)> {
         std::mem::take(&mut *self.pending_child_requests.lock())
@@ -1714,12 +1657,12 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     }
 
     // No early-return here for the empty case: a lazy sliver (e.g.
-    // `RenderSliverListLazy`) starts with zero attached children and must
-    // call `build_and_layout_box_child` on its first frame to schedule
-    // initial builds via `pending_builds`.  The `ErasedSliverLayoutCtx`
-    // path is always taken for slivers so that the context's
-    // `pending_builds` / `pending_removes` sinks are wired in — even when
-    // the current child list is empty.
+    // `RenderSliverList`) starts with zero attached children and must
+    // call `request_child_build` on its first frame to schedule
+    // initial requests via `pending_child_requests`.  The
+    // `ErasedSliverLayoutCtx` path is always taken for slivers so that the
+    // context's `pending_child_requests` / `pending_retain_bands` sinks are
+    // wired in — even when the current child list is empty.
     let mut child_states: Vec<crate::protocol::ErasedSliverChildState> = child_ids
         .iter()
         .map(|&cid| crate::protocol::ErasedSliverChildState::new(cid))
@@ -1741,8 +1684,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     //
     // Parent-data: `ErasedSliverChildState.parent_data` starts as `None`;
     // seed from persisted state so lazy sliver consumers (e.g.
-    // `RenderSliverListLazy`) can read the logical index installed by
-    // `apply_deferred_mutation` on the previous frame.
+    // `RenderSliverList`) can read the logical index the element tree
+    // stamped on insertion (`stamp_sliver_logical_index` in
+    // `flui-view/src/element/behavior_commons.rs`) on a previous frame.
     // `ParentData: DynClone` makes this a cheap heap clone (one `Box` per
     // attached child; K is bounded by viewport/cache band, not by item count).
     //
@@ -1914,8 +1858,6 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             box_cb_ref,
             box_intrinsic_cb_ref,
             id,
-            &arena.pending_builds,
-            &arena.pending_removes,
             &arena.pending_child_requests,
             &arena.pending_retain_bands,
         );
@@ -2043,8 +1985,6 @@ mod tests {
             &FxHashMap::default(),
         );
         assert!(arena.by_id.is_empty());
-        assert!(arena.take_pending_builds().is_empty());
-        assert!(arena.take_pending_removes().is_empty());
         assert!(arena.take_pending_child_requests().is_empty());
         assert!(arena.take_pending_retain_bands().is_empty());
         assert!(arena.take_layout_failures().is_empty());
@@ -2127,8 +2067,6 @@ mod tests {
             by_id,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
-            pending_builds: Mutex::new(Vec::new()),
-            pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
             laid_out: Mutex::new(Vec::new()),
@@ -2159,8 +2097,8 @@ mod tests {
         assert!(third.is_ok(), "entry after drop must succeed");
     }
 
-    /// Verify that all three pending sinks (builds, removes, child
-    /// requests) drain and leave themselves empty.
+    /// Verify that both pending sinks (child requests, retain bands) drain
+    /// and leave themselves empty.
     #[test]
     fn pending_sink_drains_are_idempotent() {
         let poison = LayoutPoison::default();
@@ -2168,8 +2106,6 @@ mod tests {
             by_id: HashMap::new(),
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
-            pending_builds: Mutex::new(Vec::new()),
-            pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
             laid_out: Mutex::new(Vec::new()),
@@ -2180,23 +2116,8 @@ mod tests {
             _lifetime: PhantomData,
         };
 
-        // Push a remove entry directly into the sink (simulating what
+        // Push a request entry directly into the sink (simulating what
         // ErasedSliverLayoutCtx does during a walk).
-        let parent_id = RenderId::new(1);
-        let child_id = RenderId::new(2);
-        arena.pending_removes.lock().push((parent_id, child_id));
-
-        // First drain must return the entry.
-        let removes = arena.take_pending_removes();
-        assert_eq!(removes.len(), 1);
-        assert_eq!(removes[0], (parent_id, child_id));
-
-        // Second drain must be empty (idempotent / mem::take).
-        let removes2 = arena.take_pending_removes();
-        assert!(removes2.is_empty(), "second drain must be empty");
-
-        // Same for builds and request sink (empty — idempotency).
-        assert!(arena.take_pending_builds().is_empty());
         let sliver_id = RenderId::new(3);
         arena.pending_child_requests.lock().push((sliver_id, 7));
         let requests = arena.take_pending_child_requests();
