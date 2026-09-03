@@ -23,16 +23,15 @@
 //! 4. Compute [`SliverGeometry`] with `scroll_offset_correction` from the
 //!    accumulated anchor correction.
 //!
-//! # Anchor-correction state machine
+//! # Anchor correction
 //!
-//! `Virtualizer::set_measured` emits `Some(AnchorCorrection)` when a
-//! re-measured item above the scroll anchor shifts the anchored pixel
-//! position. Consumer policy:
-//!
-//! - **Backward scroll** (offset decreased): suppress emission and preserve
-//!   the accumulator — apply it when the user scrolls forward again.
-//! - **Forward / idle / stationary**: emit `scroll_offset_correction` if
-//!   non-zero and reset the accumulator.
+//! `Virtualizer::set_measured` (and the adaptive re-hint of unmeasured items)
+//! emits `Some(AnchorCorrection)` when the extent of something above the
+//! scroll anchor changes, shifting the anchored pixel position. The deltas
+//! accumulate over the pass and are emitted as `scroll_offset_correction` at
+//! its end, whatever the scroll direction — the anchor stays pixel-stationary
+//! (ADR-0051). The old backward-scroll suppression is gone: withholding the
+//! correction was itself the one-frame jump it meant to prevent.
 //!
 //! # Next-frame latency
 //!

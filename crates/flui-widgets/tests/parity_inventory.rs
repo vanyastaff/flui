@@ -135,6 +135,13 @@ struct Pin {
     /// executable statement of exactly what the oracle would have asserted.
     #[serde(default)]
     decision: Option<String>,
+    /// For a decided pin: the active (non-`#[ignore]`d) test in the same
+    /// target that asserts the replacement contract. Required with
+    /// `decision`, checked to resolve — deleting or ignoring the replacement
+    /// fails this gate, so a decided divergence can never quietly lose its
+    /// coverage.
+    #[serde(default)]
+    replacement: Option<String>,
     /// The oracle file whose case(s) this pin diverges from. Required when
     /// `cases` is non-empty.
     oracle: Option<String>,
@@ -569,6 +576,38 @@ fn targets_match_the_tree_and_pins_are_owned() {
                 t.rust,
                 p.test
             );
+            if p.decision.is_some() {
+                let replacement = p.replacement.as_deref().unwrap_or_else(|| {
+                    panic!(
+                        "target `{}`: decided pin `{}` must name its `replacement` test",
+                        t.rust, p.test
+                    )
+                });
+                let active = scanned
+                    .tests
+                    .iter()
+                    .find(|x| x.name == replacement)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "target `{}`: decided pin `{}` names replacement `{replacement}`, \
+                             which is not a test in {}.rs",
+                            t.rust, p.test, t.rust
+                        )
+                    });
+                assert!(
+                    !active.ignored,
+                    "target `{}`: replacement `{replacement}` for decided pin `{}` is #[ignore]d — \
+                     a decided divergence must keep an active FLUI oracle",
+                    t.rust, p.test
+                );
+            } else {
+                assert!(
+                    p.replacement.is_none(),
+                    "target `{}`: pin `{}` names a `replacement` but no `decision`",
+                    t.rust,
+                    p.test
+                );
+            }
             if let Some(adr) = &p.decision {
                 let path = format!("{}/../../docs/adr", env!("CARGO_MANIFEST_DIR"));
                 let exists = std::fs::read_dir(&path).is_ok_and(|dir| {

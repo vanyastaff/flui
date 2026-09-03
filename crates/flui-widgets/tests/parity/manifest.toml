@@ -921,6 +921,7 @@ cases = ["SliverList handles 0 scrollOffsetCorrection"]
 test = "inaccurate_scroll_offset_converges_to_the_oracles_exact_windows_over_multiple_drags"
 capability = "anchor-stationary scroll correction: FLUI keeps the first visible item in place when off-screen items above it change size, where Flutter lets the growth shift the content; the FLUI oracle beside the pin asserts the replacement contract"
 decision = "ADR-0051"
+replacement = "inaccurate_scroll_offset_keeps_the_anchor_stationary_and_still_reaches_the_start"
 oracle = "widgets/slivers_test.dart"
 cases = ["SliverList can handle inaccurate scroll offset due to changes in children list"]
 
