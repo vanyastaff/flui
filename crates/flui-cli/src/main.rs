@@ -109,6 +109,15 @@ enum Commands {
         /// Interactive mode (prompt for all options)
         #[arg(short, long)]
         interactive: bool,
+
+        /// Skip the `cargo check` that normally runs after scaffolding.
+        ///
+        /// The check only reports; it never fails the command. Skipping it
+        /// makes `create` finish in well under a second — for scripted use,
+        /// offline machines, or when you will build the project right away
+        /// anyway.
+        #[arg(long)]
+        no_check: bool,
     },
 
     /// Run the FLUI application
@@ -596,6 +605,7 @@ fn main() {
             local,
             lib,
             interactive,
+            no_check,
         } => {
             if interactive || name.is_none() {
                 // Interactive mode — newtypes already validated by prompts
@@ -607,8 +617,11 @@ fn main() {
                         config.template,
                         config.platforms.or(platforms),
                         path,
-                        local,
-                        lib,
+                        commands::create::CreateOptions {
+                            local,
+                            lib,
+                            skip_check: no_check,
+                        },
                     )
                 })()
             } else {
@@ -625,8 +638,11 @@ fn main() {
                         template,
                         platforms,
                         path,
-                        local,
-                        lib,
+                        commands::create::CreateOptions {
+                            local,
+                            lib,
+                            skip_check: no_check,
+                        },
                     )
                 })()
             }

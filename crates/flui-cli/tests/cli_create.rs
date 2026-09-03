@@ -70,6 +70,11 @@ fn assert_generated_project_compiles(template: &str) {
             "--org",
             "com.test",
             "--local",
+            // The scaffold's own post-create `cargo check` is a full cold
+            // build into the scaffold's private target dir — measured at
+            // 236 s on the CI runner, per template. This test's check
+            // below is the oracle; the internal one only reports.
+            "--no-check",
         ])
         .arg("--path")
         .arg(&target)

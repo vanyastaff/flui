@@ -10,6 +10,20 @@ use crate::{Platform, Template};
 use console::style;
 use std::path::{Path, PathBuf};
 
+/// The boolean switches of `flui create`, grouped so adding one is a field,
+/// not a positional argument every caller has to count.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CreateOptions {
+    /// Use local path dependencies instead of crates.io versions.
+    pub local: bool,
+    /// Create a library instead of an application.
+    pub lib: bool,
+    /// Skip the post-scaffold `cargo check`. The check only reports — it
+    /// never fails the command — so skipping it changes nothing about the
+    /// scaffold, only how long `create` takes.
+    pub skip_check: bool,
+}
+
 /// Execute the create command.
 ///
 /// # Arguments
@@ -33,9 +47,13 @@ pub fn execute(
     template: Template,
     platforms: Option<Vec<Platform>>,
     path: Option<PathBuf>,
-    local: bool,
-    _is_lib: bool,
+    options: CreateOptions,
 ) -> CliResult<()> {
+    let CreateOptions {
+        local,
+        lib: _is_lib,
+        skip_check,
+    } = options;
     cliclack::intro(style(" flui create ").on_cyan().black())?;
     cliclack::log::info(format!("Project: {}", style(&project_name).cyan()))?;
 
@@ -79,17 +97,24 @@ pub fn execute(
     init_git_repo(project_dir)?;
     spinner.stop(format!("{} Initialized git repository", style("✓").green()));
 
-    // Step 4: Run cargo check
-    let spinner = cliclack::spinner();
-    spinner.start("Running cargo check (this may take a while)...");
-    let check_passed = run_cargo_check(project_dir)?;
-    if check_passed {
-        spinner.stop(format!("{} Cargo check completed", style("✓").green()));
+    // Step 4: Run cargo check (unless asked not to)
+    if skip_check {
+        cliclack::log::info(format!(
+            "{} Skipped cargo check (--no-check)",
+            style("→").dim()
+        ))?;
     } else {
-        spinner.stop(format!(
-            "{} Cargo check found problems — project created but does not yet compile",
-            style("⚠").yellow()
-        ));
+        let spinner = cliclack::spinner();
+        spinner.start("Running cargo check (this may take a while)...");
+        let check_passed = run_cargo_check(project_dir)?;
+        if check_passed {
+            spinner.stop(format!("{} Cargo check completed", style("✓").green()));
+        } else {
+            spinner.stop(format!(
+                "{} Cargo check found problems — project created but does not yet compile",
+                style("⚠").yellow()
+            ));
+        }
     }
 
     // Print next steps
