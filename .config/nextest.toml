@@ -14,3 +14,11 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 # A test that has exited but left a child process holding stdout/stderr open
 # is reported as a leak after this grace period instead of hanging the run.
 leak-timeout = "1s"
+
+# The three trybuild suites compile every compile_fail case with a real
+# rustc. Measured on a 32-core machine: 56 s, 67 s, and 78 s; a 4-core CI
+# runner needs several times that, so they get their own budget instead of a
+# higher global.
+[[profile.default.overrides]]
+filter = 'binary_id(flui-engine::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests)'
+slow-timeout = { period = "180s", terminate-after = 4 }
