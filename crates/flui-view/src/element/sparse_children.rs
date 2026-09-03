@@ -225,6 +225,14 @@ impl SparseChildren {
     /// empty and reported in [`ReconcileOutcome::end_reached_at`] so the
     /// caller can clamp the render object's count.
     ///
+    /// `retain_band` bounds the work: a keyless resident outside the band the
+    /// layout pass retained is neither built nor evicted here — it is carried
+    /// over for the band eviction that follows, so a scroll that rebuilds the
+    /// host never calls the builder for an item it is about to drop (Flutter
+    /// rebuilds every resident and collects the garbage afterwards). A view
+    /// built for an out-of-band index that claims no resident is dropped, not
+    /// mounted.
+    ///
     /// `host` is the adaptor element's own id (the parent for fresh mounts).
     pub(crate) fn reconcile(
         &mut self,
@@ -238,27 +246,40 @@ impl SparseChildren {
             builder,
             find_index_by_key,
             item_count,
+            retain_band: (band_first, band_last),
         } = source;
+        let in_band = |index: usize| index >= band_first && index < band_last;
         // ── Phase 1: snapshot the residents, decide what to build, build ──
         struct Resident {
             index: usize,
             id: ElementId,
             key: Option<Box<dyn ViewKey>>,
             claimed: bool,
+            /// Keyless and outside the band: left to the band eviction.
+            carried_over: bool,
         }
         let mut residents: Vec<Resident> = self
             .by_logical_index
             .iter()
-            .map(|(&index, &id)| Resident {
-                index,
-                id,
-                key: tree
+            .map(|(&index, &id)| {
+                let key = tree
                     .get(id)
-                    .and_then(|node| node.key().map(ViewKey::clone_key)),
-                claimed: false,
+                    .and_then(|node| node.key().map(ViewKey::clone_key));
+                let carried_over = key.is_none() && !in_band(index);
+                Resident {
+                    index,
+                    id,
+                    key,
+                    claimed: false,
+                    carried_over,
+                }
             })
             .collect();
-        let mut targets: BTreeSet<usize> = residents.iter().map(|r| r.index).collect();
+        let mut targets: BTreeSet<usize> = residents
+            .iter()
+            .filter(|r| !r.carried_over)
+            .map(|r| r.index)
+            .collect();
         if let Some(find) = find_index_by_key {
             for resident in &residents {
                 if let Some(key) = &resident.key
@@ -331,7 +352,10 @@ impl SparseChildren {
         // ── Apply into a fresh map: evict, relocate, update, mount ──
         let mut any_work = false;
         let mut next: BTreeMap<usize, ElementId> = BTreeMap::new();
-        for resident in residents.iter().filter(|r| !r.claimed) {
+        for resident in residents.iter().filter(|r| r.carried_over) {
+            next.insert(resident.index, resident.id);
+        }
+        for resident in residents.iter().filter(|r| !r.claimed && !r.carried_over) {
             tree.remove_subtree(resident.id, owner);
             tracing::trace!(
                 logical_index = resident.index,
@@ -377,11 +401,13 @@ impl SparseChildren {
                     }
                     next.insert(*index, resident.id);
                 }
-            } else {
+            } else if in_band(*index) {
                 let child = mount_sparse_child(*index, view, host, tree, owner, pipeline);
                 next.insert(*index, child);
                 any_work = true;
             }
+            // An unclaimed view outside the band would be evicted by the
+            // band before it was ever laid out: not mounted.
         }
         self.by_logical_index = next;
         ReconcileOutcome {
@@ -402,6 +428,12 @@ pub(crate) struct ReconcileSource<'a> {
     pub(crate) find_index_by_key: Option<FindIndexByKeyRef<'a>>,
     /// The data source length as the render object currently knows it.
     pub(crate) item_count: usize,
+    /// The `[first, last)` band the layout pass retained. A keyless resident
+    /// outside it is about to be evicted by the band and is carried over
+    /// untouched rather than rebuilt; nothing is mounted fresh outside it.
+    /// Keyed residents are always reconciled — their data may have moved
+    /// into the band.
+    pub(crate) retain_band: (usize, usize),
 }
 
 /// What [`SparseChildren::reconcile`] did.
@@ -1323,6 +1355,113 @@ mod reconcile_tests {
         out
     }
 
+    #[derive(Clone)]
+    struct PlainBox;
+    impl RenderView for PlainBox {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::new(Some(px(10.0)), Some(px(10.0)))
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+    impl View for PlainBox {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
+    /// A scroll that rebuilds the host must not call the builder for the
+    /// keyless residents the band is about to drop: they are carried over
+    /// for the band eviction, untouched. A keyed resident outside the band
+    /// is still reconciled — here its data moved into the band, so it is
+    /// relocated rather than rebuilt fresh. Nothing is mounted outside the
+    /// band, even when the builder has a view for the index.
+    #[test]
+    fn keyless_residents_outside_the_band_are_carried_over_not_rebuilt() {
+        let mut fx = fixture();
+        // Keyless residents at 0 and 1, a keyed one (id 7) at 2; the band
+        // moves to [4, 8) and the keyed item's data moves to index 5.
+        let plain = {
+            let mut element_owner = fx.owner.element_owner_mut();
+            [0usize, 1].map(|index| {
+                fx.sparse.ensure(
+                    index,
+                    &PlainBox,
+                    fx.host,
+                    &mut fx.tree,
+                    &mut element_owner,
+                    &fx.pipeline,
+                )
+            })
+        };
+        let keyed = seed(&mut fx, &[(2, 7)])[0];
+        let built = Rc::new(std::cell::RefCell::new(Vec::<usize>::new()));
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = {
+            let built = Rc::clone(&built);
+            Rc::new(move |i| {
+                built.borrow_mut().push(i);
+                match i {
+                    5 => Some(BoxedView(Box::new(KeyedBox::new(7)))),
+                    _ => Some(BoxedView(Box::new(PlainBox))),
+                }
+            })
+        };
+        let find = |key: &dyn ViewKey| (key.key_eq(&ValueKey::new(7u32))).then_some(5);
+        let outcome = {
+            let mut element_owner = fx.owner.element_owner_mut();
+            fx.sparse.reconcile(
+                ReconcileSource {
+                    builder: &*builder,
+                    find_index_by_key: Some(&find),
+                    item_count: 100,
+                    retain_band: (4, 8),
+                },
+                fx.host,
+                &mut fx.tree,
+                &mut element_owner,
+                &fx.pipeline,
+            )
+        };
+        assert!(outcome.did_work);
+        let built = built.borrow();
+        assert!(
+            !built.contains(&0) && !built.contains(&1),
+            "the builder must not run for keyless residents outside the band; built={built:?}"
+        );
+        assert_eq!(
+            fx.sparse.get(0),
+            Some(plain[0]),
+            "carried over, not evicted here"
+        );
+        assert_eq!(
+            fx.sparse.get(1),
+            Some(plain[1]),
+            "carried over, not evicted here"
+        );
+        assert_eq!(fx.sparse.get(2), None, "the keyed resident left index 2");
+        assert_eq!(
+            fx.sparse.get(5),
+            Some(keyed),
+            "the keyed resident moved into the band"
+        );
+        assert_eq!(index_of(&fx, keyed), Some(5));
+        assert_eq!(
+            fx.sparse.len(),
+            3,
+            "nothing mounted fresh: index 2 was out of band"
+        );
+    }
+
     /// Residents at 3 and 4 both shift to 4 and 5 (an insert at the head,
     /// reported by the callback): both elements survive, at their new
     /// indices, with their render parent data re-stamped — the in-place
@@ -1346,6 +1485,7 @@ mod reconcile_tests {
                     builder: &*builder,
                     find_index_by_key: Some(&find),
                     item_count: 6,
+                    retain_band: (0, usize::MAX),
                 },
                 fx.host,
                 &mut fx.tree,
@@ -1396,6 +1536,7 @@ mod reconcile_tests {
                     builder: &*builder,
                     find_index_by_key: None,
                     item_count: 4,
+                    retain_band: (0, usize::MAX),
                 },
                 fx.host,
                 &mut fx.tree,
@@ -1426,6 +1567,7 @@ mod reconcile_tests {
                     builder: &*builder,
                     find_index_by_key: None,
                     item_count: 2,
+                    retain_band: (0, usize::MAX),
                 },
                 fx.host,
                 &mut fx.tree,

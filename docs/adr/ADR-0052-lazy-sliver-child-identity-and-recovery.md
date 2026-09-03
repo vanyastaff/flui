@@ -54,7 +54,10 @@ laid out.
 
 1. **Two-phase keyed reconcile into a fresh map** (`SparseChildren::reconcile`).
    Snapshot every resident `(index, element, key)`; build every resident index
-   plus, for each keyed resident, the index `find_index_by_key` reports; match
+   inside the band the layout pass retained (a keyless resident outside it is
+   carried over untouched for the band eviction that follows — never rebuilt,
+   never mounted fresh out of band) plus every keyed resident's index and, for
+   each keyed resident, the index `find_index_by_key` reports; match
    each built view to the first unclaimed resident with an equal key wherever
    it sat (first wins on duplicate local keys, as the dense reconciler does),
    or positionally for keyless views of the same type; apply into a fresh map —
@@ -98,9 +101,15 @@ laid out.
   half-states (owner without render id, render id without owner) stay `BUG:`
   panics.
 - **Recorded divergences.** `_replaceMovedChildren` (Flutter: `SliverList`
-  only) is effectively always on: a moved resident's old index is rebuilt
-  because every resident index is; the extra build is evicted by the next band
-  at worst. The `_didUnderflow` look-ahead one past the last key is covered
+  only) is effectively always on: a moved keyed resident's old index is rebuilt
+  because every keyed resident's index is; the extra build is evicted by the
+  next band at worst. **Improvement over Flutter:** `performRebuild` rebuilds
+  every resident and `collectGarbage` drops the out-of-band ones afterwards;
+  FLUI reconciles before it evicts (so a keyed item can move with the viewport
+  and keep its state) and therefore skips the keyless residents the band is
+  about to drop — a scroll that rebuilds the host costs no builder call for an
+  item it does not keep (`grid_view_builder_does_not_cache_item_builder_calls_across_scroll`
+  pins the count). The `_didUnderflow` look-ahead one past the last key is covered
   structurally: the adaptor's render update forces a layout, and the band walk
   re-requests the next index inside the same frame's fixpoint. `updateChild`'s
   layout-offset preservation across a render swap is covered by the walk
