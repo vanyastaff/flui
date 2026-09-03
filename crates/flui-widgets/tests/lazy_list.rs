@@ -628,14 +628,16 @@ fn lazy_list_view_builder_materialises_the_band_in_the_same_frame() {
     const ITEM_EXTENT: f32 = 48.0;
     let list = |offset: f32| {
         ListView::builder(ITEM_COUNT, ITEM_EXTENT, |i| {
-            if i < ITEM_COUNT {
-                Some(Text::new(format!("item{i}")).boxed())
-            } else {
-                None
-            }
+            // Exactly `ITEM_EXTENT` tall, so a jump to `50 * ITEM_EXTENT`
+            // lands on item 50 whatever the estimate has adapted to.
+            (i < ITEM_COUNT).then(|| {
+                SizedBox::new(200.0, ITEM_EXTENT)
+                    .child(Text::new(format!("item{i}")))
+                    .boxed()
+            })
         })
-        // Composite items with no per-item boundary: the harder case, where
-        // the item's own render object is what must carry the index.
+        // No per-item boundary: the harder case, where the item's own
+        // render object is what must carry the index.
         .repaint_boundaries(false)
         .offset(offset)
     };
@@ -802,4 +804,187 @@ fn lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band() {
             _ => unreachable!(),
         }
     }
+}
+
+// ============================================================================
+// Estimate adaptation — a wrong seed estimate must not cost a frame per band
+// generation, nor trip the frame's pass bound
+// ============================================================================
+
+/// The geometry of the tree's single `RenderSliverList`.
+fn sliver_list_geometry(laid: &LaidOut) -> flui_rendering::constraints::SliverGeometry {
+    let slivers = laid.find_all_by_render_type("RenderSliverList");
+    assert_eq!(slivers.len(), 1, "expected exactly one RenderSliverList");
+    laid.sliver_geometry(slivers[0])
+}
+
+/// A 20× over-estimate (200 px seed, 10 px items) once converged geometrically:
+/// each pass requested only the handful of items the stale hint said still
+/// fit, so a 600 px viewport took a dozen generations — one frame each on the
+/// old post-paint service path, a `BUG:` overrun once servicing moved inside
+/// the bounded fixpoint. The hint now follows the running mean of measured
+/// extents, so the bootstrap frame alone lays out the whole visible band.
+#[test]
+fn lazy_list_view_builder_overestimated_extent_settles_in_the_bootstrap_frame() {
+    const ITEM_COUNT: usize = 1000;
+    const SEED_ESTIMATE: f32 = 200.0;
+    const ACTUAL: f32 = 10.0;
+    const VIEWPORT_HEIGHT: f32 = 600.0;
+    let laid = lay_out(
+        ListView::builder(ITEM_COUNT, SEED_ESTIMATE, |i| {
+            (i < ITEM_COUNT).then(|| {
+                SizedBox::new(200.0, ACTUAL)
+                    .child(Text::new(format!("item{i}")))
+                    .boxed()
+            })
+        })
+        .repaint_boundaries(false),
+        tight(200.0, VIEWPORT_HEIGHT),
+    );
+    // Every item that intersects the viewport is built AND laid out — not
+    // just the six the seed estimate would have requested first.
+    let visible_items = (VIEWPORT_HEIGHT / ACTUAL) as usize;
+    for i in [0, visible_items / 2, visible_items - 1] {
+        let text = format!("item{i}");
+        let height = laid.find_text(&text).map(|id| laid.size(id).height.get());
+        assert!(
+            height.is_some_and(|h| h > 0.0),
+            "{text} must be laid out by the bootstrap frame under a 20× over-estimate; height={height:?}"
+        );
+    }
+    let geometry = sliver_list_geometry(&laid);
+    assert!(
+        geometry.paint_extent >= VIEWPORT_HEIGHT - 1.0,
+        "the sliver must fill the viewport once its band settled; paint_extent={}",
+        geometry.paint_extent
+    );
+}
+
+/// Content whose measured extents keep falling faster than the mean can
+/// follow — every item past the entry point is half the height of the one
+/// before — cannot settle inside the frame's lazy-band budget. That is the
+/// deferral path, and it must stay a deferral: no `BUG:` panic in a debug
+/// build, and the band completes over the following frames exactly as the
+/// old post-paint service path would have.
+#[test]
+fn lazy_list_view_builder_pathological_extents_defer_instead_of_panicking() {
+    const ITEM_COUNT: usize = 400;
+    const ENTRY: usize = 25;
+    const SEED: f32 = 200.0;
+    let height_of = |i: usize| -> f32 {
+        if i < ENTRY {
+            SEED
+        } else {
+            (SEED / 2f32.powi((i - ENTRY) as i32 + 1)).max(0.25)
+        }
+    };
+    let mut laid = lay_out(
+        ListView::builder(ITEM_COUNT, SEED, move |i| {
+            (i < ITEM_COUNT).then(|| SizedBox::new(200.0, height_of(i)).boxed())
+        })
+        .offset(ENTRY as f32 * SEED),
+        tight(200.0, 600.0),
+    );
+    // Whatever the first frame managed, the following frames finish the band.
+    for _ in 0..12 {
+        laid.tick();
+    }
+    // Past the entry point the remaining 375 items sum to under 200 px, so a
+    // settled band reaches the list's end: every one of them is resident
+    // (one boundary + one box each, plus the viewport and the sliver). The
+    // 25 items above the entry are never measured — they stay hinted, as in
+    // Flutter — so the total extent is deliberately not asserted here.
+    let resident_items = laid.render_node_count().saturating_sub(2) / 2;
+    assert!(
+        resident_items >= ITEM_COUNT - ENTRY,
+        "the band must reach the list's end over a few frames; resident items={resident_items}"
+    );
+    let geometry = sliver_list_geometry(&laid);
+    assert!(
+        geometry.scroll_extent.is_finite() && geometry.scroll_extent > 0.0,
+        "geometry must stay sane while the band settles; {geometry:?}"
+    );
+}
+
+/// The lazy-band pass budget is a deferral, never a panic. With the budget
+/// forced to a single pass, the frame that mounts a 20× over-estimated list
+/// services exactly one band generation inside its fixpoint; the widened
+/// band is picked up by the frame's post-paint safety net — built, but not
+/// laid out until the next frame — and that next frame completes it. The
+/// default budget settles the same scene in one frame (the test above), so
+/// the knob is what makes this path observable.
+#[test]
+fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame() {
+    const ITEM_COUNT: usize = 1000;
+    const SEED_ESTIMATE: f32 = 200.0;
+    const ACTUAL: f32 = 10.0;
+    let list = || {
+        ListView::builder(ITEM_COUNT, SEED_ESTIMATE, |i| {
+            (i < ITEM_COUNT).then(|| {
+                SizedBox::new(200.0, ACTUAL)
+                    .child(Text::new(format!("item{i}")))
+                    .boxed()
+            })
+        })
+        .repaint_boundaries(false)
+    };
+    let mut laid = lay_out(SizedBox::square(10.0), tight(200.0, 600.0));
+    laid.build_owner_mut().set_lazy_band_pass_budget_for_test(1);
+
+    laid.pump_widget(list());
+    // `try_size`: a deferred item exists in the render tree (the safety net
+    // built it) but has no geometry until the next frame lays it out.
+    let laid_out = |laid: &LaidOut, i: usize| -> Option<f32> {
+        laid.find_text(&format!("item{i}"))
+            .and_then(|id| laid.try_size(id))
+            .map(|size| size.height.get())
+    };
+    assert!(
+        laid_out(&laid, 0).is_some_and(|h| h > 0.0),
+        "the first band generation is serviced and laid out within the budget"
+    );
+    let deferred = laid_out(&laid, 30);
+    assert!(
+        deferred.is_none_or(|h| h == 0.0),
+        "an item the widened band requested past the budget must not be laid out \
+         this frame (deferred, not panicked); item30 height={deferred:?}"
+    );
+
+    laid.tick();
+    assert!(
+        laid_out(&laid, 30).is_some_and(|h| h > 0.0),
+        "the deferred generation completes on the next frame"
+    );
+}
+
+/// The reviewer's scenario for the in-frame fixpoint: a 1000 px seed over
+/// 1 px items in a 200 px viewport. The first pass requests one item; that
+/// single measurement must be enough for the same frame to request, build,
+/// and lay out the whole viewport — the loop only re-runs when a manager did
+/// work, so the band the measurement moved has to be requested in the pass
+/// that measured it, not discovered by the next frame.
+#[test]
+fn lazy_list_view_builder_thousandfold_overestimate_fills_the_viewport_in_the_bootstrap_frame() {
+    const ITEM_COUNT: usize = 100_000;
+    const SEED_ESTIMATE: f32 = 1000.0;
+    const ACTUAL: f32 = 1.0;
+    const VIEWPORT_HEIGHT: f32 = 200.0;
+    let laid = lay_out(
+        ListView::builder(ITEM_COUNT, SEED_ESTIMATE, |i| {
+            (i < ITEM_COUNT).then(|| SizedBox::new(200.0, ACTUAL).boxed())
+        })
+        .repaint_boundaries(false),
+        tight(200.0, VIEWPORT_HEIGHT),
+    );
+    let geometry = sliver_list_geometry(&laid);
+    assert!(
+        geometry.paint_extent >= VIEWPORT_HEIGHT - 1.0,
+        "the viewport must be filled by the bootstrap frame; paint_extent={}",
+        geometry.paint_extent
+    );
+    let resident_items = laid.render_node_count().saturating_sub(2);
+    assert!(
+        resident_items >= VIEWPORT_HEIGHT as usize,
+        "every 1 px item across the 200 px viewport must be resident; got {resident_items}"
+    );
 }

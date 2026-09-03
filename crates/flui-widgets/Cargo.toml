@@ -88,6 +88,9 @@ flui-widgets = { path = ".", version = "0.2.0", features = ["testing"] }
 # Integration tests drive the real layout pipeline through the render harness.
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
+# `test-utils` reaches the fixpoint's lazy-band pass budget so a widget test can
+# drive the deferral path with ordinary content.
+flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
 flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 # Drives a real `AnimationController` in the `FadeTransition` integration test.

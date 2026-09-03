@@ -125,6 +125,18 @@ pub(crate) struct DirtyElement {
     depth: usize,
 }
 
+/// Which finalize step a lazy-sliver service pass ends with — see
+/// [`BuildOwner::service_child_requests_between_passes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServiceFinalize {
+    /// Unmount the evicted children and verify the frame's `GlobalKey`
+    /// reservations (the post-`run_frame` call).
+    Frame,
+    /// Unmount the evicted children only; the ledger keeps accumulating
+    /// until the frame's own finalize (a fixpoint pass).
+    UnmountOnly,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuildScopeTarget {
     /// Drain every dirty element. Used when no layout-builder scopes exist.
@@ -330,6 +342,11 @@ pub struct BuildOwner {
     /// Empty unless a `LayoutBuilder` is mounted; the seam is inert until one is.
     pub(crate) layout_builder_registry: LayoutBuilderRegistry,
 
+    /// How many fixpoint passes may service lazy-sliver child requests per
+    /// frame before the rest is deferred to the next frame — see
+    /// `owner/layout_builder.rs`. Only a test lowers it.
+    pub(crate) lazy_band_pass_budget: usize,
+
     /// Lazily allocated root/isolated dirty-work buckets. A nonempty isolated
     /// bucket is the sole pending-scope authority; no parallel scope set can
     /// drift from the queued work.
@@ -492,6 +509,7 @@ impl BuildOwner {
             external_inbox: Arc::new(Mutex::new(HashMap::new())),
             child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
             layout_builder_registry: LayoutBuilderRegistry::default(),
+            lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
             build_scope_queues: None,
             focus_manager,
             async_driver: None,
@@ -1513,6 +1531,37 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &flui_rendering::pipeline::PipelineCell,
     ) -> bool {
+        self.service_child_requests_impl(tree, pipeline, ServiceFinalize::Frame)
+    }
+
+    /// [`Self::service_child_requests`] as run between two layout passes of
+    /// the same frame's fixpoint.
+    ///
+    /// Identical servicing, but the finalize step only unmounts the evicted
+    /// children — it does **not** verify (and so does not clear) the
+    /// `GlobalKey` reservation ledger. Verification is a per-*frame* verdict
+    /// (ADR-0050): two lazy slivers that both declare one key in the same
+    /// frame must be seen by one verification, and the fixpoint may service
+    /// them in different passes. The frame's post-`run_frame` call keeps
+    /// the full finalize.
+    pub(crate) fn service_child_requests_between_passes(
+        &mut self,
+        tree: &mut ElementTree,
+        pipeline: &flui_rendering::pipeline::PipelineCell,
+    ) -> bool {
+        self.service_child_requests_impl(tree, pipeline, ServiceFinalize::UnmountOnly)
+    }
+
+    fn service_child_requests_impl(
+        &mut self,
+        tree: &mut ElementTree,
+        pipeline: &flui_rendering::pipeline::PipelineCell,
+        finalize: ServiceFinalize,
+    ) -> bool {
+        let finalize = |owner: &mut Self, tree: &mut ElementTree| match finalize {
+            ServiceFinalize::Frame => owner.finalize_tree(tree),
+            ServiceFinalize::UnmountOnly => owner.unmount_inactive_elements(tree),
+        };
         // 1. Drain pending buffers from the pipeline (a brief checkout).
         let (pending_requests, retain_bands) = pipeline.with_mut(|guard| {
             let requests = guard.take_pending_child_requests();
@@ -1527,7 +1576,7 @@ impl BuildOwner {
         // elements and their render nodes are leaked until the next
         // `service_child_requests` call that has pending layout requests.
         if !self.inactive_elements.is_empty() {
-            self.finalize_tree(tree);
+            finalize(self, tree);
         }
 
         if pending_requests.is_empty() && retain_bands.is_empty() {
@@ -1667,7 +1716,7 @@ impl BuildOwner {
         // 7. Finalize: unmount evicted children (pushed to inactive by
         //    `retain_band` → `evict` → `tree.remove_subtree`) and the lazy
         //    children pushed by `on_unmount` (F3).
-        self.finalize_tree(tree);
+        finalize(self, tree);
         any_service_did_work
     }
 
