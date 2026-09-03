@@ -15,7 +15,7 @@ oracle.*
 - **Status:** Accepted (2026-09-03)
 - **Date:** 2026-09-03
 - **Deciders:** @vanyastaff
-- **Scope:** `RenderSliverList` / `RenderSliverListLazy` and the shared band
+- **Scope:** `RenderSliverList` and the shared band
   walk (`crates/flui-objects/src/sliver/virtualized_band.rs`), the
   `Virtualizer`'s `AnchorCorrection` (`crates/flui-rendering/src/virtualization/mod.rs`),
   the viewport's correction loop (`crates/flui-objects/src/sliver/viewport.rs`).

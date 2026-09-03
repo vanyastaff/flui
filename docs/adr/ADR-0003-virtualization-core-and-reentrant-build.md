@@ -237,3 +237,41 @@ The core lives as an **intra-crate module** inside `flui-rendering`: the sliver 
 ## Implementation
 
 See the sequenced plan: [`docs/plans/2026-06-12-001-feat-virtualization-core-and-reentrant-build-plan.md`](../plans/2026-06-12-001-feat-virtualization-core-and-reentrant-build-plan.md). Units U1 (`virtualization` module + SumTree/B+-tree-backed core; delete `FenwickExtents`), U2 (mid-pass-capable build contract), U3 (lazy `SliverList` consumer, incl. backward-scroll correction suppression), U4 (future: grid/staggered, `flui-view` lazy widgets, crate-extraction on 2nd direct consumer, recycling-if-benched), with ARCH-GATE on U2's contract, API-GATE on the **module's** public surface, and QA via the `render_viewport` harness.
+
+---
+
+## Amendment (2026-09-03) — the mid-pass backend is retired; rejected alternative (c) is adopted knowingly
+
+**What changed.** Every lazy sliver now builds its children through one path: during layout the
+render object calls `request_child_build(logical_index)` and `emit_retain_band(first, last)`; the
+element tree's `ChildManager` services those requests *between layout passes inside the frame*
+(ADR-0017's layout↔build fixpoint, bounded by `MAX_LAYOUT_BUILD_PASSES` and the softer
+`MAX_LAZY_BAND_PASSES`), and the post-frame service picks up whatever the budget left over. The
+render-owned strategy — `RenderSliverListLazy`, `build_and_layout_box_child` / `dispose_box_child`,
+the `PendingBuild` / `pending_builds` / `pending_removes` sinks, `ChildLayout::Ready` and
+`BoxChildRef`, the deferred-mutation queue (`pipeline/deferred.rs`, `defer_insert_box` /
+`defer_insert_sliver` / `defer_remove` / `defer_update`, `apply_deferred_mutation`) and the
+`LogicalIndexParentData` stamp — is deleted. None of it had a production producer: no view ever
+created the render-owned object, and the deferred queue's only producer was the seam itself. The
+"Current state" bullet above that calls the queue "fully wired", and the U3c completion note under
+Decision 2, describe deleted code and are kept as history.
+
+**What this does to Decision 2.** The build contract is no longer mid-pass-shaped. `ChildLayout`
+is `{ Scheduled, NoChild, Unwired }`: a request is answered at *whole-pass* granularity — the
+child is built after the pass that asked for it and laid out in the next pass of the same frame.
+That is rejected alternative (c), adopted with its eyes open. The property Decision 2 wanted —
+a fresh band materialised in the frame that needed it, no blank frame, no one-frame-behind scroll
+— is delivered by the in-frame fixpoint instead of by re-entrancy, and the price is the one a
+mid-pass design would not have paid: under a wrong extent estimate a band converges over several
+passes (each pass sizes the band with the hints it has, then the measurements move the window),
+which is why the walk adapts its estimate to the band's own measured mean and re-queries the band
+in the pass that measured it (ADR-0051's walk), and why a lazy band that still does not settle
+defers the remainder to the next frame rather than tripping the fixpoint's `BUG:` bound.
+Re-adding a mid-pass backend is now a **breaking change** to `SliverLayoutCtxErased` and
+`ChildLayout`; the "never locked out" guarantee above is superseded by this record, not violated
+by accident. It returns only with a consumer that measures a real cost of whole-pass granularity.
+
+**What this does to Decision 3.** `OffBandDisposal` is gone with the seam: eviction has exactly
+one owner, the element tree's `SparseChildren::retain_band`, driven by the band the render object
+emitted. The ABA double-remove hazard the walk's disposal step used to document was the
+consequence of having two owners; it cannot arise with one.
