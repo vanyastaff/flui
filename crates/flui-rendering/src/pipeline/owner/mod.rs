@@ -47,7 +47,6 @@ use crate::testing::parent_data::ParentDataSeed;
 use crate::{constraints::BoxConstraints, storage::RenderTree};
 
 use super::{
-    deferred::DeferredMutations,
     handle::{DirtyRequest, DirtySender},
     notifier::VisualUpdateNotifier,
     phase::{Idle, PipelinePhase},
@@ -243,17 +242,6 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// headless tests.
     device_pixel_ratio: f32,
 
-    /// Deferred mutation queue for re-entrant layout.
-    ///
-    /// During layout, render objects may enqueue child insertions,
-    /// removals, or property updates. These are applied after the
-    /// layout pass completes, outside the `&mut` borrow scope of
-    /// the layout walk.
-    ///
-    /// This is the Rust-native alternative to Flutter's
-    /// `invokeLayoutCallback` which uses unsafe re-entrant mutation.
-    deferred_mutations: DeferredMutations,
-
     /// Private sender cloned only into node-bound invalidation capabilities.
     dirty_sender: DirtySender,
 
@@ -282,9 +270,10 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// logical index band `[first, last)` emitted by
     /// `RenderSliverList::perform_layout` after each walk.  The binding layer
     /// consumes this via [`Self::take_pending_retain_bands`] after every frame
-    /// to drive `SparseChildren::retain_band` through the element tree, evicting
-    /// out-of-band lazy children rather than calling `dispose_box_child` from
-    /// the render tree (which would double-remove element-owned nodes).
+    /// to drive `SparseChildren::retain_band` through the element tree,
+    /// evicting out-of-band lazy children. The render side never disposes a
+    /// child itself, which is what avoids double-removing element-owned
+    /// nodes.
     pending_retain_bands: Vec<(RenderId, usize, usize)>,
 
     /// Phantom marker for the typestate phase. Always zero-sized.
@@ -351,7 +340,6 @@ where
         retained_boundaries: from.retained_boundaries,
         last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,
-        deferred_mutations: from.deferred_mutations,
         dirty_sender: from.dirty_sender,
         dirty_rx: from.dirty_rx,
         #[cfg(any(test, feature = "testing"))]
@@ -387,9 +375,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// Each entry is `(sliver_id, cache_first, cache_last)`.  The binding
     /// layer calls this to drive `SparseChildren::retain_band` through the
-    /// element tree, evicting out-of-band lazy children via the element tree
-    /// rather than via `dispose_box_child` (which would ABA-double-remove
-    /// element-owned render nodes).
+    /// element tree, evicting out-of-band lazy children. The render side
+    /// never disposes a child itself, which is what avoids an ABA
+    /// double-remove of element-owned render nodes.
     #[must_use]
     pub fn take_pending_retain_bands(&mut self) -> Vec<(RenderId, usize, usize)> {
         std::mem::take(&mut self.pending_retain_bands)

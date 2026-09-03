@@ -437,7 +437,14 @@ assert!(has_overflow(&run, run.id("fitted")));   // 100×100 child in 50×50 box
 | `snapshot_decorated_box` | `RenderDecoratedBox` | Shadow → fill → border command order |
 | `snapshot_clip_layer` | `RenderClipRect` | Clip-layer scoping (structural, not just a rect) |
 | `snapshot_opacity_layer` | `RenderOpacity` | Opacity layer alpha value (invisible to `structure()`) |
-| `snapshot_lazy_sliver_visible_band` | `RenderSliverListLazy` | Virtualization: only ≈ visible+cache children painted, not all 1 000 |
+
+The same file's `scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded`
+(not a snapshot test) proves `RenderSliverList`'s render-side windowing math tracks scroll
+position and stays bounded; the paint-layer claim it replaces (bounded materialization end to
+end, through a real `ChildManager`) is covered by
+[`flui-widgets/tests/lazy_list.rs`](../../flui-widgets/tests/lazy_list.rs)
+(`lazy_list_view_builder_convergence_stabilizes`,
+`lazy_list_view_builder_off_band_eviction_bounded`).
 
 ## See also
 

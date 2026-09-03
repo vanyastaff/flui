@@ -137,22 +137,7 @@ impl Hash for SliverMultiBoxAdaptorParentData {
     }
 }
 
-impl crate::parent_data::base::LogicalIndexParentData for SliverMultiBoxAdaptorParentData {
-    fn set_logical_index(&mut self, index: usize) {
-        self.index = index;
-    }
-}
-
-impl crate::parent_data::base::ParentData for SliverMultiBoxAdaptorParentData {
-    // `private_interfaces`: `LogicalIndexParentData` is `pub(crate)` by design;
-    // this method is pipeline-internal plumbing, not part of the public contract.
-    #[expect(private_interfaces)]
-    fn as_logical_index_mut(
-        &mut self,
-    ) -> Option<&mut dyn crate::parent_data::base::LogicalIndexParentData> {
-        Some(self)
-    }
-}
+impl crate::parent_data::base::ParentData for SliverMultiBoxAdaptorParentData {}
 
 // ============================================================================
 // SLIVER GRID PARENT DATA
@@ -220,22 +205,7 @@ impl Hash for SliverGridParentData {
     }
 }
 
-impl crate::parent_data::base::LogicalIndexParentData for SliverGridParentData {
-    fn set_logical_index(&mut self, index: usize) {
-        self.index = index;
-    }
-}
-
-impl crate::parent_data::base::ParentData for SliverGridParentData {
-    // `private_interfaces`: `LogicalIndexParentData` is `pub(crate)` by design;
-    // this method is pipeline-internal plumbing, not part of the public contract.
-    #[expect(private_interfaces)]
-    fn as_logical_index_mut(
-        &mut self,
-    ) -> Option<&mut dyn crate::parent_data::base::LogicalIndexParentData> {
-        Some(self)
-    }
-}
+impl crate::parent_data::base::ParentData for SliverGridParentData {}
 
 // ============================================================================
 // TREE SLIVER NODE PARENT DATA
@@ -303,22 +273,7 @@ impl Hash for TreeSliverNodeParentData {
     }
 }
 
-impl crate::parent_data::base::LogicalIndexParentData for TreeSliverNodeParentData {
-    fn set_logical_index(&mut self, index: usize) {
-        self.index = index;
-    }
-}
-
-impl crate::parent_data::base::ParentData for TreeSliverNodeParentData {
-    // `private_interfaces`: `LogicalIndexParentData` is `pub(crate)` by design;
-    // this method is pipeline-internal plumbing, not part of the public contract.
-    #[expect(private_interfaces)]
-    fn as_logical_index_mut(
-        &mut self,
-    ) -> Option<&mut dyn crate::parent_data::base::LogicalIndexParentData> {
-        Some(self)
-    }
-}
+impl crate::parent_data::base::ParentData for TreeSliverNodeParentData {}
 
 // ============================================================================
 // SLIVER LOGICAL CONTAINER PARENT DATA
@@ -491,7 +446,6 @@ mod tests {
     use flui_types::geometry::px;
 
     use super::*;
-    use crate::parent_data::base::LogicalIndexParentData;
 
     fn hash_of<T: Hash>(value: &T) -> u64 {
         let mut hasher = DefaultHasher::new();
@@ -570,24 +524,6 @@ mod tests {
     }
 
     #[test]
-    fn sliver_multi_box_adaptor_parent_data_logical_index_channel() {
-        let mut data = SliverMultiBoxAdaptorParentData::new(1);
-
-        // Exercise the concrete inherent setter directly.
-        data.set_logical_index(5);
-        assert_eq!(data.index, 5);
-
-        // Exercise the type-erased `ParentData::as_logical_index_mut` channel
-        // the pipeline uses to reach `set_logical_index` through `dyn ParentData`.
-        let erased: &mut dyn ParentData = &mut data;
-        let logical = erased
-            .as_logical_index_mut()
-            .expect("multi-box adaptor parent data must expose the logical-index channel");
-        logical.set_logical_index(11);
-        assert_eq!(data.index, 11);
-    }
-
-    #[test]
     fn test_sliver_grid_parent_data() {
         let data = SliverGridParentData::new(3, 50.0).with_layout_offset(100.0);
 
@@ -621,17 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn sliver_grid_parent_data_logical_index_channel() {
-        let mut data = SliverGridParentData::new(0, 0.0);
-        let erased: &mut dyn ParentData = &mut data;
-        let logical = erased
-            .as_logical_index_mut()
-            .expect("grid parent data must expose the logical-index channel");
-        logical.set_logical_index(7);
-        assert_eq!(data.index, 7);
-    }
-
-    #[test]
     fn test_tree_sliver_node_parent_data() {
         let data = TreeSliverNodeParentData::new(0, 0);
         assert!(data.is_root());
@@ -662,19 +587,6 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(hash_of(&a), hash_of(&b));
         assert_ne!(hash_of(&a), hash_of(&c));
-    }
-
-    #[test]
-    fn tree_sliver_node_parent_data_logical_index_channel() {
-        let mut data = TreeSliverNodeParentData::new(0, 3);
-        let erased: &mut dyn ParentData = &mut data;
-        let logical = erased
-            .as_logical_index_mut()
-            .expect("tree sliver node parent data must expose the logical-index channel");
-        logical.set_logical_index(9);
-        assert_eq!(data.index, 9);
-        // Setting the logical index must not disturb unrelated fields.
-        assert_eq!(data.depth, 3);
     }
 
     #[test]

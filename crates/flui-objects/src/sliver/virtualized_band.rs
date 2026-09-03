@@ -1,25 +1,21 @@
-//! Shared virtualizer band-walk for lazily-virtualized sliver layout.
-//!
-//! Extracted from `RenderSliverListLazy::perform_layout` so both the
-//! build strategy ([`super::sliver_list_lazy::RenderSliverListLazy`]) and the
-//! request strategy ([`super::sliver_list::RenderSliverList`]) drive
-//! the same geometry engine without duplicating per-frame virtualizer
-//! bookkeeping.
+//! Shared virtualizer band-walk for the request-strategy lazily-virtualized
+//! sliver list ([`super::sliver_list::RenderSliverList`]).
 //!
 //! ## Sharing contract
 //!
-//! [`walk_virtualizer_band`] handles everything that is identical across
-//! strategies: virtualizer sync, band query, logical↔dense-slot reconciliation,
-//! off-band disposal, geometry computation, and anchor correction.  The
-//! strategy-specific piece — what to do with an in-band index that has **no**
-//! currently-attached child — is delegated to the caller via three closures:
+//! [`walk_virtualizer_band`] handles everything the request strategy needs:
+//! virtualizer sync, band query, logical↔dense-slot reconciliation, geometry
+//! computation, and anchor correction. Off-band eviction is NOT one of
+//! those — the element tree owns it, driven by the retained band this
+//! function returns (the caller forwards it to `ctx.emit_retain_band`); the
+//! render side never disposes a child itself, which is what avoids an ABA
+//! double-remove between the render and element sides.
 //!
-//! - `resident_build_fallback(logical_i)`: called when laying out an already-
-//!   attached child, in case the backend concurrently evicted the slot.
+//! The one piece still delegated to the caller is what to do with an
+//! in-band index that has **no** currently-attached child:
+//!
 //! - `on_absent(logical_i, dense_count, box_constraints, ctx)`: decides what
-//!   to do with a missing in-band item (build it, request it, etc.).
-//! - `on_dispose(logical_i)`: called for each off-band child after the
-//!   deferred removal is enqueued, for caller-side cleanup.
+//!   to do with a missing in-band item (request it, etc.).
 
 use std::collections::BTreeMap;
 
@@ -31,8 +27,7 @@ use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry, child_paint_offset},
     context::SliverLayoutContext,
     parent_data::SliverMultiBoxAdaptorParentData,
-    protocol::{BoxChildRef, BoxProtocol, ChildLayout},
-    traits::RenderObject,
+    protocol::ChildLayout,
     virtualization::{AnchorCorrection, ScrollWindow, Virtualizer},
 };
 
@@ -44,33 +39,7 @@ use flui_rendering::{
 const ADAPTIVE_ESTIMATE_RELATIVE_TOLERANCE: f32 = 0.05;
 
 // ============================================================================
-// OFF-BAND DISPOSAL STRATEGY
-// ============================================================================
-
-/// Controls whether `walk_virtualizer_band` disposes off-band children from
-/// the render tree or leaves that to the element tree.
-///
-/// - `RenderOwned`: the render object owns its children (built via
-///   `build_and_layout_box_child`); `dispose_box_child` enqueues the removal.
-///   Used by [`super::sliver_list_lazy::RenderSliverListLazy`].
-///
-/// - `ElementOwned`: the element tree owns the children; the render sliver
-///   must NOT call `dispose_box_child` (that would evict the render node from
-///   under the element's feet, causing an ABA double-remove on the next
-///   element-side eviction). Instead the caller reads back the band indices
-///   returned by [`walk_virtualizer_band`] and signals the element tree via
-///   `ctx.emit_retain_band`.  Used by
-///   [`super::sliver_list::RenderSliverList`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OffBandDisposal {
-    /// Caller is `RenderSliverListLazy`; dispose via `ctx.dispose_box_child`.
-    RenderOwned,
-    /// Caller is `RenderSliverList`; skip dispose — element tree handles it.
-    ElementOwned,
-}
-
-// ============================================================================
-// HELPER FREE FUNCTIONS  (pub(super) — used by sliver_list_lazy + sliver_list)
+// HELPER FREE FUNCTIONS  (pub(super) — used by sliver_list)
 // ============================================================================
 
 /// Adapts [`SliverConstraints`] to the protocol-agnostic [`ScrollWindow`]
@@ -188,10 +157,9 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 
 /// Drives the full virtualized-band layout pass for one sliver scroll frame.
 ///
-/// This is the shared algorithm for `RenderSliverListLazy` (build strategy)
-/// and `RenderSliverList` (request strategy).  Both share the
-/// virtualizer geometry bookkeeping; the absent-in-band action is the only
-/// point of divergence and is delegated to the caller.
+/// This is the request strategy's shared geometry engine, used by
+/// [`super::sliver_list::RenderSliverList`]. The absent-in-band action is the
+/// only point delegated to the caller.
 ///
 /// ## Parameters
 ///
@@ -201,29 +169,15 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 /// - `item_count`: total known item count.  May be shrunken mid-pass by the
 ///   `NoChild` outcome of `on_absent`.
 /// - `pending_correction`: the anchor-correction accumulator (see
-///   [`super::sliver_list_lazy`] module doc).
+///   [`super::sliver_list`] module doc).
 /// - `attached_child_count`: written with the post-layout dense child count
 ///   so the `&self` hit-test walk can reverse-iterate without re-querying.
 /// - `constraints`: sliver constraints for this layout pass.
 /// - `ctx`: live sliver layout context wired to the pipeline.
-/// - `resident_build_fallback(logical_i)`: factory supplied to
-///   [`SliverLayoutContext::build_and_layout_box_child`] for in-band children
-///   that are **already** attached, covering the rare case where the backend
-///   concurrently evicted the slot.  Return `None` for request-only consumers.
 /// - `on_absent(logical_i, dense_count, box_constraints, ctx)`: strategy for
-///   each in-band index that has **no** attached child.  The closure owns the
-///   complete decision, including whether to use `dense_count` as the
-///   deferred-insert position.  `dense_count` is the pre-loop child count
-///   (the correct append index for the build strategy; a request-only strategy
-///   ignores it — the element decides placement at service time).
-/// - `off_band_disposal`: whether to call `ctx.dispose_box_child` for off-band
-///   children ([`OffBandDisposal::RenderOwned`]) or to skip that call and let
-///   the element tree handle removal via the retain-band channel
-///   ([`OffBandDisposal::ElementOwned`]).
-/// - `on_dispose(logical_i)`: called for each off-band child **after**
-///   `ctx.dispose_box_child` enqueues the deferred removal (only fires for
-///   `RenderOwned`). Use this for data bookkeeping inside the render/layout
-///   layer, not for owner-plane UI callbacks.
+///   each in-band index that has **no** attached child.  `dense_count` is the
+///   pre-loop child count; the request strategy ignores it — the element
+///   tree decides placement once it services the request.
 ///
 /// ## Returns
 ///
@@ -231,9 +185,10 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 /// - `geometry` — the [`SliverGeometry`] for this pass.
 /// - `cache_first` / `cache_last` — the `[first, last)` logical-index band
 ///   that was retained this pass (the `Virtualizer::query` result, clamped
-///   by any mid-pass `item_count` shrink via `NoChild`).  `ElementOwned`
-///   callers forward these to `ctx.emit_retain_band(cache_first, cache_last)`.
-pub(super) fn walk_virtualizer_band<'ctx, F, G, H>(
+///   by any mid-pass `item_count` shrink via `NoChild`).  The caller forwards
+///   these to `ctx.emit_retain_band(cache_first, cache_last)` so the element
+///   tree can evict everything outside the band.
+pub(super) fn walk_virtualizer_band<'ctx, G>(
     virtualizer: &mut Virtualizer,
     logical_to_slot: &mut BTreeMap<usize, usize>,
     item_count: &mut usize,
@@ -241,20 +196,15 @@ pub(super) fn walk_virtualizer_band<'ctx, F, G, H>(
     attached_child_count: &mut usize,
     constraints: &SliverConstraints,
     ctx: &mut SliverLayoutContext<'ctx, Variable, SliverMultiBoxAdaptorParentData>,
-    off_band_disposal: OffBandDisposal,
-    resident_build_fallback: &mut F,
     on_absent: &mut G,
-    on_dispose: &mut H,
 ) -> (SliverGeometry, usize, usize)
 where
-    F: FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
     G: FnMut(
         usize, // logical_i
-        usize, // dense_count (pre-loop, the deferred-insert position)
+        usize, // dense_count (pre-loop; ignored by the request strategy)
         BoxConstraints,
         &mut SliverLayoutContext<'ctx, Variable, SliverMultiBoxAdaptorParentData>,
-    ) -> ChildLayout<BoxChildRef>,
-    H: FnMut(usize), // logical_i of each off-band disposed child (RenderOwned only)
+    ) -> ChildLayout,
 {
     // ── 1. Sync virtualizer count ──────────────────────────────────────────
     virtualizer.set_count(*item_count);
@@ -302,33 +252,23 @@ where
 
         if let Some(&slot) = logical_to_slot.get(&logical_i) {
             // Present: lay out and record the real extent.
-            // Child already exists — build closure is unreachable on the Ready
-            // arm, but the backend may call it if the slot was concurrently
-            // evicted.  `resident_build_fallback` is a disjoint borrow from
-            // `virtualizer`; Rust-2021 disjoint capture applies at the call site.
-            let result =
-                ctx.build_and_layout_box_child(slot, logical_i, box_constraints, &mut |_| {
-                    resident_build_fallback(logical_i)
-                });
-            if let ChildLayout::Ready(BoxChildRef { size, .. }) = result {
-                let extent = main_axis_extent(size, constraints.axis_direction);
-                let correction = virtualizer.set_measured(logical_i, extent, anchor);
-                accumulate_anchor_correction(pending_correction, correction);
-            }
+            let size = ctx.layout_box_child(slot, box_constraints);
+            let extent = main_axis_extent(size, constraints.axis_direction);
+            let correction = virtualizer.set_measured(logical_i, extent, anchor);
+            accumulate_anchor_correction(pending_correction, correction);
         } else {
             // Absent: strategy owns the complete decision.
-            let result = on_absent(logical_i, dense_count, box_constraints, ctx);
-            // match_same_arms: the `Scheduled | Ready(_)` no-op arm is kept separate
-            // from the `#[non_exhaustive]` forward-compat wildcard on purpose — the
-            // arm exists to document the per-variant semantics, and merging it into
-            // `_` would silently absorb future `ChildLayout` variants.
+            // match_same_arms: `Scheduled`'s empty body is kept separate from
+            // the `#[non_exhaustive]` forward-compat wildcard on purpose — the
+            // arm exists to document this variant's semantics, and merging it
+            // into `_` would silently absorb future `ChildLayout` variants.
             #[expect(clippy::match_same_arms)]
-            match result {
-                ChildLayout::Scheduled | ChildLayout::Ready(_) => {
-                    // Scheduled = parked for next frame (v1 next-frame backend).
-                    // Ready     = laid out in this pass (future mid-pass backend).
-                    // Both: use the virtualizer estimate this pass; real extent
-                    // arrives on the next layout pass.
+            match on_absent(logical_i, dense_count, box_constraints, ctx) {
+                ChildLayout::Scheduled => {
+                    // Parked for the element tree to service between layout
+                    // passes of this frame's fixpoint. Use the virtualizer
+                    // estimate this pass; the real extent arrives once the
+                    // request is serviced and a later pass lays it out.
                 }
                 ChildLayout::NoChild => {
                     // Strategy declined — end of data.  Clamp count to actual.
@@ -337,8 +277,8 @@ where
                     break;
                 }
                 ChildLayout::Unwired => {
-                    // No backend wired — expected in Direct/test contexts; a
-                    // production consumer that hits this arm has a wiring bug.
+                    // No request sink wired — expected in Direct/test contexts;
+                    // a production consumer that hits this arm has a wiring bug.
                     break;
                 }
                 // ChildLayout is #[non_exhaustive]; forward-compat wildcard.
@@ -410,44 +350,21 @@ where
     // in-band check → disposed instead of panicking on `offset_of`.
     let cache_last = cache_last.min(*item_count);
 
-    // ── 5. Dispose off-band children ──────────────────────────────────────
-    // For `RenderOwned` slivers, `dispose_box_child` enqueues the render-node
-    // removal — the queued removal must be ordered before the corresponding
-    // insert in `layout_dirty_root`.
-    // For `ElementOwned` slivers, we skip this entirely: the element tree drives
-    // eviction via `SparseChildren::retain_band` using the `cache_first`/
-    // `cache_last` band returned below, preventing the ABA double-remove that
-    // would occur if both the render side and the element side tried to free the
-    // same node.
-    if off_band_disposal == OffBandDisposal::RenderOwned {
-        for (&logical_i, &slot) in logical_to_slot.iter() {
-            let in_band = logical_i >= cache_first && logical_i < cache_last;
-            if !in_band {
-                let keep_alive = ctx
-                    .child_parent_data(slot)
-                    .is_some_and(|pd| pd.keep_alive.keep_alive);
-                if keep_alive {
-                    continue;
-                }
-                if let Some(id) = ctx.child_id(slot) {
-                    ctx.dispose_box_child(id);
-                }
-                on_dispose(logical_i);
-            }
-        }
-    }
-
-    // ── 6. Snapshot attached count for hit-test (takes &self) ─────────────
+    // ── 5. Snapshot attached count for hit-test (takes &self) ─────────────
+    // Off-band eviction is not this function's job: the element tree drives
+    // it via `SparseChildren::retain_band` using the `cache_first`/
+    // `cache_last` band this function returns, which is what avoids an ABA
+    // double-remove between the render and element sides.
     *attached_child_count = ctx.child_count();
 
-    // ── 7. Build slot → logical map for positioning ───────────────────────
-    // Rebuilt after the layout pass so newly-materialized Ready children are
+    // ── 6. Build slot → logical map for positioning ───────────────────────
+    // Rebuilt after the layout pass so newly-materialized children are
     // included.
     let slot_to_logical: Vec<Option<usize>> = (0..*attached_child_count)
         .map(|slot| ctx.child_parent_data(slot).map(|pd| pd.index))
         .collect();
 
-    // ── 8. Write layout_offset to parent data ─────────────────────────────
+    // ── 7. Write layout_offset to parent data ─────────────────────────────
     // O(K · log n): K slot reads, each offset_of O(log n).
     for (slot, maybe_logical) in slot_to_logical.iter().enumerate() {
         let Some(&logical_i) = maybe_logical.as_ref() else {
@@ -464,7 +381,7 @@ where
         }
     }
 
-    // ── 9. Compute geometry ────────────────────────────────────────────────
+    // ── 8. Compute geometry ────────────────────────────────────────────────
     let scroll_extent = virtualizer.total_extent().value();
     let paint_extent = calc_paint_offset(constraints, 0.0, scroll_extent);
     let cache_extent = calc_cache_offset(constraints, 0.0, scroll_extent);
@@ -481,7 +398,7 @@ where
         ..SliverGeometry::ZERO
     };
 
-    // ── 10. Position in-band children ─────────────────────────────────────
+    // ── 9. Position in-band children ───────────────────────────────────────
     // Run after geometry is known so `child_paint_offset` clips correctly.
     // O(K · log n): K slots, each offset_of + item_extent_from_virtualizer O(log n).
     for (slot, maybe_logical) in slot_to_logical.iter().enumerate() {
@@ -499,7 +416,7 @@ where
         ctx.position_child(slot, paint_offset);
     }
 
-    // ── 11. Anchor correction ──────────────────────────────────────────────
+    // ── 10. Anchor correction ───────────────────────────────────────────────
     let scroll_offset_correction = take_anchor_correction(pending_correction);
 
     let geometry = SliverGeometry {
@@ -507,8 +424,8 @@ where
         ..geometry
     };
 
-    // Return the geometry and the retained band so element-owned callers can
-    // forward it to `ctx.emit_retain_band`.
+    // Return the geometry and the retained band so the caller can forward it
+    // to `ctx.emit_retain_band`.
     (geometry, cache_first, cache_last)
 }
 

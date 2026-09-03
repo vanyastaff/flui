@@ -308,237 +308,146 @@ fn snapshot_opacity_layer() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. RenderSliverListLazy — only visible+cache children appear in the snapshot
+// 4. RenderSliverList — the request-strategy band tracks scroll position
+//    across head/mid/tail stops, staying bounded
 // ---------------------------------------------------------------------------
+//
+// The paint-layer virtualization claim this section used to make against
+// `RenderSliverListLazy` (only a bounded set of `DrawRect`s appear out of
+// 1 000 declared items) had no analog once the render-owned build strategy
+// was deleted: `RenderSliverList` never builds a child itself, so what
+// paints depends entirely on what a `ChildManager` attached beforehand.  A
+// bare render-only harness carries no `ChildManager`, so seeding a bounded
+// set of residents directly would prove nothing about virtualization — it
+// would just paint exactly the residents seeded, whatever that count is.
+// That end-to-end claim (bounded render-tree node count against a huge
+// declared item count, through a real `ChildManager`) is covered by
+// `crates/flui-widgets/tests/lazy_list.rs`
+// (`lazy_list_view_builder_convergence_stabilizes`,
+// `lazy_list_view_builder_off_band_eviction_bounded`).
+//
+// What a render-only harness CAN still verify is the render-side half of the
+// seam: the layout pass's own windowing math must ask for the right logical
+// indices via `request_child_build`, tracking scroll position, regardless of
+// who services the request.  That is what the test below checks.
 
-/// Snapshot of a `RenderSliverListLazy` with 1 000 items inside a small
-/// viewport, after enough frames to settle the visible+cache band.
+/// Scrolls a `RenderSliverList` of 1 000 declared items from the top, to a
+/// mid offset (~item 500), to a deep offset (the tail), and at each stop
+/// asserts the logical indices requested via `request_child_build` are both
+/// bounded (virtualization: distant items are never requested) and correctly
+/// windowed (the requested band tracks the scroll position, not a stale one).
 ///
-/// The key invariant: the snapshot shows `DrawRect` entries for ONLY a bounded
-/// set of children (≈ visible+cache band), NOT all 1 000.  This proves
-/// virtualization works at the paint layer — off-band children are never painted.
-///
-/// Each live child is a `RenderColoredBox` that paints exactly one `DrawRect`.
-/// Counting `DrawRect` lines in the snapshot gives the painted child count.
+/// Nothing is ever attached in this harness (no `ChildManager`), so every
+/// in-band index is "absent" on every pass and re-requested in full — this
+/// test is about the freshly computed window each pass, not about anything
+/// persisting across passes.
 #[test]
-#[expect(clippy::type_complexity)]
-fn snapshot_lazy_sliver_visible_band() {
-    use std::sync::Arc;
-
-    use flui_objects::{RenderColoredBox as SnapColoredBox, RenderSliverListLazy, RenderViewport};
-    use flui_rendering::{
-        protocol::{BoxProtocol, RenderObject},
-        testing::sliver_node,
-    };
-    use flui_types::{Size, geometry::px, layout::AxisDirection};
-
-    // N=1000 items, 50 px each; viewport = 200 px → ~4 visible + cache band.
-    let n_items = 1_000usize;
-    let item_height = 50.0_f32;
-    let viewport_height = 200.0_f32;
-    // Default cache_extent ≈ 250 px → band ≈ (200+500)/50 ≈ 14.
-    // Allow 3× for pipeline timing jitter.
-    let band_limit = ((viewport_height + 500.0) / item_height).ceil() as usize * 3 + 5;
-
-    // Each item is a colored box (paints a DrawRect → visible in the layer tree).
-    // The sliver lays children out to tight cross-axis × item_height constraints.
-    let source: Arc<dyn Fn(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>> + Send + Sync> =
-        Arc::new(move |_idx| {
-            Some(Box::new(SnapColoredBox::red(300.0, item_height))
-                as Box<dyn RenderObject<BoxProtocol>>)
-        });
-
-    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source));
-
-    let mut run = RenderTester::mount(
-        box_node(RenderViewport::new(AxisDirection::TopToBottom)).child(sliver_node(lazy)),
-    )
-    .with_size(Size::new(px(300.0), px(viewport_height)))
-    .run_frame();
-
-    // Pump enough frames to settle the full visible+cache band.
-    // The v1 next-frame backend builds one absent child per frame.
-    let settle_frames = ((viewport_height + 500.0) / item_height).ceil() as usize + 10;
-    run.pump_frames(settle_frames);
-
-    // Mark root paint-dirty and pump one final frame so the snapshot captures
-    // the fully-settled, all-band-children-visible layer tree.
-    run.mark_needs_paint(run.root());
-    run.pump();
-
-    let snap = run.snapshot();
-
-    // Each painted sliver child emits exactly one DrawRect line (one per
-    // RenderColoredBox).  Count DrawRect lines to get the painted child count.
-    let painted_children = snap.lines().filter(|l| l.contains("DrawRect")).count();
-
-    assert!(
-        painted_children > 0,
-        "at least one child must be painted after settling; snap:\n{snap}"
-    );
-    assert!(
-        painted_children <= band_limit,
-        "painted child count {painted_children} exceeds band_limit {band_limit}: \
-         virtualization must prevent painting all {n_items} items.\n\
-         Snapshot:\n{snap}"
-    );
-
-    insta::assert_snapshot!("lazy_sliver_visible_band", snap);
-}
-
-// ---------------------------------------------------------------------------
-// 5. RenderSliverListLazy — scrolling a 1 000-item list keeps the
-//    materialized band bounded and correctly windowed at each stop
-// ---------------------------------------------------------------------------
-
-/// Scrolls a `RenderSliverListLazy` of 1 000 items from the top, to a mid
-/// offset (~item 500), to a deep offset (the tail), and at each stop asserts
-/// the materialized (attached) child band is both bounded (laziness: distant
-/// items are never built) and correctly windowed (the band tracks the scroll
-/// position, not a stale one).
-///
-/// Companion to [`snapshot_lazy_sliver_visible_band`], which only proves
-/// laziness at a fixed offset=0; this proves it holds across a scroll.
-#[test]
-#[expect(clippy::type_complexity)] // matches snapshot_lazy_sliver_visible_band's own item source type
-fn scrolling_lazy_sliver_keeps_materialized_band_bounded_and_windowed() {
-    use std::sync::Arc;
-
-    use flui_objects::{RenderColoredBox as SnapColoredBox, RenderSliverListLazy, RenderViewport};
-    use flui_rendering::{
-        parent_data::SliverMultiBoxAdaptorParentData,
-        protocol::{BoxProtocol, RenderObject},
-        testing::{Probe, sliver_node},
-        view::ScrollableViewportOffset,
-    };
-    use flui_types::{Size, geometry::px, layout::AxisDirection};
+fn scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded() {
+    use flui_objects::RenderSliverList;
+    use flui_rendering::{testing::sliver_node, view::ScrollableViewportOffset};
+    use flui_types::layout::AxisDirection;
 
     let n_items = 1_000usize;
     let item_height = 50.0_f32;
     let viewport_height = 200.0_f32;
-    // Same generous bound as `snapshot_lazy_sliver_visible_band`: total
-    // *attached* children (not just painted ones) must never approach N.
-    let band_limit = ((viewport_height + 500.0) / item_height).ceil() as usize * 3 + 5;
-    let settle_frames = ((viewport_height + 500.0) / item_height).ceil() as usize + 10;
+    // Default cache_extent ≈ 250 px each side → band ≈ (200+500)/50 ≈ 14;
+    // +5 covers rounding at the window edges.
+    let band_limit = ((viewport_height + 500.0) / item_height).ceil() as usize + 5;
     let max_scroll = n_items as f32 * item_height - viewport_height;
     let mid_scroll = 500.0 * item_height;
 
-    let source: Arc<dyn Fn(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>> + Send + Sync> =
-        Arc::new(move |_idx| {
-            Some(Box::new(SnapColoredBox::red(300.0, item_height))
-                as Box<dyn RenderObject<BoxProtocol>>)
-        });
-    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source));
-
     let mut run = RenderTester::mount(
-        box_node(RenderViewport::new(AxisDirection::TopToBottom)).child(sliver_node(lazy)),
+        box_node(flui_objects::RenderViewport::new(
+            AxisDirection::TopToBottom,
+        ))
+        .child(sliver_node(RenderSliverList::new(n_items, item_height)).label("list")),
     )
     .with_size(Size::new(px(300.0), px(viewport_height)))
     .run_layout();
 
     let vp_id = run.root();
-    let sliver_id = *run
-        .pipeline()
-        .render_tree()
-        .children(vp_id)
-        .first()
-        .expect("viewport must have the lazy sliver as its one child");
 
-    // Reads the currently-attached children's stamped logical indices —
-    // "materialized" here means "has a live render object under the sliver",
-    // not "was painted" (a stricter, layout-level laziness check than the
-    // paint-snapshot test above).
-    let materialized_indices = |run: &flui_rendering::testing::LayoutRun| -> Vec<usize> {
-        let tree = run.pipeline().render_tree();
-        tree.children(sliver_id)
-            .iter()
-            .filter_map(|&child_id| tree.get(child_id))
-            .filter_map(|node| {
-                node.parent_data()?
-                    .downcast_ref::<SliverMultiBoxAdaptorParentData>()
-            })
-            .map(|pd| pd.index)
-            .collect()
-    };
-
-    let settle = |run: &mut flui_rendering::testing::LayoutRun| {
-        for _ in 0..settle_frames {
-            run.relayout();
-        }
+    let requested_indices = |run: &mut flui_rendering::testing::LayoutRun| -> Vec<usize> {
+        let mut indices: Vec<usize> = run
+            .owner_mut()
+            .take_pending_child_requests()
+            .into_iter()
+            .map(|(_sliver_id, logical_index)| logical_index)
+            .collect();
+        indices.sort_unstable();
+        indices
     };
 
     let scroll_to = |run: &mut flui_rendering::testing::LayoutRun, pixels: f32| {
-        run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        run.update::<flui_objects::RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
             vp.offset_mut().set_pixels(pixels);
         });
+        run.relayout();
     };
 
     // ---- Stop 1: offset 0 — the band sits at the head ---------------------
-    settle(&mut run);
-    let head = materialized_indices(&run);
+    let head = requested_indices(&mut run);
     assert!(
         !head.is_empty(),
-        "head stop: at least one child must be materialized"
+        "head stop: at least one index must be requested"
     );
     assert!(
         head.len() <= band_limit,
-        "head stop: {} materialized children exceeds band_limit {band_limit} \
-         (laziness violated): {head:?}",
+        "head stop: {} requested indices exceeds band_limit {band_limit} \
+         (virtualization violated): {head:?}",
         head.len(),
     );
     assert!(
         head.iter().all(|&idx| idx < 100),
-        "head stop: a far-tail item was materialized at scroll_offset=0 \
-         (laziness violated): {head:?}",
+        "head stop: a far-tail item was requested at scroll_offset=0 \
+         (virtualization violated): {head:?}",
     );
     assert!(
         !head.contains(&999),
-        "head stop: the very last item must not be materialized while scrolled to the top",
+        "head stop: the very last item must not be requested while scrolled to the top",
     );
 
     // ---- Stop 2: mid offset (~item 500) ------------------------------------
     scroll_to(&mut run, mid_scroll);
-    settle(&mut run);
-    let mid = materialized_indices(&run);
+    let mid = requested_indices(&mut run);
     assert!(
         !mid.is_empty(),
-        "mid stop: at least one child must be materialized"
+        "mid stop: at least one index must be requested"
     );
     assert!(
         mid.len() <= band_limit,
-        "mid stop: {} materialized children exceeds band_limit {band_limit}: {mid:?}",
+        "mid stop: {} requested indices exceeds band_limit {band_limit}: {mid:?}",
         mid.len(),
     );
     assert!(
         mid.iter().all(|&idx| (440..=560).contains(&idx)),
-        "mid stop: materialized band did not track scroll_offset={mid_scroll} \
+        "mid stop: requested band did not track scroll_offset={mid_scroll} \
          (expected indices near item 500): {mid:?}",
     );
     assert!(
         !mid.contains(&0) && !mid.contains(&999),
-        "mid stop: head/tail items must not still be materialized after scrolling away: {mid:?}",
+        "mid stop: head/tail items must not still be requested after scrolling away: {mid:?}",
     );
 
     // ---- Stop 3: deep offset (the tail) ------------------------------------
     scroll_to(&mut run, max_scroll);
-    settle(&mut run);
-    let tail = materialized_indices(&run);
+    let tail = requested_indices(&mut run);
     assert!(
         !tail.is_empty(),
-        "tail stop: at least one child must be materialized"
+        "tail stop: at least one index must be requested"
     );
     assert!(
         tail.len() <= band_limit,
-        "tail stop: {} materialized children exceeds band_limit {band_limit}: {tail:?}",
+        "tail stop: {} requested indices exceeds band_limit {band_limit}: {tail:?}",
         tail.len(),
     );
     assert!(
         tail.iter().all(|&idx| idx >= 900),
-        "tail stop: materialized band did not reach the list's tail \
+        "tail stop: requested band did not reach the list's tail \
          at scroll_offset={max_scroll}: {tail:?}",
     );
     assert!(
         !tail.contains(&0) && !tail.contains(&500),
-        "tail stop: head/mid items must not still be materialized at the tail: {tail:?}",
+        "tail stop: head/mid items must not still be requested at the tail: {tail:?}",
     );
 }

@@ -89,7 +89,7 @@ pub mod test_support;
 // render/sliver/protocol type, so it stays a general-purpose abstraction and is
 // cheaply extractable into a standalone crate once a 2nd direct consumer
 // appears. The `SliverConstraints -> ScrollWindow` adapter lives outside it.
-pub mod virtualization; // PORT-CHECK-OK-SP4: agnostic windowing core; intra-crate consumer is RenderSliverListLazy + the criterion bench (both excluded from the cross-crate consumer search); cross-crate consumers are future flui-view lazy widgets / a standalone flui-virtualization crate (see ADR-0003).
+pub mod virtualization; // PORT-CHECK-OK-SP4: agnostic windowing core; intra-crate consumer is the criterion bench (excluded from the cross-crate consumer search); cross-crate consumers are `flui-objects`' `RenderSliverList` and a future standalone flui-virtualization crate (see ADR-0003).
 // Render-object test harness. Compiled only for this crate's own tests
 // (`cfg(test)`) or when a consumer enables the `testing` feature. Builds
 // real `PipelineOwner` trees through the production pipeline and exposes a
@@ -196,8 +196,6 @@ pub use error::{RenderError, RenderResult};
 pub use parent_data::ParentData;
 pub use pipeline::{PipelineCell, PipelineOwner};
 pub use protocol::{
-    // Re-entrant build contract (ADR-0003 Decision 2): child handle + outcome
-    BoxChildRef,
     // Concrete capabilities
     BoxHitTest,
     BoxLayout,

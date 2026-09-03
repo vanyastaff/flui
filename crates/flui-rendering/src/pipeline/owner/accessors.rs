@@ -1304,13 +1304,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Called by every insertion path (`insert`, `insert_child_render_object`,
     /// `insert_sliver_child_render_object`, `insert_render_node`) right after
     /// the id is minted and its `NodeLinks` are wired, alongside the initial
-    /// dirty marks those methods already issue. Also called by
-    /// `apply_deferred_mutation`'s `Insert` arm (`pipeline/owner/layout.rs`)
-    /// for both `DeferredRenderObject::Box` and `::Sliver` — the lazy
-    /// list/grid child-building path bypasses the methods above and used to
-    /// skip `attach` entirely for every protocol. `pub(super)` (rather than
-    /// private) so that call site can reach it. No-op if `id` is somehow not
-    /// present (defensive — every call site holds a freshly-inserted id).
+    /// dirty marks those methods already issue. `pub(super)` (rather than
+    /// private) so those call sites can reach it. No-op if `id` is somehow
+    /// not present (defensive — every call site holds a freshly-inserted id).
     #[inline]
     pub(super) fn attach_inserted_node(&mut self, id: RenderId) {
         let Some(epoch) = self
@@ -1330,93 +1326,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     // ========================================================================
     // Dirty Node Access (Flutter API)
     // ========================================================================
-
-    // ========================================================================
-    // Deferred Mutations (re-entrant layout)
-    // ========================================================================
-
-    /// Enqueues a deferred mutation to be applied after the layout pass.
-    ///
-    /// During layout, render objects may need to add, remove, or update
-    /// children. But the layout walk holds `&mut` on the subtree, making
-    /// direct mutation impossible. This method collects mutations in a
-    /// queue that is drained after the pass completes.
-    ///
-    /// `logical_index`: if `Some(li)`, the pipeline stamps `li` into the
-    /// inserted child's parent-data after insertion (if the parent-data
-    /// type implements `crate::parent_data::LogicalIndexParentData`).
-    /// Pass `None` for non-lazy inserts.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // During layout:
-    /// owner.defer_insert_box(parent_id, Box::new(new_child), None, None);
-    /// owner.defer_remove(parent_id, child_id);
-    /// owner.defer_update(target_id, Box::new(|obj| { /* mutate */ }));
-    /// ```
-    pub fn defer_insert_box(
-        &mut self,
-        parent_id: RenderId,
-        render_object: Box<dyn crate::protocol::RenderObject<BoxProtocol>>,
-        index: Option<usize>,
-        logical_index: Option<usize>,
-        initial_parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
-    ) {
-        self.deferred_mutations.insert_box(
-            parent_id,
-            render_object,
-            index,
-            logical_index,
-            initial_parent_data,
-        );
-    }
-
-    /// Enqueues a deferred Sliver child insertion.
-    ///
-    /// `logical_index`: if `Some(li)`, stamps `li` into the child's
-    /// parent-data after insertion.  Pass `None` for non-lazy inserts.
-    ///
-    /// `initial_parent_data`: pre-built parent-data to install on the fresh
-    /// node immediately after insertion.  See `DeferredMutation::Insert`.
-    pub fn defer_insert_sliver(
-        &mut self,
-        parent_id: RenderId,
-        render_object: Box<dyn crate::protocol::RenderObject<SliverProtocol>>,
-        index: Option<usize>,
-        logical_index: Option<usize>,
-        initial_parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
-    ) {
-        self.deferred_mutations.insert_sliver(
-            parent_id,
-            render_object,
-            index,
-            logical_index,
-            initial_parent_data,
-        );
-    }
-
-    /// Enqueues a deferred removal.
-    pub fn defer_remove(&mut self, parent_id: RenderId, child_id: RenderId) {
-        self.deferred_mutations.remove(parent_id, child_id);
-    }
-
-    /// Enqueues a deferred update (e.g., animation driving properties).
-    ///
-    /// The updater receives `&mut dyn Any` — the caller downcasts to
-    /// the concrete render object type.
-    pub fn defer_update(
-        &mut self,
-        target_id: RenderId,
-        updater: Box<dyn FnOnce(&mut dyn std::any::Any) + Send + Sync>,
-    ) {
-        self.deferred_mutations.update(target_id, updater);
-    }
-
-    /// Returns the number of pending deferred mutations.
-    pub fn deferred_mutation_count(&self) -> usize {
-        self.deferred_mutations.len()
-    }
 
     /// Returns the nodes needing layout.
     ///

@@ -367,16 +367,15 @@ impl RenderSliver for RenderSliverGridLazy {
         );
 
         // ── 6. Layout pass: resident → re-layout; absent → request ───────────
-        // Resident slots use the `|_| None` fallback: this render object carries
-        // no owned child-source factory (element tree owns the children).
+        // This render object carries no owned child-source factory — the
+        // element tree owns construction.
         for logical_index in first_in_window..=last_in_window {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
-                ctx.build_and_layout_box_child(slot, logical_index, tile_constraints, &mut |_| {
-                    None
-                });
+                ctx.layout_box_child(slot, tile_constraints);
             } else {
                 // Absent — emit a build request.  The element tree's
-                // `SliverGridLazyAdaptorManager::service` builds it post-frame.
+                // `SliverGridLazyAdaptorManager::service` builds it between
+                // layout passes of this frame's fixpoint.
                 ctx.request_child_build(logical_index);
             }
         }
@@ -451,9 +450,8 @@ impl RenderSliver for RenderSliverGridLazy {
         // ── 10. Emit retain band for element-side eviction ────────────────────
         // [first_in_window, last_in_window+1) is the half-open retained range.
         // `SparseChildren::retain_band` on the element side evicts any logical
-        // index outside this band.  `dispose_box_child` is NOT called here to
-        // prevent the ABA double-remove that would occur if both the render side
-        // and the element side freed the same node.
+        // index outside this band. The render side never disposes a child
+        // itself, which is what avoids an ABA double-remove between the two.
         ctx.emit_retain_band(first_in_window, last_in_window + 1);
 
         geometry

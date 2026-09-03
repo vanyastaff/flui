@@ -63,11 +63,11 @@ Two independent, load-bearing facts — both verified in-tree, not assumed:
    *after* the recursive walk returns
    (`crates/flui-rendering/src/pipeline/owner/layout.rs:600-665`). Structural
    mutation mid-walk is therefore an aliasing violation, which is exactly why
-   the arena exposes **sinks** (`take_pending_removes`, `take_pending_builds`,
-   `take_pending_child_requests`, `take_pending_retain_bands`) drained after the
-   walk, rather than letting a render object insert a node in place. Note that
-   `pending_builds` carries an **already-constructed** render object — it
-   presupposes the element build already happened.
+   the arena exposes **sinks** (`take_pending_child_requests`,
+   `take_pending_retain_bands`) drained after the walk, rather than letting a
+   render object insert a node in place. (The render-owned build sinks that
+   once sat beside them carried already-constructed render objects and were
+   deleted with that strategy — see ADR-0003's amendment.)
 
 2. **The `PipelineOwner` is not reachable through its `Arc<RwLock<…>>` during a
    frame.** The binding does

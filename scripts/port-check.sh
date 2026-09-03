@@ -1191,11 +1191,6 @@ fi
 #   GestureArenaMember, FocusTraversalPolicy, SliverGridDelegate,
 #   SingleChildLayoutDelegate, MultiChildLayoutDelegate, FlowDelegate,
 #   CustomPainter, ParentData, CustomClipper, RendererBinding, Debug
-#   #6-adjacent: LogicalIndexParentData — the pub(crate) ParentData sub-trait the
-#   re-entrant build contract (ADR-0003) uses to stamp the logical item index
-#   through at deferred-insert apply, keeping the generic insert path parent-data-
-#   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
-#   erasure traits below.
 #   Catalog.1 theming + localizations substrate (2026-07-16):
 #   ErasedLocalizationsDelegate — `Arc<dyn ErasedLocalizationsDelegate>` inside
 #   `BoxedLocalizationsDelegate` erases a `LocalizationsDelegate`'s associated
@@ -1208,7 +1203,7 @@ fi
 #   `GlobalWidgetsLocalizations`) behind the trait every `Localizations::of`
 #   caller depends on — Flutter parity: `Localizations.of<WidgetsLocalizations>`
 #   is keyed by the abstract interface, never the concrete runtime class.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|TreeObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations)\b'
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|TreeObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(

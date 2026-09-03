@@ -2,12 +2,10 @@
 
 use flui_foundation::RenderId;
 use flui_types::Size;
-use rustc_hash::FxHashSet;
 
 use crate::{
     constraints::BoxConstraints,
     pipeline::{
-        deferred::{DeferredMutation, DeferredRenderObject},
         phase::{Compositing, Idle, Layout},
         scheduler::PhaseKind,
     },
@@ -236,239 +234,7 @@ impl PipelineOwner<Layout> {
             let _ = self.scheduler.exit_phase(PhaseKind::Layout);
         }
 
-        // Drain deferred mutations: render objects may have enqueued
-        // child insertions, removals, or updates during layout. Apply
-        // them now, outside the `&mut` borrow scope of the layout walk.
-        // This is the Rust-native alternative to Flutter's
-        // `invokeLayoutCallback`.
-        //
-        // True Remove → Insert → Update ordering. Previously the
-        // apply loop was strict FIFO with only a remove-vs-update skip,
-        // which let a frame that enqueues both Remove and Insert apply them
-        // in arbitrary order. Stable-partition into three buckets and apply
-        // each bucket in order. This makes the ordering comment above
-        // factually true rather than aspirational.
-        if !self.deferred_mutations.is_empty() {
-            let mutations = self.deferred_mutations.drain();
-
-            let (mut removes, rest): (Vec<_>, Vec<_>) = mutations
-                .into_iter()
-                .partition(|m| matches!(m, DeferredMutation::Remove { .. }));
-            let (inserts, updates): (Vec<_>, Vec<_>) = rest
-                .into_iter()
-                .partition(|m| matches!(m, DeferredMutation::Insert { .. }));
-
-            // Collect removed IDs for conflict detection (Update on same target).
-            let removed_ids: FxHashSet<RenderId> = removes
-                .iter()
-                .filter_map(|m| match m {
-                    DeferredMutation::Remove { child_id, .. } => Some(*child_id),
-                    _ => None,
-                })
-                .collect();
-
-            tracing::trace!(
-                "run_layout: applying {} deferred mutations ({} removes, {} inserts, {} updates)",
-                removes.len() + inserts.len() + updates.len(),
-                removes.len(),
-                inserts.len(),
-                updates.len(),
-            );
-
-            let mut applied = 0usize;
-            let mut skipped = 0usize;
-
-            // Phase 1: Removes.
-            for mutation in removes.drain(..) {
-                self.apply_deferred_mutation(mutation);
-                applied += 1;
-            }
-
-            // Phase 2: Inserts.
-            for mutation in inserts {
-                self.apply_deferred_mutation(mutation);
-                applied += 1;
-            }
-
-            // Phase 3: Updates — skip any whose target was removed this batch.
-            for mutation in updates {
-                match &mutation {
-                    DeferredMutation::Update { target_id, .. }
-                        if removed_ids.contains(target_id) =>
-                    {
-                        tracing::warn!(
-                            ?target_id,
-                            "apply_deferred_mutation: skipping update — target was \
-                             removed in the same layout pass"
-                        );
-                        skipped += 1;
-                    }
-                    _ => {
-                        self.apply_deferred_mutation(mutation);
-                        applied += 1;
-                    }
-                }
-            }
-
-            if skipped > 0 {
-                tracing::warn!(
-                    "run_layout: {skipped} deferred mutations skipped due to \
-                     remove-update conflicts ({applied} applied)"
-                );
-            }
-        }
-
         Ok(())
-    }
-
-    /// Applies a single deferred mutation.
-    ///
-    /// Called after the layout pass completes. The mutation queue was
-    /// populated during layout by render objects that needed to modify
-    /// the tree structure (e.g., `LayoutBuilder`, `OverlayPortal`).
-    fn apply_deferred_mutation(&mut self, mutation: DeferredMutation) {
-        match mutation {
-            DeferredMutation::Insert {
-                parent_id,
-                render_object,
-                index,
-                logical_index,
-                initial_parent_data,
-            } => {
-                // A deferred insert must schedule the new child and apply the
-                // canonical membership impact to its parent. Without this the fresh node
-                // carries NEEDS_LAYOUT but is absent from every dirty queue,
-                // so it is laid out never and painted never (invisible child).
-                let Some(parent_depth) = self.render_tree.depth(parent_id) else {
-                    tracing::warn!(
-                        ?parent_id,
-                        "apply_deferred_mutation: Insert parent does not exist; mutation dropped"
-                    );
-                    return;
-                };
-                let child_depth = (parent_depth + 1) as usize;
-                let inserted = match render_object {
-                    DeferredRenderObject::Box(obj) => {
-                        self.render_tree.insert_box_child(parent_id, obj)
-                    }
-                    DeferredRenderObject::Sliver(obj) => {
-                        self.render_tree.insert_sliver_child(parent_id, obj)
-                    }
-                };
-                let Some(child_id) = inserted else { return };
-
-                // `insert_*_child` appends; honor an explicit position by
-                // moving the freshly appended child into place. Clamp so an
-                // out-of-range index lands at the end rather than panicking.
-                if let Some(i) = index
-                    && let Some(parent) = self.render_tree.get_mut(parent_id)
-                {
-                    parent.remove_child(child_id);
-                    let clamped = i.min(parent.child_count());
-                    parent.insert_child(clamped, child_id);
-                }
-
-                // Part of the lazy-sliver re-entrant build contract: install the
-                // logical index on the fresh child's parent-data so the lazy
-                // sliver consumer can reconcile it on the next pass.
-                //
-                // Fresh `RenderNode`s start with `parent_data = None`; the
-                // build backend seeds `initial_parent_data` with a pre-built
-                // `SliverMultiBoxAdaptorParentData { index: logical_index }`
-                // for exactly this case.  If parent-data is already present
-                // (e.g. a re-inserted node whose data survived) we stamp the
-                // index field directly instead so we never overwrite unrelated
-                // fields the existing box carries.
-                if (logical_index.is_some() || initial_parent_data.is_some())
-                    && let Some(child_node) = self.render_tree.get_mut(child_id)
-                {
-                    match child_node.parent_data_mut() {
-                        None => {
-                            // Node has no parent-data yet: install the
-                            // pre-built box wholesale.
-                            if let Some(pd) = initial_parent_data {
-                                child_node.set_parent_data(pd);
-                                tracing::trace!(
-                                    ?child_id,
-                                    logical_index,
-                                    "apply_deferred_mutation: installed \
-                                     initial parent-data on fresh child",
-                                );
-                            }
-                        }
-                        Some(pd) => {
-                            // Parent-data already present: stamp only the
-                            // logical-index field so other fields are
-                            // preserved.
-                            if let Some(li) = logical_index
-                                && let Some(lip) = pd.as_logical_index_mut()
-                            {
-                                lip.set_logical_index(li);
-                                tracing::trace!(
-                                    ?child_id,
-                                    logical_index = li,
-                                    "apply_deferred_mutation: stamped \
-                                     logical index into existing parent-data",
-                                );
-                            }
-                        }
-                    }
-                }
-
-                self.bootstrap_repaint_boundary_flag(child_id);
-                // ADR-0013: hand the freshly-inserted child its self-dirty
-                // handle. `attach_inserted_node` is protocol-generic (keys
-                // off `RenderId`, not the protocol tag), so this one call
-                // covers both `DeferredRenderObject::Box` and `::Sliver` —
-                // before this, a lazily-built list/grid child (of either
-                // protocol) never received `attach`, silently starving any
-                // render object that subscribes to a `Listenable` there
-                // (e.g. a snap-animation controller) of its handle.
-                self.attach_inserted_node(child_id);
-                self.add_node_needing_layout(child_id, child_depth);
-                self.note_render_child_membership_changed(parent_id);
-                tracing::trace!(
-                    ?parent_id,
-                    ?child_id,
-                    "apply_deferred_mutation: inserted child and scheduled membership work"
-                );
-            }
-            DeferredMutation::Remove {
-                parent_id,
-                child_id,
-            } => {
-                // Cascade-dispose: `remove_render_object` evicts the whole
-                // subtree from every dirty queue and frees it recursively
-                // (the old `remove_shallow` orphaned + leaked descendants and
-                // left stale dirty entries). Then re-dirty the parent so it
-                // reflows without the removed child.
-                let removed = self.remove_render_object(child_id);
-                if removed > 0 {
-                    // Re-dirty the parent (flag-setting walk, not a flagless
-                    // enqueue) so it reflows without the removed child.
-                    self.mark_needs_layout(parent_id);
-                }
-                tracing::trace!(
-                    ?parent_id,
-                    ?child_id,
-                    removed,
-                    "apply_deferred_mutation: removed subtree and re-dirtied parent"
-                );
-            }
-            DeferredMutation::Update { target_id, updater } => {
-                if let Some(node) = self.render_tree.get_mut(target_id) {
-                    match node {
-                        crate::storage::RenderNode::Box(entry) => {
-                            updater(entry.render_object_mut() as &mut dyn std::any::Any);
-                        }
-                        crate::storage::RenderNode::Sliver(entry) => {
-                            updater(entry.render_object_mut() as &mut dyn std::any::Any);
-                        }
-                    }
-                    tracing::trace!(?target_id, "apply_deferred_mutation: updated render object");
-                }
-            }
-        }
     }
 
     /// Returns the constraints to apply when laying out `id` as a
@@ -696,17 +462,10 @@ impl PipelineOwner<Layout> {
         // enforced by LayoutCycleGuard), but no `unsafe` appears here.
         let result = arena.layout_child(id, constraints);
 
-        // Step 5: drain all three arena sinks (re-entrant build contract v1,
-        // per ADR-0003 Decision 2).
-        // Take all three (owned), then DROP `arena` to release the &mut RenderTree
+        // Step 5: drain the arena's request-strategy sinks (the
+        // request-strategy seam's producer/removal halves).
+        // Take both (owned), then DROP `arena` to release the &mut RenderTree
         // subtree borrow before touching `&mut self`.
-        //
-        // Ordering: Remove → Insert → Request.  Removes first so that an
-        // off-band child evicted this pass does not collide with the Insert that
-        // replaces it in the same batch.  Requests last because they carry no
-        // pre-built object and do not mutate the tree.
-        let pending_removes = arena.take_pending_removes();
-        let pending_builds = arena.take_pending_builds();
         let pending_child_requests = arena.take_pending_child_requests();
         let pending_retain_bands = arena.take_pending_retain_bands();
         let layout_failures = arena.take_layout_failures();
@@ -766,35 +525,17 @@ impl PipelineOwner<Layout> {
             }
         }
 
-        // Apply removes first.  Each entry is `(parent, child)`:
-        // the parent is the sliver's own node_id (tagged at push time in
-        // ErasedSliverLayoutCtx::dispose_box_child), NOT the walk root `id`.
-        // Using `id` here would misdirect `mark_needs_layout` to the viewport
-        // root instead of the lazy sliver, preventing it from reflowing.
-        for (parent, child_id) in pending_removes {
-            self.defer_remove(parent, child_id);
-        }
-
-        for pending in pending_builds {
-            self.defer_insert_box(
-                pending.parent,
-                pending.object,
-                Some(pending.index),
-                Some(pending.logical_index),
-                pending.initial_parent_data,
-            );
-        }
-
         // Move child-build requests into the owner's observable buffer so the
-        // binding layer can consume them after the frame.  No tree
-        // mutation here — the requests are inert until a manager wires them up.
+        // binding layer can consume them after the frame. No tree mutation
+        // here — the request sits inert until the binding layer's child
+        // manager services it between layout passes of this frame's fixpoint.
         self.pending_child_requests.extend(pending_child_requests);
 
         // Move retain-band signals from element-owned slivers into the
-        // owner's observable buffer.  The binding layer drains
-        // these via `take_pending_retain_bands` to drive `SparseChildren::
-        // retain_band` on the element side, skipping `dispose_box_child` to
-        // avoid the ABA double-remove.
+        // owner's observable buffer.  The binding layer drains these via
+        // `take_pending_retain_bands` to drive `SparseChildren::retain_band`
+        // on the element side.  The render side never disposes a child
+        // itself, which is what avoids an ABA double-remove.
         self.pending_retain_bands.extend(pending_retain_bands);
 
         result

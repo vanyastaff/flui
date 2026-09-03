@@ -48,8 +48,6 @@ mod layout_offset_commit;
 mod layout_poison;
 #[path = "layout_raw_bridge.rs"]
 mod layout_raw_bridge;
-#[path = "lazy_sliver_list_child_build_contract.rs"]
-mod lazy_sliver_list_child_build_contract;
 
 #[path = "retained_boundary_layers.rs"]
 mod retained_boundary_layers;

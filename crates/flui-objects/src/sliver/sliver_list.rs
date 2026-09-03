@@ -20,8 +20,7 @@
 //!
 //! # Design notes
 //!
-//! Unlike [`RenderSliverListLazy`](super::sliver_list_lazy::RenderSliverListLazy),
-//! this object carries **no `child_source`** — it cannot build render objects
+//! This object carries **no `child_source`** — it cannot build render objects
 //! directly. The element tree's child manager owns the construction. Existing
 //! arena-resident children (built in a prior pass) are laid out normally; only
 //! absent in-band children generate requests.
@@ -40,7 +39,7 @@ use flui_rendering::{
     virtualization::Virtualizer,
 };
 
-use super::virtualized_band::{OffBandDisposal, walk_virtualizer_band};
+use super::virtualized_band::walk_virtualizer_band;
 
 // ============================================================================
 // RENDER OBJECT
@@ -220,30 +219,18 @@ impl RenderSliver for RenderSliverList {
             &mut self.attached_child_count,
             &constraints,
             ctx,
-            // Element tree owns the children: skip `dispose_box_child` to
-            // prevent the ABA double-remove.  The element tree drives eviction
-            // via `SparseChildren::retain_band` using the band indices below.
-            OffBandDisposal::ElementOwned,
-            // Resident-build fallback: returns `None` because this type carries
-            // no owned child-source factory.  A resident child is already in the
-            // arena; the fallback fires only if the slot was concurrently evicted,
-            // which should not occur on the layout thread.  Returning `None`
-            // signals NoChild, matching the honestly-inert posture of this type.
-            &mut |_logical_i| None,
             // Absent strategy: emit a request via the request-strategy seam.
-            // The element tree services it post-frame, once a child manager
-            // is wired up.  `dense_count` is ignored — the element tree
+            // The element tree services it between layout passes of this
+            // frame's fixpoint.  `dense_count` is ignored — the element tree
             // decides the insert position.
             &mut |logical_i, _dense_count, _box_constraints, ctx| {
                 ctx.request_child_build(logical_i)
             },
-            // Dispose hook: no-op — `ElementOwned` skips the dispose path so
-            // this closure never fires.
-            &mut |_logical_i| {},
         );
         // Signal the retained band to the element tree via the pending_retain_bands
         // channel.  The binding layer forwards this to `SparseChildren::retain_band`
-        // post-frame so out-of-band lazy children are evicted on the element side.
+        // between layout passes of this frame's fixpoint, evicting everything
+        // outside the band.
         ctx.emit_retain_band(cache_first, cache_last);
         geometry
     }

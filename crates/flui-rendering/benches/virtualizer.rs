@@ -24,15 +24,16 @@
 //!
 //! ## Lazy sliver consumer
 //!
-//! The `lazy_sliver` group measures the two hot paths of
-//! [`RenderSliverListLazy`] at N = 1k / 10k / 100k items:
+//! The `lazy_sliver` group measures the two hot paths of the request-strategy
+//! [`RenderSliverList`] at N = 1k / 10k / 100k items:
 //!
 //! - **`query_band`** — the `Virtualizer::query` call that selects the
 //!   visible + cache band inside `perform_layout`: `O(log n)`, constant w.r.t.
 //!   N because the band width (≈ K items) is fixed by the viewport.
-//! - **`frame_settled`** — one `run_layout` pass on a fully-settled pipeline
-//!   (band already built, no deferred inserts pending): steady-state per-frame
-//!   cost, also `O(K log N)` where K is band size.
+//! - **`frame_settled`** — one `run_layout` pass on a pipeline whose settled
+//!   visible+cache band residents are seeded directly (no `ChildManager` is
+//!   wired to a bare pipeline, so nothing here is ever built on demand):
+//!   steady-state per-frame cost, `O(K log N)` where K is band size.
 //!
 //! Run with:
 //!   cargo bench -p flui-rendering --bench virtualizer
@@ -41,16 +42,15 @@
 // undocumentable entry fn.
 
 use std::hint::black_box;
-use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::Diagnosticable;
-use flui_objects::RenderSliverListLazy;
+use flui_objects::RenderSliverList;
 use flui_rendering::{
     PipelineOwner,
     constraints::{BoxConstraints, SliverConstraints},
     context::{BoxHitTestContext, BoxLayoutContext},
-    parent_data::BoxParentData,
+    parent_data::{BoxParentData, SliverMultiBoxAdaptorParentData},
     pipeline::Layout,
     protocol::{BoxProtocol, SliverProtocol},
     testing::sliver as sliver_presets,
@@ -373,9 +373,11 @@ impl RenderBox for BenchSliverHost {
 const BENCH_ITEM_HEIGHT: f32 = 50.0;
 const BENCH_VIEWPORT: f32 = 300.0;
 
-/// Type alias for the item-source callback used in lazy-sliver bench setup.
-type BenchItemSource =
-    Arc<dyn Fn(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>> + Send + Sync>;
+/// Resident count that covers the settled visible+cache band at
+/// [`BENCH_VIEWPORT`]/[`BENCH_ITEM_HEIGHT`] with headroom: window ≈
+/// `viewport(300) + cache_before(50) + cache_after(100)` = 450 px ⇒ 9 items;
+/// rounded up with margin so the band is fully resident, never partial.
+const BENCH_RESIDENT_COUNT: usize = 12;
 
 fn bench_constraints(scroll_offset: f32) -> SliverConstraints {
     sliver_presets::vertical()
@@ -388,28 +390,27 @@ fn bench_constraints(scroll_offset: f32) -> SliverConstraints {
         .build()
 }
 
-/// Build and fully settle a lazy-sliver pipeline at `n_items`.
+/// Build a request-strategy `RenderSliverList` pipeline at `n_items`, with
+/// the settled visible+cache band's residents seeded directly.
 ///
-/// Runs layout passes until the deferred-insert queue drains (at most
-/// `max_frames` iterations — in practice 2–3 for a fresh viewport).
+/// `RenderSliverList` never builds a child itself — construction is the
+/// element tree's `ChildManager`'s job, which this bare-pipeline bench has
+/// none of. Seeding `BENCH_RESIDENT_COUNT` residents up front (each carrying
+/// the `SliverMultiBoxAdaptorParentData` the band-reconciliation walk keys
+/// off) reproduces the steady state a real `ChildManager` converges to,
+/// without needing one: no deferred inserts are ever pending, so one
+/// `run_layout` call is enough to settle.
 ///
 /// Returns the settled `(owner, root_id, sliver_id)`.
-fn build_settled_lazy(
+fn build_settled_list(
     n_items: usize,
-    max_frames: usize,
 ) -> (
     PipelineOwner<Layout>,
     flui_foundation::RenderId,
     flui_foundation::RenderId,
 ) {
     let constraints = bench_constraints(0.0);
-    let source: BenchItemSource = Arc::new(move |_| {
-        Some(Box::new(BenchBox {
-            height: BENCH_ITEM_HEIGHT,
-        }) as Box<dyn RenderObject<BoxProtocol>>)
-    });
-
-    let lazy = RenderSliverListLazy::new(n_items, BENCH_ITEM_HEIGHT, Arc::clone(&source));
+    let list = RenderSliverList::new(n_items, BENCH_ITEM_HEIGHT);
 
     let mut owner = PipelineOwner::new();
     let root_id = owner
@@ -418,9 +419,26 @@ fn build_settled_lazy(
         .render_tree_mut()
         .insert_sliver_child(
             root_id,
-            Box::new(lazy) as Box<dyn RenderObject<SliverProtocol>>,
+            Box::new(list) as Box<dyn RenderObject<SliverProtocol>>,
         )
         .expect("sliver node must insert under root host");
+
+    for logical_index in 0..BENCH_RESIDENT_COUNT {
+        let child_id = owner
+            .render_tree_mut()
+            .insert_box_child(
+                sliver_id,
+                Box::new(BenchBox {
+                    height: BENCH_ITEM_HEIGHT,
+                }) as Box<dyn RenderObject<BoxProtocol>>,
+            )
+            .expect("sliver node must accept a resident Box child");
+        if let Some(node) = owner.render_tree_mut().get_mut(child_id) {
+            node.set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(
+                logical_index,
+            )));
+        }
+    }
 
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
@@ -429,11 +447,9 @@ fn build_settled_lazy(
     ))));
 
     let mut owner = owner.into_layout();
-    for _ in 0..max_frames {
-        owner
-            .run_layout()
-            .expect("layout must not fail during bench setup");
-    }
+    owner
+        .run_layout()
+        .expect("layout must not fail during bench setup");
     (owner, root_id, sliver_id)
 }
 
@@ -462,12 +478,12 @@ fn bench_lazy_sliver_query_band(c: &mut Criterion) {
 
 fn bench_lazy_sliver_frame_settled(c: &mut Criterion) {
     let mut group = c.benchmark_group("lazy_sliver/frame_settled");
-    // `frame_settled`: one `run_layout` pass after band is built — no deferred
-    // inserts pending.  O(K · log N) where K is bounded by the viewport.
-    // Expected result: grows very slowly with N (log factor only).
+    // `frame_settled`: one `run_layout` pass over an already-settled resident
+    // band — no pending child requests. O(K · log N) where K is bounded by
+    // the viewport. Expected result: grows very slowly with N (log factor
+    // only).
     for &n in SIZES {
-        // 5 settlement frames is generous for a fresh viewport (typically 2–3).
-        let (mut owner, root_id, _sliver_id) = build_settled_lazy(n, 5);
+        let (mut owner, root_id, _sliver_id) = build_settled_list(n);
         group.bench_with_input(BenchmarkId::new("settled_frame", n), &n, |b, _| {
             b.iter(|| {
                 owner.mark_needs_layout(black_box(root_id));

@@ -71,7 +71,6 @@
 //! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderSliverList` | `harness_sliver_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverMainAxisGroup` | `harness_sliver_main_axis_group_*` | yes | — | — | yes | — |
-//! | `RenderSliverListLazy` | `harness_sliver_list_lazy_*` | yes | — | — | yes | — |
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
 //! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | compositing |
 //! | `RenderSliverAnimatedOpacity` | `harness_sliver_animated_opacity_*` | yes | yes | yes | yes | tick dirty-marking |
@@ -214,7 +213,6 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverFillRemainingWithScrollable",
     "RenderSliverIgnorePointer",
     "RenderSliverList",
-    "RenderSliverListLazy",
     "RenderSliverOffstage",
     "RenderSliverOpacity",
     "RenderSliverAnimatedOpacity",
@@ -6788,9 +6786,10 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_rejection_band_after_invalid_ge
 // the current window get laid out, and absent slots get a
 // `ctx.request_child_build` — but nothing detaches slots that fall OUTSIDE
 // the window (`ctx.emit_retain_band` only signals the ELEMENT tree's
-// `SparseChildren::retain_band` to evict them later; `dispose_box_child` is
-// deliberately not called at the render level, per that file's own module
-// doc, to avoid an ABA double-remove with the element side). Since this
+// `SparseChildren::retain_band` to evict them later — the render level has
+// no eviction call of its own; only the element tree can retire a slot,
+// which is what prevents an ABA double-remove between the two sides).
+// Since this
 // harness mounts render objects directly with no element tree at all, there
 // is no consumer for that retain-band signal — pre-seeding all 60 children
 // and scrolling would show every one still `.attached` forever, the OPPOSITE
@@ -7352,23 +7351,6 @@ fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
          item 0 (layout_offset=0) must have dy=0-96=-96; got {:?}",
         run.offset(item0_id).dy,
     );
-}
-
-#[test]
-fn harness_sliver_list_lazy_zero_items_reports_zero_geometry() {
-    // Empty source — build closure always returns None, so perform_layout
-    // produces zero scroll_extent and self-describes via diagnostics.
-    let list = RenderSliverListLazy::new(0, 48.0, std::sync::Arc::new(|_| None));
-    let run = RenderTester::mount(viewport(sliver_node(list).label("lazy")))
-        .with_size(Size::new(px(300.0), px(400.0)))
-        .run_layout();
-
-    assert_eq!(
-        run.sliver_geometry(run.id("lazy")).scroll_extent,
-        0.0,
-        "empty RenderSliverListLazy must report zero scroll extent",
-    );
-    assert_descendant_properties(&run.diagnostics(), "RenderSliverListLazy", &["item_count"]);
 }
 
 #[test]
@@ -10906,14 +10888,10 @@ fn harness_render_animated_size_fast_path_tight_constraints_snaps_and_leaves_off
 // through `PipelineOwner::insert_child_render_object`, which calls
 // `attach_inserted_node` — but Sliver children were inserted via the
 // low-level `render_tree_mut().insert_sliver_child(...)`
-// (`crates/flui-rendering/src/storage/tree.rs`), which did not, and
-// `apply_deferred_mutation` (`crates/flui-rendering/src/pipeline/owner/
-// layout.rs`, used by lazy-sliver child building) had the same gap for both
-// protocols. `crate::testing::tree::mount_child` now inserts Sliver children
-// via the new `PipelineOwner::insert_sliver_child_render_object` (the
-// Sliver-protocol counterpart of `insert_child_render_object`), and
-// `apply_deferred_mutation`'s `Insert` arm now calls `attach_inserted_node`
-// for both `DeferredRenderObject` variants (see
+// (`crates/flui-rendering/src/storage/tree.rs`), which did not.
+// `crate::testing::tree::mount_child` now inserts Sliver children via the
+// new `PipelineOwner::insert_sliver_child_render_object` (the
+// Sliver-protocol counterpart of `insert_child_render_object`; see
 // `crates/flui-rendering/tests/attach_detach_lifecycle.rs` for the
 // regression coverage). The snap-animation test below no longer forces its
 // own dirty mark — the real `attach()`-registered controller listener

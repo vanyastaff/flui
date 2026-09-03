@@ -910,14 +910,9 @@ fn reparent_via_remove_then_insert_detaches_old_and_attaches_a_fresh_handle() {
 // ────────────────────────────────────────────────────────────────────────
 // Sliver-protocol coverage: no insertion path called `attach` for a Sliver
 // child before this fix. `insert_child_render_object` was hard-coded to
-// `BoxProtocol`, and `apply_deferred_mutation`'s lazy-child-building path
-// (the `Insert` arm in `pipeline/owner/layout.rs`) called the raw
-// `RenderTree::insert_sliver_child`/`insert_box_child` directly, bypassing
-// `attach_inserted_node` for BOTH protocols. These tests exercise the two
-// fixed call sites: the new `insert_sliver_child_render_object` (the
-// Sliver-protocol counterpart of `insert_child_render_object`) and
-// `apply_deferred_mutation`'s `Insert` arm for each `DeferredRenderObject`
-// variant.
+// `BoxProtocol`. This test exercises the fixed call site: the new
+// `insert_sliver_child_render_object` (the Sliver-protocol counterpart of
+// `insert_child_render_object`).
 // ────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -940,63 +935,6 @@ fn insert_sliver_child_render_object_fires_exactly_one_attach_with_a_handle_boun
         handle.id(),
         child_id,
         "the handed-over handle must be bound to the freshly-inserted sliver child"
-    );
-}
-
-/// Mounts `parent_id` as a laid-out-ready root, ready to run a layout pass
-/// that drains whatever gets deferred onto it.
-fn rooted_layout_pipeline() -> (PipelineOwner, flui_foundation::RenderId) {
-    let mut owner = PipelineOwner::new();
-    let parent_id = owner.insert(probe(LifecycleLog::default()));
-    owner.set_root_id(Some(parent_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(40.0), px(40.0)))));
-    (owner, parent_id)
-}
-
-#[test]
-fn deferred_sliver_insert_fires_attach_via_apply_deferred_mutation() {
-    let (mut owner, parent_id) = rooted_layout_pipeline();
-
-    let log = LifecycleLog::default();
-    owner.defer_insert_sliver(parent_id, sliver_probe(log.clone()), None, None, None);
-
-    let mut layout_owner = owner.into_layout();
-    layout_owner.run_layout().expect(
-        "layout must not error: parent_id is the root with constraints set, \
-         and the deferred insert only needs parent_id to exist",
-    );
-
-    assert_eq!(
-        log.attach_count(),
-        1,
-        "apply_deferred_mutation's DeferredRenderObject::Sliver arm \
-         (pipeline/owner/layout.rs, the lazy-sliver-child-building path) \
-         must call attach exactly once"
-    );
-}
-
-#[test]
-fn deferred_box_insert_fires_attach_via_apply_deferred_mutation() {
-    // Collateral fix at the same call site: `apply_deferred_mutation`'s
-    // `Insert` arm handles `DeferredRenderObject::Box` and `::Sliver`
-    // through one shared code path that calls `attach_inserted_node` once
-    // after either variant's tree insertion — so the Box side, which was
-    // equally starved of `attach` before this fix, is proven here too.
-    let (mut owner, parent_id) = rooted_layout_pipeline();
-
-    let log = LifecycleLog::default();
-    owner.defer_insert_box(parent_id, probe(log.clone()), None, None, None);
-
-    let mut layout_owner = owner.into_layout();
-    layout_owner
-        .run_layout()
-        .expect("layout must not error: parent_id is the root with constraints set");
-
-    assert_eq!(
-        log.attach_count(),
-        1,
-        "apply_deferred_mutation's DeferredRenderObject::Box arm must call \
-         attach exactly once"
     );
 }
 
