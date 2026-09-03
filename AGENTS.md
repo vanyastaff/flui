@@ -211,7 +211,7 @@ workflow file does *not* tell you, and what you will misjudge without it:
   the facade surface — and asserts via `cargo tree` that `flui-hot-reload` is *absent* from
   `flui-app`'s default normal graph rather than merely unused by it.
 - **wasm-check excludes 7 crates** — the mio/uuid CLI stack and the dlopen-based hot-reload path,
-  none of which can work on wasm32.
+  none of which can work on wasm32. It runs `cargo clippy` as well as `cargo check` (lib/bin targets — test targets pull native-only dev-deps): the web backend of flui-platform is wasm32-only, so this is the only lint pass that ever sees it.
 - **gpu-test runs the readback suite on WARP** (windows-latest) and is merge-blocking. On an oracle
   mismatch the harness dumps the actual frame as a PNG to `FLUI_READBACK_DUMP_DIR` and uploads it
   as an artifact — fetch that before theorising about a pixel diff.

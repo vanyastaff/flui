@@ -784,6 +784,12 @@ jobs:
   # --no-deps` counts packages, recount if this drifts); the excluded seven
   # genuinely cannot target wasm today — see NO_WASM_PKGS. A crate that
   # gains wasm support is REMOVED from the exclude list, never worked around.
+  #
+  # `cargo clippy` as well as `cargo check`: the web backend of flui-platform
+  # is `cfg(target_arch = "wasm32")`-only, so the host clippy job never sees
+  # it — it carried 15 deny-level violations (two bare `unwrap()`s among them)
+  # for as long as this job was check-only. Lib/bin targets only: the crates'
+  # test targets pull native-only dev-deps (tokio) that do not build here.
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
     name: wasm-check (wasm32-unknown-unknown)
@@ -827,6 +833,9 @@ jobs:
 
       - name: cargo check (wasm32)
         run: cargo check --workspace --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }}
+
+      - name: cargo clippy (wasm32, lib + bin targets)
+        run: cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }} -- -D warnings
 
       # No dlopen-based runner exists on web, but the public feature must still
       # be cfg-complete: enabling it cannot expose desktop-only imports.

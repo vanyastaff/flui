@@ -244,9 +244,7 @@ fn make_pointer_state(pe: &web_sys::PointerEvent, count: u8) -> ui_events::point
         orientation: PointerOrientation::default(),
         pressure: pe.pressure(),
         tangential_pressure: pe.tangential_pressure(),
-        scale_factor: web_sys::window()
-            .map(|w| w.device_pixel_ratio())
-            .unwrap_or(1.0),
+        scale_factor: web_sys::window().map_or(1.0, |w| w.device_pixel_ratio()),
     }
 }
 
@@ -305,7 +303,8 @@ fn convert_pointer_move(pe: &web_sys::PointerEvent) -> PlatformInput {
 fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
     use dpi::PhysicalPosition;
     use ui_events::pointer::{
-        PointerEvent, PointerInfo, PointerScrollEvent, PointerState, PointerType,
+        PointerEvent, PointerInfo, PointerOrientation, PointerScrollEvent, PointerState,
+        PointerType,
     };
 
     let delta = crate::shared::scroll::from_web(we.delta_mode(), we.delta_x(), we.delta_y());
@@ -326,12 +325,10 @@ fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
             modifiers,
             count: 0,
             contact_geometry: dpi::PhysicalSize::new(1.0, 1.0),
-            orientation: Default::default(),
+            orientation: PointerOrientation::default(),
             pressure: 0.0,
             tangential_pressure: 0.0,
-            scale_factor: web_sys::window()
-                .map(|w| w.device_pixel_ratio())
-                .unwrap_or(1.0),
+            scale_factor: web_sys::window().map_or(1.0, |w| w.device_pixel_ratio()),
         },
     }))
 }
@@ -357,10 +354,11 @@ fn convert_keyboard_event(
     let key = map_key_value(&ke.key());
 
     let location = match ke.location() {
-        0 => keyboard_types::Location::Standard,
         1 => keyboard_types::Location::Left,
         2 => keyboard_types::Location::Right,
         3 => keyboard_types::Location::Numpad,
+        // 0 is DOM_KEY_LOCATION_STANDARD; an unrecognised value is treated
+        // the same way rather than dropped.
         _ => keyboard_types::Location::Standard,
     };
 

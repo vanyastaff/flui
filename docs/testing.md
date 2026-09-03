@@ -499,6 +499,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings  # feature-matrix job, then a --tests --benches --examples pass
 just facade-combos                                            # isolated per-combination facade builds (same job)
 cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — just wasm-check
+cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — just wasm-check
 cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — just cross-typecheck
 cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
 cargo deny check                                              # advisories / bans / licenses / sources

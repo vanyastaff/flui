@@ -371,8 +371,9 @@ unwrap_used = "warn"
 #     license the claim "every unsafe site is documented" while that remains
 #     false for two of three desktop targets plus mobile/web. Enabling it is
 #     only meaningful once the cross-target jobs run `clippy`, not `cargo
-#     check` (today `cross-typecheck` type-checks msvc/darwin without
-#     linting, and there is no Android/wasm clippy job at all).
+#     check`. They now do — `cross-typecheck` lints msvc/darwin/android and
+#     `wasm-check` lints wasm32 — so this first reason no longer holds and
+#     the lint is due a re-evaluation; the second reason below still does.
 #   * Turning it on first and writing comments to satisfy it produces prose, not
 #     review. That is how several comments in flui-hot-reload came to state
 #     invariants the code does not establish. Document unsafe because the

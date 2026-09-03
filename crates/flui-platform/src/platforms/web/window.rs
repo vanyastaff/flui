@@ -66,24 +66,22 @@ impl WebWindow {
         let scale_factor = window.device_pixel_ratio();
 
         // Find existing canvas or create a new one
-        let canvas = match document.get_element_by_id("flui-canvas") {
-            Some(el) => el
+        let canvas = if let Some(el) = document.get_element_by_id("flui-canvas") {
+            el.dyn_into::<web_sys::HtmlCanvasElement>()
+                .map_err(|_| backend("element 'flui-canvas' is not a canvas"))?
+        } else {
+            let canvas = document
+                .create_element("canvas")
+                .map_err(|e| backend(format!("failed to create canvas: {e:?}")))?
                 .dyn_into::<web_sys::HtmlCanvasElement>()
-                .map_err(|_| backend("element 'flui-canvas' is not a canvas"))?,
-            None => {
-                let canvas = document
-                    .create_element("canvas")
-                    .map_err(|e| backend(format!("failed to create canvas: {e:?}")))?
-                    .dyn_into::<web_sys::HtmlCanvasElement>()
-                    .map_err(|_| backend("failed to cast to HtmlCanvasElement"))?;
-                canvas.set_id("flui-canvas");
-                document
-                    .body()
-                    .ok_or_else(|| backend("no body element"))?
-                    .append_child(&canvas)
-                    .map_err(|e| backend(format!("failed to append canvas: {e:?}")))?;
-                canvas
-            }
+                .map_err(|_| backend("failed to cast to HtmlCanvasElement"))?;
+            canvas.set_id("flui-canvas");
+            document
+                .body()
+                .ok_or_else(|| backend("no body element"))?
+                .append_child(&canvas)
+                .map_err(|e| backend(format!("failed to append canvas: {e:?}")))?;
+            canvas
         };
 
         // Set physical size (sharp rendering on HiDPI)
@@ -217,12 +215,11 @@ impl PlatformWindow for WebWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        if let Some(w) = web_sys::window() {
-            if let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)") {
-                if mql.matches() {
-                    return WindowAppearance::Dark;
-                }
-            }
+        if let Some(w) = web_sys::window()
+            && let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)")
+            && mql.matches()
+        {
+            return WindowAppearance::Dark;
         }
         WindowAppearance::Light
     }
@@ -283,9 +280,12 @@ impl PlatformWindow for WebWindow {
 
         // WebCanvasWindowHandle expects a NonNull<c_void> pointer to the canvas object
         let obj: &wasm_bindgen::JsValue = self.canvas.as_ref();
-        let ptr =
-            std::ptr::NonNull::new(obj as *const wasm_bindgen::JsValue as *mut std::ffi::c_void)
-                .expect("canvas JsValue pointer is null");
+        let ptr = std::ptr::NonNull::new(
+            std::ptr::from_ref(obj)
+                .cast_mut()
+                .cast::<std::ffi::c_void>(),
+        )
+        .expect("BUG: a reference can never be null");
         let handle = WebCanvasWindowHandle::new(ptr);
         let raw = RawWindowHandle::WebCanvas(handle);
         // SAFETY: The canvas element is valid for the lifetime of this borrow

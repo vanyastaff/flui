@@ -78,12 +78,19 @@ build-layered:
     cargo build -p flui-cli
 
 [group("build")]
-[doc("Type-check the wasm-capable crates for wasm32-unknown-unknown (mirrors the CI wasm-check job)")]
+[doc("Type-check and clippy the wasm-capable crates for wasm32-unknown-unknown (mirrors the CI wasm-check job)")]
 wasm-check:
     cargo check --workspace --locked --target wasm32-unknown-unknown \
       --exclude flui-assets --exclude flui-build --exclude flui-cli \
       --exclude flui-web-server --exclude hot-reload-counter-host \
       --exclude hot-reload-counter-logic --exclude hot-reload-counter-types
+    # Lib/bin targets only: test targets pull native-only dev-deps (tokio).
+    # This is the ONLY lint pass over flui-platform's wasm32-only web backend.
+    cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown \
+      --exclude flui-assets --exclude flui-build --exclude flui-cli \
+      --exclude flui-web-server --exclude hot-reload-counter-host \
+      --exclude hot-reload-counter-logic --exclude hot-reload-counter-types \
+      -- -D warnings
     # The development feature has no web runner integration, but enabling it
     # must remain a well-formed build rather than exposing native-only imports.
     cargo check -p flui --locked --target wasm32-unknown-unknown \
