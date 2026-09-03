@@ -183,6 +183,10 @@ impl GpuServices {
 
     #[cfg(not(debug_assertions))]
     #[inline]
+    #[expect(
+        clippy::unused_self,
+        reason = "release-build no-op twin of the debug assertion above; the receiver keeps both arms one signature"
+    )]
     fn assert_owner_thread(&self) {}
 
     /// The shared device. Every [`Renderer`] built from these services via

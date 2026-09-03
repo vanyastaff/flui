@@ -17,6 +17,9 @@ use flui_cupertino::{
 use flui_scheduler::UpdateScheduler;
 use flui_types::Color;
 use flui_types::geometry::px;
+// Only the `#[cfg(debug_assertions)]` recovery test names this type: the
+// ErrorView substitution it asserts on exists only in debug builds.
+#[cfg(debug_assertions)]
 use flui_view::ErrorView;
 use flui_view::prelude::*;
 use flui_widgets::prelude::EdgeInsets;
