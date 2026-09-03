@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use flui_rendering::view::ScrollPosition;
 use flui_types::layout::Axis;
+use flui_view::element::StaticChildren;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
@@ -71,7 +72,13 @@ pub struct ListView {
     offset_source: OffsetSource,
     shrink_wrap: bool,
     /// Children for the static variant. Empty in the lazy variant.
-    children: Vec<BoxedView>,
+    /// The static children as handed in — a shared delegate, so a `ListView`
+    /// cloned or rebuilt from the same value compares as unchanged and its
+    /// resident children are not rebuilt (ADR-0053).
+    children: Rc<StaticChildren>,
+    /// `children` with the per-item repaint boundary applied, created on
+    /// first use so it too keeps its identity across builds of one value.
+    children_in_boundaries: std::cell::OnceCell<Rc<StaticChildren>>,
     /// Builder delegate for the lazy variant. `None` in the static variant.
     builder_source: Option<SliverChildBuilderDelegate>,
     /// Wrap each item in a `RepaintBoundary` (default `true`).
@@ -98,7 +105,8 @@ impl ListView {
             item_extent_estimate: item_extent,
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
-            children: children.into_boxed_vec(),
+            children: StaticChildren::new(children.into_boxed_vec()),
+            children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
             add_repaint_boundaries: true,
         }
@@ -128,7 +136,8 @@ impl ListView {
             item_extent_estimate,
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
-            children: Vec::new(),
+            children: StaticChildren::new(Vec::new()),
+            children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
             add_repaint_boundaries: true,
         }
@@ -220,7 +229,11 @@ impl fmt::Debug for ListView {
         } else {
             s.field("item_extent", &self.item_extent)
                 .field("children", &self.children.len())
-                .field("add_repaint_boundaries", &self.add_repaint_boundaries);
+                .field("add_repaint_boundaries", &self.add_repaint_boundaries)
+                .field(
+                    "children_in_boundaries",
+                    &self.children_in_boundaries.get().map(|c| c.len()),
+                );
         }
         s.finish()
     }
@@ -261,12 +274,20 @@ impl StatelessView for ListView {
             }
             .boxed()
         } else {
+            // Static children go through the same lazy path as a builder:
+            // only the window is built, keyed children are found by the
+            // delegate's key map, everything outside the window is evicted.
             let children = if self.add_repaint_boundaries {
-                super::sliver_list::wrap_in_repaint_boundaries(self.children.clone())
+                Rc::clone(self.children_in_boundaries.get_or_init(|| {
+                    StaticChildren::mapped(
+                        self.children.children().to_vec(),
+                        super::sliver_list::wrap_in_repaint_boundary,
+                    )
+                }))
             } else {
-                self.children.clone()
+                Rc::clone(&self.children)
             };
-            SliverFixedExtentList::new(self.item_extent, children).boxed()
+            SliverFixedExtentList::over(self.item_extent, children).boxed()
         };
         if self.shrink_wrap {
             let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);

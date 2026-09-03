@@ -224,6 +224,24 @@ impl MountedDemo {
     /// equals `render_type_name` — duplicated from
     /// `crates/flui-material/tests/common/mod.rs`'s `LaidOut::find_all_by_render_type`
     /// for the same reason every other helper here is (see the module doc).
+    /// The item count the home list's render object declares — the list is
+    /// lazy, so a row below the window is never built and cannot be found by
+    /// its text; the count is what an append changes.
+    fn list_item_count(&self) -> usize {
+        let lists = self.find_all_by_render_type("RenderSliverFixedExtentList");
+        assert_eq!(lists.len(), 1, "the home route mounts exactly one list");
+        self.pipeline_owner.with(|owner| {
+            owner
+                .debug_node_diagnostics(lists[0])
+                .and_then(|diagnostics| {
+                    diagnostics
+                        .get_property("item_count")
+                        .and_then(|count| count.parse::<usize>().ok())
+                })
+                .expect("the list reports its item_count")
+        })
+    }
+
     fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
         self.pipeline_owner.with(|owner| {
             owner
@@ -460,9 +478,10 @@ fn dialog_add_appends_an_item_and_preserves_home_state() {
         1,
         "MaterialDemoHomeState::create_state must have run exactly once at mount"
     );
-    assert!(
-        demo.find_text("Item 20").is_none(),
-        "the list must start with exactly INITIAL_ITEM_COUNT (20) items"
+    assert_eq!(
+        demo.list_item_count(),
+        tree::INITIAL_ITEM_COUNT,
+        "the list must start with exactly INITIAL_ITEM_COUNT items"
     );
 
     let fab = demo
@@ -482,9 +501,12 @@ fn dialog_add_appends_an_item_and_preserves_home_state() {
         demo.find_text(tree::ADD_DIALOG_TITLE).is_none(),
         "the dialog must be gone once Add pops it"
     );
-    assert!(
-        demo.find_text("Item 20").is_some(),
-        "Add must append a fresh item (the 21st, labeled 'Item 20') to the list"
+    // The list is lazy: the appended row sits below the window and is not
+    // built, so its text cannot be found; the declared count is the oracle.
+    assert_eq!(
+        demo.list_item_count(),
+        tree::INITIAL_ITEM_COUNT + 1,
+        "Add must append a fresh item (the 21st) to the list"
     );
     // The discriminating assertion: `items` is an `Rc<RefCell<_>>` shared
     // with the seed closure (`tree.rs`'s `MaterialDemoRoot::home_create_count`

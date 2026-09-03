@@ -138,7 +138,7 @@ fn committed_geometry_matches_the_controllers_pixels_after_jump_to() {
     let mut laid = lay_out(items(), tight(300.0, 300.0));
     let viewport = laid.root();
     let sliver = laid.only_child(viewport);
-    let item0 = laid.only_child(sliver);
+    let item0 = laid.child(sliver, 0);
 
     assert_eq!(controller.pixels(), 0.0);
     assert_eq!(laid.offset(item0), offset(0.0, 0.0));
@@ -147,16 +147,21 @@ fn committed_geometry_matches_the_controllers_pixels_after_jump_to() {
     laid.pump();
 
     assert_eq!(controller.pixels(), 653.0);
-    // A right-way-up (TopToBottom) sliver's child paint offset is
-    // `-pixels` on the main axis (`sliver_layout.rs`'s `child_paint_offset`
-    // contract, cited in `single_child_scroll_view_test.rs`) — the render
-    // tree's own, independently-computed number must equal the controller's.
+    // The list is lazy: at 653 px the cache window starts at 403 px, so item
+    // 0 is evicted and the first resident is item 2 (200 px items), whose
+    // layout offset is 400 px. A right-way-up (TopToBottom) sliver's child
+    // paint offset is `layout_offset - pixels` on the main axis
+    // (`sliver_layout.rs`'s `child_paint_offset` contract, cited in
+    // `single_child_scroll_view_test.rs`) — the render tree's own,
+    // independently-computed number must equal the controller's.
+    let first_resident = laid.child(sliver, 0);
     assert_eq!(
-        laid.offset(item0),
-        offset(0.0, -653.0),
-        "the committed child paint offset must equal exactly -controller.pixels() \
-         after a pump — a divergence here means the position-mode pixel value \
-         reached the controller but not the render tree (or vice versa)"
+        laid.offset(first_resident),
+        offset(0.0, 400.0 - 653.0),
+        "the committed child paint offset must equal exactly its layout offset \
+         minus controller.pixels() after a pump — a divergence here means the \
+         position-mode pixel value reached the controller but not the render \
+         tree (or vice versa)"
     );
 }
 

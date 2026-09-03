@@ -52,10 +52,10 @@
 //! in `SparseChildren::by_logical_index`; they are managed solely by
 //! `service_child_requests`.
 
-use std::{marker::PhantomData, rc::Rc, sync::Arc};
+use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
-use flui_objects::{RenderSliverGridLazy, RenderSliverList};
+use flui_objects::{RenderSliverFixedExtentList, RenderSliverGridLazy, RenderSliverList};
 use flui_rendering::{
     parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell, protocol::SliverProtocol,
     traits::RenderSliver,
@@ -79,6 +79,9 @@ use crate::{
 
 /// A delegate's key → index callback (Flutter's `findChildIndexCallback`).
 pub(crate) type FindIndexByKey = Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>;
+
+/// A delegate's item factory: the view at a logical index, `None` past the end.
+pub(crate) type ItemBuilder = Rc<dyn Fn(usize) -> Option<BoxedView>>;
 
 // ============================================================================
 // LAZY MULTI-BOX RENDER TRAIT
@@ -126,6 +129,152 @@ pub trait LazyMultiBoxRender:
 
     /// Update the known item count. Call when the data-source length changes.
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact;
+}
+
+/// Whether an update replaced the delegate: the builder or key callback by
+/// identity (`Rc::ptr_eq`), or the count. Config changes reach the render
+/// object through `update_render_object` and need no resident refresh.
+fn delegate_changed<R: LazyMultiBoxRender>(
+    old: &SliverMultiBoxAdaptor<R>,
+    new: &SliverMultiBoxAdaptor<R>,
+) -> bool {
+    let same_callback = match (&old.find_index_by_key, &new.find_index_by_key) {
+        (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    };
+    !Rc::ptr_eq(&old.builder, &new.builder) || !same_callback || old.item_count != new.item_count
+}
+
+// ============================================================================
+// STATIC CHILDREN — the delegate behind every `list` constructor
+// ============================================================================
+
+/// A fixed `Vec<BoxedView>` served by index, with the key → index map that
+/// lets a keyed child whose data moved be found without a callback.
+///
+/// Flutter's `SliverChildListDelegate` (`widgets/scroll_delegate.dart`):
+/// `build` answers `None` out of range, `findIndexByKey` consults a lazily
+/// filled `_keyToIndex`, and two delegates compare by the identity of their
+/// `children`. The map here is built on the first lookup, keyed by
+/// `key_hash` and decided by `key_eq` inside the bucket; the adaptor's
+/// reconcile hands the callback the item's own key (the per-item wrapper's
+/// salt is stripped before the call).
+pub struct StaticChildren {
+    children: Vec<BoxedView>,
+    key_to_index: std::cell::OnceCell<HashMap<u64, Vec<usize>>>,
+    /// Applied to each child as it is built (a per-item repaint boundary,
+    /// say). The key map reads the raw children, so a wrapper that salts
+    /// the key stays matchable through the unsalted callback key.
+    map: Option<Rc<dyn Fn(BoxedView) -> BoxedView>>,
+}
+
+impl StaticChildren {
+    /// Wrap `children` as a shared delegate.
+    #[must_use]
+    pub fn new(children: Vec<BoxedView>) -> Rc<Self> {
+        Rc::new(Self {
+            children,
+            key_to_index: std::cell::OnceCell::new(),
+            map: None,
+        })
+    }
+
+    /// Wrap `children` as a shared delegate whose every built item passes
+    /// through `map` first.
+    #[must_use]
+    pub fn mapped(
+        children: Vec<BoxedView>,
+        map: impl Fn(BoxedView) -> BoxedView + 'static,
+    ) -> Rc<Self> {
+        Rc::new(Self {
+            children,
+            key_to_index: std::cell::OnceCell::new(),
+            map: Some(Rc::new(map)),
+        })
+    }
+
+    /// The raw children, as handed in (before any mapping).
+    #[must_use]
+    pub fn children(&self) -> &[BoxedView] {
+        &self.children
+    }
+
+    /// The number of children.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Whether there are no children.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.children.is_empty()
+    }
+
+    /// The child at `index` (mapped, if a mapper was given), or `None` past
+    /// the end.
+    #[must_use]
+    pub fn build(&self, index: usize) -> Option<BoxedView> {
+        let child = self.children.get(index).cloned()?;
+        Some(match &self.map {
+            Some(map) => map(child),
+            None => child,
+        })
+    }
+
+    /// The index of the first child carrying `key`.
+    #[must_use]
+    pub fn find_index_by_key(&self, key: &dyn ViewKey) -> Option<usize> {
+        let map = self.key_to_index.get_or_init(|| {
+            let mut map: HashMap<u64, Vec<usize>> = HashMap::new();
+            for (index, child) in self.children.iter().enumerate() {
+                if let Some(child_key) = child.0.key() {
+                    map.entry(child_key.key_hash()).or_default().push(index);
+                }
+            }
+            map
+        });
+        map.get(&key.key_hash())?.iter().copied().find(|&index| {
+            self.children[index]
+                .0
+                .key()
+                .is_some_and(|child_key| child_key.key_eq(key))
+        })
+    }
+
+    /// The builder and key callback an adaptor takes.
+    fn delegate_pair(self: &Rc<Self>) -> (ItemBuilder, FindIndexByKey) {
+        let builder: ItemBuilder = {
+            let this = Rc::clone(self);
+            Rc::new(move |index: usize| this.build(index))
+        };
+        let find: FindIndexByKey = {
+            let this = Rc::clone(self);
+            Rc::new(move |key: &dyn ViewKey| this.find_index_by_key(key))
+        };
+        (builder, find)
+    }
+}
+
+impl std::fmt::Debug for StaticChildren {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticChildren")
+            .field("len", &self.children.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
+    /// Serve `children` through this adaptor: built by index, keyed children
+    /// found by the delegate's key map.
+    fn over_static_children(mut self, children: &Rc<StaticChildren>) -> Self {
+        let (builder, find) = children.delegate_pair();
+        self.item_count = children.len();
+        self.builder = builder;
+        self.find_index_by_key = Some(find);
+        self
+    }
 }
 
 // ============================================================================
@@ -243,12 +392,11 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         _ctx: &crate::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_item_count(self.item_count)
-            | render_object.update(&self.config)
-            // The builder is an opaque owner-local closure. Reconciliation
-            // cannot compare its behavior, so every replacement conservatively
-            // refreshes resident children and relayouts them.
-            | flui_rendering::RenderUpdateImpact::LAYOUT
+        // A changed delegate (builder or key callback) is detected by the
+        // behavior's `on_view_updated`, which sees both views: it flags the
+        // resident refresh and marks this render object for layout. Here only
+        // the render-side knobs speak.
+        render_object.set_item_count(self.item_count) | render_object.update(&self.config)
     }
 
     /// Invariant: no dense children — the dense reconciler must not touch
@@ -708,12 +856,29 @@ where
         // already-built index, so without this an already-resident child
         // would show stale content forever across a `pump_widget` root-swap
         // that changes the backing item list/builder).
+        if !delegate_changed(old_view, core.view()) {
+            // Same builder, same key callback, same count: the residents
+            // cannot read differently — Flutter's `SliverChildListDelegate.
+            // shouldRebuild` (`children != oldDelegate.children`) says the
+            // same for a list handed over unchanged; a builder delegate is a
+            // fresh closure per build and never compares equal, exactly as
+            // `SliverChildBuilderDelegate.shouldRebuild` is always true.
+            return;
+        }
         let mut manager = self.manager.lock();
         manager.builder = Rc::clone(&core.view().builder);
         manager
             .find_index_by_key
             .clone_from(&core.view().find_index_by_key);
         manager.needs_resident_refresh = true;
+        drop(manager);
+        // The refresh runs in the service pass after a layout: a delegate
+        // swap with an unchanged count and config would otherwise leave the
+        // sliver clean and the residents stale until something else laid it
+        // out.
+        if let (Some(render_id), Some(pipeline)) = (self.inner.render_id, core.pipeline_owner()) {
+            pipeline.with_mut(|pipeline_owner| pipeline_owner.mark_needs_layout(render_id));
+        }
     }
 
     fn render_id(&self) -> Option<RenderId> {
@@ -903,13 +1068,15 @@ impl SliverList {
     ///
     /// Panics under the same condition as [`SliverList::new`].
     pub fn list(item_extent_estimate: f32, children: Vec<BoxedView>) -> Self {
-        let children = Rc::new(children);
-        let item_count = children.len();
-        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = {
-            let children = Rc::clone(&children);
-            Rc::new(move |index: usize| children.get(index).cloned())
-        };
-        Self::new(item_count, item_extent_estimate, builder)
+        Self::over(item_extent_estimate, &StaticChildren::new(children))
+    }
+
+    /// The same as [`Self::list`] over an already shared delegate: two views
+    /// built over one `Rc` compare as the same delegate on update, so the
+    /// residents are not refreshed (Flutter's `shouldRebuild` by identity).
+    #[must_use]
+    pub fn over(item_extent_estimate: f32, children: &Rc<StaticChildren>) -> Self {
+        Self::new(0, item_extent_estimate, Rc::new(|_| None)).over_static_children(children)
     }
 }
 
@@ -959,6 +1126,109 @@ impl SliverGridLazy {
             builder,
             find_index_by_key: None,
         }
+    }
+
+    /// A grid over a fixed list of children, served lazily by index with the
+    /// delegate's key map (Flutter's `SliverGrid` with a
+    /// `SliverChildListDelegate`).
+    #[must_use]
+    pub fn list(
+        grid_delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
+        children: Vec<BoxedView>,
+    ) -> Self {
+        Self::over(grid_delegate, &StaticChildren::new(children))
+    }
+
+    /// [`Self::list`] over an already shared delegate.
+    #[must_use]
+    pub fn over(
+        grid_delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
+        children: &Rc<StaticChildren>,
+    ) -> Self {
+        Self::new(grid_delegate, 0, Rc::new(|_| None)).over_static_children(children)
+    }
+}
+
+// ============================================================================
+// SLIVER FIXED EXTENT LIST — RenderSliverFixedExtentList as a LazyMultiBoxRender
+// ============================================================================
+
+/// The one knob of a fixed-extent list: every child's main-axis extent.
+///
+/// `#[non_exhaustive]` with a constructor, like [`ListConfig`]: a future knob
+/// is additive through [`FixedExtentConfig::new`], never through a literal.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct FixedExtentConfig {
+    /// Main-axis extent every child is laid out to (logical pixels).
+    pub item_extent: f32,
+}
+
+impl FixedExtentConfig {
+    /// A config with the given per-child extent.
+    #[must_use]
+    pub const fn new(item_extent: f32) -> Self {
+        Self { item_extent }
+    }
+}
+
+impl LazyMultiBoxRender for RenderSliverFixedExtentList {
+    type Config = FixedExtentConfig;
+
+    const KIND: &'static str = "SliverFixedExtentList";
+
+    fn create(config: &Self::Config, item_count: usize) -> Self {
+        RenderSliverFixedExtentList::new(config.item_extent, item_count)
+    }
+
+    fn update(&mut self, config: &Self::Config) -> flui_rendering::RenderUpdateImpact {
+        self.set_item_extent(config.item_extent)
+    }
+
+    fn item_count(&self) -> usize {
+        RenderSliverFixedExtentList::item_count(self)
+    }
+
+    fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverFixedExtentList::set_item_count(self, item_count)
+    }
+}
+
+/// A lazily built list whose children all share one main-axis extent: the
+/// index math needs no measurement, so any offset is a multiplication.
+/// Flutter's `SliverFixedExtentList`.
+pub type SliverFixedExtentList = SliverMultiBoxAdaptor<RenderSliverFixedExtentList>;
+
+impl SliverFixedExtentList {
+    /// A fixed-extent list of `item_count` children built on demand.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `item_extent` is not finite or not greater than zero.
+    #[must_use]
+    pub fn new(
+        item_extent: f32,
+        item_count: usize,
+        builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    ) -> Self {
+        assert!(
+            item_extent.is_finite() && item_extent > 0.0,
+            "item_extent must be finite and positive, got {item_extent}",
+        );
+        SliverMultiBoxAdaptor::with_config(FixedExtentConfig::new(item_extent), item_count, builder)
+    }
+
+    /// A fixed-extent list over a fixed list of children, served lazily by
+    /// index with the delegate's key map.
+    #[must_use]
+    pub fn list(item_extent: f32, children: Vec<BoxedView>) -> Self {
+        Self::over(item_extent, &StaticChildren::new(children))
+    }
+
+    /// [`Self::list`] over an already shared delegate.
+    #[must_use]
+    pub fn over(item_extent: f32, children: &Rc<StaticChildren>) -> Self {
+        Self::new(item_extent, 0, Rc::new(|_| None)).over_static_children(children)
     }
 }
 

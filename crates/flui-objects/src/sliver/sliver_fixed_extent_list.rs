@@ -33,7 +33,7 @@
 //! - **The precision tolerance is `f32`-scaled.** Flutter compares layout
 //!   offsets in doubles against `precisionErrorTolerance = 1e-10`; FLUI's
 //!   pixels are `f32`, whose spacing at a few thousand pixels is already
-//!   `~1e-4`, so [`PRECISION_ERROR_TOLERANCE`] is `1e-3` px — far below any
+//!   `~1e-4`, so `PRECISION_ERROR_TOLERANCE` is `1e-3` px — far below any
 //!   layout-relevant distance, wide enough to absorb the rounding the
 //!   reference's own regression tests exist for.
 //! - **An unbounded window is bounded here.** With an infinite
@@ -41,7 +41,7 @@
 //!   this sliver for a real count (shrink-wrap materialises everything, as
 //!   Flutter does), but a `usize::MAX` "unknown" count is read as the sentinel
 //!   it is and served as a small bounded window, exactly as the lazy grid does
-//!   ([`MAX_UNBOUNDED_WINDOW_CHILDREN`], [`UNBOUNDED_SENTINEL_WINDOW`]).
+//!   (`MAX_UNBOUNDED_WINDOW_CHILDREN`, `UNBOUNDED_SENTINEL_WINDOW`).
 
 use std::collections::BTreeMap;
 
@@ -154,7 +154,7 @@ impl RenderSliverFixedExtentList {
     /// The first child index whose extent reaches `scroll_offset`
     /// (Flutter's `getMinChildIndexForScrollOffset`).
     ///
-    /// An offset within [`PRECISION_ERROR_TOLERANCE`] of an item boundary
+    /// An offset within `PRECISION_ERROR_TOLERANCE` of an item boundary
     /// counts as that boundary, so accumulated rounding never pulls in the
     /// child that ends exactly there.
     #[must_use]
@@ -426,7 +426,7 @@ mod tests {
     //! `'… correctly references itemExtent …'` cases). The reference nudges
     //! offsets by `1e-10` / `1e-11` doubles around `precisionErrorTolerance`;
     //! here the nudges are `1e-2` / `1e-4` px around the `f32`-scaled
-    //! [`PRECISION_ERROR_TOLERANCE`] — the same side of the tolerance each time.
+    //! `PRECISION_ERROR_TOLERANCE` — the same side of the tolerance each time.
 
     use super::*;
 

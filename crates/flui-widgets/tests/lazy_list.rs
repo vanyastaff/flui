@@ -1050,6 +1050,94 @@ fn painted_rect_colors(laid: &LaidOut) -> Vec<Color> {
     colors
 }
 
+/// `ListView::new` over a thousand static children materialises only its
+/// window: the children are a delegate served by index, not dense children.
+/// Flutter's `SliverChildListDelegate` gives `ListView(children:)` the same
+/// bound; before this the fixed-extent list attached every child eagerly.
+#[test]
+fn list_view_new_materialises_only_the_window() {
+    const ITEM_COUNT: usize = 1000;
+    const EXTENT: f32 = 10.0;
+    let children: Vec<BoxedView> = (0..ITEM_COUNT)
+        .map(|i| {
+            SizedBox::new(200.0, EXTENT)
+                .child(Text::new(format!("row{i}")))
+                .boxed()
+        })
+        .collect();
+    let laid = lay_out(
+        ListView::new(EXTENT, children).repaint_boundaries(false),
+        tight(200.0, 200.0),
+    );
+    // 200 px viewport + 250 px cache below at 10 px rows: 45 rows, and a few
+    // render nodes each; a thousand rows would be thousands of nodes.
+    let nodes = laid.render_node_count();
+    assert!(
+        nodes < 400,
+        "only the window is built: {nodes} render nodes for {ITEM_COUNT} rows"
+    );
+    assert!(laid.find_text("row0").is_some(), "the head row is resident");
+    assert!(
+        laid.find_text("row500").is_none(),
+        "a row far below the window is never built"
+    );
+}
+
+/// The static delegate's key map: a keyed row of `ListView::new` whose data
+/// moved out of the resident band while the viewport jumped to its new
+/// place keeps its state — the same contract `ListView::builder` has with a
+/// `find_index_by_key` callback, here with no callback at all (Flutter's
+/// `SliverChildListDelegate` derives `findIndexByKey` from its children).
+#[test]
+fn list_view_new_keyed_row_moving_with_the_viewport_keeps_state() {
+    const EXTENT: f32 = 10.0;
+    let inits = Arc::new(parking_lot::Mutex::new(Vec::<u32>::new()));
+    let rows = |order: &[u32]| -> Vec<BoxedView> {
+        order
+            .iter()
+            .map(|&id| {
+                KeyedRow {
+                    id,
+                    key: flui_foundation::ValueKey::new(id),
+                    inits: Arc::clone(&inits),
+                }
+                .boxed()
+            })
+            .collect()
+    };
+    let initial: Vec<u32> = (1..=100).collect();
+    let mut laid = lay_out(
+        ListView::new(EXTENT, rows(&initial)).repaint_boundaries(false),
+        tight(200.0, 200.0),
+    );
+    assert!(
+        laid.find_text("row1").is_some(),
+        "row 1 is resident at the head"
+    );
+
+    // Row 1 moves to index 60 and the viewport jumps there in the same frame.
+    let mut moved: Vec<u32> = (2..=100).collect();
+    moved.insert(59, 1);
+    laid.pump_widget(
+        ListView::new(EXTENT, rows(&moved))
+            .repaint_boundaries(false)
+            .offset(58.0 * EXTENT),
+    );
+    let row1 = laid
+        .find_text("row1")
+        .expect("row 1 is resident at its new index");
+    let top = laid.absolute_offset(row1).dy.get();
+    assert!(
+        (0.0..200.0).contains(&top),
+        "row 1 is on screen at its new index; top={top}"
+    );
+    let states_for_1 = inits.lock().iter().filter(|&&id| id == 1).count();
+    assert_eq!(
+        states_for_1, 1,
+        "row 1's state must be created once and carried to its new index"
+    );
+}
+
 /// The reviewer's scenario for the in-frame fixpoint: a 1000 px seed over
 /// 1 px items in a 200 px viewport. The first pass requests one item; that
 /// single measurement must be enough for the same frame to request, build,
