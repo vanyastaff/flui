@@ -7,7 +7,6 @@ authors.workspace = true
 license.workspace = true
 description = "Type-safe 2D geometry primitives for FLUI"
 repository.workspace = true
-readme = "README.md"
 keywords = ["geometry", "graphics", "ui", "flui", "math"]
 categories = ["graphics", "mathematics"]
 

@@ -9,7 +9,6 @@ repository.workspace = true
 description = "GPU-accelerated rendering engine for FLUI using wgpu"
 keywords = ["rendering", "gpu", "wgpu", "ui", "graphics"]
 categories = ["rendering::engine", "graphics", "gui"]
-readme = "README.md"
 
 [features]
 default = ["wgpu-backend", "images"]

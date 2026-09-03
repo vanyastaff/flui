@@ -1,0 +1,16 @@
+# nextest configuration. Read from the workspace root by every `cargo nextest`
+# invocation — the `just test*` recipes and CI alike — so one file governs both.
+#
+# Why it exists: a test that hangs (a GPU adapter that never answers, an Xvfb
+# connection that never comes up) used to run until the CI job's own
+# `timeout-minutes` killed the whole job, discarding every other result with
+# it. nextest runs each test in its own process, so it can time out and
+# terminate ONE test and keep reporting the rest.
+[profile.default]
+# Report a test as SLOW after 60 s and kill it after four periods (4 min).
+# A test that legitimately needs longer gets its own override below — never
+# a higher global.
+slow-timeout = { period = "60s", terminate-after = 4 }
+# A test that has exited but left a child process holding stdout/stderr open
+# is reported as a leak after this grace period instead of hanging the run.
+leak-timeout = "1s"

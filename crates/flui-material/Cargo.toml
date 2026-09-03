@@ -51,7 +51,7 @@ flui-widgets = { path = "../flui-widgets", version = "0.2.0", features = ["testi
 # scoping end-to-end.
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
 flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
-flui-testing = { path = "../flui-testing", version = "0.2.0" }
+flui-testing = { workspace = true }
 # `DrawCommand` — the selection-controls' painter unit tests
 # (`checkbox`/`switch`/`radio`) record a real paint pass and pattern-match
 # its recorded circle commands; `flui_rendering::pipeline` re-exports

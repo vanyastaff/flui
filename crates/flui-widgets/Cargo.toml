@@ -7,7 +7,6 @@ authors.workspace = true
 license.workspace = true
 description = "User-facing Flutter-style widget catalog for FLUI (configuration objects over the flui-objects render catalog)"
 repository.workspace = true
-readme = "README.md"
 keywords = ["ui", "widget", "flutter", "flui", "gui"]
 categories = ["gui"]
 # Root tests/*.rs are consolidated into the single `widgets_it` binary below
@@ -78,7 +77,7 @@ lru = { workspace = true, optional = true }
 # suites) is built on `HeadlessBinding`. Optional + feature-gated so no
 # production graph ever links the test driver (see the sanctioned
 # same-layer edge in docs/workspace-layers.toml).
-flui-testing = { path = "../flui-testing", version = "0.2.0", optional = true }
+flui-testing = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Enable this crate's own `testing` feature for its integration tests:
@@ -102,7 +101,7 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0", features =
 flui-platform = { path = "../flui-platform", version = "0.2.0" }
 # Headless frame driver: provides the shared clock-bound arena a `GestureArenaScope`
 # hands to detectors, and `pump_frame` to poll deadline-driven gestures in tests.
-flui-testing = { path = "../flui-testing", version = "0.2.0" }
+flui-testing = { workspace = true }
 # Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
 parking_lot = { workspace = true }
 # Deterministic paint/layout snapshot assertions.

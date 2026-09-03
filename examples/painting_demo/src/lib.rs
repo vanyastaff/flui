@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use wasm_bindgen::prelude::*;
 
+/// Entry point invoked by the generated JS glue on module load: creates a
+/// WebGPU surface on the `flui-canvas` element and renders the demo scene.
 #[wasm_bindgen(start)]
 pub async fn main() {
     console_error_panic_hook::set_once();
@@ -36,11 +38,11 @@ pub async fn main() {
     // The resulting surface is used immediately in this function and the canvas
     // outlives both the surface and the wgpu instance (canvas is owned by the
     // calling JS context for the page lifetime).
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     let surface = unsafe {
         use std::ptr::NonNull;
         let obj: JsValue = canvas.clone().into();
-        let ptr = NonNull::new_unchecked(Box::into_raw(Box::new(obj)) as *mut std::ffi::c_void);
+        let ptr = NonNull::new_unchecked(Box::into_raw(Box::new(obj)).cast::<std::ffi::c_void>());
         let handle = raw_window_handle::WebCanvasWindowHandle::new(ptr);
         let raw_window = raw_window_handle::RawWindowHandle::WebCanvas(handle);
         let raw_display =

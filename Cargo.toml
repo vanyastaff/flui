@@ -1,5 +1,9 @@
 [workspace]
-resolver = "2"
+# Resolver 3 (stable since 1.84) is the MSRV-aware resolver: `cargo update` /
+# `cargo add` prefer dependency versions whose own `rust-version` fits the
+# declared MSRV instead of leaving the `msrv` CI job as the only guard. Edition
+# 2024 makes it the default for packages, but a virtual workspace must say so.
+resolver = "3"
 members = [
     # === Phase 1: Foundation Layer ===
     "crates/flui-geometry",   # Geometry primitives (split from flui-types)
@@ -420,7 +424,6 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Flutter-inspired declarative UI framework with wgpu rendering"
-readme = "README.md"
 keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 categories = ["gui", "rendering::engine"]
 
@@ -476,7 +479,7 @@ flui-platform = { path = "crates/flui-platform", version = "0.2.0" }
 flui-hot-reload = { path = "crates/flui-hot-reload", version = "0.2.0" }
 
 # === Test support (for the vertical_slice_demo acceptance test) ===
-flui-testing = { path = "crates/flui-testing", version = "0.2.0" }
+flui-testing = { workspace = true }
 # Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
 insta = { workspace = true }
 parking_lot.workspace = true

@@ -36,3 +36,6 @@ raw-window-handle = "0.6"
 wgpu = { workspace = true, features = ["webgpu", "wgsl"] }
 flui-engine = { path = "../../crates/flui-engine", features = ["wgpu-backend", "webgpu"] }
 flui-types = { path = "../../crates/flui-types" }
+
+[lints]
+workspace = true

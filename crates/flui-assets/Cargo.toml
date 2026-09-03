@@ -7,7 +7,6 @@ authors.workspace = true
 license.workspace = true
 description = "High-performance asset management with smart caching, type safety, and async I/O"
 repository.workspace = true
-readme = "README.md"
 keywords = ["assets", "cache", "async", "game", "ui"]
 categories = ["asynchronous", "caching", "game-development", "gui"]
 documentation = "https://docs.rs/flui-assets"

@@ -8,7 +8,6 @@ authors.workspace = true
 repository.workspace = true
 description = "Foundation types and utilities for FLUI framework"
 documentation = "https://docs.rs/flui-foundation"
-readme = "README.md"
 keywords = ["ui", "gui", "foundation", "flui"]
 categories = ["gui", "data-structures"]
 

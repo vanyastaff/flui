@@ -9,7 +9,7 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 | Tool | Minimum version | Notes |
 |------|-----------------|-------|
 | Rust | 1.97 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned in `rust-toolchain.toml` (channel `1.97.1`). `rustup` installs/selects it automatically on first `cargo` invocation. |
-| Cargo | bundled with Rust | Workspace uses `resolver = "2"` and edition 2024. |
+| Cargo | bundled with Rust | Workspace uses `resolver = "3"` (MSRV-aware) and edition 2024. |
 | Git | any recent | Required to clone the repo. |
 | `cargo-ndk` | 3.x | Required only for Android targets. |
 | `wasm-pack` | 0.13+ | Required only for `examples/web_demo` and `examples/painting_demo`. |
