@@ -462,6 +462,31 @@ Grep по `crates/**/*.rs` — 0 использований у каждого:
 
 ---
 
+## 10. Статус исполнения (2026-09-03, тот же день)
+
+Документ выше — оценка на утро 2026-09-03; ниже — что из §7 сделано к вечеру, что при исполнении оказалось не так, и что отложено осознанно. PR-ы стеком: #808 — база, остальные ретаргетятся на `main` после его слияния.
+
+| Пункт §7 | Статус | Где |
+|---|---|---|
+| `fetch_update` → `try_update` (8 сайтов) + устаревший комментарий в miri-job | **сделано** | #808 |
+| Гигиена манифестов (lints inheritance в 2 примерах, `serde_json` под `timeline`, `workspace = true` для `dyn-clone`/`downcast-rs`/`flui-testing`, лишние `readme =`) | **сделано**; наследование lints вскрыло 5 реальных замечаний в двух wasm-демо — исправлены в исходниках | #808 |
+| `resolver = "3"`, `.config/nextest.toml`, lld-комментарий | **сделано**. Первый прогон CI под nextest-таймаутами убил два теста `flui-cli` (сборка сгенерированного проекта, ~180 с на 4-ядерном раннере) — бюджет пересчитан по замерам CI: глобально 10 мин, компилирующим тестам 20 мин | #808 |
+| `nightly-canary` в `weekly.yml` + `just nightly-check` | **сделано** | #808 |
+| `recursion_depth_exceeding_limit` (6 сайтов) | **сделано** через `#![recursion_limit = "256"]`; ручной `impl Send` отвергнут — он вернул бы blanket-утверждение, которое ADR-0045 убрал, и был бы unsound на wasm32 без `fragile-send-sync-non-atomic-wasm` | #809 |
+| `Rodeo` → `ThreadedRodeo` | **сделано**; `AssetKey::as_str` теперь `&'static str` (breaking, потребителей вне крейта нет) | #810 |
+| `crossbeam-channel` → std mpsc; `regex` → `regex-lite` | **снято** — см. §6b «Оставить»: все сайты каналов опираются на `len()`, тип `Regex` диктует `wgsl_bindgen` | — |
+| `#[allow]` → `#[expect]` покрейтно | **сделано одним проходом**: 673 атрибута → 606 `expect`, 145 мёртвых подавлений удалены (в основном lints, разрешённые на уровне workspace, `missing_docs` в bench-бинарях, где lint не срабатывает, и `dead_code` на давно используемых элементах), 12 переведены в точный `cfg_attr(...)` (только-в-тестах, только-без-`simd`, только-под-`enable-wgpu-tests`, только-не-wasm). Обёртки над сгенерированным wgsl_bindgen-кодом и 8 подключаемых по `#[path]` демо-модулей остаются `allow` с `reason` — там набор срабатывающих lints зависит от версии генератора и включённых feature. `clippy::allow_attributes` как lint **не** включён: оставшиеся `allow` условны по построению | #814 |
+| `#[diagnostic::on_unimplemented]` на публичных трейтах | **сделано** для 11 трейтов; текст закреплён trybuild-кейсами (`not_a_view`, `not_a_render_box`, `not_parent_data`); `do_not_recommend` на blanket-impl не ставился намеренно — цепочка «required for … to implement» и есть подсказка | #812 |
+| Web-backend `flui-platform` под clippy | **не планировалось, найдено при проверке**: 15 deny-замечаний в коде, который ни один job не линтил (wasm-check делал только `check`). Исправлены; `wasm-check` теперь гоняет clippy по lib/bin-таргетам wasm-набора | #811 |
+| `NOTICE` + README («почему FLUI», acknowledgments) | **сделано**; юридический текст — прочитать перед слиянием | #813 |
+| `cocoa`/`objc` → `objc2` | **отложено**: 164 `msg_send!` в 6 файлах, верифицируется только `cross-typecheck` (компиляция без запуска); без ручного smoke на Mac это перенос UB-класса вслепую. Первый кандидат, когда появится macOS-раннер (§8a #1) | — |
+| `cfg_select!` в `flui-log`/`flui-platform` | **отложено**: каскады содержат ветки `target_os = "ios"`, которые не компилирует ни один CI-job; перестройка непроверяемого кода противоречит «Done means verified» | — |
+| `fmt::from_fn` | **неприменимо по факту**: grep не нашёл ни одного вспомогательного `struct …Debug` — ручных `Debug` через helper-типы в workspace нет | — |
+| Бамп dev-пина на 1.99 | ждёт релиза 2026-10-01 | — |
+| ADR parley/vello, ADR inspection-протокол + `flui-mcp`, `a11y` в default-features, acceptance-сценарий обзора, `llms.txt` | **не начато** — каждый из них продуктовое решение уровня ADR, а не hygiene-правка | — |
+
+Найденное попутно и починенное: локальный toolchain `1.98.0` был установлен частично (без `rustfmt` и host `rust-std`) — из-за этого `just gate` и pre-push hook были красными на чистом `main`, а не из-за дерева; типо-чекер CI отвергал сам этот документ («Relm4»).
+
 ## 9. Источники
 
 - Release notes: [RELEASES.md @1.98.0](https://github.com/rust-lang/rust/blob/1.98.0/RELEASES.md), [1.98 announcement](https://blog.rust-lang.org/2026/08/20/Rust-1.98.0/), [releases.rs 1.99 beta](https://releases.rs/docs/1.99.0/), [Cargo CHANGELOG (1.99/1.100)](https://doc.rust-lang.org/nightly/cargo/CHANGELOG.html)
