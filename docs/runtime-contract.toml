@@ -244,7 +244,7 @@ declarations = [
     "pub use frame_stamp::FrameStamp;",
     "pub use debug::{ DebugPaintConfig, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty, DiagnosticsPropertyKind, DiagnosticsTreeStyle, };",
     "pub use id::{ DataTransferId, ElementId, FrameCallbackId, FrameId, Id, Identifier, LayerId, ListenerId, Marker, ObserverId, PresentationAddress, PresentationId, RawId, RealmId, RenderId, SemanticsId, TaskId, TickerId, TreeId, ViewId, markers, };",
-    "pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};",
+    "pub use key::{Key, KeyRef, Keyed, SaltedKey, UniqueKey, ValueKey, ViewKey, WithKey};",
     "pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};",
     "pub use rebuild_reason::{RebuildReason, RebuildReasons};",
     "pub use listener_registry::{ListenerRegistry, ListenerSubscription};",

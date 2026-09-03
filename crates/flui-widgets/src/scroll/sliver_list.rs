@@ -18,6 +18,9 @@ pub use flui_view::element::SliverList;
 // SliverChildBuilderDelegate
 // ============================================================================
 
+/// A delegate's key → index callback (Flutter's `findChildIndexCallback`).
+pub(crate) type FindIndexByKey = Rc<dyn Fn(&dyn flui_foundation::ViewKey) -> Option<usize>>;
+
 /// Delegate that builds sliver list items on demand.
 ///
 /// Carries the item-builder closure and a known item count. Pass it to
@@ -25,19 +28,21 @@ pub use flui_view::element::SliverList;
 /// lazily-virtualized list that only builds children visible in the viewport
 /// plus a configurable cache margin.
 ///
-/// # First-frame settling (Flutter divergence)
+/// # Same-frame settling
 ///
-/// Lazy children are built **after** the frame's paint completes, not during
-/// layout as Flutter does. This means the very first frame a viewport band
-/// becomes visible, the children paint blank; content lands on the *next*
-/// frame (~16 ms at 60 fps). The settling frame is automatically scheduled
-/// because layout marks the sliver dirty (`PipelineOwner::has_dirty_nodes`
-/// returns `true`), which keeps the runner's `has_pending_work()` gate open.
+/// Lazy children are built between the layout passes of the frame that
+/// requested them (the layout↔build fixpoint `LayoutBuilder` also uses), so
+/// a band that scrolls into view is built, laid out, and painted in that
+/// frame — the observable result Flutter gets from building during layout,
+/// without the reentrant build. A frame that needs more passes than the
+/// lazy-band budget allows defers the remainder to the next frame; the
+/// item-extent estimate adapts to the measured children so that is rare.
 ///
-/// This is a deliberate, recorded divergence from Flutter — Flutter builds
-/// lazy children during the same-frame layout pass so no blank frame is
-/// visible. FLUI defers to the post-paint service step for architectural
-/// simplicity; prefetch-hidden items are not affected.
+/// # Recovery
+///
+/// A builder that panics yields the registered error view at that index
+/// only — a render-owning error box in a finite row — and every other index
+/// is untouched (Flutter's `SliverChildBuilderDelegate.build` try/catch).
 #[derive(Clone)]
 pub struct SliverChildBuilderDelegate {
     pub(crate) item_count: usize,
@@ -46,8 +51,7 @@ pub struct SliverChildBuilderDelegate {
     /// `findChildIndexCallback`), so a keyed item whose data moved out of
     /// the resident band keeps its state. Moves within the band need no
     /// callback.
-    pub(crate) find_index_by_key:
-        Option<Rc<dyn Fn(&dyn flui_foundation::ViewKey) -> Option<usize>>>,
+    pub(crate) find_index_by_key: Option<FindIndexByKey>,
 }
 
 impl SliverChildBuilderDelegate {

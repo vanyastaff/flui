@@ -525,7 +525,7 @@ impl<T: Clone + Hash + Eq + Send + Sync + fmt::Debug + 'static> ViewKey for Valu
 ///   wrapper's salt of an equal inner key.
 /// - **it is never a `GlobalKey`.** [`ViewKey::is_global_key`] is `false`
 ///   whatever the inner key is, so the wrapper registers nothing in the
-///   GlobalKey registry and the item inside registers its own key exactly
+///   `GlobalKey` registry and the item inside registers its own key exactly
 ///   once. Forwarding a raw `GlobalKey` made the wrapper and the item both
 ///   claim it: a debug panic at mount, a duplicate report in release.
 ///
@@ -1276,9 +1276,6 @@ mod tests {
 #[cfg(test)]
 mod salted_key_tests {
     use super::*;
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    struct Marker;
 
     #[test]
     fn salt_equals_only_another_salt_of_an_equal_inner_key() {

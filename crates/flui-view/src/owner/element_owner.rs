@@ -573,19 +573,18 @@ impl ElementOwner<'_> {
         let Some(manager) = manager else {
             return;
         };
-        match manager.try_lock() {
-            Some(mut manager) => manager.forget_child(child),
-            None => {
-                debug_assert!(
-                    false,
-                    "BUG: forget_sparse_child re-entered a lazy sliver's own service pass"
-                );
-                tracing::error!(
-                    ?host_render_id,
-                    ?child,
-                    "a GlobalKey retake could not notify the losing lazy sliver (manager busy)"
-                );
-            }
+        if let Some(mut manager) = manager.try_lock() {
+            manager.forget_child(child);
+        } else {
+            debug_assert!(
+                false,
+                "BUG: forget_sparse_child re-entered a lazy sliver's own service pass"
+            );
+            tracing::error!(
+                ?host_render_id,
+                ?child,
+                "a GlobalKey retake could not notify the losing lazy sliver (manager busy)"
+            );
         }
     }
 

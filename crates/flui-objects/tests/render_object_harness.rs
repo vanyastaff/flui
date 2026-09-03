@@ -747,7 +747,7 @@ fn error_box_size(run: &flui_rendering::testing::FrameRun) -> (f32, f32) {
             .unwrap_or_else(|| panic!("{name} in {raw:?}"))
             + name.len();
         raw[start..]
-            .trim_start_matches(|c: char| c == ':' || c == ' ')
+            .trim_start_matches([':', ' '])
             .trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.')
             .split(|c: char| !c.is_ascii_digit() && c != '.')
             .next()

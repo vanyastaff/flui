@@ -49,7 +49,7 @@ use flui_objects::{RenderSliverGridLazy, RenderSliverList};
 use flui_rendering::{pipeline::PipelineCell, protocol::SliverProtocol};
 use parking_lot::Mutex;
 
-use super::sparse_children::build_item_or_error;
+use super::sparse_children::{ReconcileSource, build_item_or_error};
 use super::{
     Variable,
     behavior::{ElementBehavior, RenderBehavior},
@@ -63,6 +63,9 @@ use crate::{
     tree::ElementTree,
     view::{RenderView, View},
 };
+
+/// A delegate's key → index callback (Flutter's `findChildIndexCallback`).
+pub(crate) type FindIndexByKey = Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>;
 
 // ============================================================================
 // VIEW CONFIG
@@ -96,7 +99,7 @@ pub struct SliverList {
     /// found and its state kept — Flutter's `findChildIndexCallback`. Keyed
     /// moves *within* the band need no callback: the reconcile matches
     /// residents by key on its own.
-    pub(crate) find_index_by_key: Option<Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>>,
+    pub(crate) find_index_by_key: Option<FindIndexByKey>,
 }
 
 impl SliverList {
@@ -310,7 +313,7 @@ pub(crate) struct SliverListAdaptorManager {
     /// behavior without cloning the closure.
     builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     /// The view's key → index callback, if any (see `SliverList`).
-    find_index_by_key: Option<Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>>,
+    find_index_by_key: Option<FindIndexByKey>,
     /// The sliver's render id, for clamping its item count when the builder
     /// declines an index below it (the data source shrank).
     render_id: Option<RenderId>,
@@ -377,9 +380,11 @@ impl ChildManager for SliverListAdaptorManager {
         let refresh_did_work = if self.needs_resident_refresh {
             self.needs_resident_refresh = false;
             let outcome = self.sparse_children.reconcile(
-                &*self.builder,
-                self.find_index_by_key.as_deref(),
-                self.item_count(pipeline),
+                ReconcileSource {
+                    builder: &*self.builder,
+                    find_index_by_key: self.find_index_by_key.as_deref(),
+                    item_count: self.item_count(pipeline),
+                },
                 host,
                 tree,
                 owner,
@@ -692,7 +697,9 @@ where
         // that changes the backing item list/builder).
         let mut manager = self.manager.lock();
         manager.builder = Rc::clone(&core.view().builder);
-        manager.find_index_by_key = core.view().find_index_by_key.clone();
+        manager
+            .find_index_by_key
+            .clone_from(&core.view().find_index_by_key);
         manager.needs_resident_refresh = true;
     }
 
@@ -760,7 +767,7 @@ pub struct SliverGridLazy {
     /// the index is past the end of the data source.
     pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     /// See `SliverList::find_index_by_key`.
-    pub(crate) find_index_by_key: Option<Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>>,
+    pub(crate) find_index_by_key: Option<FindIndexByKey>,
 }
 
 impl SliverGridLazy {
@@ -857,7 +864,7 @@ pub(crate) struct SliverGridLazyAdaptorManager {
     render_id: Option<RenderId>,
     builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     /// See `SliverList::find_index_by_key`.
-    find_index_by_key: Option<Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>>,
+    find_index_by_key: Option<FindIndexByKey>,
     /// Set by `SliverGridLazyAdaptorBehavior::on_view_updated` whenever the
     /// parent hands this element a new `SliverGridLazy` view; consumed (and
     /// cleared) by the next `service` call, which re-consults `builder` for
@@ -959,11 +966,12 @@ impl ChildManager for SliverGridLazyAdaptorManager {
         // re-diffed against a new view (`SparseChildren::ensure`'s own doc).
         let refresh_did_work = if self.needs_resident_refresh {
             self.needs_resident_refresh = false;
-            let item_count = self.item_count(pipeline);
             let outcome = self.sparse_children.reconcile(
-                &*self.builder,
-                self.find_index_by_key.as_deref(),
-                item_count,
+                ReconcileSource {
+                    builder: &*self.builder,
+                    find_index_by_key: self.find_index_by_key.as_deref(),
+                    item_count: self.item_count(pipeline),
+                },
                 host,
                 tree,
                 owner,
@@ -1184,7 +1192,9 @@ where
         // gap `SliverListAdaptorManager` had, fixed identically here.
         let mut manager = self.manager.lock();
         manager.builder = Rc::clone(&core.view().builder);
-        manager.find_index_by_key = core.view().find_index_by_key.clone();
+        manager
+            .find_index_by_key
+            .clone_from(&core.view().find_index_by_key);
         manager.needs_resident_refresh = true;
     }
 

@@ -272,9 +272,7 @@ fn sliver_list_item_builder_panic_becomes_an_error_box_at_that_index() {
 
     const ITEM_EXTENT: f32 = 48.0;
     let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|index: usize| {
-        if index == 2 {
-            panic!("boom in a sliver item builder");
-        }
+        assert!(index != 2, "boom in a sliver item builder");
         (index < 10).then(|| Text::new(format!("item{index}")).boxed())
     });
     let root = CustomScrollView::new((SliverList::new(10, ITEM_EXTENT, builder),));

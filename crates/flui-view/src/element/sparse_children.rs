@@ -228,14 +228,17 @@ impl SparseChildren {
     /// `host` is the adaptor element's own id (the parent for fresh mounts).
     pub(crate) fn reconcile(
         &mut self,
-        builder: &dyn Fn(usize) -> Option<BoxedView>,
-        find_index_by_key: Option<&dyn Fn(&dyn ViewKey) -> Option<usize>>,
-        item_count: usize,
+        source: ReconcileSource<'_>,
         host: ElementId,
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
         pipeline: &PipelineCell,
     ) -> ReconcileOutcome {
+        let ReconcileSource {
+            builder,
+            find_index_by_key,
+            item_count,
+        } = source;
         // ── Phase 1: snapshot the residents, decide what to build, build ──
         struct Resident {
             index: usize,
@@ -324,8 +327,8 @@ impl SparseChildren {
                 continue;
             };
             let view: &dyn View = view.0.as_ref();
-            match matched[k] {
-                Some(pos) => {
+            if let Some(pos) = matched[k] {
+                {
                     let resident = &residents[pos];
                     if resident.index != *index {
                         tree.relocate_sparse_child(resident.id, *index);
@@ -356,11 +359,10 @@ impl SparseChildren {
                     }
                     next.insert(*index, resident.id);
                 }
-                None => {
-                    let child = mount_sparse_child(*index, view, host, tree, owner, pipeline);
-                    next.insert(*index, child);
-                    any_work = true;
-                }
+            } else {
+                let child = mount_sparse_child(*index, view, host, tree, owner, pipeline);
+                next.insert(*index, child);
+                any_work = true;
             }
         }
         self.by_logical_index = next;
@@ -369,6 +371,19 @@ impl SparseChildren {
             end_reached_at,
         }
     }
+}
+
+/// A borrowed key → index callback (Flutter's `findChildIndexCallback`).
+pub(crate) type FindIndexByKeyRef<'a> = &'a dyn Fn(&dyn ViewKey) -> Option<usize>;
+
+/// The data source [`SparseChildren::reconcile`] reconciles against.
+pub(crate) struct ReconcileSource<'a> {
+    /// The delegate's item builder.
+    pub(crate) builder: &'a dyn Fn(usize) -> Option<BoxedView>,
+    /// The delegate's key → index callback, if it has one.
+    pub(crate) find_index_by_key: Option<FindIndexByKeyRef<'a>>,
+    /// The data source length as the render object currently knows it.
+    pub(crate) item_count: usize,
 }
 
 /// What [`SparseChildren::reconcile`] did.
@@ -1133,7 +1148,7 @@ mod reconcile_tests {
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
     use flui_types::geometry::px;
 
-    use super::{SparseChildren, build_item_or_error};
+    use super::{ReconcileSource, SparseChildren, build_item_or_error};
     use crate::view::{RenderView, View};
     use crate::{BoxedView, BuildOwner, ElementTree};
 
@@ -1279,9 +1294,11 @@ mod reconcile_tests {
         let outcome = {
             let mut element_owner = fx.owner.element_owner_mut();
             fx.sparse.reconcile(
-                &*builder,
-                Some(&find),
-                6,
+                ReconcileSource {
+                    builder: &*builder,
+                    find_index_by_key: Some(&find),
+                    item_count: 6,
+                },
                 fx.host,
                 &mut fx.tree,
                 &mut element_owner,
@@ -1312,7 +1329,10 @@ mod reconcile_tests {
             "render parent data re-stamped"
         );
         assert_eq!(index_of(&fx, seeded[1]), Some(5));
-        assert_eq!(fx.tree.get(seeded[0]).map(|n| n.slot()), Some(4));
+        assert_eq!(
+            fx.tree.get(seeded[0]).map(crate::tree::ElementNode::slot),
+            Some(4)
+        );
     }
 
     /// A swap within the band, with no callback at all: matched by key.
@@ -1324,9 +1344,11 @@ mod reconcile_tests {
         let outcome = {
             let mut element_owner = fx.owner.element_owner_mut();
             fx.sparse.reconcile(
-                &*builder,
-                None,
-                4,
+                ReconcileSource {
+                    builder: &*builder,
+                    find_index_by_key: None,
+                    item_count: 4,
+                },
                 fx.host,
                 &mut fx.tree,
                 &mut element_owner,
@@ -1352,9 +1374,11 @@ mod reconcile_tests {
         let outcome = {
             let mut element_owner = fx.owner.element_owner_mut();
             fx.sparse.reconcile(
-                &*builder,
-                None,
-                2,
+                ReconcileSource {
+                    builder: &*builder,
+                    find_index_by_key: None,
+                    item_count: 2,
+                },
                 fx.host,
                 &mut fx.tree,
                 &mut element_owner,
@@ -1369,9 +1393,7 @@ mod reconcile_tests {
     #[test]
     fn a_panicking_builder_yields_the_error_view_for_that_index_only() {
         let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|i| {
-            if i == 1 {
-                panic!("boom");
-            }
+            assert!(i != 1, "boom");
             Some(BoxedView(Box::new(KeyedBox::new(i as u32))))
         });
         assert!(build_item_or_error(&*builder, 0).is_some());
