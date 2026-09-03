@@ -4,7 +4,7 @@
 
 | Что | Значение | Источник |
 |---|---|---|
-| Dev-toolchain (пин) | `1.98.0` (stable, релиз 2026-08-20) | `rust-toolchain.toml` |
+| Dev-toolchain (пин) | `1.98.1` (stable, релиз 2026-09-01) | `rust-toolchain.toml` |
 | MSRV | `1.97` | `[workspace.package].rust-version`, `clippy.toml`, `msrv` CI job |
 | Текущий stable / beta / nightly | 1.98.1 / 1.99 (стабилизируется **2026-10-01**) / 1.100 (**2026-11-12**) | [releases.rs](https://releases.rs/) |
 | Проверенный nightly | `rustc 1.100.0-nightly (2e2b193f8 2026-09-02)` — уже установлен локально | `rustup toolchain list` |

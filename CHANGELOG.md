@@ -106,6 +106,10 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **Toolchain 1.98.0 → 1.98.1 (development pin only; MSRV floor stays 1.97).** The current
+  stable point release (2026-09-01); CI's `stable` jobs already floated to it, so local and CI
+  were a point release apart. Verified with `cargo check --workspace --all-targets`, clippy at
+  `-D warnings`, and `cargo fmt --check` before bumping.
 - **`anyhow` retired from `flui-platform`'s public API** — the last workspace
   library exposing it. A new typed taxonomy (`flui_platform::PlatformError`:
   `Init` / `EventLoop` / `Bootstrap` / `AppPath` / `Dialog`, thiserror,

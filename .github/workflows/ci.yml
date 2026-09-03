@@ -1011,7 +1011,7 @@ jobs:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
-      # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.0`
+      # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.1`
       # the ACTIVE toolchain — a separate rustup install even at the same
       # version — so the target has to be added again against the pin. Without
       # this the build fails with E0463 "can't find crate for `core`".
@@ -1099,7 +1099,7 @@ jobs:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
-      # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.0`
+      # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.1`
       # the ACTIVE toolchain — a separate rustup install even at the same
       # version — so the target has to be added again against the pin. Without
       # this the build fails with E0463 "can't find crate for `core`".
@@ -1156,19 +1156,25 @@ jobs:
       #    turning the job into a no-op nobody would notice. The day a job
       #    legitimately needs an `if:`, list it in ALLOWED_SKIPS with the
       #    reason — that is the reviewable decision, not an accident.
+      # A real YAML parse, not a regex over `key:` lines: a job declared as
+      # `"quoted-key":` or `key: # comment` is valid YAML that a line regex
+      # misses, and a missed declaration silently re-opens the hole this
+      # step closes. The runner image ships Python but not PyYAML.
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet --disable-pip-version-check "pyyaml>=6,<7"
+
       - name: Verify every job is gated and every gated job succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
           ALLOWED_SKIPS: ""
         run: |
           python3 - <<'EOF'
-          import json, os, re, sys
+          import json, os, sys, yaml
           needs = json.loads(os.environ["NEEDS"])
           allowed_skips = set(os.environ["ALLOWED_SKIPS"].split())
-          # Job keys are the 2-space-indented `key:` lines directly under `jobs:`.
-          text = open(".github/workflows/ci.yml", encoding="utf-8").read()
-          body = text[text.index("\njobs:\n") + len("\njobs:\n"):]
-          declared = set(re.findall(r"^  ([A-Za-z0-9_-]+):\s*$", body, re.M)) - {"ci"}
+          with open(".github/workflows/ci.yml", encoding="utf-8") as f:
+              workflow = yaml.safe_load(f)
+          declared = set(workflow["jobs"]) - {"ci"}
           for job, data in sorted(needs.items()):
               print(f"{job}: {data['result']}")
           missing = sorted(declared - set(needs))
