@@ -230,6 +230,13 @@ workflow file does *not* tell you, and what you will misjudge without it:
   smaller-feature-set save costs the others a partial dep rebuild, never a cold one. Jobs whose
   artifacts genuinely differ (release profile, MSRV toolchain, miri/nightly, wasm32, cross
   targets, Windows, the per-feature slices) keep their own keys on purpose. The same job also runs `just facade-combos`, which compiles every supported `flui`
+  **Caches are saved only by runs on `main`; PR runs restore and never save** (`save-if:
+  github.ref == 'refs/heads/main'` on every rust-cache step). With ~13 key families, per-PR saves
+  overshot the 10 GB cap as soon as two PRs were open (27 caches / 11.9 GB measured on
+  2026-09-03) and the largest — the shared `stable-dev-host` — was evicted first. A PR's second
+  push therefore reuses `main`'s build rather than its own first push; that is the trade. If a
+  cold PR run looks wrong, check `gh api repos/vanyastaff/flui/actions/cache/usage` before
+  blaming the workflow.
   facade feature combination (`material` / `cupertino` / `localizations` / `hot-reload` / `serde`)
   **on its own**, against the `flui` package alone — a `--workspace` build is not evidence about
   the facade surface — and asserts via `cargo tree` that `flui-hot-reload` is *absent* from
