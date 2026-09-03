@@ -21,7 +21,7 @@ pub fn event_timestamp_ns() -> u64 {
     // Upstream ui-events documents PointerState.time as NANOSECONDS
     // ("u64 nanoseconds real time"); a millisecond stamp here silently
     // broke the unit for every consumer comparing across devices.
-    #[allow(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
+    #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
     {
         PROCESS_START.elapsed().as_nanos() as u64
     }

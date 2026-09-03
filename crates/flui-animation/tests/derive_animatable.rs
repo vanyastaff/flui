@@ -6,7 +6,6 @@
 
 // The derive copies fields verbatim and the asserted values are exactly
 // representable in f32, so exact-equality round-trip assertions are correct.
-#![allow(clippy::float_cmp)]
 
 use flui_animation::{Animatable, AnimatedValue, SpringDescription, TwoWayConverter};
 

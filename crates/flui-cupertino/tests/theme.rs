@@ -15,7 +15,7 @@
 //! (`Static`, not `Dynamic`) — not just the final color — is what makes both
 //! mutants observable.
 
-#![allow(clippy::unwrap_used)]
+#![expect(clippy::unwrap_used)]
 
 mod common;
 

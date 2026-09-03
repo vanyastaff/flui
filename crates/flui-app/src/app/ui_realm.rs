@@ -10374,10 +10374,6 @@ mod tests {
 
             let dispatched = flui_scheduler::MAX_COALESCED_INPUT_EPOCHS + 4;
             for i in 0..dispatched {
-                #[expect(
-                    clippy::cast_precision_loss,
-                    reason = "test-only pixel offsets, i stays far below f32's exact-integer range"
-                )]
                 let position = Offset::new(Pixels(i as f32), Pixels(i as f32));
                 let event = make_move_event(position, PointerType::Mouse);
                 realm.enter(|realm| {

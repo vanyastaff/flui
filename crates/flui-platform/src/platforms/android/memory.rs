@@ -25,7 +25,7 @@
 // raw page-aligned allocation has no safe wrapper. The workspace lint
 // `unsafe_code = "warn"` is opted out here, at the module boundary, rather
 // than for the whole crate (see `lib.rs`).
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::{
     alloc::{Layout, alloc, dealloc},

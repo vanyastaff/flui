@@ -12,11 +12,6 @@ use super::{
 
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
 // color channels, and buffer indices. These truncations are intentional.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 impl DrawBatcher {
     /// Record a rectangle with a linear gradient.
     ///
@@ -32,11 +27,6 @@ impl DrawBatcher {
     /// * `gradient_end`    — gradient end point (local to `bounds`)
     /// * `stops`           — gradient color stops (max 8)
     /// * `corner_radii`    — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
-                  the remaining args mirror the gradient's own parameters"
-    )]
     pub(in super::super) fn gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
@@ -128,11 +118,6 @@ impl DrawBatcher {
     /// * `radius`         — gradient radius
     /// * `stops`          — gradient color stops (max 8)
     /// * `corner_radii`   — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
-                  the remaining args mirror the gradient's own parameters"
-    )]
     pub(in super::super) fn radial_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
@@ -222,7 +207,7 @@ impl DrawBatcher {
     /// * `end_angle`    — end angle in radians
     /// * `stops`        — gradient color stops (max 8)
     /// * `corner_radii` — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
                   the remaining args mirror the gradient's own parameters"

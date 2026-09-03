@@ -661,7 +661,7 @@ pub(crate) struct ModalHandle {
 
 /// `dead_code` in the lib target: `HeroController` is this handle's only production
 /// caller, and it is itself dead until the `Hero` widget uses it. See `hero_controller.rs`.
-#[allow(dead_code)]
+#[expect(dead_code)]
 impl ModalHandle {
     /// Deliver `onPopInvokedWithResult(did_pop, …)` to every `PopScope`
     /// registered in this route's page (`routes.dart:2045-2050`). Called by

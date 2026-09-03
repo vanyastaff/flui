@@ -83,7 +83,7 @@ macro_rules! scene_plugin {
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_scene_drop(ptr: *mut ::std::ffi::c_void) {
             if !ptr.is_null() {
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code)]
                 unsafe {
                     drop(::std::boxed::Box::from_raw(ptr as *mut ::flui_layer::Scene));
                 }
@@ -105,7 +105,7 @@ macro_rules! scene_plugin {
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_scene_free(ptr: *mut ::std::ffi::c_void) {
             if !ptr.is_null() {
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code)]
                 unsafe {
                     drop(::std::boxed::Box::from_raw(
                         ptr as *mut ::std::mem::MaybeUninit<::flui_layer::Scene>,
@@ -419,7 +419,7 @@ macro_rules! app_plugin {
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_app_drop(ptr: *mut ::std::ffi::c_void) {
             if !ptr.is_null() {
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code)]
                 unsafe {
                     drop(::std::boxed::Box::from_raw(
                         ptr.cast::<::flui_layer::Scene>(),
@@ -438,7 +438,7 @@ macro_rules! app_plugin {
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_app_free(ptr: *mut ::std::ffi::c_void) {
             if !ptr.is_null() {
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code)]
                 unsafe {
                     drop(::std::boxed::Box::from_raw(
                         ptr.cast::<::std::mem::MaybeUninit<::flui_layer::Scene>>(),
@@ -470,7 +470,7 @@ mod thread_affinity_tests {
     // in-crate (as opposed to in a downstream cdylib, where these symbols
     // normally live) — same allowance the macro's own `unsafe {}` bodies
     // already carry elsewhere in this file.
-    #![allow(unsafe_code)]
+    #![expect(unsafe_code)]
 
     #[derive(Clone)]
     struct ThreadAffinityProbeRoot;

@@ -91,11 +91,6 @@ mod gpu_tests {
     fn oracle_premultiplied(src: Color, dst: Color, mode: BlendMode) -> [u8; 4] {
         let result = src.blend(dst, mode);
         let [r, g, b, a] = result.to_f32_array();
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value is clamped to [0,1]*255 then rounded — truncation is safe"
-        )]
         let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
         [to_u8(r * a), to_u8(g * a), to_u8(b * a), to_u8(a)]
     }
@@ -301,11 +296,6 @@ mod gpu_tests {
         // Check only pixels in the interior of the rrect (far from any edge).
         // The interior rect is inset by 2*inset from all surface edges so we are
         // safely away from both the surface boundary AND the rounded-rect boundary.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "inset is a small positive pixel margin; truncation and sign-loss are safe"
-        )]
         let inner_margin = (inset * 2.0) as usize;
         let width = SURFACE_WIDTH as usize;
         let height = SURFACE_HEIGHT as usize;
@@ -784,11 +774,6 @@ mod gpu_tests {
 
         let width = SURFACE_WIDTH as usize;
         let height = SURFACE_HEIGHT as usize;
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "half_width is a small positive pixel count; truncation and sign-loss are safe"
-        )]
         let half_col = half_width as usize;
 
         // Left half (inside scissor): foreground was emitted here; the Multiply

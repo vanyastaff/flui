@@ -9,7 +9,7 @@
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![allow(clippy::unwrap_used)]
+#![expect(clippy::unwrap_used)]
 // `Renderer: Send` is re-proved here for the frame callback; see the
 // `recursion_limit` rationale at the top of flui-engine's `lib.rs`.
 #![recursion_limit = "256"]
@@ -33,7 +33,7 @@ impl GpuState {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
         // Safety: PlatformWindow outlives the surface (held in Arc)
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         let surface = unsafe {
             instance
                 .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window).unwrap())

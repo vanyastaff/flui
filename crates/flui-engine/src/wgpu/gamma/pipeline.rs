@@ -85,7 +85,6 @@ pub(crate) fn gamma_direction_to_u32(dir: GammaDirection) -> u32 {
 ///
 /// `REPLACE` (no fixed-function blending): the fragment shader emits the full
 /// premultiplied filtered texel directly.
-#[allow(missing_debug_implementations)]
 pub(crate) struct GammaPipeline {
     /// The single render pipeline (format-parametric at construction time).
     pub(crate) pipeline: wgpu::RenderPipeline,

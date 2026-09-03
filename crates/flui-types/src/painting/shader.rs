@@ -109,7 +109,6 @@ impl Shader {
     /// Creates a radial gradient shader.
     #[inline]
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
     pub fn radial_gradient(
         center: Offset<Pixels>,
         radius: f32,

@@ -5,13 +5,13 @@
 // removed; surviving `#[allow(dead_code)]` markers are scoped
 // to specific modules where forward-looking infrastructure has named consumers
 // that are not yet wired up.
-#![allow(missing_debug_implementations)]
+#![expect(missing_debug_implementations)]
 // GPU capability structs legitimately use many bools; field name postfixes
-// are unavoidable when wrapping distinct pipeline/stack types.
-#![allow(
-    clippy::struct_excessive_bools,
-    clippy::struct_field_names,
-    clippy::large_enum_variant
+// are unavoidable when wrapping distinct pipeline/stack types. Both live in
+// the wgpu backend, so without that feature there is nothing to expect.
+#![cfg_attr(
+    feature = "wgpu-backend",
+    expect(clippy::struct_field_names, clippy::large_enum_variant)
 )]
 // The next-generation trait solver counts auto-trait proof depth honestly,
 // and proving `wgpu::Renderer: Send` descends through wgpu-core

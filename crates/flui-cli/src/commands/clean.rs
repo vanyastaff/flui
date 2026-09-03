@@ -18,10 +18,6 @@ use std::path::Path;
 /// # Errors
 ///
 /// Returns `CliError::CleanFailed` if cargo clean fails.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "mirrors clap argument structure"
-)]
 pub fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
     cliclack::intro(style(" flui clean ").on_red().white())?;
 

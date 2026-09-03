@@ -16,11 +16,6 @@
 // These methods were originally `impl Painter for WgpuPainter` trait methods;
 // the `Painter` trait was deleted in commit 1b376beb. This doc-sweep
 // (engine-painter-doc-sweep) adds per-method docs directly on the inherent impl.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 impl super::WgpuPainter {
     /// Draw a filled or stroked rectangle.
     ///

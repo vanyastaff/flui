@@ -16,7 +16,7 @@ fn diagnosticable_derive_basic() {
         height: f32,
         // Skipped from diagnostics, hence never read.
         #[diagnostic(skip)]
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         internal_id: u64,
     }
 
@@ -54,7 +54,7 @@ fn diagnosticable_derive_empty_struct() {
 #[test]
 fn diagnosticable_derive_all_skipped() {
     #[derive(Debug, Diagnosticable)]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     struct AllSkipped {
         #[diagnostic(skip)]
         a: u32,

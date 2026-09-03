@@ -157,15 +157,12 @@ pub(super) fn style_to_attrs_owned(style: Option<&TextStyle>, base_color: Color)
         // cosmic-text 0.19.0: Attrs::metrics(Metrics) sets metrics_opt on the
         // run, overriding the buffer-level default for this run only.
         // line_height = size × height-multiplier (or ×1.2 when absent).
-        #[allow(clippy::cast_possible_truncation)]
         if let Some(size) = style.font_size.map(|s| s as f32) {
-            #[allow(clippy::cast_possible_truncation)]
             let line_height = style.height.map_or(size * 1.2, |h| h as f32 * size);
             attrs = attrs.metrics(Metrics::new(size, line_height));
         }
 
         // Letter spacing in EM (cosmic: spacing_em = px / font_size).
-        #[allow(clippy::cast_possible_truncation)]
         if let Some(spacing) = style.letter_spacing.map(|s| s as f32)
             && let Some(size) = style.font_size.map(|s| s as f32)
             && size > 0.0
@@ -276,19 +273,18 @@ impl RichTextCacheKey {
                 if let Some(sz) = s.font_size {
                     // f64 font-size values come from TextStyle which is a UI
                     // coordinate: practical range 1–300 pt, well within f32.
-                    #[allow(clippy::cast_possible_truncation)]
                     let bits = (sz as f32).to_bits();
                     fingerprint.push_str(&bits.to_string());
                 }
                 fingerprint.push('\x01');
                 if let Some(ls) = s.letter_spacing {
-                    #[allow(clippy::cast_possible_truncation)] // UI coordinate, fits f32
+                    #[expect(clippy::cast_possible_truncation)] // UI coordinate, fits f32
                     let bits = (ls as f32).to_bits();
                     fingerprint.push_str(&bits.to_string());
                 }
                 fingerprint.push('\x01');
                 if let Some(h) = s.height {
-                    #[allow(clippy::cast_possible_truncation)] // UI coordinate, fits f32
+                    #[expect(clippy::cast_possible_truncation)] // UI coordinate, fits f32
                     let bits = (h as f32).to_bits();
                     fingerprint.push_str(&bits.to_string());
                 }
@@ -858,7 +854,6 @@ impl TextRenderer {
                 height: size.1,
             },
         );
-        #[allow(clippy::cast_possible_wrap)]
         let full_bounds = TextBounds {
             left: 0,
             top: 0,
@@ -965,7 +960,7 @@ impl TextRenderer {
     }
 
     /// Returns `(hits, misses, plain_cache_size, rich_cache_size)`.
-    #[allow(dead_code)] // exposed for diagnostics / tests
+    #[expect(dead_code)] // exposed for diagnostics / tests
     pub fn cache_stats(&self) -> (u64, u64, usize, usize) {
         (
             self.cache_hits,
@@ -1042,7 +1037,6 @@ fn build_text_areas<'cache>(
 /// fully-clipped run still occupies its slot in the batch: replay addresses
 /// glyph ranges by index (`DrawSegment::text_start..text_end`), and dropping an
 /// entry here would shift every later run into the wrong segment.
-#[allow(clippy::cast_possible_wrap)]
 fn clip_bounds(clip: Option<(u32, u32, u32, u32)>, viewport: TextBounds) -> TextBounds {
     let Some((x, y, w, h)) = clip else {
         return viewport;
@@ -1233,10 +1227,9 @@ mod tests {
         let runs_1x = collect_styled_spans(&span, 1.0);
         assert_eq!(runs_1x.len(), 1);
         let s1 = runs_1x[0].1.as_ref().expect("style must be present");
-        #[allow(clippy::cast_possible_truncation)]
         // UI coordinate; f64 value ≤ 300 fits f32 exactly
         let size_1x = s1.font_size.expect("font_size must be present") as f32;
-        #[allow(clippy::cast_possible_truncation)] // UI coordinate; spacing fits f32
+        #[expect(clippy::cast_possible_truncation)] // UI coordinate; spacing fits f32
         let spacing_1x = s1.letter_spacing.expect("letter_spacing must be present") as f32;
         let em_1x = spacing_1x / size_1x;
         assert!(
@@ -1248,9 +1241,9 @@ mod tests {
         let runs_2x = collect_styled_spans(&span, 2.0);
         assert_eq!(runs_2x.len(), 1);
         let s2 = runs_2x[0].1.as_ref().expect("style must be present");
-        #[allow(clippy::cast_possible_truncation)] // UI coordinate; fits f32
+        #[expect(clippy::cast_possible_truncation)] // UI coordinate; fits f32
         let size_2x = s2.font_size.expect("font_size must be present") as f32;
-        #[allow(clippy::cast_possible_truncation)] // UI coordinate; fits f32
+        #[expect(clippy::cast_possible_truncation)] // UI coordinate; fits f32
         let spacing_2x = s2.letter_spacing.expect("letter_spacing must be present") as f32;
         let em_2x = spacing_2x / size_2x;
         assert!(

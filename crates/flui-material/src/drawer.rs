@@ -915,11 +915,6 @@ fn inner_alignment(alignment: DrawerAlignment) -> Alignment {
 fn scale_alpha(color: Color, factor: f32) -> Color {
     let factor = factor.clamp(0.0, 1.0);
     let scaled = (f32::from(color.a) * factor).round().clamp(0.0, 255.0);
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "scaled is clamped to [0.0, 255.0] immediately above"
-    )]
     let alpha = scaled as u8;
     color.with_alpha(alpha)
 }

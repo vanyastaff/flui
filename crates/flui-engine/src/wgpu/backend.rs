@@ -78,7 +78,7 @@ fn build_gradient_stops(
 ///
 /// Note: Debug is not derived because `WgpuPainter` contains wgpu types that
 /// don't implement Debug.
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct Backend<'frame> {
     painter: &'frame mut WgpuPainter,
     offscreen: Option<&'frame mut super::offscreen::OffscreenRenderer>,
@@ -415,13 +415,9 @@ impl<'frame> Backend<'frame> {
         let surface_extent = surface_texture.size();
         let surface_w = surface_extent.width;
         let surface_h = surface_extent.height;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let x = device_rect.left().0.clamp(0.0, surface_w as f32).round() as u32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let y = device_rect.top().0.clamp(0.0, surface_h as f32).round() as u32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let right = device_rect.right().0.clamp(0.0, surface_w as f32).round() as u32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let bottom = device_rect.bottom().0.clamp(0.0, surface_h as f32).round() as u32;
         let w = right.saturating_sub(x).max(1);
         let h = bottom.saturating_sub(y).max(1);
@@ -631,7 +627,6 @@ impl CommandRenderer for Backend<'_> {
         transform: &Matrix4,
     ) {
         self.with_transform(transform, |painter| {
-            #[allow(clippy::cast_possible_truncation)]
             let font_size = style.font_size.unwrap_or(14.0) as f32;
             let color = style.color.unwrap_or(Color::BLACK);
             let paint = Paint::fill(color);
@@ -650,9 +645,8 @@ impl CommandRenderer for Backend<'_> {
     ) {
         // Resolve the buffer-level defaults from the root span's style.
         let root_style = span.style();
-        #[allow(clippy::cast_possible_truncation)] // f64 font-size fits in f32 at UI scales
+        #[expect(clippy::cast_possible_truncation)] // f64 font-size fits in f32 at UI scales
         let base_font_size = root_style.and_then(|s| s.font_size).unwrap_or(14.0) as f32;
-        #[allow(clippy::cast_possible_truncation)]
         let scaled_font_size = base_font_size * (text_scale_factor as f32);
         let base_color = root_style
             .and_then(|s| s.foreground.or(s.color))
@@ -661,7 +655,7 @@ impl CommandRenderer for Backend<'_> {
         // Flatten the span tree into per-run (text, merged style) pairs with
         // text_scale_factor baked into every effective font size.
         // Average and worst case O(total spans + text bytes): one pre-order walk.
-        #[allow(clippy::cast_possible_truncation)] // same truncation guard as above
+        #[expect(clippy::cast_possible_truncation)] // same truncation guard as above
         let runs = crate::wgpu::text::collect_styled_spans(span, text_scale_factor as f32);
 
         if runs.is_empty() {
@@ -812,9 +806,7 @@ impl CommandRenderer for Backend<'_> {
             let dpr_scale = self.painter.current_max_scale().max(1.0);
 
             // Device-resolution offscreen dimensions: logical extent × DPR.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let dev_width = (bounds.width().0 * dpr_scale).round().max(1.0) as u32;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let dev_height = (bounds.height().0 * dpr_scale).round().max(1.0) as u32;
 
             // Composite rect in device space — mirrors Path B (backdrop filter):
@@ -1150,13 +1142,6 @@ impl CommandRenderer for Backend<'_> {
         });
     }
 
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "backdrop-filter region bounds are f32 in physical pixels; coercion to u32 \
-                  matches Path A's `Renderer::handle_backdrop_filter` (renderer.rs:903-906) \
-                  which is the canonical reference"
-    )]
     fn render_backdrop_filter(
         &mut self,
         child: Option<&flui_painting::DisplayList>,
@@ -1534,7 +1519,6 @@ impl LayerStateStack for Backend<'_> {
         self.flush_active_transform();
         // Create a layer with opacity (clamped to [0, 255]).
         // Blend mode defaults to SrcOver via Paint::fill.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         let paint = Paint::fill(Color::WHITE).with_alpha(alpha_u8);
         self.painter.save_layer(None, &paint);
@@ -1545,7 +1529,6 @@ impl LayerStateStack for Backend<'_> {
         // Propagate the explicit blend mode into the saveLayer paint so the
         // compositor reads it from `paint.blend_mode` and routes the layer
         // through the dst-read advanced compositor path when needed.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         let paint = Paint::fill(Color::WHITE)
             .with_alpha(alpha_u8)
@@ -1570,10 +1553,6 @@ impl LayerStateStack for Backend<'_> {
                 // built from bit-exact 0.0/1.0 literals, so a transitive equality
                 // check correctly skips the GPU pass without ULP slop.
                 let identity = flui_types::painting::effects::ColorMatrix::identity();
-                #[expect(
-                    clippy::float_cmp,
-                    reason = "identity matrix is bit-exact (0.0/1.0 literals); exact comparison is correct"
-                )]
                 if m.values == identity.values {
                     self.painter.save_layer(None, &Paint::fill(Color::WHITE));
                     tracing::trace!("push_color_filter: identity matrix — no-op layer");
@@ -2312,11 +2291,6 @@ mod tests {
         // CPU oracle: Multiply(orange, blue).
         let blend_result = orange_color.blend(blue_color, BlendMode::Multiply);
         let [br, bg, bb, ba] = blend_result.to_f32_array();
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "clamped [0,1]*255; truncation safe"
-        )]
         let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let multiply_oracle = [to_u8(br * ba), to_u8(bg * ba), to_u8(bb * ba), to_u8(ba)];
 

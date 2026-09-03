@@ -42,7 +42,7 @@ fn a_padded_environment_value_is_read_and_trimmed() {
     // or writing the environment. This is the only test in this binary, the
     // variable name is unique to it, and no thread has been spawned — the test
     // harness's own threads do not touch the environment.
-    #[allow(
+    #[expect(
         unsafe_code,
         reason = "std::env::set_var is unsafe in edition 2024; the single-threaded precondition holds here"
     )]
@@ -57,7 +57,7 @@ fn a_padded_environment_value_is_read_and_trimmed() {
     );
 
     // Blank is "unset", not "invalid": it must fall through rather than error.
-    #[allow(
+    #[expect(
         unsafe_code,
         reason = "std::env::set_var is unsafe in edition 2024; the single-threaded precondition holds here"
     )]

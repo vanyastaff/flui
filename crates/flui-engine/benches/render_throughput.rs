@@ -1,9 +1,5 @@
 // criterion_group!/criterion_main! generate public functions that have no docs;
 // missing_docs on a bench binary is noise (no external consumers of the items).
-#![allow(
-    missing_docs,
-    reason = "criterion macros generate undocumented public fns"
-)]
 //! Render-throughput and per-frame allocation micro-benchmarks for flui-engine.
 //!
 //! Two benchmark groups:

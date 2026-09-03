@@ -38,7 +38,7 @@ pub async fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> BuildResul
 }
 
 /// Run a command and capture output
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) async fn run_command_with_output<S: AsRef<str>>(
     program: &str,
     args: &[S],
@@ -120,7 +120,7 @@ pub async fn run_command_in_dir<S: AsRef<str>>(
 /// * `args` - Command arguments
 /// * `progress` - Optional progress reporter
 /// * `verbose` - If true, show all output; if false, only show parsed events
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) async fn run_command_with_progress<S: AsRef<str>>(
     program: &str,
     args: &[S],
@@ -164,7 +164,6 @@ pub(crate) async fn run_command_with_progress<S: AsRef<str>>(
                         }
                     }
                     BuildEvent::Progress { current, total } => {
-                        #[allow(clippy::cast_possible_truncation)]
                         let percent = (current * 100 / total.max(1)) as u8;
                         prog.set_progress(percent);
                     }

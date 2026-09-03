@@ -111,29 +111,9 @@ pub(crate) fn copy_backdrop_region(
     let surface_h = surface_size.height;
 
     // Round before truncate (mirrors renderer.rs policy).
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "clamped to [0, surface_wh] before cast; truncation is intentional"
-    )]
     let x = device_rect.left().0.clamp(0.0, surface_w as f32).round() as u32;
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "clamped to [0, surface_wh] before cast; truncation is intentional"
-    )]
     let y = device_rect.top().0.clamp(0.0, surface_h as f32).round() as u32;
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "clamped to [0, surface_wh] before cast; truncation is intentional"
-    )]
     let right = device_rect.right().0.clamp(0.0, surface_w as f32).round() as u32;
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "clamped to [0, surface_wh] before cast; truncation is intentional"
-    )]
     let bottom = device_rect.bottom().0.clamp(0.0, surface_h as f32).round() as u32;
 
     // Entirely off-screen after clamping → no copy possible.
@@ -196,11 +176,7 @@ pub(crate) fn copy_backdrop_region(
 /// 3. Issue one render pass over `op.device_bounds` with `LoadOp::Load` (preserving
 ///    existing surface content outside the blend region).
 /// 4. Pooled textures (foreground, backdrop copy) are returned to the pool on drop.
-#[allow(clippy::too_many_arguments)]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "AdvancedBlendOp fields are moved into the GPU bind group and render pass; ownership is required"
-)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn flush_advanced_layer(
     op: AdvancedBlendOp,
     surface_texture: &wgpu::Texture,
@@ -371,12 +347,6 @@ mod synthetic_op_tests {
     ) -> wgpu::Texture {
         // Convert f32 premultiplied → u8 Rgba8Unorm bytes.
         // Clamping [0,1] before rounding makes the truncation and sign-loss safe.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value clamped to [0,1] * 255 rounds into [0,255]; truncation and \
-                      sign-loss are intentional and provably safe"
-        )]
         let f32_to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
 
         let mut texels: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
@@ -410,7 +380,7 @@ mod synthetic_op_tests {
     }
 
     /// Build a w×h surface texture with left-half = `left_pm` and right-half = `right_pm`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn create_split_texture(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -422,11 +392,6 @@ mod synthetic_op_tests {
         usage_extra: wgpu::TextureUsages,
     ) -> wgpu::Texture {
         // Clamping [0,1]*255 before truncation makes the cast provably safe.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value clamped to [0,1] * 255 rounds into [0,255]; safe"
-        )]
         let f32_to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
 
         let mut texels: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
@@ -486,11 +451,6 @@ mod synthetic_op_tests {
         // RGBA bytes for comparison with the GPU readback (which outputs premultiplied).
         let [r, g, b, a] = result.to_f32_array();
         // Clamping [0,1]*255 before truncation makes the cast provably safe.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value clamped to [0,1] * 255 rounds into [0,255]; safe"
-        )]
         let f32_to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let r_pm = f32_to_u8(r * a);
         let g_pm = f32_to_u8(g * a);

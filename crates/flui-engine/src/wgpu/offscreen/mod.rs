@@ -53,7 +53,7 @@ const MAX_BLUR_ITERATIONS: usize = 5;
 /// │  Output: Masked Canvas                                  │
 /// └──────────────────────────────────────────────────────────┘
 /// ```
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct OffscreenRenderer {
     /// Texture pool for offscreen rendering — owned directly; borrow it via
     /// [`Self::texture_pool_mut`]. The pool is single-mutator by
@@ -436,7 +436,6 @@ pub struct BlurParams {
 }
 
 /// Cached Dual Kawase blur pipelines (downsample + upsample)
-#[allow(missing_debug_implementations)]
 struct BlurPipelines {
     downsample: Arc<wgpu::RenderPipeline>,
     upsample: Arc<wgpu::RenderPipeline>,
@@ -505,10 +504,6 @@ impl FullscreenVertex {
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
-#[allow(
-    clippy::float_cmp,
-    reason = "tests assert exact expected values produced by exact arithmetic"
-)]
 mod tests {
     use super::*;
 

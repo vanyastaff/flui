@@ -8,7 +8,7 @@
 // `--test-threads 1`, which nothing in this repo sets for these tests. Under a
 // plain `cargo test -p flui-platform` these calls race the other tests in the
 // same binary.
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

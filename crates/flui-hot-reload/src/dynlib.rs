@@ -26,7 +26,7 @@ use std::{
 ///
 /// Wraps platform-specific `dlopen`/`LoadLibraryW` and provides
 /// symbol resolution via `dlsym`/`GetProcAddress`.
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct DynLib {
     handle: *mut c_void,
     path: PathBuf,
@@ -46,7 +46,7 @@ pub struct DynLib {
 // What this impl does NOT establish, and what callers must not assume: that
 // code or data resolved out of the library outlives `Drop`. See the module
 // note on the plugin boundary.
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl Send for DynLib {}
 
 impl DynLib {
@@ -68,7 +68,7 @@ impl DynLib {
     ///
     /// The caller must ensure the returned pointer is transmuted to the
     /// correct function signature. Calling with a wrong signature is UB.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     pub unsafe fn symbol(&self, name: &str) -> Option<*mut c_void> {
         sys::get_symbol(self.handle, name)
     }
@@ -84,7 +84,7 @@ impl Drop for DynLib {
         // SAFETY: `self.handle` is the non-null value `load_library` returned
         // (it returns `None` on a null handle), `DynLib` is not `Clone`, and
         // `Drop` runs once — so this is neither a null nor a double close.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe {
             sys::close_library(self.handle);
         }
@@ -126,7 +126,7 @@ mod sys {
         // but on an implementation with a shared slot a concurrent `dlopen`
         // could rewrite the buffer between `dlerror()` and `CStr::from_ptr`.
         // `DynLib: Send` makes that reachable; it is unaddressed.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe {
             // Clear previous error
             libc::dlerror();
@@ -157,7 +157,7 @@ mod sys {
         // NUL-terminated `CString` that outlives it. The result is only
         // null-checked here — turning it into a callable is the caller's
         // obligation, documented on `DynLib::symbol`.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe {
             let ptr = libc::dlsym(handle, c_name.as_ptr());
             if ptr.is_null() { None } else { Some(ptr) }
@@ -167,7 +167,7 @@ mod sys {
     /// # Safety
     ///
     /// `handle` must be a valid library handle returned by `load_library`.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     pub(super) unsafe fn close_library(handle: *mut c_void) {
         // SAFETY: edition 2024 makes unsafe-fn bodies safe by default, so the
         // call still needs its own block. `handle` is the value `dlopen`
@@ -197,7 +197,7 @@ mod sys {
     pub(super) fn load_library(path: &Path) -> Option<*mut c_void> {
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
 
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe {
             let handle = LoadLibraryW(windows::core::PCWSTR(wide.as_ptr())).ok()?;
             Some(handle.0)
@@ -208,7 +208,7 @@ mod sys {
         let c_name = CString::new(name).ok()?;
         let module = HMODULE(handle.cast());
 
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe {
             let addr = GetProcAddress(module, windows::core::PCSTR(c_name.as_ptr().cast()));
             addr.map(|f| f as *mut c_void)
@@ -218,7 +218,7 @@ mod sys {
     /// # Safety
     ///
     /// `handle` must be a valid library handle returned by `load_library`.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code)]
     pub(super) unsafe fn close_library(handle: *mut c_void) {
         unsafe {
             let module = HMODULE(handle.cast());

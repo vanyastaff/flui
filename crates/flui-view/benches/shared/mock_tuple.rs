@@ -84,37 +84,22 @@ pub const TUPLE_ARITY: usize = 16;
 // We could have generated these with a macro; the explicit hand-written list
 // stays bench-fixture-style readable, and the count is small enough that
 // macro overhead would not pay back.
-#[allow(dead_code)] // each marker's TypeId is consumed via TYPE_IDS, not the struct itself
+// each marker's TypeId is consumed via TYPE_IDS, not the struct itself
 pub struct Marker0;
-#[allow(dead_code)]
 pub struct Marker1;
-#[allow(dead_code)]
 pub struct Marker2;
-#[allow(dead_code)]
 pub struct Marker3;
-#[allow(dead_code)]
 pub struct Marker4;
-#[allow(dead_code)]
 pub struct Marker5;
-#[allow(dead_code)]
 pub struct Marker6;
-#[allow(dead_code)]
 pub struct Marker7;
-#[allow(dead_code)]
 pub struct Marker8;
-#[allow(dead_code)]
 pub struct Marker9;
-#[allow(dead_code)]
 pub struct Marker10;
-#[allow(dead_code)]
 pub struct Marker11;
-#[allow(dead_code)]
 pub struct Marker12;
-#[allow(dead_code)]
 pub struct Marker13;
-#[allow(dead_code)]
 pub struct Marker14;
-#[allow(dead_code)]
 pub struct Marker15;
 
 /// Returns the 16 distinct `TypeId`s, one per `Marker{0..15}`. The bench

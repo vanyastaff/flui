@@ -86,7 +86,6 @@ const SSAA_QUAD_VERTICES: &[f32] = &[
 /// One `SsaaDownsamplePipeline` is created per `PipelineSet` (keyed to the
 /// surface format) and reused for every SSAA path in the frame.
 // wgpu handle types do not implement Debug.
-#[allow(missing_debug_implementations)]
 pub(crate) struct SsaaDownsamplePipeline {
     /// Render pipeline for the 4-tap box downsample.
     pub(crate) pipeline: wgpu::RenderPipeline,
@@ -238,7 +237,7 @@ fn round_up_to_alignment(value: u32, alignment: u32) -> u32 {
 
 // ─── Replay helper ─────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 impl GpuReplay {
     /// Replay a `DrawItem::SsaaPath`: render the path into a 2× tile,
     /// box-downsample to a premultiplied 1× tile, then composite onto the target.
@@ -321,30 +320,9 @@ impl GpuReplay {
         // side must be ≤ max_tex_dim/2.  Use saturating_div to avoid u32 overflow.
         let max_tile_half = max_tex_dim.saturating_div(2).max(1);
 
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "device_bounds is non-negative device-pixel coordinates; \
-                      floor/ceil→u32 is analytically safe and clamped to [1,vp]"
-        )]
         let tile_x = op.device_bounds.left().0.floor().max(0.0) as u32;
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "device_bounds is non-negative device-pixel coordinates"
-        )]
         let tile_y = op.device_bounds.top().0.floor().max(0.0) as u32;
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "device_bounds right/bottom edges are non-negative; ceil is safe"
-        )]
         let tile_right_edge = (op.device_bounds.right().0.ceil() as u32 + 1).min(vp_w); // +1px AA fringe
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "device_bounds right/bottom edges are non-negative; ceil is safe"
-        )]
         let tile_bottom_edge = (op.device_bounds.bottom().0.ceil() as u32 + 1).min(vp_h); // +1px AA fringe
 
         let tile_w = tile_right_edge.saturating_sub(tile_x).max(1);
@@ -442,16 +420,7 @@ impl GpuReplay {
         // clamps the scissor to the attachment dimensions automatically.
         let tile_origin_x = tile_x as f32;
         let tile_origin_y = tile_y as f32;
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "tile_w/tile_h are small u32 tile dims; f32 precision is \
-                      sufficient for device-pixel coordinate remapping"
-        )]
         let scale_x = vp_w as f32 / tile_w as f32;
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "tile_h is a small u32 tile dim; f32 precision is sufficient"
-        )]
         let scale_y = vp_h as f32 / tile_h as f32;
 
         let mut remapped_segment = op.segment.clone();
@@ -743,12 +712,7 @@ impl GpuReplay {
         let bucket_w = source_tex.width();
         let bucket_h = source_tex.height();
 
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "bucket/supersample dims are small u32 values; f32 is sufficient for UV ratios"
-        )]
         let crop_uv_x = supersample_w as f32 / bucket_w as f32;
-        #[allow(clippy::cast_precision_loss, reason = "same as above")]
         let crop_uv_y = supersample_h as f32 / bucket_h as f32;
 
         // crop_uv uniform: [x, y, pad, pad] — matches the WGSL struct layout.
@@ -1039,7 +1003,6 @@ mod unit_tests {
     ///
     /// This test asserts the arithmetic directly against the formula used in
     /// `render_ssaa_path` — it would have caught the pre-fix under-coverage.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     #[test]
     fn tile_rect_covers_full_subpixel_right_and_bottom_edge() {
         struct Case {
@@ -1380,12 +1343,6 @@ mod gpu_tests {
     /// (the `surface_texture.is_none()` path for advanced blends) is deleted:
     /// without it `one_x_tile` is silently dropped and the target stays transparent.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "small fixed-size test surface; pixel-coordinate arithmetic is safe"
-    )]
     fn h2b_view_only_advanced_blend_fallback_composites_via_src_over() {
         let (device, queue) = acquire_device_and_queue();
         // Create a render surface: hold `surface_tex` for readback; derive `surface_view`

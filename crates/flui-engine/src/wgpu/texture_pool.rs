@@ -37,7 +37,6 @@ pub struct TextureDesc {
 
 impl TextureDesc {
     /// Create texture descriptor from size and format
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn from_size(size: Size<Pixels>, format: wgpu::TextureFormat) -> Self {
         Self {
             width: size.width.0.ceil().max(1.0) as u32,
@@ -241,7 +240,7 @@ impl TexturePoolInner {
 ///
 /// // Texture automatically returned to pool when dropped
 /// ```
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct TexturePool {
     inventory: TexturePoolInner,
     return_tx: Sender<GpuTexture>,
@@ -320,7 +319,6 @@ impl TexturePool {
 
     /// Acquire a texture sized from a `Size<Pixels>` value
     #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn acquire_from_size(
         &mut self,
         size: Size<Pixels>,

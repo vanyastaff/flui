@@ -342,7 +342,7 @@ impl WindowsTheme {
 /// DWM (Desktop Window Manager) attribute constants.
 ///
 /// These correspond to DWMWINDOWATTRIBUTE values from dwmapi.h.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) mod dwm_attributes {
     /// Use immersive dark mode.
     pub const DWMWA_USE_IMMERSIVE_DARK_MODE: i32 = 20;

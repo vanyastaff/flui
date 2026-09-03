@@ -80,10 +80,6 @@ impl WgpuPainter {
     /// rounded boundary.  The SDF clip is applied per-draw rather than as a
     /// hardware stencil, so it only affects shapes that read the clip uniforms
     /// (rect/circle/arc SDF batches).
-    #[allow(
-        clippy::similar_names,
-        reason = "r_tl/r_tr/r_br/r_bl mirror the rrect-corner field names; renaming would obscure intent"
-    )]
     pub fn clip_rrect(&mut self, rrect: RRect) {
         self.state.clip_rrect(rrect, self.size);
     }
@@ -122,10 +118,6 @@ impl WgpuPainter {
     /// scissor for early rasterizer rejection, and relies on
     /// `rect_instanced.wgsl`'s per-pixel SDF evaluation to clip pixels
     /// outside the iOS-squircle curve.
-    #[allow(
-        clippy::similar_names,
-        reason = "tl_r/tr_r/br_r/bl_r mirror the rsuperellipse-corner field names; renaming would obscure intent"
-    )]
     pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse) {
         self.state.clip_rsuperellipse(rse, self.size);
     }

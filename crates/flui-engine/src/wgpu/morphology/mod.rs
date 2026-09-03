@@ -73,7 +73,7 @@ use generated::morphology;
 /// - `h_tex` is acquired before the H pass and dropped immediately after the V
 ///   pass starts reading it, so only `h_tex` + `v_tex` are simultaneously live.
 /// - `source_tex` is a caller-owned borrow — not counted against this limit.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "GPU pass functions require device/encoder/pipeline/resources plus the operation inputs"
 )]
@@ -99,10 +99,6 @@ pub(crate) fn apply_morphology(
     // The H-pass decal guard compares sample UV against content_rect_uv; without
     // subtracting fb_origin the UV is in viewport space, which would be wrong for an
     // off-origin grown-bounds texture (content UV would not fall in [0, fb_dim]).
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "fb coords and content_bounds are ≤ viewport ≤ ~16 M px; f32 precision is sufficient"
-    )]
     let content_rect_uv_h = [
         (content_bounds.left().0 - fb_origin_x as f32) / fb_w as f32,
         (content_bounds.top().0 - fb_origin_y as f32) / fb_h as f32,
@@ -127,10 +123,6 @@ pub(crate) fn apply_morphology(
     // texture_size = fb_dim: the shader uses texture_size to
     // convert kernel offsets to UV deltas. Using viewport_size for a smaller
     // fb_dim texture over-shrinks the UV step → effectively widens the kernel.
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "fb_w/fb_h are u32 texture dims ≤ viewport; f32 precision is sufficient"
-    )]
     let h_tex = resources
         .layer_texture_pool_mut()
         .acquire(fb_w, fb_h, surface_format);
@@ -184,7 +176,7 @@ pub(crate) fn apply_morphology(
 /// Writes into `dst_view` using `LoadOp::Clear(TRANSPARENT)` so pixels outside
 /// the viewport are transparent (R3 invariant). `REPLACE` blend prevents the
 /// GPU from re-blending the premultiplied output.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "GPU sub-pass needs the uniform, src/dst views, pipeline, pool, device, encoder, and label"
 )]

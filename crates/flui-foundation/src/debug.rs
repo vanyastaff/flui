@@ -1902,8 +1902,8 @@ mod tests {
 // Four independent debug-overlay toggles, not a state machine — each
 // overlay is orthogonal and combined freely (mirrors Flutter's separate
 // `debugPaint*Enabled` flags). A bitflags/enum would obscure, not clarify.
-#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(clippy::struct_excessive_bools)]
 pub struct DebugPaintConfig {
     /// Draw a colored rectangle around each render object's paint bounds.
     pub show_paint_bounds: bool,

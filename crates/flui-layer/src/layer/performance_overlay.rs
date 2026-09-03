@@ -68,7 +68,7 @@ impl PerformanceStats {
         }
 
         let total: Duration = self.frame_times.iter().sum();
-        #[allow(clippy::cast_precision_loss)] // frame count will never exceed f32 mantissa range
+        #[expect(clippy::cast_precision_loss)] // frame count will never exceed f32 mantissa range
         let avg_frame_time = total.as_secs_f32() / self.frame_times.len() as f32;
 
         if avg_frame_time > 0.0 {
@@ -85,7 +85,7 @@ impl PerformanceStats {
         }
 
         let total: Duration = self.frame_times.iter().sum();
-        #[allow(clippy::cast_precision_loss)] // frame count will never exceed f32 mantissa range
+        #[expect(clippy::cast_precision_loss)] // frame count will never exceed f32 mantissa range
         let len = self.frame_times.len() as f32;
         total.as_secs_f32() * 1000.0 / len
     }

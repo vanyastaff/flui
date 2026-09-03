@@ -81,7 +81,6 @@ const _GENERATED_MORPH_OP_OFFSET_CHECK: () = {
 ///
 /// `REPLACE` (no fixed-function blending): the fragment shader emits the full
 /// premultiplied result directly.
-#[allow(missing_debug_implementations)]
 pub(crate) struct MorphologyPipeline {
     /// The single render pipeline (format-parametric at construction time).
     pub(crate) pipeline: wgpu::RenderPipeline,
@@ -205,10 +204,6 @@ mod cpu_tests {
 
     /// Round-trip: values written into the struct are readable from the same
     /// byte positions — proves the generated layout has no hidden reordering.
-    #[allow(
-        clippy::float_cmp,
-        reason = "comparing floats we just assigned from exact literals — bit identity is the invariant"
-    )]
     #[test]
     fn morph_uniforms_field_round_trips() {
         let u = morphology::MorphUniforms::new([640.0, 480.0], 3.0, 1.0, [0.1, 0.2, 0.9, 0.8], 0.0);

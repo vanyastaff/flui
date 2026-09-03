@@ -27,10 +27,6 @@ use std::path::{Path, PathBuf};
 /// - Directory already exists
 /// - Template generation fails
 /// - Git initialization fails
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "mirrors clap argument structure"
-)]
 pub fn execute(
     project_name: ProjectName,
     org_id: OrganizationId,

@@ -133,7 +133,6 @@ pub(crate) fn blend_mode_to_u32(mode: BlendMode) -> u32 {
 ///
 /// `REPLACE` (no fixed-function blending): the fragment shader emits the full
 /// premultiplied blended texel directly.
-#[allow(missing_debug_implementations)]
 pub(crate) struct ModePipeline {
     /// The single render pipeline (format-parametric at construction time).
     ///
@@ -231,7 +230,6 @@ impl ModePipeline {
 #[cfg(test)]
 // `float_cmp` fires on `assert_eq!` of f32 arrays; these compare stored literals
 // read back through a struct — no arithmetic, so equality is bit-exact.
-#[allow(clippy::float_cmp)]
 mod cpu_tests {
     use flui_types::painting::BlendMode;
 

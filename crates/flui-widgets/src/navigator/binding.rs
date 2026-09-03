@@ -349,7 +349,6 @@ impl RouteBinding {
     ///
     /// `dead_code` because that consumer is itself dead until the `Hero` widget
     /// gives it a production caller; see `hero_controller.rs`.
-    #[allow(dead_code)]
     pub(crate) fn mark_entry_needs_build(&self) {
         if let Some(entry) = self.entry() {
             entry.mark_needs_build();

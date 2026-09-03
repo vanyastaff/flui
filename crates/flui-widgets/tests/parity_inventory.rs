@@ -84,7 +84,7 @@ struct Manifest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Source {
-    #[allow(dead_code, reason = "documents the upstream repo; not checked")]
+    #[expect(dead_code, reason = "documents the upstream repo; not checked")]
     repo: String,
     tag: String,
     test_root: String,

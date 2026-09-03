@@ -4,7 +4,7 @@
 // the workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary, rather than for the whole crate (see `lib.rs`). The other
 // submodules in this backend have no `unsafe` of their own.
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 mod clipboard;
 mod control;

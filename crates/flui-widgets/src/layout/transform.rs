@@ -22,7 +22,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 // `transform` names the Flutter-parity concept the struct wraps (matches
 // `RenderTransform`'s own field of the same name); renaming it to dodge the
 // lint would trade a clear name for a weaker one.
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 #[derive(Clone, Debug)]
 pub struct Transform {
     transform: Matrix4,

@@ -86,7 +86,6 @@ impl TwoWayConverter for Color {
     fn from_vector(v: Self::Vector) -> Self {
         // The `clamp(0.0, 255.0).round()` pins the value into the exact u8 range
         // before the cast, so the truncation/sign-loss lints do not apply.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let to_u8 = |c: f32| c.clamp(0.0, 255.0).round() as u8;
         Color::rgba(to_u8(v[0]), to_u8(v[1]), to_u8(v[2]), to_u8(v[3]))
     }

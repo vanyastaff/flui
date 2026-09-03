@@ -213,7 +213,7 @@ struct PointerTrackingState {
     /// Is pointer currently down?
     is_down: bool,
     /// Device kind (stored for potential future use).
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     device_kind: PointerType,
 }
 

@@ -109,7 +109,7 @@ pub(crate) struct SemanticsHost {
     /// clears this unconditionally in production (see
     /// [`Self::clear_announce_callback`]); `announce()`'s read side still
     /// has no production caller until a platform embedder wires delivery.
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     announce_callback: RwLock<Option<Arc<dyn Fn(&str, Assertiveness) + Send + Sync>>>,
 
     /// Callback for semantics events dispatched via [`Self::dispatch_event`]/
@@ -118,7 +118,7 @@ pub(crate) struct SemanticsHost {
     /// silent (or the presentation closes — see
     /// [`Self::clear_event_callback`]). Mirrors [`Self::announce_callback`]'s
     /// shape.
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     event_callback: RwLock<Option<Arc<dyn Fn(&SemanticsEvent) + Send + Sync>>>,
 }
 

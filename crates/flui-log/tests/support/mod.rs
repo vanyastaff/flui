@@ -5,7 +5,7 @@
 //! gives every test its own process, so the scenarios never see each other's
 //! state and never depend on execution order.
 
-#![allow(dead_code, reason = "each test binary uses a different subset")]
+#![expect(dead_code, reason = "each test binary uses a different subset")]
 
 use std::sync::{Arc, Mutex};
 

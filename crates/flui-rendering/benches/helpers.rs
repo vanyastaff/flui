@@ -6,7 +6,7 @@
 
 // Shared across the `layout`, `paint`, and `intrinsic_parent_data` benches via `mod helpers;`; each bench
 // uses only the subset it needs, so unused-in-this-unit helpers are expected.
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 use flui_foundation::RenderId;
 use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary};

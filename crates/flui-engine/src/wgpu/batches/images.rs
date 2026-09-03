@@ -86,11 +86,6 @@ use super::{
 
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
 // color channels, and buffer indices. These truncations are intentional.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 impl DrawBatcher {
     /// Record an external texture draw by ID into `external_images`.
     ///
@@ -189,7 +184,7 @@ impl DrawBatcher {
     ///
     /// When `blend_mode.is_advanced()`, the current segment is sealed and the
     /// image is wrapped in `DrawItem::AdvancedShape`.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
                   WgpuPainter fields; texture_id/image/dst_rect/blend_mode are distinct per-draw \
@@ -282,7 +277,7 @@ impl DrawBatcher {
     /// returns a hit on key alone, never re-comparing bytes — see
     /// `TextureCache::load_from_rgba`). Hashing the bytes is collision-free and
     /// lets identical filtered output reuse its cached texture across frames.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
                   WgpuPainter fields; width/height/pixels/dst/blend_mode are the distinct \
@@ -323,7 +318,7 @@ impl DrawBatcher {
     ///
     /// The SrcOver delegation path is byte-identical to what it was before
     /// advanced-blend support existed.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
                   WgpuPainter fields; image/dst/repeat/blend_mode are distinct per-draw inputs"
@@ -569,11 +564,11 @@ impl DrawBatcher {
     ///
     /// Sub-image extraction and slice boundaries are byte-identical to the
     /// original painter implementation.
-    #[allow(
+    #[expect(
         clippy::type_complexity,
         reason = "nine-slice src/dst tuple layout is local detail; refactoring into a named type adds no clarity"
     )]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
                   WgpuPainter fields; image/center_slice/dst/blend_mode are distinct per-draw inputs"
@@ -885,11 +880,11 @@ impl DrawBatcher {
     /// delegates to `draw_image` passing `paint.blend_mode` — NOT the filter's
     /// mode.  The Matrix / gamma filter branches carry no per-pixel blend mode
     /// and always delegate with `SrcOver` (the paint's default).
-    #[allow(
+    #[expect(
         clippy::many_single_char_names,
         reason = "w/h/r/g/b/a are idiomatic in CPU-side color-matrix pixel loops"
     )]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
                   WgpuPainter fields; image/dst/filter/paint_blend_mode are distinct inputs"
@@ -1111,7 +1106,7 @@ impl DrawBatcher {
     /// sprite destination rects in device space.  The SrcOver path is the
     /// existing per-sprite `cached_images` push (byte-identical to what it was
     /// before advanced-blend support existed).
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
                   WgpuPainter fields; image/sprites/sprite_origins/colors/blend_mode are distinct \
@@ -1360,7 +1355,7 @@ impl DrawBatcher {
     /// `draw_texture` carries no `blend_mode` parameter. External-texture draws
     /// enter via the `DrawTexture` display-list command which carries no `Paint`
     /// upstream — advanced blend is unreachable here by construction.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/state/src_uv_registry are disjoint parameters; \
                   src/filter_quality/opacity are distinct per-draw parameters with no natural grouping"

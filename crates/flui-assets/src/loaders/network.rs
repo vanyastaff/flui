@@ -96,7 +96,7 @@ impl NetworkLoader {
     ///
     /// Returns an error when the `network` feature is not enabled.
     #[cfg(not(feature = "network"))]
-    #[allow(
+    #[expect(
         clippy::unused_async,
         reason = "public API: signature must match the genuinely-async `network`-enabled variant"
     )]
@@ -121,7 +121,7 @@ impl NetworkLoader {
     ///
     /// Returns an error when the `network` feature is not enabled.
     #[cfg(not(feature = "network"))]
-    #[allow(
+    #[expect(
         clippy::unused_async,
         reason = "public API: signature must match the genuinely-async `network`-enabled variant"
     )]

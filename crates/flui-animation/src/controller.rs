@@ -20,7 +20,6 @@ const BOUND_EPSILON: f32 = 1e-6;
 /// Narrow an f64 time/progress value to the f32 the animation value space uses.
 /// Time is accumulated in f64 for frame-coherence, but values and simulations
 /// are f32; the sub-microsecond precision lost here is irrelevant to rendering.
-#[allow(clippy::cast_possible_truncation)]
 #[inline]
 fn narrow_f32(x: f64) -> f32 {
     x as f32
@@ -29,7 +28,6 @@ fn narrow_f32(x: f64) -> f32 {
 /// Floor a non-negative cycle ratio to a whole repeat-cycle count. Used by the
 /// repeat tick to retire every cycle a long frame elapsed; `as u32` saturates a
 /// pathological ratio to `u32::MAX` rather than wrapping.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[inline]
 fn whole_cycles(ratio: f64) -> u32 {
     ratio.floor() as u32

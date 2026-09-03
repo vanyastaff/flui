@@ -20,7 +20,7 @@
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![allow(clippy::unwrap_used)]
+#![expect(clippy::unwrap_used)]
 
 use std::{
     any::TypeId,
@@ -69,7 +69,7 @@ impl StatelessView for PanickingView {
     // `IntoView for Box<dyn View>` shim. The line still panics (the
     // assignment never completes); the bind exists purely to anchor
     // a concrete `impl IntoView`-satisfying type.
-    #[allow(
+    #[expect(
         unreachable_code,
         unused_variables,
         clippy::diverging_sub_expression,
@@ -124,7 +124,7 @@ impl StatefulView for PanickingStatefulView {
 impl ViewState<PanickingStatefulView> for PanickingStatefulState {
     // See `PanickingView::build` — anchor `!` through `Box<dyn View>` so
     // the `impl IntoView`-satisfying type is fixed.
-    #[allow(
+    #[expect(
         unreachable_code,
         unused_variables,
         clippy::diverging_sub_expression,

@@ -39,7 +39,7 @@
 #[must_use]
 pub enum TargetPlatform {
     /// Apple iOS (iPhone, iPad).
-    #[allow(non_camel_case_types)]
+    #[expect(non_camel_case_types)]
     iOS,
     /// Google Android.
     Android,

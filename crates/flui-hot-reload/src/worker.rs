@@ -55,13 +55,12 @@ struct BuildPtr(*const ());
 // BEFORE `DynLib::drop` unmaps the image, so a map hit implies the image is
 // still mapped (single-threaded host loop; a caller racing an unload from
 // another thread is outside the supported dev-loop).
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl Send for BuildPtr {}
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl Sync for BuildPtr {}
 
 /// Host entry point wired into [`WorkerPlugin::load`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
 extern "C" fn host_register_worker_build(fingerprint: u64, build: *const ()) {
     if build.is_null() {
         tracing::warn!(
@@ -125,7 +124,7 @@ type WorkerFingerprintFn = extern "C" fn() -> u64;
 type WorkerAbiTokenFn = extern "C" fn() -> u64;
 
 /// A loaded hot-reload worker dylib (`my_app_logic.dll`).
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct WorkerPlugin {
     lib: DynLib,
     init_fn: WorkerInitFn,
@@ -151,7 +150,7 @@ impl WorkerPlugin {
         // is the worker ABI symbol this crate defines, so a library built by the
         // matching macro exports it with `WorkerInitFn`'s signature; the pointer
         // is null-checked before the transmute.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         unsafe {
             let init_ptr = lib.symbol("flui_worker_init")?;
             if init_ptr.is_null() {
@@ -344,7 +343,7 @@ fn resolve_worker_path(lib_path: &Path) -> PathBuf {
 }
 
 /// Polls a worker dylib path and reloads on mtime changes.
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct WorkerReloadDriver {
     plugin: Option<WorkerPlugin>,
     /// Canonical path (used for manifest lookup).

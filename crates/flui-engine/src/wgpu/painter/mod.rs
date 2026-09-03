@@ -95,11 +95,6 @@ pub struct WgpuPainter {
 
 // GPU rendering routinely converts between numeric types for pixel coordinates,
 // color channels, buffer indices, and instance counts.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 impl WgpuPainter {
     /// Create a new GPU painter
     ///
@@ -827,11 +822,6 @@ mod transform_clip;
 /// - [`ImageFilterPass::Morph`] → `radius.ceil()` (pixel expansion per `restore_layer`).
 /// - [`ImageFilterPass::ColorMatrix`] → `0.0` (full-viewport REPLACE, no growth).
 /// - [`ImageFilterPass::Identity`] → `0.0` (passthrough, no growth).
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "kernel_radius returns u32 ≤ a few thousand for any realistic sigma; \
-              cast to f32 is exact for values this small"
-)]
 pub(super) fn cumulative_growth(passes: &[ImageFilterPass]) -> f32 {
     passes
         .iter()

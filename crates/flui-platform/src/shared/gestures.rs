@@ -26,7 +26,7 @@ pub fn pinch(magnification: f64) -> Option<PointerGesture> {
     if magnification.is_nan() {
         return None;
     }
-    #[allow(clippy::cast_possible_truncation)] // a magnification fraction is far inside f32 range
+    #[expect(clippy::cast_possible_truncation)] // a magnification fraction is far inside f32 range
     Some(PointerGesture::Pinch(magnification as f32))
 }
 

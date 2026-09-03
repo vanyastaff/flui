@@ -98,7 +98,7 @@ impl ElementBuildContext {
     /// Create a context for a specific element from the tree.
     ///
     /// Returns None if the element doesn't exist in the tree.
-    #[allow(clippy::needless_pass_by_value)] // Arc is cloned into Self, taking by value is idiomatic
+    #[expect(clippy::needless_pass_by_value)] // Arc is cloned into Self, taking by value is idiomatic
     pub fn for_element(
         element_id: ElementId,
         tree: Arc<RwLock<ElementTree>>,

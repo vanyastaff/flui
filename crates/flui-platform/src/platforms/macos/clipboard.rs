@@ -63,7 +63,7 @@ impl MacOSClipboard {
     ///
     /// Change count increments each time the pasteboard contents change.
     /// Use this to detect if clipboard has changed without reading contents.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     fn change_count(&self) -> i64 {
         // SAFETY: the stored pointer is the live pasteboard singleton (or nil,
         // which is checked); `changeCount` is a plain integer getter.

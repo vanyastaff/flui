@@ -21,11 +21,6 @@ use super::{
 
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
 // color channels, and buffer indices. These truncations are intentional.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 impl DrawBatcher {
     /// Record a stroked line segment.
     ///
@@ -235,11 +230,6 @@ impl DrawBatcher {
     ///
     /// `draw_path` does not read opacity — no opacity baking is performed,
     /// consistent with the other record methods in this module.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "borrow-seam design: segment/draw_order/state are disjoint WgpuPainter fields \
-                  passed as separate borrows; path geometry parameters are all necessary"
-    )]
     pub(in super::super) fn draw_path(
         &mut self,
         segment: &mut DrawSegment,
@@ -445,7 +435,7 @@ impl DrawBatcher {
     ///
     /// `draw_vertices` does not read opacity — no opacity baking is performed,
     /// consistent with the other record methods in this module.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state are disjoint WgpuPainter fields \
                   passed as separate borrows; vertex geometry slices are all necessary"

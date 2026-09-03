@@ -228,7 +228,7 @@ impl RenderBox for RenderShaderMask {
     // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
     // (Single's zero-arg overload vs the indexed variant on other arities), so the
     // closure cannot be replaced by a method reference.
-    #[allow(clippy::redundant_closure_for_method_calls)]
+    #[expect(clippy::redundant_closure_for_method_calls)]
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         // Oracle `:1191-1193` — no child means nothing at all is drawn
         // (not even an empty mask layer).

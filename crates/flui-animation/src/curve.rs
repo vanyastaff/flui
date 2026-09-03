@@ -486,7 +486,7 @@ impl<B: Curve, E: Curve> Split<B, E> {
 }
 
 impl<B: Curve, E: Curve> Curve for Split<B, E> {
-    #[allow(clippy::float_cmp)] // Intentional exact comparisons per the Flutter contract
+    #[expect(clippy::float_cmp)] // Intentional exact comparisons per the Flutter contract
     fn transform(&self, t: f32) -> f32 {
         if t.is_nan() {
             return 0.0;
@@ -539,7 +539,7 @@ impl Default for ElasticInCurve {
 }
 
 impl Curve for ElasticInCurve {
-    #[allow(clippy::float_cmp)] // Intentional exact comparison after clamp
+    #[expect(clippy::float_cmp)] // Intentional exact comparison after clamp
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         // Guarantee exact boundary values per Curve contract
@@ -580,7 +580,7 @@ impl Default for ElasticOutCurve {
 }
 
 impl Curve for ElasticOutCurve {
-    #[allow(clippy::float_cmp)] // Intentional exact comparison after clamp
+    #[expect(clippy::float_cmp)] // Intentional exact comparison after clamp
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         // Guarantee exact boundary values per Curve contract
@@ -621,7 +621,7 @@ impl Default for ElasticInOutCurve {
 }
 
 impl Curve for ElasticInOutCurve {
-    #[allow(clippy::float_cmp)] // Intentional exact comparison after clamp
+    #[expect(clippy::float_cmp)] // Intentional exact comparison after clamp
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         // Guarantee exact boundary values per Curve contract
@@ -769,7 +769,6 @@ impl CatmullRomCurve {
 }
 
 impl Curve for CatmullRomCurve {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
 
@@ -836,7 +835,6 @@ impl CatmullRomSpline {
 }
 
 impl Curve2D for CatmullRomSpline {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn transform(&self, t: f32) -> Curve2DSample {
         let t = t.clamp(0.0, 1.0);
 
@@ -961,7 +959,7 @@ impl<C: Curve> Curve for ReverseCurve<C> {
 #[derive(Debug)]
 pub struct Curves;
 
-#[allow(non_upper_case_globals)]
+#[expect(non_upper_case_globals)]
 impl Curves {
     /// A linear curve (the identity function).
     pub const Linear: Linear = Linear;

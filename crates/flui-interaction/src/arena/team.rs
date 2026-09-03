@@ -147,7 +147,7 @@ impl CombiningMember {
     /// Pure state transition: returns the member to reject and/or the arena
     /// entry to resolve so the caller can dispatch both AFTER releasing the
     /// combiner lock (member callbacks re-enter the combiner).
-    #[allow(clippy::type_complexity)] // local return plumbing, not public API
+    #[expect(clippy::type_complexity)] // local return plumbing, not public API
     fn resolve(
         &mut self,
         member: &Arc<dyn GestureArenaMember>,
@@ -472,7 +472,7 @@ mod tests {
     use super::*;
 
     // Mock member for testing
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     struct MockMember {
         id: usize,
         accepted: AtomicBool,

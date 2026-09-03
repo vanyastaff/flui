@@ -149,32 +149,32 @@ where
     /// lookup is NOT wired here — it is built structurally by
     /// [`ElementTree::insert`](crate::tree::ElementTree) into each node's
     /// `inherited` map, so `InheritedBehavior` needs no mount-time hook.)
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called before unmount to perform behavior-specific cleanup.
     ///
     /// `owner` is threaded through so behaviors can unregister themselves
     /// from `BuildOwner` registries (mirror of `on_mount`).
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called after view update to perform behavior-specific reactions.
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn on_update(&mut self, core: &ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called after the element is re-activated (re-inserted into the tree).
     ///
     /// Default is a no-op. Behaviors that own user-visible state (e.g.
     /// `StatefulBehavior`) override this to forward to `ViewState::activate`.
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn on_activate(&mut self, core: &mut ElementCore<V, A>) {}
 
     /// Called before the element is deactivated (temporarily removed from the tree).
     ///
     /// Default is a no-op. Behaviors that own user-visible state (e.g.
     /// `StatefulBehavior`) override this to forward to `ViewState::deactivate`.
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn on_deactivate(&mut self, core: &mut ElementCore<V, A>) {}
 
     /// Called after the view configuration is replaced, with access to the
@@ -190,7 +190,7 @@ where
     /// The split-borrow `owner` handle is threaded through so behaviors
     /// can call `ElementOwner::schedule_build_for` for affected
     /// descendants.
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn on_view_updated(
         &mut self,
         core: &ElementCore<V, A>,
@@ -271,7 +271,7 @@ where
     /// `ElementTree` insert/update seams (`apply_ancestor_parent_data`) — the
     /// port of Flutter's `RenderObjectElement.attachRenderObject` →
     /// `_findAncestorParentDataElements` → `ParentDataWidget.applyParentData`.
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn parent_data_config(
         &self,
         core: &ElementCore<V, A>,
@@ -363,7 +363,7 @@ where
     /// can resolve the same live build-time context (`BuildHandle`) the
     /// rebuild uses, letting a user `did_change_dependencies` re-read the
     /// changed inherited value against the real tree (PR-K).
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     fn did_change_dependencies(
         &mut self,
         core: &ElementCore<V, A>,

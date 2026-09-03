@@ -50,7 +50,7 @@ pub struct BuildProgress {
     multi: Arc<MultiProgress>,
     main_bar: ProgressBar,
     phase_bar: Option<ProgressBar>,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     platform: String,
 }
 

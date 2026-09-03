@@ -462,7 +462,6 @@ impl ColorFilter {
     #[inline]
     #[must_use]
     pub const fn grayscale() -> Self {
-        #[allow(clippy::excessive_precision)]
         ColorFilter::Matrix(ColorMatrix::new([
             0.2126, 0.7152, 0.0722, 0.0, 0.0, // R = luminance
             0.2126, 0.7152, 0.0722, 0.0, 0.0, // G = luminance

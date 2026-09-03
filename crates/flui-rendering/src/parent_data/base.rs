@@ -75,7 +75,7 @@ pub trait ParentData: Debug + Downcast + dyn_clone::DynClone {
     /// trait-object pattern is the only way to provide type-erasure without an
     /// intermediate `Any` downcast, and the seal is enforced by crate visibility
     /// on `LogicalIndexParentData` itself.
-    #[allow(private_interfaces)]
+    #[expect(private_interfaces)]
     fn as_logical_index_mut(&mut self) -> Option<&mut dyn LogicalIndexParentData> {
         None
     }

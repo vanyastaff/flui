@@ -205,7 +205,7 @@ fn test_transform_get_current_matrix() {
 
     // Verify translation was applied
     let expected = Matrix4::translation(50.0, 100.0, 0.0);
-    #[allow(clippy::float_cmp)] // Exact comparison is correct for transform matrices
+    #[expect(clippy::float_cmp)] // Exact comparison is correct for transform matrices
     {
         assert_eq!(current.m[12], expected.m[12]); // Translation X
         assert_eq!(current.m[13], expected.m[13]); // Translation Y

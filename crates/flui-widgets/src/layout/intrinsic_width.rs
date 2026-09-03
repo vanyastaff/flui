@@ -90,7 +90,7 @@ impl RenderView for IntrinsicWidth {
 impl_render_view!(IntrinsicWidth);
 
 #[cfg(test)]
-#[allow(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
+// unit tests assert exact set-then-read values, not computed floats
 mod tests {
     use super::*;
     use crate::SizedBox;

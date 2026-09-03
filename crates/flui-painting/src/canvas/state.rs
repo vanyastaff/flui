@@ -43,7 +43,7 @@ pub struct CanvasState {
 /// - Clip bounds queries: `canvas.local_clip_bounds()`.
 /// - Render optimization: merge adjacent clips.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields stored for future optimization features
+// Fields stored for future optimization features
 pub enum ClipShape {
     /// Rectangular clip.
     Rect(Rect<Pixels>),

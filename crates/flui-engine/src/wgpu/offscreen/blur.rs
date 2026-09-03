@@ -216,11 +216,6 @@ impl OffscreenRenderer {
         // result; truncation is the documented integer-iteration count and
         // sign loss is impossible after the float-space clamp.
         let sigma_nonneg = sigma.max(0.0);
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "sigma_nonneg is ≥0 by the line above; the cast is bounded by .clamp(1, 5)"
-        )]
         let iterations = ((sigma_nonneg / 2.0).ceil() as u32).clamp(1, 5);
         let offset = sigma.max(1.0);
 

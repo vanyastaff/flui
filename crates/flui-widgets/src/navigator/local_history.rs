@@ -35,7 +35,7 @@
 // Catalog consumer (ADR-0025) — the seam-before-consumer shape
 // `hero_controller.rs` documents. Deleting and re-deriving later is how a
 // seam stops matching the ADR that specified it.
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};

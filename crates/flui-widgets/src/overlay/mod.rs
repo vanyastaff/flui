@@ -67,7 +67,7 @@
 //
 // The `navigator` module needs no such allow: every item there has a production
 // caller or a `#[cfg(test)]`.
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 mod entry;
 mod theater;

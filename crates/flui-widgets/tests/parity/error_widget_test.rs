@@ -173,7 +173,7 @@ impl StatelessView for PanickingView {
     // explicit `Box<dyn View>` so inference anchors a concrete
     // `IntoView`-satisfying type. The line still panics (the assignment
     // never completes); the bind exists purely for that anchor.
-    #[allow(
+    #[expect(
         unreachable_code,
         unused_variables,
         clippy::diverging_sub_expression,

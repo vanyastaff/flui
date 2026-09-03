@@ -347,7 +347,7 @@ impl AssetRegistry {
     }
 
     /// Clears all caches in the registry.
-    #[allow(
+    #[expect(
         clippy::unused_async,
         reason = "public API: uniform async surface with the genuinely-async `invalidate`/`clear` siblings"
     )]

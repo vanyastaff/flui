@@ -139,7 +139,7 @@ impl PlatformWindow for AndroidWindow {
         let raw = raw_window_handle::RawWindowHandle::AndroidNdk(handle);
         // SAFETY: The ANativeWindow pointer is valid as long as we are between Resume
         // and Pause. AndroidWindow is only used within that lifecycle window.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }
 
@@ -150,7 +150,7 @@ impl PlatformWindow for AndroidWindow {
         let handle = raw_window_handle::AndroidDisplayHandle::new();
         let raw = raw_window_handle::RawDisplayHandle::Android(handle);
         // SAFETY: The Android display handle is always valid while the app is running
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(raw) })
     }
 

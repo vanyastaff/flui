@@ -324,11 +324,11 @@ pub enum RawWindowHandle {
 // crate defines elsewhere (see their own SAFETY comments for the caveat that
 // *using* the pointee, as opposed to holding its address, still owes
 // whatever thread-affinity the native handle requires).
-#[allow(unsafe_code)] // small, cross-platform marker impl — not an FFI island
+#[expect(unsafe_code)] // small, cross-platform marker impl — not an FFI island
 unsafe impl Send for RawWindowHandle {}
 // SAFETY: as for `Send` above — the handle is an opaque address that is never
 // dereferenced here, so sharing it across threads adds no aliasing.
-#[allow(unsafe_code)] // small, cross-platform marker impl — not an FFI island
+#[expect(unsafe_code)] // small, cross-platform marker impl — not an FFI island
 unsafe impl Sync for RawWindowHandle {}
 
 // ============================================================================

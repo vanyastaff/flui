@@ -119,7 +119,7 @@ impl IntTween {
 }
 
 impl Animatable<i32> for IntTween {
-    #[allow(clippy::cast_possible_truncation)] // rounded f32->i32, saturating cast
+    #[expect(clippy::cast_possible_truncation)] // rounded f32->i32, saturating cast
     fn transform(&self, t: f32) -> i32 {
         let t = t.clamp(0.0, 1.0);
         (self.begin as f32 + (self.end - self.begin) as f32 * t).round() as i32
@@ -148,7 +148,7 @@ impl StepTween {
 }
 
 impl Animatable<i32> for StepTween {
-    #[allow(clippy::cast_possible_truncation)] // floored f32->i32, saturating cast
+    #[expect(clippy::cast_possible_truncation)] // floored f32->i32, saturating cast
     fn transform(&self, t: f32) -> i32 {
         let t = t.clamp(0.0, 1.0);
         (self.begin as f32 + (self.end - self.begin) as f32 * t).floor() as i32

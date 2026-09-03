@@ -11,7 +11,6 @@ use super::super::batches::DrawBatcher;
 use super::super::effects::{GradientStop, ShadowParams};
 use super::WgpuPainter;
 
-#[allow(clippy::cast_possible_truncation)]
 impl WgpuPainter {
     /// Draw a rectangle with a linear gradient.
     ///

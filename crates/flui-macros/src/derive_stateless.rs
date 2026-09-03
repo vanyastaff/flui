@@ -44,7 +44,7 @@ use syn::{DeriveInput, parse_quote};
 /// an error — the wrap reserves headroom for future attribute parsing
 /// (`#[view(key = …)]`, recursive-widget hints) that does need to
 /// surface fallible diagnostics through `into_compile_error`.
-#[allow(
+#[expect(
     clippy::unnecessary_wraps,
     reason = "future-proof against attribute parsing"
 )]

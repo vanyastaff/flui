@@ -957,7 +957,6 @@ impl Path {
 
         let wanted = (sweep / chord_angle).ceil();
         if wanted.is_finite() {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let wanted = wanted as usize;
             wanted.clamp(1, Self::MAX_ARC_CHORDS)
         } else {
@@ -980,7 +979,6 @@ impl Path {
         let mut from = Self::eval_arc(rect, start_angle);
 
         for i in 1..=chords {
-            #[allow(clippy::cast_precision_loss)]
             let t = i as f32 / chords as f32;
             let to = Self::eval_arc(rect, start_angle + sweep_angle * t);
             if Self::ray_intersects_segment(point, from, to) {
@@ -1006,7 +1004,6 @@ impl Path {
         let mut from = Self::eval_arc(rect, start_angle);
 
         for i in 1..=chords {
-            #[allow(clippy::cast_precision_loss)]
             let t = i as f32 / chords as f32;
             let to = Self::eval_arc(rect, start_angle + sweep_angle * t);
             winding += Self::segment_winding(point, from, to);

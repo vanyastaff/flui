@@ -1026,7 +1026,7 @@ impl RenderBox for RenderFlex {
     // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
-    #[allow(clippy::redundant_closure_for_method_calls)]
+    #[expect(clippy::redundant_closure_for_method_calls)]
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
             FlexDirection::Horizontal => {
@@ -1043,7 +1043,7 @@ impl RenderBox for RenderFlex {
     // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
-    #[allow(clippy::redundant_closure_for_method_calls)]
+    #[expect(clippy::redundant_closure_for_method_calls)]
     fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
             FlexDirection::Horizontal => {
@@ -1060,7 +1060,7 @@ impl RenderBox for RenderFlex {
     // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
-    #[allow(clippy::redundant_closure_for_method_calls)]
+    #[expect(clippy::redundant_closure_for_method_calls)]
     fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
             FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {
@@ -1075,7 +1075,7 @@ impl RenderBox for RenderFlex {
     // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
-    #[allow(clippy::redundant_closure_for_method_calls)]
+    #[expect(clippy::redundant_closure_for_method_calls)]
     fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
             FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {

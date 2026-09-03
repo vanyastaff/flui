@@ -92,7 +92,7 @@ pub struct ForcePressGestureRecognizer {
 }
 
 // Field names keep Flutter's `onForcePressStart`-style callback names (parity).
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct ForcePressCallbacks {
     on_start: Option<ForcePressStartCallback>,

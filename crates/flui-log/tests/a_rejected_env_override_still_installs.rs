@@ -30,7 +30,7 @@ fn a_rejected_override_falls_back_and_still_installs_a_subscriber() {
     // or writing the environment. This is the only test in this binary, the
     // variable name is unique to it, and no thread has been spawned — the test
     // harness's own threads do not touch the environment.
-    #[allow(
+    #[expect(
         unsafe_code,
         reason = "std::env::set_var is unsafe in edition 2024; the single-threaded precondition holds here"
     )]

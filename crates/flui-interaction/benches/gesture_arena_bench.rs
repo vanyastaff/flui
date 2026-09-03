@@ -23,7 +23,6 @@
 
 // Bench harness, not public API; `criterion_group!` generates the
 // undocumentable entry fn.
-#![allow(missing_docs)]
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -44,7 +43,7 @@ use flui_interaction::sealed::CustomGestureRecognizer;
 /// could grow to per-id timings in a follow-up).
 #[derive(Debug)]
 struct BenchMember {
-    #[allow(dead_code)] // retained for future per-id bench breakdown
+    #[expect(dead_code)] // retained for future per-id bench breakdown
     id: usize,
 }
 

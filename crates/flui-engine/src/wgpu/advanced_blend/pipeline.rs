@@ -359,10 +359,6 @@ mod cpu_tests {
 
     /// Round-trip: values written via the pad-free `new` are readable from the
     /// same byte positions — proves the generated layout has no hidden reordering.
-    #[allow(
-        clippy::float_cmp,
-        reason = "comparing floats just assigned from exact literals — bit identity is the invariant"
-    )]
     #[test]
     fn blend_uniforms_field_round_trips() {
         let uniform = advanced_blend::BlendUniforms::new(

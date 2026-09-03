@@ -4,7 +4,7 @@
 //! including blend modes, image handling, clipping, canvas primitives, and
 //! shaders.
 
-#![allow(unused)] // Painting API for future implementation
+#![expect(unused)] // Painting API for future implementation
 
 pub mod blend_mode;
 pub mod canvas;

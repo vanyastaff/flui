@@ -81,7 +81,6 @@ use super::{
 // `wgpu::RenderPipeline` / `wgpu::BindGroup` are opaque GPU handles with no
 // useful `Debug` impl. The `#[allow]` avoids the compiler error while still
 // documenting the reason.
-#[allow(missing_debug_implementations)]
 pub(crate) struct PipelineSet {
     // ── On-demand shape pipeline cache ───────────────────────────────────────
     //

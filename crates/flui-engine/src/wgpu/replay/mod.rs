@@ -65,7 +65,6 @@ use super::{
 /// coexist in the same call without an `&mut self` on the painter.
 // `wgpu::Device` / `wgpu::Queue` / `wgpu::Buffer` / `wgpu::BindGroup` /
 // `wgpu::Sampler` are opaque GPU handles with no useful `Debug` impl.
-#[allow(missing_debug_implementations)]
 pub(super) struct GpuReplay {
     // ── Static GPU plumbing moved from WgpuPainter ───────────────────────────
     /// Viewport uniform buffer (updated on resize, read by all instanced
@@ -112,12 +111,6 @@ pub(super) struct GpuReplay {
 // suppressed for the same reason as in `painter.rs`: GPU rendering converts
 // between numeric types (pixel coords, buffer indices, instance counts)
 // intentionally.
-#[allow(
-    clippy::too_many_arguments,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 impl GpuReplay {
     /// Construct a new [`GpuReplay`] with all five GPU plumbing fields initialised.
     ///
@@ -250,7 +243,7 @@ impl GpuReplay {
     /// loop and all `flush_opacity_layer` recursion.  Every `flush_texture_batch*`
     /// call drains and clears it before returning, so depth-N+1 content cannot
     /// leak into depth-N.  `&mut self` serializes the recursion.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn submit(
         &mut self,
         items: Vec<DrawItem>,
@@ -385,11 +378,6 @@ impl GpuReplay {
                             encoder,
                         );
                         let (vp_w, vp_h) = viewport_size;
-                        #[allow(
-                            clippy::cast_precision_loss,
-                            reason = "vp_w/vp_h are u32 viewport dims; \
-                                      precision loss at >16 M pixels is acceptable"
-                        )]
                         let (viewport_width_f32, viewport_height_f32) = (vp_w as f32, vp_h as f32);
 
                         let blend_op = AdvancedBlendOp {
@@ -543,10 +531,6 @@ impl GpuReplay {
                     //    (the composite-grid shift this integer-grid contract prevents).
                     let (fb_origin_x, fb_origin_y) = op.fb_origin;
                     let (fb_w, fb_h) = op.fb_dim;
-                    #[allow(
-                        clippy::cast_precision_loss,
-                        reason = "fb coords are u32 pixel dims ≤ viewport; f32 precision is sufficient"
-                    )]
                     let dst_rect = flui_types::Rect::from_xywh(
                         flui_types::geometry::px(fb_origin_x as f32),
                         flui_types::geometry::px(fb_origin_y as f32),

@@ -320,7 +320,7 @@ impl ChildEntry {
     /// attach the dismissal status-listener — [`ChildEntry::register`] does
     /// that once a [`BuildContext`] is available (`create_state` has none;
     /// see `AnimatedSwitcherState::init_state`).
-    #[allow(clippy::too_many_arguments)] // one argument per oracle constructor parameter
+    #[expect(clippy::too_many_arguments)] // one argument per oracle constructor parameter
     fn new(
         child: BoxedView,
         child_number: u64,

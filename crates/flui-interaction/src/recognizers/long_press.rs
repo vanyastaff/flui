@@ -115,7 +115,7 @@ pub struct LongPressGestureRecognizer {
 }
 
 // Field names keep Flutter's `onLongPressStart`-style callback names (parity).
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct LongPressCallbacks {
     on_long_press_down: Option<LongPressDownCallback>,

@@ -150,13 +150,6 @@ mod gpu_tests {
     /// - Premul-direct max: `max(128,128)=128` for all channels → boundary output ~128 RGB.
     /// - Unpremul+max+repremul would: straight P2=`(255,255,255,0.5)` → max straight
     ///   RGB=`255` → repremul → boundary RGB ~255. Gap of ~127 u8 units — test M4 catches it.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap,
-        clippy::cast_sign_loss,
-        reason = "radius is a small positive float (≤64); content_rect coords are small test constants (≤64); \
-                  all casts are within i32/usize range for a 64×64 test surface"
-    )]
     fn morph_oracle_premul(
         source_pixels: &[[u8; 4]],
         surface_width: u32,
@@ -932,11 +925,6 @@ mod gpu_tests {
 
         // Columns within ceil(radius) of the left viewport edge MUST erode to
         // transparent — the decal beyond x=0 is vec4(0). (Pre-fix: stayed opaque.)
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "ERODE_RADIUS is a small positive const (3.0); ceil()→usize is exact"
-        )]
         let kernel = ERODE_RADIUS.ceil() as usize;
         for col in 0..kernel {
             let alpha = pixels[mid_row * surface_width + col][3];

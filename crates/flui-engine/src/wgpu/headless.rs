@@ -29,7 +29,7 @@ const CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 ///
 /// Construct once (device creation is the expensive step), then call
 /// [`Self::render_layer_tree`] per capture.
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct HeadlessRenderer {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,

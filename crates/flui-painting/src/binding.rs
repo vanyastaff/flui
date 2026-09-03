@@ -411,7 +411,7 @@ impl PaintingBinding {
     /// P-10) for the visibility rationale. Kept on the surface so a
     /// future platform-side trigger only needs to flip the visibility
     /// back, not re-introduce a getter.
-    #[allow(dead_code, reason = "P-10: kept ready for the platform trigger")]
+    #[expect(dead_code, reason = "P-10: kept ready for the platform trigger")]
     pub(crate) fn system_fonts(&self) -> &SystemFontsNotifier {
         &self.system_fonts
     }
@@ -490,11 +490,6 @@ impl PaintingBinding {
 // ============================================================================
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test code: unwrap/expect-panic IS the assertion path"
-)]
 mod tests {
     use flui_types::geometry::px;
 

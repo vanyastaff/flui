@@ -463,7 +463,6 @@ fn paint_decoration_image(
         return;
     }
 
-    #[allow(clippy::cast_precision_loss)]
     // image dimensions are far below f32's 24-bit integer range
     let (src_w, src_h) = (image.image.width() as f32, image.image.height() as f32);
     let (dst_w, dst_h) = (rect.width().get(), rect.height().get());
@@ -511,7 +510,6 @@ fn paint_decoration_image(
     );
 
     let paint = (image.opacity < 1.0).then(|| {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         // clamped 0..=1 then scaled to u8 range
         let alpha = (image.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         Paint::fill(Color::rgba(255, 255, 255, alpha))

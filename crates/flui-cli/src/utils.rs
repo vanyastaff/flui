@@ -39,7 +39,7 @@ pub fn run_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> CliResult<St
 }
 
 /// Copy directory recursively.
-#[allow(dead_code, reason = "utility functions for future commands")]
+#[expect(dead_code, reason = "utility functions for future commands")]
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> CliResult<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;

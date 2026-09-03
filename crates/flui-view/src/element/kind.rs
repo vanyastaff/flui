@@ -34,16 +34,6 @@
 //! blanket-impl line, not a new variant in this enum (the variant set
 //! is closed at the BEHAVIOR FAMILY level, not at the per-`V` level).
 
-#![allow(
-    // The render-arity Leaf/Single/Optional sub-trait families have no
-    // concrete blanket impls in Phase 1 (only `RenderBehavior<V>` over
-    // `Variable` exists today). The empty trait definitions are part of
-    // the public surface so Phase 2/3 can land a concrete render-leaf
-    // element without rev-ing the variant set. Suppressing the dead-
-    // code lint at the module level keeps the file warning-clean.
-    dead_code
-)]
-
 use std::{fmt, rc::Rc, sync::Arc};
 
 use flui_foundation::{Listenable, ListenerId};

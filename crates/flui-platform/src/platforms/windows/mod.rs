@@ -9,7 +9,7 @@
 // boundary, rather than for the whole crate (see `lib.rs`); every `unsafe`
 // block still carries its own `// SAFETY:` comment stating the invariant
 // that makes it sound.
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 #[cfg(feature = "a11y")]
 mod accessibility;
@@ -38,7 +38,7 @@ pub use window_ext::{
 /// crate version of their own.
 #[cfg(target_os = "windows")]
 pub mod win32 {
-    #![allow(missing_docs)] // straight re-exports; the `windows` crate documents them
+    #![cfg_attr(not(target_os = "windows"), expect(missing_docs))] // straight re-exports; the `windows` crate documents them
     pub use windows::Win32::{
         Foundation::HWND,
         Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute},

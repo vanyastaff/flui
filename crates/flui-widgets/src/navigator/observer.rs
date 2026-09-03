@@ -83,7 +83,7 @@ use super::route::RouteId;
 /// They are route-internal — they drive secondary animations, which no observer
 /// surface exposes — so an observer sees a strictly more settled stack, never a
 /// different one.
-#[allow(unused_variables)]
+#[expect(unused_variables)]
 pub trait NavigatorObserver {
     /// This observer was registered on a navigator that is now mounted.
     ///

@@ -56,12 +56,12 @@
 #![deny(missing_docs)]
 // `flex/flex.rs`, `text/text.rs`: a one-type family module named after its
 // type is the catalog's house style (matches `flui-view`/`flui-objects`).
-#![allow(clippy::module_inception)]
+#![expect(clippy::module_inception)]
 // ADR-0027: navigator/overlay/hero/focus widget state is owner-local, but the
 // current handle graph still uses `Arc` at many internal seams. Do not restore
 // `Send + Sync` to UI callbacks or route/page builders to satisfy this lint; a
 // focused owner-local handle migration can replace these with `Rc` later.
-#![allow(clippy::arc_with_non_send_sync)]
+#![expect(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Modules

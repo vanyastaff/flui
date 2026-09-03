@@ -297,7 +297,7 @@ fn assert_snapshot_preorder(snapshot: &SemanticsSnapshot, expected: &[Accessibil
 }
 
 // The test oracle names each independently observable node field explicitly.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn assert_snapshot_node(
     snapshot: &SemanticsSnapshot,
     id: AccessibilityNodeId,

@@ -66,7 +66,7 @@ struct CountingAllocator;
 // from this harness would break that precondition and require acquire/release.
 // `System` itself upholds `GlobalAlloc`'s contract; this wrapper adds no new
 // invariant for the caller to uphold.
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         bump(&ALLOC_COUNT, 1);

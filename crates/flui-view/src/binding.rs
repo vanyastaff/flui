@@ -418,7 +418,6 @@ pub struct WidgetsBinding {
     global_key_registry: crate::key::registry::GlobalKeyRegistryHandle,
 
     /// Callback when a frame is needed.
-    #[allow(clippy::type_complexity)]
     on_need_frame: RwLock<Option<Box<dyn Fn() + Send + Sync>>>,
 
     /// Whether the first frame has been rasterized.

@@ -1,5 +1,5 @@
 //! Windows utility functions and helpers
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 use flui_types::geometry::{DevicePixels, Pixels, Point, Size, device_px, px};
 use windows::{

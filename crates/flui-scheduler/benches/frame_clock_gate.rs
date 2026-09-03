@@ -13,7 +13,6 @@
 // Benchmark harness functions are internal measurement scaffolding, not a
 // public API surface — exempt from the crate's missing-docs lint, matching
 // flui-animation's own bench target.
-#![allow(missing_docs)]
 
 use std::cell::Cell;
 use std::hint::black_box;

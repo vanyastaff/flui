@@ -103,7 +103,7 @@
 // read to assert the measurement pass; their `dead_code` in a non-test build cascades
 // into the `ModalHandle` / `RouteBinding` / `HeroRegistry` seams. The allow keeps a
 // seam from being deleted and re-derived later, out of step with the design.
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 use std::collections::HashMap;
 use std::rc::Rc;

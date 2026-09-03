@@ -210,7 +210,7 @@ impl Matrix4 {
     ///
     /// Parameters are named as `mRC` where R is row and C is column
     /// (0-indexed).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         m00: f32,
         m01: f32,

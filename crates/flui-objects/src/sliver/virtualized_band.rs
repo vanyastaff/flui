@@ -311,7 +311,7 @@ where
             // from the `#[non_exhaustive]` forward-compat wildcard on purpose — the
             // arm exists to document the per-variant semantics, and merging it into
             // `_` would silently absorb future `ChildLayout` variants.
-            #[allow(clippy::match_same_arms)]
+            #[expect(clippy::match_same_arms)]
             match result {
                 ChildLayout::Scheduled | ChildLayout::Ready(_) => {
                     // Scheduled = parked for next frame (v1 next-frame backend).

@@ -495,7 +495,7 @@ fn navigation_destination_states(selected: bool, enabled: bool) -> WidgetStates 
 
 /// Builds one destination's `Expanded(MergeSemantics(Semantics(InkWell(...))))`
 /// subtree — see the module docs for the layout/overlay/semantics shape.
-#[allow(clippy::too_many_arguments, reason = "internal helper, not public API")]
+#[expect(clippy::too_many_arguments, reason = "internal helper, not public API")]
 fn build_destination(
     colors: &ColorScheme,
     indicator_color: Color,

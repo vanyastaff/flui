@@ -335,7 +335,7 @@ mod tests {
     /// Test implementation of ClipContext for unit testing
     struct TestClipContext {
         canvas: Canvas,
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         clip_calls: Vec<String>,
     }
 

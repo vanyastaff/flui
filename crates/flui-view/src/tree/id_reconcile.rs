@@ -118,7 +118,6 @@ use crate::view::{ElementBase, View};
 // Five Flutter-parity phases + per-disposition ReconcileEvent emission push the
 // body past 100 lines; splitting would scramble the 1:1 mapping to the keyed
 // reconcile algorithm (Flutter's `Element.updateChildren`).
-#[allow(clippy::too_many_lines)]
 pub(crate) fn reconcile_children_by_id(
     tree: &mut ElementTree,
     parent_id: ElementId,

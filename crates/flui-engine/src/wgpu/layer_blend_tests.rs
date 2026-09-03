@@ -303,11 +303,6 @@ mod gpu_tests {
     fn oracle_premultiplied(src_straight: Color, dst_straight: Color, mode: BlendMode) -> [u8; 4] {
         let result = src_straight.blend(dst_straight, mode);
         let [r, g, b, a] = result.to_f32_array();
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "value clamped to [0.0, 1.0] * 255.0, rounds into [0, 255]; truncation is safe"
-        )]
         let to_u8 = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
         [to_u8(r * a), to_u8(g * a), to_u8(b * a), to_u8(a)]
     }
@@ -675,20 +670,12 @@ mod gpu_tests {
         );
 
         let half_width = SURFACE_WIDTH / 2;
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "SURFACE_WIDTH is a small u32; no precision loss at this scale"
-        )]
         let left_bounds = Rect::from_xywh(
             Pixels(0.0),
             Pixels(0.0),
             Pixels(half_width as f32),
             Pixels(SURFACE_HEIGHT as f32),
         );
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "SURFACE_WIDTH is a small u32; no precision loss at this scale"
-        )]
         let right_bounds = Rect::from_xywh(
             Pixels(half_width as f32),
             Pixels(0.0),

@@ -197,7 +197,7 @@ fn field_border_decoration() -> BoxDecoration<Pixels> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
+    #![expect(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
 
     use super::*;
 

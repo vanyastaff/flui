@@ -86,11 +86,6 @@ pub(super) struct DrawBatcher {
 
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
 // color channels, and buffer indices. These truncations are intentional.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 impl DrawBatcher {
     /// Construct a `DrawBatcher` with the same cache capacities used by the
     /// original `WgpuPainter::with_shared_device`.

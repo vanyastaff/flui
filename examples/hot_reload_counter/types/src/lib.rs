@@ -17,7 +17,7 @@ pub const TYPE_FINGERPRINT: u64 = 0xC007_EA01;
 
 type CounterBuildFn = fn(WorkerBuildEnv<'_>, &CounterAppState, &CounterApp) -> BoxedView;
 
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 fn get_counter_build() -> CounterBuildFn {
     // `None` is now a clean "worker unavailable" signal (the registry is
     // pruned before an image unmaps, and a layout-fingerprint change after a

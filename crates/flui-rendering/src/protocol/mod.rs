@@ -56,7 +56,7 @@
 pub mod box_protocol;
 mod capabilities;
 mod into_render_object;
-#[allow(clippy::module_inception)] // protocol.rs inside protocol/ contains core Protocol trait
+#[expect(clippy::module_inception)] // protocol.rs inside protocol/ contains core Protocol trait
 mod protocol;
 pub mod sliver_protocol;
 

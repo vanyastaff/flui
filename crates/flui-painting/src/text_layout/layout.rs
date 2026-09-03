@@ -307,7 +307,7 @@ impl TextLayout {
     /// Worst case the fit loop re-shapes once per dropped glyph on the
     /// last line — bounded by that line's glyph count; typical case is
     /// one extra shape.
-    #[allow(clippy::too_many_arguments)] // mirrors the shaping input surface; callers are the two crate-internal wrappers
+    #[expect(clippy::too_many_arguments)] // mirrors the shaping input surface; callers are the two crate-internal wrappers
     pub fn with_overflow(
         text: &str,
         style: Option<&TextStyle>,
@@ -343,7 +343,7 @@ impl TextLayout {
     /// Truncation (`max_lines`/`ellipsis`) slices the SPANS, so a
     /// truncated rich layout keeps the styling of everything it kept;
     /// the ellipsis inherits the last kept span's attributes.
-    #[allow(clippy::too_many_arguments)] // mirrors the shaping input surface
+    #[expect(clippy::too_many_arguments)] // mirrors the shaping input surface
     pub fn from_spans(
         spans: Vec<(String, Option<TextStyle>)>,
         default_style: Option<&TextStyle>,
@@ -371,16 +371,13 @@ impl TextLayout {
                         // Per-span font size/line height ride on the attrs
                         // (cosmic's per-span Metrics); spans without one
                         // inherit the buffer-level default.
-                        #[allow(clippy::cast_possible_truncation)]
                         // f64 style sizes → f32 shaping space
                         if let Some(size) = style.font_size.map(|s| s as f32) {
-                            #[allow(clippy::cast_possible_truncation)]
                             let span_line_height =
                                 style.height.map_or(size * 1.2, |h| h as f32 * size);
                             attrs = attrs.metrics(Metrics::new(size, span_line_height));
                             // cosmic letter spacing is in EM; ours is in
                             // logical px.
-                            #[allow(clippy::cast_possible_truncation)]
                             if let Some(spacing) = style.letter_spacing.map(|s| s as f32)
                                 && size > 0.0
                             {
@@ -767,7 +764,6 @@ impl TextLayout {
     }
 
     /// Returns bounding boxes for the given text range.
-    #[allow(clippy::needless_pass_by_value)]
     pub fn get_boxes_for_range(&self, range: TextRange) -> Vec<TextBox> {
         let mut boxes = Vec::new();
 

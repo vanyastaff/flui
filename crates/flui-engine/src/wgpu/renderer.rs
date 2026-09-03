@@ -451,7 +451,7 @@ struct RawHandles {
 // outlives every window built from it (argued per-platform above; Win32
 // and AppKit carry no display-handle data to invalidate in the first
 // place).
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl Send for RawHandles {}
 
 #[cfg(test)]
@@ -512,9 +512,7 @@ pub struct Renderer {
     // because `wgpu::Surface<'static>` and `wgpu::Device` depend on them. They
     // are not read post-init in production code; the `#[allow(dead_code)]`
     // markers document that the keep-alive shape is intentional.
-    #[allow(dead_code)]
     instance: wgpu::Instance,
-    #[allow(dead_code)]
     adapter: wgpu::Adapter,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -744,7 +742,7 @@ impl Renderer {
         // `Instance::create_surface_unsafe` require the handles to stay valid
         // for the lifetime of the resulting `Surface<'static>`; that invariant
         // is upheld because flui-app's `App` owns the window for its lifetime.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         let surface = unsafe {
             let surface_target = wgpu::SurfaceTargetUnsafe::RawHandle {
                 raw_display_handle,
@@ -1022,7 +1020,7 @@ impl Renderer {
     /// Used by C2 (forced-intermediate GPU correctness) and C3 (byte-identity)
     /// tests to exercise the intermediate path on COPY_SRC-capable hardware.
     #[cfg(test)]
-    #[allow(
+    #[expect(
         dead_code,
         reason = "called from live DX12 GPU tests run by the user, not from automated unit tests"
     )]
@@ -2045,9 +2043,7 @@ impl Renderer {
     /// 3. Apply Dual Kawase blur via `OffscreenRenderer::render_blur`
     /// 4. Queue blurred result for compositing back to the surface
     /// 5. Render children on top
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
+    #[expect(
         clippy::too_many_arguments,
         reason = "backdrop-filter pipeline needs the surface texture/view and layer-tree context to do its job — splitting these into a helper struct adds indirection without clarity"
     )]
@@ -2164,11 +2160,6 @@ impl Renderer {
     /// the same precedented limitation `render_shader_mask`'s `DisplayList`
     /// path already has (`backend.rs`, "no OffscreenRenderer, rendering child
     /// without mask").
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "device-pixel dimensions are `.max(1.0)`-clamped before the cast and bounded by GPU texture-size limits — matches the identical cast pattern already reviewed in `Backend::render_shader_mask`"
-    )]
     fn handle_shader_mask(
         sm_layer: &flui_layer::ShaderMaskLayer,
         node: &flui_layer::tree::LayerNode,
@@ -3500,11 +3491,6 @@ mod tests {
         // CPU oracle: what Multiply should produce.
         let blend_result = source_orange.blend(backdrop_color, BlendMode::Multiply);
         let [br, bg, bb, ba] = blend_result.to_f32_array();
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "clamped to [0,1]*255 range; truncation is correct and safe"
-        )]
         let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let multiply_oracle = [to_u8(br * ba), to_u8(bg * ba), to_u8(bb * ba), to_u8(ba)];
 

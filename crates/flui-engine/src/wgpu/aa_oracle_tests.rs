@@ -214,10 +214,6 @@ mod oracle_unit_tests {
     fn oracle_interior_coverage_is_one() {
         let coverage = analytic_coverage(0.0, 0.0, |px, py| inside_rect(px, py, 50.0, 25.0));
         // All 8×8 sub-samples land inside the shape → sum/64 is exactly 1.0 (no float rounding).
-        #[allow(
-            clippy::float_cmp,
-            reason = "analytic oracle: all sub-samples inside → coverage is exactly 1.0"
-        )]
         {
             assert_eq!(coverage, 1.0, "interior pixel must have full coverage");
         }
@@ -228,10 +224,6 @@ mod oracle_unit_tests {
     fn oracle_exterior_coverage_is_zero() {
         let coverage = analytic_coverage(60.0, 0.0, |px, py| inside_rect(px, py, 50.0, 25.0));
         // All 8×8 sub-samples land outside the shape → sum/64 is exactly 0.0.
-        #[allow(
-            clippy::float_cmp,
-            reason = "analytic oracle: all sub-samples outside → coverage is exactly 0.0"
-        )]
         {
             assert_eq!(coverage, 0.0, "exterior pixel must have zero coverage");
         }
@@ -316,10 +308,6 @@ mod oracle_unit_tests {
         let coverage = analytic_coverage(-20.0, 0.0, |px, py| {
             inside_arc(px, py, 40.0, 0.0, 3.0 * std::f32::consts::FRAC_PI_2)
         });
-        #[allow(
-            clippy::float_cmp,
-            reason = "analytic oracle: all sub-samples inside → coverage exactly 1.0"
-        )]
         {
             assert_eq!(coverage, 1.0, "arc interior pixel must have full coverage");
         }
@@ -333,10 +321,6 @@ mod oracle_unit_tests {
         let coverage = analytic_coverage(60.0, 0.0, |px, py| {
             inside_arc(px, py, 40.0, 0.0, std::f32::consts::FRAC_PI_2)
         });
-        #[allow(
-            clippy::float_cmp,
-            reason = "analytic oracle: all sub-samples outside → coverage exactly 0.0"
-        )]
         {
             assert_eq!(coverage, 0.0, "arc exterior pixel must have zero coverage");
         }
@@ -354,10 +338,6 @@ mod oracle_unit_tests {
             inside_arc(px, py, r, 0.0, 2.0 * std::f32::consts::PI)
         });
         // The center pixel is fully inside the circle → coverage must be 1.0.
-        #[allow(
-            clippy::float_cmp,
-            reason = "analytic oracle: all sub-samples inside → coverage exactly 1.0"
-        )]
         {
             assert_eq!(
                 arc_cov, 1.0,
@@ -494,12 +474,6 @@ mod oracle_unit_tests {
 // All intentional: pixel-coordinate and alpha-value casts (f32 → u8 / usize)
 // are clamped or derived from fixed [0,1] oracle values; sign loss is impossible
 // (oracle returns non-negative; pixel coords are positive screen positions).
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "oracle alpha: f32 in [0,1]×255 → [0,255] fits u8; pixel coords are non-negative \
-              device-px — both casts are analytically safe"
-)]
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gpu_tests {
     use std::f32::consts::PI;
@@ -669,10 +643,6 @@ mod gpu_tests {
             let readback_alpha = pixels[*pixel_idx][3];
             let oracle_alpha = (oracle_coverage * 255.0).round() as u8;
             let diff = (i16::from(readback_alpha) - i16::from(oracle_alpha)).unsigned_abs();
-            #[allow(
-                clippy::cast_possible_truncation,
-                reason = "diff of two u8-range values fits in u8"
-            )]
             let diff_u8 = diff as u8;
             if diff_u8 > CALIBRATION_TOLERANCE_U8 {
                 failed_count += 1;
@@ -735,10 +705,6 @@ mod gpu_tests {
                 };
             let oracle_alpha = (oracle_coverage * 255.0).round() as u8;
             let diff = (i16::from(hard_aliased_alpha) - i16::from(oracle_alpha)).unsigned_abs();
-            #[allow(
-                clippy::cast_possible_truncation,
-                reason = "diff of two u8-range values fits in u8"
-            )]
             let diff_u8 = diff as u8;
             if diff_u8 > CALIBRATION_TOLERANCE_U8 {
                 exceeded_count += 1;
@@ -767,12 +733,6 @@ mod gpu_tests {
     ///
     /// After the reroute: the affine SDF path produces smooth AA → passes.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn o3_rotated_rect_boundary_matches_oracle() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -981,10 +941,6 @@ mod gpu_tests {
             let readback_alpha = pixels[*pixel_idx][3];
             let oracle_alpha = (oracle_coverage * 255.0).round() as u8;
             let diff = (i16::from(readback_alpha) - i16::from(oracle_alpha)).unsigned_abs();
-            #[allow(
-                clippy::cast_possible_truncation,
-                reason = "diff of two u8-range values fits in u8"
-            )]
             let diff_u8 = diff as u8;
             if diff_u8 > CALIBRATION_TOLERANCE_U8 {
                 failed_count += 1;
@@ -1056,12 +1012,6 @@ mod gpu_tests {
     /// Additionally, the test verifies that the interior is fully opaque and an
     /// exterior point is transparent (C3 properties), consolidating three checks.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn c1_circle_aa_is_radius_independent() {
         // We test one radius per isolated surface to keep the test self-contained
         // and avoid shape overlap. Use r=12 and r=50 on the 128×128 surface (r=200
@@ -1166,12 +1116,6 @@ mod gpu_tests {
     /// uses the wrong local→device mapping, the boundary will be in the wrong
     /// position and the oracle match will fail.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn c2_rotated_ellipse_boundary_matches_oracle() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -1264,12 +1208,6 @@ mod gpu_tests {
     /// This guards against the fringe quad expansion producing visible artifacts
     /// outside the shape boundary.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn c3_circle_interior_opaque_exterior_transparent() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -1367,12 +1305,6 @@ mod gpu_tests {
     /// identity scale and cannot catch this; production hits it on every HiDPI
     /// (DPR>1) display, which pushes a root `scale(dpr)` into the painter CTM.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn c4_scaled_circle_center_not_double_scaled() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -1457,10 +1389,6 @@ mod gpu_tests {
     /// byte-identity vs `origin/main` is further corroborated by the unchanged
     /// 294-test GPU suite, which asserts exact axis-aligned pixel values.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "pixel index → f32 device coordinate over a 128×128 test surface"
-    )]
     fn o5_axis_aligned_src_over_rect_and_rrect_byte_identical() {
         let (device, queue) = acquire_test_device_and_queue();
 
@@ -1673,11 +1601,6 @@ mod gpu_tests {
     /// `sdRoundedBox`'s quadrant `select`; production rrects use distinct
     /// per-corner radii, so this pins the `[tl,tr,br,bl]` → screen-corner mapping.
     #[test]
-    #[allow(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        reason = "fixed positive device-pixel coordinates on a 128² test surface"
-    )]
     fn o7_non_uniform_corner_radii_map_to_correct_corners() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface, view) = create_render_surface(&device);
@@ -1749,12 +1672,6 @@ mod gpu_tests {
     /// The arc used is a 270° sweep (wide arc) so most of the circle boundary
     /// is present; the angular edges are kept away from the boundary sample pixels.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn a1_arc_radial_aa_is_radius_independent() {
         for radius in [12.0_f32, 50.0_f32] {
             let (device, queue) = acquire_test_device_and_queue();
@@ -1872,12 +1789,6 @@ mod gpu_tests {
     /// If the arc routing incorrectly uses the old axis-aligned path (scale+translate
     /// only), the boundary will be at the wrong position and this test will fail.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn a2_rotated_arc_boundary_matches_oracle() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -2020,12 +1931,6 @@ mod gpu_tests {
     /// Note: C1–C3 use identity scale and cannot catch this; production hits it on
     /// every HiDPI (DPR>1) display.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn a3_scaled_arc_center_not_double_scaled() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -2143,7 +2048,7 @@ mod gpu_tests {
     /// Uses three half-plane tests.  The winding order must be consistent —
     /// either all CCW or all CW — so that the signs agree.  The oracle
     /// tests both orientations and accepts if either fires.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn inside_triangle(
         px: f32,
         py: f32,
@@ -2185,12 +2090,6 @@ mod gpu_tests {
     /// of those pixels must carry partial alpha (> 5, < 250) — the strict
     /// majority (>50%) guarantees the assertion cannot be vacuous.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn p1_ssaa_polygon_boundary_has_partial_alpha() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -2287,12 +2186,6 @@ mod gpu_tests {
     /// This guards against the SSAA path ignoring the `PathFillType` carried by
     /// the tessellated geometry (which lives in the `SsaaPathOp::segment`).
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn p2_ssaa_fill_rule_honored_nonzero_vs_evenodd() {
         use flui_types::painting::PathFillType;
 
@@ -2440,12 +2333,6 @@ mod gpu_tests {
     /// A hard-aliased fallback would produce binary (0/255) pixels at any scale
     /// and would have zero partial-alpha pixels — this test would catch that.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn p3_ssaa_aa_band_scale_invariant() {
         // Same device-space triangle at two scales.
         let cx = SURFACE_WIDTH as f32 / 2.0;
@@ -2556,12 +2443,6 @@ mod gpu_tests {
     /// here — only existence of partial alpha), so it cannot degenerate to "check
     /// nothing" even if the oracle boundary is small.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn p4_anti_mvp_srcover_fill_has_partial_alpha_at_boundary() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -3861,12 +3742,6 @@ mod gpu_tests {
     /// at start_angle=0 (the +X ray). The pixels immediately above and below the
     /// start ray must have partial alpha — not 0 or 255.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
-    )]
     fn a4_arc_angular_edges_are_antialiased() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -3970,12 +3845,6 @@ mod gpu_tests {
     /// pixels are hard 0 or 255 — no partial alpha. SSAA produces genuine fractional
     /// alpha at every non-axis-aligned edge. The same kite geometry as p4 is used.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index arithmetic over a small fixed-size test surface"
-    )]
     fn pd1_tile_safe_non_srcover_path_has_partial_alpha_at_boundary() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -4047,12 +3916,6 @@ mod gpu_tests {
     /// Uses an unrotated rrect with 10 px corner radii — the curved corner
     /// band is the best probe for SSAA sub-pixel coverage vs hard aliasing.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index arithmetic over a small fixed-size test surface"
-    )]
     fn pd3_non_srcover_basic_shape_has_partial_alpha_at_boundary() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -4133,12 +3996,6 @@ mod gpu_tests {
     /// These pixels show partial alpha — proving SSAA ran AND the DstOut blend
     /// pipeline was used (SrcOver would yield alpha = 1 at the same positions).
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index arithmetic over a small fixed-size test surface"
-    )]
     fn pd2_tile_safe_non_srcover_over_opaque_backdrop_is_pixel_distinct_from_srcover() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -4235,12 +4092,6 @@ mod gpu_tests {
     /// non-SrcOver tile-safe modes; the dispatch is uniform (keyed by `mode`), so
     /// the remaining two share the verified code path.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index arithmetic over a small fixed-size test surface"
-    )]
     fn pd6_tile_safe_composite_matches_requested_blend_not_srcover() {
         let cx = SURFACE_WIDTH as f32 / 2.0;
         let cy = SURFACE_HEIGHT as f32 / 2.0;
@@ -4343,12 +4194,6 @@ mod gpu_tests {
     /// (both give `src`), so this test validates SSAA routing fires without
     /// requiring the per-mode composite pipeline (same rationale as PD1/PD3).
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index arithmetic over a small fixed-size test surface"
-    )]
     fn pd4_all_non_srcover_shape_producers_emit_partial_alpha() {
         // Helper: render `draw_fn` onto a fresh clear surface and count
         // partial-alpha pixels (3 < alpha < 252).
@@ -4520,12 +4365,6 @@ mod gpu_tests {
     ///
     /// These partial-alpha boundary pixels also confirm SSAA ran.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index arithmetic over a small fixed-size test surface"
-    )]
     fn pd6_xor_over_opaque_red_backdrop_is_not_srcover() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
@@ -4630,12 +4469,6 @@ mod gpu_tests {
     /// structurally equivalent to p4_anti_mvp_srcover_fill_has_partial_alpha_at_boundary
     /// but documents its role as a regression gate specifically for PR-4.
     #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "pixel index arithmetic over a small fixed-size test surface"
-    )]
     fn pd5_srcover_path_still_has_partial_alpha_after_pr4() {
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_render_surface(&device);
