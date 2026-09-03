@@ -7210,30 +7210,34 @@ fn harness_sliver_list_scroll_extent_equals_virtualizer_estimate() {
 fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
     // Two-pass test for the anchor-correction state machine.
     //
-    // Setup: 10-item list (48 px estimate), item 0 pre-seeded at 60 px.
+    // Setup: 10-item list (48 px seed estimate), item 0 pre-seeded at 60 px.
     // With scroll=100 the viewport tight-visible range starts at item 2
     // (estimated start 96 px < 100 < 144 px = its end) → anchor=(2, 0).
     // Item 0 is in the cache-above band (cache_before = 100 px, cache
     // starts at 0).  set_measured(0, 60, (2,0)) accumulates pending=12.
-    // Forward scroll (last=0 → current=100) → correction EMITTED.
+    // The band's only measured child is 60 px, so the hint for the nine
+    // unmeasured items adapts 48 → 60; item 1 sits above the anchor, so the
+    // anchor's offset moves 108 → 120 and that +12 joins the accumulator:
+    // pending=24.  Forward scroll (last=0 → current=100) → correction EMITTED.
     //
-    // The viewport absorbs the correction in a three-pass correction loop:
-    //   Pass 1 (scroll=100): correction=12 fires → correct_by(12) → pixels=112.
-    //   Pass 2 (scroll=112): no new correction; apply_content_dimensions clamps
-    //     pixels 112→92 (max_scroll = total_extent(492) − viewport(400) = 92),
-    //     returns false → re-run.
-    //   Pass 3 (scroll=92): accepted; last_scroll_offset finalised to 92.
-    // Observable: item 0's paint dy = layout_offset(0) − scroll(92) = −92 px.
+    // The viewport absorbs the correction in its correction loop:
+    //   Pass 1 (scroll=100): correction=24 fires → correct_by(24) → pixels=124.
+    //   Pass 2 (scroll=124): no new correction; total_extent is now
+    //     60 + 9 × 60 = 600, max_scroll = 600 − 400 = 200 ≥ 124, so
+    //     apply_content_dimensions accepts; last_scroll_offset finalised to 124.
+    // Observable: item 0's paint dy = layout_offset(0) − scroll(124) = −124 px.
     //
     // Pass 2 of this test: grow item 0 to 84 px, scroll BACKWARD to 72 px.
-    // Virtualizer item 0 is now Measured at 60 px.  With scroll=72,
-    // visible range starts at item 1 (item 0 ends at 60 < 72) → anchor=(1,0).
-    // set_measured(0, 84, (1,0)) accumulates pending=24.  But backward
-    // scroll (72 < 92 = last_scroll_offset) → SUPPRESSED.  Viewport keeps
-    // scroll=72.  Item 0 paint dy = 0 − 72 = −72 px.
+    // Virtualizer item 0 is now Measured at 60 px.  With scroll=72 and the
+    // 60 px hint, visible range starts at item 1 (item 0 ends at 60 < 72) →
+    // anchor=(1,0).  set_measured(0, 84, (1,0)) accumulates pending=24; the
+    // hint adapts 60 → 84 but nothing unmeasured sits above the anchor, so no
+    // further correction.  Backward scroll (72 < 124 = last_scroll_offset) →
+    // SUPPRESSED.  Viewport keeps scroll=72.  Item 0 paint dy = 0 − 72 = −72 px.
     //
     // Fails when anchor-correction is not wired, when forward/backward
-    // detection is inverted, or when the viewport's correction loop is broken.
+    // detection is inverted, when the adaptive hint stops feeding the
+    // accumulator, or when the viewport's correction loop is broken.
     let mut run = RenderTester::mount(viewport_with_scroll(
         100.0,
         sliver_node(RenderSliverList::new(10, 48.0))
@@ -7252,15 +7256,15 @@ fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
     let item0_id = run.id("item0");
     let vp_id = run.id("viewport");
 
-    // Pass 1 check: the 12 px forward correction was absorbed by the viewport.
-    // Correction loop: scroll 100→112 (correct_by), 112→92 (clamped by
-    // apply_content_dimensions, max_scroll=492-400=92), 92 accepted.
-    // Item 0 at layout_offset=0 with final scroll=92 gets paint dy = -92 px.
+    // Pass 1 check: the 24 px forward correction (12 px remeasure + 12 px
+    // adaptive re-hint of item 1) was absorbed by the viewport: scroll
+    // 100→124 (correct_by), accepted (max_scroll = 600 − 400 = 200).
+    // Item 0 at layout_offset=0 with final scroll=124 gets paint dy = -124 px.
     assert_eq!(
         run.offset(item0_id).dy,
-        px(-92.0),
-        "forward correction loop: scroll 100→112→92 (clamped); \
-         item 0 (layout_offset=0) must have dy=0-92=-92; got {:?}",
+        px(-124.0),
+        "forward correction loop: scroll 100→124 (remeasure + adaptive hint); \
+         item 0 (layout_offset=0) must have dy=0-124=-124; got {:?}",
         run.offset(item0_id).dy,
     );
 
@@ -7276,7 +7280,7 @@ fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
     });
     run.relayout();
 
-    // Pass 2 check: backward scroll (72 < 92 = last_scroll_offset) suppresses
+    // Pass 2 check: backward scroll (72 < 124 = last_scroll_offset) suppresses
     // the 24 px correction → viewport stays at scroll=72.  Item 0 at
     // layout_offset=0 gets paint dy = 0 - 72 = -72 px.
     assert_eq!(

@@ -25,8 +25,10 @@
 //! ```
 //!
 //! The child is therefore laid out **and painted in the same frame** the
-//! builder ran. This is deliberately *not* the one-frame-late shape lazy
-//! `SliverList` uses (see ADR-0017's rejected alternatives).
+//! builder ran. Lazy `SliverList` originally shipped one frame late (ADR-0017's
+//! rejected alternative for this widget); it has since adopted this same
+//! fixpoint — `service_child_requests` runs beside `service_layout_builders`
+//! in every pass — so both deferred-build seams now settle within the frame.
 //!
 //! # The first build has no constraints, and does not invent any
 //!

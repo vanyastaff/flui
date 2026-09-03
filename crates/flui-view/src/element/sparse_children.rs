@@ -7,7 +7,7 @@
 //! order, and disposes them when they scroll off. [`SparseChildren`] is that
 //! bookkeeping: a `logical index -> ElementId` map plus mount/evict operations
 //! that reuse [`ElementTree::insert`]/[`ElementTree::remove`] and stamp each
-//! freshly-built child's render node with its [`SliverMultiBoxAdaptorParentData`]
+//! freshly-built child's render node with its [`SliverMultiBoxAdaptorParentData`](flui_rendering::parent_data::SliverMultiBoxAdaptorParentData)
 //! index. Stamping is what lets the lazy sliver recover `logical -> dense slot`
 //! from parent-data alone (ADR-0003), so children may be attached in any order —
 //! FLUI has no equivalent of Flutter's `_currentBeforeChild` insertion cursor.
@@ -17,7 +17,6 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Keys;
 
 use flui_foundation::{ElementId, RenderId};
-use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::pipeline::PipelineCell;
 
 use crate::BoxedView;
@@ -294,36 +293,58 @@ fn resident_type_matches(tree: &ElementTree, existing: ElementId, new: &dyn View
 }
 
 // Called from `SparseChildren::ensure` via the lazy-sliver adaptor element.
-/// Stamp `child`'s render node with its sliver logical index, so the lazy sliver
-/// can map `logical -> dense slot` from parent-data alone. Fresh render nodes
-/// start with `parent_data = None`; this seeds a full
-/// [`SliverMultiBoxAdaptorParentData`] carrying the index.
+/// Stamp the render node(s) that carry `child`'s sliver logical index — the
+/// first render descendants reachable from `child` without crossing another
+/// render element — so the lazy sliver can map `logical -> dense slot` from
+/// parent-data alone.
 ///
-/// A direct sliver child always owns a render node by the time `insert` returns
-/// (`RenderBehavior::on_mount` mints it); the debug assertion catches a future
-/// regression where a non-render child is fed in by mistake.
+/// This is the *relocation* half of the stamp. A freshly-mounted render
+/// object is stamped at adoption by `RenderBehavior::on_mount`, reading the
+/// `sliver_slot` the slab seeded on insert (Flutter's `didAdoptChild`); a
+/// subtree that arrives through GlobalKey relocation never re-mounts, so its
+/// already-built render descendants are found here and stamped explicitly.
+/// A fresh composite child (a bare `Text`, a `StatefulView`) has no render
+/// descendant yet at `ensure` time — the walk stamps nothing, and the
+/// adopt-time path covers it when the follow-up build expands the subtree.
 fn stamp_logical_index(
     tree: &ElementTree,
     pipeline: &PipelineCell,
     child: ElementId,
     logical_index: usize,
 ) {
-    let render_id: Option<RenderId> = tree.get(child).and_then(|node| node.element().render_id());
-    let Some(render_id) = render_id else {
-        debug_assert!(
-            false,
-            "a lazy sliver child must own a render node to carry its logical \
-             index; logical_index={logical_index} produced no render id"
-        );
+    let render_ids = first_render_descendants(tree, child);
+    if render_ids.is_empty() {
         return;
-    };
+    }
     pipeline.with_mut(|owner| {
-        if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
-            node.set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(
+        for render_id in render_ids {
+            crate::element::behavior_commons::stamp_sliver_logical_index(
+                owner,
+                render_id,
                 logical_index,
-            )));
+            );
         }
     });
+}
+
+/// The render ids of the first render elements reachable from `root`
+/// (inclusive) walking down through composite elements only. A render
+/// element stops the walk on its branch: its own children attach under it,
+/// not under the sliver.
+fn first_render_descendants(tree: &ElementTree, root: ElementId) -> Vec<RenderId> {
+    let mut found = Vec::new();
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        let Some(node) = tree.get(id) else {
+            continue;
+        };
+        if let Some(render_id) = node.element().render_id() {
+            found.push(render_id);
+        } else {
+            stack.extend(node.child_ids().iter().copied());
+        }
+    }
+    found
 }
 
 #[cfg(test)]

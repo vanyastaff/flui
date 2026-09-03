@@ -921,3 +921,104 @@ mod tree_edits {
         assert_eq!(t.seek_offset(20.0), (3, 0.0));
     }
 }
+
+// ============================================================================
+// Adaptive estimate — re-hinting unmeasured items keeps the anchor stationary
+// ============================================================================
+mod adaptive_estimate {
+    use super::*;
+
+    #[test]
+    fn measured_mean_tracks_set_measured_and_invalidation() {
+        let mut v = Virtualizer::new(10, 100.0);
+        assert_eq!(v.measured_mean(), None);
+        v.set_measured(0, 10.0, (0, 0.0));
+        v.set_measured(1, 30.0, (0, 0.0));
+        assert_eq!(v.measured_mean(), Some(20.0));
+        // Re-measuring replaces, it does not accumulate.
+        v.set_measured(1, 10.0, (0, 0.0));
+        assert_eq!(v.measured_mean(), Some(10.0));
+        // Shrinking the count off a measured tail drops it from the mean.
+        v.set_measured(9, 90.0, (0, 0.0));
+        v.set_count(9);
+        assert_eq!(v.measured_mean(), Some(10.0));
+        v.invalidate_from(0);
+        assert_eq!(v.measured_mean(), None);
+    }
+
+    #[test]
+    fn adapt_default_estimate_corrects_by_the_anchor_offset_delta() {
+        let mut v = Virtualizer::new(10, 100.0);
+        for index in 0..4 {
+            v.set_measured(index, 10.0, (0, 0.0));
+        }
+        // Anchor at item 5: items 0..4 are measured (10 each), item 4 is
+        // unmeasured at the 100 hint → offset 140. Re-hinting to the mean
+        // (10) moves the anchor to 50; the correction is that delta.
+        assert_eq!(v.offset_of(5), 140.0);
+        let correction = v.adapt_default_estimate(10.0, (5, 0.0));
+        assert_eq!(correction, Some(AnchorCorrection { delta: -90.0 }));
+        assert_eq!(v.offset_of(5), 50.0);
+        assert_eq!(v.default_estimate(), 10.0);
+        assert_eq!(v.anchor_item(), (5, 0.0));
+        // Total extent follows the new hint for every unmeasured item.
+        assert_eq!(v.total_extent(), Extent::Estimated(40.0 + 6.0 * 10.0));
+    }
+
+    #[test]
+    fn adapt_default_estimate_with_nothing_unmeasured_above_the_anchor_owes_no_correction() {
+        let mut v = Virtualizer::new(10, 100.0);
+        for index in 0..5 {
+            v.set_measured(index, 10.0, (0, 0.0));
+        }
+        assert_eq!(v.adapt_default_estimate(10.0, (5, 0.0)), None);
+        assert_eq!(v.offset_of(5), 50.0);
+    }
+
+    #[test]
+    fn adapt_default_estimate_is_a_no_op_for_an_unchanged_estimate() {
+        let mut v = Virtualizer::new(10, 100.0);
+        v.set_measured(0, 10.0, (0, 0.0));
+        assert_eq!(v.adapt_default_estimate(100.0, (5, 0.0)), None);
+        assert_eq!(v.offset_of(5), 410.0);
+    }
+
+    #[test]
+    fn adapt_default_estimate_refuses_an_out_of_range_anchor_but_still_rehints() {
+        let mut v = Virtualizer::new(4, 100.0);
+        v.set_measured(0, 10.0, (0, 0.0));
+        assert_eq!(v.adapt_default_estimate(10.0, (9, 0.0)), None);
+        assert_eq!(v.default_estimate(), 10.0);
+        assert_eq!(v.offset_of(3), 30.0);
+    }
+}
+
+mod band_local_mean {
+    use super::*;
+
+    #[test]
+    fn measured_mean_in_averages_only_the_range_and_only_measured_items() {
+        let mut v = Virtualizer::new(20, 100.0);
+        // A tall region of history that a jump leaves behind...
+        for index in 0..5 {
+            v.set_measured(index, 500.0, (0, 0.0));
+        }
+        // ...and the band the jump landed in, half of it measured.
+        for index in 10..13 {
+            v.set_measured(index, 2.0, (10, 0.0));
+        }
+        assert_eq!(v.measured_mean_in(10..16), Some(2.0));
+        assert_eq!(v.measured_mean_in(0..5), Some(500.0));
+        assert_eq!(v.measured_mean_in(13..20), None);
+        // A zero-extent placeholder inside the band does not drag the hint
+        // down; a band of nothing but placeholders has no hint to give.
+        v.set_measured(13, 0.0, (10, 0.0));
+        assert_eq!(v.measured_mean_in(10..16), Some(2.0));
+        assert_eq!(v.measured_mean_in(13..14), None);
+        // The all-history mean would still say "tall" (the placeholder counts
+        // there: it is a real measurement, just not a useful hint).
+        assert_eq!(v.measured_mean(), Some((2500.0 + 6.0) / 9.0));
+        // A range past the end is clamped, not a panic.
+        assert_eq!(v.measured_mean_in(12..40), Some(2.0));
+    }
+}

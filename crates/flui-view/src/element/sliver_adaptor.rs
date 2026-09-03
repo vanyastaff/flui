@@ -601,6 +601,9 @@ where
     fn render_id(&self) -> Option<RenderId> {
         self.inner.render_id()
     }
+    fn hosts_sparse_children(&self) -> bool {
+        true
+    }
 }
 
 // ============================================================================
@@ -1042,6 +1045,9 @@ where
 
     fn render_id(&self) -> Option<RenderId> {
         self.inner.render_id()
+    }
+    fn hosts_sparse_children(&self) -> bool {
+        true
     }
 }
 

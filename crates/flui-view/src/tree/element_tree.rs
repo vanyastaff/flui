@@ -776,16 +776,22 @@ impl ElementTree {
         // slab-resident, so that propagate-before-mount ordering moves
         // here: read `pipeline_owner()` / `child_render_id()` off the
         // parent node, hand them to the child, then mount.
-        let (parent_depth, parent_owner, child_parent_render_id, parent_inherited) =
-            match self.get(parent) {
-                Some(node) => (
-                    node.depth,
-                    node.element().pipeline_owner(),
-                    node.element().child_render_id(),
-                    Arc::clone(&node.inherited),
-                ),
-                None => (0, None, None, Arc::new(HashMap::new())),
-            };
+        let (
+            parent_depth,
+            parent_owner,
+            child_parent_render_id,
+            child_sliver_slot,
+            parent_inherited,
+        ) = match self.get(parent) {
+            Some(node) => (
+                node.depth,
+                node.element().pipeline_owner(),
+                node.element().child_render_id(),
+                node.element().child_sliver_slot(slot),
+                Arc::clone(&node.inherited),
+            ),
+            None => (0, None, None, None, Arc::new(HashMap::new())),
+        };
 
         if let Some(pipeline_owner) = parent_owner {
             element.element_mut().set_pipeline_owner(pipeline_owner);
@@ -793,6 +799,7 @@ impl ElementTree {
         element
             .element_mut()
             .set_parent_render_id(child_parent_render_id);
+        element.element_mut().set_sliver_slot(child_sliver_slot);
 
         let mut node = ElementNode::new(element, Some(parent), slot);
         node.depth = parent_depth + 1;
@@ -1304,18 +1311,20 @@ impl ElementTree {
             let Some(node) = self.get(id) else {
                 continue;
             };
-            let (parent_map, depth, parent_render_id) = match node.parent {
+            let node_slot = node.slot;
+            let (parent_map, depth, parent_render_id, sliver_slot) = match node.parent {
                 Some(parent_id) => self.get(parent_id).map_or_else(
-                    || (Arc::new(HashMap::new()), 0, None),
+                    || (Arc::new(HashMap::new()), 0, None, None),
                     |parent| {
                         (
                             Arc::clone(&parent.inherited),
                             parent.depth + 1,
                             parent.element().child_render_id(),
+                            parent.element().child_sliver_slot(node_slot),
                         )
                     },
                 ),
-                None => (Arc::new(HashMap::new()), 0, None),
+                None => (Arc::new(HashMap::new()), 0, None, None),
             };
             let scope = {
                 let node = self.get(id).expect("id resolved at loop top");
@@ -1325,6 +1334,7 @@ impl ElementTree {
             node.inherited = scope;
             node.depth = depth;
             node.element_mut().set_parent_render_id(parent_render_id);
+            node.element_mut().set_sliver_slot(sliver_slot);
             stack.extend_from_slice(&node.child_ids);
         }
     }
@@ -2090,6 +2100,9 @@ fn retake_inactive_global_key(
     let child_parent_render_id = tree
         .get(new_parent)
         .and_then(|node| node.element().child_render_id());
+    let child_sliver_slot = tree
+        .get(new_parent)
+        .and_then(|node| node.element().child_sliver_slot(new_slot));
 
     // Route through the staleness-checked accessor. The candidate came from the
     // live GlobalKey registry and was soft-removed (slot kept, generation NOT
@@ -2101,6 +2114,7 @@ fn retake_inactive_global_key(
         node.depth = parent_depth + 1;
         node.element_mut()
             .set_parent_render_id(child_parent_render_id);
+        node.element_mut().set_sliver_slot(child_sliver_slot);
     }
 
     // Reactivate the whole subtree. Deactivation released every inherited
@@ -2240,9 +2254,14 @@ fn retake_active_global_key(
     }
     detach_render_relocation(&mut relocation);
 
-    let (parent_depth, child_parent_render_id) = tree.get(new_parent).map_or((0, None), |node| {
-        (node.depth(), node.element().child_render_id())
-    });
+    let (parent_depth, child_parent_render_id, child_sliver_slot) =
+        tree.get(new_parent).map_or((0, None, None), |node| {
+            (
+                node.depth(),
+                node.element().child_render_id(),
+                node.element().child_sliver_slot(new_slot),
+            )
+        });
 
     tree.deactivate_subtree(candidate_id, owner);
     {
@@ -2252,6 +2271,7 @@ fn retake_active_global_key(
         node.depth = parent_depth + 1;
         node.element_mut()
             .set_parent_render_id(child_parent_render_id);
+        node.element_mut().set_sliver_slot(child_sliver_slot);
     }
     tree.activate_subtree(candidate_id, owner);
     // Deactivation above synchronously released dependency edges for the

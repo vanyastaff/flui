@@ -329,10 +329,11 @@ impl HeadlessBinding {
             let layer_tree = build_owner
                 .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
                 .expect("the bootstrap frame must succeed");
-            // Same trailing step every pumped frame's pipeline runs: drain the
-            // lazy-sliver build requests and retain bands layout emitted. A
-            // no-op when no lazy sliver is mounted; without it the bootstrap's
-            // pipeline step would not be the one `pump_frame` runs.
+            // Same trailing step every pumped frame's pipeline runs: the
+            // safety net for a frame that hit the fixpoint's pass bound (the
+            // loop itself services lazy-sliver requests between passes). A
+            // no-op on a converged frame; without it the bootstrap's pipeline
+            // step would not be the one `pump_frame` runs.
             build_owner.service_child_requests(&mut tree, &pipeline_owner);
             layer_tree
         });

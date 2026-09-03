@@ -366,6 +366,14 @@ impl LaidOut {
         self.child(id, 0)
     }
 
+    /// The laid-out size of a render node, or `None` for a node that exists
+    /// but has not been laid out yet — a lazy child built by the frame's
+    /// post-paint safety net and waiting for the next frame, say.
+    pub fn try_size(&self, id: RenderId) -> Option<Size> {
+        self.pipeline_owner
+            .with(|owner| inspect::box_geometry(owner, id))
+    }
+
     /// The laid-out size of a render node.
     pub fn size(&self, id: RenderId) -> Size {
         self.pipeline_owner
@@ -489,6 +497,13 @@ impl LaidOut {
     /// build inbox), drains it, and re-runs layout/paint. No root dirtying.
     pub fn pump_for(&mut self, dt: Duration) {
         self.binding.pump_frame(dt);
+    }
+
+    /// The tree's `BuildOwner`, for a test that needs to reach a knob the
+    /// public widget surface does not expose (the fixpoint's lazy-band pass
+    /// budget, a planted layout-builder entry).
+    pub fn build_owner_mut(&mut self) -> &mut flui_view::BuildOwner {
+        self.binding.build_owner_mut()
     }
 
     /// The binding's **own** scheduler — never `UpdateScheduler::instance()`.

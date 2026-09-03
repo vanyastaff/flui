@@ -515,6 +515,23 @@ pub trait ElementBase: Downcast + 'static {
     fn set_parent_render_id(&mut self, _parent_id: Option<flui_foundation::RenderId>) {
         // Default: no-op
     }
+    /// The lazy-sliver logical index a child inserted at `slot` under this
+    /// element must carry down to its render object.
+    ///
+    /// Companion to [`Self::child_render_id`], and the FLUI shape of the slot
+    /// Flutter's `RenderObjectElement` inherits through component elements
+    /// down to `didAdoptChild`: a sparse sliver host answers `Some(slot)`
+    /// (its insert slot *is* the logical index); a component element passes
+    /// through the slot it received; a render element answers `None`, since
+    /// its own children attach under it, not under the sliver. Default
+    /// `None`.
+    fn child_sliver_slot(&self, _slot: usize) -> Option<usize> {
+        None
+    }
+    /// Store the inherited lazy-sliver slot on this element. Called by the
+    /// slab at the same seams as [`Self::set_parent_render_id`]. Default
+    /// no-op.
+    fn set_sliver_slot(&mut self, _slot: Option<usize>) {}
 
     // ========================================================================
     // Inherited-element protocol

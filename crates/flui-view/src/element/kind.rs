@@ -677,6 +677,12 @@ impl ElementBase for ElementKind {
     fn set_parent_render_id(&mut self, parent_id: Option<flui_foundation::RenderId>) {
         self.element_mut().set_parent_render_id(parent_id);
     }
+    fn child_sliver_slot(&self, slot: usize) -> Option<usize> {
+        self.element().child_sliver_slot(slot)
+    }
+    fn set_sliver_slot(&mut self, slot: Option<usize>) {
+        self.element_mut().set_sliver_slot(slot);
+    }
 
     fn as_inherited(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
         self.element().as_inherited()

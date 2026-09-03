@@ -63,6 +63,16 @@ use crate::tree::ElementTree;
 /// build degrades to a stale frame rather than hanging the UI thread.
 const MAX_LAYOUT_BUILD_PASSES: usize = 10;
 
+/// How many fixpoint passes may service lazy-sliver child requests in one
+/// frame before the rest is deferred to the next frame.
+///
+/// A band settles in two or three passes once the extent estimate adapts
+/// (request the band → lay it out → one more round when the measured sizes
+/// move the band edge); the budget leaves headroom for a heterogeneous list
+/// whose mean keeps shifting, and stays below `MAX_LAYOUT_BUILD_PASSES` so a
+/// settling band can never be what trips the layout-builder `BUG:` path.
+pub(crate) const MAX_LAZY_BAND_PASSES: usize = 6;
+
 /// A live build-during-layout node: the element to rebuild, and the cell its
 /// render object publishes constraints into.
 #[derive(Debug, Clone)]
@@ -358,8 +368,9 @@ impl BuildOwner {
     /// builder that settles headlessly but not on screen (or vice versa) is a
     /// silent correctness bug, so neither binding may hand-roll this loop.
     ///
-    /// The loop drives `run_layout` → `service_layout_builders` until no builder
-    /// needs a build, then delegates to
+    /// The loop drives `run_layout` → `service_layout_builders` +
+    /// `service_child_requests` until no builder needs a build and no lazy
+    /// sliver requested or evicted a child, then delegates to
     /// [`PipelineOwner::run_frame`](flui_rendering::pipeline::PipelineOwner::run_frame)
     /// for the full
     /// layout → compositing → paint → semantics sequence. `run_frame`'s own
@@ -380,7 +391,11 @@ impl BuildOwner {
     /// # Non-convergence
     ///
     /// Bounded at `MAX_LAYOUT_BUILD_PASSES`. Exceeding it means a builder's
-    /// output changes the constraints that builder receives. In debug this is a
+    /// output changes the constraints that builder receives, or a lazy sliver's
+    /// band never settles (a fresh band is requested on every pass). A lazy
+    /// list normally settles in two or three passes: request the band, lay out
+    /// the built children, and — when measured extents differ from the
+    /// estimates enough to move the band edge — one more round. In debug this is a
     /// `BUG:` panic (an internal-invariant violation per `docs/PANIC-POLICY.md`);
     /// in release it logs and paints the last settled tree rather than spinning.
     pub fn run_frame_with_layout_builders(
@@ -388,6 +403,8 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
     ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+        let mut lazy_passes: usize = 0;
+        let mut lazy_budget_exhausted = false;
         let converged = {
             let owner = &mut *self;
             drive_fixpoint(|| {
@@ -408,10 +425,43 @@ impl BuildOwner {
                     *pipeline_owner = layout.into_idle();
                     result
                 })?;
-                // …build with the checkout closed.
-                Ok(owner.service_layout_builders(tree, pipeline))
+                // …build with the checkout closed. Both deferred-build seams
+                // run every pass, neither short-circuits the other: a layout
+                // builder inside a lazy item and a lazy list inside a layout
+                // builder each need the other's output laid out before the
+                // frame can settle. `|`, not `||`, on purpose.
+                let rebuilt_layout_builders = owner.service_layout_builders(tree, pipeline);
+                // The lazy seam has its own, softer budget. A layout builder
+                // that never settles is a bug (its output changes its own
+                // constraints); a lazy band that needs more passes than the
+                // budget is *content* — an estimate so far from the measured
+                // extents that the band keeps growing — and content must not
+                // panic a debug build. Past the budget the loop stops
+                // servicing, converges on the layout builders alone, and the
+                // frame's post-`run_frame` call defers the rest to the next
+                // frame: the old multi-frame settle as the fallback, never
+                // the `BUG:` path.
+                let serviced_lazy_children = if lazy_passes < owner.lazy_band_pass_budget {
+                    let did_work = owner.service_child_requests_between_passes(tree, pipeline);
+                    if did_work {
+                        lazy_passes += 1;
+                    }
+                    did_work
+                } else {
+                    lazy_budget_exhausted = true;
+                    false
+                };
+                Ok(rebuilt_layout_builders | serviced_lazy_children)
             })
         };
+        if lazy_budget_exhausted {
+            tracing::warn!(
+                passes = self.lazy_band_pass_budget,
+                "lazy sliver band did not settle within the frame's pass budget; \
+                 the remaining requests are deferred to the next frame"
+            );
+        }
+        tracing::debug!(lazy_passes, "layout<->build fixpoint settled");
 
         match converged {
             Err(e) => return Err(e),
@@ -452,6 +502,14 @@ fn drive_fixpoint<E>(mut pass: impl FnMut() -> Result<bool, E>) -> Result<bool, 
 /// their frame paths actually run the seam is to plant an entry by hand.
 #[cfg(any(test, feature = "test-utils"))]
 impl BuildOwner {
+    /// Override the per-frame lazy-band pass budget (default
+    /// [`MAX_LAZY_BAND_PASSES`]). Test-only: a budget of one lets a harness
+    /// drive the deferral path with ordinary content instead of hunting for
+    /// content that defeats the adaptive estimate.
+    pub fn set_lazy_band_pass_budget_for_test(&mut self, passes: usize) {
+        self.lazy_band_pass_budget = passes;
+    }
+
     /// Plant a layout-builder entry and hand back the cell its (future) render
     /// object would publish into.
     ///
@@ -489,14 +547,16 @@ fn report_non_convergence() {
     #[cfg(debug_assertions)]
     panic!(
         "BUG: layout<->build fixpoint failed to converge after {MAX_LAYOUT_BUILD_PASSES} passes \
-         — a layout builder's output is changing its own incoming constraints"
+         — a layout builder's output is changing its own incoming constraints, or a lazy \
+         sliver's band never settles (every serviced pass requests a new band)"
     );
 
     #[cfg(not(debug_assertions))]
     tracing::error!(
         max_passes = MAX_LAYOUT_BUILD_PASSES,
         "layout<->build fixpoint failed to converge — a layout builder's output is changing \
-         its own incoming constraints; painting the last settled tree"
+         its own incoming constraints, or a lazy sliver's band never settles; painting the \
+         last settled tree"
     );
 }
 

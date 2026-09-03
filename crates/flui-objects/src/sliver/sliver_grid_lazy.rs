@@ -344,7 +344,16 @@ impl RenderSliver for RenderSliverGridLazy {
         let dense_child_count = ctx.child_count();
         for slot in 0..dense_child_count {
             if let Some(pd) = ctx.child_parent_data(slot) {
-                self.logical_to_slot.insert(pd.index, slot);
+                let previous = self.logical_to_slot.insert(pd.index, slot);
+                // Same invariant as the list's band walk: one attached child
+                // per logical index, or one of them paints at a stale offset.
+                debug_assert!(
+                    previous.is_none(),
+                    "BUG: lazy grid has two attached children stamped with logical index {} \
+                     (dense slots {:?} and {slot})",
+                    pd.index,
+                    previous,
+                );
             }
         }
 

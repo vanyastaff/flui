@@ -36,6 +36,13 @@ use flui_rendering::{
     virtualization::{AnchorCorrection, ScrollWindow, Virtualizer},
 };
 
+/// How far the running mean of measured extents must drift from the current
+/// estimate before the unmeasured items are re-hinted — relative to the
+/// estimate, with a 1 px floor. Re-hinting moves every unmeasured offset (and
+/// therefore the scrollbar's total), so it is done for a material change,
+/// not on every remeasure of a heterogeneous list.
+const ADAPTIVE_ESTIMATE_RELATIVE_TOLERANCE: f32 = 0.05;
+
 // ============================================================================
 // OFF-BAND DISPOSAL STRATEGY
 // ============================================================================
@@ -272,7 +279,19 @@ where
     let dense_count = ctx.child_count();
     for slot in 0..dense_count {
         if let Some(pd) = ctx.child_parent_data(slot) {
-            logical_to_slot.insert(pd.index, slot);
+            let previous = logical_to_slot.insert(pd.index, slot);
+            // Two attached children carrying one logical index would leave
+            // one of them unpositioned and painted at a stale offset. Every
+            // path that stamps an index (adopt-time, relocation, a keyed
+            // remap) owes uniqueness; a collision here is a bug in one of
+            // them, not a state to tolerate quietly.
+            debug_assert!(
+                previous.is_none(),
+                "BUG: lazy sliver has two attached children stamped with logical index {} \
+                 (dense slots {:?} and {slot})",
+                pd.index,
+                previous,
+            );
         }
     }
 
@@ -335,6 +354,62 @@ where
             }
         }
     }
+
+    // ── 4a. Adapt the estimate for still-unmeasured items ──────────────────
+    // The caller's `default_extent_estimate` seeds the first pass only. From
+    // then on the unmeasured items are hinted with the mean of the band's
+    // own measured children (Flutter's `_extrapolateMaxScrollOffset`
+    // averages the same set) — the band's, not all history's, so a jump from
+    // tall items into short ones adapts on the first measured batch instead
+    // of after hundreds. Without this a band under an over-estimate
+    // converges geometrically — each pass only requests the few items the
+    // stale hint says still fit — which is a many-frame pop-in on the old
+    // post-frame service path and a bounded-fixpoint overrun on the in-frame
+    // one. Re-hinting the items above the anchor moves the anchor's offset,
+    // so the delta goes through the same correction accumulator a remeasure
+    // does: the anchored content stays pixel-stationary.
+    if let Some(mean) = virtualizer.measured_mean_in(cache_first..cache_last) {
+        let current = virtualizer.default_estimate();
+        let tolerance = (current * ADAPTIVE_ESTIMATE_RELATIVE_TOLERANCE).max(1.0);
+        if (mean - current).abs() > tolerance {
+            let correction = virtualizer.adapt_default_estimate(mean, anchor);
+            accumulate_anchor_correction(pending_correction, correction);
+        }
+    }
+
+    // ── 4a'. Re-query the band the measurements just moved ──────────────────
+    // Steps 2–4 sized the band with pre-measure hints. Measuring (and any
+    // re-hint above) moves every offset after the first changed item, so
+    // the window now covers indices the first query did not see. Those must
+    // be requested in THIS pass: the frame's fixpoint only runs another
+    // pass when the manager built or evicted something, so an item that
+    // came into band purely through measurement would otherwise wait for
+    // the next frame — with a 1000 px seed over 1 px items, the whole
+    // viewport would. When a correction is pending the viewport re-runs
+    // this layout at the corrected offset in the same pass and that run
+    // re-queries on its own; a request against the pre-correction window
+    // is at worst a child the re-run evicts next pass, never a lost one.
+    let widened = virtualizer.query(&window);
+    for logical_i in widened.cache_first..widened.cache_last {
+        if logical_i >= *item_count {
+            break;
+        }
+        let already_visited = logical_i >= cache_first && logical_i < cache_last;
+        if already_visited || logical_to_slot.contains_key(&logical_i) {
+            continue;
+        }
+        match on_absent(logical_i, dense_count, box_constraints, ctx) {
+            ChildLayout::NoChild => {
+                *item_count = logical_i;
+                virtualizer.set_count(logical_i);
+                break;
+            }
+            ChildLayout::Unwired => break,
+            _ => {}
+        }
+    }
+    let cache_first = cache_first.min(widened.cache_first);
+    let cache_last = cache_last.max(widened.cache_last);
 
     // ── 4b. Clamp cache_last after possible mid-pass item_count shrink ──────
     // The NoChild branch above may call `virtualizer.set_count(logical_i)`,

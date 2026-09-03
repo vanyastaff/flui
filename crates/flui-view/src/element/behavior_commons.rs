@@ -65,6 +65,44 @@ where
     }
 }
 
+/// Stamp `render_id`'s node with `SliverMultiBoxAdaptorParentData { index }`
+/// so its lazy-sliver parent can map `logical -> dense slot` from parent
+/// data alone.
+///
+/// Two callers, one invariant ("every direct render child of a sparse
+/// sliver host carries its logical index"): `RenderBehavior::on_mount`
+/// stamps at adoption for freshly-mounted render objects, however deep
+/// below the sparse child they sit; `SparseChildren::ensure` stamps the
+/// first render descendants of a subtree that arrived by GlobalKey
+/// relocation, which never re-mounts.
+///
+/// A node that already carries `SliverMultiBoxAdaptorParentData` — a
+/// relocated child that was laid out under its previous host — has only its
+/// `index` rewritten: `layout_offset` and `keep_alive` are the sliver's and
+/// the keep-alive protocol's own state, and replacing the box would reset
+/// both until the next layout recomputed them. A fresh node (no parent data)
+/// or one carrying another type gets a new box.
+pub(crate) fn stamp_sliver_logical_index(
+    owner: &mut flui_rendering::pipeline::PipelineOwner,
+    render_id: flui_foundation::RenderId,
+    logical_index: usize,
+) {
+    use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
+    let Some(node) = owner.render_tree_mut().get_mut(render_id) else {
+        return;
+    };
+    if let Some(existing) = node
+        .parent_data_mut()
+        .and_then(|pd| pd.downcast_mut::<SliverMultiBoxAdaptorParentData>())
+    {
+        existing.index = logical_index;
+        return;
+    }
+    node.set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(
+        logical_index,
+    )));
+}
+
 /// Run a user `build()` closure under [`std::panic::catch_unwind`] and,
 /// on a caught panic, substitute the registered `ErrorView`.
 ///
@@ -466,5 +504,71 @@ mod tests {
     fn remove_render_object_from_tree_is_noop_without_pipeline_owner() {
         let core = ElementCore::<TestView, Leaf>::new(TestView);
         remove_render_object_from_tree(&core, None, "TestBehavior");
+    }
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_types::geometry::px;
+
+    use super::stamp_sliver_logical_index;
+
+    #[test]
+    fn stamp_installs_fresh_parent_data_on_a_bare_node() {
+        let mut owner = PipelineOwner::new();
+        let id = owner
+            .render_tree_mut()
+            .insert_box(Box::new(RenderSizedBox::new(
+                Some(px(10.0)),
+                Some(px(10.0)),
+            )));
+        stamp_sliver_logical_index(&mut owner, id, 7);
+        let pd = owner
+            .render_tree()
+            .get(id)
+            .and_then(|node| node.parent_data())
+            .and_then(|pd| pd.downcast_ref::<SliverMultiBoxAdaptorParentData>())
+            .map(|pd| pd.index)
+            .expect("stamp must install SliverMultiBoxAdaptorParentData");
+        assert_eq!(pd, 7);
+    }
+
+    /// A relocated child arrives already laid out under its previous host:
+    /// re-stamping rewrites the index and nothing else, so the offset the
+    /// previous layout committed (and the keep-alive state) survive until
+    /// the next layout recomputes them, instead of snapping to zero.
+    #[test]
+    fn stamp_rewrites_only_the_index_of_existing_parent_data() {
+        let mut owner = PipelineOwner::new();
+        let id = owner
+            .render_tree_mut()
+            .insert_box(Box::new(RenderSizedBox::new(
+                Some(px(10.0)),
+                Some(px(10.0)),
+            )));
+        let mut seeded = SliverMultiBoxAdaptorParentData::new(3);
+        seeded.layout_offset = 42.0;
+        seeded.keep_alive.keep_alive = true;
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("node")
+            .set_parent_data(Box::new(seeded));
+
+        stamp_sliver_logical_index(&mut owner, id, 9);
+
+        let pd = owner
+            .render_tree()
+            .get(id)
+            .and_then(|node| node.parent_data())
+            .and_then(|pd| pd.downcast_ref::<SliverMultiBoxAdaptorParentData>())
+            .map(|pd| (pd.index, pd.layout_offset, pd.keep_alive.keep_alive))
+            .expect("parent data must still be SliverMultiBoxAdaptorParentData");
+        assert_eq!(pd.0, 9);
+        assert_eq!(pd.1, 42.0, "layout_offset must survive a re-stamp");
+        assert!(pd.2, "keep_alive must survive a re-stamp");
     }
 }

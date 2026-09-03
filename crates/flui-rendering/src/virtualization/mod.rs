@@ -268,6 +268,10 @@ pub struct Virtualizer {
     /// incrementally so [`total_extent`](Self::total_extent) /
     /// [`measured_count`](Self::measured_count) are `O(1)`.
     measured: usize,
+    /// Sum of every [`ItemExtent::Measured`] extent, kept in step with
+    /// `measured` so [`measured_mean`](Self::measured_mean) — the adaptive
+    /// hint for still-unmeasured items, read on every layout pass — is `O(1)`.
+    measured_total: f32,
     /// The current scroll anchor `(index, sub_offset)`. Item-identity, not raw
     /// pixel — see the module docs.
     anchor: (usize, f32),
@@ -286,6 +290,7 @@ impl Virtualizer {
             tree,
             default_estimate: est,
             measured: 0,
+            measured_total: 0.0,
             anchor: (0, 0.0),
         }
     }
@@ -335,10 +340,78 @@ impl Virtualizer {
                 let removed = self.tree.remove(last);
                 if removed.is_measured() {
                     self.measured -= 1;
+                    self.measured_total -= removed.extent();
                 }
             }
         }
         self.clamp_anchor();
+    }
+    /// The extent currently hinted for every unmeasured item.
+    #[inline]
+    #[must_use]
+    pub fn default_estimate(&self) -> f32 {
+        self.default_estimate
+    }
+    /// The running mean of the measured extents, or `None` before the first
+    /// measurement. This is what the unmeasured items should be hinted with
+    /// once real sizes exist — the caller's seed estimate is only a guess for
+    /// the very first pass.
+    #[must_use]
+    pub fn measured_mean(&self) -> Option<f32> {
+        (self.measured > 0).then(|| self.measured_total / self.measured as f32)
+    }
+    /// The mean of the measured, non-zero extents among the items in `range`,
+    /// or `None` when there is no such item.
+    ///
+    /// This is the hint a band should adapt to: the running mean over *every*
+    /// measurement ([`Self::measured_mean`]) is dominated by history — after
+    /// a jump from a region of tall items into one of short items it stays
+    /// tall for hundreds of measurements — while the band's own children are
+    /// what Flutter's `_extrapolateMaxScrollOffset` averages. Zero-extent
+    /// children are left out: a collapsed row or a `SizedBox.shrink`
+    /// placeholder says nothing about the extent of a row that has not been
+    /// measured, and counting it would shrink every unmeasured hint (and the
+    /// scrollable total with it) for a placeholder's sake. O(band) tree reads.
+    #[must_use]
+    pub fn measured_mean_in(&self, range: std::ops::Range<usize>) -> Option<f32> {
+        let end = range.end.min(self.tree.len());
+        let mut total = 0.0f32;
+        let mut count = 0usize;
+        for index in range.start..end {
+            if let ItemExtent::Measured { extent } = self.tree.get(index)
+                && *extent > 0.0
+            {
+                total += *extent;
+                count += 1;
+            }
+        }
+        (count > 0).then(|| total / count as f32)
+    }
+    /// Re-hint every unmeasured item with `estimate` while keeping `anchor`'s
+    /// content pixel-stationary.
+    ///
+    /// A hint change moves the offset of every item below any unmeasured
+    /// item, the anchor included; the returned correction is exactly the
+    /// anchor's offset delta, for the same accumulator [`Self::set_measured`]
+    /// feeds. `None` when the estimate is unchanged or the anchor is out of
+    /// range (the hints are still updated in that case — only the correction
+    /// is withheld, mirroring `set_measured`'s refusal to enshrine a bad
+    /// anchor). O(n) over the items, like [`Self::set_default_estimate`]; the
+    /// caller gates it on a material change.
+    pub fn adapt_default_estimate(
+        &mut self,
+        estimate: f32,
+        anchor: (usize, f32),
+    ) -> Option<AnchorCorrection> {
+        let anchor_in_range = anchor.0 < self.tree.len();
+        let anchor_offset_before = anchor_in_range.then(|| self.offset_of(anchor.0));
+        if !self.set_default_estimate(estimate) {
+            return None;
+        }
+        let before = anchor_offset_before?;
+        self.anchor = anchor;
+        let delta = self.offset_of(anchor.0) - before;
+        (delta != 0.0).then_some(AnchorCorrection { delta })
     }
 
     /// Replaces the estimate used by every still-unmeasured item and by
@@ -402,9 +475,12 @@ impl Virtualizer {
         let old = self
             .tree
             .set(index, ItemExtent::Measured { extent: new_extent });
-        if !old.is_measured() {
+        if old.is_measured() {
+            self.measured_total -= old.extent();
+        } else {
             self.measured += 1;
         }
+        self.measured_total += new_extent;
         let old_extent = old.extent();
 
         let delta = new_extent - old_extent;
@@ -555,7 +631,12 @@ impl Virtualizer {
             );
             if old.is_measured() {
                 self.measured -= 1;
+                self.measured_total -= old.extent();
             }
+        }
+        if self.measured == 0 {
+            // Never let float drift leave a phantom total behind an empty set.
+            self.measured_total = 0.0;
         }
     }
 
