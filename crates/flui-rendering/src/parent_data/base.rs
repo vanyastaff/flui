@@ -49,6 +49,11 @@ use downcast_rs::{Downcast, impl_downcast};
 ///
 /// impl ParentData for CustomParentData {}
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be attached to a child as parent data",
+    label = "missing `impl ParentData for {Self}`",
+    note = "`impl ParentData for {Self} {{}}` is enough (every method has a default) provided `{Self}` is `Debug + Clone + 'static`"
+)]
 pub trait ParentData: Debug + Downcast + dyn_clone::DynClone {
     /// Called when render object is removed from tree.
     ///

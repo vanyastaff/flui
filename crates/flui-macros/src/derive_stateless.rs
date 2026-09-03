@@ -9,7 +9,7 @@
 //! #[derive(Clone, StatelessView)]
 //! struct Greeting { name: String }
 //!
-//! impl Greeting {
+//! impl StatelessView for Greeting {
 //!     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
 //!         Text::new(&self.name)
 //!     }

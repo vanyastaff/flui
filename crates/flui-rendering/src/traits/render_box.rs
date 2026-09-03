@@ -75,6 +75,11 @@ use crate::{
 /// - Baseline support for text alignment
 /// - Dry layout (compute size without actual layout)
 /// - Coordinate conversion (local ↔ global)
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a `RenderBox`",
+    label = "missing `impl RenderBox for {Self}`",
+    note = "a box-protocol render object implements `RenderBox` (its `Arity`, `perform_layout`, `paint`, hit-testing) and `flui_foundation::Diagnosticable`; `RenderObject<BoxProtocol>` is then derived automatically"
+)]
 pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable {
     /// The arity of this render box (Leaf, Optional, Variable, etc.)
     type Arity: Arity;

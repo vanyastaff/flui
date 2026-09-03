@@ -167,6 +167,11 @@ impl HitTestOutcome {
 ///   cross-thread mutable access to guard)
 ///
 /// The storage layer calls these trait methods to drive the rendering pipeline.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a render object for the `{P}` protocol",
+    label = "no `RenderObject<{P}>` for `{Self}`",
+    note = "render objects implement the protocol trait instead: `RenderBox` (box protocol) or `RenderSliver` (sliver protocol), plus `flui_foundation::Diagnosticable`; `RenderObject<P>` then follows from a blanket impl"
+)]
 pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     // ========================================================================
     // Core Operations

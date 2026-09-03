@@ -27,4 +27,10 @@
 fn ui_tests() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/column_17_compile_error.rs");
+    // `#[diagnostic::on_unimplemented]` on the view traits: the message a
+    // framework user sees must name the derive/impl they are missing, not
+    // the blanket impl the compiler walked through. The expected stderr also
+    // lists the crate's own `View` impls, so adding one to flui-view means
+    // regenerating it with `TRYBUILD=overwrite`.
+    t.compile_fail("tests/ui/not_a_view.rs");
 }

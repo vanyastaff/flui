@@ -1,0 +1,29 @@
+error[E0277]: `Offset` cannot be attached to a child as parent data
+  --> tests/compile_fail/not_parent_data.rs:11:12
+   |
+11 |     attach(Offset(1.0));
+   |     ------ ^^^^^^^^^^^ missing `impl ParentData for Offset`
+   |     |
+   |     required by a bound introduced by this call
+   |
+help: the trait `ParentData` is not implemented for `Offset`
+  --> tests/compile_fail/not_parent_data.rs:6:1
+   |
+ 6 | struct Offset(f32);
+   | ^^^^^^^^^^^^^
+   = note: `impl ParentData for Offset {}` is enough (every method has a default) provided `Offset` is `Debug + Clone + 'static`
+   = help: the following other types implement trait `ParentData`:
+             BoxParentData
+             ContainerBoxParentData
+             FlexParentData
+             FlowParentData
+             ListWheelParentData
+             MultiChildLayoutParentData
+             SliverGridParentData
+             SliverLogicalContainerParentData
+           and $N others
+note: required by a bound in `attach`
+  --> tests/compile_fail/not_parent_data.rs:8:14
+   |
+ 8 | fn attach<P: ParentData>(_data: P) {}
+   |              ^^^^^^^^^^ required by this bound in `attach`

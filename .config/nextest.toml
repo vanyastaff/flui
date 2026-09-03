@@ -22,5 +22,5 @@ leak-timeout = "1s"
 # suite and ~180 s for each template build, varying run to run with cache
 # state — a 4-minute global killed both template tests once. Budget: 20 min.
 [[profile.default.overrides]]
-filter = 'binary_id(flui-engine::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | test(/^cli_create::generated_.*_project_compiles$/)'
+filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | test(/^cli_create::generated_.*_project_compiles$/)'
 slow-timeout = { period = "300s", terminate-after = 4 }

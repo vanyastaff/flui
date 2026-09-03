@@ -18,6 +18,13 @@ autotests = false
 name = "rendering_it"
 path = "tests/main.rs"
 
+# trybuild compile-fail suite: its own binary so nextest runs the slow rustc
+# fixtures alongside `rendering_it`, and so the nextest timeout override can
+# address it by binary id.
+[[test]]
+name = "compile_fail"
+path = "tests/compile_fail.rs"
+
 [dependencies]
 flui-types = { path = "../flui-types", version = "0.2.0" }
 flui-painting = { path = "../flui-painting", version = "0.2.0" }
@@ -90,6 +97,10 @@ required-features = ["testing"]
 
 [dev-dependencies]
 criterion.workspace = true
+# Compile-fail fixtures (`tests/compile_fail/*.rs`) pinning the
+# `#[diagnostic::on_unimplemented]` text on `RenderObject`/`RenderBox`/
+# `ParentData`: a wrong program must be told which trait to implement.
+trybuild = { workspace = true }
 # Compile-time Send/Sync pins for the `PipelineCell` owner-local seam (see
 # `pipeline::owner::cell`'s tests): a manual `impl Send`/`Sync` reappearing on
 # `PipelineCell`, `PipelineOwner`, or `RenderTree` would silently reopen the

@@ -72,6 +72,11 @@ use super::view::View;
 ///     Container::new().color(theme.primary_color)
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `InheritedView`",
+    label = "missing `impl InheritedView for {Self}`",
+    note = "an inherited view publishes `type Data` to its subtree: `impl InheritedView for {Self} {{ type Data = ..; fn data(&self) -> &Self::Data {{ .. }} fn child(&self) -> &dyn View {{ .. }} fn update_should_notify(&self, old: &Self) -> bool {{ .. }} }}`; descendants read it with `ctx.depend_on::<{Self}>()`"
+)]
 pub trait InheritedView: Clone + 'static + Sized {
     /// The data type this InheritedView provides.
     type Data: Clone + 'static;
