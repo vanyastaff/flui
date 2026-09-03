@@ -13,6 +13,19 @@
     clippy::struct_field_names,
     clippy::large_enum_variant
 )]
+// The next-generation trait solver counts auto-trait proof depth honestly,
+// and proving `wgpu::Renderer: Send` descends through wgpu-core
+// (`Global -> Hub -> Registry -> RwLock<Storage<..>>`) past the default
+// limit of 128. On stable that is invisible; on nightly it is the
+// future-incompat lint `recursion_depth_exceeding_limit`
+// (rust-lang/rust#159228), which becomes a hard error once the solver
+// stabilises. Auto-trait proofs are structural and re-run in every crate
+// that needs `Renderer: Send`, so flui-app and the root examples carry the
+// same attribute. A manual `impl Send` on an intermediate type would
+// short-circuit the proof, but reopening a hand-written `Send` assertion
+// is exactly what ADR-0045 decision 1 removed; the limit is the honest fix
+// until wgpu adds the impls upstream (same class as rust-lang/rust#160036).
+#![recursion_limit = "256"]
 
 //! FLUI Rendering Engine - GPU-accelerated rendering for FLUI
 //!
