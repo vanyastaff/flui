@@ -72,6 +72,80 @@ fn lazy_list_view_builder_builds_visible_items() {
 }
 
 // ============================================================================
+// Test 1b — composite (non-render) children settle and carry their index
+// ============================================================================
+
+/// A composite top-level child: a `StatelessView` that builds into a
+/// `SizedBox` one level down. This is the shape `ListView::builder` callers
+/// write constantly (a bare `Text`, a small extracted widget) and the one
+/// every other test here misses, because they all hand back a `SizedBox`,
+/// which owns a render node the moment `insert` returns.
+#[derive(Clone, StatelessView)]
+struct CompositeItem {
+    height: f32,
+}
+
+impl StatelessView for CompositeItem {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(200.0, self.height)
+    }
+}
+
+/// KNOWN GAP — a lazy list cannot yet take a composite child when the
+/// per-item repaint boundary is switched off.
+///
+/// The sliver maps `logical -> dense slot` from parent data alone, so every
+/// child's render node is stamped with its logical index at
+/// `SparseChildren::ensure` time. A *composite* child (one whose top-level
+/// view owns no render object — a bare `Text`, a `StatefulView`, an extracted
+/// widget) has no render node at that moment: its first render descendant
+/// only appears after the follow-up build pass expands the subtree. The stamp
+/// therefore has nowhere to land, and `stamp_logical_index` reports it with a
+/// `debug_assert!(false)`.
+///
+/// The default path hides this, which is why no other test here sees it:
+/// `addRepaintBoundaries` defaults to `true`, and the boundary owns a render
+/// node, so the composite view is never itself the top-level sparse child.
+/// Turning the boundary off is what exposes the gap.
+///
+/// This test is `#[ignore]`d rather than deleted so the gap stays
+/// reproducible in-tree instead of living in a branch. Deferring the stamp
+/// until after the build pass removes the assertion but is NOT sufficient on
+/// its own — measured: the items still do not materialise (2 render nodes
+/// instead of 5), so the sliver's own layout path needs the matching work
+/// before this can be un-ignored.
+#[test]
+#[ignore = "composite lazy children are unsupported without a per-item repaint boundary; see the doc above"]
+fn lazy_list_view_builder_settles_composite_children() {
+    let mut laid = lay_out(
+        ListView::builder(3, 48.0, |i| {
+            if i < 3 {
+                Some(CompositeItem { height: 48.0 }.boxed())
+            } else {
+                None
+            }
+        })
+        // Without the per-item boundary the COMPOSITE view is itself the
+        // top-level sparse child, so nothing owns a render node when the
+        // logical index is stamped. With the boundary on (the default) the
+        // boundary supplies one and the composite path is never reached.
+        .repaint_boundaries(false),
+        tight(200.0, 200.0),
+    );
+
+    laid.tick();
+    laid.tick();
+
+    // 1 viewport + 1 sliver + 3 item nodes; no per-item boundary here.
+    let nodes_after_settle = laid.render_node_count();
+    assert_eq!(
+        nodes_after_settle, 5,
+        "a composite child must settle like a render child; got {nodes_after_settle}"
+    );
+}
+
+// ============================================================================
+// ============================================================================
 // Test 2 — None-at-K caps the build count
 // ============================================================================
 
