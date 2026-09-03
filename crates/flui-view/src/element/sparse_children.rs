@@ -490,8 +490,38 @@ pub(crate) fn build_item_or_error(
                 "lazy sliver builder panicked; substituting ErrorView: {}",
                 error.message
             );
-            Some(BoxedView(crate::view::ErrorView::build_error_view(&error)))
+            let recovered = crate::view::ErrorView::build_error_view(&error);
+            // A recovered item must be unkeyed, whatever the registered
+            // error-view factory returned: a keyed one would take part in the
+            // reconcile's key matching, and a `GlobalKey` would trigger a
+            // retake, instead of staying isolated to the failed index.
+            if recovered.key().is_some() {
+                Some(BoxedView(Box::new(UnkeyedRecovery {
+                    inner: BoxedView(recovered),
+                })))
+            } else {
+                Some(BoxedView(recovered))
+            }
         }
+    }
+}
+
+/// A keyless composite around a custom error view that carried a key. Its
+/// render descendant is stamped at adoption like any composite item's.
+#[derive(Clone)]
+struct UnkeyedRecovery {
+    inner: BoxedView,
+}
+
+impl crate::view::StatelessView for UnkeyedRecovery {
+    fn build(&self, _ctx: &dyn crate::BuildContext) -> impl crate::view::IntoView {
+        self.inner.clone()
+    }
+}
+
+impl View for UnkeyedRecovery {
+    fn create_element(&self) -> crate::element::ElementKind {
+        crate::element::ElementKind::stateless(self)
     }
 }
 
@@ -1406,6 +1436,25 @@ mod reconcile_tests {
         assert_eq!(outcome.end_reached_at, Some(1));
         assert_eq!(fx.sparse.len(), 1);
         assert!(fx.sparse.get(1).is_none());
+    }
+
+    /// A registered error-view factory that answers with a keyed view is
+    /// wrapped keyless: the recovered item may never join key matching.
+    #[test]
+    fn a_keyed_custom_error_view_is_recovered_unkeyed() {
+        use crate::view::{FlutterError, clear_error_view_builder, set_error_view_builder};
+        fn keyed_error_view(_error: &FlutterError) -> Box<dyn View> {
+            Box::new(KeyedBox::new(7))
+        }
+        // The factory is process-global; this test owns it for its duration.
+        set_error_view_builder(keyed_error_view);
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|_| panic!("boom"));
+        let recovered = build_item_or_error(&*builder, 0).expect("an error view");
+        clear_error_view_builder();
+        assert!(
+            recovered.0.key().is_none(),
+            "the recovered item must be unkeyed"
+        );
     }
 
     #[test]

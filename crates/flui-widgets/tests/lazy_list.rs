@@ -1070,21 +1070,28 @@ struct KeyedRow {
 
 struct KeyedRowState {
     born_as: u32,
+    log: Arc<parking_lot::Mutex<Vec<u32>>>,
 }
 
 impl StatefulView for KeyedRow {
     type State = KeyedRowState;
     fn create_state(&self) -> KeyedRowState {
-        KeyedRowState { born_as: self.id }
+        KeyedRowState {
+            born_as: self.id,
+            log: Arc::clone(&self.inits),
+        }
     }
 }
 
 impl ViewState<KeyedRow> for KeyedRowState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {}
-    fn build(&self, view: &KeyedRow, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+        // One entry per STATE created: a preserved element never adds a
+        // second entry for its id, a remounted one does.
+        self.log.lock().push(self.born_as);
+    }
+    fn build(&self, _view: &KeyedRow, _ctx: &dyn BuildContext) -> impl IntoView {
         // The paragraph carries the STATE's id (what the element was born as),
         // so a remounted element reads differently from a preserved one.
-        view.inits.lock().push(view.id);
         SizedBox::new(200.0, 48.0).child(Text::new(format!("row{}", self.born_as)))
     }
 }
@@ -1174,6 +1181,46 @@ fn lazy_list_view_builder_keyed_insert_at_head_preserves_resident_state() {
         "an insert must not leave duplicate row elements behind; got {resident_rows}"
     );
     let _ = nodes_before;
+}
+
+/// A keyed row whose data moves far away while the viewport jumps to its
+/// new place in the same frame keeps its state: the reconcile relocates it
+/// before the band eviction judges it by its NEW index. Evicting first
+/// destroyed it and mounted a fresh row at the destination.
+#[test]
+fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state() {
+    const EXTENT: f32 = 48.0;
+    let data: Data = Arc::new(parking_lot::Mutex::new((0..100).collect()));
+    let inits = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let mut laid = lay_out(keyed_list(&data, &inits, true), tight(200.0, 200.0));
+    assert_eq!(born_ids(&laid, &[0, 1, 2]), vec![0, 1, 2]);
+
+    // Row 1 moves to index 60; the viewport jumps there in the same frame.
+    {
+        let mut d = data.lock();
+        let row = d.remove(1);
+        d.insert(60, row);
+    }
+    laid.pump_widget(keyed_list(&data, &inits, true).offset(58.0 * EXTENT));
+    let top = laid
+        .absolute_offset(
+            laid.find_text("row1")
+                .expect("row 1 must be resident at its new index"),
+        )
+        .dy
+        .get();
+    assert!(
+        top >= 0.0 && top < 200.0,
+        "row 1 is on screen at its new index; top={top}"
+    );
+    // Its state is the one it was born with: the element moved, it was not
+    // remounted — a remount would read `row1` too (the id is the data), so
+    // the oracle is the state log: exactly one state ever created for id 1.
+    let states_for_1 = inits.lock().iter().filter(|&&id| id == 1).count();
+    assert_eq!(
+        states_for_1, 1,
+        "row 1's state must be created once and carried to its new index"
+    );
 }
 
 /// A swap inside the band without any callback: the two rows keep their

@@ -365,18 +365,13 @@ impl ChildManager for SliverListAdaptorManager {
             return false;
         };
 
-        // Evict out-of-band children FIRST so the retain-band contract is
-        // satisfied before we try to build new children. An index that falls
-        // outside the band and was also requested (rare edge case from a
-        // mid-scroll jump) is correctly evicted then not rebuilt.
-        let retain_did_work =
-            self.sparse_children
-                .retain_band(retain_first, retain_last, tree, owner);
-
-        // Refresh whatever survived eviction against the (possibly just-
-        // updated) builder — see `on_view_updated`'s doc comment for why
-        // this is needed at all; a resident child is otherwise never
-        // re-diffed against a new view (`SparseChildren::ensure`'s own doc).
+        // Reconcile against the (possibly just-updated) delegate BEFORE
+        // evicting by band: a keyed resident whose old index falls outside
+        // the new band but whose data moved inside it is relocated by the
+        // reconcile, and only then does the band eviction judge it — by its
+        // new index. Evicting first destroyed such a resident and the
+        // request pass mounted fresh state (Flutter runs `performRebuild`'s
+        // remap before `collectGarbage` for the same reason).
         let refresh_did_work = if self.needs_resident_refresh {
             self.needs_resident_refresh = false;
             let outcome = self.sparse_children.reconcile(
@@ -397,6 +392,12 @@ impl ChildManager for SliverListAdaptorManager {
         } else {
             false
         };
+        // Then evict what the retain band no longer covers. An index that
+        // falls outside the band and was also requested (a mid-scroll jump)
+        // is correctly evicted then not rebuilt.
+        let retain_did_work =
+            self.sparse_children
+                .retain_band(retain_first, retain_last, tree, owner);
         // Build each requested index that is (a) within the retain band and
         // (b) not already built. We check first to avoid calling the builder
         // for already-present indices (idempotency without closure overhead)
@@ -956,14 +957,7 @@ impl ChildManager for SliverGridLazyAdaptorManager {
 
         // Evict out-of-band children first so the retain-band contract is
         // satisfied before building new ones (same ordering as SliverList).
-        let eviction_did_work =
-            self.sparse_children
-                .retain_band(retain_first, retain_last, tree, owner);
-
-        // Refresh whatever survived eviction against the (possibly
-        // just-updated) builder — see `on_view_updated`'s doc comment for why
-        // this is needed at all; a resident child is otherwise never
-        // re-diffed against a new view (`SparseChildren::ensure`'s own doc).
+        // Reconcile before evicting by band — see the list manager.
         let refresh_did_work = if self.needs_resident_refresh {
             self.needs_resident_refresh = false;
             let outcome = self.sparse_children.reconcile(
@@ -984,7 +978,9 @@ impl ChildManager for SliverGridLazyAdaptorManager {
         } else {
             false
         };
-
+        let eviction_did_work =
+            self.sparse_children
+                .retain_band(retain_first, retain_last, tree, owner);
         let mut any_new_build = false;
         let mut reached_end_at: Option<usize> = None;
         for &logical_index in requested_indices {
