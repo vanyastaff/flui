@@ -13,6 +13,11 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- **`flui create --no-check`** skips the `cargo check` that runs on a fresh scaffold. The check
+  only reports (it never fails the command) and is a full cold build into the scaffold's own
+  target directory — 236 s per template on the CI runner — so scripted, offline, or
+  build-it-yourself-anyway use has no need for it. The command's boolean switches now live in
+  `commands::create::CreateOptions`.
 - **Runtime.1 conformance registry and public-API freeze gate** (#576):
   `docs/runtime-contract.toml` is the machine-readable inventory of every
   normative ADR-0027/0037/0029/0039 clause (state verified against current

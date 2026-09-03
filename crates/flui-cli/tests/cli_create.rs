@@ -69,6 +69,11 @@ fn assert_generated_project_compiles(template: &str) {
             "--org",
             "com.test",
             "--local",
+            // The scaffold's own post-create `cargo check` is a full cold
+            // build into the scaffold's private target dir — measured at
+            // 236 s on the CI runner, per template. This test's own check
+            // below is the oracle; the internal one only reports.
+            "--no-check",
         ])
         .arg("--path")
         .arg(&target)
@@ -102,6 +107,16 @@ fn assert_generated_project_compiles(template: &str) {
     std::fs::copy(root.join("Cargo.lock"), project.join("Cargo.lock"))
         .expect("seed the generated project with the workspace's resolved versions");
 
+    // The scaffold is checked into a scratch target under `target/`, shared
+    // by the two template tests (cargo's build-directory lock serialises
+    // them, so the second finds the first's artifacts). Checking it into the
+    // workspace's own target instead was tried and measured on the CI
+    // runner: the check compiles nothing there, and still takes ~180 s per
+    // test — cargo's freshness scan over a 549-crate `--all-targets` target
+    // on a busy disk — which is slower than this cold build at opt-level 0.
+    // The scaffold's OWN post-create check is what used to dominate (236 s
+    // per template, a full cold build into the scaffold's private target);
+    // `--no-check` above removes that entirely.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = std::process::Command::new(cargo)
         .arg("check")
