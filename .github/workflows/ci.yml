@@ -464,8 +464,12 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
-      - name: Ensure Xvfb is available
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb
+      # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
+      # backend dlopens it at startup (`xkbcommon-dl` panics without it, so
+      # the demo dies before a window exists — the first run of this split
+      # job proved it). Same pair the `test` job installs for flui-platform.
+      - name: Ensure Xvfb + xkbcommon are available
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 libxkbcommon0
 
       - name: live-smoke (real window, real input, real teardown)
         if: runner.os == 'Linux'
