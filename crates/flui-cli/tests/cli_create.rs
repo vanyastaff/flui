@@ -134,8 +134,13 @@ fn assert_generated_project_compiles(template: &str) {
          [profile.dev.package.\"*\"]\nopt-level = 2\ndebug = false\n",
     )
     .expect("write the scaffold's profile config");
-    let workspace_target =
-        std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
+    // `CARGO_TARGET_DIR` may be relative (`just nightly-check` sets
+    // `target/nightly`), and it is relative to the invoking cargo's cwd —
+    // the workspace root — not to the scaffold we `current_dir` into
+    // below. Resolve it against the root, or a relative value would land
+    // the whole check under the scaffold and rebuild everything cold.
+    let workspace_target = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| root.join("target"), |dir| root.join(PathBuf::from(dir)));
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = std::process::Command::new(cargo)
