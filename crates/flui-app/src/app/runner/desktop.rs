@@ -1,7 +1,9 @@
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 
-use super::device_recovery::{DeviceRecoveryBackoff, render_frame_with_device_recovery};
+use super::device_recovery::{
+    DeviceRecoveryBackoff, FrameRecoveryOutcome, render_frame_with_device_recovery,
+};
 use super::frame_pacing::{
     WakeAction, frame_is_dirty, keeps_frame_gate_open, no_present_fallback_pace, wake_action,
 };
@@ -315,22 +317,42 @@ where
             }
         });
 
-        // 4. Wrap renderer for callback sharing
-        let renderer = Arc::new(Mutex::new(renderer));
+        // 4. Adopt the raster mailbox (ADR-0045's inline lane). The lane's
+        // owner SOLELY owns the renderer from here on: the platform resize
+        // path holds only the lane's mailbox handle plus the owner-affine
+        // stamp/size state, and the frame closure below drives every
+        // submit through the mailbox pump — an owned, stamped
+        // `SceneSnapshot` per frame, checked against the lane's single
+        // `SurfaceGeneration` counter. `Arc<Mutex<RasterLane>>` mirrors the
+        // `Arc<Mutex<Renderer>>` it replaces (the platform's callback
+        // registrations require `Send` closures even though they only ever
+        // fire on this owner thread); a reentrant frame dispatch — already
+        // skipped upstream by the empty-slot drain protection — degrades to
+        // a skipped frame at the `try_lock` below instead of a same-thread
+        // lock deadlock.
+        let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
+            renderer,
+            realm_dispatch.address,
+            phys_size.width.0 as u32,
+            phys_size.height.0 as u32,
+        )));
 
         // Install the registration-lifetime surface applier alongside the
         // realm (cleared together at teardown): a `Resized` event takes it
         // out of the TLS slot, calls it, and restores it (see
         // `PlatformToUi::run`'s `Resized` arm) rather than capturing the
-        // renderer inside the event payload itself.
+        // lane inside the event payload itself. The hook mints the frame
+        // stamp's next `SurfaceGeneration` and records the platform's new
+        // size as layout's authority; the backend surface itself is
+        // reconfigured by the lane's next pump, before the next render.
         {
-            let renderer_resize = Arc::clone(&renderer);
+            let resize_hook = lane.lock().resize_hook();
             install_surface_applier(
                 realm_dispatch.address.realm_id,
                 move |size, scale_factor| {
                     let w = (size.width.0 * scale_factor) as u32;
                     let h = (size.height.0 * scale_factor) as u32;
-                    renderer_resize.lock().resize(w, h);
+                    resize_hook.apply(w, h);
                 },
             );
         }
@@ -344,13 +366,13 @@ where
             DispatchEventResult::resolved(false, true)
         }));
 
-        // 6. Register frame callback -> scheduler + UiRealm::render_frame_entered()
-        let renderer_frame = Arc::clone(&renderer);
+        // 6. Register frame callback -> scheduler + UiRealm::render_frame_on_lane()
+        let lane_frame = Arc::clone(&lane);
         let worker_reload_frame = worker_reload.clone();
         // Reuses the SAME backoff constructed at step 0c (already wired
         // into the wake-deadline hook above) — not a fresh one.
         window.on_request_frame(Box::new(move || {
-            let renderer_frame = Arc::clone(&renderer_frame);
+            let lane_frame = Arc::clone(&lane_frame);
             let worker_reload_frame = worker_reload_frame.clone();
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let _ = dispatch_platform_realm(
@@ -483,10 +505,24 @@ where
                             // frame builds anyway, see this function's own doc for why),
                             // and AFTER when the wgpu device-lost callback fired
                             // mid-frame — see `render_frame_with_device_recovery`.
-                            let mut r = renderer_frame.lock();
+                            let Some(mut lane) = lane_frame.try_lock() else {
+                                // A reentrant frame dispatch that slipped past the
+                                // empty-slot drain protection upstream: skip this
+                                // nested frame rather than deadlock mid-pump; the
+                                // outer dispatch still completes its own.
+                                tracing::error!(
+                                    "frame skipped: raster lane already held by an \
+                                     outer frame dispatch"
+                                );
+                                return FrameRecoveryOutcome {
+                                    presented: false,
+                                    just_failed: false,
+                                    next_attempt_at: None,
+                                };
+                            };
                             render_frame_with_device_recovery(
                                 realm,
-                                &mut *r,
+                                &mut *lane,
                                 &device_recovery_backoff,
                                 now,
                             )

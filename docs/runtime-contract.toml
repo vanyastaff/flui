@@ -973,8 +973,8 @@ by a threaded protocol harness so the protocol is not vacuously green under \
 the synchronous baseline. The latest frame completion is additionally \
 published through the reliable coalesced `SurfaceState` slot with the \
 backend's actual presented bit. This establishes the non-lossy input the \
-future threaded pacing predicate will consume; the shipping path still \
-bypasses `RasterOwner`, as the adjacent partial contract states.\
+future threaded pacing predicate will consume; the native shipping runners \
+now drive this seam inline, as the adjacent contract states.\
 """
 state = "implemented"
 domain = "raster"
@@ -992,15 +992,31 @@ evidence = [
 key = "raster-owner-in-shipping-path"
 statement = """
 The shipping runners must drive frames through the raster-owner mailbox seam \
-with the raster owner as sole `Renderer` owner. Today the desktop/Android \
-runners call `Renderer::render_scene` directly and the web runner shares an \
-`Arc<Mutex<Option<Renderer>>>`; `RasterOwner` has zero production consumers.\
+with the raster owner as sole `Renderer` owner. The desktop and Android \
+runners now do: `flui_app`'s `RasterLane` wraps `RasterOwner<Renderer>` as \
+the renderer's sole owner, every production frame crosses as an owned, \
+stamped `SceneSnapshot` through `RasterHandle::submit` + an inline pump, the \
+platform resize path mints `SurfaceGeneration` through the mailbox's one \
+counter, and layout reads the platform-authoritative surface-size cell \
+instead of the backend. Still partial: the web runner keeps the direct sink \
+(its renderer arrives asynchronously and recovers across an `.await`, a \
+shape the lane does not yet accommodate — stated in `FrameSink`'s doc), the \
+lane is pumped inline on the owner thread (no produce/present overlap; the \
+dedicated raster thread is ADR-0045's remaining ladder), and `RasterOptions` \
+still governs nothing.\
 """
 state = "partial"
 domain = "raster"
 owner_issue = 559
-mechanical = false
+mechanical = true
+mechanism = "source-text pin: runner_frame_ordering's native-sites-drive-the-mailbox count"
 evidence = [
+    { kind = "symbol", file = "crates/flui-app/src/app/raster_lane.rs", contains = "pub(crate) struct RasterLane" },
+    { kind = "test", file = "crates/flui-app/tests/runner_frame_ordering.rs", contains = "fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend" },
+    { kind = "test", file = "crates/flui-app/src/app/raster_lane.rs", contains = "fn a_presented_frame_classifies_presented_and_renders_through_the_mailbox" },
+    { kind = "test", file = "crates/flui-app/src/app/raster_lane.rs", contains = "fn the_resize_hook_mints_forward_and_the_next_frame_is_accepted" },
+    # The statement's "still partial" half: the web runner keeps the direct
+    # sink, so its `Renderer` ownership is evidence too.
     { kind = "symbol", file = "crates/flui-app/src/app/runner/web.rs", contains = "Arc<Mutex<Option<Renderer>>>" },
 ]
 

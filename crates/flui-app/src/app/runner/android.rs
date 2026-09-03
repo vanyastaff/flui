@@ -237,20 +237,30 @@ where
             }
         }
 
-        // 4. Wrap renderer for callback sharing
-        let renderer = Arc::new(Mutex::new(renderer));
+        // 4. Adopt the raster mailbox (ADR-0045's inline lane) — the same
+        // ownership shape as the desktop bootstrap: the lane's owner solely
+        // owns the renderer, the resize path holds only the mailbox handle
+        // plus the owner-affine stamp/size state, and every frame submit
+        // below crosses the raster boundary as an owned, stamped
+        // `SceneSnapshot`.
+        let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
+            renderer,
+            realm_dispatch.address,
+            phys_size.width.0 as u32,
+            phys_size.height.0 as u32,
+        )));
 
         // Install the registration-lifetime surface applier alongside the
         // realm (cleared together at teardown) — see the desktop bootstrap's
         // matching comment for the take/call/restore protocol this feeds.
         {
-            let renderer_resize = Arc::clone(&renderer);
+            let resize_hook = lane.lock().resize_hook();
             install_surface_applier(
                 realm_dispatch.address.realm_id,
                 move |size, scale_factor| {
                     let w = (size.width.0 * scale_factor) as u32;
                     let h = (size.height.0 * scale_factor) as u32;
-                    renderer_resize.lock().resize(w, h);
+                    resize_hook.apply(w, h);
                 },
             );
         }
@@ -265,12 +275,12 @@ where
         }));
 
         // 6. Register frame callback -- with hot-reload plugin override
-        let renderer_frame = Arc::clone(&renderer);
+        let lane_frame = Arc::clone(&lane);
         let hot_reload_frame = hot_reload.clone();
         // Reuses the SAME backoff constructed at step 0b (already wired
         // into the wake-deadline hook above) — not a fresh one.
         window.on_request_frame(Box::new(move || {
-            let renderer_frame = Arc::clone(&renderer_frame);
+            let lane_frame = Arc::clone(&lane_frame);
             let hot_reload_frame = hot_reload_frame.clone();
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let _ = dispatch_platform_realm(
@@ -285,17 +295,30 @@ where
                     // regardless of which rendering path this frame takes.
                     let inbox_redraw = drain_owner_inbox(realm);
 
-                    let mut r = renderer_frame.lock();
-                    let (w, h) = r.size();
-
                     // If a scene plugin is live it owns this presentation frame,
                     // but the callback still executes inside the realm entry
                     // scope. Always `false` in a build without the `hot-reload`
-                    // feature.
-                    if hot_reload_frame.try_render_frame(&mut *r, w as f32, h as f32) {
-                        return;
+                    // feature. The plugin renders through the backend directly
+                    // (its own diagnostic scene, not a realm-produced frame),
+                    // so it goes through the lane's scoped backend access —
+                    // per ADR-0045 decision 6 the plugin path is one of the
+                    // named inline-only lanes.
+                    {
+                        let Some(mut lane) = lane_frame.try_lock() else {
+                            tracing::error!(
+                                "frame skipped: raster lane already held by an outer \
+                                 frame dispatch"
+                            );
+                            return;
+                        };
+                        let plugin_rendered = lane.with_backend(|r| {
+                            let (w, h) = r.size();
+                            hot_reload_frame.try_render_frame(r, w as f32, h as f32)
+                        });
+                        if plugin_rendered {
+                            return;
+                        }
                     }
-                    drop(r);
 
                     let has_pending = realm.has_pending_work();
                     // See the desktop closure's matching comment: a wake-
@@ -384,10 +407,16 @@ where
                             // Device-loss recovery around the frame, same
                             // shape as the desktop path — see
                             // `render_frame_with_device_recovery`.
-                            let mut r = renderer_frame.lock();
+                            let Some(mut lane) = lane_frame.try_lock() else {
+                                tracing::error!(
+                                    "frame skipped: raster lane already held by an \
+                                     outer frame dispatch"
+                                );
+                                return;
+                            };
                             let _ = render_frame_with_device_recovery(
                                 realm,
-                                &mut *r,
+                                &mut *lane,
                                 &device_recovery_backoff,
                                 now,
                             );
