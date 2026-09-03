@@ -1473,9 +1473,17 @@ impl Renderer {
     pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<bool, EngineError> {
         // Fine-grained damage tracking is the caller's responsibility: the
         // application layer calls `mark_dirty()` / `mark_full_repaint()` after
-        // input events or state changes. When flui-view is wired up, widgets
-        // will call `mark_dirty(bounds)` on state change; until then, callers
-        // use `mark_full_repaint()` to force a frame.
+        // input events or state changes. Nothing calls `mark_dirty` today, so
+        // every frame is a full repaint.
+        //
+        // The design this comment used to anticipate — widgets reporting their
+        // own bounds on state change — does not work, and ADR-0047 records why:
+        // the paint walk repaints all inline content every frame, so the union
+        // of repainted bounds is the whole surface no matter how many repaint
+        // boundaries the tree has. Damage has to come from comparing
+        // consecutive layer trees, which needs a layer identity that survives a
+        // frame boundary. `flui-engine`'s `damage_scissor` benchmark measures
+        // what that is worth.
 
         // If the previous frame detected a straddling advanced shape under partial
         // damage, promote this frame to a full repaint so the shape is redrawn
