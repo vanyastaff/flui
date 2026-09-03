@@ -20,8 +20,8 @@ help: the trait `View` is not implemented for `NotAView`
              Memo<V>
              PersistentHeaderView<R>
              RootRenderView<V>
-             SliverGridLazy
-           and $N others
+             SliverMultiBoxAdaptor<R>
+             StreamBuilder<K, T, E>
    = note: required for `NotAView` to implement `IntoView`
 note: required by a bound in `takes_view`
   --> tests/ui/not_a_view.rs:8:27

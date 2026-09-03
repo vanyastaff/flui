@@ -328,7 +328,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         };
 
         // Step 3: register. `self_id` is stamped by `ElementTree::insert` before
-        // `on_mount` fires (same ordering `SliverListAdaptorBehavior` relies on).
+        // `on_mount` fires (same ordering `SliverAdaptorBehavior` relies on).
         let Some(self_id) = core.self_id() else {
             tracing::warn!(
                 ?render_id,

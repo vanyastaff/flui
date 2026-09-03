@@ -67,7 +67,9 @@ pub use notification::{
 };
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 pub use root::{RootElement, RootElementImpl};
-pub use sliver_adaptor::{SliverGridLazy, SliverList};
+pub use sliver_adaptor::{
+    LazyMultiBoxRender, ListConfig, SliverGridLazy, SliverList, SliverMultiBoxAdaptor,
+};
 pub use sliver_persistent_header::{
     FloatingPersistentHeaderView, FloatingPinnedPersistentHeaderView, PersistentHeaderView,
     PinnedPersistentHeaderView, ScrollingPersistentHeaderView, SharedHeaderDelegate,
