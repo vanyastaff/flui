@@ -43,8 +43,8 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Trait utilities
-downcast-rs = "2.0"
-dyn-clone = "1.0"
+downcast-rs = { workspace = true }
+dyn-clone = { workspace = true }
 
 # `ReconcileEventCollector` (gated to `test-utils` feature
 # or `cfg(test)`) needs `tracing_subscriber::Layer` and the `registry`
@@ -58,7 +58,7 @@ tracing-subscriber = { workspace = true, optional = true }
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
-flui-testing = { path = "../flui-testing", version = "0.2.0" }
+flui-testing = { workspace = true }
 criterion = { workspace = true }
 # Enable flui-rendering's `testing` feature for unit tests so the
 # layout-builder tests can read committed geometry back off the pipeline

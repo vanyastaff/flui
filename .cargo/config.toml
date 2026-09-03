@@ -16,13 +16,12 @@ jobs = 8
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-arg=/DEBUG:NONE"] # Faster release builds
 
-# Linux — faster linkers, opt in locally by uncommenting ONE block.
-# Kept commented in the committed config: not every environment (or every
-# GitHub runner image) ships them, and a missing linker fails builds with a
-# cryptic error. lld is the safer bet (apt install lld); mold is the fastest.
-# [target.x86_64-unknown-linux-gnu]
-# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
-#
+# Linux — `rust-lld` has been the default linker for x86_64-unknown-linux-gnu
+# since Rust 1.90 (the target spec reports linker flavor `gnu-lld-cc`,
+# self-contained), so an lld opt-in buys nothing any more. The one remaining
+# upgrade is mold; opt in locally by uncommenting the block. Kept commented in
+# the committed config: not every environment (or GitHub runner image) ships
+# it, and a missing linker fails builds with a cryptic error.
 # [target.x86_64-unknown-linux-gnu]
 # linker = "clang"
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]

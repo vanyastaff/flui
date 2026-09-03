@@ -9,7 +9,7 @@ FLUI is a **port** of Flutter's three-tree architecture into Rust, not a redesig
 
 PORT.md sits inside a four-document governance set:
 
-1. [`STRATEGY.md`](../STRATEGY.md) — product strategy, the three port rules, "behavior loyal, structure Rust-native".
+1. [`STRATEGY.md`](../STRATEGY.md) — product strategy, the three architectural rules, "Flutter is the reference and the oracle, not the ceiling".
 2. [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architecture contract (target architecture, locked contracts, target crate graph).
 3. **`PORT.md` (this page)** — governance + operational translation manual.
 4. [`ROADMAP.md`](ROADMAP.md) — the construction plan (dependency-ordered phases from current to target).
@@ -24,7 +24,7 @@ The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](htt
 
 - [§Refusal triggers](#refusal-triggers) — 22 anti-patterns the maintainer refuses to introduce, with grep regexes
 - [§Lock decisions](#lock-decisions) — allowed vs forbidden `RwLock`/`Mutex` placements
-- [§Mapping rules](#mapping-rules) — Flutter behaviour primacy + binding-deletion carve-out + compile-time-over-runtime + sync-hot-path
+- [§Mapping rules](#mapping-rules) — Flutter behaviour as the floor + improvement ledger + binding-deletion carve-out + compile-time-over-runtime + sync-hot-path
 - [§Per-crate `ARCHITECTURE.md` template](#per-crate-architecturemd-template) — required and optional sections per crate
 - [§Index](#index) — which crate carries which template state
 - [§Verification](#verification) — `just port-check` recipe + self-test
@@ -359,7 +359,7 @@ was chosen deliberately over splitting them across two mechanisms.
 
 ### 18. `new_unchecked` in `flui-foundation/src/key.rs`
 
-**F2 (P0 UB) — key counter off the checked path.** F2 replaced `NonZeroU64::new_unchecked` in `Key::new` with the `fetch_update` sentinel pattern (counter = 0 is the permanent-exhaustion sentinel; retries panic without mutation or duplicate keys), eliminating the UB-on-counter-wrap hazard. This trigger guards against reintroducing any `new_unchecked` call into `crates/flui-foundation/src/key.rs` — the key counter must stay on the safe checked path.
+**F2 (P0 UB) — key counter off the checked path.** F2 replaced `NonZeroU64::new_unchecked` in `Key::new` with the `Atomic::try_update` sentinel pattern (counter = 0 is the permanent-exhaustion sentinel; retries panic without mutation or duplicate keys), eliminating the UB-on-counter-wrap hazard. This trigger guards against reintroducing any `new_unchecked` call into `crates/flui-foundation/src/key.rs` — the key counter must stay on the safe checked path.
 
 **Scope:** `crates/flui-foundation/src/key.rs` only.
 
@@ -494,13 +494,20 @@ The general rule is: **a lock that protects shared infrastructure mutated outsid
 
 These are the rules the methodology uses to resolve Dart ↔ Rust translation conflicts at port time. They are operational summaries of the strategy clauses in [`STRATEGY.md`](../STRATEGY.md) — when a clause conflicts with a refactor proposal, the clause wins, and the proposal is reshaped.
 
-### Flutter behaviour primacy, with binding-deletion carve-out
+### Flutter behaviour as the floor, with the improvement ledger
 
-Algorithms (`build` / `layout` / `paint`, lifecycle FSM, dependency tracking, child reconciliation through keys) are ported 1:1 from `.flutter/`. Conflicts with Rust-idiomatic alternatives resolve in favour of Flutter semantics. This means:
+The observable contracts of `build` / `layout` / `paint`, the lifecycle state sequence, dependency tracking, and child reconciliation through keys are taken from `.flutter/` as the **minimum** FLUI must meet: they are what the ported test corpus checks, and losing one of them silently is the failure mode the whole methodology exists to prevent. They are not the design. A conflict between the Flutter shape and a better Rust-native or market-current alternative resolves in favour of the **better solution**, and the burden on the proposer is the ledger, not a defence of Flutter:
 
-- Element lifecycle FSM stays even when a typestate-only sealed enum would be "cleaner".
-- Mixin → trait + `ambassador` delegation is the translation; not a typestate or generic-only restructure.
-- `RenderObject::parent_data` indirection stays even when an arity-keyed enum would compile-time-eliminate the indirection.
+1. **State the improvement** — what is better (type safety, speed, safety, ergonomics, a stronger contract) and why the Flutter shape was the way it was (usually a Dart-era constraint: single isolate, nullable references, exceptions, string-keyed aspects, no compile-time arity). Protocol-level contracts get an ADR; local ones get a `## Mapping decisions` entry in the crate's `ARCHITECTURE.md`.
+2. **Replace the oracle** — every Flutter test that stops applying is named, and a FLUI test proving the new behaviour takes its place. Coverage never drops below the reference.
+3. **Keep every edge case, or drop it on purpose** — a behaviour the reference handles disappears only by a recorded decision.
+
+Worked examples of the rule, both directions:
+
+- Element lifecycle stays a state machine because that is what the user-visible contract *is* (mount → build → update → unmount, with the same observable ordering) — but a typestate or sealed-enum encoding of it that makes illegal transitions unrepresentable is an improvement to take, not a restructure to refuse, once the ported lifecycle tests pass against it.
+- Mixin → trait + `ambassador` delegation is the *default* translation; a generic- or typestate-based restructure replaces it wherever it removes a runtime check without changing the contract.
+- `RenderObject::parent_data` indirection: an arity-keyed encoding that compile-time-eliminates the indirection is preferred *if* it preserves the contract that parent data is owned by the parent's protocol and survives reparenting the same way — prove that with the ported tests before swapping.
+- `InheritedModel`'s string aspects → field-mask typed aspects (ADR-0008): the same user-visible dependency semantics, a stricter and faster mechanism. This is the shape every improvement should have.
 
 **Carve-out:** a Flutter binding may be **deleted**, not ported, when a Rust-native crate stack already owns the responsibility end-to-end. The canonical precedent is the removal of `PlatformTextSystem` in [`docs/plans/2026-03-31-platform-roadmap.md`](plans/2026-03-31-platform-roadmap.md) Task 1 — cosmic-text + glyphon + flui-assets covers the text-shaping responsibility, so the Flutter abstraction was removed rather than re-implemented. The carve-out applies when:
 
@@ -524,7 +531,7 @@ Where a runtime check and a compile-time check express the same constraint, the 
 
 ### Multi-source references in `## Mapping decisions`
 
-The per-crate `ARCHITECTURE.md` `## Mapping decisions` section may cite any audited reference codebase, not Flutter alone. The workspace already routinely cites Flutter, GPUI, Iced, Makepad, Vello, and Skia as design references (see [`docs/plans/2026-03-31-engine-hardening.md`](plans/2026-03-31-engine-hardening.md)). The Flutter-primacy rule above is about *semantics*, not source exclusivity — the structural shape may be drawn from any of the audited references when their pattern fits Rust idioms better.
+The per-crate `ARCHITECTURE.md` `## Mapping decisions` section may cite any audited reference codebase, not Flutter alone. The workspace already routinely cites Flutter, GPUI, Iced, Makepad, Vello, and Skia as design references (see [`docs/plans/2026-03-31-engine-hardening.md`](plans/2026-03-31-engine-hardening.md)). The behaviour-as-floor rule above is about *semantics*, not source exclusivity — the structural shape may be drawn from any of the audited references, or designed fresh, when that pattern is the better solution; the ledger records where it came from.
 
 ---
 
@@ -1013,7 +1020,7 @@ Some Dart constructs do **not** map to Rust at all. Listing them up front preven
 
 ### Deleted, not ported (binding-deletion carve-out)
 
-A Flutter binding may be **deleted**, not ported, when a Rust-native crate stack already owns the responsibility end-to-end. This is the [§Mapping rules](#flutter-behaviour-primacy-with-binding-deletion-carve-out) carve-out. Recorded precedents:
+A Flutter binding may be **deleted**, not ported, when a Rust-native crate stack already owns the responsibility end-to-end. This is the [§Mapping rules](#flutter-behaviour-as-the-floor-with-the-improvement-ledger) carve-out. Recorded precedents:
 
 | Dart construct | Replaced by | Recorded in |
 |---|---|---|
@@ -1021,7 +1028,7 @@ A Flutter binding may be **deleted**, not ported, when a Rust-native crate stack
 | `LayerHandle<T>` (Flutter cached-layer pointer, 467 LOC + 17 aliases, 0 external callers) | deleted; layer caching handled at the `flui-layer` enum + `LayerId` level | [`crates/flui-layer/ARCHITECTURE.md`](../crates/flui-layer/ARCHITECTURE.md) Mythos Step 1 |
 | `ShaderWarmUp` (Flutter Skia shader pre-compilation hook) | deleted; wgpu compiles pipelines on first use, no warm-up phase | [`crates/flui-painting/ARCHITECTURE.md`](../crates/flui-painting/ARCHITECTURE.md) |
 
-When proposing a new binding-deletion, the three conditions in [§Mapping rules](#flutter-behaviour-primacy-with-binding-deletion-carve-out) apply: end-to-end Rust-native ownership, no Flutter-semantic break, and a `## Mapping decisions` entry citing the precedent table above.
+When proposing a new binding-deletion, the three conditions in [§Mapping rules](#flutter-behaviour-as-the-floor-with-the-improvement-ledger) apply: end-to-end Rust-native ownership, no Flutter-semantic break, and a `## Mapping decisions` entry citing the precedent table above.
 
 ### Not yet replaced — leave for Phase B
 

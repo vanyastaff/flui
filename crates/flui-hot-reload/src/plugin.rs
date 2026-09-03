@@ -362,7 +362,7 @@ macro_rules! app_plugin {
             __FLUI_APP_STATE.with(|state| {
                 let caller = match state.token.get() {
                     0 => {
-                        let token = __FLUI_APP_NEXT_THREAD_TOKEN.fetch_update(
+                        let token = __FLUI_APP_NEXT_THREAD_TOKEN.try_update(
                             ::std::sync::atomic::Ordering::Relaxed,
                             ::std::sync::atomic::Ordering::Relaxed,
                             |next| next.checked_add(1),

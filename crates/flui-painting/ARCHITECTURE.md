@@ -50,7 +50,7 @@ This section records places where the Rust shape diverges from the Dart/Skia sha
 
 ### 1. Closed `DrawCommand` enum, not a `Box<dyn Drawable>` plugin trait
 
-**Rule:** [`docs/PORT.md`](../../docs/PORT.md) Mapping rule "Compile-time over runtime"; constitution Anti-Patterns ("Prefer generics and enum dispatch over `dyn` trait objects"); strategy clause "Behavior loyal, structure Rust-native".
+**Rule:** [`docs/PORT.md`](../../docs/PORT.md) Mapping rule "Compile-time over runtime"; constitution Anti-Patterns ("Prefer generics and enum dispatch over `dyn` trait objects"); strategy clause "Behavior as floor, everything else designed for Rust".
 
 **Choice:** `DrawCommand` is a closed `enum` with 29 concrete variants ([`src/display_list/command.rs`](src/display_list/command.rs)). The closed enum is **the** trust boundary with `flui-engine`'s wgpu backend -- the backend pattern-matches every variant exhaustively for GPU lowering. Adding a 30th variant is a coordinated change in `flui-painting` + `flui-engine` (+ optionally `flui-rendering` if a render-object should emit it).
 
@@ -98,7 +98,7 @@ This section records places where the Rust shape diverges from the Dart/Skia sha
 
 ### 5. `Canvas::finish(self) -> DisplayList` stays infallible
 
-**Rule:** Strategy clause "Behavior loyal, structure Rust-native" -- Flutter parity for the common case.
+**Rule:** Strategy clause "Behavior as floor, everything else designed for Rust" -- Flutter behavior as the floor for the common case.
 
 **Choice:** `Canvas::finish(self)` returns `DisplayList` directly (not `Result<DisplayList, PaintingError>`). On unrestored `save()` calls, it fires `debug_assert!` (Mythos chain Step 10) to catch the bug during tests, and `tracing::warn!` for release-build observability. Flutter's `PictureRecorder.endRecording()` does the same -- silent finalisation with debug-time sanity checks.
 

@@ -13,9 +13,10 @@ description = "Developer tools for FLUI - profiling, debugging, hot reload, and 
 # Timing and performance (web-time is the maintained replacement for instant)
 web-time = { workspace = true }
 
-# Serialization (for devtools protocol)
+# Serialization (for devtools protocol). `serde_json` is only reached by the
+# Chrome-trace exporter in `timeline`, so the feature owns the edge.
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, optional = true }
 
 # Hot reload support (shared watcher in flui-hot-reload)
 flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", optional = true, features = [
@@ -52,7 +53,7 @@ default = []
 profiling = ["dep:tracing", "dep:tracing-subscriber"]
 
 # Timeline/frame history tracking
-timeline = ["dep:flui-scheduler"]
+timeline = ["dep:flui-scheduler", "dep:serde_json"]
 
 # === Advanced Features ===
 # Hot code reload for development
@@ -75,7 +76,7 @@ full = ["profiling", "timeline", "hot-reload", "inspector"]
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
-flui-testing = { path = "../flui-testing", version = "0.2.0" }
+flui-testing = { workspace = true }
 
 # The profiler demo exercises the `profiling`-gated `profiler` module, so it
 # only builds when that feature is enabled (it is off in the default build).

@@ -56,6 +56,14 @@ in a growing collection of copy-pasted `allow` attributes.
   a reason that explains why the code is clearer or more correct as written.
 - Do not add crate-wide `allow` attributes to make a new warning disappear.
 - New code MUST NOT depend on APIs stabilized after the declared MSRV.
+- Within the MSRV, code SHOULD use the most current stable idiom for the job
+  and MUST NOT reproduce a pattern the language or standard library has since
+  superseded (for example `#[allow]` where `#[expect]` applies, `fetch_update`
+  where `try_update` applies, hand-rolled `Debug` where `fmt::from_fn`
+  applies, `cfg`-chains where `cfg_select!` applies, `lazy_static`/`once_cell`
+  where `LazyLock`/`OnceLock` apply). Flutter's Dart shape is never a reason
+  to keep an older Rust idiom. When a materially better idiom is blocked only
+  by the MSRV, propose the bump per `docs/PORT.md` instead of writing around it.
 - `cfg` branches not compiled on Linux MUST still pass the repository's
   cross-target checks.
 

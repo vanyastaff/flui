@@ -8,7 +8,6 @@ authors.workspace = true
 repository.workspace = true
 description = "Composition-only cross-platform tracing backend for FLUI"
 documentation = "https://docs.rs/flui-log"
-readme = "README.md"
 keywords = ["logging", "tracing", "cross-platform", "android", "ios"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
 

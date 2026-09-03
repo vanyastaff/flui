@@ -28,7 +28,7 @@ This section records places where the Rust shape diverges from the Dart shape an
 
 ### Render-tree storage uses a `Slab<RenderNode>` with `RenderId` (NonZeroUsize) keys
 
-**Rule:** strategy clause "Behavior loyal, structure Rust-native"; constitution Anti-Patterns list ("`Arc<Mutex<>>` for tree structures — use arena/slotmap"); the ID-offset pattern documented in [`docs/architecture.md`](../../docs/architecture.md).
+**Rule:** strategy clause "Behavior as floor, everything else designed for Rust"; constitution Anti-Patterns list ("`Arc<Mutex<>>` for tree structures — use arena/slotmap"); the ID-offset pattern documented in [`docs/architecture.md`](../../docs/architecture.md).
 
 **Choice:** `RenderTree` stores `Slab<RenderNode>`. `RenderId` is a `NonZeroUsize` newtype that adds `+1` to the slab index, so `Option<RenderId>` niche-optimises to 8 bytes for parent / child references. The slab is reached from one strong root (`PipelineOwner::root_id`) and every other node is reached by walking child IDs in `NodeLinks`.
 
@@ -95,7 +95,7 @@ The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_se
 
 ### Multi-source design references in this crate
 
-Strategy clause "Behavior loyal, structure Rust-native" treats Flutter as the **semantic** reference. The structural shape of individual components in this crate has been informed by multiple Rust-side audited references as recorded in prior plans:
+Strategy clause "Behavior as floor, everything else designed for Rust" treats Flutter as the **semantic** floor, not the design. The structural shape of individual components in this crate has been informed by multiple Rust-side audited references as recorded in prior plans:
 
 - `slab::Slab` storage pattern with `+1/-1` ID offset — internal precedent in [`src/storage/tree.rs`](src/storage/tree.rs); the offset rationale lives in [`docs/architecture.md`](../../docs/architecture.md).
 - `Weak<RwLock<PipelineOwner>>` parent back-reference replacing a raw pointer — [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 7.

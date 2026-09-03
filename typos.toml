@@ -56,3 +56,5 @@ mis = "mis"
 # Intentional pre-insert text in a TextEditingController test: start "helo",
 # insert "l" before 'o' → "hello".
 helo = "helo"
+# Relm4 — the GTK4 Rust framework, cited by name in the landscape survey.
+relm = "relm"

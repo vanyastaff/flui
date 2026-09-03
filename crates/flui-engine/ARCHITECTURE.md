@@ -74,7 +74,7 @@ This section records places where the Rust shape diverges from the patterns the 
 
 ### 1. Closed `LayerRender<R>` static dispatch, not `Box<dyn Backend>` plugin trait
 
-**Rule:** [`docs/PORT.md`](../../docs/PORT.md) Mapping rule "Compile-time over runtime"; constitution Anti-Patterns ("Prefer generics and enum dispatch over `dyn` trait objects"); strategy clause "Behavior loyal to wgpu/Vulkan/Metal semantics, structure Rust-native."
+**Rule:** [`docs/PORT.md`](../../docs/PORT.md) Mapping rule "Compile-time over runtime"; constitution Anti-Patterns ("Prefer generics and enum dispatch over `dyn` trait objects"); strategy clause "Behavior as floor, everything else designed for Rust" (here: wgpu/Vulkan/Metal semantics as the floor).
 
 **Choice:** `LayerRender<R: CommandRenderer + ?Sized>` is a closed extension trait with 19 impls (one per `flui_layer::Layer` variant) ([`src/wgpu/layer_render.rs`](src/wgpu/layer_render.rs)). Dispatch is static via generics; no `Box<dyn Layer>`, no `Box<dyn Backend>`, no vtable on the hot path. `CommandRenderer` itself has exactly **one production impl** (`Backend` in [`src/wgpu/backend.rs`](src/wgpu/backend.rs)) and **one test mock** (`MockRenderer` in `layer_render.rs:683-965`). The trait earns its existence via the test mock and via the static-dispatch generic boundary; a future second backend (Skia/Vello/software) would add a second impl, not displace the trait.
 

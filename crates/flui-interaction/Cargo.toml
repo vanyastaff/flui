@@ -42,7 +42,7 @@ dpi = "0.1.2"
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
-flui-testing = { path = "../flui-testing", version = "0.2.0" }
+flui-testing = { workspace = true }
 static_assertions = { workspace = true }
 # `tracing-subscriber` is a dev-only dependency — the observability tests
 # install a `fmt::TestWriter` subscriber to exercise span emission on hot

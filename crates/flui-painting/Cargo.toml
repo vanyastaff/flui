@@ -9,7 +9,6 @@ rust-version.workspace = true
 description = "Canvas-based painting abstraction for FLUI - records drawing commands into DisplayList"
 keywords = ["gui", "canvas", "painting", "2d-graphics", "rendering"]
 categories = ["graphics", "gui", "rendering"]
-readme = "README.md"
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 12
 # separate binaries). See the `[[test]] name = "painting_it"` target below.

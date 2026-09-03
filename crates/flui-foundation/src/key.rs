@@ -167,7 +167,7 @@ impl Key {
     /// sentinel so they exercise the overflow path without mutating the
     /// shared counter (which would race sibling tests calling `Key::new`).
     ///
-    /// F2 — `fetch_update` sentinel state machine.
+    /// The `try_update` sentinel state machine.
     ///
     /// Invariants for `counter`:
     ///
@@ -175,19 +175,19 @@ impl Key {
     ///   out; the next stored value is `value + 1`.
     /// * `0` — PERMANENT EXHAUSTION SENTINEL: every key in `1..=u64::MAX`
     ///   has been issued. The closure refuses to advance (returns `None`),
-    ///   so `fetch_update` yields `Err(0)` on this and ALL subsequent
+    ///   so `try_update` yields `Err(0)` on this and ALL subsequent
     ///   calls — there is no silent recovery, even across `catch_unwind`
     ///   + retry.
     ///
     /// The plain `fetch_add` + unchecked-construction shape this replaces
     /// wrapped `u64::MAX -> 0` and then fabricated a duplicate (re-issuing
     /// 1, 2, ... after the panic was caught), breaking identity.
-    /// `fetch_update` writes the sentinel atomically with the read, so the
+    /// `try_update` writes the sentinel atomically with the read, so the
     /// exhausted state is observable and sticky.
     #[inline]
     fn new_with_counter(counter: &AtomicU64) -> Self {
         let id = counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 // current == 0 -> exhausted: refuse, keep sentinel.
                 // current == u64::MAX -> hand it out, then wrap to the
                 // 0 sentinel so the *next* call is permanently exhausted.
@@ -560,7 +560,7 @@ impl UniqueKey {
     /// so they exercise the overflow path without mutating the shared
     /// counter (which would race sibling tests calling `UniqueKey::new`).
     ///
-    /// F3 — same `fetch_update` sentinel state machine as `Key::new`.
+    /// The same `try_update` sentinel state machine as `Key::new`.
     ///
     /// Invariants for `counter`:
     ///
@@ -575,7 +575,7 @@ impl UniqueKey {
     /// re-issue 1, 2, ... breaking the uniqueness contract.
     fn new_with_counter(counter: &AtomicU64) -> Self {
         let id = counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 if current == 0 {
                     None
                 } else {

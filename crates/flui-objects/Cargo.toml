@@ -7,7 +7,6 @@ authors.workspace = true
 license.workspace = true
 description = "Concrete RenderBox/RenderSliver catalog for Flui (the object catalog atop flui-rendering's engine)"
 repository.workspace = true
-readme = "README.md"
 # Single-binary integration-test consolidation. The binary keeps the name
 # `render_object_harness` — docs and muscle memory reference
 # `cargo test -p flui-objects --test render_object_harness` — and

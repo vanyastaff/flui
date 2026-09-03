@@ -391,15 +391,15 @@ impl NavigatorShared {
         // Saturating, not `fetch_sub`: `fetch_sub` on an unmatched call at 0
         // wraps to `u32::MAX` in release (the debug_assert below is compiled
         // out there), which would make every later `user_gesture_in_progress()`
-        // read `true` forever. `fetch_update` with `saturating_sub` makes an
+        // read `true` forever. `try_update` with `saturating_sub` makes an
         // unmatched call a true no-op in release, exactly as the debug-only
         // assert already documents it should be.
         let count_before = self
             .user_gestures_in_progress
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 Some(count.saturating_sub(1))
             })
-            .expect("BUG: the update closure always returns Some, fetch_update cannot fail");
+            .expect("BUG: the update closure always returns Some, try_update cannot fail");
         debug_assert!(
             count_before > 0,
             "BUG: did_stop_user_gesture called without a matching did_start_user_gesture"

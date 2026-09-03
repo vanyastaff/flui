@@ -8,6 +8,8 @@ use wasm_bindgen::prelude::*;
 
 use flui_platform::traits::{DispatchEventResult, PlatformInput};
 
+/// Entry point invoked by the generated JS glue on module load: brings up the
+/// web platform, logs every input event it dispatches, and requests frames.
 #[wasm_bindgen(start)]
 pub fn start() {
     // Set up panic hook for better error messages
@@ -68,12 +70,11 @@ pub fn start() {
                             .into(),
                         );
                     }
-                    PointerEvent::Move(_) => {
-                        // Skip move events to avoid console spam
-                    }
                     PointerEvent::Scroll(e) => {
                         web_sys::console::log_1(&format!("Scroll: delta={:?}", e.delta).into());
                     }
+                    // Move events are skipped to avoid console spam; the
+                    // remaining variants are not interesting to this demo.
                     _ => {}
                 }
             }

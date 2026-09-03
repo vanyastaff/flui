@@ -11,6 +11,15 @@ name: Weekly
 #                 are noisy, so the numbers support "did this drift over
 #                 weeks", not "did this PR regress" — real A/B comparisons
 #                 happen locally via `just bench-save` / `just bench-compare`.
+#   nightly-canary — `cargo +nightly check` + `clippy` over the workspace,
+#                 then the future-incompatibility report and a duplicate-
+#                 versions metric. ADVISORY: nightly is where the next
+#                 stable's deprecations, new lints, and future-incompat
+#                 errors appear first (each with a known release date), so a
+#                 red canary is a dated warning to act on, never a gate.
+#                 Read it alongside This Week in Rust's "Calls for Testing"
+#                 and "Final Comment Period" sections. Local mirror:
+#                 `just nightly-check`.
 # Runs Monday ~05:17 UTC (off the :00/:30 herd marks). Not a merge gate;
 # failures surface in the Actions tab.
 
@@ -120,3 +129,46 @@ jobs:
           name: criterion-weekly-${{ github.run_id }}
           path: target/criterion
           retention-days: 90
+
+  nightly-canary:
+    name: nightly canary (check + clippy + future-incompat, advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Advisory by design (see the header): a failure here is information
+    # about a coming stable release, not a regression in this tree.
+    continue-on-error: true
+    env:
+      # Nightly deprecates APIs and adds lints ahead of stable; a deny gate
+      # here would abort on the first one and hide the rest of the report.
+      CARGO_BUILD_WARNINGS: warn
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
+        with:
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      # `+nightly` on every cargo line: the committed rust-toolchain.toml pin
+      # overrides the job's installed default (same as the miri job).
+      - name: cargo +nightly check (workspace, all targets)
+        run: cargo +nightly check --workspace --all-targets --locked
+
+      - name: cargo +nightly clippy (workspace, all targets)
+        run: cargo +nightly clippy --workspace --all-targets --locked
+
+      # Lints that will become hard errors in a future release, collected
+      # from the build above. Empty output is the good outcome.
+      - name: Future-incompatibility report
+        run: cargo +nightly report future-incompatibilities || true
+
+      # Duplicate-version metric for the committed lockfile. Duplicates are
+      # removed by bumping the upstream that pins the old version, never by
+      # patching — this step only makes the count visible week over week.
+      - name: Duplicate dependency versions (metric, informational)
+        run: cargo tree --workspace --duplicates --edges normal
