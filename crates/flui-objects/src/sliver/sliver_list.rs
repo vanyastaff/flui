@@ -87,13 +87,9 @@ pub struct RenderSliverList {
     /// Kept as a field to reuse the allocation across passes.
     logical_to_slot: BTreeMap<usize, usize>,
 
-    // ── anchor-correction state machine ─────────────────────────────────────
+    // ── anchor correction ───────────────────────────────────────────────────
     /// Accumulated anchor-correction delta not yet emitted to the viewport.
     pending_correction: f32,
-
-    /// Scroll offset at the end of the previous layout pass; used to detect
-    /// backward scrolling (offset decreased → suppress correction emission).
-    last_scroll_offset: f32,
 
     // ── hit-test support ────────────────────────────────────────────────────
     /// Dense child count committed after the last layout pass. Used by the
@@ -123,7 +119,6 @@ impl RenderSliverList {
             virtualizer: Virtualizer::new(item_count, default_extent_estimate),
             logical_to_slot: BTreeMap::new(),
             pending_correction: 0.0,
-            last_scroll_offset: 0.0,
             attached_child_count: 0,
         }
     }
@@ -176,7 +171,6 @@ impl Clone for RenderSliverList {
             virtualizer: self.virtualizer.clone(),
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
             pending_correction: self.pending_correction,
-            last_scroll_offset: self.last_scroll_offset,
             attached_child_count: self.attached_child_count,
         }
     }
@@ -217,7 +211,6 @@ impl RenderSliver for RenderSliverList {
             &mut self.logical_to_slot,
             &mut self.item_count,
             &mut self.pending_correction,
-            &mut self.last_scroll_offset,
             &mut self.attached_child_count,
             &constraints,
             ctx,
@@ -304,11 +297,9 @@ mod tests {
     fn clone_preserves_item_count_and_correction() {
         let mut list = make_list();
         list.pending_correction = 8.0;
-        list.last_scroll_offset = 200.0;
         let cloned = list.clone();
         assert_eq!(cloned.item_count, 100);
         assert_eq!(cloned.pending_correction, 8.0);
-        assert_eq!(cloned.last_scroll_offset, 200.0);
         // logical_to_slot is reset on clone (transient state).
         assert!(cloned.logical_to_slot.is_empty());
     }

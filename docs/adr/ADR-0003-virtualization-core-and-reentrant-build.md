@@ -164,6 +164,8 @@ flui explicitly does **not** adopt **RecyclerView's two-level recycling pool** i
 
 **Consumer note (lives with the consumer, U3 — *not* in the agnostic core).** The lazy `SliverList` must **suppress anchor correction while scrolling backward** — applying corrections during an upward scroll is the canonical "items jump while scrolling up" bug — and must **reset the correction accumulator on user-initiated scroll**. The agnostic `Virtualizer` only *emits* the signed `AnchorCorrection`; the *policy* of when to apply, defer, or suppress it (and when to zero the accumulator) is a consumer concern and belongs in U3, not the core.
 
+> **Amended 2026-09-03 ([ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md)):** the backward-scroll suppression above is retired. Withholding a pending correction while the offset decreases is itself the one-frame content jump it meant to prevent (the anchor drifts by exactly the growth above it until the next non-decreasing pass replays the correction), and with lazy requests serviced inside the frame's fixpoint every build re-runs layout at an unchanged offset, so the deferral could only ever last one pass. Corrections are now emitted whenever non-zero, in either direction; the accumulator-reset on user-initiated scroll never existed and is not needed. Measured on the `slivers_test.dart` 'inaccurate scroll offset' scene: suppression on and off produce identical windows and offsets at every checkpoint.
+
 ### Layering
 
 ```
