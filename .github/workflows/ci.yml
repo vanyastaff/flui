@@ -191,7 +191,21 @@ jobs:
           # rebuild of the missing deps on the next run — never a cold one.
           shared-key: stable-dev-host
           cache-on-failure: true
-          save-if: ${{ github.event_name != 'merge_group' }}
+          # Caches are WRITTEN only by runs on main; every PR run is a
+          # read-only consumer that restores main's cache (rust-cache falls
+          # back to the base branch's key when a PR-ref key is absent).
+          # Before this, every PR run saved its own copies under its own
+          # ref, so with ~13 key families the repo overshot GitHub's 10 GB
+          # cap as soon as two PRs were open — measured 2026-09-03: 27
+          # caches, 11.9 GB, with the shared `stable-dev-host` entries
+          # evicted first because they are the largest, turning "warm" jobs
+          # cold on exactly the runs that mattered. One set of caches, from
+          # main, is ~5-6 GB and stays under the cap. What a PR gives up:
+          # its second push cannot reuse its first push's build — it
+          # reuses main's instead, which is usually as good. Merge-queue
+          # runs never saved (the previous `save-if` excluded them) and
+          # still do not, since their ref is not main.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -249,7 +263,7 @@ jobs:
           # the rationale lives on the `clippy` job's cache step.
           shared-key: stable-dev-host
           cache-on-failure: true
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Per tokio: binary caching breaks on macOS — guard for when macOS
           # joins the matrix.
           cache-bin: ${{ matrix.os != 'macos-latest' }}
@@ -413,7 +427,7 @@ jobs:
           # the rationale lives on the `clippy` job's cache step.
           shared-key: stable-dev-host
           cache-on-failure: true
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
@@ -493,7 +507,7 @@ jobs:
           # the rationale lives on the `clippy` job's cache step.
           shared-key: stable-dev-host
           cache-on-failure: true
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
       # backend dlopens it at startup (`xkbcommon-dl` panics without it, so
@@ -560,7 +574,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
@@ -619,7 +633,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: ${{ matrix.os != 'macos-latest' }}
 
       - name: cargo bench --no-run
@@ -651,7 +665,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo doc --no-deps
         run: cargo doc --workspace --no-deps --locked --document-private-items
@@ -713,7 +727,7 @@ jobs:
           # the rationale lives on the `clippy` job's cache step.
           shared-key: stable-dev-host
           cache-on-failure: true
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo test --doc
         run: cargo test --workspace --locked --doc
@@ -744,7 +758,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo check --workspace (MSRV)
         run: cargo check --workspace --all-targets --locked
@@ -799,7 +813,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # `+nightly` is required: the committed rust-toolchain.toml pin overrides
       # the job's installed default toolchain, and the pinned stable has no
@@ -876,7 +890,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           prefix-key: v1-rust-feature-matrix-${{ matrix.slice }}
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
       # `just` carries the facade combination list, so CI and `just
@@ -1008,7 +1022,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
       # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.1`
@@ -1096,7 +1110,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
       # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.1`
