@@ -72,10 +72,16 @@ driver.
 
 - **Three-tree pipeline.** Immutable `View` → mutable `Element` → layout/paint `Render`. Build / Layout / Paint phases run on demand only.
 - **Type-safe arity.** Render children parameterized by `Leaf`, `Single`, `Optional`, `Variable` — child-count mismatches become compile-time errors.
-- **GPU-first rendering.** `wgpu` 29.x backend with `lyon` tessellation and `cosmic-text` / `glyphon` for high-quality text.
+- **GPU-first rendering.** `wgpu` 30 backend with `lyon` tessellation and `cosmic-text` / `glyphon` for high-quality text.
 - **Cross-platform.** Native Win32 and AppKit backends, headless mode for CI, Android NDK target, WASM/WebGPU, plus a `winit` fallback.
 - **Hot-reload scenes.** `dlopen`-based plugin host (`flui-hot-reload`) for desktop iteration without process restarts.
 - **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is *not* confined to a fixed crate list — it concentrates wherever a crate touches an FFI or ABI boundary. By unsafe-site count in `src/` (`rg -c '\bunsafe\s+(fn|impl|trait|extern)\b|\bunsafe\s*\{'`, measured 2026-08-04): `flui-platform` (Win32/AppKit/Android FFI) dominates by a wide margin, followed by `flui-rendering` (a miri-audited arena, `subtree_arena.rs`), `flui-hot-reload` (the `dlopen` ABI boundary), and `flui-engine` (wgpu/raw-window-handle FFI); smaller counts exist in `flui-layer`, `flui-foundation`, `flui-types`, `flui-log`, `flui-view`, and `flui-app`. `flui-painting` carries zero unsafe code today. Reviewed at the workspace level — see `docs/PANIC-POLICY.md` and each crate's `ARCHITECTURE.md`.
+
+## Why FLUI
+
+- **Flutter's layout protocol, not CSS.** The Rust GUI stacks that are not game engines lay out with Taffy (flexbox/grid): GPUI, Dioxus Native, Bevy UI, Vexo. FLUI implements Flutter's box and sliver protocols — constraints down, sizes up, one pass, with intrinsic dimensions, baselines, relayout boundaries, and `RenderSliver` for pinned, floating, and overlapping scrolling — because that is the model a Flutter developer expects, and the one Jetpack Compose independently converged on. Flutter's own rendering and widget tests are the oracle: 72 test files in this workspace are adapted from `packages/flutter/test` (see [`NOTICE`](NOTICE)).
+- **Pure Rust, one toolchain.** rinf and flutter_rust_bridge put Rust logic inside a real Flutter app, so the Dart VM, the Flutter SDK, and a second build system ship with it. FLUI keeps the same mental model — declarative widgets over a retained three-tree, keys, lifecycle — as ordinary crates: `cargo build` is the whole build, `wgpu` is the one renderer on every platform, and there is no VM in the binary.
+- **Resilience that is tested, not assumed.** The renderer recovers from GPU device loss and rebuilds its surface; a window reported as fully occluded stops submitting GPU work while input is still serviced; and both are exercised by a live end-to-end smoke test that drives a real window with real X11 input under Xvfb, checks the captured pixels and the exit code, and verifies occlusion against a real cover window — plus a Wayland variant for the close-path teardown order. Synthetic-event tests stayed green through every one of the platform-layer regressions that suite now catches.
 
 ## Hello World
 
@@ -163,4 +169,6 @@ Licensed under either the [MIT License](LICENSE) or the [Apache License, Version
 
 ## Acknowledgments
 
-Patterns are adapted from the [Flutter](https://flutter.dev) framework and the [GPUI](https://www.gpui.rs/) Rust UI library. Maintainer checkouts may include local `.flutter/` and `.gpui/` reference mirrors for parity work; they are studied, never copied, and patterns are translated to FLUI idioms.
+FLUI takes [Flutter](https://flutter.dev) as its behavioral reference: the three-tree model, the box/sliver layout protocol, lifecycle ordering, and Flutter's test corpus are the floor it must meet, and 72 test files here are adapted from `packages/flutter/test`. Structure and mechanisms are designed for Rust and diverge deliberately, with each divergence recorded in an ADR or a crate's `## Mapping decisions`. Flutter is Copyright 2014 The Flutter Authors, BSD-3-Clause — see [`NOTICE`](NOTICE) for the attribution that ships with the affected crates. Flutter is a trademark of Google LLC; FLUI is not affiliated with or endorsed by Google.
+
+[GPUI](https://www.gpui.rs/) (Zed Industries, Apache-2.0) is consulted as a design reference for the platform layer; nothing is copied from it. Maintainer checkouts may include local `.flutter/` and `.gpui/` mirrors for that reference work.
