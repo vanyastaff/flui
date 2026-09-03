@@ -59,6 +59,7 @@ fn assert_generated_project_compiles(template: &str) {
     // failure (`run_cargo_check` returns `Ok(false)`, the scaffold itself
     // having succeeded), so this cannot turn the assertion below red; it just
     // stops the test reaching the network at all.
+    let t_create = std::time::Instant::now();
     flui()
         .env("CARGO_NET_OFFLINE", "true")
         .args([
@@ -74,6 +75,11 @@ fn assert_generated_project_compiles(template: &str) {
         .arg(&target)
         .assert()
         .success();
+    eprintln!(
+        "[timing] flui create ({template}): {:.1}s; scaffold-local target present: {}",
+        t_create.elapsed().as_secs_f64(),
+        project.join("target").is_dir()
+    );
 
     // Seed the generated project with this workspace's own resolved versions
     // before checking it, and forbid the network.
@@ -143,14 +149,28 @@ fn assert_generated_project_compiles(template: &str) {
         .map_or_else(|| root.join("target"), |dir| root.join(PathBuf::from(dir)));
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let t_check = std::time::Instant::now();
     let output = std::process::Command::new(cargo)
         .arg("check")
         .arg("--offline")
+        .arg("-v")
         .arg("--target-dir")
         .arg(&workspace_target)
         .current_dir(&project)
         .output()
         .expect("run cargo check on the generated project");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let compiled = stderr
+        .lines()
+        .filter(|l| {
+            l.trim_start().starts_with("Checking ") || l.trim_start().starts_with("Compiling ")
+        })
+        .count();
+    eprintln!(
+        "[timing] scaffold check ({template}): {:.1}s; crates compiled: {compiled}; target-dir: {}",
+        t_check.elapsed().as_secs_f64(),
+        workspace_target.display()
+    );
 
     assert!(
         output.status.success(),

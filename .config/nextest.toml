@@ -24,3 +24,9 @@ leak-timeout = "1s"
 [[profile.default.overrides]]
 filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | test(/^cli_create::generated_.*_project_compiles$/)'
 slow-timeout = { period = "300s", terminate-after = 4 }
+
+# TEMPORARY DIAGNOSTIC (draft PR #821 only): surface these two tests' stderr
+# on success so CI's log carries their per-phase timings.
+[[profile.default.overrides]]
+filter = 'test(/generated_.*_project_compiles/)'
+success-output = "immediate"
