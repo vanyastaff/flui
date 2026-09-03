@@ -44,7 +44,7 @@ This section records places where the Rust shape diverges from the Dart shape an
 
 ### 1. Closed `Layer` enum, not a `Box<dyn Layer>` plugin trait
 
-**Rule:** [`docs/PORT.md`](../../docs/PORT.md) Mapping rule "Compile-time over runtime"; constitution Anti-Patterns ("Prefer generics and enum dispatch over `dyn` trait objects"); strategy clause "Behavior loyal, structure Rust-native".
+**Rule:** [`docs/PORT.md`](../../docs/PORT.md) Mapping rule "Compile-time over runtime"; constitution Anti-Patterns ("Prefer generics and enum dispatch over `dyn` trait objects"); strategy clause "Behavior as floor, everything else designed for Rust".
 
 **Choice:** `Layer` is a `#[non_exhaustive] enum` with 19 concrete variants ([`src/layer/mod.rs`](src/layer/mod.rs)). The closed enum is **the** trust boundary -- adding a 20th variant is a coordinated change in `flui-layer` + `flui-engine` (whose wgpu backend pattern-matches every variant to GPU draw calls). There is no third-party `impl Layer` extension point.
 

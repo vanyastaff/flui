@@ -10,10 +10,10 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 
 ## How to read this document
 
-- **Benchmark / specification — released Flutter.** `.flutter/flutter-master/packages/flutter/lib/src/` is a shipped, mature product (~480k LOC of framework logic across 12 packages). It defines *done* and it defines *correct behavior*. FLUI is measured against it.
-- **Target — the complete FLUI.** Flutter behavior parity, Rust-native structure, and **better than Flutter wherever Rust permits at no behavior cost**.
+- **Benchmark / floor — released Flutter.** `.flutter/flutter-master/packages/flutter/lib/src/` is a shipped, mature product (~480k LOC of framework logic across 12 packages) with a test corpus to match. It defines the *minimum* observable behavior and the cheapest oracle for it; it does not define the ceiling, the architecture, or the idiom. FLUI is measured as *at least* this, and expected to be more.
+- **Target — the complete FLUI.** Flutter's behavior as the floor, Rust-native structure, and **better than Flutter wherever a better solution is known** — in functionality, architecture, and code style — with every improvement recorded (ADR / `## Mapping decisions`) and its oracle replaced by a FLUI test.
 - **Current code — a flawed head start.** The existing 21 crates are an inventory, not an anchor. Where the current code matches the target it is kept (a genuine head start — the render *machine* is gold-standard); where it does not, that is an unbuilt or wrong delta of **low narrative weight**, closed as normal construction reaches it. The current code does not anchor the target architecture — the target does. Where current-code defect *patterns* inform the standing quality discipline of Part VI, that is deliberate and forward-looking: a rule that refuses an observed mistake protects the finished product.
-- **The three port rules** (from [`STRATEGY.md`](../STRATEGY.md)): *behavior loyal* (algorithms 1:1 from `.flutter/`), *structure Rust-native*, *sync hot path, async at the edges*. This document adds a fourth: **better-than-Flutter where Rust permits** — type-safety, determinism, ergonomics — never at the cost of behavior parity.
+- **The three architectural rules** (from [`STRATEGY.md`](../STRATEGY.md)): *behavior as floor, everything else designed for Rust* (observable contracts from `.flutter/` are the minimum, improved wherever a better solution is known and the improvement is recorded and tested), *compile-time over runtime*, *sync hot path, async at the edges*. What "better" may never cost is an edge case lost by accident: a Flutter behavior is dropped only by decision, with its test replaced.
 
 **Backing research** (read for the per-decision depth this document synthesizes):
 
@@ -88,7 +88,7 @@ These nine decisions are the "right contract." Each is committed by the **first 
 
 ### C1 — Reactivity: `setState` canonical, signals out, `memoize` added
 
-Flutter's `setState` + `InheritedWidget` + depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on a signals crate. `STRATEGY.md` mandates this explicitly ("реинвент … откатывается к Flutter-семантике"); the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — Flutter's own internal short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. Signals are not banned outright: an *application-author* signal crate that drives `Element::mark_needs_build` from outside the catalog is a permitted post-parity opt-in, gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`. What is locked is the catalog's independence from signals — not a blanket language prohibition.
+Flutter's `setState` + `InheritedWidget` + depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on a signals crate. `STRATEGY.md` mandates this explicitly ("Not working on" → «Смена mental model для пользователя фреймворка»: signals are not the *external* model; the mechanisms beneath it are open to improvement with the ledger); the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — Flutter's own internal short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. Signals are not banned outright: an *application-author* signal crate that drives `Element::mark_needs_build` from outside the catalog is a permitted post-parity opt-in, gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`. What is locked is the catalog's independence from signals — not a blanket language prohibition.
 
 ### C2 — Heterogeneous children: a `ViewSeq` trait with two load-bearing paths
 
@@ -316,7 +316,7 @@ The **Mythos methodology** (audit → design → plan → atomic-commit waves, `
 
 This document is the **architecture contract** for the port. Its relationship to the other governing documents:
 
-- [`STRATEGY.md`](../STRATEGY.md) — *why* (target problem, the three port rules, product philosophy). Upstream of this document.
+- [`STRATEGY.md`](../STRATEGY.md) — *why* (target problem, the three architectural rules, product philosophy). Upstream of this document.
 - **`FOUNDATIONS.md`** (this document) — *what* (the target architecture, the locked contracts, the crate graph).
 - [`PORT.md`](PORT.md) — *how* (the port methodology, refusal triggers, mapping rules).
 - [`ROADMAP.md`](ROADMAP.md) — *when / in what order* (the dependency-ordered construction phases).

@@ -13,7 +13,7 @@ Before opening a PR or even a planning issue, read:
    testing.
 2. [`docs/FOUNDATIONS.md`](FOUNDATIONS.md) — **architecture contract**: target architecture, locked contracts (C1–C9), target crate graph (Part IV).
 3. [`docs/ROADMAP.md`](ROADMAP.md) — **construction plan**: dependency-ordered phases that move the workspace from current state to the target.
-4. [`STRATEGY.md`](../STRATEGY.md) — product strategy and the three port rules ("behavior loyal, structure Rust-native").
+4. [`STRATEGY.md`](../STRATEGY.md) — product strategy and the three architectural rules ("Flutter is the reference and the oracle, not the ceiling").
 5. [`docs/PORT.md`](PORT.md) — port methodology, refusal triggers, per-crate `ARCHITECTURE.md` template.
 6. [`AGENTS.md`](../AGENTS.md) — the cross-tool agent guide and this workspace's non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc. `docs/FOUNDATIONS.md` (item 2 above) is the full architectural-rules-and-anti-patterns reference. Neither `.specify/memory/constitution.md`, `.ai-factory/ARCHITECTURE.md`, nor `.ai-factory/rules/base.md` exists in this checkout — those are stale paths this repo no longer carries.
 7. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
