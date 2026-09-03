@@ -374,7 +374,7 @@ impl RenderSliver for RenderSliverGridLazy {
                 ctx.layout_box_child(slot, tile_constraints);
             } else {
                 // Absent — emit a build request.  The element tree's
-                // `SliverGridLazyAdaptorManager::service` builds it between
+                // `SliverAdaptorManager<RenderSliverGridLazy>::service` builds it between
                 // layout passes of this frame's fixpoint.
                 ctx.request_child_build(logical_index);
             }

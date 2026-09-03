@@ -4,7 +4,7 @@
 //!
 //! [`ChildManager`] is the single authority that bridges a [`RenderSliverList`]
 //! (the render half of a lazy list) with its element-tree child source (the
-//! adaptor half — `SliverListAdaptorElement` in `sliver_adaptor.rs`).
+//! adaptor half — `SliverAdaptorElement` in `sliver_adaptor.rs`).
 //!
 //! After each layout pass, `PipelineOwner` holds two buffers:
 //! - `pending_child_requests`: `(sliver_render_id, logical_index)` pairs for
@@ -61,7 +61,7 @@ pub(crate) type ChildManagerRegistry = Arc<Mutex<HashMap<RenderId, Arc<Mutex<dyn
 ///
 /// # Implementors
 ///
-/// `SliverListAdaptorBehavior` (in `sliver_adaptor.rs`) is the only
+/// `SliverAdaptorBehavior` (in `sliver_adaptor.rs`) is the only
 /// production implementor. The trait exists so the `BuildOwner` registry can
 /// hold heterogeneous manager types — one per live lazy sliver — without generic
 /// parameters on the owner itself.

@@ -190,7 +190,7 @@ pub struct ElementOwner<'a> {
     /// Registry of live lazy-sliver `ChildManager`s, keyed by sliver `RenderId`.
     ///
     /// Carried as a reference to the `Arc` (same pattern as `external_inbox`)
-    /// so `SliverListAdaptorBehavior::on_mount` / `on_unmount` can mutate the
+    /// so `SliverAdaptorBehavior::on_mount` / `on_unmount` can mutate the
     /// registry without re-borrowing `BuildOwner`. `service_child_requests` on
     /// `BuildOwner` reads it after all `ElementOwner` borrows drop.
     pub(crate) child_manager_registry: &'a ChildManagerRegistry,
@@ -550,7 +550,7 @@ impl ElementOwner<'_> {
 
     /// Register a `ChildManager` for the given sliver render id.
     ///
-    /// Called from `SliverListAdaptorBehavior::on_mount` (F8 — NOT from the
+    /// Called from `SliverAdaptorBehavior::on_mount` (F8 — NOT from the
     /// generic `RenderBehavior::on_mount`).  Idempotent: re-registering the
     /// same `render_id` with a new manager replaces the old entry (last-write
     /// wins; a single sliver has exactly one live manager at a time).
@@ -600,7 +600,7 @@ impl ElementOwner<'_> {
 
     /// Unregister the `ChildManager` for `render_id`.
     ///
-    /// Called from `SliverListAdaptorBehavior::on_unmount` so that a stale
+    /// Called from `SliverAdaptorBehavior::on_unmount` so that a stale
     /// registry entry for the dismounted sliver cannot be serviced post-frame.
     /// No-op if the id is not present.
     pub(crate) fn unregister_child_manager(&mut self, render_id: RenderId) {

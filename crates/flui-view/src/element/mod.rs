@@ -67,7 +67,13 @@ pub use notification::{
 };
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 pub use root::{RootElement, RootElementImpl};
-pub use sliver_adaptor::{SliverGridLazy, SliverList};
+// The lazy multi-box adaptor and its extension point: a render object that
+// implements `LazyMultiBoxRender` gets the element-owned child lifecycle by
+// constructing `SliverMultiBoxAdaptor::with_config` (ADR-0053). `SliverList` and
+// `SliverGridLazy` are the in-tree instantiations.
+pub use sliver_adaptor::{
+    LazyMultiBoxRender, ListConfig, SliverGridLazy, SliverList, SliverMultiBoxAdaptor,
+};
 pub use sliver_persistent_header::{
     FloatingPersistentHeaderView, FloatingPinnedPersistentHeaderView, PersistentHeaderView,
     PinnedPersistentHeaderView, ScrollingPersistentHeaderView, SharedHeaderDelegate,

@@ -335,7 +335,7 @@ pub struct BuildOwner {
 
     /// Registry of live lazy-sliver [`ChildManager`]s, one per live adaptor
     /// element. Keyed by the sliver's `RenderId`; populated at mount and
-    /// cleared at unmount by `SliverListAdaptorBehavior` via the
+    /// cleared at unmount by `SliverAdaptorBehavior` via the
     /// `ElementOwner::register_child_manager` / `unregister_child_manager`
     /// split-borrow methods.
     ///
@@ -1627,7 +1627,7 @@ impl BuildOwner {
 
         // Finalize BEFORE the early-return: `build_scope` does not call
         // `finalize_tree`, so sparse children pushed to `inactive_elements` by
-        // `SliverListAdaptorBehavior::on_unmount` (F3) — during a reconcile that
+        // `SliverAdaptorBehavior::on_unmount` (F3) — during a reconcile that
         // removed their host — must be cleaned up here. Without this, those
         // elements and their render nodes are leaked until the next
         // `service_child_requests` call that has pending layout requests.

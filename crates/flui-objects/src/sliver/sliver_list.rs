@@ -6,7 +6,7 @@
 //! [`SliverLayoutContext::request_child_build`], which parks
 //! `(sliver_id, logical_index)` in the arena's request sink, and after the walk
 //! it declares the retained band through [`SliverLayoutContext::emit_retain_band`].
-//! The element tree — `SliverListAdaptorElement` in `flui-view`, registered as
+//! The element tree — `SliverAdaptorElement<RenderSliverList>` in `flui-view`, registered as
 //! this sliver's `ChildManager` — drains both signals between layout passes of
 //! the frame's layout↔build fixpoint: it mounts the requested children, evicts
 //! the off-band ones, and marks this sliver for the next pass, so a fresh band
@@ -56,7 +56,7 @@ use super::virtualized_band::walk_virtualizer_band;
 ///
 /// Corresponds to Flutter's `RenderSliverList` whose `childManager`
 /// (`SliverMultiBoxAdaptorElement`) services `createChild` calls. In FLUI the
-/// manager is `SliverListAdaptorElement` (`flui-view`); this object is the
+/// manager is `SliverAdaptorElement<RenderSliverList>` (`flui-view`); this object is the
 /// render half of that split.
 ///
 /// # Construction
