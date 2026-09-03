@@ -273,6 +273,18 @@ miri:
     cargo +nightly miri test -p flui-rendering --lib pipeline::owner
     cargo +nightly miri test -p flui-view --lib owner::global_key
 
+# Local mirror of the weekly `nightly-canary` job. Advisory: nightly is where
+# the next stable's deprecations, new lints, and future-incompat errors show
+# up first. Its own target dir keeps nightly artifacts from evicting the
+# stable build in `target/debug` (a different rustc means a full rebuild in
+# both directions).
+[group("quality")]
+[doc("Nightly canary: check + clippy the workspace on nightly, then print the future-incompat report (advisory; mirrors the weekly job)")]
+nightly-check:
+    CARGO_TARGET_DIR=target/nightly CARGO_BUILD_WARNINGS=warn cargo +nightly check --workspace --all-targets --locked
+    CARGO_TARGET_DIR=target/nightly CARGO_BUILD_WARNINGS=warn cargo +nightly clippy --workspace --all-targets --locked
+    CARGO_TARGET_DIR=target/nightly cargo +nightly report future-incompatibilities || true
+
 [group("test")]
 [doc("Generate an HTML coverage report (requires cargo-llvm-cov)")]
 coverage:
