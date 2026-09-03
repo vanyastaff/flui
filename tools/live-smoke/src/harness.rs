@@ -317,10 +317,11 @@ fn check_occlusion_gating(
     // Quiescence is best-effort (bounded): a stuck-animating app weakens
     // attribution but cannot weaken the gate assertion itself.
     //
-    // Re-established before EVERY drag attempt, not once: a retry that
-    // reused the first attempt's baseline could satisfy the >= 3 frame
-    // premise from the dead attempt's own leftovers, which is exactly the
-    // vacuous pass the baseline exists to prevent.
+    // Re-established before EVERY drag attempt, not once: it is what makes
+    // the reported frame count attributable to the attempt that actually
+    // ran. (The premise itself no longer rests on this baseline — liveness
+    // is measured against the pre-release sample of the same attempt — so a
+    // stale baseline can no longer manufacture a vacuous pass either way.)
     let quiesced_present_baseline = || -> Result<usize> {
         let mut base = count(&read_log()?, GPU_PRESENT_MARKER);
         let quiesce_deadline = Instant::now() + Duration::from_secs(5);
@@ -423,7 +424,7 @@ fn check_occlusion_gating(
     // time to drain each motion separately instead of batching them —
     // while staying well clear of the 40 ms contiguity cliff that a longer
     // pause would walk into.
-    let drag_once = || -> Result<(bool, usize)> {
+    let drag_once = || -> Result<(bool, usize, usize)> {
         fake_motion(conn, root, center_x, fling_start_y)?;
         conn.sync()?;
         std::thread::sleep(Duration::from_millis(100));
@@ -441,23 +442,33 @@ fn check_occlusion_gating(
             conn.sync()?;
             std::thread::sleep(Duration::from_millis(12));
         }
+        // Sampled BEFORE the release: every marker counted here presented
+        // during (or before) the drag, so any count above it afterwards is a
+        // frame the still-running ballistic animation presented. That is the
+        // liveness evidence the poll below waits for.
+        let pre_release = count(&read_log()?, GPU_PRESENT_MARKER);
         conn.xtest_fake_input(BUTTON_RELEASE, 1, 0, root, 0, 0, 0)?;
         conn.sync()?;
         let after_drag_pixels = capture(conn, window, &geometry)?;
         let drag_moved_content = after_drag_pixels != before_drag_pixels;
         let drag_frames = count(&read_log()?, GPU_PRESENT_MARKER).saturating_sub(gpu_before_drag);
-        Ok((drag_moved_content, drag_frames))
+        Ok((drag_moved_content, drag_frames, pre_release))
     };
 
-    // 4. Cover the app mid-fling — DEMAND-gated, never time-gated: a fixed
-    //    gap between drag and cover is runner-speed-dependent (a slow CI
-    //    software raster presents a handful of frames where a dev machine
-    //    presents dozens), so instead poll until the ballistic animation
-    //    has demonstrably presented >= 3 frames beyond the quiesced
-    //    baseline AND is still producing (the count grew within the latest
-    //    sample window — the gate must close on a LIVE animation, not one
-    //    that just died), then map immediately. Only a bound expiring
-    //    without that evidence is a failure: a genuinely dead fling.
+    // 4. Cover the app mid-fling — LIVENESS-gated, never time-gated and
+    //    never count-gated. A fixed drag->cover gap is runner-speed
+    //    dependent, and so is any ABSOLUTE frame threshold: on a slow CI
+    //    software raster the whole ballistic decay spans only a couple of
+    //    frame intervals, so "N frames beyond the baseline" is unreachable
+    //    there however long the poll waits, and retrying the fling cannot
+    //    help — the ubuntu runner was observed presenting 2 frames in
+    //    total. What the vacuity property actually needs is that demand
+    //    exists AT cover time, and liveness proves that on any frame
+    //    budget: poll until at least one frame lands AFTER the sample taken
+    //    just before the button release, i.e. the animation presented
+    //    within the last poll interval, then map the cover immediately.
+    //    Only the bound expiring with no post-release frame at all is a
+    //    failure: a genuinely dead fling.
     //
     //    Each attempt gets its own freshly quiesced baseline, so a later
     //    attempt can never inherit a dead earlier one's frames.
@@ -475,6 +486,7 @@ fn check_occlusion_gating(
         let outcome = drag_once()?;
         drag_moved_content = outcome.0;
         drag_frames = outcome.1;
+        let pre_release = outcome.2;
 
         // The first attempt keeps the original 10s bound; retries are
         // shorter, since a fling that has not appeared in 6s on an already
@@ -485,12 +497,11 @@ fn check_occlusion_gating(
             Duration::from_secs(6)
         };
         let fling_deadline = Instant::now() + bound;
-        let mut previous = count(&read_log()?, GPU_PRESENT_MARKER);
         loop {
             std::thread::sleep(Duration::from_millis(150));
             let sample = count(&read_log()?, GPU_PRESENT_MARKER);
             frames = sample.saturating_sub(gpu_armed_base);
-            if frames >= 3 && sample > previous {
+            if sample > pre_release {
                 fling_frames = frames;
                 established = true;
                 break;
@@ -498,7 +509,6 @@ fn check_occlusion_gating(
             if Instant::now() > fling_deadline {
                 break;
             }
-            previous = sample;
         }
         if established {
             break;
@@ -575,9 +585,9 @@ fn check_occlusion_gating(
     let wheel_hidden_base = count(&hidden_snapshot, MOUSE_WHEEL_LINE);
 
     // The fling premise was already established BEFORE the cover mapped
-    // (the demand-gated poll above): a live animation with >= 3 presented
-    // frames existed at cover time, so the zero-submissions assertion
-    // below is non-vacuous by construction. (`gpu_visible_base`, before
+    // (the liveness-gated poll above): the animation presented a frame
+    // within the poll interval preceding the cover, so the
+    // zero-submissions assertion below is non-vacuous by construction. (`gpu_visible_base`, before
     // arming, only feeds the arming loop above.)
 
     // 6. Covered-phase probes: two wheel ticks pass through the cover's
