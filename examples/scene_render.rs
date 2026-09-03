@@ -33,6 +33,9 @@
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
 #![allow(clippy::unwrap_used)]
+// `Renderer: Send` is re-proved here for the frame callback; see the
+// `recursion_limit` rationale at the top of flui-engine's `lib.rs`.
+#![recursion_limit = "256"]
 
 use std::sync::{Arc, Mutex};
 

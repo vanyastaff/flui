@@ -34,6 +34,11 @@
 //! Applications normally enter through [`run_app`] or
 //! [`run_app_with_config`]; the runner constructs and owns the UI realm.
 
+// Proving `flui_engine::wgpu::Renderer: Send` (for the `Send` frame
+// callbacks that capture it) descends through wgpu-core past the default
+// recursion limit under the next-generation trait solver; see the matching
+// attribute and rationale at the top of flui-engine's `lib.rs`.
+#![recursion_limit = "256"]
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
