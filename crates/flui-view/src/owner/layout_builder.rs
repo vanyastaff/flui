@@ -358,8 +358,9 @@ impl BuildOwner {
     /// builder that settles headlessly but not on screen (or vice versa) is a
     /// silent correctness bug, so neither binding may hand-roll this loop.
     ///
-    /// The loop drives `run_layout` → `service_layout_builders` until no builder
-    /// needs a build, then delegates to
+    /// The loop drives `run_layout` → `service_layout_builders` +
+    /// `service_child_requests` until no builder needs a build and no lazy
+    /// sliver requested or evicted a child, then delegates to
     /// [`PipelineOwner::run_frame`](flui_rendering::pipeline::PipelineOwner::run_frame)
     /// for the full
     /// layout → compositing → paint → semantics sequence. `run_frame`'s own
@@ -380,7 +381,11 @@ impl BuildOwner {
     /// # Non-convergence
     ///
     /// Bounded at `MAX_LAYOUT_BUILD_PASSES`. Exceeding it means a builder's
-    /// output changes the constraints that builder receives. In debug this is a
+    /// output changes the constraints that builder receives, or a lazy sliver's
+    /// band never settles (a fresh band is requested on every pass). A lazy
+    /// list normally settles in two or three passes: request the band, lay out
+    /// the built children, and — when measured extents differ from the
+    /// estimates enough to move the band edge — one more round. In debug this is a
     /// `BUG:` panic (an internal-invariant violation per `docs/PANIC-POLICY.md`);
     /// in release it logs and paints the last settled tree rather than spinning.
     pub fn run_frame_with_layout_builders(
@@ -408,8 +413,14 @@ impl BuildOwner {
                     *pipeline_owner = layout.into_idle();
                     result
                 })?;
-                // …build with the checkout closed.
-                Ok(owner.service_layout_builders(tree, pipeline))
+                // …build with the checkout closed. Both deferred-build seams
+                // run every pass, neither short-circuits the other: a layout
+                // builder inside a lazy item and a lazy list inside a layout
+                // builder each need the other's output laid out before the
+                // frame can settle. `|`, not `||`, on purpose.
+                let rebuilt_layout_builders = owner.service_layout_builders(tree, pipeline);
+                let serviced_lazy_children = owner.service_child_requests(tree, pipeline);
+                Ok(rebuilt_layout_builders | serviced_lazy_children)
             })
         };
 
@@ -489,14 +500,16 @@ fn report_non_convergence() {
     #[cfg(debug_assertions)]
     panic!(
         "BUG: layout<->build fixpoint failed to converge after {MAX_LAYOUT_BUILD_PASSES} passes \
-         — a layout builder's output is changing its own incoming constraints"
+         — a layout builder's output is changing its own incoming constraints, or a lazy \
+         sliver's band never settles (every serviced pass requests a new band)"
     );
 
     #[cfg(not(debug_assertions))]
     tracing::error!(
         max_passes = MAX_LAYOUT_BUILD_PASSES,
         "layout<->build fixpoint failed to converge — a layout builder's output is changing \
-         its own incoming constraints; painting the last settled tree"
+         its own incoming constraints, or a lazy sliver's band never settles; painting the \
+         last settled tree"
     );
 }
 

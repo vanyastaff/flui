@@ -65,6 +65,29 @@ where
     }
 }
 
+/// Stamp `render_id`'s node with `SliverMultiBoxAdaptorParentData { index }`
+/// so its lazy-sliver parent can map `logical -> dense slot` from parent
+/// data alone.
+///
+/// Two callers, one invariant ("every direct render child of a sparse
+/// sliver host carries its logical index"): `RenderBehavior::on_mount`
+/// stamps at adoption for freshly-mounted render objects, however deep
+/// below the sparse child they sit; `SparseChildren::ensure` stamps the
+/// first render descendants of a subtree that arrived by GlobalKey
+/// relocation, which never re-mounts. Idempotent: a fresh node has no
+/// parent data, and re-stamping the same index is a no-op in effect.
+pub(crate) fn stamp_sliver_logical_index(
+    owner: &mut flui_rendering::pipeline::PipelineOwner,
+    render_id: flui_foundation::RenderId,
+    logical_index: usize,
+) {
+    if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
+        node.set_parent_data(Box::new(
+            flui_rendering::parent_data::SliverMultiBoxAdaptorParentData::new(logical_index),
+        ));
+    }
+}
+
 /// Run a user `build()` closure under [`std::panic::catch_unwind`] and,
 /// on a caught panic, substitute the registered `ErrorView`.
 ///

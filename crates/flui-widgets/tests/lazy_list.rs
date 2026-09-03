@@ -24,7 +24,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use crate::common::{lay_out, tight};
+use crate::common::{LaidOut, lay_out, tight};
 use flui_view::ViewExt;
 use flui_widgets::prelude::*;
 
@@ -115,7 +115,6 @@ impl StatelessView for CompositeItem {
 /// instead of 5), so the sliver's own layout path needs the matching work
 /// before this can be un-ignored.
 #[test]
-#[ignore = "composite lazy children are unsupported without a per-item repaint boundary; see the doc above"]
 fn lazy_list_view_builder_settles_composite_children() {
     let mut laid = lay_out(
         ListView::builder(3, 48.0, |i| {
@@ -610,4 +609,197 @@ fn lazy_list_view_builder_repaint_boundaries_false_drops_the_wrappers() {
         without_boundaries, 0,
         "repaint_boundaries(false) must drop them; got {without_boundaries}"
     );
+}
+
+// ============================================================================
+// Same-frame materialisation — the band a layout pass requests is built,
+// laid out, and painted in that same frame
+// ============================================================================
+
+/// Lazy child requests are serviced inside the frame's layout↔build fixpoint,
+/// not after paint: the bootstrap frame alone materialises every in-band item,
+/// and a root swap that jumps the offset shows the new band — with the old
+/// one evicted — after the single frame `pump_widget` drives. Before this the
+/// list needed a second tick for every band change, so a scroll painted one
+/// frame behind its position.
+#[test]
+fn lazy_list_view_builder_materialises_the_band_in_the_same_frame() {
+    const ITEM_COUNT: usize = 100;
+    const ITEM_EXTENT: f32 = 48.0;
+    let list = |offset: f32| {
+        ListView::builder(ITEM_COUNT, ITEM_EXTENT, |i| {
+            if i < ITEM_COUNT {
+                Some(Text::new(format!("item{i}")).boxed())
+            } else {
+                None
+            }
+        })
+        // Composite items with no per-item boundary: the harder case, where
+        // the item's own render object is what must carry the index.
+        .repaint_boundaries(false)
+        .offset(offset)
+    };
+    let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
+
+    // The oracle is a LAID-OUT size, not mere presence: the old post-paint
+    // service pass also created the paragraph nodes, but left them unsized
+    // until the next frame. A non-zero height proves the fixpoint laid the
+    // fresh band out before this frame painted.
+    let laid_out_height = |laid: &LaidOut, text: &str| -> Option<f32> {
+        laid.find_text(text).map(|id| laid.size(id).height.get())
+    };
+
+    // No tick: the bootstrap frame is the whole story.
+    for text in ["item0", "item4"] {
+        let height = laid_out_height(&laid, text);
+        assert!(
+            height.is_some_and(|h| h > 0.0),
+            "{text} must be built AND laid out by the frame that requested it; height={height:?}"
+        );
+    }
+    assert!(
+        laid.find_text("item50").is_none(),
+        "an item far outside the band must not be built"
+    );
+
+    // Jump the offset to item 50 through a root swap: one frame.
+    laid.pump_widget(list(50.0 * ITEM_EXTENT));
+    for text in ["item50", "item54"] {
+        let height = laid_out_height(&laid, text);
+        assert!(
+            height.is_some_and(|h| h > 0.0),
+            "{text} must be built AND laid out in the frame that moved the offset; height={height:?}"
+        );
+    }
+    assert!(
+        laid.find_text("item0").is_none(),
+        "the old band must be evicted in that same frame"
+    );
+}
+
+// ============================================================================
+// Stateful items — init on entering the band, dispose on leaving it
+// ============================================================================
+
+#[derive(Clone, StatefulView)]
+struct ProbeItem {
+    index: usize,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+struct ProbeItemState {
+    index: usize,
+    log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>>,
+}
+
+impl StatefulView for ProbeItem {
+    type State = ProbeItemState;
+    fn create_state(&self) -> ProbeItemState {
+        ProbeItemState {
+            index: self.index,
+            log: Arc::clone(&self.log),
+        }
+    }
+}
+
+impl ViewState<ProbeItem> for ProbeItemState {
+    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+        self.log.lock().push((self.index, "init"));
+    }
+    fn build(&self, _view: &ProbeItem, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(200.0, 48.0)
+    }
+    fn dispose(&mut self) {
+        self.log.lock().push((self.index, "dispose"));
+    }
+}
+
+/// A `StatefulView` item — a composite top-level child — mounts (`init_state`)
+/// when its index enters the band and is disposed exactly once when the band
+/// moves away. Every disposed index was initialised first, and no index is
+/// initialised twice while resident. (Same-frame timing is pinned by the test
+/// above; this one pins the lifecycle pairing.)
+#[test]
+fn lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band() {
+    const ITEM_COUNT: usize = 100;
+    const ITEM_EXTENT: f32 = 48.0;
+    let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let list = {
+        let log = Arc::clone(&log);
+        move |offset: f32| {
+            let log = Arc::clone(&log);
+            ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
+                (i < ITEM_COUNT).then(|| {
+                    ProbeItem {
+                        index: i,
+                        log: Arc::clone(&log),
+                    }
+                    .boxed()
+                })
+            })
+            .repaint_boundaries(false)
+            .offset(offset)
+        }
+    };
+    let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
+
+    let inits_at_start: Vec<usize> = log
+        .lock()
+        .iter()
+        .filter(|(_, what)| *what == "init")
+        .map(|(i, _)| *i)
+        .collect();
+    assert!(
+        inits_at_start.contains(&0) && inits_at_start.contains(&4),
+        "visible items must have initialised state in the bootstrap frame; got {inits_at_start:?}"
+    );
+    assert!(
+        !inits_at_start.contains(&50),
+        "an off-band item must not have been created; got {inits_at_start:?}"
+    );
+    assert!(
+        log.lock().iter().all(|(_, what)| *what != "dispose"),
+        "nothing is disposed before the band moves"
+    );
+
+    laid.pump_widget(list(50.0 * ITEM_EXTENT));
+    let entries = log.lock().clone();
+    let disposed: Vec<usize> = entries
+        .iter()
+        .filter(|(_, what)| *what == "dispose")
+        .map(|(i, _)| *i)
+        .collect();
+    assert!(
+        disposed.contains(&0) && disposed.contains(&4),
+        "items that left the band must be disposed in the frame that moved it; got {disposed:?}"
+    );
+    let inits_after: Vec<usize> = entries
+        .iter()
+        .filter(|(_, what)| *what == "init")
+        .map(|(i, _)| *i)
+        .collect();
+    assert!(
+        inits_after.contains(&50) && inits_after.contains(&54),
+        "items of the new band must initialise in that same frame; got {inits_after:?}"
+    );
+    for index in &disposed {
+        assert!(
+            inits_after.contains(index),
+            "index {index} was disposed without ever being initialised"
+        );
+    }
+    // Resident set discipline: no index is initialised twice without a
+    // dispose in between.
+    let mut live = std::collections::HashSet::new();
+    for (i, what) in &entries {
+        match *what {
+            "init" => assert!(
+                live.insert(*i),
+                "index {i} initialised twice while resident"
+            ),
+            "dispose" => assert!(live.remove(i), "index {i} disposed while not resident"),
+            _ => unreachable!(),
+        }
+    }
 }

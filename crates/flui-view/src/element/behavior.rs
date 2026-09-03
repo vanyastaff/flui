@@ -263,6 +263,19 @@ where
     fn render_id(&self) -> Option<flui_foundation::RenderId> {
         None
     }
+    /// Whether this element hosts lazy (sparse) sliver children whose
+    /// insert slot is their logical data-source index.
+    ///
+    /// Only the lazy-sliver adaptor behaviors answer `true`. The slab reads
+    /// it through [`ElementBase::child_sliver_slot`] to seed the inherited
+    /// slot that [`RenderBehavior::on_mount`] stamps into the child's
+    /// `SliverMultiBoxAdaptorParentData` — the moment Flutter calls
+    /// `didAdoptChild`.
+    ///
+    /// [`ElementBase::child_sliver_slot`]: crate::view::ElementBase::child_sliver_slot
+    fn hosts_sparse_children(&self) -> bool {
+        false
+    }
 
     /// The parent-data this element contributes to its render child's nearest
     /// render parent, if it is a `ParentDataView` (Flexible / Positioned).
@@ -823,6 +836,7 @@ where
             let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
             let render_object = core.view().create_render_object(&ctx);
 
+            let sliver_slot = core.sliver_slot();
             let render_id = pipeline_owner.with_mut(|pipeline_owner| {
                 // Use helper to insert (handles Protocol type)
                 let render_id = insert_render_object_helper(render_object, pipeline_owner);
@@ -833,6 +847,21 @@ where
                 // independently (see `RenderTree::adopt_child`).
                 if let Some(parent_id) = core.parent_render_id() {
                     pipeline_owner.adopt_render_child(parent_id, render_id);
+                }
+
+                // Adopt-time stamp — Flutter's `didAdoptChild`. The inherited
+                // slot reaches this render object through however many
+                // composite elements sit between it and the sparse sliver
+                // host, so a bare `Text` or a `StatefulView` item carries
+                // its logical index the moment its first render descendant
+                // attaches; the sliver rebuilds its `logical -> dense slot`
+                // map from this parent data on every layout pass.
+                if let Some(logical_index) = sliver_slot {
+                    super::behavior_commons::stamp_sliver_logical_index(
+                        pipeline_owner,
+                        render_id,
+                        logical_index,
+                    );
                 }
 
                 render_id

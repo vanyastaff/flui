@@ -1,29 +1,28 @@
 //! `RenderSliverList` — request-strategy lazily-virtualized list of Box children.
 //!
-//! # Producer half only (inert without a child-manager consumer)
+//! # Request strategy
 //!
-//! This type uses the **request-strategy seam**: when an
-//! in-band child is absent it calls [`SliverLayoutContext::request_child_build`],
-//! which pushes `(sliver_id, logical_index)` into the arena's request sink.
-//! After the layout pass the pipeline moves those requests to
-//! `PipelineOwner::take_pending_child_requests` — the binding-layer entry point
-//! that the element tree will eventually consume.
+//! When an in-band child is absent this object calls
+//! [`SliverLayoutContext::request_child_build`], which parks
+//! `(sliver_id, logical_index)` in the arena's request sink, and after the walk
+//! it declares the retained band through [`SliverLayoutContext::emit_retain_band`].
+//! The element tree — `SliverListAdaptorElement` in `flui-view`, registered as
+//! this sliver's `ChildManager` — drains both signals between layout passes of
+//! the frame's layout↔build fixpoint: it mounts the requested children, evicts
+//! the off-band ones, and marks this sliver for the next pass, so a fresh band
+//! is laid out and painted in the same frame that requested it. Children are
+//! never built here; this object carries no child source.
 //!
-//! **`RenderSliverList` is inert until a child manager is wired up** — it
-//! emits requests but nothing services them, so absent children never appear.
-//! This matches Flutter's `RenderSliverList` behavior without a `childManager`:
-//! the list reports the virtualizer's estimate geometry but renders nothing for
-//! unbuilt slots.  Document the inert behavior loudly; do not paper over it.
-//!
-//! This seam is **provisional**: end-to-end validation of the consumer half may
-//! refine the `(RenderId, usize)` payload or the drain ordering.  The rework
-//! surface is intentionally small.
+//! Without a registered manager (a render-only harness, a `Direct` layout
+//! context) the requests are parked and never serviced — the list lays out the
+//! estimate geometry and renders nothing for unbuilt slots. That is the
+//! render-only harness's expected shape, not a production state.
 //!
 //! # Design notes
 //!
 //! Unlike [`RenderSliverListLazy`](super::sliver_list_lazy::RenderSliverListLazy),
 //! this object carries **no `child_source`** — it cannot build render objects
-//! directly.  The element tree's child manager owns the construction.  Existing
+//! directly. The element tree's child manager owns the construction. Existing
 //! arena-resident children (built in a prior pass) are laid out normally; only
 //! absent in-band children generate requests.
 
@@ -47,22 +46,19 @@ use super::virtualized_band::{OffBandDisposal, walk_virtualizer_band};
 // RENDER OBJECT
 // ============================================================================
 
-/// A request-strategy lazily-virtualized `SliverList` (producer half).
+/// A request-strategy lazily-virtualized `SliverList` (the render half).
 ///
 /// Lays out arena-resident children from the visible-plus-cache band and emits
 /// build requests for absent slots via
-/// [`SliverLayoutContext::request_child_build`].  The requests accumulate in
-/// `PipelineOwner::take_pending_child_requests` for the element tree to consume.
-///
-/// **Inert without a child manager** — absent children are requested but
-/// never built until a child manager wires up the response path.
+/// [`SliverLayoutContext::request_child_build`]. The element tree services
+/// them between layout passes of the same frame (see the module doc).
 ///
 /// # Flutter parity
 ///
 /// Corresponds to Flutter's `RenderSliverList` whose `childManager`
-/// (`SliverMultiBoxAdaptorElement`) services `createChild` calls.  In FLUI the
-/// element manager is the (not-yet-landed) `LazySliverElement`; this object is
-/// the render half of that split.
+/// (`SliverMultiBoxAdaptorElement`) services `createChild` calls. In FLUI the
+/// manager is `SliverListAdaptorElement` (`flui-view`); this object is the
+/// render half of that split.
 ///
 /// # Construction
 ///
@@ -199,13 +195,6 @@ impl Diagnosticable for RenderSliverList {
             None,
         );
         props.add_double("pending_correction", self.pending_correction, Some("px"));
-        // Always-set flag to make the inert-until-child-manager state visible
-        // in diagnostics output during development.
-        props.add_flag(
-            "inert_without_child_manager",
-            true,
-            "no child manager wired — requests emit but are unserviced",
-        );
     }
 }
 

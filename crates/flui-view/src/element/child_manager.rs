@@ -18,6 +18,13 @@
 //! `SparseChildren::ensure` and evicts off-band ones via
 //! `SparseChildren::retain_band`.
 //!
+//! The service pass runs **inside the frame's layout↔build fixpoint**
+//! (`BuildOwner::run_frame_with_layout_builders`, beside
+//! `service_layout_builders`): layout requests the band, the manager builds
+//! it, the next pass lays the fresh children out, and the frame paints them —
+//! same frame, no reentrant build. A manager reports whether it did work so
+//! the loop knows to run another pass.
+//!
 //! # FR-036 / Port-check #9
 //!
 //! `dyn ChildManager` is a sanctioned `dyn`-boundary — added to the

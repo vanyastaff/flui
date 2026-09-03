@@ -362,6 +362,10 @@ changes** — no new `LayoutContextApi` capability, no new pipeline sink, no are
 surgery, and the layout hot path is untouched. The unsafe mid-pass mutation
 Flutter relies on is never introduced. The design generalizes: lazy `SliverList`
 could later adopt the same fixpoint to retire its blank-first-frame divergence.
+*(Adopted 2026-09-03: `service_child_requests` now runs inside the same loop,
+beside `service_layout_builders`, so a lazy sliver's fresh band is built, laid
+out, and painted in the frame that requested it. The post-`run_frame` call both
+frame paths still make is the safety net for a frame that hit the pass bound.)*
 
 **Negative.** Up to N (bounded) layout passes per frame when a `LayoutBuilder`'s
 constraints change; steady state is one pass, since `needs_build` is

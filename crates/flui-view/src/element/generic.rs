@@ -90,6 +90,18 @@ struct CoreState {
     /// Parent's RenderId for tree structure.
     parent_render_id: Option<RenderId>,
 
+    /// The lazy-sliver logical index this element's render object (or the
+    /// render object of its first render descendant) carries, when this
+    /// element sits between a sparse sliver host and that render object.
+    ///
+    /// Seeded at insert from the parent's `ElementBase::child_sliver_slot`
+    /// and passed through composite elements exactly like
+    /// `parent_render_id`; a render element consumes it (stamps its
+    /// `SliverMultiBoxAdaptorParentData` at mount) and hands `None` to its
+    /// own children. This is the slot Flutter's `RenderObjectElement`
+    /// inherits down to `didAdoptChild`.
+    sliver_slot: Option<usize>,
+
     /// This element's own `ElementId`, stamped at slab insertion.
     self_id: Option<ElementId>,
 
@@ -106,6 +118,7 @@ impl CoreState {
             dirty: Arc::new(AtomicBool::new(true)),
             pipeline_owner: None,
             parent_render_id: None,
+            sliver_slot: None,
             self_id: None,
             external_scheduler: None,
         }
@@ -528,6 +541,19 @@ where
     /// children attach under *it*. Defaults here to the pass-through.
     pub fn child_parent_render_id(&self) -> Option<RenderId> {
         self.state.parent_render_id
+    }
+    /// The lazy-sliver logical index this element carries, if it sits
+    /// between a sparse sliver host and the render object that will carry
+    /// that index. See `CoreState::sliver_slot`.
+    #[inline]
+    pub fn sliver_slot(&self) -> Option<usize> {
+        self.state.sliver_slot
+    }
+    /// Seed (or clear) the inherited lazy-sliver slot. Called by the slab at
+    /// the same seams as [`Self::set_parent_render_id`].
+    #[inline]
+    pub fn set_sliver_slot(&mut self, slot: Option<usize>) {
+        self.state.sliver_slot = slot;
     }
 
     // ========================================================================

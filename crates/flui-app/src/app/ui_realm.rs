@@ -2530,8 +2530,10 @@ impl UiRealm {
             }
         };
 
-        // Production<->headless convergence point: service lazy-sliver child
-        // requests accumulated by `run_frame`'s layout pass.
+        // Production<->headless convergence point: the lazy-sliver safety net.
+        // The fixpoint above already serviced child requests between its
+        // layout passes; this drains only what a pass-bound-limited frame's
+        // final `run_frame` layout emitted, and is a no-op otherwise.
         {
             let w = presentation.widgets();
             w.service_child_requests(presentation.pipeline());

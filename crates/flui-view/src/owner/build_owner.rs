@@ -1503,11 +1503,16 @@ impl BuildOwner {
     /// tests drive it directly via `HeadlessBinding`; a real window drives it via
     /// `WidgetsBinding::service_child_requests`, which `UiRealm::draw_frame`
     /// invokes after each `run_frame`.
+    ///
+    /// Returns `true` iff a manager built or evicted a child — the sliver was
+    /// then marked `needs_layout`, and the caller (the layout↔build fixpoint
+    /// in `run_frame_with_layout_builders`) must run another layout pass so
+    /// the change is laid out and painted in this same frame.
     pub fn service_child_requests(
         &mut self,
         tree: &mut ElementTree,
         pipeline: &flui_rendering::pipeline::PipelineCell,
-    ) {
+    ) -> bool {
         // 1. Drain pending buffers from the pipeline (a brief checkout).
         let (pending_requests, retain_bands) = pipeline.with_mut(|guard| {
             let requests = guard.take_pending_child_requests();
@@ -1526,7 +1531,7 @@ impl BuildOwner {
         }
 
         if pending_requests.is_empty() && retain_bands.is_empty() {
-            return;
+            return false;
         }
 
         tracing::debug!(
@@ -1569,7 +1574,7 @@ impl BuildOwner {
 
         if manager_arcs.is_empty() {
             tracing::debug!("service_child_requests: no registered managers for affected slivers");
-            return;
+            return false;
         }
 
         // 4. Call service on each manager. Each iteration builds an inline
@@ -1663,6 +1668,7 @@ impl BuildOwner {
         //    `retain_band` → `evict` → `tree.remove_subtree`) and the lazy
         //    children pushed by `on_unmount` (F3).
         self.finalize_tree(tree);
+        any_service_did_work
     }
 
     // ========================================================================
