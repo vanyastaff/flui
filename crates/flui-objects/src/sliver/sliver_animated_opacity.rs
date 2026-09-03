@@ -38,7 +38,7 @@ use flui_rendering::{
     constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    pipeline::RepaintHandle,
+    pipeline::RenderInvalidationHandle,
     traits::RenderSliver,
 };
 
@@ -130,7 +130,7 @@ impl RenderSliverAnimatedOpacity {
     fn recompute_alpha(
         animation: &ProxyAnimation<f32>,
         alpha: &AtomicU8,
-        handle: &RepaintHandle,
+        handle: &RenderInvalidationHandle,
     ) -> bool {
         let new_alpha = Self::opacity_to_alpha(animation.value());
         let old_alpha = alpha.load(Ordering::Relaxed);
@@ -239,7 +239,7 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
         self.alpha() == 0
     }
 
-    fn attach(&mut self, handle: RepaintHandle) {
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
@@ -279,12 +279,12 @@ mod tests {
         ProxyAnimation::new(parent)
     }
 
-    fn anchor_handle() -> (PipelineOwner, RepaintHandle) {
+    fn anchor_handle() -> (PipelineOwner, RenderInvalidationHandle) {
         let mut owner = PipelineOwner::new();
         let anchor = owner.insert(Box::new(render_at(1.0))
             as Box<dyn flui_rendering::traits::RenderObject<SliverProtocol>>);
         let handle = owner
-            .repaint_handle(anchor)
+            .render_invalidation_handle(anchor)
             .expect("just-inserted id must be live");
         (owner, handle)
     }

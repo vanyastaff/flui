@@ -141,7 +141,7 @@ parking_lot = "0.12"
 # `once_cell` is deliberately absent: `std::sync::{OnceLock, LazyLock}` cover
 # every use this workspace had, and are what the crates already reach for.
 dashmap = "6.1"
-# Bounded typed mailboxes (PipelineOwnerHandle dirty channel, UiRealm
+# Bounded typed mailboxes (private render-invalidation channel, UiRealm
 # owner inbox — bounded queues with typed backpressure only)
 crossbeam-channel = "0.5"
 

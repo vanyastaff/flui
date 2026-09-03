@@ -114,7 +114,19 @@ impl SparseChildren {
         if let Some(&existing) = self.by_logical_index.get(&logical_index) {
             return existing;
         }
-        let child = tree.insert(view, host, logical_index, owner);
+        // Declare `host` as the parent being reconciled for the duration of
+        // this insert. `ElementTree::insert` refuses to relocate an active
+        // GlobalKey onto a parent that is not the one currently reconciling,
+        // and its rejection arm panics — so without this, a keyed item
+        // scrolling from one lazy list into another aborted the process
+        // instead of moving. `service_child_requests` calls `service` (and so
+        // `ensure`) outside any other reconcile, before its own `build_scope`,
+        // so this never nests inside the guard `reconcile_children_by_id`
+        // installs — which `begin_reconcile` asserts against.
+        let child = {
+            let _reconcile_guard = tree.begin_reconcile(host);
+            tree.insert(view, host, logical_index, owner)
+        };
         stamp_logical_index(tree, pipeline, child, logical_index);
         self.by_logical_index.insert(logical_index, child);
 
@@ -316,10 +328,17 @@ fn stamp_logical_index(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use flui_foundation::ViewKey;
     use flui_objects::RenderSizedBox;
     use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+    use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, RenderBox, Size};
+    use flui_tree::Leaf;
     use flui_types::geometry::px;
 
     use super::SparseChildren;
@@ -367,17 +386,42 @@ mod tests {
     struct GlobalKeyedLeafBox {
         side: f32,
         key: GlobalKey<Self>,
+        detach_count: Arc<AtomicUsize>,
+    }
+
+    #[derive(Debug)]
+    struct DetachCountingBox {
+        side: f32,
+        detach_count: Arc<AtomicUsize>,
+    }
+
+    impl flui_foundation::Diagnosticable for DetachCountingBox {}
+
+    impl RenderBox for DetachCountingBox {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            Size::new(px(self.side), px(self.side))
+        }
+
+        fn detach(&mut self) {
+            self.detach_count.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     impl RenderView for GlobalKeyedLeafBox {
         type Protocol = flui_rendering::protocol::BoxProtocol;
-        type RenderObject = RenderSizedBox;
+        type RenderObject = DetachCountingBox;
 
         fn create_render_object(
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderSizedBox::new(Some(px(self.side)), Some(px(self.side)))
+            DetachCountingBox {
+                side: self.side,
+                detach_count: Arc::clone(&self.detach_count),
+            }
         }
 
         fn update_render_object(
@@ -385,7 +429,8 @@ mod tests {
             _ctx: &crate::RenderObjectContext<'_>,
             render_object: &mut Self::RenderObject,
         ) -> flui_rendering::RenderUpdateImpact {
-            render_object.set_size(Some(px(self.side)), Some(px(self.side)))
+            render_object.side = self.side;
+            flui_rendering::RenderUpdateImpact::LAYOUT
         }
     }
 
@@ -692,15 +737,89 @@ mod tests {
     /// The test uses a leaf view so the globally-keyed root has no descendants —
     /// the non-keyed descendant-leak concern for composite subtrees is a separate,
     /// orthogonal investigation.
+    /// A GlobalKey moving between two lazy hosts must relocate the existing
+    /// element, not panic.
+    ///
+    /// TWO preconditions block it, and only the first is fixed:
+    ///
+    /// 1. `ensure` called `ElementTree::insert` with no reconcile guard, so
+    ///    `retake_active_global_key`'s `is_reconciling_parent` check failed.
+    ///    Fixed — `ensure` now declares `host` for the duration of the insert.
+    /// 2. **Still open.** `retake_active_global_key` then verifies the
+    ///    candidate is in `from_parent.child_ids`. A lazy host never populates
+    ///    `child_ids` — resident children live in the `SparseChildren` map —
+    ///    so that reverse-edge check fails, `try_retake_global_key` yields
+    ///    `GlobalKeyRetake::Rejected`, and `insert`'s `Rejected` arm panics.
+    ///
+    /// Closing (2) is a design call, not a patch: either the membership check
+    /// stops treating `child_ids` as authoritative, or the lazy path starts
+    /// maintaining it. The latter has wider consequences — every walk that
+    /// iterates `child_ids` (`collect_render_frontier`, `deactivate_subtree`,
+    /// ancestry recompute) currently skips sparse children too.
+    #[test]
+    #[ignore = "known regression: a lazy host does not maintain child_ids, so \
+                retake_active_global_key's reverse-edge membership check rejects \
+                the relocation and insert's Rejected arm panics — see the test's \
+                own doc comment"]
+    fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
+        let (mut tree, mut build_owner, pipeline, host_a) = host_tree();
+        let host_b = tree.insert(
+            &LeafBox { side: 10.0 },
+            host_a,
+            1,
+            &mut build_owner.element_owner_mut(),
+        );
+
+        let keyed_item = GlobalKeyedLeafBox {
+            side: 4.0,
+            key: GlobalKey::<GlobalKeyedLeafBox>::new(),
+            detach_count: Arc::new(AtomicUsize::new(0)),
+        };
+
+        let mut list_a = SparseChildren::new();
+        let first = list_a.ensure(
+            0,
+            &keyed_item,
+            host_a,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        // The same key surfacing under a different lazy host — a keyed item
+        // scrolled from one list into another.
+        let mut list_b = SparseChildren::new();
+        let moved = list_b.ensure(
+            0,
+            &keyed_item,
+            host_b,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert_eq!(
+            moved, first,
+            "the keyed child must relocate, preserving element identity, not mount a duplicate"
+        );
+        assert_eq!(
+            tree.get(moved).and_then(crate::ElementNode::parent),
+            Some(host_b),
+            "the relocated child must be reparented onto the new host"
+        );
+    }
+
     #[test]
     fn evicted_globally_keyed_child_freed_by_finalize_tree() {
         let (mut tree, mut build_owner, pipeline, host) = host_tree();
         let element_count_before = tree.len();
 
         let global_key = GlobalKey::<GlobalKeyedLeafBox>::new();
+        let detach_count = Arc::new(AtomicUsize::new(0));
         let keyed_item = GlobalKeyedLeafBox {
             side: 4.0,
             key: global_key.clone(),
+            detach_count: Arc::clone(&detach_count),
         };
 
         let mut children = SparseChildren::new();
@@ -728,6 +847,12 @@ mod tests {
         children.evict(0, &mut tree, &mut build_owner.element_owner_mut());
 
         assert_eq!(
+            detach_count.load(Ordering::SeqCst),
+            1,
+            "soft removal must detach the render subtree immediately",
+        );
+
+        assert_eq!(
             children.get(0),
             None,
             "evict must clear the SparseChildren map entry"
@@ -747,6 +872,12 @@ mod tests {
         // `finalize_tree` drains the inactive queue and calls `remove_finalized`
         // on each entry, which frees the slab slot.
         build_owner.finalize_tree(&mut tree);
+
+        assert_eq!(
+            detach_count.load(Ordering::SeqCst),
+            1,
+            "finalization must not detach an already-detached render subtree twice",
+        );
 
         assert!(
             !build_owner.has_inactive_elements(),

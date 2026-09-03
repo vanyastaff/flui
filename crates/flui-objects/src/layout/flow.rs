@@ -63,7 +63,7 @@ use flui_rendering::{
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     delegates::{FlowDelegate, FlowPaintingContext},
     parent_data::BoxParentData,
-    pipeline::RepaintHandle,
+    pipeline::RenderInvalidationHandle,
     traits::RenderBox,
 };
 
@@ -72,7 +72,7 @@ use flui_rendering::{
 ///
 /// See the module docs for why this needs no custom parent data and how
 /// hit-testing works without mutable paint state.
-// NOT `Clone`: holds live per-node lifecycle state (a `RepaintHandle` bound to
+// NOT `Clone`: holds live per-node lifecycle state (a `RenderInvalidationHandle` bound to
 // its `RenderId` + a repaint-`Listenable` subscription id). Cloning would
 // duplicate an id the clone does not own — move-only, like `RenderCustomPaint`
 // / `RenderAnimatedSize` (the ADR-0013 siblings).
@@ -88,7 +88,7 @@ pub struct RenderFlow {
     /// Self-dirty handle, held between [`RenderBox::attach`] and
     /// [`RenderBox::detach`] so the delegate's repaint `Listenable` can mark
     /// this node needing paint (ADR-0013). `None` while detached.
-    repaint_handle: Option<RepaintHandle>,
+    render_invalidation_handle: Option<RenderInvalidationHandle>,
     /// Active `add_listener` id on the delegate's repaint listenable, torn
     /// down in `detach` and migrated on a delegate swap.
     delegate_listener: Option<ListenerId>,
@@ -102,7 +102,7 @@ impl RenderFlow {
             delegate,
             clip_behavior: Clip::HardEdge,
             child_sizes: Vec::new(),
-            repaint_handle: None,
+            render_invalidation_handle: None,
             delegate_listener: None,
         }
     }
@@ -112,7 +112,7 @@ impl RenderFlow {
     /// needing paint. Returns the subscription id, or `None` when detached or
     /// the delegate has no repaint listenable.
     fn subscribe(&self) -> Option<ListenerId> {
-        let handle = self.repaint_handle.as_ref()?;
+        let handle = self.render_invalidation_handle.as_ref()?;
         let listenable = self.delegate.repaint()?;
         let mark = handle.clone();
         Some(listenable.add_listener(Arc::new(move || {
@@ -389,15 +389,15 @@ impl RenderBox for RenderFlow {
     /// Subscribes the delegate's repaint listenable (ADR-0013): a notify from
     /// the delegate's `repaint()` listenable now marks this node needing paint,
     /// so an animation-driven flow repaints without a widget rebuild.
-    fn attach(&mut self, handle: RepaintHandle) {
-        self.repaint_handle = Some(handle);
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
+        self.render_invalidation_handle = Some(handle);
         self.delegate_listener = self.subscribe();
     }
 
     /// Tears down the repaint subscription and drops the self-dirty handle.
     fn detach(&mut self) {
         Self::unsubscribe(&self.delegate, self.delegate_listener.take());
-        self.repaint_handle = None;
+        self.render_invalidation_handle = None;
     }
 }
 

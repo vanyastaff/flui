@@ -201,7 +201,7 @@ Dirty-root-цикл (shallow-first sort, snapshot, clean-skip на уровне 
 
 1. **Typestate-фазы**: run_layout существует только на `PipelineOwner<Layout>`, переходы consume self, compile_fail-доктест (`owner.rs:101,299-368`, `phase.rs`) — Flutter имеет лишь debug-asserts, исчезающие в release.
 2. **Generational ids + эвикция dirty-очередей при dispose**: use-after-free render-объекта структурно невозможен без GC (`owner.rs:599-619`, `dirty.rs:88-93`, `tree.rs:517-522`) — у Flutter только debugDisposed.
-3. **Bounded cross-thread dirty-канал с wake** (RepaintHandle/PipelineOwnerHandle, `handle.rs:1-127`, `owner.rs:441-490`): Send+Sync, backpressure вместо роста кучи, generation-валидация, wake из idle. Data-plane ADR-0002 в production; аналога у Flutter нет.
+3. **Bounded cross-thread dirty-канал с wake** (RenderInvalidationHandle/PipelineOwnerHandle, `handle.rs:1-127`, `owner.rs:441-490`): Send+Sync, backpressure вместо роста кучи, generation-валидация, wake из idle. Data-plane ADR-0002 в production; аналога у Flutter нет.
 4. **Типизированный LayoutCycle + stacker**: RAII-guard → `RenderError::LayoutCycle` вместо stack overflow (`owner.rs:1969-2044`); ensure_stack на 6 walk'ах — 20k-глубина лэйаутится (PR #177).
 5. Типизированный contract-violation во всех профилях + Poisoned-retry (см. §2-паритет) — деградация per-node вместо срыва кадра в части кейсов.
 6. Generic RenderClip<S>/ClipGeometry вместо 4+ подклассов; typed delegate-suite; RenderViewAdapter.

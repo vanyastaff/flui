@@ -19,12 +19,19 @@ mod paint;
 mod poison;
 mod query;
 mod reassemble;
+mod relocation;
 mod semantics;
 
 pub use cell::PipelineCell;
+pub use relocation::{
+    AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
+    DetachedRenderSubtrees, ReleaseDetachedRenderSubtreesError,
+    ReleaseDetachedRenderSubtreesFailure,
+};
 
 use std::{
     marker::PhantomData,
+    rc::Rc,
     sync::atomic::{AtomicBool, AtomicU64},
 };
 
@@ -41,14 +48,14 @@ use crate::{constraints::BoxConstraints, storage::RenderTree};
 
 use super::{
     deferred::DeferredMutations,
-    handle::{DirtyRequest, PipelineOwnerHandle},
+    handle::{DirtyRequest, DirtySender},
     notifier::VisualUpdateNotifier,
     phase::{Idle, PipelinePhase},
     scheduler::DirtyTracker,
 };
 
 /// Default bounded capacity of the dirty-request channel between
-/// [`PipelineOwnerHandle`] producers and the [`PipelineOwner`] receiver.
+/// node-bound [`crate::pipeline::RenderInvalidationHandle`] producers and the owner receiver.
 /// 256 is a heuristic: more than peak burst from a typical async asset
 /// loader completion storm, low enough that producers feel backpressure
 /// rather than silently growing the queue. Tunable at owner construction
@@ -110,6 +117,11 @@ static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Unique identifier for this pipeline owner.
     id: u64,
+
+    /// Allocation identity binding linear relocation tokens to this owner.
+    /// Pointer identity is sufficient; unlike a numeric id it cannot collide
+    /// or require process-global token bookkeeping.
+    relocation_owner_seal: Rc<relocation::RelocationOwnerSeal>,
 
     /// The render tree storing all RenderObjects (Slab-based).
     render_tree: RenderTree,
@@ -242,10 +254,8 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// `invokeLayoutCallback` which uses unsafe re-entrant mutation.
     deferred_mutations: DeferredMutations,
 
-    /// Prototype handle held by the owner so `handle()` can clone it for
-    /// each caller without re-allocating the channel. See
-    /// [`PipelineOwnerHandle`].
-    handle: PipelineOwnerHandle,
+    /// Private sender cloned only into node-bound invalidation capabilities.
+    dirty_sender: DirtySender,
 
     /// Receiver end of the bounded dirty-request channel. Drained into
     /// `dirty` by `drain_pending_dirty` at phase boundaries.
@@ -325,6 +335,7 @@ where
 {
     PipelineOwner {
         id: from.id,
+        relocation_owner_seal: from.relocation_owner_seal,
         render_tree: from.render_tree,
         root_id: from.root_id,
         notifier: from.notifier,
@@ -341,7 +352,7 @@ where
         last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,
         deferred_mutations: from.deferred_mutations,
-        handle: from.handle,
+        dirty_sender: from.dirty_sender,
         dirty_rx: from.dirty_rx,
         #[cfg(any(test, feature = "testing"))]
         parent_data_seeds: from.parent_data_seeds,
@@ -2163,5 +2174,94 @@ mod tests {
             "frame 2 (no dirty nodes) must produce no layer tree (equivalence: \
              removing retention does not conjure stale output on clean frames)"
         );
+    }
+
+    #[test]
+    fn detached_subtree_evicts_poison_without_touching_sibling_poison() {
+        use crate::pipeline::owner::poison::LayoutFailureKind;
+
+        type BoxObject = Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>;
+
+        let mut owner = PipelineOwner::new();
+        let parent = owner.insert(Box::new(PaintingLeaf::red(10.0, 10.0)) as BoxObject);
+        let detached = owner
+            .insert_child_render_object(
+                parent,
+                Box::new(PaintingLeaf::red(10.0, 10.0)) as BoxObject,
+            )
+            .expect("detached child inserts");
+        let retained = owner
+            .insert_child_render_object(
+                parent,
+                Box::new(PaintingLeaf::red(10.0, 10.0)) as BoxObject,
+            )
+            .expect("retained sibling inserts");
+
+        for id in [detached, retained] {
+            assert_eq!(
+                owner
+                    .layout_poison
+                    .note_failure(id, LayoutFailureKind::Structural, None,),
+                Some(true),
+            );
+            assert!(owner.layout_poison.is_poisoned(id));
+        }
+
+        let _token = owner
+            .detach_render_subtrees(&[detached])
+            .expect("detached subtree");
+        assert!(!owner.layout_poison.is_poisoned(detached));
+        assert!(owner.layout_poison.is_poisoned(retained));
+        assert_eq!(owner.render_tree.parent(detached), None);
+        assert_eq!(owner.render_tree.parent(retained), Some(parent));
+    }
+
+    #[test]
+    fn detached_subtree_evicts_every_live_and_mid_queue_without_touching_sibling() {
+        type BoxObject = Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>;
+
+        let mut owner = PipelineOwner::new();
+        let parent = owner.insert(Box::new(PaintingLeaf::red(10.0, 10.0)) as BoxObject);
+        let detached = owner
+            .insert_child_render_object(
+                parent,
+                Box::new(PaintingLeaf::red(10.0, 10.0)) as BoxObject,
+            )
+            .expect("detached child inserts");
+        let retained = owner
+            .insert_child_render_object(
+                parent,
+                Box::new(PaintingLeaf::red(10.0, 10.0)) as BoxObject,
+            )
+            .expect("retained sibling inserts");
+        owner.scheduler.clear_all();
+        owner.scheduler.seed_all_queues_for_test(detached);
+        owner.scheduler.seed_all_queues_for_test(retained);
+
+        let _token = owner
+            .detach_render_subtrees(&[detached])
+            .expect("detached subtree");
+        assert!(!owner.scheduler.has_every_queue_entry_for_test(detached));
+        assert!(owner.scheduler.has_every_queue_entry_for_test(retained));
+    }
+
+    #[test]
+    fn multi_frontier_detach_filters_scheduler_once_for_the_combined_subtrees() {
+        type BoxObject = Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>;
+
+        let mut owner = PipelineOwner::new();
+        let first = owner.insert(Box::new(PaintingLeaf::red(10.0, 10.0)) as BoxObject);
+        let second = owner.insert(Box::new(PaintingLeaf::red(10.0, 10.0)) as BoxObject);
+        owner.scheduler.seed_all_queues_for_test(first);
+        owner.scheduler.seed_all_queues_for_test(second);
+        let before = owner.scheduler.eviction_passes_for_test();
+
+        let token = owner
+            .detach_render_subtrees(&[first, second])
+            .expect("detached batch");
+        assert_eq!(token.node_count(), 2);
+        assert_eq!(owner.scheduler.eviction_passes_for_test(), before + 1);
+        assert!(!owner.scheduler.has_every_queue_entry_for_test(first));
+        assert!(!owner.scheduler.has_every_queue_entry_for_test(second));
     }
 }

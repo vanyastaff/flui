@@ -143,16 +143,68 @@ impl RenderNode {
     /// object a self-dirty handle bound to its own node.
     ///
     /// Dispatches to [`RenderObject::attach`] on the underlying object.
-    pub fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
-        with_entry!(self, entry => entry.render_object_mut().attach(handle));
+    pub(crate) fn next_attachment_epoch(&self) -> Option<crate::pipeline::handle::AttachmentEpoch> {
+        with_entry!(self, entry => entry.next_attachment_epoch())
+    }
+
+    pub(crate) fn is_attached_for(&self, epoch: crate::pipeline::handle::AttachmentEpoch) -> bool {
+        match self {
+            Self::Box(entry) => entry.is_attached_for(epoch),
+            Self::Sliver(entry) => entry.is_attached_for(epoch),
+        }
+    }
+
+    pub(crate) fn attachment_epoch(&self) -> Option<crate::pipeline::handle::AttachmentEpoch> {
+        match self {
+            Self::Box(entry) => entry.attachment_epoch(),
+            Self::Sliver(entry) => entry.attachment_epoch(),
+        }
+    }
+
+    pub(crate) fn is_detached_after(
+        &self,
+        epoch: crate::pipeline::handle::AttachmentEpoch,
+    ) -> bool {
+        match self {
+            Self::Box(entry) => entry.is_detached_after(epoch),
+            Self::Sliver(entry) => entry.is_detached_after(epoch),
+        }
+    }
+
+    pub(crate) fn attach(
+        &mut self,
+        epoch: crate::pipeline::handle::AttachmentEpoch,
+        handle: crate::pipeline::RenderInvalidationHandle,
+    ) -> bool {
+        match self {
+            Self::Box(entry) => {
+                if !entry.begin_attachment(epoch) {
+                    return false;
+                }
+                entry.render_object_mut().attach(handle);
+            }
+            Self::Sliver(entry) => {
+                if !entry.begin_attachment(epoch) {
+                    return false;
+                }
+                entry.render_object_mut().attach(handle);
+            }
+        }
+        true
     }
 
     /// Tree-lifecycle hook (ADR-0013): tears down whatever `attach`
     /// subscribed to, called before this node is removed from the tree.
     ///
     /// Dispatches to [`RenderObject::detach`] on the underlying object.
-    pub fn detach(&mut self) {
-        with_entry!(self, entry => entry.render_object_mut().detach());
+    pub(crate) fn detach(&mut self) -> bool {
+        with_entry!(self, entry => {
+            if !entry.end_attachment() {
+                return false;
+            }
+            entry.render_object_mut().detach();
+        });
+        true
     }
 }
 
@@ -554,6 +606,16 @@ impl RenderNode {
         with_entry!(self, entry => entry.state_mut().set_parent_data(data));
     }
 
+    /// Detaches and removes this node's persistent parent data.
+    ///
+    /// Returns `true` when parent data existed. Repeated calls are no-ops.
+    pub fn clear_parent_data(&mut self) -> bool {
+        match self {
+            Self::Box(entry) => entry.state_mut().clear_parent_data(),
+            Self::Sliver(entry) => entry.state_mut().clear_parent_data(),
+        }
+    }
+
     // 2B field dedup: `RenderNode::paint_bounds` was deleted. It had zero
     // call sites workspace-wide (a dead producer — the paint pipeline does
     // no bounds-based culling yet) and, once geometry moved to
@@ -831,6 +893,14 @@ impl RenderNode {
     #[inline]
     pub fn clear_needs_compositing_bits_update(&self) {
         with_entry!(self, entry => entry.state().flags().clear_needs_compositing_bits_update());
+    }
+
+    /// Clears the semantics dirty flag without scheduling work.
+    pub(crate) fn clear_needs_semantics(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().clear_needs_semantics(),
+            Self::Sliver(entry) => entry.state().flags().clear_needs_semantics(),
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 //! Cloneable parent-data presets for the render-object test harness.
 //!
-//! Production layout creates per-walk [`ErasedChildState`] slots with
+//! Production layout creates per-walk [`crate::protocol::ErasedChildState`] slots with
 //! `parent_data: None` and lazily inserts `ParentData::default()` on the
 //! first mutable access. Widget configuration that lives on the child's
 //! parent data (stack positioning, flex factors, future animation parent
@@ -36,7 +36,7 @@ pub enum ParentDataSeed {
     /// [`SliverPhysicalParentData`] for single-child sliver adapters.
     SliverPhysical(SliverPhysicalParentData),
     /// [`SliverMultiBoxAdaptorParentData`] for [`RenderSliverList`] /
-    /// [`RenderSliverListLazy`] children — stamps the logical index so the
+    /// `RenderSliverListLazy` children — stamps the logical index so the
     /// virtualizer band walk can find the child in `logical_to_slot`.
     ///
     /// [`RenderSliverList`]: crate::traits::RenderSliver

@@ -846,7 +846,7 @@ returns that boundary's own render object. The route's subtree root is a render
 object *by construction*.
 
 **The first lifecycle hook where a `RenderId` is guaranteed** is
-`RenderObject::attach(RepaintHandle)` — `RepaintHandle::id()` returns it
+`RenderObject::attach(RenderInvalidationHandle)` — `RenderInvalidationHandle::id()` returns it
 (`flui-rendering/src/pipeline/handle.rs:216`, `:231`), and `detach()` is its exact
 mirror. That is mount/unmount-driven, needs no `GlobalKey`, no element walk, and no
 acquisition during build/layout/paint (port-check trigger #22).

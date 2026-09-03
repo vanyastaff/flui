@@ -99,14 +99,14 @@ id from all queues, release the node's retained handles, THEN free the slot.
 GPU handles) — true RAII scope. Flutter's attach-re-enqueue rule
 (object.dart:2477-2503) still ports as designed.
 
-## D4 — `RepaintHandle` full spec (closes the critique's idle-wake hole)
+## D4 — `RenderInvalidationHandle` full spec (closes the critique's idle-wake hole)
 
 `PipelineOwnerHandle::request_mark_dirty` (handle.rs:141) enqueues but never
 wakes; `drain_pending_dirty` runs only at `run_layout` start. A decode
 finishing while the app is idle would never appear — the exact "GIF frozen
 until you scroll" bug Cycle C claims to kill.
 
-**Decision.** `RepaintHandle` = { generational `RenderId` (D2), dirty-kind,
+**Decision.** `RenderInvalidationHandle` = { generational `RenderId` (D2), dirty-kind,
 sender, **wake capability** }. Send path: enqueue → `wake_frame()`
 (flui-app binding chain). Drain path: validate generation; stale → silent
 no-op (ADR-0002 §77 fallible-writeback rule). Handle is `Send + Sync`
@@ -218,7 +218,7 @@ DisplayList snapshot test landing inside the same PR. The
 recurses live over `&PipelineOwner` (sound single-threaded, not `Send`);
 per-boundary parallelism requires a subtree snapshot type — later, with
 the retention work. A′'s wake wiring is the minimal sync version that
-D4's `RepaintHandle` subsumes in C′ (documented to avoid building it
+D4's `RenderInvalidationHandle` subsumes in C′ (documented to avoid building it
 twice). Engine-side risk retired by inspection: `PictureLayer(DisplayList)`
 renders identically to `CanvasLayer` (layer_render.rs:159-167), and
 nothing in production constructs `CanvasLayer` — its deletion is clean.
@@ -261,7 +261,7 @@ D2 generational RenderId (prereq #0, mechanical) — SHIPPED ae48ff1b
   → Cycle B′: D3 dispose inversion + lifecycle + D5 ParentData split
               + flex fixes (clamped free_space, Stretch, unbounded-main,
               MainAxisSize — NOT the refuted spacing change) + caches.
-  → Cycle C′: D4 RepaintHandle + TextPainter shaped/paint split
+  → Cycle C′: D4 RenderInvalidationHandle + TextPainter shaped/paint split
               + BoxDecoration painter + RenderImage.
 ```
 

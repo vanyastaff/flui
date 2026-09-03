@@ -52,9 +52,10 @@
 use std::sync::Arc;
 
 use flui_foundation::ViewKey;
+use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
 use flui_view::{
-    BuildContext, BuildOwner, ElementId, ElementTree, GlobalKey, IntoView, StatefulView,
-    StatelessView, View, ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementId, ElementTree, GlobalKey, IntoView, RenderView,
+    StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 use parking_lot::RwLock;
 
@@ -143,6 +144,47 @@ impl View for Leaf {
     }
 }
 
+#[derive(Clone)]
+struct SlotHost {
+    children: Vec<flui_view::BoxedView>,
+}
+
+impl RenderView for SlotHost {
+    type Protocol = BoxProtocol;
+    type RenderObject = flui_objects::RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        flui_objects::RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+
+    fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        for child in &self.children {
+            visitor(child);
+        }
+    }
+}
+
+impl View for SlotHost {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
 impl View for Keyed {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
@@ -167,13 +209,23 @@ fn tree_with_parents(
     owner: &Arc<RwLock<BuildOwner>>,
     parent_count: usize,
 ) -> Vec<ElementId> {
-    let root = tree
-        .write()
-        .mount_root(&Filler, &mut owner.write().element_owner_mut());
+    let root = tree.write().mount_root_with_pipeline_owner(
+        &SlotHost {
+            children: Vec::new(),
+        },
+        Some(PipelineCell::new(PipelineOwner::new())),
+        &mut owner.write().element_owner_mut(),
+    );
     (0..parent_count)
         .map(|slot| {
-            tree.write()
-                .insert(&Filler, root, slot, &mut owner.write().element_owner_mut())
+            tree.write().insert(
+                &SlotHost {
+                    children: Vec::new(),
+                },
+                root,
+                slot,
+                &mut owner.write().element_owner_mut(),
+            )
         })
         .collect()
 }
@@ -190,8 +242,19 @@ fn attach_keyed(
         key: key.clone(),
         tag,
     };
-    tree.write()
-        .insert(&view, parent, 0, &mut owner.write().element_owner_mut())
+    tree.write().update(
+        parent,
+        &SlotHost {
+            children: vec![view.boxed()],
+        },
+        &mut owner.write().element_owner_mut(),
+    );
+    let depth = tree.read().get(parent).expect("parent exists").depth();
+    owner
+        .write()
+        .schedule_build_for(parent, depth, flui_view::RebuildReason::ParentUpdate);
+    owner.write().build_scope(&mut tree.write());
+    children_of(tree, parent)[0]
 }
 
 /// Children of `parent` in slot order, as the tree currently holds them.
@@ -737,6 +800,23 @@ fn one_key_twice_under_the_same_parent_is_rejected() {
     let parents = tree_with_parents(&tree, &owner, 1);
     let key = GlobalKey::<KeyedState>::new();
 
-    attach_keyed(&tree, &owner, parents[0], &key, 1);
-    attach_keyed(&tree, &owner, parents[0], &key, 2);
+    tree.write().update(
+        parents[0],
+        &SlotHost {
+            children: vec![
+                Keyed {
+                    key: key.clone(),
+                    tag: 1,
+                }
+                .boxed(),
+                Keyed { key, tag: 2 }.boxed(),
+            ],
+        },
+        &mut owner.write().element_owner_mut(),
+    );
+    let depth = tree.read().get(parents[0]).expect("parent exists").depth();
+    owner
+        .write()
+        .schedule_build_for(parents[0], depth, flui_view::RebuildReason::ParentUpdate);
+    owner.write().build_scope(&mut tree.write());
 }

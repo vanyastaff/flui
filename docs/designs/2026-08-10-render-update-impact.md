@@ -34,7 +34,7 @@ layout-and-paint invalidation with precise, composable update effects.
   below; raw changed-node queue insertion is not preserved as that algorithm.
 - Adding a generic invalidation protocol to `BuildContext`.
 - Replacing the asynchronous `DirtyKind`/`DirtyRequest` channel used by
-  `RepaintHandle`.
+  `RenderInvalidationHandle`.
 - Completing custom-painter semantics assembly. This change preserves and
   schedules the existing `should_rebuild_semantics` contract; the existing
   `SemanticsBuilder` limitation remains separately documented.
@@ -662,7 +662,7 @@ not evidence that all owning render-object types have the same impact.
    `flui-material`, examples, and test fixtures to return the union of its
    setter results.
 4. Preserve non-widget invalidation paths such as `Listenable` callbacks and
-   `RepaintHandle`; they continue to mark the owner directly because no
+   `RenderInvalidationHandle`; they continue to mark the owner directly because no
    `RenderView` update is running at those times.
 
 ### Public setter and aggregate surface audit
@@ -725,7 +725,7 @@ of the atomic ripple.
   authoritative and repeated marking is idempotent.
 - A parentless target is marked and queues itself at its live depth.
 - A stale compositing target ID is a no-op.
-- The `RepaintHandle`/`DirtyKind::Compositing` replay path passes the same
+- The `RenderInvalidationHandle`/`DirtyKind::Compositing` replay path passes the same
   boundary cases, proving it does not use raw changed-node queue insertion.
 - Applying a union queues each requested phase once and in the required order.
 - A semantics impact is ignored while semantics are disabled; enabling

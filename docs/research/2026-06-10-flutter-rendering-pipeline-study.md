@@ -232,7 +232,7 @@ first widget wave.
    via the BoxPainter `onChanged` callback (proxy_box.dart:2474,
    decoration_image.dart:413-424), opacity animations tick (image.dart:179).
    flui's substrate exists (`add_node_needing_paint`), missing is the
-   object-held wake handle. **Rust-better:** typed `RepaintHandle` (channel to
+   object-held wake handle. **Rust-better:** typed `RenderInvalidationHandle` (channel to
    the scheduler per ADR-0002 control plane); subscriptions as RAII guards —
    flui-animation's `ListenerSubscription` is the prior art. Kills Flutter's
    detach/recreate-painter hack ("GIFs stop animating on GlobalKey reparent",
@@ -330,7 +330,7 @@ visual-update wiring (flui-app) → integration test ColoredBox→DrawRect→Lay
 5. RenderBox caches (intrinsics/dry/baseline) + explicit dependency edge.
 
 **Cycle C — painting prerequisites** (ordered by §3.1 blocking):
-1. dispose/`Drop` + RepaintHandle async wake (unblocks all leaves).
+1. dispose/`Drop` + RenderInvalidationHandle async wake (unblocks all leaves).
 2. TextPainter: shaped/paint split (3.4), real intrinsics, maxLines+ellipsis
    enforcement, span-preserving rich shaping (`set_rich_text`), named font
    families, shaper-derived baselines (kill 80/20).

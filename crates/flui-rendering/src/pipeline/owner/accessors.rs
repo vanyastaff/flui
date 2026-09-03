@@ -12,11 +12,7 @@ use flui_types::{Matrix4, Offset};
 use crate::{
     RenderUpdateImpact,
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
-    pipeline::{
-        dirty::DirtyNode,
-        handle::{DirtyKind, PipelineOwnerHandle},
-        phase::PipelinePhase,
-    },
+    pipeline::{dirty::DirtyNode, handle::DirtyKind, phase::PipelinePhase},
     protocol::{BoxProtocol, MainAxisPosition, SliverProtocol},
     storage::RenderNode,
 };
@@ -66,31 +62,28 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     // ========================================================================
-    // Cross-thread mark-dirty handle
+    // Node-bound cross-thread invalidation
     // ========================================================================
 
-    /// Returns a clone of the cross-thread mark-dirty handle.
-    ///
-    /// Each clone is its own `Sender` over the same bounded channel; sends
-    /// from different threads do not block each other. Backpressure
-    /// surfaces as `SendError::ChannelFull`.
-    #[inline]
-    pub fn handle(&self) -> PipelineOwnerHandle {
-        self.handle.clone()
-    }
-
-    /// Binds a [`RepaintHandle`](crate::pipeline::RepaintHandle) to a
+    /// Binds a [`RenderInvalidationHandle`](crate::pipeline::RenderInvalidationHandle) to a
     /// live render object — the
     /// capability async producers (image decodes, arriving assets) use
     /// to repaint that node from any thread, with the platform woken on
     /// every request.
     ///
-    /// `None` for a stale/foreign id. Once the node is later removed,
-    /// the returned handle degrades to a silent no-op (generational id:
-    /// the drain drops requests whose generation died).
-    pub fn repaint_handle(&self, id: RenderId) -> Option<crate::pipeline::RepaintHandle> {
-        self.render_tree.get(id)?;
-        Some(crate::pipeline::RepaintHandle::new(self.handle.clone(), id))
+    /// `None` for a stale, foreign, or detached id. A handle remains bound to
+    /// this exact attachment interval; detaching and reattaching the same
+    /// `RenderId` mints a different interval and makes the old handle inert.
+    pub fn render_invalidation_handle(
+        &self,
+        id: RenderId,
+    ) -> Option<crate::pipeline::RenderInvalidationHandle> {
+        let attachment_epoch = self.render_tree.get(id)?.attachment_epoch()?;
+        Some(crate::pipeline::RenderInvalidationHandle::new(
+            self.dirty_sender.clone(),
+            id,
+            attachment_epoch,
+        ))
     }
 
     /// Drains the pending dirty-request channel into the scheduler's
@@ -98,8 +91,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// Called at phase boundaries by the typestate transitions; producers
     /// (background asset loaders, async work) write into the channel via
-    /// [`PipelineOwnerHandle::request_mark_dirty`] and the owner observes
-    /// them on the next frame. Non-blocking; processes every request
+    /// a [`crate::pipeline::RenderInvalidationHandle`] and the owner observes them on
+    /// the next frame. Non-blocking; processes every request
     /// available at the time of call and returns the count drained.
     pub fn drain_pending_dirty(&mut self) -> usize {
         let mut drained = 0;
@@ -117,8 +110,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // for a non-boundary node became a bogus dirty ROOT, a
             // compositing request skipped the canonical ancestor walk, and
             // dead ids were replayed verbatim.
-            if self.render_tree.get(req.id).is_none() {
-                tracing::trace!(?req, "drain_pending_dirty: stale id, dropped");
+            if !self
+                .render_tree
+                .get(req.id)
+                .is_some_and(|node| node.is_attached_for(req.attachment_epoch))
+            {
+                tracing::trace!(?req, "drain_pending_dirty: stale attachment, dropped");
                 continue;
             }
             match req.kind {
@@ -441,7 +438,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // goes silent once the node is gone), but the clean stop.
         for &subtree_id in &subtree {
             if let Some(node) = self.render_tree.get_mut(subtree_id) {
-                node.detach();
+                let _ = node.clear_parent_data();
+                let _ = node.detach();
             }
         }
 
@@ -1300,7 +1298,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     /// ADR-0013: hands the freshly-inserted node at `id` its self-dirty
-    /// [`RepaintHandle`](crate::pipeline::RepaintHandle) via
+    /// [`RenderInvalidationHandle`](crate::pipeline::RenderInvalidationHandle) via
     /// [`RenderObject::attach`](crate::traits::RenderObject::attach).
     ///
     /// Called by every insertion path (`insert`, `insert_child_render_object`,
@@ -1315,11 +1313,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// present (defensive — every call site holds a freshly-inserted id).
     #[inline]
     pub(super) fn attach_inserted_node(&mut self, id: RenderId) {
-        let Some(handle) = self.repaint_handle(id) else {
+        let Some(epoch) = self
+            .render_tree
+            .get(id)
+            .and_then(crate::storage::RenderNode::next_attachment_epoch)
+        else {
             return;
         };
+        let handle =
+            crate::pipeline::RenderInvalidationHandle::new(self.dirty_sender.clone(), id, epoch);
         if let Some(node) = self.render_tree.get_mut(id) {
-            node.attach(handle);
+            let _ = node.attach(epoch, handle);
         }
     }
 
