@@ -188,6 +188,30 @@ impl<R: LazyMultiBoxRender> std::fmt::Debug for SliverMultiBoxAdaptor<R> {
 }
 
 impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
+    /// An adaptor over any [`LazyMultiBoxRender`]: `config` is the render
+    /// object's own knob, `item_count` the data source's length, `builder`
+    /// the item factory (`None` past the end).
+    ///
+    /// This is how a render object outside this crate joins the lazy child
+    /// lifecycle — implement the trait, construct the adaptor, and the
+    /// element tree builds, retains, evicts and reconciles its children
+    /// exactly as it does for [`SliverList`] and [`SliverGridLazy`]. (The
+    /// aliases keep their own `new`; an inherent `new` on the generic type
+    /// would collide with them.)
+    #[must_use]
+    pub fn with_config(
+        config: R::Config,
+        item_count: usize,
+        builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    ) -> Self {
+        Self {
+            config,
+            item_count,
+            builder,
+            find_index_by_key: None,
+        }
+    }
+
     /// Install the key → index callback (see the field doc).
     ///
     /// Shared by every lazy multi-box adaptor — the callback's shape does
@@ -726,15 +750,27 @@ pub(crate) type SliverAdaptorElement<R> =
 /// Render-object-specific configuration for [`RenderSliverList`] under the
 /// generic [`SliverMultiBoxAdaptor`] adaptor.
 ///
-/// A named struct (rather than a bare `f32`) so a future field is additive —
-/// adding one never breaks an existing `ListConfig { item_extent_estimate }`
-/// construction site because struct-update syntax and named-field
-/// construction both tolerate it.
+/// A named, `#[non_exhaustive]` struct rather than a bare `f32`: downstream
+/// code constructs it through [`ListConfig::new`] and reads its fields, so a
+/// future knob can be added without breaking a caller — a struct literal
+/// would break on any new field, `Default` or not, which is why literals are
+/// not part of the contract.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct ListConfig {
     /// Default per-item extent (logical pixels), used to seed the virtualizer
     /// until real measurements arrive from laid-out children.
     pub item_extent_estimate: f32,
+}
+
+impl ListConfig {
+    /// A list config with the given per-item extent estimate.
+    #[must_use]
+    pub const fn new(item_extent_estimate: f32) -> Self {
+        Self {
+            item_extent_estimate,
+        }
+    }
 }
 
 impl LazyMultiBoxRender for RenderSliverList {
@@ -782,14 +818,11 @@ impl SliverList {
             item_extent_estimate.is_finite() && item_extent_estimate > 0.0,
             "item_extent_estimate must be finite and positive, got {item_extent_estimate}",
         );
-        Self {
-            config: ListConfig {
-                item_extent_estimate,
-            },
+        SliverMultiBoxAdaptor::with_config(
+            ListConfig::new(item_extent_estimate),
             item_count,
             builder,
-            find_index_by_key: None,
-        }
+        )
     }
 
     /// Construct a lazy-sliver adaptor that interleaves `item_count` items
@@ -1204,6 +1237,23 @@ mod tests {
     }
 
     /// `SliverList` is `Clone` (required by `View` + `RenderView`).
+    /// A render object outside this crate joins by implementing the trait
+    /// and constructing the adaptor through the generic constructor — the
+    /// aliases' constructors are conveniences, not the only door.
+    #[test]
+    fn generic_constructor_builds_an_adaptor_element() {
+        let view = SliverMultiBoxAdaptor::<RenderSliverList>::with_config(
+            ListConfig::new(48.0),
+            3,
+            make_builder(3),
+        );
+        assert_eq!(view.item_count, 3);
+        assert!(matches!(
+            view.create_element(),
+            crate::element::ElementKind::RenderVariable(_)
+        ));
+    }
+
     #[test]
     fn view_is_clone() {
         let builder = make_builder(10);
