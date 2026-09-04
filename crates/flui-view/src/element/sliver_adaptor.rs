@@ -292,7 +292,7 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
     fn over_static_children(mut self, children: &Rc<StaticChildren>) -> Self {
         let (builder, find) = children.delegate_pair();
         self.static_children = Some(Rc::clone(children));
-        self.item_count = children.len();
+        self.item_count = ItemCount::Exact(children.len());
         self.builder = builder;
         self.find_index_by_key = Some(find);
         self
@@ -333,7 +333,7 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     /// `SliverChildBuilderDelegate.shouldRebuild` is always `true`).
     pub(crate) static_children: Option<Rc<StaticChildren>>,
     /// Total number of items in the data source.
-    pub(crate) item_count: usize,
+    pub(crate) item_count: ItemCount,
     /// Given a logical index, produces the item's view. Returns `None` when
     /// the index is past the end of the data source.
     pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
@@ -383,21 +383,22 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
         item_count: impl Into<ItemCount>,
         builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
-        // `Unknown` is resolved here, once, rather than discovered a band at a
-        // time. Before this, an unknown length was spelled `usize::MAX` and the
-        // first `None` clamped the count in the pass that met it — so a jump
-        // past the end converged over several layout passes, and the reported
-        // scroll extent was absurd until it did.
-        let item_count = match item_count.into() {
-            ItemCount::Exact(count) => count,
-            ItemCount::Unknown => probe_item_count(&*builder),
-        };
+        let item_count = item_count.into();
         Self {
             config,
             static_children: None,
             item_count,
             builder,
             find_index_by_key: None,
+        }
+    }
+
+    /// The item count to build a render object with, probing the builder when
+    /// the caller declared [`ItemCount::Unknown`].
+    fn resolved_item_count(&self) -> usize {
+        match self.item_count {
+            ItemCount::Exact(count) => count,
+            ItemCount::Unknown => probe_item_count(&*self.builder),
         }
     }
 
@@ -424,7 +425,11 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
     type RenderObject = R;
 
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        R::create(&self.config, self.item_count)
+        // `Unknown` is resolved HERE, at mount, not when the view value is
+        // built. A view is reconstructed on every rebuild, so probing in its
+        // constructor would repeat `2·log₂(n)` builder calls every frame —
+        // and a builder with side effects would see them.
+        R::create(&self.config, self.resolved_item_count())
     }
 
     fn update_render_object(
@@ -436,7 +441,20 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         // behavior's `on_view_updated`, which sees both views: it flags the
         // resident refresh and marks this render object for layout. Here only
         // the render-side knobs speak.
-        render_object.set_item_count(self.item_count) | render_object.update(&self.config)
+        let count_impact = match self.item_count {
+            // The declaration still names an exact length: push it, so a data
+            // source that shrank or grew is honoured.
+            ItemCount::Exact(count) => render_object.set_item_count(count),
+            // Unknown: the render object's count was resolved at mount and is
+            // maintained from there by the manager's clamp. Re-probing on
+            // every rebuild is the cost this whole arrangement exists to
+            // avoid, and re-probing only when the builder changed needs an
+            // identity for the builder that `Rc<dyn Fn>` does not give us
+            // cheaply — `on_view_updated` already flags a changed delegate and
+            // marks this object for layout, which re-runs the clamp.
+            ItemCount::Unknown => flui_rendering::RenderUpdateImpact::NONE,
+        };
+        count_impact | render_object.update(&self.config)
     }
 
     /// Invariant: no dense children — the dense reconciler must not touch
@@ -1017,8 +1035,22 @@ pub enum ItemCount {
 }
 
 impl From<usize> for ItemCount {
+    /// `usize::MAX` becomes [`Unknown`](ItemCount::Unknown), not
+    /// `Exact(usize::MAX)`.
+    ///
+    /// That value was the sentinel ADR-0053 recorded for "only the builder
+    /// knows the length", so translating it is what it always meant. Mapping
+    /// it to an exact count instead would keep every existing caller
+    /// compiling *and* keep them on the old behaviour — advertising a sentinel
+    /// extent and converging through later clamps — which is precisely the
+    /// defect being fixed. A list that genuinely holds `usize::MAX` items
+    /// cannot be materialised anyway; the window bounds it either way.
     fn from(count: usize) -> Self {
-        Self::Exact(count)
+        if count == usize::MAX {
+            Self::Unknown
+        } else {
+            Self::Exact(count)
+        }
     }
 }
 
@@ -1054,13 +1086,20 @@ pub fn probe_item_count(builder: &dyn Fn(usize) -> Option<BoxedView>) -> usize {
     let mut hi: usize = 2;
     while builder(hi - 1).is_some() {
         lo = hi;
-        let Some(doubled) = hi.checked_mul(2) else {
-            // Every probe up to `usize::MAX - 1` produced a child. Treat the
-            // source as unbounded rather than erroring: the caller's window
-            // bounds it, exactly as the sentinel path already did.
+        // On overflow, clamp the upper bound to `usize::MAX` and let the
+        // bisection below decide. Returning `usize::MAX` here instead would
+        // misreport every finite source whose length happens to sit in the
+        // top half of the range: at this point only index `hi - 1` has been
+        // shown to exist, and nothing above it has been tested at all.
+        hi = hi.saturating_mul(2);
+        if hi == usize::MAX && builder(usize::MAX - 1).is_some() {
+            // Even the last representable index yields a child, so the source
+            // is unbounded in any sense that matters. Flutter raises a
+            // `FlutterError` here; an always-`Some` builder is a legitimate
+            // infinite source, so this reports the sentinel the
+            // unbounded-window path already handles.
             return usize::MAX;
-        };
-        hi = doubled;
+        }
     }
     // Invariant: index `lo - 1` exists, index `hi - 1` does not.
     while hi - lo > 1 {
@@ -1464,7 +1503,7 @@ mod tests {
     fn new_succeeds_with_valid_parameters() {
         let builder = make_builder(100);
         let view = SliverList::new(100, 48.0, builder);
-        assert_eq!(view.item_count, 100);
+        assert_eq!(view.item_count, ItemCount::Exact(100));
         assert!((view.config.item_extent_estimate - 48.0).abs() < f32::EPSILON);
         assert!(
             !view.has_children(),
@@ -1507,7 +1546,11 @@ mod tests {
     #[test]
     fn separated_reports_interleaved_child_count() {
         let view = SliverList::separated(3, 48.0, make_builder(3), make_builder(3));
-        assert_eq!(view.item_count, 5, "2*3-1 = 5 interleaved logical slots");
+        assert_eq!(
+            view.item_count,
+            ItemCount::Exact(5),
+            "2*3-1 = 5 interleaved logical slots"
+        );
     }
 
     /// `SliverList::separated` with zero items produces zero children —
@@ -1516,7 +1559,7 @@ mod tests {
     #[test]
     fn separated_with_zero_items_has_zero_children() {
         let view = SliverList::separated(0, 48.0, make_builder(0), make_builder(0));
-        assert_eq!(view.item_count, 0);
+        assert_eq!(view.item_count, ItemCount::Exact(0));
     }
 
     /// `SliverList::separated` maps even logical indices to item indices
@@ -1542,7 +1585,10 @@ mod tests {
             });
 
         let view = SliverList::separated(3, 48.0, item_builder, separator_builder);
-        for logical_index in 0..view.item_count {
+        let ItemCount::Exact(child_count) = view.item_count else {
+            panic!("separated declares an exact interleaved child count");
+        };
+        for logical_index in 0..child_count {
             (view.builder)(logical_index);
         }
 
@@ -1582,7 +1628,7 @@ mod tests {
         ];
         let view = SliverList::list(48.0, children);
 
-        assert_eq!(view.item_count, 2);
+        assert_eq!(view.item_count, ItemCount::Exact(2));
         assert!((view.builder)(0).is_some());
         assert!((view.builder)(1).is_some());
         assert!(
@@ -1626,7 +1672,7 @@ mod tests {
             3,
             make_builder(3),
         );
-        assert_eq!(view.item_count, 3);
+        assert_eq!(view.item_count, ItemCount::Exact(3));
         assert!(matches!(
             view.create_element(),
             crate::element::ElementKind::RenderVariable(_)
@@ -1691,7 +1737,7 @@ mod tests {
         let builder = make_builder(10);
         let view = SliverList::new(10, 48.0, builder);
         let cloned = view.clone();
-        assert_eq!(cloned.item_count, 10);
+        assert_eq!(cloned.item_count, ItemCount::Exact(10));
         assert!((cloned.config.item_extent_estimate - 48.0).abs() < f32::EPSILON);
     }
 

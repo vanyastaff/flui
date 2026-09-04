@@ -87,9 +87,30 @@ objects, so their materialised child count was unbounded, and the parity pin for
   Flutter's `1e-10` double); the reference's rounding regression tests are ported with nudges on
   the same side of the tolerance.
 - Shrink-wrap in an unbounded parent materialises all N (Flutter-equal: `targetLastIndex == null`
-  lays out to the end). A `usize::MAX` count with a finite window reports an absurd finite extent
-  where Flutter's builder delegate with a null count binary-searches the end — growable count is a
-  follow-up. Under an unbounded window a sentinel count is truncated as the lazy grid does.
+  lays out to the end). Under an unbounded window a sentinel count is truncated as the lazy grid
+  does.
+- **Unknown item counts are declared, not sentinelled, and resolved by probing.** `ItemCount::
+  Unknown` replaces the `usize::MAX` convention this ADR originally recorded, and
+  `SliverMultiBoxAdaptor::create_render_object` resolves it once by searching the builder for its
+  end — doubling for an upper bound, then bisection, as
+  `SliverMultiBoxAdaptorElement.childCount` does. `impl From<usize>` maps `usize::MAX` to
+  `Unknown` so callers still using the old sentinel get the fix rather than merely continuing to
+  compile.
+
+  Two deliberate divergences from the reference. **It probes without building:** Flutter's search
+  calls `_build`, inflating a widget inside a `buildScope` for every probe, which is why its own
+  doc tells callers to supply a count "to avoid the cost of searching"; here the builder returns a
+  view value and nothing is mounted. **An endless builder is unbounded, not an error:** Flutter
+  raises a `FlutterError` when even the maximum index yields a child, but a builder answering
+  `Some` everywhere is a legitimate infinite source, so the probe reports `usize::MAX` and lets
+  the caller's window bound it — the same answer the unbounded-window path above already gives.
+
+  Resolution happens at **mount**, not at view construction: a view value is rebuilt every frame,
+  so probing in the constructor would repeat the search — and its side effects — on every one.
+  Pinned by `an_unknown_item_count_is_probed_once_per_mount_not_per_rebuild`, whose oracle is
+  differential (an `Unknown` list must cost the same per rebuild as an `Exact` one) because an
+  absolute call-count bound encodes whatever the reconcile currently does, and because asserting
+  the extent proves nothing — a per-rebuild probe produces the right extent every time.
 - `semanticBounds` fallback, `addAutomaticKeepAlives`, `addSemanticIndexes`: not ported;
   follow-ups.
 - The eager grid's stale-tile harness pins are replaced by the frame-level deferral tests: the
