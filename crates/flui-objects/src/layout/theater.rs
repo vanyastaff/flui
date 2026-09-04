@@ -36,13 +36,25 @@
 //!   unbounded theater falls back to `constraints.smallest()`, matching
 //!   `RenderStack`'s own no-non-positioned-children fallback rather than panicking
 //!   — see [`PANIC-POLICY`](../../../../docs/PANIC-POLICY.md).
-//! * **Semantics are not skipped.** Flutter's `visitChildrenForSemantics` walks
-//!   `_childrenInPaintOrder()` (`overlay.dart:1427-1428`), so offstage entries are
-//!   absent from the semantics tree. FLUI's `RenderBox` has no per-child semantics
-//!   visitor — only the whole-subtree `excludes_semantics_subtree` — so a
-//!   `maintainState` entry beneath an opaque one is still announced. Parity is
-//!   **not** claimed for this; `RenderOffstage` (which a `ModalRoute` puts around
-//!   its page) does suppress semantics for the case that matters today.
+//! * **Skipped entries leave the semantics tree only once they have been laid
+//!   out.** Flutter's `visitChildrenForSemantics` walks `_childrenInPaintOrder()`
+//!   (`overlay.dart:1427-1428`), so an offstage entry is absent from the semantics
+//!   tree unconditionally. FLUI's `RenderBox` has no per-child semantics visitor —
+//!   only the whole-subtree `excludes_semantics_subtree` — so exclusion here is a
+//!   side effect of the placed-generation stamp instead: a skipped entry is not
+//!   laid out, its stamp goes stale, and the semantics walk drops it along with
+//!   paint and hit-test.
+//!
+//!   That covers the transition this widget actually performs — an entry laid out
+//!   while visible, then skipped when an opaque entry is pushed above it. It does
+//!   **not** cover an entry that is skipped from its very first pass: nothing ever
+//!   stamped it, and an unstamped child reads as placed by design (the stamp must
+//!   only ever remove a child a parent demonstrably *stopped* laying out, or a
+//!   parent that lays out through a path of its own would hide its whole subtree).
+//!   Such an entry is still announced. Full parity needs the per-child semantics
+//!   visitor FLUI lacks; tracked on issue #885. `RenderOffstage` (which a
+//!   `ModalRoute` puts around its page) suppresses semantics for the case that
+//!   matters today.
 
 use flui_tree::Variable;
 use flui_types::{Offset, Size};
