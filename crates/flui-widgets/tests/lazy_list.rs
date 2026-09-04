@@ -1472,17 +1472,18 @@ fn lazy_list_view_builder_duplicate_local_keys_first_wins_second_remounts() {
 /// building in the same frame moves between them — the second list's mount
 /// retakes it (from the first list's still-active resident, or from the
 /// inactive queue if the first list already let it go) — and the first list
-/// forgets it (Flutter's `forgetChild`), so its later band eviction never
-/// reaches into the other list's subtree. Observable: exactly one element,
+/// drops its own bookkeeping entry for it (Flutter's `forgetChild` — the
+/// list forgets the child, the child keeps its state), so the first list's
+/// later band eviction never reaches into the other list's subtree. Observable: exactly one element,
 /// its state intact, and both lists still evicting cleanly afterwards.
 ///
-/// The lists run without the per-item repaint boundary so the keyed item
-/// *is* the resident root. With the boundary on, the root is the boundary
-/// (carrying a salted, non-global key) and an eviction unmounts its whole
-/// subtree at once — FLUI has no equivalent of Flutter's deactivate-then-
-/// retake for a `GlobalKey`'d *descendant* of a removed unkeyed subtree, in
-/// lazy and dense trees alike. That gap is recorded in the design notes
-/// for #530; it is not this slice's.
+/// The lists keep the per-item repaint boundary — the default, and what an
+/// app would actually write — so the resident root is the boundary (carrying
+/// a salted, non-global key) and the keyed item is a *descendant* of the
+/// subtree an eviction removes. Reaching it therefore depends on the removal
+/// walk stopping at a `GlobalKey`'d descendant and deactivating it rather
+/// than unmounting the subtree wholesale, which is the behaviour this file's
+/// fixture exists to pin.
 #[derive(Clone)]
 struct TwoLists {
     keyed_in_second: Arc<AtomicBool>,
