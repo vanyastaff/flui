@@ -62,8 +62,8 @@ pub use layout::{
 
 // --- flat re-exports (proxy) ---
 pub use proxy::{
-    ClipGeometry, DecorationPosition, ERROR_BOX_FALLBACK_EXTENT, Oval, PathClipConfiguration,
-    PathClipSourceToken, RenderAnimatedOpacity, RenderBackdropFilter, RenderClip, RenderClipOval,
+    ClipGeometry, ClipSourceToken, DecorationPosition, ERROR_BOX_FALLBACK_EXTENT, Oval,
+    PathClipConfiguration, RenderAnimatedOpacity, RenderBackdropFilter, RenderClip, RenderClipOval,
     RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint,
     RenderDecoratedBox, RenderErrorBox, RenderFollowerLayer, RenderIgnoreBaseline,
     RenderLeaderLayer, RenderOpacity, RenderPhysicalModel, RenderPhysicalShape,

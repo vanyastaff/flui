@@ -69,60 +69,74 @@ use flui_rendering::{
 };
 
 #[derive(Debug)]
-struct PathClipSourceMarker;
+struct ClipSourceMarker;
 
-/// Stable identity for one widget-owned custom path clip source.
+/// Stable identity for one widget-owned closure clip source.
 ///
-/// A source token lets [`RenderClipPath`] distinguish a cloned [`ClipPath`](https://api.flutter.dev/flutter/widgets/ClipPath-class.html)
+/// A source token lets a render object distinguish a cloned widget
 /// configuration from a separately constructed one without exposing callback
 /// pointers or an integer identity protocol. Cloning the token preserves source
 /// identity; call [`Self::fresh`] when constructing a new source.
+///
+/// # It answers a question Rust cannot
+///
+/// Two closures cannot be compared, so "did the clip change" has no structural
+/// answer for a callback-shaped clip source, and this token is the substitute:
+/// a new identity means a changed clip, and the render object repaints. That
+/// makes minting one **not free** — under the ordinary pattern of building a
+/// view fresh on every rebuild, a token minted in the constructor repaints the
+/// clipped subtree every frame the surrounding tree rebuilds.
+///
+/// Prefer a clip that is DATA where the shape allows it: `ClipRect`,
+/// `ClipOval` and `ClipRRect` take values compared with `==`, so they need no
+/// token and cannot have this cost. This exists for `ClipPath`, where the
+/// shape genuinely is a function the caller supplies.
 ///
 /// The representation is deliberately private and has no accessor or raw-value
 /// constructor.
 ///
 /// ```
-/// use flui_objects::PathClipSourceToken;
+/// use flui_objects::ClipSourceToken;
 ///
-/// let source = PathClipSourceToken::fresh();
+/// let source = ClipSourceToken::fresh();
 /// assert_eq!(source, source);
-/// assert_ne!(source, PathClipSourceToken::fresh());
+/// assert_ne!(source, ClipSourceToken::fresh());
 /// ```
 ///
 /// ```compile_fail
-/// use flui_objects::PathClipSourceToken;
+/// use flui_objects::ClipSourceToken;
 ///
-/// let _ = PathClipSourceToken(1);
+/// let _ = ClipSourceToken(1);
 /// ```
 ///
 /// ```compile_fail
-/// use flui_objects::PathClipSourceToken;
+/// use flui_objects::ClipSourceToken;
 ///
-/// let raw = PathClipSourceToken::fresh().get();
+/// let raw = ClipSourceToken::fresh().get();
 /// # let _ = raw;
 /// ```
 #[derive(Clone)]
-pub struct PathClipSourceToken(Arc<PathClipSourceMarker>);
+pub struct ClipSourceToken(Arc<ClipSourceMarker>);
 
-impl fmt::Debug for PathClipSourceToken {
+impl fmt::Debug for ClipSourceToken {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("PathClipSourceToken(..)")
+        formatter.write_str("ClipSourceToken(..)")
     }
 }
 
-impl PartialEq for PathClipSourceToken {
+impl PartialEq for ClipSourceToken {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
-impl Eq for PathClipSourceToken {}
+impl Eq for ClipSourceToken {}
 
-impl PathClipSourceToken {
+impl ClipSourceToken {
     /// Allocates a new source identity.
     #[must_use]
     pub fn fresh() -> Self {
-        Self(Arc::new(PathClipSourceMarker))
+        Self(Arc::new(ClipSourceMarker))
     }
 }
 
@@ -502,7 +516,7 @@ pub struct RenderClip<S: ClipGeometry> {
     /// `RenderClipPath`; other `RenderClip<S>` instantiations ignore it.
     path_clip_target: Option<PathClipTarget>,
     /// Stable identity of the widget-owned path source currently registered.
-    path_clip_source_token: Option<PathClipSourceToken>,
+    path_clip_source_token: Option<ClipSourceToken>,
     /// A caller-supplied clip shape that replaces `S::default_for_size`.
     ///
     /// Data, not a callback — see `set_clip_shape` for why that is the right
@@ -661,7 +675,7 @@ impl RenderClip<RRect> {
 impl RenderClip<Path> {
     /// Builder form of [`Self::set_path_clip_source_token`].
     #[must_use]
-    pub fn with_path_clip_source_token(mut self, source_token: PathClipSourceToken) -> Self {
+    pub fn with_path_clip_source_token(mut self, source_token: ClipSourceToken) -> Self {
         self.path_clip_source_token = Some(source_token);
         self
     }
@@ -672,7 +686,7 @@ impl RenderClip<Path> {
     /// geometry. An identical token is a no-op.
     pub fn set_path_clip_source_token(
         &mut self,
-        source_token: &PathClipSourceToken,
+        source_token: &ClipSourceToken,
     ) -> RenderUpdateImpact {
         if self.path_clip_source_token.as_ref() == Some(source_token) {
             return RenderUpdateImpact::NONE;
@@ -1073,16 +1087,16 @@ mod tests {
 
     #[test]
     fn path_clip_source_tokens_clone_identity_and_fresh_values_are_distinct() {
-        let source_token = PathClipSourceToken::fresh();
+        let source_token = ClipSourceToken::fresh();
         let cloned_source_token = source_token.clone();
 
         assert_eq!(source_token, cloned_source_token);
-        assert_ne!(source_token, PathClipSourceToken::fresh());
+        assert_ne!(source_token, ClipSourceToken::fresh());
     }
 
     #[test]
     fn render_clip_path_reports_only_source_token_changes() {
-        let source_token = PathClipSourceToken::fresh();
+        let source_token = ClipSourceToken::fresh();
         let mut node =
             RenderClipPath::anti_alias().with_path_clip_source_token(source_token.clone());
 
@@ -1091,7 +1105,7 @@ mod tests {
             RenderUpdateImpact::NONE
         );
         assert_eq!(
-            node.set_path_clip_source_token(&PathClipSourceToken::fresh()),
+            node.set_path_clip_source_token(&ClipSourceToken::fresh()),
             RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
         );
     }
