@@ -159,10 +159,25 @@ impl PipelineOwner<PaintPhase> {
                 tracing::warn!(
                     id = ?dirty_node.id,
                     depth = dirty_node.depth,
-                    "run_paint: dirty node not reached by root descent (multi-root \
-                     or detached subtree?); paint dropped, flag cleared"
+                    "run_paint: dirty node not reached by root descent (multi-root, \
+                     detached subtree, or a child its parent stopped laying out); \
+                     paint dropped, flag cleared, retained capture evicted"
                 );
                 render_node.clear_needs_paint();
+                // Dropping the invalidation must drop the cached output with
+                // it. `mark_needs_paint` stops at the nearest established
+                // boundary, so a node in this list IS one, and leaving its
+                // capture behind means the next frame that reaches it grafts
+                // output that was already known to be stale — the flag that
+                // would have forced a repaint has just been cleared here.
+                //
+                // Reachable through the placed-generation gate above: a child
+                // its parent stopped laying out is skipped, so a paint-only
+                // update it received while unplaced lands in this scan. If the
+                // parent later places it again with unchanged constraints its
+                // layout short-circuits and requeues nothing, and without this
+                // eviction the stale capture would be grafted.
+                self.retained_boundaries.remove(&dirty_node.id);
             }
         }
         // `clear()` retains capacity (preserve Vec backing across frames).
@@ -366,6 +381,9 @@ impl PipelineOwner<PaintPhase> {
                     // nothing is. `parent_generation` is the parent's current
                     // layout generation; a child it laid out was stamped with
                     // that value at the layout commit.
+                    //
+                    // Hit-test reads the same stamp; semantics deliberately
+                    // does NOT — see `RenderState::placed_generation`.
                     if !child_node.was_placed_by(parent_generation) {
                         continue;
                     }

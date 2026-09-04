@@ -952,7 +952,7 @@ unsafe fn layout_subtree_borrowed_impl(
     }
     // A fresh generation for this pass. Children this node lays out are
     // stamped with it at commit; children it skips keep the previous value and
-    // fall out of `was_placed_by`, which is what paint, hit-test and semantics
+    // fall out of `was_placed_by`, which is what paint and hit-test
     // read to leave them alone.
 
     // -----------------------------------------------------------------------
@@ -1410,7 +1410,7 @@ unsafe fn layout_subtree_borrowed_impl(
             child_node.set_offset(cs.offset);
             // Stamp only the children this pass actually laid out. A child the
             // parent skipped keeps its previous stamp and is skipped in turn by
-            // paint, hit-test and semantics, which is what keeps a lazy
+            // paint and hit-test, which is what keeps a lazy
             // sliver's out-of-band residents from being painted at an offset
             // no longer describing the tree.
             if cs.laid_out_this_pass {
@@ -1739,7 +1739,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     }
     // A fresh generation for this pass. Children this node lays out are
     // stamped with it at commit; children it skips keep the previous value and
-    // fall out of `was_placed_by`, which is what paint, hit-test and semantics
+    // fall out of `was_placed_by`, which is what paint and hit-test
     // read to leave them alone.
 
     // No early-return here for the empty case: a lazy sliver (e.g.
@@ -2048,7 +2048,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
             child_node.set_offset(cs.offset);
             // See the box walk's commit: only children this pass laid out are
-            // stamped, and paint, hit-test and semantics skip the rest.
+            // stamped, and paint and hit-test skip the rest.
             if cs.laid_out_this_pass {
                 child_node.set_placed_generation(parent_generation);
             }
