@@ -2,6 +2,26 @@
 
 > See also [crates/flui-rendering/ARCHITECTURE.md](../ARCHITECTURE.md) for the per-crate template instance.
 
+> **⚠️ HISTORICAL from the result-accumulator sections onward (2026-09-04, issue #844).**
+> This document describes a protocol-level hit-test *result accumulator* —
+> `HitTestContextApi::result` / `result_mut`, `ctx.add_hit(id)`, `ctx.add_self(id)`
+> and the `BoxHitTestCtx.result` field. **None of that exists.** Every one of those
+> writers wrote into a structure no production code read: the driver
+> (`PipelineOwner`'s hit-test walk) owns the path and builds each entry from the
+> node's own `RenderId`. They were deleted rather than wired, because a
+> compiling, running, no-op API is worse than an absent one.
+>
+> **What a render object actually does today:** return `true` to be the target,
+> or call `ctx.register_self_hit_entry()` to appear in the path without blocking
+> what is behind it (Flutter's `HitTestBehavior::Translucent`). No id is passed —
+> the driver already has it.
+>
+> `HitTestCapability::Result` and `::Entry` survive as vocabulary with no
+> accumulator behind them; see their doc in `protocol/capabilities.rs` for the
+> bar a future consumer must meet. The rest of this guide — position types,
+> protocol split, the walk's structure — is still current; read the code for the
+> accumulator sections rather than the snippets below.
+
 ## Overview
 
 The hit test system determines which render objects are under a given pointer position. It traverses the render tree in **reverse paint order** (front-to-back) to find the topmost element at a position.

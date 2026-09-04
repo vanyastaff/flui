@@ -35,6 +35,50 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### The hit-test path is driver-owned; the protocol carries no result accumulator
+
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — a contract may be improved, and an
+improvement owes a record plus a replacement test. This is that record.
+
+**Choice:** `HitTestCapability::Result` and `::Entry` are vocabulary only. There is no
+`ctx.result()`, `result_mut()`, `add_hit(entry)` or `add_self(id)`: the driver
+(`PipelineOwner`'s hit-test walk) owns the path and builds each entry from the node's own
+`RenderId`. A render object says it was hit by returning `true`, or calls
+`ctx.register_self_hit_entry()` to appear in the path without blocking what is behind it.
+
+**The reference's shape:** Flutter's `hitTest` takes a `HitTestResult` and each render object
+calls `result.add(BoxHitTestEntry(this, position))`. The accumulator is the protocol.
+
+**Why the divergence is better here, in checkable terms:**
+
+1. **A render object cannot get the id wrong**, because it never supplies one. Flutter's
+   `add(BoxHitTestEntry(this, …))` takes the node as an argument; passing the wrong one, or
+   adding twice, is expressible and silent.
+2. **There is one writer, not N.** The driver knows the node, its transform and its position in
+   the walk, so the entry is assembled once from state that cannot disagree with itself. FLUI's
+   accumulator was the second writer, and — this is the finding that produced the deletion — it
+   was *unread*: `add_self` compiled, ran, and did nothing, because nothing downstream consumed
+   the protocol-level result (issue #844).
+3. **The trap is gone rather than documented.** The broken call was the discoverable one: it took
+   the id you were holding and read like the box-side API. Deleting it makes the wrong call
+   impossible instead of warned against.
+
+**Alternatives:**
+- *Wire the accumulator so the driver bridge reads it* — the honest alternative, and the one to
+  take if a consumer ever appears (a sliver assembling its own path). Rejected now for having no
+  consumer: wiring a second writer into the hit path to serve nothing would add exactly the
+  disagreement point item 2 removes.
+- *Keep the API and document the trap* — rejected; the deleted method's own module already
+  documented it in passing ("dead in production") and that stopped nobody.
+
+**Replacement coverage:** `register_self_hit_entry` is exercised end-to-end by the widget-level
+hit-test ports that dispatch through a real pipeline — the `Transform`, `ClipPath`, `ClipRect`,
+`Wrap` and viewport-order cases in `crates/flui-widgets/tests/parity/`, each asserting a tap
+reaches or misses a specific child. The deleted tests asserted a write landed in a structure
+nobody read, so they were removed rather than adapted: they could not fail for a reason a user
+would notice. `crates/flui-widgets/tests/parity/render_viewport_test.rs` carries the debug trail
+of how the dead path was found.
+
 ### Lazy-sliver scroll correction keeps the first visible item stationary
 
 **Rule:** Prime Directive rule 1 ("improve where a Flutter contract can be improved, record it, replace the oracle"); [ADR-0051](../../docs/adr/ADR-0051-anchor-stationary-scroll-correction.md).

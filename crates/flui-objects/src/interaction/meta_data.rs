@@ -196,11 +196,17 @@ impl RenderBox for RenderMetaData {
             return true;
         }
 
-        // TODO(core.1): once the gesture system threads a target id
-        // through hit-test contexts, register `metadata` against the
-        // hit-test entry via `ctx.add_self(id)`. For now self-hits
-        // for `Opaque` / `Translucent` just return `true` so the
-        // upstream router treats this node as the target.
+        // The driver owns the hit path and builds each entry from the
+        // node's own id, so a self-hit is expressed by returning `true`
+        // (or by `ctx.register_self_hit_entry()` for a node that must
+        // appear in the path without blocking what is behind it). The
+        // `add_self` this comment used to point at was deleted with the
+        // rest of the unread protocol-level result (issue #844).
+        //
+        // Carrying `metadata` INTO the entry is still not possible: the
+        // entry the driver builds has no payload slot. That is a real gap
+        // and it is the reason this node cannot yet be routed to by its
+        // metadata rather than by its id.
         self.behavior.registers_self()
     }
 }
