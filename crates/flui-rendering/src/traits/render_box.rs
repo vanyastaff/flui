@@ -525,6 +525,28 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         false
     }
 
+    /// The rect, in this node's coordinates, outside which child paint is not
+    /// visible.
+    ///
+    /// Default: `None`. See [`RenderObject::describe_approximate_paint_clip`].
+    fn describe_approximate_paint_clip(
+        &self,
+        _child_slot: usize,
+    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        None
+    }
+
+    /// The rect, in this node's coordinates, outside which a child carries no
+    /// accessibility presence.
+    ///
+    /// Default: `None`. See [`RenderObject::describe_semantics_clip`].
+    fn describe_semantics_clip(
+        &self,
+        _child_slot: usize,
+    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        None
+    }
+
     /// Marks this render object for reprocessing after hot reload.
     ///
     /// Default: no-op. See
@@ -829,6 +851,20 @@ where
 
     fn excludes_semantics_subtree(&self) -> bool {
         <T as RenderBox>::excludes_semantics_subtree(self)
+    }
+
+    fn describe_approximate_paint_clip(
+        &self,
+        child_slot: usize,
+    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        <T as RenderBox>::describe_approximate_paint_clip(self, child_slot)
+    }
+
+    fn describe_semantics_clip(
+        &self,
+        child_slot: usize,
+    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        <T as RenderBox>::describe_semantics_clip(self, child_slot)
     }
 
     fn reassemble(&mut self) {

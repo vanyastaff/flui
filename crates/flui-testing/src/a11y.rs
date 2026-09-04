@@ -21,7 +21,7 @@ use accesskit::{Node, TreeUpdate};
 // `use flui_testing::a11y::Role` and never has to add accesskit itself at a
 // version that must match ours. Named items only — a glob would enrol every
 // future accesskit item into this crate's contract without anyone deciding to.
-pub use accesskit::{Action, NodeId, Role, Toggled};
+pub use accesskit::{Action, NodeId, Rect as A11yRect, Role, Toggled};
 
 /// The binding drives no tree, so there is no pipeline to assemble semantics
 /// from.
@@ -262,6 +262,17 @@ impl<'a> A11yNode<'a> {
     #[must_use]
     pub fn supports_action(&self, action: Action) -> bool {
         self.node.supports_action(action)
+    }
+
+    /// The node's bounds, in the coordinate space the platform adapter reads.
+    ///
+    /// `None` when the assembler published no rect for this node. A screen
+    /// reader uses this to place its focus ring and to decide what a touch
+    /// lands on, so a rect that outgrows what is actually on screen is a
+    /// user-visible defect, not a cosmetic one.
+    #[must_use]
+    pub fn bounds(&self) -> Option<A11yRect> {
+        self.node.bounds()
     }
 
     /// The node's children, in tree order.

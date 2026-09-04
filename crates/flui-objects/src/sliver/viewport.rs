@@ -179,6 +179,12 @@ struct StagedPosition {
     layout_offset: f32,
     growth_direction: GrowthDirection,
     paint_extent: f32,
+    /// How far the leading edge of this child's paint clip is pushed in by
+    /// the slivers ahead of it — the room a pinned header occupies. `0.0`
+    /// when nothing overlaps it. Staged with the position because it belongs
+    /// to the same accepted pass: a clip taken from a rejected pass would
+    /// describe a layout the tree never adopted.
+    paint_clip_correction: f32,
 }
 
 /// Per-child sliver constraint fields that vary during a viewport walk.
@@ -192,6 +198,33 @@ struct ChildSliverLayoutFields {
     remaining_paint_extent: f32,
     remaining_cache_extent: f32,
     cache_origin: f32,
+}
+
+/// Pushes `rect`'s leading edge in by `amount`, along `direction`.
+fn shrink_leading_edge(rect: Rect<Pixels>, direction: AxisDirection, amount: f32) -> Rect<Pixels> {
+    let (mut left, mut top) = (rect.min.x.get(), rect.min.y.get());
+    let (mut right, mut bottom) = (rect.max.x.get(), rect.max.y.get());
+    match direction {
+        AxisDirection::TopToBottom => top += amount,
+        AxisDirection::BottomToTop => bottom -= amount,
+        AxisDirection::LeftToRight => left += amount,
+        AxisDirection::RightToLeft => right -= amount,
+    }
+    Rect::from_ltrb(px(left), px(top), px(right), px(bottom))
+}
+
+/// Grows `rect` by `amount` at BOTH ends of `axis`.
+fn grow_along_axis(rect: Rect<Pixels>, axis: Axis, amount: f32) -> Rect<Pixels> {
+    let (left, top) = (rect.min.x.get(), rect.min.y.get());
+    let (right, bottom) = (rect.max.x.get(), rect.max.y.get());
+    match axis {
+        Axis::Vertical => {
+            Rect::from_ltrb(px(left), px(top - amount), px(right), px(bottom + amount))
+        }
+        Axis::Horizontal => {
+            Rect::from_ltrb(px(left - amount), px(top), px(right + amount), px(bottom))
+        }
+    }
 }
 
 /// A Box-protocol viewport that lays out Sliver-protocol children.
@@ -243,6 +276,44 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// `Clip::None` clips nothing at all, so a child may paint outside the
     /// viewport's bounds (Flutter's `clipBehavior`, default `hardEdge`).
     clip_behavior: Clip,
+    /// The size and cache extent the last pass laid out under, and the
+    /// per-slot paint-clip corrections it committed — everything the
+    /// semantics walk needs to answer what a child is clipped to, since it
+    /// asks after layout has returned and no longer has a layout context.
+    ///
+    /// Size and cache extent come from this node's own constraints, which no
+    /// descendant stand-in can move, so unlike the scroll dimensions they are
+    /// written on every pass rather than only on an accepted one.
+    committed_clips: CommittedClipGeometry,
+}
+
+/// What the accepted pass left for [`RenderViewport::describe_semantics_clip`]
+/// and its paint-clip counterpart to answer from.
+#[derive(Debug, Default, Clone)]
+struct CommittedClipGeometry {
+    /// The viewport's own size.
+    size: Size,
+    /// The cache extent in pixels, already resolved from
+    /// [`CacheExtentStyle`].
+    cache_extent: f32,
+    /// Slot-indexed; see [`CommittedChildClip`].
+    child_clips: Vec<CommittedChildClip>,
+}
+
+/// What the accepted pass committed about ONE child's paint clip.
+///
+/// The growth direction rides along with the correction because the direction
+/// the leading edge is pushed from depends on it, and the staged positions the
+/// pass built it from are drained by `commit_positions` — reading them back
+/// afterwards would find an empty vector and silently answer "forward" for
+/// every reverse-group child.
+#[derive(Debug, Default, Clone, Copy)]
+struct CommittedChildClip {
+    /// How far the leading edge of this child's paint clip is pushed in; see
+    /// [`StagedPosition::paint_clip_correction`].
+    correction: f32,
+    /// Which end of the axis that edge is measured from.
+    growth_direction: GrowthDirection,
 }
 
 impl RenderViewport<ScrollableViewportOffset> {
@@ -288,6 +359,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             offset_listener: None,
             staged_positions: Vec::new(),
             clip_behavior: Clip::HardEdge,
+            committed_clips: CommittedClipGeometry::default(),
         }
     }
 
@@ -787,11 +859,24 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             } else {
                 -scroll_offset + initial_layout_offset
             };
+            // Oracle (`rendering/viewport.dart:902-934`,
+            // `describeApproximatePaintClip`): a child nothing overlaps is
+            // clipped to the whole viewport; one a pinned header overlaps has
+            // its clip's leading edge pushed in to where that overlap starts.
+            // Computed here, where the child's own constraints are still in
+            // hand, and staged so only an accepted pass commits it.
+            let child_overlap = max_paint_offset - layout_offset;
+            let paint_clip_correction = if child_overlap == 0.0 || !main_axis_extent.is_finite() {
+                0.0
+            } else {
+                (main_axis_extent - child_remaining_paint_extent) + child_overlap
+            };
             self.staged_positions.push(StagedPosition {
                 slot: index,
                 layout_offset: child_layout_offset,
                 growth_direction,
                 paint_extent: geometry.paint_extent,
+                paint_clip_correction,
             });
 
             max_paint_offset =
@@ -843,10 +928,35 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
         size: Size,
+        cache_extent: f32,
     ) {
+        // The clips the semantics walk will ask about, recorded here because
+        // it asks long after `perform_layout` has returned its context. Size
+        // and cache extent derive from this viewport's own constraints, which
+        // no descendant stand-in can move, so they are recorded on every pass
+        // — unlike the scroll dimensions, which a degraded pass withholds.
+        self.committed_clips.size = size;
+        self.committed_clips.cache_extent = cache_extent;
         // Taken out and put back so the vector keeps its capacity across
         // frames: this runs on every scroll pixel.
         let mut staged = std::mem::take(&mut self.staged_positions);
+        // Slot-indexed, like `sliver_obstruction_extents`: the walk may visit
+        // the reverse group first, so write by absolute slot rather than in
+        // visit order.
+        self.committed_clips
+            .child_clips
+            .resize(self.child_count, CommittedChildClip::default());
+        self.committed_clips
+            .child_clips
+            .fill(CommittedChildClip::default());
+        for position in &staged {
+            if let Some(slot) = self.committed_clips.child_clips.get_mut(position.slot) {
+                *slot = CommittedChildClip {
+                    correction: position.paint_clip_correction,
+                    growth_direction: position.growth_direction,
+                };
+            }
+        }
         for position in staged.drain(..) {
             ctx.position_child(
                 position.slot,
@@ -1025,7 +1135,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
             );
         }
 
-        self.commit_positions(ctx, size);
+        self.commit_positions(ctx, size, self.calculated_cache_extent(main_axis_extent));
         size
     }
 
@@ -1041,6 +1151,52 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         } else {
             paint_children(ctx);
         }
+    }
+
+    /// Oracle (`rendering/viewport.dart:886-934`,
+    /// `describeApproximatePaintClip`): the viewport's own bounds, with the
+    /// leading edge pushed in by whatever overlaps this child — the room a
+    /// pinned header takes. `Clip::None` clips nothing, so it reports
+    /// nothing and content outside the viewport stays a fully present
+    /// accessibility node.
+    ///
+    /// The direction the correction pushes from follows the child's growth
+    /// direction: a reverse-group child is measured from the far edge.
+    fn describe_approximate_paint_clip(&self, child_slot: usize) -> Option<Rect<Pixels>> {
+        if self.clip_behavior == Clip::None {
+            return None;
+        }
+        let clip = Rect::from_origin_size(Point::ZERO, self.committed_clips.size);
+        let committed = self
+            .committed_clips
+            .child_clips
+            .get(child_slot)
+            .copied()
+            .unwrap_or_default();
+        if committed.correction == 0.0 {
+            return Some(clip);
+        }
+        let effective = match committed.growth_direction {
+            GrowthDirection::Forward => self.axis_direction,
+            GrowthDirection::Reverse => self.axis_direction.opposite(),
+        };
+        Some(shrink_leading_edge(clip, effective, committed.correction))
+    }
+
+    /// Oracle (`rendering/viewport.dart:938-966`, `describeSemanticsClip`):
+    /// the viewport's bounds grown by the cache extent along the scroll axis.
+    ///
+    /// Wider than the paint clip on purpose — a row just past the edge is
+    /// off-screen but reachable, so it stays in the tree (flagged hidden by
+    /// the paint clip) for a screen reader to scroll to. A row past the cache
+    /// area is not there at all.
+    fn describe_semantics_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+        let bounds = Rect::from_origin_size(Point::ZERO, self.committed_clips.size);
+        let cache = self.committed_clips.cache_extent;
+        if cache <= 0.0 {
+            return Some(bounds);
+        }
+        Some(grow_along_axis(bounds, self.axis_direction.axis(), cache))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {
@@ -1098,6 +1254,8 @@ pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     /// `Clip::None` clips nothing at all, so a child may paint outside the
     /// viewport's bounds (Flutter's `clipBehavior`, default `hardEdge`).
     clip_behavior: Clip,
+    /// See [`RenderViewport::committed_clips`]'s matching field docs.
+    committed_clips: CommittedClipGeometry,
 }
 
 impl RenderShrinkWrappingViewport<ScrollableViewportOffset> {
@@ -1137,6 +1295,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             offset_listener: None,
             staged_positions: Vec::new(),
             clip_behavior: Clip::HardEdge,
+            committed_clips: CommittedClipGeometry::default(),
         }
     }
 
@@ -1454,11 +1613,24 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             } else {
                 -scroll_offset + initial_layout_offset
             };
+            // Oracle (`rendering/viewport.dart:902-934`,
+            // `describeApproximatePaintClip`): a child nothing overlaps is
+            // clipped to the whole viewport; one a pinned header overlaps has
+            // its clip's leading edge pushed in to where that overlap starts.
+            // Computed here, where the child's own constraints are still in
+            // hand, and staged so only an accepted pass commits it.
+            let child_overlap = max_paint_offset - layout_offset;
+            let paint_clip_correction = if child_overlap == 0.0 || !main_axis_extent.is_finite() {
+                0.0
+            } else {
+                (main_axis_extent - child_remaining_paint_extent) + child_overlap
+            };
             self.staged_positions.push(StagedPosition {
                 slot: index,
                 layout_offset: child_layout_offset,
                 growth_direction,
                 paint_extent: geometry.paint_extent,
+                paint_clip_correction,
             });
 
             max_paint_offset =
@@ -1491,10 +1663,35 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
         size: Size,
+        cache_extent: f32,
     ) {
+        // The clips the semantics walk will ask about, recorded here because
+        // it asks long after `perform_layout` has returned its context. Size
+        // and cache extent derive from this viewport's own constraints, which
+        // no descendant stand-in can move, so they are recorded on every pass
+        // — unlike the scroll dimensions, which a degraded pass withholds.
+        self.committed_clips.size = size;
+        self.committed_clips.cache_extent = cache_extent;
         // Taken out and put back so the vector keeps its capacity across
         // frames: this runs on every scroll pixel.
         let mut staged = std::mem::take(&mut self.staged_positions);
+        // Slot-indexed, like `sliver_obstruction_extents`: the walk may visit
+        // the reverse group first, so write by absolute slot rather than in
+        // visit order.
+        self.committed_clips
+            .child_clips
+            .resize(self.child_count, CommittedChildClip::default());
+        self.committed_clips
+            .child_clips
+            .fill(CommittedChildClip::default());
+        for position in &staged {
+            if let Some(slot) = self.committed_clips.child_clips.get_mut(position.slot) {
+                *slot = CommittedChildClip {
+                    correction: position.paint_clip_correction,
+                    growth_direction: position.growth_direction,
+                };
+            }
+        }
         for position in staged.drain(..) {
             ctx.position_child(
                 position.slot,
@@ -1649,7 +1846,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
         // them at commit is the same contract without a second layout of
         // every child.
         let size = self.size_from_extents(cross_axis_extent, effective_extent);
-        self.commit_positions(ctx, size);
+        self.commit_positions(ctx, size, self.calculated_cache_extent(main_axis_extent));
         size
     }
 
@@ -1665,6 +1862,52 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
         } else {
             paint_children(ctx);
         }
+    }
+
+    /// Oracle (`rendering/viewport.dart:886-934`,
+    /// `describeApproximatePaintClip`): the viewport's own bounds, with the
+    /// leading edge pushed in by whatever overlaps this child — the room a
+    /// pinned header takes. `Clip::None` clips nothing, so it reports
+    /// nothing and content outside the viewport stays a fully present
+    /// accessibility node.
+    ///
+    /// The direction the correction pushes from follows the child's growth
+    /// direction: a reverse-group child is measured from the far edge.
+    fn describe_approximate_paint_clip(&self, child_slot: usize) -> Option<Rect<Pixels>> {
+        if self.clip_behavior == Clip::None {
+            return None;
+        }
+        let clip = Rect::from_origin_size(Point::ZERO, self.committed_clips.size);
+        let committed = self
+            .committed_clips
+            .child_clips
+            .get(child_slot)
+            .copied()
+            .unwrap_or_default();
+        if committed.correction == 0.0 {
+            return Some(clip);
+        }
+        let effective = match committed.growth_direction {
+            GrowthDirection::Forward => self.axis_direction,
+            GrowthDirection::Reverse => self.axis_direction.opposite(),
+        };
+        Some(shrink_leading_edge(clip, effective, committed.correction))
+    }
+
+    /// Oracle (`rendering/viewport.dart:938-966`, `describeSemanticsClip`):
+    /// the viewport's bounds grown by the cache extent along the scroll axis.
+    ///
+    /// Wider than the paint clip on purpose — a row just past the edge is
+    /// off-screen but reachable, so it stays in the tree (flagged hidden by
+    /// the paint clip) for a screen reader to scroll to. A row past the cache
+    /// area is not there at all.
+    fn describe_semantics_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+        let bounds = Rect::from_origin_size(Point::ZERO, self.committed_clips.size);
+        let cache = self.committed_clips.cache_extent;
+        if cache <= 0.0 {
+            return Some(bounds);
+        }
+        Some(grow_along_axis(bounds, self.axis_direction.axis(), cache))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {
@@ -1937,6 +2180,74 @@ mod offset_listener_tests {
             "under channel backpressure the offset listener's mark is dropped, not queued — \
              the node must stay off the layout-dirty list until an unrelated mutation frees \
              a slot and retries it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod paint_clip_direction_tests {
+    use super::*;
+
+    fn viewport_with_committed_child(
+        axis_direction: AxisDirection,
+        growth_direction: GrowthDirection,
+    ) -> RenderViewport {
+        let mut viewport = RenderViewport::new(axis_direction);
+        viewport.committed_clips = CommittedClipGeometry {
+            size: Size::new(px(100.0), px(100.0)),
+            cache_extent: 0.0,
+            child_clips: vec![CommittedChildClip {
+                correction: 30.0,
+                growth_direction,
+            }],
+        };
+        viewport
+    }
+
+    /// The direction a paint clip's edge is pushed from follows the CHILD's
+    /// growth direction, and that direction has to survive the commit.
+    ///
+    /// It is read from committed state rather than from the staged positions
+    /// the pass built it from, because `commit_positions` drains those: a
+    /// lookup there finds an empty vector and answers "forward" for every
+    /// child. A forward-only viewport — nearly every viewport — cannot tell
+    /// the difference, which is why this is pinned directly.
+    #[test]
+    fn a_reverse_group_child_has_its_paint_clip_pushed_from_the_far_edge() {
+        let forward =
+            viewport_with_committed_child(AxisDirection::TopToBottom, GrowthDirection::Forward);
+        let clip = forward
+            .describe_approximate_paint_clip(0)
+            .expect("a clipping viewport reports a paint clip");
+        assert_eq!(
+            (clip.min.y.get(), clip.max.y.get()),
+            (30.0, 100.0),
+            "a forward child's clip loses its LEADING edge to the overlap",
+        );
+
+        let reverse =
+            viewport_with_committed_child(AxisDirection::TopToBottom, GrowthDirection::Reverse);
+        let clip = reverse
+            .describe_approximate_paint_clip(0)
+            .expect("a clipping viewport reports a paint clip");
+        assert_eq!(
+            (clip.min.y.get(), clip.max.y.get()),
+            (0.0, 70.0),
+            "a reverse child grows from the far edge, so its clip loses THAT one",
+        );
+    }
+
+    /// `Clip::None` means no clip at all, not a clip the size of the viewport:
+    /// a child painting outside the bounds keeps its full accessibility rect.
+    #[test]
+    fn clip_none_reports_no_paint_clip() {
+        let mut viewport =
+            viewport_with_committed_child(AxisDirection::TopToBottom, GrowthDirection::Forward);
+        let _ = viewport.set_clip_behavior(Clip::None);
+
+        assert!(
+            viewport.describe_approximate_paint_clip(0).is_none(),
+            "an unclipped viewport imposes nothing on its children",
         );
     }
 }
