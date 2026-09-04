@@ -39,9 +39,12 @@
 //!   [`compute_distance_to_actual_baseline`](RenderTable::compute_distance_to_actual_baseline):
 //!   dry column widths, then the max child dry-baseline over row 0's
 //!   `Baseline`-aligned cells (driven by the table's `text_baseline`).
-//! - **Deferred**: `TableCellVerticalAlignment::IntrinsicHeight` —
-//!   `TableCellVerticalAlignment` keeps its existing FLUI shape (see
-//!   `flui_types::layout::table`).
+//! - **`TableCellVerticalAlignment::IntrinsicHeight`** — measured with
+//!   `Top`/`Middle`/`Bottom` so its own content contributes to the row
+//!   height, then stretched to the settled height with `Fill`. The contrast
+//!   with `Fill` is which pass sees it: a row of only-`Fill` cells has zero
+//!   height, a row of only-`IntrinsicHeight` cells is as tall as its tallest
+//!   cell and every cell in it ends up that tall.
 
 use std::collections::HashMap;
 
@@ -722,9 +725,14 @@ impl RenderBox for RenderTable {
                             }
                         }
                     }
+                    // `IntrinsicHeight` is measured here, unlike `Fill`:
+                    // its own content is part of what makes the row tall,
+                    // and the position pass then stretches it to that
+                    // height (table.dart:1401-1405).
                     TableCellVerticalAlignment::Top
                     | TableCellVerticalAlignment::Middle
-                    | TableCellVerticalAlignment::Bottom => {
+                    | TableCellVerticalAlignment::Bottom
+                    | TableCellVerticalAlignment::IntrinsicHeight => {
                         let cc = BoxConstraints::tight_for(Some(widths[x]), None);
                         let size = ctx.layout_child(idx, cc);
                         cell_sizes[x] = size;
@@ -759,9 +767,11 @@ impl RenderBox for RenderTable {
                     TableCellVerticalAlignment::Bottom => {
                         Offset::new(column_lefts[x], row_top + row_height - cell_sizes[x].height)
                     }
-                    TableCellVerticalAlignment::Fill => {
-                        // Second, tight-height layout call (oracle's own
-                        // second pass for `fill`).
+                    // Both are re-laid-out tight to the settled row height;
+                    // they differ only in whether the measure pass above saw
+                    // them (table.dart:1437-1441).
+                    TableCellVerticalAlignment::Fill
+                    | TableCellVerticalAlignment::IntrinsicHeight => {
                         let cc = BoxConstraints::tight_for(Some(widths[x]), Some(row_height));
                         ctx.layout_child(idx, cc);
                         Offset::new(column_lefts[x], row_top)
@@ -822,7 +832,8 @@ impl RenderBox for RenderTable {
                     }
                     TableCellVerticalAlignment::Top
                     | TableCellVerticalAlignment::Middle
-                    | TableCellVerticalAlignment::Bottom => {
+                    | TableCellVerticalAlignment::Bottom
+                    | TableCellVerticalAlignment::IntrinsicHeight => {
                         let cc = BoxConstraints::tight_for(Some(width), None);
                         let size = ctx.child_dry_layout(idx, cc);
                         row_height = row_height.max(size.height);
@@ -978,13 +989,24 @@ impl RenderBox for RenderTable {
                 .child_parent_data_as::<TableCellParentData>(cell)
                 .and_then(|pd| pd.vertical_alignment)
                 .unwrap_or(self.default_vertical_alignment);
-            if alignment == TableCellVerticalAlignment::Baseline {
-                let cell_constraints = BoxConstraints::tight_for(Some(width), None);
-                if let Some(distance) =
-                    ctx.child_dry_baseline(cell, cell_constraints, text_baseline)
-                {
-                    before_baseline = Some(before_baseline.map_or(distance, |b| b.max(distance)));
+            // A `match`, not `alignment == Baseline`: an equality test lets
+            // the next variant added to this enum through in silence, and
+            // this one happened to want the same answer only by luck.
+            match alignment {
+                TableCellVerticalAlignment::Baseline => {
+                    let cell_constraints = BoxConstraints::tight_for(Some(width), None);
+                    if let Some(distance) =
+                        ctx.child_dry_baseline(cell, cell_constraints, text_baseline)
+                    {
+                        before_baseline =
+                            Some(before_baseline.map_or(distance, |b| b.max(distance)));
+                    }
                 }
+                TableCellVerticalAlignment::Top
+                | TableCellVerticalAlignment::Middle
+                | TableCellVerticalAlignment::Bottom
+                | TableCellVerticalAlignment::Fill
+                | TableCellVerticalAlignment::IntrinsicHeight => {}
             }
         }
         before_baseline

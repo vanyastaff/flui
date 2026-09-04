@@ -81,9 +81,8 @@ key would have nothing to address. Key the cell instead.
   `table` parity family drops to zero pins and zero diverged cases.
 - `TableRow`'s `Debug` no longer prints its cells (it prints their count and whether the row is
   keyed) because `BoxedView` has no `Debug`.
-- Still open, and tracked in #544: `TableCellVerticalAlignment::IntrinsicHeight`, and the
-  baseline/`textBaseline` pairing as a type-level invariant rather than the recorded degradation it
-  is today.
+- Still open, and tracked in #544: the baseline/`textBaseline` pairing as a type-level invariant
+  rather than the recorded degradation it is today.
 
 ## Amendment (2026-09-04): a ragged grid is repaired where it is supplied
 
@@ -121,3 +120,27 @@ Pinned by `table_pads_a_short_row_and_drops_a_long_rows_extra_cells` (the padded
 slot instead of shifting the grid, and every row still contributes its height) and
 `data_table_squares_up_a_row_that_does_not_match_its_columns` (red with the repair removed: an
 index-out-of-bounds panic).
+
+## Amendment (2026-09-04): `TableCellVerticalAlignment::IntrinsicHeight`
+
+The variant Flutter has and FLUI did not. A cell with it is measured with `Top`/`Middle`/`Bottom`,
+so its own content contributes to how tall the row becomes, and is then re-laid-out tight to the
+settled row height with `Fill` (`rendering/table.dart:1401-1405` and `:1437-1441`). The contrast
+with `Fill` is which pass sees it: a row whose cells are all `Fill` has zero height because none
+of them is measured, while a row whose cells are all `IntrinsicHeight` is as tall as its tallest
+cell and every cell in it ends up that tall.
+
+Four sites in `RenderTable`, one of which was not a `match`: `compute_dry_baseline` tested
+`alignment == Baseline`, which silently absorbs any new variant. It happened to want the same
+answer this variant needs, by luck rather than by design, so it is now a `match` and the next
+variant added to this enum is a compile error there instead of a silent default.
+
+`TableCellVerticalAlignment` is deliberately not `#[non_exhaustive]`, so adding a variant is a
+breaking change for an external matcher. That is accepted: the enum is small, closed in concept,
+and exhaustive matching on it is what just caught three of the four sites that needed updating.
+
+Pinned by the ported oracle case
+(`default_vertical_alignment_intrinsic_height_makes_each_row_as_tall_as_its_tallest_cell`, from
+`widgets/table_test.dart`'s "Set defaultVerticalAlignment to intrinsic height and check their
+heights", including its third assertion that rows differ from each other) and by two harness tests
+that put `IntrinsicHeight` and `Fill` side by side on the same two cells: 90 tall versus zero.
