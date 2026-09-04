@@ -207,8 +207,11 @@ pub struct RenderState<P: Protocol> {
     /// `placed_generation` equals this value. **Paint and hit-test** read that
     /// comparison and skip the rest.
     ///
-    /// Starts at 1 so a child stamped in its parent's first layout differs
-    /// from a never-stamped child's 0.
+    /// Starts at 1, the same value [`placed_generation`](Self::placed_generation)
+    /// starts at, so an untouched parent and its untouched children agree —
+    /// see that field for why "no evidence" has to mean "placed". The first
+    /// real layout advances this to 2 and stamps the children it laid out,
+    /// which is the first moment the two can differ.
     layout_generation: AtomicU64,
 
     /// The parent's [`layout_generation`](Self::layout_generation) at the last
