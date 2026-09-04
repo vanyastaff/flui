@@ -123,12 +123,26 @@ struct LayoutChildSequenceParams {
     remaining_paint_extent: f32,
     main_axis_extent: f32,
     cross_axis_extent: f32,
-    size: Size,
     growth_direction: GrowthDirection,
     remaining_cache_extent: f32,
     cache_origin: f32,
     child_start: usize,
     child_end: usize,
+}
+
+/// Where a pass decided a child goes, in the viewport's logical coordinates.
+///
+/// A pass stages these instead of positioning as it walks: the physical
+/// offset needs the viewport's final size (a reverse axis measures from the
+/// far edge), which a shrink-wrapping viewport only knows once its passes
+/// have settled. Positioning once, from the accepted pass, is what lets that
+/// viewport skip a second layout of every child.
+#[derive(Debug, Clone, Copy)]
+struct StagedPosition {
+    slot: usize,
+    layout_offset: f32,
+    growth_direction: GrowthDirection,
+    paint_extent: f32,
 }
 
 /// Per-child sliver constraint fields that vary during a viewport walk.
@@ -171,6 +185,9 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// retained so `detach`/`set_offset` can remove the SAME `Arc` via
     /// [`ViewportOffset::remove_listener`]'s ptr-eq contract.
     offset_listener: Option<OffsetListener>,
+    /// The child positions the current pass decided; committed by
+    /// `commit_positions` once the pass is accepted.
+    staged_positions: Vec<StagedPosition>,
 }
 
 impl RenderViewport<ScrollableViewportOffset> {
@@ -211,6 +228,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             has_visual_overflow: false,
             render_invalidation_handle: None,
             offset_listener: None,
+            staged_positions: Vec::new(),
         }
     }
 
@@ -424,8 +442,8 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         main_axis_extent: f32,
         cross_axis_extent: f32,
         corrected_offset: f32,
-        size: Size,
     ) -> f32 {
+        self.staged_positions.clear();
         self.min_scroll_extent = 0.0;
         self.max_scroll_extent = 0.0;
         self.max_scroll_obstruction_extent = 0.0;
@@ -492,7 +510,6 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             remaining_paint_extent: forward_remaining_paint_extent,
             main_axis_extent,
             cross_axis_extent,
-            size,
             growth_direction: GrowthDirection::Forward,
             remaining_cache_extent,
             cache_origin: center_offset.clamp(-cache_extent, 0.0),
@@ -550,7 +567,6 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             remaining_paint_extent,
             main_axis_extent,
             cross_axis_extent,
-            size,
             growth_direction,
             mut remaining_cache_extent,
             mut cache_origin,
@@ -613,15 +629,12 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             } else {
                 -scroll_offset + initial_layout_offset
             };
-            ctx.position_child(
-                index,
-                self.compute_absolute_paint_offset(
-                    px(child_layout_offset),
-                    growth_direction,
-                    px(geometry.paint_extent),
-                    size,
-                ),
-            );
+            self.staged_positions.push(StagedPosition {
+                slot: index,
+                layout_offset: child_layout_offset,
+                growth_direction,
+                paint_extent: geometry.paint_extent,
+            });
 
             max_paint_offset =
                 max_paint_offset.max(effective_layout_offset + geometry.paint_extent);
@@ -658,6 +671,25 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             .push(geometry.max_scroll_obstruction_extent);
         if geometry.has_visual_overflow {
             self.has_visual_overflow = true;
+        }
+    }
+
+    /// Position every child the accepted pass staged, against the final size.
+    fn commit_positions(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+        size: Size,
+    ) {
+        for staged in std::mem::take(&mut self.staged_positions) {
+            ctx.position_child(
+                staged.slot,
+                self.compute_absolute_paint_offset(
+                    px(staged.layout_offset),
+                    staged.growth_direction,
+                    px(staged.paint_extent),
+                    size,
+                ),
+            );
         }
     }
 
@@ -749,7 +781,6 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 main_axis_extent,
                 cross_axis_extent,
                 self.offset.pixels(),
-                size,
             );
             if correction != 0.0 {
                 self.offset.correct_by(correction);
@@ -785,6 +816,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
             );
         }
 
+        self.commit_positions(ctx, size);
         size
     }
 
@@ -850,6 +882,9 @@ pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     render_invalidation_handle: Option<RenderInvalidationHandle>,
     /// See [`RenderViewport::offset_listener`]'s matching field docs.
     offset_listener: Option<OffsetListener>,
+    /// The child positions the current pass decided; committed by
+    /// `commit_positions` once the pass is accepted.
+    staged_positions: Vec<StagedPosition>,
 }
 
 impl RenderShrinkWrappingViewport<ScrollableViewportOffset> {
@@ -887,6 +922,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             has_visual_overflow: false,
             render_invalidation_handle: None,
             offset_listener: None,
+            staged_positions: Vec::new(),
         }
     }
 
@@ -1075,8 +1111,8 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         main_axis_extent: f32,
         cross_axis_extent: f32,
         corrected_offset: f32,
-        size: Size,
     ) -> f32 {
+        self.staged_positions.clear();
         self.max_scroll_extent = 0.0;
         self.shrink_wrap_extent = 0.0;
         self.has_visual_overflow = corrected_offset < 0.0;
@@ -1092,7 +1128,6 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
                 remaining_paint_extent,
                 main_axis_extent,
                 cross_axis_extent,
-                size,
                 growth_direction: GrowthDirection::Forward,
                 remaining_cache_extent: main_axis_extent + 2.0 * cache_extent,
                 cache_origin: -cache_extent,
@@ -1115,7 +1150,6 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             remaining_paint_extent,
             main_axis_extent,
             cross_axis_extent,
-            size,
             growth_direction,
             mut remaining_cache_extent,
             mut cache_origin,
@@ -1179,15 +1213,12 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             } else {
                 -scroll_offset + initial_layout_offset
             };
-            ctx.position_child(
-                index,
-                self.compute_absolute_paint_offset(
-                    px(child_layout_offset),
-                    growth_direction,
-                    px(geometry.paint_extent),
-                    size,
-                ),
-            );
+            self.staged_positions.push(StagedPosition {
+                slot: index,
+                layout_offset: child_layout_offset,
+                growth_direction,
+                paint_extent: geometry.paint_extent,
+            });
 
             max_paint_offset =
                 max_paint_offset.max(effective_layout_offset + geometry.paint_extent);
@@ -1211,6 +1242,25 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         self.shrink_wrap_extent += geometry.max_paint_extent;
         if geometry.has_visual_overflow {
             self.has_visual_overflow = true;
+        }
+    }
+
+    /// Position every child the accepted pass staged, against the final size.
+    fn commit_positions(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+        size: Size,
+    ) {
+        for staged in std::mem::take(&mut self.staged_positions) {
+            ctx.position_child(
+                staged.slot,
+                self.compute_absolute_paint_offset(
+                    px(staged.layout_offset),
+                    staged.growth_direction,
+                    px(staged.paint_extent),
+                    size,
+                ),
+            );
         }
     }
 
@@ -1291,13 +1341,6 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
 
         let main_axis_extent = self.main_axis_extent_from_constraints(&constraints);
         let cross_axis_extent = self.cross_axis_extent_from_constraints(&constraints);
-        let provisional_main_axis_extent = if main_axis_extent.is_finite() {
-            main_axis_extent
-        } else {
-            0.0
-        };
-        let provisional_size =
-            self.size_from_extents(cross_axis_extent, provisional_main_axis_extent);
 
         let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
         let mut accepted = false;
@@ -1308,7 +1351,6 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
                 main_axis_extent,
                 cross_axis_extent,
                 self.offset.pixels(),
-                provisional_size,
             );
             if correction != 0.0 {
                 self.offset.correct_by(correction);
@@ -1337,26 +1379,15 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
             );
         }
 
+        // The accepted pass laid every child out against constraints that do
+        // not depend on this viewport's final size; only the physical offsets
+        // do (a reverse axis measures from the far edge), and they are
+        // resolved here, once, from what that pass staged. Flutter stores
+        // logical offsets in parent data and resolves them at paint; resolving
+        // them at commit is the same contract without a second layout of
+        // every child.
         let size = self.size_from_extents(cross_axis_extent, effective_extent);
-        // Re-run once with the final shrink-wrapped size so reverse physical
-        // axes (BottomToTop/RightToLeft) compute child paint offsets from the
-        // committed viewport extent. Flutter stores logical offsets in parent
-        // data and resolves them later; FLUI commits physical offsets during
-        // layout, so this final pass keeps the observable offset contract loyal.
-        let correction = self.attempt_layout(
-            ctx,
-            main_axis_extent,
-            cross_axis_extent,
-            self.offset.pixels(),
-            size,
-        );
-        if correction != 0.0 {
-            tracing::warn!(
-                correction,
-                "RenderShrinkWrappingViewport requested a correction during final positioning pass"
-            );
-        }
-
+        self.commit_positions(ctx, size);
         size
     }
 

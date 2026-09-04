@@ -8061,6 +8061,119 @@ fn harness_shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_
     );
 }
 
+/// A shrink-wrapping viewport on a reverse axis positions its children from
+/// the far edge of its FINAL size: two 25 px items under an unbounded main
+/// axis make it 50 px tall, and on `BottomToTop` item 0 sits at y = 50 − 25
+/// and item 1 at y = 0. The offsets are resolved once, from the accepted
+/// pass, against that size — not from a provisional size the pass laid out
+/// under.
+#[test]
+fn harness_shrink_wrapping_viewport_reverse_axis_positions_from_the_final_extent() {
+    let run = RenderTester::mount(
+        box_node(RenderShrinkWrappingViewport::new(
+            AxisDirection::BottomToTop,
+        ))
+        .label("shrink_viewport")
+        .child(
+            fixed_extent_list(
+                25.0,
+                vec![
+                    box_node(RenderColoredBox::red(300.0, 1000.0)).label("item0"),
+                    box_node(RenderColoredBox::green(300.0, 1000.0)).label("item1"),
+                ],
+            )
+            .label("list"),
+        ),
+    )
+    .with_constraints(BoxConstraints::new(
+        px(300.0),
+        px(300.0),
+        px(0.0),
+        flui_types::Pixels::INFINITY,
+    ))
+    .run_layout();
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(300.0), px(50.0)));
+    assert_eq!(
+        run.offset(run.id("item0")).dy,
+        px(25.0),
+        "item 0 is measured from the bottom edge of the 50 px viewport"
+    );
+    assert_eq!(run.offset(run.id("item1")).dy, px(0.0));
+}
+
+/// A sliver that counts its layouts, for pinning how many passes a viewport
+/// spends on its children.
+#[derive(Debug)]
+struct LayoutCountingSliver {
+    extent: f32,
+    layouts: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl flui_rendering::traits::RenderSliver for LayoutCountingSliver {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::SliverPhysicalParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::SliverLayoutContext<
+            '_,
+            flui_tree::Leaf,
+            Self::ParentData,
+        >,
+    ) -> flui_rendering::constraints::SliverGeometry {
+        self.layouts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let constraints = *ctx.constraints();
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
+        flui_rendering::constraints::SliverGeometry {
+            scroll_extent: self.extent,
+            paint_extent,
+            layout_extent: paint_extent,
+            max_paint_extent: self.extent,
+            cache_extent: self.calculate_cache_offset(&constraints, 0.0, self.extent),
+            hit_test_extent: paint_extent,
+            visible: paint_extent > 0.0,
+            ..flui_rendering::constraints::SliverGeometry::ZERO
+        }
+    }
+}
+
+impl flui_foundation::Diagnosticable for LayoutCountingSliver {}
+
+/// A shrink-wrapping viewport lays its children out once per accepted pass:
+/// the single pass a settled layout needs, not that pass plus a positioning
+/// re-run. Positions are resolved from what the pass staged.
+#[test]
+fn harness_shrink_wrapping_viewport_lays_children_out_once_per_pass() {
+    let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let run = RenderTester::mount(
+        box_node(RenderShrinkWrappingViewport::new(
+            AxisDirection::TopToBottom,
+        ))
+        .label("shrink_viewport")
+        .child(
+            sliver_node(LayoutCountingSliver {
+                extent: 40.0,
+                layouts: Arc::clone(&layouts),
+            })
+            .label("counting"),
+        ),
+    )
+    .with_constraints(BoxConstraints::new(
+        px(300.0),
+        px(300.0),
+        px(0.0),
+        flui_types::Pixels::INFINITY,
+    ))
+    .run_layout();
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(300.0), px(40.0)));
+    assert_eq!(
+        layouts.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "one accepted pass, one layout of the child"
+    );
+}
+
 #[test]
 fn harness_shrink_wrapping_viewport_empty_uses_cross_axis_max_and_main_axis_min() {
     let run = RenderTester::mount(box_node(RenderShrinkWrappingViewport::new(
