@@ -1566,7 +1566,6 @@ impl ViewState<TwoLists> for TwoListsState {
                     }
                 })
             })
-            .repaint_boundaries(false)
         };
         Column::new((
             SizedBox::new(200.0, 100.0).child(list(
@@ -1589,6 +1588,14 @@ impl flui_view::View for TwoLists {
     }
 }
 
+/// The default per-item `RepaintBoundary` stays ON here, and that is the
+/// point: it used to have to be turned off.
+///
+/// The boundary is an UNKEYED wrapper, and `remove_subtree` hard-removed every
+/// descendant of one — including a `GlobalKey`'d element, which lost its
+/// identity the moment the boundary was evicted. Issue #838. With the keyed
+/// descendant deactivated instead, a lazy item can carry a `GlobalKey` under
+/// the default configuration, which is what an app would actually write.
 #[test]
 fn lazy_list_view_builder_forgets_a_global_keyed_item_grafted_to_another_list() {
     let keyed_in_second = Arc::new(AtomicBool::new(false));
