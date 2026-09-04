@@ -1,0 +1,709 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+#
+# CodeRabbit configuration for FLUI.
+#
+# The substance of what a reviewer must know lives in AGENTS.md, STYLE.md,
+# docs/PORT.md and docs/FOUNDATIONS.md — this file points CodeRabbit at them
+# (knowledge_base.code_guidelines) and encodes the few things a document
+# cannot: which paths are worth reviewing, and which repo-specific gates a
+# pull request has to clear.
+#
+# Validate a change to this file by commenting `@coderabbitai configuration`
+# on any open PR — it prints the resolved config and where each value came
+# from.
+
+language: en-US
+
+# Max 250 characters (schema-enforced).
+tone_instructions: >-
+  Direct, evidence-based, no praise and no restating the diff. One finding per
+  comment: name the defect, then a concrete failure scenario (inputs to wrong
+  output). If you cannot construct one, label the finding a hypothesis.
+
+early_access: false
+enable_free_tier: true
+
+reviews:
+  # This repository's bar is "verified", not "looks fine" — see AGENTS.md
+  # "Definition of Done". Prefer more findings over a quiet review.
+  profile: assertive
+
+  # The maintainer merges their own PRs; a bot-held "changes requested" would
+  # only add a click. Findings are surfaced, not enforced.
+  request_changes_workflow: false
+
+  high_level_summary: true
+  high_level_summary_instructions: >-
+    Lead with the behavior change, not the file list. State what observably
+    differs after this PR, and which contract (Flutter reference, ADR, or
+    crate ARCHITECTURE.md mapping decision) it is measured against.
+  high_level_summary_in_walkthrough: false
+  collapse_walkthrough: true
+  changed_files_summary: true
+
+  # Pipeline changes (build -> layout -> paint -> composite) are ordering
+  # problems; a diagram is worth more here than in most repositories.
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+
+  # Work here is issue-driven and issues carry acceptance criteria.
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+
+  review_status: true
+  review_details: false
+  commit_status: true
+  fail_commit_status: false
+
+  # Noise off.
+  poem: false
+  in_progress_fortune: false
+
+  # The maintainer drives this repo through coding agents; this section is the
+  # handoff format those agents consume.
+  enable_prompt_for_ai_agents: true
+
+  abort_on_close: true
+
+  suggested_labels: true
+  auto_apply_labels: false
+  labeling_instructions:
+    - label: bug
+      instructions: >-
+        Apply when the PR fixes wrong observable behavior — a layout, paint,
+        hit-test, semantics, lifecycle or scheduling result that differed from
+        the contract. Conventional-commit type is `fix`.
+    - label: enhancement
+      instructions: >-
+        Apply when the PR adds a capability or widens a public surface.
+        Conventional-commit type is `feat`.
+    - label: refactoring
+      instructions: >-
+        Apply when the PR changes structure with no intended behavior change.
+        Conventional-commit type is `refactor`.
+    - label: testing
+      instructions: >-
+        Apply when the PR is predominantly test or harness work — new parity
+        tests, render-object harness coverage, or flui-testing changes.
+    - label: documentation
+      instructions: >-
+        Apply when the PR is predominantly docs — README, docs/**, ADRs,
+        AGENTS.md or crate ARCHITECTURE.md.
+    - label: performance
+      instructions: >-
+        Apply when the PR targets frame cost — allocation on the paint or
+        layout path, repaint scoping, GPU submission count, or a benchmark.
+    - label: architecture
+      instructions: >-
+        Apply when the PR changes a crate boundary, a workspace-layer
+        dependency, or a protocol-level contract, or lands with an ADR.
+    - label: tech-debt
+      instructions: >-
+        Apply when the PR removes a workaround, a lint suppression, an
+        allowlist entry, or a shipped-but-unwired seam.
+  mutually_exclusive_groups:
+    priority:
+      - "priority: critical"
+      - "priority: high"
+      - "priority: medium"
+      - "priority: low"
+
+  # Solo maintainer — a suggested reviewer is always the same person.
+  suggested_reviewers: false
+  auto_assign_reviewers: false
+
+  slop_detection:
+    enabled: true
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    # Agent-driven branches routinely carry more than five commits; the
+    # default pause would silently stop reviewing exactly those PRs.
+    auto_pause_after_reviewed_commits: 0
+    drafts: false
+    # Regex, not glob. `main` (the default branch) is always included; stacked
+    # PRs in this repo target another feature branch, so those bases are
+    # listed too.
+    base_branches:
+      - "feat/.*"
+      - "fix/.*"
+      - "refactor/.*"
+      - "perf/.*"
+      - "test/.*"
+      - "docs/.*"
+      - "chore/.*"
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+      - "[skip review]"
+
+  # Excluded paths are dropped from the review entirely, including the
+  # walkthrough. Three reasons appear below: generated or vendored content, a
+  # file too large to review line-by-line usefully, and internal planning
+  # artifacts that are not part of the shipped product.
+  path_filters:
+    # Read-only upstream reference clones (also gitignored).
+    - "!.flutter/**"
+    - "!.gpui/**"
+    # Build output and lockfile.
+    - "!target/**"
+    - "!Cargo.lock"
+    # insta snapshots — reviewed by regenerating, not by reading.
+    - "!**/*.snap"
+    - "!**/*.snap.new"
+    # Agent/runtime scratch and editor state.
+    - "!.claude/**"
+    - "!.compound-engineering/**"
+    - "!.pi/**"
+    - "!.idea/**"
+    - "!.rust-studio/**"
+    # Planning and archival roots (AGENTS.md "No internal process-ID markers"
+    # names these as out of scope for shipped-doc rules).
+    - "!docs/audits/**"
+    - "!docs/brainstorms/**"
+    - "!docs/ideation/**"
+    - "!docs/plans/**"
+    - "!docs/research/**"
+    - "!docs/superpowers/**"
+    - "!specs/**"
+    - "!openspec/**"
+    # Archival: a per-item construction log and a one-off toolchain
+    # evaluation, neither of which ships.
+    - "!docs/ROADMAP-TRACKER.md"
+    - "!NIGHTLY-RUST-EVALUATION.md"
+
+  path_instructions:
+    - path: "**/*.rs"
+      instructions: |
+        Workspace-wide Rust rules. STYLE.md is the engineering standard;
+        docs/PANIC-POLICY.md governs panics. Flag, with a failure scenario:
+
+        - `unwrap()` on a production path. The house form is
+          `expect("BUG: <invariant>")` for an internal invariant that cannot
+          fail, and a `Result` otherwise. `clippy::unwrap_used` gates this, so
+          a new `unwrap` usually means a new `#[allow]`/`#[expect]` — flag the
+          suppression, not just the call.
+        - A new `#[allow(...)]`. This workspace uses `#[expect(...)]` with a
+          reason so a suppression that stops being needed becomes a warning;
+          a bare `allow` is a silent one.
+        - `println!`, `eprintln!`, `dbg!`. Diagnostics go through `tracing`.
+        - `unimplemented!()` / `todo!()` outside platform-init stubs.
+        - Errors: `thiserror` in libraries, `anyhow` only in binaries.
+        - ID handling: slab indices are 0-based, public IDs (`ViewId`,
+          `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based
+          `NonZeroUsize`. Insert is `slab_index + 1`, lookup is `id.get() - 1`.
+          An off-by-one here is silent and cross-crate.
+        - `async fn` anywhere on build / layout / paint / composite / hit-test.
+          The pipeline is synchronous by contract.
+        - A lock in a public API: `pub fn -> MutexGuard`, or `pub field:
+          Mutex<..>`.
+
+        Do not propose a Flutter/Dart shape as an improvement on its own —
+        Dart structure is explicitly not inherited here (AGENTS.md Prime
+        Directive rule 1).
+
+    - path: "**/*.rs"
+      instructions: |
+        `unsafe` blocks. Every one needs a `SAFETY:` comment naming the
+        invariant the caller relies on, and it has to be an invariant this
+        code actually establishes — not a restatement of the operation. If a
+        safe API can express the same thing, say so. Module-level
+        `#![allow(unsafe_code)]` in foundation or tree source is a refusal
+        trigger, not a style choice.
+
+    - path: "crates/{flui-rendering,flui-objects,flui-layer,flui-painting}/**/*.rs"
+      instructions: |
+        Render, layout, paint, hit-test and semantics. Flutter is the
+        behavioral reference (`.flutter/packages/flutter/`), not a style
+        guide. For a change here, check and report:
+
+        - Does the diff preserve Flutter's observable contract — output,
+          edge cases, and ordering — or does it deliberately improve on it?
+          A deliberate improvement owes an ADR (`docs/adr/`) or a
+          `## Mapping decisions` entry in the crate's ARCHITECTURE.md, plus a
+          FLUI test replacing the Flutter one. An undocumented divergence is
+          a regression until proven otherwise.
+        - `SliverGeometry` built with `..SliverGeometry::ZERO`. Struct-update
+          from ZERO drops the constructor's derived defaults
+          (`layout_extent ??= paint_extent`, `visible ??= paint_extent > 0`)
+          and has already produced real header bugs. Prefer the constructor.
+        - A layout that reads a stand-in or degraded value and still publishes
+          geometry as if it were authoritative (ADR-0054).
+        - Every concrete `RenderBox` / `RenderSliver` must appear in
+          `RENDER_OBJECT_TYPES` with a matching `harness_*` test — the catalog
+          guard in `crates/flui-objects/tests/render_object_harness.rs`.
+          New behavior needs a harness test that fails without the change.
+        - Intrinsics, baselines and hit-test returning defaults is not
+          "working". Say so explicitly if the diff leaves them stubbed.
+
+    - path: "crates/flui-engine/**/*.rs"
+      instructions: |
+        GPU backend. Refusal triggers that live here specifically:
+
+        - `Arc<Mutex<..>>` around a `Renderer`, a pool, or a `wgpu::*` handle.
+        - `lyon` used outside `wgpu/tessellator.rs` — that file is the
+          RasterBackend seam.
+        - `Matrix4` on the `DrawBatcher` record side, in
+          `PipelineCache`/`PipelineBuilder`, or on the `GpuReplay` replay side;
+          and direct `glam` use outside the wgpu backend.
+        - A `wgpu::Instance` and the surface it must be compatible with have
+          to be created together. A constructor that builds its own `Instance`
+          and takes a foreign `&Surface` as `compatible_surface` is broken for
+          every caller, not just some.
+
+        A pixel claim needs a readback oracle whose sample points can actually
+        distinguish the fixed code from the broken code — rotation about the
+        centre, an SSAA area gate, and a framebuffer rebase have each produced
+        a test that passed both ways.
+
+    - path: "crates/{flui-foundation,flui-tree,flui-macros}/**/*.rs"
+      instructions: |
+        Foundation layer. In addition to the workspace rules: no `println!` /
+        `eprintln!` / `dbg!` at all (CI trigger), no module-level
+        `#![allow(unsafe_code)]`, no locally reinvented `debug_assert_*`
+        macros, and no `new_unchecked` in `flui-foundation/src/key.rs`. There
+        is no ambient-singleton pattern left in this crate — `HasInstance`,
+        `BindingBase` and `impl_binding_singleton!` were deleted; a new
+        process-global here needs a stated reason.
+
+    - path: "crates/flui-app/**/*.rs"
+      instructions: |
+        Runtime and realm ownership. `UiRealm` is the composition root and any
+        number of realms may exist concurrently — scheduler, focus and
+        GlobalKey state are realm-scoped, never process-global. Flag anything
+        that reintroduces ambient state, and check the frame phase: reordering
+        phases breaks `draw_frame`, which asserts it is not in
+        `PersistentCallbacks` when driving async tasks. Per ADR-0027,
+        window/thread/runtime topology is a sanctioned divergence from
+        Flutter — do not report it as drift.
+
+    - path: "crates/{flui-widgets,flui-material,flui-cupertino}/**/*.rs"
+      instructions: |
+        Widget catalog. Check the widget's Flutter counterpart under
+        `.flutter/packages/flutter/lib/src/` for constructor parameters,
+        defaults and edge cases, and check whether the corresponding Flutter
+        test under `.flutter/packages/flutter/test/` has a FLUI equivalent.
+        A missing parameter that silently changes layout or paint is the
+        failure mode here. Type-erased downcasts in the catalog are a refusal
+        trigger (FR-033).
+
+    - path: "crates/flui-platform/**/*.rs"
+      instructions: |
+        Platform backends. Only the Linux/headless path runs in CI; Win32,
+        AppKit and Android are lint-only (`cross-typecheck` runs clippy with
+        no link and no tests), so a change to those backends has no executing
+        coverage — say so rather than implying it is verified. Event
+        translation is a known blind spot: synthetic-event tests have stayed
+        green while the real winit translation was broken, so a translation
+        change needs the live smoke path (`just live-smoke`), not a synthetic
+        gesture test.
+
+    - path: "**/{tests,benches}/**/*.rs"
+      instructions: |
+        Tests. Ask one question of every new test: would it fail if the
+        production change were reverted? Concrete ways a test in this
+        repository has passed both ways:
+
+        - It reimplements the predicate it is supposed to pin, so it passes
+          against the reverted line. Extract the predicate so the test and
+          production code call the same function.
+        - It asserts on creation, not on the effect — `find_text` proves a
+          widget exists, not that it was laid out or painted this frame.
+        - It moves a value across threads to "pin" a `Send` bound. Only a type
+          that violates the bound can pin it; a conforming type is silent.
+        - It counts rebuilds through a harness helper that itself dirties the
+          root, so it measures the harness. Use the non-dirtying tick plus an
+          idle control.
+        - It narrows the assertion to exactly what the partial implementation
+          handles.
+
+        Also flag: a new test that mutates genuinely process-global state
+        (`Registry::global`, `FONT_SYSTEM`) without its own module-scoped
+        lock — nextest runs fully parallel, one process per test. Realms and
+        schedulers do not need this; each test constructs its own.
+
+    - path: "**/Cargo.toml"
+      instructions: |
+        Manifests. Shared dependencies belong in the root
+        `[workspace.dependencies]` and are referenced with
+        `workspace = true`. Dependency direction must stay one-way down the
+        layer DAG in `docs/workspace-layers.toml`; `flui-log` in particular
+        may only be depended on by `flui-app`, `flui-cli` and the facade.
+        Features must stay additive — enabling a feature may not remove or
+        change an item. A new crate has to be classified in
+        `docs/workspace-layers.toml` and placed in exactly one CI
+        feature-matrix group (`FM_GROUP_1..3` in `.github/workflows/ci.yml`),
+        or the matrix's union assertion fails.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Workflows. Rules this repo already enforces, worth checking in review
+        because a violation is silent until it matters:
+
+        - Actions are pinned to a full commit SHA, never a tag.
+        - Every cargo invocation passes `--locked`.
+        - Caches save only on `main`
+          (`save-if: ${{ github.ref == 'refs/heads/main' }}`); each job keeps
+          its own key. A shared key across jobs was measured and lost on every
+          warm run.
+        - A job's display name equals its key — `needs` and required-status
+          contexts reference the key.
+        - Adding a job means adding it to the `ci` aggregator's `needs`; the
+          aggregator parses `ci.yml` at run time and fails on a missing key,
+          and treats `skipped` as red unless the job is listed in
+          `ALLOWED_SKIPS` with a reason.
+        - Feature-matrix passes must stay split (a targetless libs/bins pass
+          and a `--tests --benches --examples` pass). Folding them into
+          `--all-targets` lets dev-dependency feature unification hide broken
+          per-crate wiring.
+
+    - path: "{scripts,justfile,tools}/**"
+      instructions: |
+        Build and gate scripts. A gate must report its own exit status —
+        piping it through `tail`, `head` or `tee` reports the pipe's status
+        and has already turned a failing clippy run into a reported success.
+        Redirect to a file and check `$?`. Shell here is bash/sh under `set
+        -euo pipefail`; flag unquoted expansions and `cd` without a guard.
+
+    - path: "docs/adr/*.md"
+      instructions: |
+        ADRs. Check that the record states the context, the options that were
+        actually considered, the decision, and the consequences — including
+        what this gives up. An ADR that documents a divergence from Flutter
+        must name the replacement test that covers the behavior the Flutter
+        test used to cover.
+
+    - path: "{docs/ROADMAP.md,docs/runtime-contract.toml,docs/workspace-layers.toml,docs/panic-policy-allowlist.txt,scripts/wasm-import-allowlist.txt}"
+      instructions: |
+        These are large checked-in registries, not prose. Do not review them
+        line by line and do not comment on formatting or wording. Check one
+        thing only: that the entry added, removed or changed here matches the
+        code in the same PR, and that an added allowlist or exemption entry
+        has a stated reason. If the diff here has no counterpart in the code,
+        say so; if code in this PR should have produced an entry here and did
+        not, say that instead.
+
+    - path: "{docs,crates}/**/*.md"
+      instructions: |
+        Shipped documentation. Flag:
+
+        - Internal process markers: `Cycle N`, audit finding IDs,
+          `PR #NNN review`, agent-pass IDs, bare `U##` step citations, spec
+          `SC-NNN` numbers. State the invariant in plain English instead.
+          `FR-NNN` and `ADR-NNNN` are fine — they are grepped by checkers.
+        - Completeness claims a human has to maintain by hand ("all call
+          sites now use X", "swept clean"). State the rule, name the tracking
+          issue, and name the command a "zero hits" came from.
+        - A claim of parity with Flutter with nothing cited to check it
+          against.
+
+  pre_merge_checks:
+    docstrings:
+      mode: warning
+      threshold: 80
+    title:
+      mode: warning
+      requirements: >-
+        Conventional Commits with a crate scope, in the imperative and
+        lowercase after the colon: `type(scope): summary`, where type is one
+        of feat, fix, refactor, perf, test, docs, chore, build or ci and scope
+        is the crate without its `flui-` prefix (widgets, rendering, objects,
+        view, app, engine, types, painting, material). A breaking change adds
+        `!` before the colon: `feat(objects)!: ...`. The summary states the
+        behavior after the change, not the activity that produced it — "a
+        keyed descendant survives its unkeyed ancestor's removal", not
+        "fix keyed descendant bug". A PR landing an architecture decision
+        cites it as `(ADR-NNNN)`. Do not include the PR number; GitHub appends
+        it at squash time.
+    description:
+      mode: warning
+    issue_assessment:
+      mode: warning
+
+    custom_checks:
+      - name: Flutter reference or recorded divergence
+        mode: error
+        instructions: |
+          Applies only when the PR changes render-tree, layout, paint,
+          hit-test, semantics, scheduling, parent-data, or reconciliation
+          behavior under crates/flui-rendering, crates/flui-objects,
+          crates/flui-view, crates/flui-tree, crates/flui-layer or
+          crates/flui-painting. Otherwise pass without comment.
+
+          PASS if either holds:
+          (a) the PR description, a code comment, or a test cites the
+              corresponding Flutter source or test under `.flutter/` and the
+              change preserves that observable contract; or
+          (b) the PR deliberately diverges AND the divergence is recorded in a
+              new or existing `docs/adr/ADR-NNNN-*.md` or a
+              `## Mapping decisions` entry in the crate's ARCHITECTURE.md,
+              AND the PR adds or points to a FLUI test covering the behavior
+              the Flutter contract used to cover.
+
+          FAIL if the behavior changed with neither a cited reference nor a
+          recorded divergence plus its replacement test. Name the specific
+          file and behavior. "Same as Flutter" asserted with nothing cited is
+          a fail, and so is "better than Flutter" with no ADR and no test.
+
+      - name: Test would fail without the change
+        mode: error
+        instructions: |
+          For every behavior change in the diff, identify the test that
+          covers it and state, in one sentence, why that test fails if the
+          production hunk is reverted.
+
+          FAIL if any of these is true:
+          - A behavior change lands with no new or modified test.
+          - A test asserts on a value the production change does not
+            influence — for example asserting a widget was created when the
+            change affects layout, or asserting a size that is identical
+            before and after.
+          - A test reimplements the predicate it claims to pin, so it would
+            pass against the reverted production line.
+          - An existing test was narrowed, its assertion weakened, or a case
+            deleted, without the PR description saying why the old assertion
+            no longer describes correct behavior.
+          - A snapshot under `**/*.snap` was regenerated without the PR
+            explaining what changed in the rendered output and why that is
+            correct.
+
+          Pure refactors with no behavior change pass on the existing tests;
+          say which ones cover the refactored path.
+
+      - name: New surface has a production caller
+        mode: error
+        instructions: |
+          This repository's most common defect is correct, tested code that no
+          production path ever calls — a shipped seam that is never wired.
+
+          For each new `pub` function, method, type, trait, field, variant or
+          feature flag introduced by this PR outside `#[cfg(test)]`, determine
+          whether a non-test, non-example, non-benchmark caller reaches it,
+          searching the workspace with ripgrep or ast-grep.
+
+          PASS if every new public item is reachable from a production path,
+          OR the PR description explicitly names it as staged for a follow-up
+          and links the tracking issue.
+
+          FAIL otherwise, listing each unreachable item as
+          `path/to/file.rs:LINE — item_name`. A test-only caller does not
+          count as reachable. Speculative `pub mod` with zero workspace
+          consumers is a documented refusal trigger.
+
+      - name: Port refusal triggers
+        mode: warning
+        instructions: |
+          Scan the diff for patterns docs/PORT.md refuses at write time and
+          `scripts/port-check.sh` gates in CI. Report each hit with file and
+          line:
+
+          - `RwLock` or another interior-mutability primitive wrapping
+            `Box<dyn RenderObject<_>>` in render, view, layer, painting or
+            engine storage.
+          - `Box<dyn View>` stored as a struct field in an element child
+            collection.
+          - `async fn` on `View::build`, `RenderObject::layout` or
+            `RenderObject::paint`, or anywhere else on the frame path.
+          - `Mutex` on dirty-list state mutated during build/layout/paint.
+          - `unimplemented!()` or `todo!()` in a production `fn` body, outside
+            platform-init stubs on linux/ios/android.
+          - `From<f32>` implemented for a unit wrapper in flui-geometry.
+          - A `pub fn` returning a `MutexGuard`, or a `pub` field of lock type.
+          - A new `dyn` boundary not in the trigger-9 allowlist in
+            `scripts/port-check.sh`.
+          - `rebuild_handle()`, `post_frame_handle()`, `text_input_handle()`
+            or `focus_manager()` called inside a `build`, `perform_layout` or
+            `paint` body. These are acquired in `init_state` /
+            `did_change_dependencies` and used later; adding a new capability
+            to `BuildContext` means adding its token to
+            `scripts/check-frame-capability-scope.sh` in the same change.
+
+          PASS if none are present.
+
+      - name: Contract registries updated with the code
+        mode: warning
+        instructions: |
+          Several checked-in registries must move together with the code they
+          describe, and CI gates each one. Verify:
+
+          - A changed root export or public runtime surface is reflected in
+            `docs/runtime-contract.toml` (`just runtime-conformance-check`).
+          - A new or removed workspace member appears in
+            `docs/workspace-layers.toml` and in exactly one `FM_GROUP_*` in
+            `.github/workflows/ci.yml` (`just inventory-check`).
+          - A new concrete `RenderBox`/`RenderSliver` appears in
+            `RENDER_OBJECT_TYPES` with a matching `harness_*` test.
+          - A new panic-policy or wasm-import exemption is added to
+            `docs/panic-policy-allowlist.txt` or
+            `scripts/wasm-import-allowlist.txt` with the reason stated in the
+            PR, not silently.
+          - A user-visible change is reflected in `CHANGELOG.md`, and a
+            roadmap item it completes is marked in `docs/ROADMAP.md`.
+
+          FAIL naming the registry and the code that outran it. Pass without
+          comment when the PR touches none of these.
+
+      - name: Honest scope report
+        mode: warning
+        instructions: |
+          Compare the PR description against the diff.
+
+          FAIL if the description claims something the diff does not support:
+          a behavior described as implemented that is stubbed or returns a
+          default; verification claimed against `.flutter/` when no reference
+          file is cited; "all X now do Y" when the diff changes only some;
+          a gate reported green whose output is not quoted or linked.
+
+          FAIL also if the diff substantially exceeds the description — an
+          unrelated rename, a drive-by refactor, or a dependency bump folded
+          into a behavior fix — and name what should be split out.
+
+          PASS when the description states what is implemented, what is
+          deferred and why, and the diff matches.
+
+  finishing_touches:
+    docstrings:
+      enabled: true
+    unit_tests:
+      enabled: true
+    simplify:
+      enabled: false
+    autofix:
+      enabled: true
+    fix_ci:
+      enabled: true
+    resolve_merge_conflict:
+      enabled: true
+
+  tools:
+    # Relevant to this workspace.
+    clippy:
+      enabled: true
+    ast-grep:
+      # Security/essentials pack only. FLUI's own banned patterns are already
+      # gated by scripts/port-check.sh and are expressed above as review
+      # instructions and pre-merge checks rather than duplicated as rules.
+      # To add repo-specific structural rules, create a directory of ast-grep
+      # rule YAML files and list it under rule_dirs.
+      essential_rules: true
+    shellcheck:
+      enabled: true
+    actionlint:
+      enabled: true
+    zizmor:
+      enabled: true
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    semgrep:
+      enabled: true
+    osvScanner:
+      enabled: true
+    # Reads failing CI logs and comments on the responsible lines. The single
+    # highest-value tool here, given how long `ci` takes.
+    github-checks:
+      enabled: true
+
+    # Off on purpose: their default rulesets would flood every docs PR, and
+    # this repo already gates prose with `typos` and TOML with `taplo`.
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+    vale:
+      enabled: false
+    # No yamllint config in-repo; the default 80-column rule alone would
+    # bury .github/workflows/ci.yml in findings.
+    yamllint:
+      enabled: false
+
+chat:
+  art: false
+  auto_reply: true
+  # Public repository — outside contributors should be able to ask.
+  allow_non_org_members: true
+
+knowledge_base:
+  opt_out: false
+  # Prime Directive rule 2 asks for the current ecosystem shape, not the
+  # remembered one.
+  web_search:
+    enabled: true
+  # Keep this repository's learnings and history to this repository.
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local
+  code_guidelines:
+    enabled: true
+    # A bare string entry is directory-scoped: `**/AGENTS.md` makes the root
+    # guide repo-wide and each crate's guide apply to that crate only. Object
+    # entries map a document to the paths it governs. The read budget is 50
+    # files per review after glob expansion — keep additions scoped.
+    filePatterns:
+      - "**/AGENTS.md"
+      - "**/CLAUDE.md"
+      - "**/ARCHITECTURE.md"
+      - "STYLE.md"
+      - files: "docs/PORT.md"
+        applyTo: "crates/**/*.rs,platforms/**/*.rs,src/**/*.rs"
+      - files: "docs/FOUNDATIONS.md"
+        applyTo: "crates/**/*.rs,**/Cargo.toml"
+      - files: "docs/PANIC-POLICY.md"
+        applyTo: "**/*.rs"
+      - files: "docs/testing.md,crates/flui-rendering/docs/TESTING.md"
+        applyTo: "**/tests/**,**/*_test.rs,**/*_tests.rs,crates/flui-testing/**"
+      - files: "docs/workspace-layers.toml"
+        applyTo: "**/Cargo.toml"
+      - files: "STRATEGY.md"
+        applyTo: "docs/adr/*.md,docs/*.md"
+
+code_generation:
+  docstrings:
+    language: en-US
+    path_instructions:
+      - path: "**/*.rs"
+        instructions: |
+          Rustdoc, not comments. Open with a one-sentence summary in the
+          third person ("Returns the ...", not "Return the ..."), then the
+          detail. Include `# Errors` for every `fn` returning `Result`,
+          `# Panics` for every path that can panic (this workspace's panics
+          are `expect("BUG: ...")` on internal invariants — say which
+          invariant), and `# Safety` for every `unsafe fn`, naming the
+          invariant the caller must uphold. Link types with intra-doc links
+          (`[`RenderBox`]`), not backticks alone. Do not add `# Examples`
+          unless the example compiles as a doc-test — `just test-doc` runs
+          them. Do not restate the signature.
+  unit_tests:
+    path_instructions:
+      - path: "**/*.rs"
+        instructions: |
+          Tests must fail if the code under test is reverted — assert on the
+          observable effect, not on the fact that something was constructed.
+
+          Use the repository's own tiers rather than hand-rolling a harness:
+          `flui_testing::bootstrap` / `HeadlessBinding::mount_root` for a
+          mounted tree, `RenderTester`/`Probe` for a render object (see
+          crates/flui-rendering/docs/TESTING.md), `flui_widgets::testing::
+          LaidOut` for a laid-out widget. Never call `PipelineOwner::run_frame`
+          directly — it skips build-during-layout content.
+
+          Tests are run with `cargo nextest run`, fully parallel, one process
+          per test. Do not assume ordering, and do not share process-global
+          state without a module-scoped lock.
+
+          Prefer one behavior per test with a name that states the behavior.
+
+issue_enrichment:
+  auto_enrich:
+    enabled: false
+  planning:
+    enabled: true
+    auto_planning:
+      # On demand via `@coderabbitai plan`, not on every issue.
+      enabled: false
