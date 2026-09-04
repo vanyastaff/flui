@@ -1,0 +1,55 @@
+# CodeRabbit does not review this repository automatically: it gates automatic
+# reviews on public repositories with fewer than ten stars, and flui has two.
+# The gate is not a configuration setting and not a subscription setting — the
+# sibling repository vanyastaff/nebula, same owner and the same two stars, is
+# under it too, and reviewed automatically until CodeRabbit introduced the gate
+# between 2026-08-05 and 2026-08-16.
+#
+# So the trigger it does honour is asked for here, once per pull request, in
+# place of the "Trigger review" checkbox a human would otherwise click.
+# Incremental reviews on later pushes are left to CodeRabbit's own
+# auto_incremental_review rather than a comment per push.
+#
+# Delete this workflow once flui passes ten stars, or if the repository is ever
+# moved somewhere the gate does not apply.
+
+name: coderabbit-trigger
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+# The job posts one comment and reads nothing else.
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: coderabbit-trigger-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Display name is the job key, as every job in this repository is.
+  request-review:
+    # A pull request from a fork gets a read-only token, so the comment would
+    # fail; those keep the manual checkbox. Drafts are excluded here and in
+    # .coderabbit.yaml, and reach this workflow through ready_for_review.
+    if: >-
+      github.repository == 'vanyastaff/flui' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # CodeRabbit posts its own status comment within seconds of the pull
+      # request opening. Asking before it has registered the pull request
+      # risks the command arriving first, so wait past that window.
+      - name: Wait for CodeRabbit to register the pull request
+        run: sleep 45
+
+      - name: Ask CodeRabbit for a review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr comment "$PR_NUMBER" --repo "$REPO" --body '@coderabbitai review'
