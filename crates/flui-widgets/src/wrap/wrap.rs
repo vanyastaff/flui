@@ -5,6 +5,7 @@ use std::fmt;
 use flui_objects::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::layout::Axis;
+use flui_types::painting::Clip;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
@@ -50,6 +51,7 @@ pub struct Wrap<C = Vec<BoxedView>> {
     run_alignment: WrapAlignment,
     run_spacing: f32,
     cross_axis_alignment: WrapCrossAlignment,
+    clip_behavior: Clip,
     children: C,
 }
 
@@ -64,8 +66,21 @@ impl<C> Wrap<C> {
             run_alignment: WrapAlignment::Start,
             run_spacing: 0.0,
             cross_axis_alignment: WrapCrossAlignment::Start,
+            clip_behavior: Clip::None,
             children,
         }
+    }
+
+    /// How content that overflows this wrap is clipped when it paints.
+    ///
+    /// `Clip::None` by default, matching the reference: a wrap is a layout
+    /// rather than a viewport, and most never overflow, so it does not pay
+    /// for a clip layer it does not need. A wrap that DOES overflow paints
+    /// past its own bounds until this is set.
+    #[must_use]
+    pub const fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
+        self.clip_behavior = clip_behavior;
+        self
     }
 
     /// Sets the main-axis direction (`Horizontal` by default).
@@ -118,6 +133,7 @@ impl<C> Wrap<C> {
             .with_run_alignment(self.run_alignment)
             .with_run_spacing(self.run_spacing)
             .with_cross_axis_alignment(self.cross_axis_alignment)
+            .with_clip_behavior(self.clip_behavior)
     }
 }
 
@@ -130,6 +146,7 @@ impl<C: ViewSeq> fmt::Debug for Wrap<C> {
             .field("run_alignment", &self.run_alignment)
             .field("run_spacing", &self.run_spacing)
             .field("cross_axis_alignment", &self.cross_axis_alignment)
+            .field("clip_behavior", &self.clip_behavior)
             .field("children", &self.children.len())
             .finish()
     }
@@ -158,7 +175,7 @@ where
             self.run_alignment,
             self.run_spacing,
             self.cross_axis_alignment,
-        )
+        ) | render_object.set_clip_behavior(self.clip_behavior)
     }
 
     fn has_children(&self) -> bool {

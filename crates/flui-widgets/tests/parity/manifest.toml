@@ -1199,7 +1199,7 @@ cases = ["Visibility"]
 rust = "wrap_test"
 family = "layout"
 oracles = ["widgets/wrap_test.dart"]
-tests = 11
+tests = 12
 
 [[targets.claims]]
 oracle = "widgets/wrap_test.dart"
@@ -1215,6 +1215,7 @@ cases = [
     "RenderWrap toString control test",
     "Spacing with slight overflow",
     "Object exactly matches container width",
+    "Visual overflow generates a clip",
 ]
 
 # One row per oracle file: every *_test.dart under <test_root>/widgets at the
@@ -1613,7 +1614,7 @@ cases = [
 "widgets/widgets_app_tester_test.dart" = { cases = 35, claimed = 0, status = "pending" }
 "widgets/window_positioner_test.dart" = { cases = 20, claimed = 0, status = "pending" }
 "widgets/windowing_test.dart" = { cases = 79, claimed = 0, status = "pending" }
-"widgets/wrap_test.dart" = { cases = 21, claimed = 11, status = "partial" }
+"widgets/wrap_test.dart" = { cases = 21, claimed = 12, status = "partial" }
 
 # Derived counts. The inventory test recomputes every number here and fails
 # on drift; ROADMAP.md cites these values.
@@ -1668,8 +1669,8 @@ pins = 0
 
 [summary.families."layout"]
 targets = 22
-rust_tests = 132
-cases_claimed = 78
+rust_tests = 133
+cases_claimed = 79
 cases_diverged = 0
 pins = 0
 

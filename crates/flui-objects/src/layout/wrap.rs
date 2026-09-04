@@ -19,11 +19,11 @@
 //! always interpreted as LTR and TTB respectively. No axis flipping.
 
 use flui_tree::Variable;
-use flui_types::{Axis, Offset, Pixels, Size, geometry::px};
+use flui_types::{Axis, Offset, Pixels, Point, Rect, Size, geometry::px, painting::Clip};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     parent_data::WrapParentData,
     traits::RenderBox,
 };
@@ -150,6 +150,15 @@ pub struct RenderWrap {
     /// Cached child count from the most recent `perform_layout` call; used by
     /// `hit_test` which executes after layout.
     child_count: usize,
+    /// How content that overflows this wrap is clipped when it paints.
+    ///
+    /// `Clip::None` by default — a `Wrap` is a layout, not a viewport, and
+    /// most of them never overflow, so the reference does not make them pay
+    /// for a clip layer they do not need.
+    clip_behavior: Clip,
+    /// Whether the last accepted layout produced content larger than the box
+    /// it was constrained to. Set by `perform_layout`, read by `paint`.
+    has_visual_overflow: bool,
 }
 
 impl Default for RenderWrap {
@@ -162,6 +171,8 @@ impl Default for RenderWrap {
             run_spacing: 0.0,
             cross_axis_alignment: WrapCrossAlignment::Start,
             child_count: 0,
+            clip_behavior: Clip::None,
+            has_visual_overflow: false,
         }
     }
 }
@@ -266,6 +277,34 @@ impl RenderWrap {
             Axis::Horizontal => Offset::new(px(main), px(cross)),
             Axis::Vertical => Offset::new(px(cross), px(main)),
         }
+    }
+
+    /// How content that overflows this wrap is clipped when it paints.
+    #[must_use]
+    pub const fn clip_behavior(&self) -> Clip {
+        self.clip_behavior
+    }
+
+    /// Sets how overflowing content is clipped. `Clip::None` clips nothing.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
+        if self.clip_behavior == clip_behavior {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.clip_behavior = clip_behavior;
+        flui_rendering::RenderUpdateImpact::PAINT
+    }
+
+    /// Builder form of [`set_clip_behavior`](Self::set_clip_behavior).
+    #[must_use]
+    pub const fn with_clip_behavior(mut self, clip_behavior: Clip) -> Self {
+        self.clip_behavior = clip_behavior;
+        self
+    }
+
+    /// Whether the last accepted layout overflowed its constraints.
+    #[must_use]
+    pub const fn has_visual_overflow(&self) -> bool {
+        self.has_visual_overflow
     }
 
     /// Maximum main-axis extent allowed by the incoming constraints.
@@ -531,6 +570,19 @@ impl RenderBox for RenderWrap {
         let runs = sized.runs;
         let child_sizes = sized.child_sizes;
 
+        // Oracle (`rendering/wrap.dart:724`): overflow on EITHER axis, where
+        // the free extent is what the container has left after the children.
+        // `compute_runs` already constrained `container`, so a negative free
+        // extent is exactly the case where the constraint clamped the content.
+        let content_main: f32 = runs
+            .iter()
+            .map(|run| run.main_axis_extent)
+            .fold(0.0_f32, f32::max);
+        let content_cross: f32 = runs.iter().map(|run| run.cross_axis_extent).sum::<f32>()
+            + self.run_spacing * runs.len().saturating_sub(1) as f32;
+        self.has_visual_overflow = content_main - container_main > PRECISION_TOLERANCE
+            || content_cross - container_cross > PRECISION_TOLERANCE;
+
         // ── Phase 3: position children ────────────────────────────────────────
 
         let num_runs = runs.len();
@@ -647,6 +699,21 @@ impl RenderBox for RenderWrap {
     }
 
     // ── Hit testing ───────────────────────────────────────────────────────────
+
+    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+        // Oracle (`rendering/wrap.dart:847-863`). A `Wrap` clips only when it
+        // actually overflowed AND a behaviour was asked for — the default is
+        // `Clip::None`, so the common case pushes no layer at all. That is the
+        // opposite default from a viewport, and deliberately so: a viewport
+        // exists to show a window onto larger content, while a wrap overflows
+        // only when its constraints could not hold what it was given.
+        if self.has_visual_overflow && self.clip_behavior != Clip::None {
+            let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
+            ctx.with_clip_rect(clip_rect, self.clip_behavior, PaintCx::paint_children);
+        } else {
+            ctx.paint_children();
+        }
+    }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, WrapParentData>) -> bool {
         if !ctx.is_within_own_size() {
