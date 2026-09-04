@@ -122,3 +122,74 @@ fn viewport_clips_the_semantics_rects_of_off_screen_rows() {
         "a row past the cache area has no accessibility presence at all"
     );
 }
+
+/// A `ClipRect` does not hand a screen reader rects for content it clips away.
+///
+/// The clip was honoured by paint and by hit-test and by nothing a screen
+/// reader could see: `RenderClip` never overrode
+/// `describe_approximate_paint_clip`, so the semantics walk saw the trait's
+/// `None` default and published full-size rects for children the clip visibly
+/// cut in half.
+///
+/// Oracle: `_RenderCustomClip.describeApproximatePaintClip`
+/// (`rendering/proxy_box.dart`) returns the clip whenever the behaviour is not
+/// `none`.
+#[test]
+fn clip_rect_narrows_the_semantics_rect_of_the_content_it_clips() {
+    use flui_types::Alignment;
+    use flui_types::geometry::px;
+    use flui_types::painting::Clip;
+    use flui_widgets::{ClipRect, OverflowBox, Semantics};
+
+    // `OverflowBox` is load-bearing: without it the outer 100x40 constrains
+    // the child to 40 and there is no overflow to clip, so both legs would
+    // agree and the oracle would prove nothing.
+    let clipped = |clip: Clip| {
+        SizedBox::new(100.0, 40.0).child(
+            ClipRect::new().clip_behavior(clip).child(
+                OverflowBox::new()
+                    .with_alignment(Alignment::TOP_LEFT)
+                    .with_max_height(px(200.0))
+                    .child(
+                        Semantics::new()
+                            .container(true)
+                            .label("Half hidden")
+                            .child(SizedBox::new(100.0, 200.0)),
+                    ),
+            ),
+        )
+    };
+
+    let mut laid = lay_out(clipped(Clip::HardEdge), crate::common::tight(100.0, 40.0));
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let bounds = tree
+        .find_by_label("Half hidden")
+        .expect("the clipped child still has a presence")
+        .bounds()
+        .expect("bounds");
+    assert_eq!(
+        (bounds.y0, bounds.y1),
+        (0.0, 40.0),
+        "the 200px child is narrowed to the 40px the clip leaves of it",
+    );
+
+    // `Clip::None` clips nothing, so it must impose nothing here either — the
+    // same rule the paint side follows, and the leg that fails against an
+    // implementation which returns its bounds unconditionally.
+    let mut laid = lay_out(clipped(Clip::None), crate::common::tight(100.0, 40.0));
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let bounds = tree
+        .find_by_label("Half hidden")
+        .expect("present")
+        .bounds()
+        .expect("bounds");
+    assert_eq!(
+        (bounds.y0, bounds.y1),
+        (0.0, 200.0),
+        "an unclipped ClipRect narrows nothing",
+    );
+}

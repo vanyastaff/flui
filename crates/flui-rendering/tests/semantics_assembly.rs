@@ -264,11 +264,15 @@ impl RenderBox for SemanticsContainer {
         self.excludes_subtree
     }
 
-    fn describe_semantics_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+    fn describe_semantics_clip(&self, _child_slot: usize, _size: Size) -> Option<Rect<Pixels>> {
         self.semantics_clip
     }
 
-    fn describe_approximate_paint_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+    fn describe_approximate_paint_clip(
+        &self,
+        _child_slot: usize,
+        _size: Size,
+    ) -> Option<Rect<Pixels>> {
         self.paint_clip
     }
 }

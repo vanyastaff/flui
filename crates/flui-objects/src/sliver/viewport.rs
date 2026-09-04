@@ -296,8 +296,6 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
 /// and its paint-clip counterpart to answer from.
 #[derive(Debug, Default, Clone)]
 struct CommittedClipGeometry {
-    /// The viewport's own size.
-    size: Size,
     /// The cache extent in pixels, already resolved from
     /// [`CacheExtentStyle`].
     cache_extent: f32,
@@ -935,12 +933,14 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         size: Size,
         cache_extent: f32,
     ) {
-        // The clips the semantics walk will ask about, recorded here because
-        // it asks long after `perform_layout` has returned its context. Size
-        // and cache extent derive from this viewport's own constraints, which
-        // no descendant stand-in can move, so they are recorded on every pass
-        // — unlike the scroll dimensions, which a degraded pass withholds.
-        self.committed_clips.size = size;
+        // The cache extent the semantics walk will ask about, recorded here
+        // because it asks long after `perform_layout` has returned its
+        // context. The SIZE is not recorded: the walk has the node's own size
+        // and passes it in, so a committed copy would be a second answer to a
+        // question that already has one, and a second thing to keep honest.
+        // The extent derives from this viewport's own constraints, which no
+        // descendant stand-in can move, so it is recorded on every pass —
+        // unlike the scroll dimensions, which a degraded pass withholds.
         self.committed_clips.cache_extent = cache_extent;
         // Taken out and put back so the vector keeps its capacity across
         // frames: this runs on every scroll pixel.
@@ -1167,11 +1167,15 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     ///
     /// The direction the correction pushes from follows the child's growth
     /// direction: a reverse-group child is measured from the far edge.
-    fn describe_approximate_paint_clip(&self, child_slot: usize) -> Option<Rect<Pixels>> {
+    fn describe_approximate_paint_clip(
+        &self,
+        child_slot: usize,
+        size: Size,
+    ) -> Option<Rect<Pixels>> {
         if self.clip_behavior == Clip::None {
             return None;
         }
-        let clip = Rect::from_origin_size(Point::ZERO, self.committed_clips.size);
+        let clip = Rect::from_origin_size(Point::ZERO, size);
         let committed = self
             .committed_clips
             .child_clips
@@ -1195,8 +1199,8 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     /// off-screen but reachable, so it stays in the tree (flagged hidden by
     /// the paint clip) for a screen reader to scroll to. A row past the cache
     /// area is not there at all.
-    fn describe_semantics_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
-        let bounds = Rect::from_origin_size(Point::ZERO, self.committed_clips.size);
+    fn describe_semantics_clip(&self, _child_slot: usize, size: Size) -> Option<Rect<Pixels>> {
+        let bounds = Rect::from_origin_size(Point::ZERO, size);
         let cache = self.committed_clips.cache_extent;
         if cache <= 0.0 {
             return Some(bounds);
@@ -1670,12 +1674,14 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         size: Size,
         cache_extent: f32,
     ) {
-        // The clips the semantics walk will ask about, recorded here because
-        // it asks long after `perform_layout` has returned its context. Size
-        // and cache extent derive from this viewport's own constraints, which
-        // no descendant stand-in can move, so they are recorded on every pass
-        // — unlike the scroll dimensions, which a degraded pass withholds.
-        self.committed_clips.size = size;
+        // The cache extent the semantics walk will ask about, recorded here
+        // because it asks long after `perform_layout` has returned its
+        // context. The SIZE is not recorded: the walk has the node's own size
+        // and passes it in, so a committed copy would be a second answer to a
+        // question that already has one, and a second thing to keep honest.
+        // The extent derives from this viewport's own constraints, which no
+        // descendant stand-in can move, so it is recorded on every pass —
+        // unlike the scroll dimensions, which a degraded pass withholds.
         self.committed_clips.cache_extent = cache_extent;
         // Taken out and put back so the vector keeps its capacity across
         // frames: this runs on every scroll pixel.
@@ -1878,11 +1884,15 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
     ///
     /// The direction the correction pushes from follows the child's growth
     /// direction: a reverse-group child is measured from the far edge.
-    fn describe_approximate_paint_clip(&self, child_slot: usize) -> Option<Rect<Pixels>> {
+    fn describe_approximate_paint_clip(
+        &self,
+        child_slot: usize,
+        size: Size,
+    ) -> Option<Rect<Pixels>> {
         if self.clip_behavior == Clip::None {
             return None;
         }
-        let clip = Rect::from_origin_size(Point::ZERO, self.committed_clips.size);
+        let clip = Rect::from_origin_size(Point::ZERO, size);
         let committed = self
             .committed_clips
             .child_clips
@@ -1906,8 +1916,8 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
     /// off-screen but reachable, so it stays in the tree (flagged hidden by
     /// the paint clip) for a screen reader to scroll to. A row past the cache
     /// area is not there at all.
-    fn describe_semantics_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
-        let bounds = Rect::from_origin_size(Point::ZERO, self.committed_clips.size);
+    fn describe_semantics_clip(&self, _child_slot: usize, size: Size) -> Option<Rect<Pixels>> {
+        let bounds = Rect::from_origin_size(Point::ZERO, size);
         let cache = self.committed_clips.cache_extent;
         if cache <= 0.0 {
             return Some(bounds);
@@ -2193,13 +2203,17 @@ mod offset_listener_tests {
 mod paint_clip_direction_tests {
     use super::*;
 
+    /// The box these unit tests treat the viewport as occupying. The hook takes
+    /// the size from its caller now, so the fixture states it once here rather
+    /// than committing a copy.
+    const TEST_SIZE: Size = Size::new(px(100.0), px(100.0));
+
     fn viewport_with_committed_child(
         axis_direction: AxisDirection,
         growth_direction: GrowthDirection,
     ) -> RenderViewport {
         let mut viewport = RenderViewport::new(axis_direction);
         viewport.committed_clips = CommittedClipGeometry {
-            size: Size::new(px(100.0), px(100.0)),
             cache_extent: 0.0,
             child_clips: vec![CommittedChildClip {
                 correction: 30.0,
@@ -2222,7 +2236,7 @@ mod paint_clip_direction_tests {
         let forward =
             viewport_with_committed_child(AxisDirection::TopToBottom, GrowthDirection::Forward);
         let clip = forward
-            .describe_approximate_paint_clip(0)
+            .describe_approximate_paint_clip(0, TEST_SIZE)
             .expect("a clipping viewport reports a paint clip");
         assert_eq!(
             (clip.min.y.get(), clip.max.y.get()),
@@ -2233,7 +2247,7 @@ mod paint_clip_direction_tests {
         let reverse =
             viewport_with_committed_child(AxisDirection::TopToBottom, GrowthDirection::Reverse);
         let clip = reverse
-            .describe_approximate_paint_clip(0)
+            .describe_approximate_paint_clip(0, TEST_SIZE)
             .expect("a clipping viewport reports a paint clip");
         assert_eq!(
             (clip.min.y.get(), clip.max.y.get()),
@@ -2257,7 +2271,7 @@ mod paint_clip_direction_tests {
         viewport.committed_clips.child_clips[0].correction = 400.0;
 
         let clip = viewport
-            .describe_approximate_paint_clip(0)
+            .describe_approximate_paint_clip(0, TEST_SIZE)
             .expect("a clipping viewport reports a paint clip");
 
         assert_eq!(
@@ -2277,7 +2291,9 @@ mod paint_clip_direction_tests {
         let _ = viewport.set_clip_behavior(Clip::None);
 
         assert!(
-            viewport.describe_approximate_paint_clip(0).is_none(),
+            viewport
+                .describe_approximate_paint_clip(0, TEST_SIZE)
+                .is_none(),
             "an unclipped viewport imposes nothing on its children",
         );
     }

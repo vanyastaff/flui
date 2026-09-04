@@ -342,19 +342,33 @@ fn child_clips_of(
     child_slot: usize,
 ) -> (Option<Rect<Pixels>>, Option<Rect<Pixels>>) {
     let offset = flui_types::Offset::new(origin.dx, origin.dy);
+    // The node's own size is passed in rather than cached by each implementor.
+    // A clip is always a function of the box it clips, so every implementor
+    // would otherwise have to commit its own copy of a value the walk already
+    // has — and keep that copy honest across every layout path.
     let (paint, semantics) = match node {
-        RenderNode::Box(entry) => (
-            entry
-                .render_object()
-                .describe_approximate_paint_clip(child_slot),
-            entry.render_object().describe_semantics_clip(child_slot),
-        ),
-        RenderNode::Sliver(entry) => (
-            entry
-                .render_object()
-                .describe_approximate_paint_clip(child_slot),
-            entry.render_object().describe_semantics_clip(child_slot),
-        ),
+        RenderNode::Box(entry) => {
+            let size = entry.state().geometry().unwrap_or(Size::ZERO);
+            (
+                entry
+                    .render_object()
+                    .describe_approximate_paint_clip(child_slot, size),
+                entry
+                    .render_object()
+                    .describe_semantics_clip(child_slot, size),
+            )
+        }
+        RenderNode::Sliver(entry) => {
+            let size = entry.state().absolute_paint_size();
+            (
+                entry
+                    .render_object()
+                    .describe_approximate_paint_clip(child_slot, size),
+                entry
+                    .render_object()
+                    .describe_semantics_clip(child_slot, size),
+            )
+        }
     };
     (
         paint.map(|r| r.translate_offset(offset)),
@@ -944,11 +958,15 @@ mod tests {
             ctx.constraints().smallest()
         }
 
-        fn describe_semantics_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+        fn describe_semantics_clip(&self, _child_slot: usize, _size: Size) -> Option<Rect<Pixels>> {
             self.semantics_clip
         }
 
-        fn describe_approximate_paint_clip(&self, _child_slot: usize) -> Option<Rect<Pixels>> {
+        fn describe_approximate_paint_clip(
+            &self,
+            _child_slot: usize,
+            _size: Size,
+        ) -> Option<Rect<Pixels>> {
             self.paint_clip
         }
     }
