@@ -26,9 +26,8 @@
 //!   `testWidgets` cases this file's scope covers; ledger below.
 //! - **`rendering/sliver_cache_test.dart`** — 1 genuine render-level subject
 //!   case, `'RenderSliverGrid calculates correct geometry'` — its
-//!   disposition is documented next to the `RenderSliverGrid`/
-//!   `RenderSliverGridLazy` catalog rows in `render_object_harness.rs` rather
-//!   than repeated here.
+//!   disposition is documented next to the `RenderSliverGrid` catalog row in
+//!   `render_object_harness.rs` rather than repeated here.
 //! - **`widgets/grid_view_test.dart`** — reading this file's own case
 //!   BODIES (not titles) found it is **not** pure scaffolding: it carries its
 //!   own genuine `SliverGridDelegate`/`SliverGridLayout`-subject cases (e.g.
@@ -59,19 +58,21 @@
 //!   not grid layout. Incidental, matching `sliver_fixed_extent_list_test.rs`'s
 //!   identical classification of that file.
 //!
-//! # The headline architecture finding
+//! # The headline architecture finding (superseded — kept for the cases below)
 //!
-//! FLUI has a genuine LAZY grid render object — unlike `SliverFixedExtentList`
-//! (fully eager, no lazy path at all), `SliverGrid` has both an eager widget
-//! (`SliverGrid::new`, `crates/flui-widgets/src/scroll/sliver_grid.rs` →
-//! `RenderSliverGrid`) AND a lazy one reachable through `GridView::builder`
-//! (`crates/flui-widgets/src/scroll/grid_view.rs:120` → `SliverGridLazy` →
-//! `RenderSliverGridLazy`, `crates/flui-objects/src/sliver/
-//! sliver_grid_lazy.rs`, the subject of the just-merged builder-refresh fix).
-//! `SliverGrid` itself (the bare widget in this crate) has no `.builder`/
-//! `.list` distinction (confirmed: grepping `sliver_grid.rs` for `fn builder`/
-//! `fn list` — zero hits); the lazy path is reached only via the composed
-//! `GridView::builder`, not via `SliverGrid` directly.
+//! At the time this file was first ported, `SliverGrid` had two SEPARATE
+//! render objects: an eager `RenderSliverGrid` (`SliverGrid::new`) and a
+//! request-strategy `RenderSliverGridLazy` reached only through
+//! `GridView::builder`. ADR-0053 (`docs/adr/
+//! ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md`) deleted the
+//! eager object and gave the request-strategy one the `RenderSliverGrid` /
+//! `SliverGrid` names: every case below now goes through the SAME lazy
+//! adaptor regardless of whether it arrives via `SliverGrid::list` (a fixed
+//! `Vec` served through `StaticChildren`) or `GridView::builder` (a caller
+//! closure) — the render-node counts these cases pin are unchanged because a
+//! small scene fully materializes within the mount's own layout↔build
+//! fixpoint either way, but the "eager path" labels below now describe which
+//! CONSTRUCTOR a case uses, not a different code path.
 //!
 //! A SECOND, independent gap was found while porting the 4 cases that use an
 //! arbitrary/custom per-child-geometry delegate — `_TestArbitrarySliverGridDelegate`/
@@ -106,9 +107,10 @@
 //! filed as a new Cross.H entry.
 //!
 //! **A genuine production bug was found and fixed in this same pass** (not
-//! a test-only workaround): both `RenderSliverGrid::perform_layout`
-//! (`crates/flui-objects/src/sliver/sliver_grid.rs`) and
-//! `RenderSliverGridLazy::perform_layout` (`.../sliver_grid_lazy.rs`) built
+//! a test-only workaround): both grid render objects of the time — the eager
+//! `RenderSliverGrid` and the request-strategy `RenderSliverGridLazy`, since
+//! unified by ADR-0053 into the one `RenderSliverGrid`
+//! (`crates/flui-objects/src/sliver/sliver_grid.rs`) — built
 //! their committed `SliverGeometry` from `..SliverGeometry::ZERO` without
 //! ever setting the `visible` field — every sibling sliver in this crate
 //! (`RenderSliverFixedExtentList`, `RenderSliverPadding`,
@@ -146,7 +148,7 @@
 //! 2. `'SliverGrid Correctly layout children after rearranging'` —
 //!    **ported, real green**: [`sliver_grid_lays_out_children_in_order_after_rearranging`].
 //!    Mirrors the oracle's `TestSliverGrid` helper exactly (a
-//!    `CustomScrollView` over one eager 2-column `SliverGrid`); checks only
+//!    `CustomScrollView` over one 2-column `SliverGrid`); checks only
 //!    final relative position after the second `pumpWidget`, matching the
 //!    oracle's own `isRight`/`isBelow`/`sameHorizontal`/`sameVertical` helpers
 //!    (`slivers_test.dart` lines 1656-1659) — no keyed cross-swap identity
@@ -187,11 +189,12 @@
 //!    plus case 6, is also the first hit-test-level regression coverage the
 //!    `visible`-field production bug fix (above) ever had.
 //! 6. `'SliverGrid.list can display children'` — **ported, real green, same
-//!    delegate substitution as case 5 (reason (a) only — this is the eager
-//!    path, so `GestureDetector` works fine here; no `Listener` substitution
-//!    needed)**: [`sliver_grid_list_hit_tests_children_by_position`]. Routes
-//!    through the eager `SliverGrid::new` (Flutter's `.list` constructor is
-//!    eager too).
+//!    delegate substitution as case 5 (reason (a) only — `GestureDetector`
+//!    works fine here, unlike case 5's `Listener` substitution; the THIRD
+//!    gap above was not reproduced through `StaticChildren`, though this
+//!    file does not establish why not)**:
+//!    [`sliver_grid_list_hit_tests_children_by_position`]. Routes through
+//!    `SliverGrid::list`.
 //! 7. `'SliverGrid.list with empty children list'` — **already covered, not
 //!    duplicated**: this file's pre-existing
 //!    `sliver_grid_empty_children_renders_two_nodes` test (present before
@@ -225,10 +228,10 @@
 //!
 //! Render-level oracle (`rendering/sliver_cache_test.dart`'s
 //! `'RenderSliverGrid calculates correct geometry'`, tag `3.44.0`): its
-//! disposition is documented next to the existing `RenderSliverGrid`/
-//! `RenderSliverGridLazy` rows in `render_object_harness.rs` rather than
-//! repeated here — not portable, but for a test-harness reason, not a
-//! production gap (no Cross.H entry follows from it; see that file for why).
+//! disposition is documented next to the `RenderSliverGrid` row in
+//! `render_object_harness.rs` rather than repeated here — not portable, but
+//! for a test-harness reason, not a production gap (no Cross.H entry follows
+//! from it; see that file for why).
 //!
 //! Geometry oracle (pre-existing, this port's own 2 tests, unchanged): with
 //! `SliverGridDelegateWithFixedCrossAxisCount(2)` on an 800 × 600 viewport:
@@ -251,21 +254,22 @@ use flui_widgets::{
 use crate::common::LaidOut;
 use crate::harness;
 
-/// A 2-column `SliverGrid` with 4 eager children inside a `Viewport` builds
-/// the correct render-node count.
+/// A 2-column `SliverGrid` with 4 static children inside a `Viewport` builds
+/// the correct render-node count — all 4 fit within the mount's own
+/// layout↔build fixpoint, so they are resident by the time this asserts.
 ///
 /// Expected: 1 `RenderViewport` + 1 `RenderSliverGrid` + 4 tile
 /// `RenderConstrainedBox` nodes = 6 total.
 ///
 /// Flutter parity: `sliver.dart` `SliverGrid` over `RenderSliverGrid` —
-/// eager children attached; delegate computes tile geometry.
+/// delegate computes tile geometry.
 #[test]
 fn sliver_grid_two_columns_four_tiles_builds_six_render_nodes() {
     let delegate = Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2));
     // Tile children: SizedBox::shrink gives 0×0; the grid delegate overrides
     // their cross/main extents to 400×400 via tight sliver constraints.
     let tiles: Vec<BoxedView> = (0..4).map(|_| SizedBox::shrink().boxed()).collect();
-    let root = Viewport::new((SliverGrid::new(delegate, tiles).boxed(),));
+    let root = Viewport::new((SliverGrid::list(delegate, tiles).boxed(),));
     let laid = harness::pump_widget(root, harness::screen());
 
     assert_eq!(
@@ -283,7 +287,7 @@ fn sliver_grid_two_columns_four_tiles_builds_six_render_nodes() {
 #[test]
 fn sliver_grid_empty_children_renders_two_nodes() {
     let delegate = Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(3));
-    let root = Viewport::new((SliverGrid::new(delegate, Vec::<BoxedView>::new()).boxed(),));
+    let root = Viewport::new((SliverGrid::list(delegate, Vec::<BoxedView>::new()).boxed(),));
     let laid = harness::pump_widget(root, harness::screen());
 
     assert_eq!(
@@ -298,7 +302,7 @@ fn sliver_grid_empty_children_renders_two_nodes() {
 // ============================================================================
 
 /// Mirrors the oracle's `TestSliverGrid` helper (`slivers_test.dart`): a
-/// `CustomScrollView` over one eager, 2-column `SliverGrid` of bare `Text`
+/// `CustomScrollView` over one 2-column `SliverGrid` of bare `Text` static
 /// children.
 fn two_column_grid_scene(labels: &[&str]) -> impl View {
     let delegate: Arc<dyn SliverGridDelegate> =
@@ -307,7 +311,7 @@ fn two_column_grid_scene(labels: &[&str]) -> impl View {
         .iter()
         .map(|&label| Text::new(label.to_string()).boxed())
         .collect();
-    CustomScrollView::new((SliverGrid::new(delegate, children),))
+    CustomScrollView::new((SliverGrid::list(delegate, children),))
 }
 
 /// The center point of `id`'s laid-out box, in absolute (viewport) pixels —
@@ -412,7 +416,7 @@ fn sliver_grid_negative_usable_cross_axis_extent_does_not_panic() {
         .iter()
         .map(|&label| Text::new(label.to_string()).boxed())
         .collect();
-    let root = CustomScrollView::new((SliverGrid::new(delegate, children),));
+    let root = CustomScrollView::new((SliverGrid::list(delegate, children),));
 
     let laid = harness::pump_widget(root, harness::screen_of(4.0, 4.0));
 
@@ -496,7 +500,7 @@ fn sliver_grid_builder_hit_tests_children_by_position() {
         harness::screen(),
     );
     // Lazy grid tiles settle over 2 frames: the first services the build
-    // requests `RenderSliverGridLazy::perform_layout` emits, the second lays
+    // requests `RenderSliverGrid::perform_layout` emits, the second lays
     // out the now-resident tiles (mirrors `lazy_grid.rs`'s settle pattern).
     laid.tick();
     laid.tick();
@@ -538,13 +542,15 @@ fn sliver_grid_builder_hit_tests_children_by_position() {
 }
 
 // ============================================================================
-// CASE 6 — SliverGrid.list can display children (hit-test, eager path)
+// CASE 6 — SliverGrid.list can display children (hit-test, static children)
 // ============================================================================
 
 /// Mirrors the oracle's `.list` tap scene (`_buildTapTarget`), substituting a
 /// regular delegate for the same Cross.H reason `grid_builder_tap_scene`
-/// documents above. Routes through the eager `SliverGrid::new` — Flutter's
-/// `.list` constructor is eager too.
+/// documents above. Routes through `SliverGrid::list` — the fixed-`Vec`
+/// constructor, over the same request-strategy adaptor `GridView::builder`
+/// uses (ADR-0053), matching how Flutter's own `.list` composes down to the
+/// same `SliverMultiBoxAdaptorWidget` machinery as `.builder`.
 fn grid_list_tap_scene(counter0: Arc<AtomicUsize>, counter1: Arc<AtomicUsize>) -> impl View {
     let delegate: Arc<dyn SliverGridDelegate> =
         Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2));
@@ -568,7 +574,7 @@ fn grid_list_tap_scene(counter0: Arc<AtomicUsize>, counter1: Arc<AtomicUsize>) -
                 .child(Text::new("Second")),
         )
         .boxed();
-    CustomScrollView::new((SliverGrid::new(delegate, vec![first, second]),))
+    CustomScrollView::new((SliverGrid::list(delegate, vec![first, second]),))
 }
 
 /// Flutter parity: `slivers_test.dart` `'SliverGrid.list can display

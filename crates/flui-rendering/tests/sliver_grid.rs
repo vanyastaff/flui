@@ -32,7 +32,7 @@ use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext},
     delegates::SliverGridDelegateWithFixedCrossAxisCount,
-    parent_data::BoxParentData,
+    parent_data::{BoxParentData, SliverMultiBoxAdaptorParentData},
     pipeline::PipelineOwner,
     testing::{inspect, sliver as sliver_presets},
     traits::RenderBox,
@@ -127,12 +127,12 @@ fn build_grid_tree(
         .render_tree_mut()
         .insert_sliver_child(
             root_id,
-            Box::new(RenderSliverGrid::new(delegate)) as BoxedSliverObject,
+            Box::new(RenderSliverGrid::new(delegate, child_count)) as BoxedSliverObject,
         )
         .expect("grid sliver inserted");
 
     let mut child_ids = Vec::with_capacity(child_count);
-    for _ in 0..child_count {
+    for index in 0..child_count {
         let child_id = owner
             .render_tree_mut()
             .insert_box_child(
@@ -140,6 +140,16 @@ fn build_grid_tree(
                 Box::new(FixedHitBox::new(1000.0, 1000.0)) as BoxedRenderObject,
             )
             .expect("box child inserted");
+        // The logical index the element tree stamps at adoption (mirrors
+        // `crates/flui-rendering/tests/sliver_fixed_extent_list.rs`'s
+        // `fixed_extent_tree`): the request-strategy grid reconciles resident
+        // children by reading this back before its own layout pass, so it
+        // must already be correct, not merely default-initialized.
+        owner
+            .render_tree_mut()
+            .get_mut(child_id)
+            .expect("just inserted")
+            .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(index)));
         child_ids.push(child_id);
     }
 

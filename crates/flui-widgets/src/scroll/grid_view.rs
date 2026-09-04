@@ -10,14 +10,13 @@ use flui_rendering::delegates::{
 };
 use flui_rendering::view::ScrollPosition;
 use flui_types::layout::Axis;
+use flui_view::element::StaticChildren;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
-use crate::scroll::{
-    ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverGrid, SliverGridLazy, Viewport,
-};
+use crate::scroll::{ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverGrid, Viewport};
 
 /// Where the composed [`Viewport`] gets its scroll offset from — mirrors
 /// [`Viewport`]'s own `OffsetSource`, since this widget is a thin
@@ -44,7 +43,7 @@ enum OffsetSource {
 /// - [`GridView::builder`] — lazily builds tiles from a closure; only the
 ///   children currently visible in the viewport plus a cache margin are built.
 ///   Tiles that scroll out of the cache window are disposed.  Backed by
-///   [`SliverGridLazy`] (element-owned, request-strategy).
+///   [`SliverGrid`] (element-owned, request-strategy).
 ///
 ///   **First-frame settling (Flutter divergence):** lazy children are built
 ///   *after* the frame's paint, so the first frame a viewport band appears it
@@ -70,9 +69,16 @@ pub struct GridView {
     offset_source: OffsetSource,
     shrink_wrap: bool,
     grid_delegate: Arc<dyn SliverGridDelegate>,
-    /// Children for the eager variants.  Empty in the lazy variant.
-    children: Vec<BoxedView>,
-    /// Builder delegate for the lazy variant.  `None` in the eager variants.
+    /// Children for the static variants ([`GridView::count`],
+    /// [`GridView::extent`]). Empty in the lazy variant.
+    /// The static children as handed in — a shared delegate, so a `GridView`
+    /// cloned or rebuilt from the same value compares as unchanged and its
+    /// resident children are not rebuilt (ADR-0053).
+    children: Rc<StaticChildren>,
+    /// `children` with the per-item repaint boundary applied, created on
+    /// first use so it too keeps its identity across builds of one value.
+    children_in_boundaries: std::cell::OnceCell<Rc<StaticChildren>>,
+    /// Builder delegate for the lazy variant.  `None` in the static variants.
     builder_source: Option<SliverChildBuilderDelegate>,
     /// Wrap each tile in a `RepaintBoundary` (default `true`).
     ///
@@ -85,7 +91,10 @@ impl GridView {
     /// A grid with a fixed number of tiles in the cross axis.
     ///
     /// All children are given upfront.  Each row contains exactly
-    /// `cross_axis_count` tiles of equal cross-axis extent.
+    /// `cross_axis_count` tiles of equal cross-axis extent. Only the
+    /// viewport-visible (plus cache margin) window is actually materialized
+    /// — the same [`SliverGrid`] request strategy [`GridView::builder`] uses
+    /// (ADR-0053).
     ///
     /// Flutter parity: `GridView.count`.
     pub fn count(cross_axis_count: usize, children: impl ViewSeq) -> Self {
@@ -95,7 +104,8 @@ impl GridView {
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
-            children: children.into_boxed_vec(),
+            children: StaticChildren::new(children.into_boxed_vec()),
+            children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
             add_repaint_boundaries: true,
         }
@@ -106,7 +116,9 @@ impl GridView {
     ///
     /// The number of columns is computed so every tile fits within the
     /// `max_cross_axis_extent` limit; tiles are stretched to fill the grid's
-    /// cross-axis evenly.
+    /// cross-axis evenly. Only the viewport-visible (plus cache margin)
+    /// window is actually materialized (ADR-0053), as for
+    /// [`GridView::count`].
     ///
     /// Flutter parity: `GridView.extent`.
     pub fn extent(max_cross_axis_extent: f32, children: impl ViewSeq) -> Self {
@@ -116,7 +128,8 @@ impl GridView {
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
-            children: children.into_boxed_vec(),
+            children: StaticChildren::new(children.into_boxed_vec()),
+            children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
             add_repaint_boundaries: true,
         }
@@ -144,7 +157,8 @@ impl GridView {
             offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate,
-            children: Vec::new(),
+            children: StaticChildren::new(Vec::new()),
+            children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
             add_repaint_boundaries: true,
         }
@@ -231,7 +245,11 @@ impl fmt::Debug for GridView {
         } else {
             s.field("grid_delegate", &self.grid_delegate)
                 .field("children", &self.children.len())
-                .field("add_repaint_boundaries", &self.add_repaint_boundaries);
+                .field("add_repaint_boundaries", &self.add_repaint_boundaries)
+                .field(
+                    "children_in_boundaries",
+                    &self.children_in_boundaries.get().map(|c| c.len()),
+                );
         }
         s.finish()
     }
@@ -247,14 +265,14 @@ impl StatelessView for GridView {
             axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
 
         let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
-            // Lazy variant: wire SliverGridLazy (element-owned request strategy).
+            // Lazy variant: wire SliverGrid (element-owned request strategy).
             let builder = if self.add_repaint_boundaries {
                 super::sliver_list::wrap_builder_in_repaint_boundaries(&delegate.builder)
             } else {
                 Rc::clone(&delegate.builder)
             };
             {
-                let sliver = SliverGridLazy::new(
+                let sliver = SliverGrid::new(
                     Arc::clone(&self.grid_delegate),
                     delegate.item_count,
                     builder,
@@ -269,13 +287,20 @@ impl StatelessView for GridView {
             }
             .boxed()
         } else {
-            // Eager variant: all children pre-attached.
+            // Static children go through the same lazy path as a builder:
+            // only the window is built, keyed children are found by the
+            // delegate's key map, everything outside the window is evicted.
             let children = if self.add_repaint_boundaries {
-                super::sliver_list::wrap_in_repaint_boundaries(self.children.clone())
+                Rc::clone(self.children_in_boundaries.get_or_init(|| {
+                    StaticChildren::mapped(
+                        self.children.children().to_vec(),
+                        super::sliver_list::wrap_in_repaint_boundary,
+                    )
+                }))
             } else {
-                self.children.clone()
+                Rc::clone(&self.children)
             };
-            SliverGrid::new(Arc::clone(&self.grid_delegate), children).boxed()
+            SliverGrid::over(Arc::clone(&self.grid_delegate), &children).boxed()
         };
 
         if self.shrink_wrap {

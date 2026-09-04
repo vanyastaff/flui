@@ -57,7 +57,7 @@ use flui_rendering::{
     traits::RenderSliver,
 };
 
-use super::sliver_grid_lazy::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
+use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
 /// How far a layout offset may miss an exact multiple of the item extent and
 /// still count as that multiple, in pixels. Flutter's `precisionErrorTolerance`

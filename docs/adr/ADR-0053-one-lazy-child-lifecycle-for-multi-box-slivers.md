@@ -52,8 +52,8 @@ objects, so their materialised child count was unbounded, and the parity pin for
    sliver owes the element tree; `SliverMultiBoxAdaptor<R>` carries `{ config, item_count,
    builder, find_index_by_key }` and is constructed through `with_config`, so a render object
    outside `flui-view` joins by implementing the trait; one `ChildManager`, one behavior, one
-   element. `SliverList`, `SliverGridLazy` (to be renamed `SliverGrid` when the eager grid goes)
-   and `SliverFixedExtentList` are type aliases with their own constructors.
+   element. `SliverList`, `SliverGrid` (the transitional `SliverGridLazy` name retired once the
+   eager grid went) and `SliverFixedExtentList` are type aliases with their own constructors.
 2. **Every multi-box sliver is on the request strategy.** The render object asks
    (`request_child_build`, `emit_retain_band`); the element tree builds between the frame's layout
    passes (ADR-0017's fixpoint, the lazy-band budget) and evicts by band. The eager fixed-extent
@@ -109,7 +109,8 @@ objects, so their materialised child count was unbounded, and the parity pin for
 Decision 1 landed with the unification and decision 4 with ADR-0017's amendment. Decisions 2, 3
 and 5 landed with the fixed-extent port (`RenderSliverFixedExtentList` on the request strategy,
 `StaticChildren`, `ListView::new` over it, the un-ignored residency pin and the clamp-contract
-ports of the two auto-correct cases). What remains is the grid: the eager `RenderSliverGrid` and
-`SliverGridParentData` are deleted and the lazy grid takes the `RenderSliverGrid` / `SliverGrid`
-names once `GridView::count|extent` route over `StaticChildren`; until then `SliverGridLazy` is
-the lazy grid's name.
+ports of the two auto-correct cases). The grid is done too: the eager `RenderSliverGrid` and
+`SliverGridParentData` are deleted, the request-strategy grid took the `RenderSliverGrid` /
+`SliverGrid` names (the transitional `RenderSliverGridLazy` / `SliverGridLazy` names are gone),
+and `GridView::count`/`GridView::extent` route over `StaticChildren` exactly as `ListView::new`
+does. All five decisions have landed.

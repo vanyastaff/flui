@@ -1,8 +1,57 @@
-//! `RenderSliverGrid` — 2-D grid sliver: `cross_axis_count` items per main-axis row.
+//! `RenderSliverGrid` — request-strategy lazily-virtualized 2-D grid sliver.
+//!
+//! # Design
+//!
+//! Combines the **request-strategy seam** of `RenderSliverList` with
+//! **delegate-windowed geometry**: layout geometry (tile size, row count,
+//! cross-axis column positions) comes from a [`SliverGridDelegate`], while
+//! child construction and eviction are owned by the element tree (ADR-0053).
+//!
+//! Because the delegate makes scroll extent deterministic
+//! (`compute_max_scroll_offset`), no virtualizer or estimate is needed.  The
+//! visible+cache window is computed directly from the delegate's grid layout.
+//!
+//! **Parent-data type is `SliverMultiBoxAdaptorParentData`** (not a
+//! grid-specific type) to route through the lazy-build backend, which
+//! hardcodes that seed type.  The cross-axis offset is recomputed from the
+//! delegate each pass; storing it in parent data is not load-bearing (paint
+//! and hit-test read from `RenderState.offset`, not from parent data).
+//!
+//! # Flutter parity
+//!
+//! Corresponds to Flutter's `RenderSliverGrid` with a `childManager`
+//! (`SliverMultiBoxAdaptorElement`).  Oracle:
+//! `flutter/rendering/sliver_grid.dart:594-728`.
+//!
+//! ## Documented divergence — unbounded main axis + undefined item count
+//!
+//! An infinite window end (a shrink-wrapping viewport in an unbounded parent)
+//! means "no upper bound", which the oracle expresses by passing a null
+//! `targetLastIndex` (`sliver_grid.dart:608-610`) and then looping until the
+//! builder returns null. That loop can call the builder mid-layout; this
+//! render object cannot — it emits build *requests* the element tree services
+//! on a later pass — so it has no way to discover the builder's end within the
+//! frame that must commit a size. A count past
+//! [`MAX_UNBOUNDED_WINDOW_CHILDREN`] is therefore read as that sentinel and
+//! served a small bounded window ([`UNBOUNDED_SENTINEL_WINDOW`]) instead,
+//! reporting the extent it actually covers rather than the declared one and
+//! logging the shortfall once. The threshold separates a sentinel from a
+//! length, not a large grid from a small one: every count at or below it lays
+//! out in full, matching the oracle, and it is set above every count that can
+//! render at all.
+//!
+//! # Lifecycle
+//!
+//! Inert until a `ChildManager` is wired (via the `SliverGrid` view in
+//! `flui-view`). Until then, `request_child_build` emits requests that
+//! nothing services, so absent tiles never appear. This matches
+//! `RenderSliverList`'s posture.
 
+use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::Arc;
 
-use flui_foundation::Diagnosticable;
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_tree::Variable;
 use flui_types::geometry::px;
 
@@ -10,94 +59,130 @@ use flui_rendering::{
     constraints::{SliverGeometry, grid_child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     delegates::SliverGridDelegate,
-    parent_data::SliverGridParentData,
+    parent_data::SliverMultiBoxAdaptorParentData,
     traits::RenderSliver,
 };
 
-/// A sliver that arranges Box children in a 2-D grid.
+// ============================================================================
+// RENDER OBJECT
+// ============================================================================
+
+/// The count above which a declared `item_count` is read as an undefined-count
+/// stand-in rather than a real data-source length, when the window end is
+/// unbounded.
 ///
-/// Layout geometry (tile size, row count, cross-axis column positions) is
-/// delegated to a [`SliverGridDelegate`], which returns a [`SliverGridLayout`]
-/// for the incoming [`SliverConstraints`].  Every tile is constrained tightly
-/// to the delegate-specified size — tiles do not measure themselves.
+/// This separates a sentinel from a length. It is deliberately NOT a "large
+/// grids are too slow" budget: every count at or below it is laid out in full,
+/// however large. The hazard it guards is specific — with no finite window end
+/// the request loop runs `first..=last` in a single pass, so a declared
+/// `usize::MAX` (the conventional stand-in for the oracle's undefined
+/// `itemCount`) would enqueue ~2^64 build requests before the frame could
+/// return.
 ///
-/// # Windowed layout
+/// The value sits above every count that can render at all. Measured on the
+/// widget harness with a 4-column shrink-wrapped grid: 10 001 items settle in
+/// ~0.3 s, 40 000 in ~1.5 s, 160 000 in ~10 s — a grid an order of magnitude
+/// past that is already unusable for reasons this constant has no part in,
+/// while `usize::MAX` is thirteen orders of magnitude beyond it.
+pub(super) const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
+
+/// How many children the sentinel case actually lays out.
 ///
-/// Only the in-band rows (those whose scroll offset intersects the
-/// cache-extended viewport window) are laid out per frame.  Out-of-band
-/// children are skipped by the pipeline; their slots remain allocated in the
-/// arena but receive no layout or paint call — and, because this sliver
-/// never evicts them, no eventual cleanup either.  `hit_test` therefore
-/// tests only the last-committed window (`laid_out_band`), not every
-/// arena-resident child: an out-of-band child's committed offset can be
-/// arbitrarily stale (positioned on some earlier pass, at a scroll offset
-/// that no longer applies), so testing it against the current pointer
-/// position would risk routing the event to content that is not, in fact,
-/// what currently paints there.
+/// Deliberately a SEPARATE number from [`MAX_UNBOUNDED_WINDOW_CHILDREN`], and
+/// conflating the two was a real bug. The threshold has to be high, since no
+/// genuine data-source length may fall past it; the window served once it
+/// trips has to be small, because layout runs EVERY FRAME. Serving a
+/// threshold-sized window meant enqueueing a million build requests per frame
+/// — survivable once, an out-of-memory kill after a few, which is how this
+/// was found.
+///
+/// There is no correct extent for "infinite content in an infinitely tall
+/// box", so the requirements that remain are that the answer be bounded,
+/// stable across frames, and large enough to fill any viewport it is asked to
+/// fill. A thousand tiles clears the last by a wide margin, and it converges:
+/// the requests are serviced once and every later frame finds them resident.
+pub(super) const UNBOUNDED_SENTINEL_WINDOW: usize = 1_000;
+
+/// A request-strategy lazily-virtualized 2-D grid sliver.
+///
+/// Layout geometry is delegated to a [`SliverGridDelegate`]; children are
+/// built on demand by the element tree's `ChildManager` (not yet wired) in
+/// response to [`SliverLayoutContext::request_child_build`] calls emitted
+/// during layout.
+///
+/// # Construction
+///
+/// ```ignore
+/// use std::sync::Arc;
+/// use flui_objects::RenderSliverGrid;
+/// use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
+///
+/// let grid = RenderSliverGrid::new(
+///     Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+///     50,
+/// );
+/// ```
 ///
 /// # Flutter parity
 ///
-/// This is the eager (all-children-attached) counterpart of Flutter's
-/// `RenderSliverGrid`.  Lazy child creation and garbage collection remain
-/// deferred to the future multi-box-adaptor layer.
-///
-/// [`SliverGridDelegate`]: flui_rendering::delegates::SliverGridDelegate
-/// [`SliverGridLayout`]: flui_rendering::delegates::SliverGridLayout
-/// [`SliverConstraints`]: flui_rendering::constraints::SliverConstraints
+/// Corresponds to Flutter's `RenderSliverGrid` with `childManager`; oracle
+/// `sliver_grid.dart:594-728`.
 pub struct RenderSliverGrid {
+    /// Grid layout delegate — controls tile sizes and cross-axis count.
     grid_delegate: Arc<dyn SliverGridDelegate>,
-    child_count: usize,
-    /// Inclusive `[first, last]` child-index window that `perform_layout`
-    /// actually laid out and positioned on its most recent SUCCESSFUL pass —
-    /// the exact `first_in_band..=last_in_band` range the position loop
-    /// iterates. `None` before the first layout pass, or when that pass's
-    /// computed window was empty (e.g. scrolled past all content).
+    /// Total known item count.
+    item_count: usize,
+    /// Logical-index → dense-slot map rebuilt each pass from parent-data.
+    /// Kept as a field to reuse the `BTreeMap` allocation across passes.
+    logical_to_slot: BTreeMap<usize, usize>,
+    /// Dense child count committed after the last layout pass.
+    /// Used by the `&self` hit-test reverse walk which cannot re-read
+    /// `ctx.child_count()`.
+    attached_child_count: usize,
+    /// The `item_count` the unbounded-window truncation warning has already
+    /// been emitted for, if any.
     ///
-    /// `hit_test` gates on this instead of `0..child_count`: this sliver is
-    /// eager (every child stays arena-resident forever, see the module doc)
-    /// and windowed (only in-band children are laid out per pass), so an
-    /// index outside the last-committed window still carries whatever
-    /// `RenderState.offset` it was positioned at on some earlier pass —
-    /// stale, and not necessarily where it paints now (or whether it paints
-    /// at all). Retaining the exact window `perform_layout` computed, rather
-    /// than re-deriving "what is in band" a second time inside `hit_test`
-    /// from the delegate and the current scroll offset, means the two can
-    /// never drift apart: there is exactly one computation of the window,
-    /// and `hit_test` reads its committed result.
-    ///
-    /// **The write site is load-bearing, not incidental**: `perform_layout`
-    /// commits this field as its LAST statement, after both the layout and
-    /// position loops have fully run — never earlier. Both loops call into
-    /// caller-supplied `grid_delegate` code that can panic; the pipeline
-    /// catches that panic in a `catch_unwind` around this render object's
-    /// own `perform_layout` call
-    /// (`crates/flui-rendering/src/pipeline/owner/subtree_arena.rs`), which
-    /// unwinds through this function WITHOUT rolling back field writes it
-    /// already made. Committing at the end means an interrupted pass leaves
-    /// this field exactly as the last SUCCESSFUL pass left it — a window
-    /// whose offsets that pass actually finished writing — rather than a
-    /// window the interrupted pass merely started positioning. Moving the
-    /// commit any earlier reopens the stale-rect class this field exists to
-    /// close: `hit_test` would trust a band whose offsets a panic left only
-    /// partially refreshed.
-    laid_out_band: Option<(usize, usize)>,
+    /// Layout runs every frame, so an ungated warning there would repeat at
+    /// frame rate for a misconfiguration that is static — the same
+    /// once-per-misconfiguration frequency `flui_painting`'s decoration
+    /// warnings take, scoped per render object rather than per process so two
+    /// misconfigured grids each report, and so a count that CHANGES to another
+    /// over-cap value reports again.
+    warned_truncation_for: Option<usize>,
 }
 
 impl RenderSliverGrid {
-    /// Creates a new grid sliver driven by `grid_delegate`.
+    /// Creates a new lazy grid sliver driven by `grid_delegate` over
+    /// `item_count` items.
     #[must_use]
-    pub fn new(grid_delegate: Arc<dyn SliverGridDelegate>) -> Self {
+    pub fn new(grid_delegate: Arc<dyn SliverGridDelegate>, item_count: usize) -> Self {
         Self {
             grid_delegate,
-            child_count: 0,
-            laid_out_band: None,
+            item_count,
+            logical_to_slot: BTreeMap::new(),
+            attached_child_count: 0,
+            warned_truncation_for: None,
         }
     }
 
-    /// Replaces the grid delegate.
-    ///
-    /// A concrete delegate type change always requires layout; otherwise the
-    /// new delegate's `should_relayout` decision is authoritative.
+    /// Updates the known item count.  Call when the data source length changes.
+    pub fn set_item_count(&mut self, count: usize) -> flui_rendering::RenderUpdateImpact {
+        if self.item_count == count {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.item_count = count;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// Current effective item count used for delegate scroll extent.
+    #[inline]
+    #[must_use]
+    pub fn item_count(&self) -> usize {
+        self.item_count
+    }
+
+    /// Replaces the grid delegate. A concrete delegate type change always
+    /// requires layout; otherwise `should_relayout` is authoritative.
     pub fn set_grid_delegate(
         &mut self,
         new_delegate: Arc<dyn SliverGridDelegate>,
@@ -119,104 +204,203 @@ impl RenderSliverGrid {
     }
 }
 
-impl std::fmt::Debug for RenderSliverGrid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for RenderSliverGrid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderSliverGrid")
+            .field("item_count", &self.item_count)
+            .field("attached_child_count", &self.attached_child_count)
             .field("grid_delegate", &self.grid_delegate)
-            .field("child_count", &self.child_count)
-            .field("laid_out_band", &self.laid_out_band)
             .finish_non_exhaustive()
     }
 }
 
-impl Diagnosticable for RenderSliverGrid {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_int("child_count", self.child_count as i64, None);
-        // `add_enum` (not `add_flag`) because `add_flag` only ever emits a
-        // property when its `bool` is `true` (`crates/flui-foundation/src/
-        // debug.rs`) — an `add_flag("laid_out_band", false, ...)` arm for the
-        // `None` case would silently emit nothing at all, leaving the dump
-        // unable to distinguish "no band yet" from "field doesn't exist".
-        // `add_enum` is unconditional and formats via `Debug`, so both
-        // `None` and `Some((first, last))` show up as-is.
-        properties.add_enum("laid_out_band", self.laid_out_band);
+impl Clone for RenderSliverGrid {
+    fn clone(&self) -> Self {
+        Self {
+            grid_delegate: self.grid_delegate.clone(),
+            item_count: self.item_count,
+            logical_to_slot: BTreeMap::new(), // transient — reset each pass
+            attached_child_count: self.attached_child_count,
+            // Carried, not reset: it tracks a configuration, so a clone that
+            // dropped it would re-report the same misconfiguration.
+            warned_truncation_for: self.warned_truncation_for,
+        }
     }
 }
 
+impl Diagnosticable for RenderSliverGrid {
+    fn debug_fill_properties(&self, props: &mut DiagnosticsBuilder) {
+        props.add_int("item_count", self.item_count as i64, None);
+        props.add_int(
+            "attached_child_count",
+            self.attached_child_count as i64,
+            None,
+        );
+    }
+}
+
+// ============================================================================
+// RenderSliver impl
+// ============================================================================
+
 impl RenderSliver for RenderSliverGrid {
     type Arity = Variable;
-    type ParentData = SliverGridParentData;
+    type ParentData = SliverMultiBoxAdaptorParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>,
     ) -> SliverGeometry {
         let constraints = *ctx.constraints();
-        self.child_count = ctx.child_count();
 
-        if self.child_count == 0 {
-            self.laid_out_band = None;
+        // ── 1. Empty grid ─────────────────────────────────────────────────────
+        if self.item_count == 0 {
+            self.attached_child_count = 0;
+            ctx.emit_retain_band(0, 0);
             return SliverGeometry::ZERO;
         }
 
-        let layout = self.grid_delegate.get_layout(constraints);
+        // ── 2. Grid layout from delegate ──────────────────────────────────────
+        let tile_layout = self.grid_delegate.get_layout(constraints);
 
-        // Effective scroll window: expand by cache origin so pre-cache rows
-        // are also laid out (mirror of Flutter's performLayout lines 599-603).
-        let effective_scroll_offset = constraints.scroll_offset + constraints.cache_origin;
-        let target_end = effective_scroll_offset + constraints.remaining_cache_extent;
+        // ── 3. Cache-extended viewport window ────────────────────────────────
+        // Mirror of Flutter's performLayout lines 599-603:
+        //   effectiveScrollOffset = scrollOffset + cacheOrigin
+        //   targetEndScrollOffset = effectiveScrollOffset + remainingCacheExtent
+        // Negative effective offsets saturate to 0 in the delegate's usize math.
+        let cache_start_offset = constraints.scroll_offset + constraints.cache_origin;
+        let cache_end_offset = cache_start_offset + constraints.remaining_cache_extent;
 
-        let first_in_band = layout.get_min_child_index_for_scroll_offset(effective_scroll_offset);
-        // An infinite target end means "no upper bound", and the oracle says so
-        // by not asking the delegate at all: `sliver_grid.dart:608-610` computes
-        // `targetLastIndex` as `targetEndScrollOffset.isFinite ? … : null`, and a
-        // null bound downstream means every child. Handing infinity to the
-        // delegate instead divides it by the stride, saturates the cast at
-        // `usize::MAX`, and overflows the `cross_axis_count * main_axis_count`
-        // product. A shrink-wrapped grid inside an unbounded parent — a
-        // `SingleChildScrollView` over `GridView.count(shrink_wrap: true)` —
-        // hands down exactly that infinite window.
-        let last_in_band = if target_end.is_finite() {
-            layout
-                .get_max_child_index_for_scroll_offset(target_end)
-                .min(self.child_count - 1)
+        let first_in_window = tile_layout.get_min_child_index_for_scroll_offset(cache_start_offset);
+        // Clamp to item_count−1; no underflow risk since item_count > 0 above.
+        //
+        // An infinite window end means "no upper bound" and must not reach the
+        // delegate: it divides infinity by the stride, saturates the
+        // `f32 as usize` cast at `usize::MAX`, and overflows the index product.
+        // The oracle expresses the same thing by not asking at all —
+        // `sliver_grid.dart:608-610` passes a null `targetLastIndex` — and a
+        // shrink-wrapped `GridView::builder` under an unbounded parent hands
+        // down exactly that window.
+        //
+        // Falling back to every child needs an extra bound here, because
+        // `item_count` is whatever the caller declared rather than a count of
+        // mounted children, and `usize::MAX` is the conventional stand-in for
+        // the oracle's undefined `itemCount`. The request loop below is
+        // synchronous, so an unbounded count would ask for ~2^64 build
+        // requests in a single frame.
+        //
+        // [`MAX_UNBOUNDED_WINDOW_CHILDREN`] bounds that, and it draws its line
+        // between a declared length and a sentinel rather than between a large
+        // grid and a small one: a finite count at or below it is laid out in
+        // full, and the constant is set above every count that can render at
+        // all. Past it the tree is asking for infinite content in an infinitely
+        // tall box, which the oracle answers by looping until the builder
+        // returns null — and would never terminate for a builder that never
+        // does.
+        //
+        // Truncating also has to move the reported scroll extent with it.
+        // `item_count` normally drives that extent so a bounded viewport can
+        // scroll through content it has not built yet — correct there, and
+        // left alone. But under an unbounded main axis the shrink-wrapping
+        // viewport *sizes itself* to that extent, and declaring content this
+        // frame never laid out would commit a box no child of it fills. So a
+        // truncated window reports the extent it actually covers.
+        let (last_in_window, effective_item_count) = if cache_end_offset.is_finite() {
+            let last = tile_layout
+                .get_max_child_index_for_scroll_offset(cache_end_offset)
+                .min(self.item_count - 1);
+            (last, self.item_count)
+        } else if self.item_count > MAX_UNBOUNDED_WINDOW_CHILDREN {
+            if self.warned_truncation_for != Some(self.item_count) {
+                self.warned_truncation_for = Some(self.item_count);
+                tracing::warn!(
+                    item_count = self.item_count,
+                    threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
+                    window = UNBOUNDED_SENTINEL_WINDOW,
+                    "lazy grid asked to fill an unbounded main axis declares \
+                     more children than any real data source has; reading the \
+                     count as an undefined-count stand-in and serving a small \
+                     bounded window instead, so the committed extent is far \
+                     short of the declared content"
+                );
+            }
+            (UNBOUNDED_SENTINEL_WINDOW - 1, UNBOUNDED_SENTINEL_WINDOW)
         } else {
-            self.child_count - 1
+            (self.item_count - 1, self.item_count)
         };
 
-        let scroll_extent = layout.compute_max_scroll_offset(self.child_count);
+        // Guard: window is entirely past the last item (e.g. scrolled to end).
+        if first_in_window > last_in_window {
+            let scroll_extent = tile_layout.compute_max_scroll_offset(effective_item_count);
+            self.attached_child_count = ctx.child_count();
+            // Empty retain band tells the element tree to evict all off-window children.
+            ctx.emit_retain_band(first_in_window, first_in_window);
+            return SliverGeometry {
+                scroll_extent,
+                ..SliverGeometry::ZERO
+            };
+        }
 
-        // Tight box constraints: the delegate forces both axes (tiles never
-        // choose their own size).
-        let tile_constraints = constraints.as_box_constraints(
-            layout.child_main_axis_extent,
-            layout.child_main_axis_extent,
-            Some(layout.child_cross_axis_extent),
-        );
-
-        let leading_scroll_offset = layout.get_scroll_offset_of_child(first_in_band);
-        let mut trailing_scroll_offset = leading_scroll_offset;
-
-        for index in first_in_band..=last_in_band {
-            if index >= self.child_count {
-                break;
-            }
-            let child_scroll_offset = layout.get_scroll_offset_of_child(index);
-            ctx.layout_box_child(index, tile_constraints);
-            let tile_trailing = child_scroll_offset + layout.child_main_axis_extent;
-            if tile_trailing > trailing_scroll_offset {
-                trailing_scroll_offset = tile_trailing;
+        // ── 4. Reconcile logical-index → dense-slot from parent data ──────────
+        // O(K) where K = currently attached child count (bounded by viewport).
+        self.logical_to_slot.clear();
+        let dense_child_count = ctx.child_count();
+        for slot in 0..dense_child_count {
+            if let Some(pd) = ctx.child_parent_data(slot) {
+                let previous = self.logical_to_slot.insert(pd.index, slot);
+                // Same invariant as the list's band walk: one attached child
+                // per logical index, or one of them paints at a stale offset.
+                debug_assert!(
+                    previous.is_none(),
+                    "BUG: lazy grid has two attached children stamped with logical index {} \
+                     (dense slots {:?} and {slot})",
+                    pd.index,
+                    previous,
+                );
             }
         }
 
-        // Oracle flutter/rendering/sliver_grid.dart:700-719.
-        let from = constraints.scroll_offset.min(leading_scroll_offset);
-        let paint_extent = self.calculate_paint_offset(&constraints, from, trailing_scroll_offset);
-        let cache_extent = self.calculate_cache_offset(
-            &constraints,
-            leading_scroll_offset,
-            trailing_scroll_offset,
+        // ── 5. Tight tile box constraints ────────────────────────────────────
+        // All tiles are constrained tightly by the delegate — they do not
+        // choose their own size.
+        let tile_constraints = constraints.as_box_constraints(
+            tile_layout.child_main_axis_extent,
+            tile_layout.child_main_axis_extent,
+            Some(tile_layout.child_cross_axis_extent),
         );
+
+        // ── 6. Layout pass: resident → re-layout; absent → request ───────────
+        // This render object carries no owned child-source factory — the
+        // element tree owns construction.
+        for logical_index in first_in_window..=last_in_window {
+            if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
+                ctx.layout_box_child(slot, tile_constraints);
+            } else {
+                // Absent — emit a build request.  The element tree's
+                // `SliverAdaptorManager<RenderSliverGrid>::service` builds it between
+                // layout passes of this frame's fixpoint.
+                ctx.request_child_build(logical_index);
+            }
+        }
+
+        // ── 7. Deterministic scroll extent ────────────────────────────────────
+        // Unlike a list, the delegate gives exact extent from item_count — no
+        // virtualizer or estimate needed.
+        let scroll_extent = tile_layout.compute_max_scroll_offset(effective_item_count);
+
+        // ── 8. Paint geometry (oracle `sliver_grid.dart:700-719`) ─────────────
+        let leading_row_offset = tile_layout.get_scroll_offset_of_child(first_in_window);
+        let trailing_row_offset = tile_layout.get_scroll_offset_of_child(last_in_window)
+            + tile_layout.child_main_axis_extent;
+
+        // `from` clamps to the viewport start so partial leading rows don't
+        // drive paint_extent negative (Flutter's `from = min(scrollOffset, leading)` ).
+        let paint_start = constraints.scroll_offset.min(leading_row_offset);
+        let paint_extent =
+            self.calculate_paint_offset(&constraints, paint_start, trailing_row_offset);
+        let cache_extent =
+            self.calculate_cache_offset(&constraints, leading_row_offset, trailing_row_offset);
+
         let geometry = SliverGeometry {
             scroll_extent,
             paint_extent,
@@ -224,14 +408,11 @@ impl RenderSliver for RenderSliverGrid {
             max_paint_extent: scroll_extent,
             cache_extent,
             hit_test_extent: paint_extent,
-            // Every sibling sliver (`RenderSliverFixedExtentList`,
-            // `RenderSliverPadding`, `RenderSliverFillViewport`, ...) sets this
-            // explicitly; omitting it left `visible` at `SliverGeometry::ZERO`'s
-            // `false` unconditionally. The viewport's own hit-test walk gates on
-            // it (`sliver_child_is_visible` in
-            // `flui-rendering/src/pipeline/owner/accessors.rs`), so a grid with
-            // real on-screen content was never reachable by any pointer event —
-            // confirmed while porting `SliverGrid`'s hit-test parity cases.
+            // Omitting this left `visible` at `SliverGeometry::ZERO`'s `false`
+            // unconditionally, which blocked the viewport's hit-test walk
+            // (`sliver_child_is_visible`,
+            // `flui-rendering/src/pipeline/owner/accessors.rs`) from ever
+            // reaching a grid's children.
             visible: paint_extent > 0.0,
             has_visual_overflow: scroll_extent > paint_extent
                 || constraints.scroll_offset > 0.0
@@ -239,115 +420,307 @@ impl RenderSliver for RenderSliverGrid {
             ..SliverGeometry::ZERO
         };
 
-        // Position pass: commit paint offset and parent data for each in-band tile.
-        for index in first_in_band..=last_in_band {
-            if index >= self.child_count {
-                break;
-            }
-            let child_scroll_offset = layout.get_scroll_offset_of_child(index);
-            let cross_axis_offset = layout.get_cross_axis_offset_of_child(index);
+        // ── 9. Commit attached count and position resident tiles ──────────────
+        // Use the `logical_to_slot` map from step 4; no new arena children are
+        // added during a request-strategy layout pass (the element tree inserts
+        // them between frames).
+        self.attached_child_count = ctx.child_count();
 
-            ctx.position_child(
-                index,
-                grid_child_paint_offset(
-                    &constraints,
-                    &geometry,
-                    px(child_scroll_offset),
-                    px(layout.child_main_axis_extent),
-                    px(cross_axis_offset),
-                ),
-            );
+        for logical_index in first_in_window..=last_in_window {
+            if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
+                let tile_scroll_offset = tile_layout.get_scroll_offset_of_child(logical_index);
+                let tile_cross_offset = tile_layout.get_cross_axis_offset_of_child(logical_index);
 
-            if let Some(parent_data) = ctx.child_parent_data_mut(index) {
-                parent_data.index = index;
-                parent_data.layout_offset = child_scroll_offset;
-                parent_data.cross_axis_offset = cross_axis_offset;
+                ctx.position_child(
+                    slot,
+                    grid_child_paint_offset(
+                        &constraints,
+                        &geometry,
+                        px(tile_scroll_offset),
+                        px(tile_layout.child_main_axis_extent),
+                        px(tile_cross_offset),
+                    ),
+                );
+
+                if let Some(pd) = ctx.child_parent_data_mut(slot) {
+                    pd.index = logical_index;
+                    pd.layout_offset = tile_scroll_offset;
+                }
             }
         }
 
-        // Commit the window `hit_test`/`paint` will read — deliberately the
-        // LAST thing this function does, after both loops above (which call
-        // into the caller-supplied `grid_delegate` and the pipeline's own
-        // child layout/position machinery) have run to completion. `None`
-        // when the window is empty (`first_in_band > last_in_band`, e.g.
-        // scrolled past all content).
-        //
-        // Load-bearing ordering, not a style choice: this crate's pipeline
-        // wraps each render object's `perform_layout` call in `catch_unwind`
-        // (`crates/flui-rendering/src/pipeline/owner/subtree_arena.rs`), so a
-        // panic from user code reachable in either loop above (most notably
-        // `self.grid_delegate`'s `SliverGridLayout` methods, called
-        // per-index) unwinds straight through this function — Rust does not
-        // roll back the field writes this function already made, only skips
-        // the ones after the panic point. Committing here means an
-        // interrupted pass leaves `laid_out_band` exactly as the LAST
-        // successful pass left it: still describing a fully-positioned
-        // window whose offsets that pass actually wrote, not a window this
-        // (aborted) pass merely intended to write. Committing any earlier —
-        // e.g. right after computing `first_in_band`/`last_in_band`, before
-        // either loop ran — would let a mid-loop panic leave `laid_out_band`
-        // pointing at a window whose offsets were only partially (or never)
-        // refreshed this pass, reopening the exact stale-rect class this
-        // field exists to close.
-        //
-        // The `geometry.validation_error().is_none()` guard covers a THIRD
-        // way this pass can fail to land, distinct from a panic: even a
-        // normal, panic-free `return` from this function is not the pipeline's
-        // last word on it. The caller validates the returned `SliverGeometry`
-        // AFTER this function returns
-        // (`SliverProtocol::validate_layout_output`,
-        // `crates/flui-rendering/src/pipeline/owner/subtree_arena.rs`), and
-        // only commits this pass's child offsets to `RenderState` (a SEPARATE
-        // step, after that validation) when it passes. A rejected geometry
-        // (NaN/non-finite/negative extents — reachable from a delegate whose
-        // `SliverGridLayout` produces one, e.g. a NaN `main_axis_stride`)
-        // means the position loop's `ctx.position_child` calls above never
-        // actually land — so this field must not commit either, or it would
-        // describe a band whose offsets the pipeline silently declined to
-        // write. Predicting the caller's own check here keeps both commits
-        // gated on the identical condition.
-        if geometry.validation_error().is_none() {
-            self.laid_out_band =
-                (first_in_band <= last_in_band).then_some((first_in_band, last_in_band));
-        }
+        // ── 10. Emit retain band for element-side eviction ────────────────────
+        // [first_in_window, last_in_window+1) is the half-open retained range.
+        // `SparseChildren::retain_band` on the element side evicts any logical
+        // index outside this band. The render side never disposes a child
+        // itself, which is what avoids an ABA double-remove between the two.
+        ctx.emit_retain_band(first_in_window, last_in_window + 1);
 
         geometry
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        // Gated on `laid_out_band`, not `ctx.paint_children()`'s
-        // `0..child_count`: the paint driver's box-child dispatch
-        // (`crates/flui-rendering/src/pipeline/owner/paint.rs`) has the
-        // identical shape to the pre-fix `hit_test` walk — it reads
-        // `child_node.offset()` unconditionally for box-typed children (the
-        // `geometry.visible` cull a few lines above it only applies to
-        // sliver-typed children). Painting every arena-resident child would
-        // draw an out-of-band tile at its stale, no-longer-current rect —
-        // the same defect this type's `hit_test` gate closes, just for
-        // pixels instead of taps. Order stays forward (paint back-to-front;
-        // `hit_test` walks the same window in reverse, front-to-back).
-        let Some((first_in_band, last_in_band)) = self.laid_out_band else {
-            return;
-        };
-        for index in first_in_band..=last_in_band {
-            ctx.paint_child(index);
-        }
+        ctx.paint_children();
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {
-        // Gated on `laid_out_band`, not `0..child_count`: this sliver never
-        // evicts out-of-band children (see the field doc on `laid_out_band`),
-        // so an index outside the last-committed window may still carry a
-        // `RenderState.offset` from an earlier, no-longer-current pass. Only
-        // the committed window is guaranteed fresh this frame.
-        let Some((first_in_band, last_in_band)) = self.laid_out_band else {
-            return false;
-        };
-        for index in (first_in_band..=last_in_band).rev() {
-            if ctx.hit_test_child_at_layout_offset(index) {
+        // Reverse walk: the last-attached slot is at the highest Z-order.
+        for slot in (0..self.attached_child_count).rev() {
+            if ctx.hit_test_child_at_layout_offset(slot) {
                 return true;
             }
         }
         false
+    }
+}
+
+// ============================================================================
+// UNIT TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+
+    use flui_rendering::constraints::{GrowthDirection, SliverConstraints};
+    use flui_rendering::delegates::{SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout};
+    use flui_rendering::view::ScrollDirection;
+    use flui_types::layout::AxisDirection;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct FalseRelayout;
+
+    #[derive(Debug)]
+    struct OtherFalseRelayout;
+
+    #[derive(Debug)]
+    struct TrueRelayout;
+
+    macro_rules! impl_grid_delegate {
+        ($type:ty, $relayout:expr) => {
+            impl SliverGridDelegate for $type {
+                fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
+                    SliverGridDelegateWithFixedCrossAxisCount::new(2).get_layout(constraints)
+                }
+
+                fn should_relayout(&self, _old_delegate: &dyn SliverGridDelegate) -> bool {
+                    $relayout
+                }
+
+                fn as_any(&self) -> &dyn Any {
+                    self
+                }
+            }
+        };
+    }
+
+    impl_grid_delegate!(FalseRelayout, false);
+    impl_grid_delegate!(OtherFalseRelayout, false);
+    impl_grid_delegate!(TrueRelayout, true);
+
+    fn two_column_grid(item_count: usize) -> RenderSliverGrid {
+        RenderSliverGrid::new(
+            Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+            item_count,
+        )
+    }
+
+    fn vertical_constraints(
+        scroll_offset: f32,
+        viewport_height: f32,
+        cross_axis_extent: f32,
+    ) -> SliverConstraints {
+        SliverConstraints {
+            axis_direction: AxisDirection::TopToBottom,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
+            scroll_offset,
+            remaining_paint_extent: viewport_height,
+            cross_axis_extent,
+            viewport_main_axis_extent: viewport_height,
+            remaining_cache_extent: viewport_height,
+            ..Default::default()
+        }
+    }
+
+    // ── Construction ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn construction_sets_item_count_and_zeroes_transient_state() {
+        let grid = two_column_grid(50);
+        assert_eq!(grid.item_count, 50);
+        assert_eq!(grid.attached_child_count, 0);
+        assert!(
+            grid.logical_to_slot.is_empty(),
+            "logical_to_slot is transient and must start empty"
+        );
+    }
+
+    #[test]
+    fn set_item_count_updates_field() {
+        let mut grid = two_column_grid(50);
+        assert_eq!(
+            grid.set_item_count(100),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+        assert_eq!(grid.item_count, 100);
+    }
+
+    #[test]
+    fn set_grid_delegate_replaces_delegate() {
+        let mut grid = two_column_grid(10);
+        let new_delegate: Arc<dyn SliverGridDelegate> =
+            Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(3));
+        assert_eq!(
+            grid.set_grid_delegate(new_delegate.clone()),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+        let actual_count = grid
+            .grid_delegate()
+            .as_any()
+            .downcast_ref::<SliverGridDelegateWithFixedCrossAxisCount>()
+            .expect("delegate must downcast to SliverGridDelegateWithFixedCrossAxisCount")
+            .cross_axis_count;
+        assert_eq!(actual_count, 3);
+    }
+
+    #[test]
+    fn grid_delegate_updates_honor_type_and_relayout_decisions() {
+        let mut grid = RenderSliverGrid::new(Arc::new(FalseRelayout), 0);
+        assert_eq!(
+            grid.set_grid_delegate(Arc::new(FalseRelayout)),
+            flui_rendering::RenderUpdateImpact::NONE,
+        );
+        assert_eq!(
+            grid.set_grid_delegate(Arc::new(OtherFalseRelayout)),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+        let mut grid_true = RenderSliverGrid::new(Arc::new(TrueRelayout), 0);
+        assert_eq!(
+            grid_true.set_grid_delegate(Arc::new(TrueRelayout)),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+        );
+    }
+
+    #[test]
+    fn debug_impl_does_not_panic() {
+        let grid = two_column_grid(10);
+        let output = format!("{grid:?}");
+        assert!(
+            output.contains("RenderSliverGrid"),
+            "Debug output must name the type"
+        );
+    }
+
+    #[test]
+    fn clone_preserves_config_and_resets_transient_logical_to_slot() {
+        let mut grid = two_column_grid(20);
+        grid.attached_child_count = 4;
+        let cloned = grid.clone();
+        assert_eq!(cloned.item_count, 20);
+        assert_eq!(cloned.attached_child_count, 4);
+        assert!(
+            cloned.logical_to_slot.is_empty(),
+            "logical_to_slot is transient and must be reset on clone"
+        );
+    }
+
+    // ── Window math (delegate-only, no layout context needed) ─────────────────
+
+    /// For a 2-column 200px-wide grid with square tiles (100×100) and 50 items,
+    /// verifies that the delegate computes the correct window bounds and scroll
+    /// extent.
+    #[test]
+    fn window_math_matches_delegate_for_two_column_grid() {
+        let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(2);
+        let constraints = vertical_constraints(0.0, 200.0, 200.0);
+        let layout = delegate.get_layout(constraints);
+
+        // 200px / 2 cols = 100px each; aspect 1.0 → 100px tall.
+        assert_eq!(
+            layout.child_cross_axis_extent, 100.0,
+            "cross extent must be 100px for a 200px grid with 2 columns"
+        );
+        assert_eq!(
+            layout.child_main_axis_extent, 100.0,
+            "main extent must be 100px (aspect ratio 1)"
+        );
+
+        // Viewport [0, 200) spans rows 0 and 1 → tiles 0..=3.
+        let first_in_window =
+            layout.get_min_child_index_for_scroll_offset(constraints.scroll_offset);
+        assert_eq!(
+            first_in_window, 0,
+            "viewport starts at 0, first tile is index 0"
+        );
+
+        // At offset 200 (trailing edge): ceil(200/100) = 2 rows → last = 2*2-1 = 3.
+        let last_unclamped = layout.get_max_child_index_for_scroll_offset(200.0);
+        assert!(
+            last_unclamped >= 3,
+            "trailing edge at 200px must include at least tiles 0..=3, got {last_unclamped}"
+        );
+
+        // Scroll extent: ceil(50/2) = 25 rows × 100px = 2500px.
+        let scroll_extent = layout.compute_max_scroll_offset(50);
+        assert_eq!(
+            scroll_extent, 2500.0,
+            "50 items in 2 columns = 25 rows × 100px"
+        );
+    }
+
+    /// Oracle 2-D positions for a 2-column 200px grid: col 0 at x=0, col 1 at
+    /// x=100; row 0 at y=0, row 1 at y=100.
+    #[test]
+    fn cross_axis_and_scroll_offsets_are_correct_for_two_column_grid() {
+        let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(2);
+        let constraints = vertical_constraints(0.0, 400.0, 200.0);
+        let layout = delegate.get_layout(constraints);
+
+        // Cross-axis offsets (x positions for vertical scroll)
+        assert_eq!(
+            layout.get_cross_axis_offset_of_child(0),
+            0.0,
+            "tile 0: col 0 → x=0"
+        );
+        assert_eq!(
+            layout.get_cross_axis_offset_of_child(1),
+            100.0,
+            "tile 1: col 1 → x=100"
+        );
+        assert_eq!(
+            layout.get_cross_axis_offset_of_child(2),
+            0.0,
+            "tile 2 (row 1, col 0) → x=0"
+        );
+        assert_eq!(
+            layout.get_cross_axis_offset_of_child(3),
+            100.0,
+            "tile 3 (row 1, col 1) → x=100"
+        );
+
+        // Main-axis scroll offsets (y positions for vertical scroll)
+        assert_eq!(
+            layout.get_scroll_offset_of_child(0),
+            0.0,
+            "row 0 starts at y=0"
+        );
+        assert_eq!(
+            layout.get_scroll_offset_of_child(1),
+            0.0,
+            "tile 1 is in row 0 → y=0"
+        );
+        assert_eq!(
+            layout.get_scroll_offset_of_child(2),
+            100.0,
+            "row 1 starts at y=100"
+        );
+        assert_eq!(
+            layout.get_scroll_offset_of_child(3),
+            100.0,
+            "tile 3 is in row 1 → y=100"
+        );
     }
 }
