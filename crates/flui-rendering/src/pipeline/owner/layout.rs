@@ -481,6 +481,25 @@ impl PipelineOwner<Layout> {
             self.mark_needs_paint(id);
         }
 
+        // Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in
+        // both of `RenderObject`'s layout entry points, so a node that lays out
+        // re-publishes its semantics geometry. Without it a frame that only
+        // re-laid-out publishes nothing, and a scroll — which is exactly that
+        // frame, since the viewport's offset listener requests layout and
+        // nothing else — leaves the accessibility tree describing where the
+        // content used to be.
+        //
+        // ONE mark, on the dirty root, not one per laid-out node. The arena
+        // walks the subtree of `id`, so every node that laid out is under it,
+        // and `try_graft_pass` re-assembles a marked node's whole subtree —
+        // marking each descendant as well would be strictly redundant while
+        // costing a `fire_need_visual_update` per node (each of which asks the
+        // platform to redraw) and a per-node ancestor walk in the graft, i.e.
+        // O(N·depth) for a deep relayout. `mark_needs_semantics` is itself a
+        // no-op while semantics is disabled, so a session with no
+        // accessibility client attached pays one predictable branch.
+        self.mark_needs_semantics(id);
+
         // Poison bookkeeping for the walk's descendant failures/successes.
         // A success clears the node's failure record; failures are deduped
         // to one count per node per walk (a node failing both layout and

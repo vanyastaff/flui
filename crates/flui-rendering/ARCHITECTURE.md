@@ -35,6 +35,37 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### Layout marks semantics once per walk, at the dirty root
+
+**Rule:** Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in *both* of
+`RenderObject`'s layout entry points (`rendering/object.dart`, `layoutWithoutResize` and
+`layout`), per object. Every node that lays out re-publishes its semantics geometry, which is
+what makes a scroll update the accessibility tree at all: a viewport's offset listener requests
+layout and nothing else.
+
+**Choice:** the same guarantee, marked **once per layout walk on the dirty root**
+(`layout_dirty_root`) rather than once per laid-out node.
+
+**Alternatives considered:** recording every laid-out node in the arena and marking each, which
+is the literal transcription — rejected on two counts. It is redundant: the arena walks the
+subtree of the dirty root, so every node that laid out is already under it, and `try_graft_pass`
+re-assembles a marked node's whole subtree. And it is expensive in a way the transcription hides:
+each `add_node_needing_semantics` fires `fire_need_visual_update`, whose production callback asks
+the platform to redraw, and the graft resolves every marked node by walking its ancestor chain —
+so an N-node relayout would cost N redraw requests and O(N·depth) graft work.
+
+**Trade-off accepted:** one unconditional call per layout walk. `mark_needs_semantics` is a
+no-op while semantics is disabled, so a session with no accessibility client attached pays one
+predictable branch. A relayout of a subtree re-assembles that subtree even where a node's own
+geometry did not move — the graft's granularity is the anchor, not the node, which is the same
+bargain the existing graft already makes.
+
+**Replacement test:** `scrolling_republishes_the_semantics_rects`
+(`crates/flui-widgets/tests/semantics.rs`). It scrolls a viewport whose rows are *all* inside the
+cache band, so the frame materialises nothing new, and asserts on a build counter that no row
+rebuilt — without that assertion the test measures a newly-built row's own semantics mark and
+passes with the change reverted, which the first draft did.
+
 ### The hit-test path is driver-owned; the protocol carries no result accumulator
 
 **Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — a contract may be improved, and an
