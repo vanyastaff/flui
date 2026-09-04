@@ -164,25 +164,25 @@ Callback-backed path configuration uses this separate public identity seam:
 
 ```rust
 #[derive(Clone)]
-pub struct PathClipSourceToken(Arc<PrivateMarker>);
+pub struct ClipSourceToken(Arc<PrivateMarker>);
 
-impl PathClipSourceToken {
+impl ClipSourceToken {
     pub fn fresh() -> Self;
 }
 
-impl Debug for PathClipSourceToken { /* opaque output */ }
-impl PartialEq for PathClipSourceToken { /* Arc::ptr_eq */ }
-impl Eq for PathClipSourceToken {}
+impl Debug for ClipSourceToken { /* opaque output */ }
+impl PartialEq for ClipSourceToken { /* Arc::ptr_eq */ }
+impl Eq for ClipSourceToken {}
 
 impl RenderClipPath {
-    pub fn with_path_clip_source_token(self, token: PathClipSourceToken) -> Self;
-    pub fn set_path_clip_source_token(&mut self, token: &PathClipSourceToken) -> RenderUpdateImpact;
+    pub fn with_path_clip_source_token(self, token: ClipSourceToken) -> Self;
+    pub fn set_path_clip_source_token(&mut self, token: &ClipSourceToken) -> RenderUpdateImpact;
     pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) -> RenderUpdateImpact;
 }
 
 impl RenderPhysicalShape {
-    pub fn with_path_clip_source_token(self, token: PathClipSourceToken) -> Self;
-    pub fn set_path_clip_source_token(&mut self, token: &PathClipSourceToken) -> RenderUpdateImpact;
+    pub fn with_path_clip_source_token(self, token: ClipSourceToken) -> Self;
+    pub fn set_path_clip_source_token(&mut self, token: &ClipSourceToken) -> RenderUpdateImpact;
     pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) -> RenderUpdateImpact;
 }
 
@@ -676,7 +676,7 @@ test modules. The migration map is:
 | `flui-rendering::PipelineOwner` | `adopt_render_child`, `drop_render_child`, `note_render_children_reordered`, `mark_needs_compositing_bits_update`, `mark_needs_semantics`, `apply_render_update_impact` | Canonical structural and phase scheduling seams described above. |
 | `flui-testing::HeadlessBinding` | `bind_tree_with_committed_layer_tree`, `did_paint_last_frame`, `painted_frame_count` | Retained committed output plus independent fresh-paint evidence. |
 | `flui-view` traits | `ElementBase::apply_parent_data_config`, `ElementBehavior::apply_parent_data_config`; changed `ParentDataView::apply_parent_data` and `RenderView::update_render_object` | Object-safe typed parent-data dispatch and required precise update reporting. |
-| `flui-objects` clip family | `PathClipSourceToken::fresh`, `PathClipConfiguration`, both render types' typed source/configuration builders and setters | Opaque callback-source identity plus value-comparable built-in shape configuration; token setters borrow and clone only on change. |
+| `flui-objects` clip family | `ClipSourceToken::fresh`, `PathClipConfiguration`, both render types' typed source/configuration builders and setters | Opaque callback-source identity plus value-comparable built-in shape configuration; token setters borrow and clone only on change. |
 | `flui-objects` layout | align/center/wrap/flex `update_*`; baseline, fitted-box, fractional-translation, padding, sized-box, transform, custom-layout and flow `set_*` methods | Preserve render-owned state and return exact impact rather than whole-object replacement. |
 | `flui-objects` paint/content | image, custom-paint, decoration, opacity, physical-model, shader/backdrop, leader/follower, semantics-configuration, paragraph and editable `set_*` methods | Field equality and independent paint/layout/compositing/semantics decisions remain authoritative in the render object. |
 | `flui-objects` sliver/virtualization | persistent-header, fill-viewport, fixed-extent, grid, lazy grid/list, sliver-opacity `set_*`, viewport offset/order/axis/cache setters, and `Virtualizer::set_default_estimate` | Exact extent/delegate/opacity changes while preserving measured virtualized state; cache setters remain `const`. |
@@ -778,7 +778,7 @@ of the atomic ripple.
   only when relayout is false.
 - Assert ordinary clip-behavior changes are paint-only and clip-source changes
   are paint plus semantics.
-- Assert `PathClipSourceToken::fresh` differs across constructions, clone
+- Assert `ClipSourceToken::fresh` differs across constructions, clone
   preserves identity, its raw representation cannot be constructed or read,
   and both `ClipPath` and `PhysicalShape` return `NONE` for cloned sources but
   `PAINT | SEMANTICS` for separately constructed sources.
@@ -885,7 +885,7 @@ This is deliberately source-breaking:
 - The canonical owner child-membership methods and headless committed-output
   binding method are additive, but raw render-tree membership edits are no
   longer valid framework mutation seams.
-- `PathClipSourceToken` and its typed builders/setters are additive, replacing
+- `ClipSourceToken` and its typed builders/setters are additive, replacing
   the unshipped raw-`usize` draft. The token intentionally exposes no raw
   identity and does not implement `Copy`, `Hash`, or `Default`.
 - `SemanticsConfiguration` now supports semantic equality; action handlers are

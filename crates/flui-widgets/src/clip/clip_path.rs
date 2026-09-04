@@ -92,21 +92,37 @@ impl ClipPath {
         self
     }
 
+    /// Installs this widget's closure in the owner lane, and reports what the
+    /// render object must invalidate.
+    ///
+    /// The two are INDEPENDENT, and conflating them was a bug: the closure is
+    /// always the live one, while `identity_changed` says only whether the
+    /// clip is considered different. A rebuild that reuses a token to avoid a
+    /// repaint — the documented way to avoid the per-rebuild cost — still
+    /// carries a NEW closure allocation, which may capture different state.
+    /// Skipping the install there left the render object invoking the previous
+    /// widget's closure for every later paint and hit test.
     fn sync_path_clip_target(
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderClipPath,
-        replace_existing: bool,
+        identity_changed: bool,
     ) -> flui_rendering::RenderUpdateImpact {
         let clipper = Rc::clone(&self.clipper);
         match render_object.path_clip_target() {
-            Some(target) if replace_existing => {
+            Some(target) => {
                 if let Err(error) = ctx.replace_path_clipper(target, move |size| clipper(size)) {
                     tracing::warn!(?error, "ClipPath clipper replacement failed");
                 }
-                render_object.set_path_clip_target(Some(target))
+                if identity_changed {
+                    render_object.set_path_clip_target(Some(target))
+                } else {
+                    // Same clip, new closure: nothing to invalidate. The
+                    // install above is what makes reusing an identity safe
+                    // rather than merely cheap.
+                    flui_rendering::RenderUpdateImpact::NONE
+                }
             }
-            Some(_) => flui_rendering::RenderUpdateImpact::NONE,
             None => match ctx.register_path_clipper(move |size| clipper(size)) {
                 Ok(target) => render_object.set_path_clip_target(Some(target)),
                 Err(error) => {
