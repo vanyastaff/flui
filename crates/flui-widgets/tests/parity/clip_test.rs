@@ -497,3 +497,77 @@ fn clip_rect_with_a_fixed_clipper_hit_tests_against_that_rect() {
          leg that fails if the clipper is ignored and the whole box is used",
     );
 }
+
+/// Reusing a clip identity across a rebuild must still install the NEW
+/// closure.
+///
+/// `ClipPath::with_source` exists so a rebuild whose closure is a fresh
+/// allocation — but whose clip has not changed — can skip the repaint
+/// (issue #856). Those are two different questions, and conflating them was a
+/// bug: the install was gated on the same flag as the invalidation, so the
+/// documented cheap path left the render object invoking the PREVIOUS
+/// widget's closure for every later paint and hit test. A closure that
+/// captures changing state was silently frozen at its first value.
+///
+/// The oracle discriminates by clip geometry rather than by impact: the first
+/// closure clips to a small rect that excludes the tap point, the rebuild
+/// reuses the token with a closure that includes it. If the replacement is
+/// not installed, the tap still misses.
+///
+/// My own first test for `with_source` asserted the reported impact was
+/// `NONE`, which is the SYMPTOM of the bug rather than the behaviour — it
+/// passed against the broken code.
+#[test]
+fn reusing_a_clip_identity_still_installs_the_new_clipper() {
+    let did_tap = Arc::new(AtomicBool::new(false));
+
+    let small = |_size: Size| {
+        let mut path = Path::new();
+        path.add_rect(flui_types::Rect::from_ltwh(
+            px(0.0),
+            px(0.0),
+            px(20.0),
+            px(20.0),
+        ));
+        path
+    };
+    let large = |_size: Size| {
+        let mut path = Path::new();
+        path.add_rect(flui_types::Rect::from_ltwh(
+            px(0.0),
+            px(0.0),
+            px(300.0),
+            px(300.0),
+        ));
+        path
+    };
+
+    let detector = |flag: Arc<AtomicBool>| {
+        GestureDetector::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_tap(move || flag.store(true, Ordering::SeqCst))
+    };
+
+    let first = ClipPath::new(small).child(detector(Arc::clone(&did_tap)));
+    let source = first.source();
+    let mut laid = pump_widget(first, screen());
+
+    laid.dispatch_pointer_down(100.0, 100.0);
+    laid.dispatch_pointer_up(100.0, 100.0);
+    assert!(
+        !did_tap.load(Ordering::SeqCst),
+        "precondition: (100, 100) is outside the first clipper's 20x20 rect",
+    );
+
+    // Same identity, different closure — the documented cheap rebuild.
+    laid.pump_widget(ClipPath::with_source(source, large).child(detector(Arc::clone(&did_tap))));
+
+    laid.dispatch_pointer_down(100.0, 100.0);
+    laid.dispatch_pointer_up(100.0, 100.0);
+    assert!(
+        did_tap.load(Ordering::SeqCst),
+        "the replacement clipper must be installed even though reusing the \
+         identity suppressed the repaint — otherwise the render object keeps \
+         calling the closure the previous widget supplied",
+    );
+}

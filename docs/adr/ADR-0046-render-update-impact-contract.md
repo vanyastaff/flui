@@ -137,9 +137,17 @@ the authoritative source of their impact. In particular:
   `PAINT | SEMANTICS`.
 
 Callback-backed path clips use the exported opaque
-`flui_objects::PathClipSourceToken`. `fresh()` allocates a private
+`flui_objects::ClipSourceToken`. `fresh()` allocates a private
 `Arc<PrivateMarker>` identity, cloning a widget preserves it, and separately
-constructing a widget creates a distinct token. Equality is implemented only
+constructing a widget creates a distinct token. A caller may also supply an
+existing token (`ClipPath::with_source`, issue #856) to declare "same clip,
+new closure" — the case Rust cannot answer structurally because closures do
+not compare. **Installing the callback is independent of the impact the token
+reports**: a reused identity suppresses the invalidation and still replaces
+the registered closure, since a rebuilt closure may capture different state.
+Gating the install on the impact left the render object calling the previous
+widget's closure, which is what `reusing_a_clip_identity_still_installs_the_new_clipper`
+now pins. Equality is implemented only
 through private `Arc::ptr_eq`; there is no raw constructor, pointer/integer
 accessor, `Copy`, `Hash`, `Default`, process-global counter, or exhaustion
 path. `RenderClipPath` and `RenderPhysicalShape` borrow the token in their
@@ -289,7 +297,7 @@ prelude. `flui-view` re-exports the same canonical type from its root and
 prelude for implementor ergonomics; it does not define a wrapper or alias with
 different semantics.
 
-`PathClipSourceToken` and `PathClipConfiguration` are intentionally exported
+`ClipSourceToken` and `PathClipConfiguration` are intentionally exported
 from `flui-objects`, the crate that owns both render objects storing them.
 `flui-widgets::ClipPath` and
 `PhysicalShape` allocate it during construction; clones share the token and

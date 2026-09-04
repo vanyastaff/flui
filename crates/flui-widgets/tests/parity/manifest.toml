@@ -147,7 +147,7 @@ tests = 2
 rust = "clip_test"
 family = "painting"
 oracles = ["widgets/clip_test.dart"]
-tests = 12
+tests = 13
 
 [[targets.claims]]
 oracle = "widgets/clip_test.dart"
@@ -1621,7 +1621,7 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 91
-rust_tests = 672
+rust_tests = 673
 pins = 1
 oracle_files = 390
 oracle_cases = 5753
@@ -1684,7 +1684,7 @@ pins = 0
 
 [summary.families."painting"]
 targets = 6
-rust_tests = 59
+rust_tests = 60
 cases_claimed = 19
 cases_diverged = 0
 pins = 0
