@@ -192,6 +192,20 @@ impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, BoxProtocol, 
 where
     <BoxLayout as LayoutCapability>::Context<'ctx, A, PD>: LayoutContextApi<'ctx, BoxLayout, A, PD>,
 {
+    /// Whether a descendant's layout was degraded during this node's pass —
+    /// a layout that failed and handed its caller a stand-in, or a poisoned
+    /// node that served one — at any depth.
+    ///
+    /// A parent that must not act on a stand-in asks before it commits: the
+    /// viewports publish no scroll dimensions from a degraded pass, so a
+    /// broken child cannot move the user's scroll offset. Contexts the
+    /// production walk did not build (direct and test contexts) answer
+    /// `false`.
+    #[must_use]
+    pub fn descendant_layout_degraded(&self) -> bool {
+        crate::protocol::box_protocol::BoxLayoutCtxErased::descendant_layout_degraded(&self.inner)
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // BOX CONSTRAINT HELPERS
     // ════════════════════════════════════════════════════════════════════════
@@ -359,6 +373,19 @@ where
         )
     }
 
+    /// Whether the sliver child at `index` committed its geometry in a
+    /// degraded pass — a descendant of it failed and its caller continued on
+    /// a stand-in. A parent that caches child geometry must re-layout such a
+    /// child rather than serve the cache, or the broken descendant is never
+    /// walked and the pass looks healthy.
+    #[must_use]
+    pub fn sliver_child_geometry_degraded(&self, index: usize) -> bool {
+        crate::protocol::box_protocol::BoxLayoutCtxErased::sliver_child_geometry_degraded(
+            &self.inner,
+            index,
+        )
+    }
+
     /// Returns whether a sliver child is still marked as needing layout.
     pub fn sliver_child_needs_layout(&self, index: usize) -> bool {
         crate::protocol::box_protocol::BoxLayoutCtxErased::sliver_child_needs_layout(
@@ -496,6 +523,16 @@ where
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::request_child_build(
             &mut self.inner,
             logical_index,
+        )
+    }
+
+    /// Whether a descendant's layout was degraded during this node's pass
+    /// (a failure turned into a stand-in, or a poisoned node served its
+    /// stand-in), at any depth. See `DegradationProbe`.
+    #[must_use]
+    pub fn descendant_layout_degraded(&self) -> bool {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::descendant_layout_degraded(
+            &self.inner,
         )
     }
 

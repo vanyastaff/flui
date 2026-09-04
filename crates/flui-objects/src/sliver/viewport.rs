@@ -765,6 +765,15 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         let main_axis_extent = self.main_axis_extent(size);
         let cross_axis_extent = self.cross_axis_extent(size);
         self.child_count = ctx.child_count();
+        // Flutter publishes the viewport dimension before laying anything
+        // out, and a `ScrollPosition` may move `pixels` to answer it (a page
+        // position keeps its fractional page across a resize). That is
+        // correct for a healthy pass; for a degraded one it would move the
+        // user's offset in a frame that is supposed to publish nothing, so
+        // the offset is restored below if the pass turns out degraded. The
+        // dimension itself is kept: it comes from this viewport's
+        // constraints, which no stand-in touched.
+        let pixels_before_pass = self.offset.pixels();
         let _ = self.offset.apply_viewport_dimension(main_axis_extent);
 
         if ctx.child_count() == 0 {
@@ -779,6 +788,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
 
         let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
         let mut accepted = false;
+        let mut degraded = false;
         for _ in 0..max_layout_cycles {
             let correction = self.attempt_layout(
                 ctx,
@@ -786,6 +796,19 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 cross_axis_extent,
                 self.offset.pixels(),
             );
+            // A descendant's layout failed, or a poisoned one served its
+            // stand-in, somewhere in this pass: the extents it accumulated
+            // describe geometry this frame did not compute. Position what the
+            // pass staged — the tree stays internally consistent, since every
+            // offset and every child geometry come from one pass — but
+            // publish nothing to the scroll position. A correction or a
+            // content extent taken from a stand-in would move the user's
+            // offset to a place the real content never had, and the frame
+            // after the child recovers would have to move it back.
+            if ctx.descendant_layout_degraded() {
+                degraded = true;
+                break;
+            }
             if correction != 0.0 {
                 self.offset.correct_by(correction);
                 continue;
@@ -801,7 +824,19 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 break;
             }
         }
-        if !accepted {
+        if degraded {
+            // Undo any offset movement `apply_viewport_dimension` made above.
+            let drift = pixels_before_pass - self.offset.pixels();
+            if drift != 0.0 {
+                self.offset.correct_by(drift);
+            }
+            tracing::warn!(
+                child_count = ctx.child_count(),
+                "RenderViewport laid out over a degraded descendant; scroll \
+                 dimensions were not published this frame, so the offset \
+                 survives until the child recovers"
+            );
+        } else if !accepted {
             // Pathological non-convergence: a sliver child kept requesting
             // scroll corrections past the bounded budget. The scroll offset
             // is already clamped to a valid range by the loop's
@@ -1352,6 +1387,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
 
         let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
         let mut accepted = false;
+        let mut degraded = false;
         let mut effective_extent = 0.0;
         for _ in 0..max_layout_cycles {
             let correction = self.attempt_layout(
@@ -1360,6 +1396,16 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
                 cross_axis_extent,
                 self.offset.pixels(),
             );
+            // See `RenderViewport::perform_layout`: a pass that read a
+            // stand-in publishes nothing. The size still comes from what the
+            // pass measured — a viewport must return one — but the scroll
+            // position keeps the dimensions it has.
+            if ctx.descendant_layout_degraded() {
+                degraded = true;
+                effective_extent =
+                    self.constrain_main_axis_extent(&constraints, self.shrink_wrap_extent);
+                break;
+            }
             if correction != 0.0 {
                 self.offset.correct_by(correction);
                 continue;
@@ -1378,7 +1424,13 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
                 break;
             }
         }
-        if !accepted {
+        if degraded {
+            tracing::warn!(
+                child_count = ctx.child_count(),
+                "RenderShrinkWrappingViewport laid out over a degraded \
+                 descendant; scroll dimensions were not published this frame"
+            );
+        } else if !accepted {
             tracing::warn!(
                 child_count = ctx.child_count(),
                 max_layout_cycles,
@@ -1469,6 +1521,15 @@ fn cached_clean_sliver_geometry(
     constraints: SliverConstraints,
 ) -> Option<SliverGeometry> {
     if ctx.sliver_child_needs_layout(index) {
+        return None;
+    }
+    // A child whose geometry came from a degraded pass is laid out again
+    // rather than served from the cache: the walk must reach the broken
+    // descendant, which is what tells this viewport its own pass is degraded.
+    // For a poisoned descendant that re-layout is the skip that serves its
+    // stand-in — cheap, and the only thing that keeps the scroll position
+    // from being published off collapsed content on every later frame.
+    if ctx.sliver_child_geometry_degraded(index) {
         return None;
     }
     let (cached_constraints, cached_geometry) = ctx.cached_sliver_child_layout(index)?;

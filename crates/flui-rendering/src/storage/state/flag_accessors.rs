@@ -159,6 +159,20 @@ impl<P: Protocol> RenderState<P> {
         self.flags.contains(RenderFlags::IS_REPAINT_BOUNDARY)
     }
 
+    /// Whether the last committed geometry came from a pass that read a
+    /// stand-in (see [`RenderFlags::GEOMETRY_DEGRADED`]).
+    #[inline]
+    pub fn geometry_degraded(&self) -> bool {
+        self.flags.geometry_degraded()
+    }
+
+    /// Records whether the pass that just committed this node's geometry read
+    /// a stand-in (see [`RenderFlags::GEOMETRY_DEGRADED`]).
+    #[inline]
+    pub fn set_geometry_degraded(&self, degraded: bool) {
+        self.flags.set_geometry_degraded(degraded);
+    }
+
     /// Sets whether this render object is a relayout boundary.
     ///
     /// # Example

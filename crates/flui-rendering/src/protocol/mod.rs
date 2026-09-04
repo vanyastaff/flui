@@ -83,6 +83,7 @@ pub use box_protocol::{
     // Per-child layout state (moved here from the deleted
     // children_access.rs)
     ChildState,
+    DegradationProbe,
     ErasedBoxLayoutCtx,
     ErasedChildState,
 };
