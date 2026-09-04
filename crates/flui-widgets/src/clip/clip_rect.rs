@@ -2,6 +2,7 @@
 
 use flui_objects::RenderClipRect;
 use flui_rendering::protocol::BoxProtocol;
+use flui_types::geometry::{Pixels, Rect};
 use flui_types::painting::Clip;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
@@ -13,6 +14,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 #[derive(Clone, Debug)]
 pub struct ClipRect {
     clip_behavior: Clip,
+    clip_shape: Option<Rect<Pixels>>,
     child: Child,
 }
 
@@ -20,6 +22,7 @@ impl Default for ClipRect {
     fn default() -> Self {
         Self {
             clip_behavior: Clip::HardEdge,
+            clip_shape: None,
             child: Child::empty(),
         }
     }
@@ -35,6 +38,21 @@ impl ClipRect {
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = clip_behavior;
+        self
+    }
+
+    /// The fixed rectangle to clip to, in the widget's own coordinates.
+    ///
+    /// Without it the clip is the widget's whole box. Flutter's equivalent is
+    /// `ClipRect(clipper: CustomClipper<Rect>)`, a callback plus a
+    /// hand-written `shouldReclip`; this is a value compared with `==`, which
+    /// is what its own test clipper amounts to. See
+    /// [`RenderClip::set_clip_shape`](flui_objects::RenderClipRect::set_clip_shape)
+    /// for the full reasoning and for the size-dependent case it does not
+    /// cover.
+    #[must_use]
+    pub fn clipper(mut self, shape: Rect<Pixels>) -> Self {
+        self.clip_shape = Some(shape);
         self
     }
 
@@ -54,7 +72,9 @@ impl RenderView for ClipRect {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderClipRect::new(self.clip_behavior)
+        let mut render_object = RenderClipRect::new(self.clip_behavior);
+        let _ = render_object.set_clip_shape(self.clip_shape);
+        render_object
     }
 
     fn update_render_object(
@@ -64,6 +84,7 @@ impl RenderView for ClipRect {
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_clip_behavior(self.clip_behavior);
+        impact |= render_object.set_clip_shape(self.clip_shape);
         impact
     }
 

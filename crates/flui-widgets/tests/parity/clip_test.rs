@@ -436,3 +436,64 @@ fn transparent_clip_oval_hit_test_still_hits_inside_the_oval() {
          inscribed oval"
     );
 }
+
+/// A `ClipRect` given a fixed clip rect hit-tests against THAT rect, not its
+/// own box.
+///
+/// Flutter parity: `clip_test.dart` `'ClipRect'` (3.44.0). The oracle passes
+/// `ValueClipper<Rect>('a', Rect.fromLTWH(5, 5, 10, 10))` into a 100x100
+/// `ClipRect` and asserts a tap at `(10, 10)` reaches the child while one at
+/// `(100, 100)` does not.
+///
+/// **The port is a value, not a callback, and that is deliberate.** The
+/// oracle's own `ValueClipper` holds a fixed `value`, ignores the `size` it is
+/// handed, and implements `shouldReclip` as `oldClipper.value != value` — in
+/// Rust that is a field and a `==`. `ClipRect::clipper` therefore takes the
+/// rect directly: no trait to implement, no `shouldReclip` to get wrong, and
+/// no closure identity to keep stable across rebuilds. A clip that is a
+/// FUNCTION of size is not covered and is recorded as such; `ClipPath` takes a
+/// closure and a path expresses any rect.
+///
+/// The oracle's third assertion — that no reclip happens when an identical
+/// clipper is supplied again — is the `RenderUpdateImpact::NONE` the setter
+/// returns on an equal value, covered by the render-object test beside it.
+#[test]
+fn clip_rect_with_a_fixed_clipper_hit_tests_against_that_rect() {
+    use flui_types::geometry::Rect;
+
+    let taps = Arc::new(AtomicU32::new(0));
+
+    let tree = |taps: Arc<AtomicU32>| {
+        flui_widgets::SizedBox::new(100.0, 100.0).child(
+            ClipRect::new()
+                .clipper(Rect::from_xywh(px(5.0), px(5.0), px(10.0), px(10.0)))
+                .child(
+                    GestureDetector::new()
+                        .behavior(HitTestBehavior::Opaque)
+                        .on_tap(move || {
+                            taps.fetch_add(1, Ordering::SeqCst);
+                        }),
+                ),
+        )
+    };
+
+    let laid = pump_widget(tree(Arc::clone(&taps)), screen());
+
+    laid.dispatch_pointer_down(10.0, 10.0);
+    laid.dispatch_pointer_up(10.0, 10.0);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "the oracle's first tap is inside the 5,5..15,15 clip and reaches the child",
+    );
+
+    laid.dispatch_pointer_down(100.0, 100.0);
+    laid.dispatch_pointer_up(100.0, 100.0);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "the oracle's second tap is inside the widget's own 100x100 box but \
+         OUTSIDE the supplied clip, and must not reach the child — this is the \
+         leg that fails if the clipper is ignored and the whole box is used",
+    );
+}

@@ -147,7 +147,7 @@ tests = 2
 rust = "clip_test"
 family = "painting"
 oracles = ["widgets/clip_test.dart"]
-tests = 11
+tests = 12
 
 [[targets.claims]]
 oracle = "widgets/clip_test.dart"
@@ -157,6 +157,7 @@ cases = [
     "ClipPath",
     "ClipOval",
     "Transparent ClipOval hit test",
+    "ClipRect",
 ]
 
 [[targets]]
@@ -1280,7 +1281,7 @@ cases = [
 "widgets/build_scope_test.dart" = { cases = 4, claimed = 0, status = "pending" }
 "widgets/center_test.dart" = { cases = 1, claimed = 0, status = "pending" }
 "widgets/clamp_overscrolls_test.dart" = { cases = 4, claimed = 0, status = "pending" }
-"widgets/clip_test.dart" = { cases = 28, claimed = 5, status = "partial" }
+"widgets/clip_test.dart" = { cases = 28, claimed = 6, status = "partial" }
 "widgets/color_filter_test.dart" = { cases = 5, claimed = 0, status = "pending" }
 "widgets/column_test.dart" = { cases = 20, claimed = 0, status = "pending" }
 "widgets/composited_transform_test.dart" = { cases = 14, claimed = 0, status = "pending" }
@@ -1620,15 +1621,15 @@ cases = [
 # on drift; ROADMAP.md cites these values.
 [summary]
 targets = 91
-rust_tests = 671
+rust_tests = 672
 pins = 1
 oracle_files = 390
 oracle_cases = 5753
-cases_claimed = 312
+cases_claimed = 313
 cases_diverged = 1
 universe_files = 382
 universe_cases = 5604
-universe_cases_claimed = 300
+universe_cases_claimed = 301
 universe_cases_diverged = 1
 universe_pending_files = 331
 
@@ -1683,8 +1684,8 @@ pins = 0
 
 [summary.families."painting"]
 targets = 6
-rust_tests = 58
-cases_claimed = 18
+rust_tests = 59
+cases_claimed = 19
 cases_diverged = 0
 pins = 0
 
