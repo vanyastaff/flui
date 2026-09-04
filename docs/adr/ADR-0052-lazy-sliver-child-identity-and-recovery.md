@@ -84,7 +84,49 @@ laid out.
    fallback row on an unbounded one (Flutter's `100000 × 100000` would swallow
    a scroll extent), paints the message in debug builds only, and reports it to
    diagnostics in every build.
-5. **A losing list forgets a grafted child** (`ChildManager::forget_child`,
+5. **The boundary covers the item's mount and update, not just its builder.**
+   `build_item_or_error` sees only the call that produces the *view*; the
+   panic an item can still throw is in its own `View::create_render_object`
+   (which `ElementTree::insert` reaches through `RenderBehavior::on_mount`) or
+   `update_render_object` (through `on_update`). Both call sites in
+   `SparseChildren` bound them the same way and substitute the same error view
+   at the same index.
+
+   Recovery differs by what the failure left behind, which is why
+   `ElementTree::insert_reporting_child` reports an `InsertedChild` rather
+   than a bare id. A **minted** node — the ordinary fresh mount — is in the
+   slab and parented but announced nowhere: `insert` emits the `Mount` event,
+   registers the `GlobalKey` and applies ancestor parent-data only *after*
+   `mount`, and never writes the parent's `child_ids` at all. So the report is
+   the only handle to it, and `discard_unannounced` retires it — a
+   `remove_finalized` with the unmount observation suppressed, since
+   announcing the removal of a node no observer saw mount would break
+   ADR-0040's causal ordering. A **retaken** one differs in every respect: the
+   retake relocates a live element and runs its own `update` (user
+   `update_render_object` with it), so the panic site sits *after* a committed
+   relocation, the element was already announced as a reparent, and it carries
+   a subtree — it goes out through an ordinary `remove_subtree(.., Finalize)`.
+   That mode finalizes the root as well as the descendants, so a broken keyed
+   element cannot wait in the inactive queue to be retaken again. A failed
+   **update** of a resident leaves a live, half-configured render object that
+   `apply_render_update_impact` never marked dirty, so the resident is removed
+   outright rather than kept: a silently stale subtree is the one outcome
+   worse than a visible error.
+
+   **Improvement over Flutter.** Flutter calls `createRenderObject` and
+   `updateRenderObject` bare (`framework.dart` `RenderObjectElement.mount` /
+   `updateRenderObject`); the nearest catch is `BuildOwner.buildScope`'s, at
+   *dirty-element* granularity, which abandons the whole host's rebuild,
+   reports, and substitutes nothing — so a single bad item takes its
+   neighbours with it, while a bad *builder* one line away is recovered per
+   item by `_createErrorWidget`. FLUI gives both stages the same per-item
+   containment. What it does not claim to make recoverable is a panic from
+   inside `on_mount`'s `with_mut` (render-tree adoption, the sliver-index
+   stamp): those are FLUI-internal `BUG:` paths, and one would strand a render
+   node. The user-code case this exists for cannot reach them —
+   `create_render_object` runs before that `with_mut`.
+
+6. **A losing list forgets a grafted child** (`ChildManager::forget_child`,
    driven from the active `GlobalKey` retake): its bookkeeping drops the
    element so a later band eviction or delegate refresh never reaches into the
    new parent's subtree. Flutter's `forgetChild`.
@@ -93,7 +135,9 @@ laid out.
 
 - Keyed insert/remove/reorder on `ListView::builder` / `GridView::builder`
   preserve `ViewState`; `GlobalKey`'d items mount under the per-item boundary;
-  a panicking item renders a visible error row and its neighbours are intact.
+  a panicking item renders a visible error row and its neighbours are intact —
+  whether it panicked in its builder, its `create_render_object`, or its
+  `update_render_object`.
 - `RenderErrorBox` joins the render-object catalog (harness-tested).
   `ErrorElement` and `ElementKind::Error` are gone: an error view is an
   ordinary render element. A render element mounted without a `PipelineOwner`
