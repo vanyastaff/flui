@@ -1057,6 +1057,13 @@ cases = [
     "Table widget - intrinsic sizing test, resizing",
     "Table widget - intrinsic sizing test, changing column widths",
     "Table widget - Default textBaseline is null",
+    # Claimed as a DELIBERATE divergence, not a match: the oracle expects a
+    # `FlutterError` naming irregular row lengths, and `Table::new` pads the
+    # short row instead, with a one-time warning. The replacement test
+    # (`irregular_row_lengths_are_padded_instead_of_erroring`) proves FLUI's
+    # behaviour rather than the oracle's; ADR-0055's amendment records why.
+    # It is not in the `diverged` bucket because that bucket means "evidenced
+    # only by an ignored pin" — this case has a green test.
     "Table widget requires all TableRows to have same number of children",
     "Table widget - changing table dimensions",
     "Does not crash if a child RenderObject is replaced by another RenderObject of a different type",

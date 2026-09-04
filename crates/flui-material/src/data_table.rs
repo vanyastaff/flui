@@ -99,9 +99,9 @@ use flui_types::typography::TextStyle;
 use flui_types::{Alignment, EdgeInsets, Pixels};
 use flui_view::prelude::*;
 use flui_widgets::{
-    Center, Container, DefaultTextStyle, Padding, Semantics, SemanticsRole, Table, TableCell,
-    TableCellVerticalAlignment, TableColumnWidth, TableRow, WidgetState, WidgetStateProperty,
-    WidgetStates,
+    Center, Container, DefaultTextStyle, Padding, Semantics, SemanticsRole, SizedBox, Table,
+    TableCell, TableCellVerticalAlignment, TableColumnWidth, TableRow, WidgetState,
+    WidgetStateProperty, WidgetStates,
 };
 
 use crate::checkbox::{CHECKBOX_EDGE_SIZE, Checkbox};
@@ -327,12 +327,17 @@ impl DataTable {
     /// override falling through to the M3 defaults (see the module docs'
     /// token table). Flutter parity: `DataTable.new`.
     ///
-    /// # Panics (debug only)
+    /// A row that does not match `columns` in length is squared up here —
+    /// padded with empty cells, extras dropped — with a warning naming the
+    /// lengths involved.
     ///
-    /// Debug-asserts every row's cell count matches `columns.len()` on
-    /// [`build`](StatelessView::build) — Flutter parity: `DataTable`'s own
-    /// constructor assert.
+    /// It used to be a `debug_assert!` on [`build`](StatelessView::build),
+    /// which meant a release build walked straight into `row.cells[col_index]`
+    /// and panicked with an index-out-of-bounds instead. Repairing rather than
+    /// rejecting is this library's rule for caller configuration; Flutter
+    /// asserts, and the divergence is deliberate.
     pub fn new(columns: Vec<DataColumn>, rows: Vec<DataRow>) -> Self {
+        let rows = square_up_rows(rows, columns.len());
         Self {
             columns,
             rows,
@@ -924,17 +929,35 @@ fn data_cell(
     }
 }
 
+/// Makes every row exactly `columns` cells long, padding with empty cells and
+/// dropping extras, and warns once per construction when it changes anything.
+fn square_up_rows(mut rows: Vec<DataRow>, columns: usize) -> Vec<DataRow> {
+    if rows.iter().all(|row| row.cells.len() == columns) {
+        return rows;
+    }
+
+    let found: Vec<usize> = rows.iter().map(|row| row.cells.len()).collect();
+    tracing::warn!(
+        expected = columns,
+        ?found,
+        "DataTable: the rows do not all have one cell per column; short rows \
+         are padded with empty cells and extra cells are dropped. Give every \
+         row one cell per column."
+    );
+
+    for row in &mut rows {
+        row.cells.truncate(columns);
+        while row.cells.len() < columns {
+            row.cells.push(DataCell::new(SizedBox::shrink()));
+        }
+    }
+    rows
+}
+
 impl StatelessView for DataTable {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        debug_assert!(
-            self.rows
-                .iter()
-                .all(|row| row.cells.len() == self.columns.len()),
-            "every DataRow must have as many cells ({}) as DataTable has columns ({})",
-            self.rows.first().map_or(0, |row| row.cells.len()),
-            self.columns.len(),
-        );
-
+        // No shape check: `DataTable::new` squared the rows up, so the
+        // `row.cells[col_index]` below cannot be out of range.
         let theme = Theme::of(ctx);
         let style = resolve_style(self, &theme);
 

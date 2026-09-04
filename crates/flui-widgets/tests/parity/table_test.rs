@@ -871,34 +871,47 @@ fn baseline_alignment_without_a_text_baseline_degrades_to_top_instead_of_asserti
     );
 }
 
-/// Rows with a different cell count than the first row trip FLUI's
-/// `debug_assert!` — a real panic, but via a different mechanism and
-/// message than the oracle's typed `FlutterError`.
+/// An irregular table is REPAIRED, not rejected: the short row is padded to
+/// the first row's cell count and the table renders.
 ///
-/// Flutter parity: `'Table widget requires all TableRows to have same
-/// number of children'` — `error!.toStringDeep()` contains `'Table contains
-/// irregular row lengths.'`. FLUI's `Table::create_render_object`
-/// (`flui-widgets/src/layout/table.rs`) instead uses
-/// `debug_assert!(..., "every Table row must have the same number of cells
-/// as the first row")` — real in debug/test builds (this assertion is what
-/// this test exercises), but a `debug_assert!` compiles out entirely in
-/// release builds, unlike Flutter's `FlutterError` which is a real,
-/// always-on `Result`-shaped error. That gap (release-mode silent
-/// acceptance of a malformed table, rather than a graceful error) is a
-/// genuine production robustness gap, distinct from this test's job of
-/// documenting today's debug-mode behavior; worth a Cross.H filing.
+/// Flutter parity, deliberately diverged: `'Table widget requires all
+/// TableRows to have same number of children'` expects a `FlutterError`
+/// whose `toStringDeep()` contains `'Table contains irregular row lengths.'`.
+///
+/// FLUI had a `debug_assert!` here, which this test used to pin — and which
+/// its own doc called "a genuine production robustness gap", because a
+/// `debug_assert!` compiles out: a release build accepted the malformed table
+/// silently, carried it into `RenderTable`, and left a trailing partial row
+/// that layout skipped, hit-test ignored, and paint was still handed.
+///
+/// `Table::new` now squares the rows up where the caller supplies them, with
+/// a one-time warning naming the lengths. Repairing rather than erroring is
+/// this library's rule for caller configuration — the same rule
+/// `RenderViewport::set_anchor` follows for an out-of-range anchor — and it
+/// is what keeps `Table::new` usable inside a `build` that cannot propagate a
+/// `Result`. Recorded in ADR-0055.
 #[test]
-// Debug-only: the guard compiles out in release, where `#[should_panic]`
-// would otherwise report "did not panic as expected".
-#[cfg(debug_assertions)]
-#[should_panic(expected = "every Table row must have the same number of cells as the first row")]
-fn irregular_row_lengths_trip_the_debug_assert() {
-    let _ = harness::pump_widget(
+fn irregular_row_lengths_are_padded_instead_of_erroring() {
+    let laid = harness::pump_widget(
         Table::new(vec![
             TableRow::new(vec![Text::new("Some Text").boxed()]),
             TableRow::new(vec![]),
         ]),
         harness::screen(),
+    );
+
+    let table = laid
+        .try_find_by_render_type("RenderTable")
+        .expect("the irregular table still mounts");
+    assert_eq!(
+        laid.children(table).len(),
+        2,
+        "one column and two rows: the empty row is padded to one cell rather \
+         than leaving a grid that does not divide evenly",
+    );
+    assert!(
+        laid.find_text("Some Text").is_some(),
+        "and the row that did have content still renders it",
     );
 }
 

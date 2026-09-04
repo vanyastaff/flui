@@ -214,3 +214,43 @@ fn rows_whose_keys_collide_by_hash_are_still_distinct() {
         "and row `b` keeps its own — a hash collision must not trade them"
     );
 }
+
+/// Rows that disagree about their cell count used to be two `debug_assert!`s
+/// and nothing else, so a release build carried the ragged grid into
+/// `RenderTable` — which floor-divides to get its row count, leaving a
+/// trailing partial row that layout skipped, hit-test ignored, and paint was
+/// still handed. `Table::new` squares the rows up instead, so that state
+/// cannot be constructed.
+#[test]
+fn table_pads_a_short_row_and_drops_a_long_rows_extra_cells() {
+    let laid = lay_out(
+        Table::new(vec![
+            TableRow::new(vec![
+                SizedBox::new(1.0, 10.0).boxed(),
+                SizedBox::new(1.0, 10.0).boxed(),
+            ]),
+            // One cell short: padded, so this row is still a row.
+            TableRow::new(vec![SizedBox::new(1.0, 20.0).boxed()]),
+            // One cell too many: the extra is dropped.
+            TableRow::new(vec![
+                SizedBox::new(1.0, 30.0).boxed(),
+                SizedBox::new(1.0, 30.0).boxed(),
+                SizedBox::new(1.0, 30.0).boxed(),
+            ]),
+        ]),
+        tight(100.0, 200.0),
+    );
+
+    let root = laid.root();
+    assert_eq!(
+        laid.children(root).len(),
+        6,
+        "three rows of two columns reach the render object as exactly six cells",
+    );
+    // The padded cell occupies its slot rather than shifting the grid: row 1's
+    // real cell stays in column 0, and row 2 starts where row 1 ends — so all
+    // three rows contributed their height (10, then 20, then 30) and none was
+    // truncated away.
+    assert_eq!(laid.offset(laid.child(root, 2)), offset(0.0, 10.0));
+    assert_eq!(laid.offset(laid.child(root, 4)), offset(0.0, 30.0));
+}

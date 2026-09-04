@@ -4,6 +4,8 @@ use std::collections::HashMap;
 
 use flui_foundation::ViewKey;
 use flui_objects::RenderTable;
+
+use crate::SizedBox;
 use flui_rendering::parent_data::TableCellParentData;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Pixels;
@@ -245,6 +247,7 @@ impl Table {
     /// A table of `rows`, with Flutter's default column width, alignment, no
     /// border, and no explicit text baseline.
     pub fn new(rows: Vec<TableRow>) -> Self {
+        let rows = square_up(rows);
         Self {
             cells: identified_cells(&rows),
             rows,
@@ -310,6 +313,48 @@ impl Table {
 /// among the unkeyed rows, so inserting or removing a keyed row does not
 /// renumber the unkeyed ones (Flutter matches its unkeyed rows by sequence
 /// among themselves for the same reason).
+/// Makes `rows` rectangular against the first row's cell count, padding a
+/// short row with empty cells and dropping a long row's extras.
+///
+/// A table whose rows disagree used to be a `debug_assert!` here and another
+/// one in the render object, which means a release build carried the ragged
+/// grid all the way down: the render object floor-divides to get its row
+/// count, so a trailing partial row was laid out by nothing and hit-tested by
+/// nothing while still being handed to paint. Squaring up at construction
+/// removes that state instead of asserting about it.
+///
+/// Repairing rather than rejecting is this library's rule for caller
+/// configuration — the same rule `RenderViewport::set_anchor` follows for an
+/// out-of-range anchor and `RenderTable` follows for a baseline alignment with
+/// no text baseline. Flutter asserts instead; the divergence is deliberate,
+/// and the warning is what keeps it from being silent.
+fn square_up(mut rows: Vec<TableRow>) -> Vec<TableRow> {
+    let Some(columns) = rows.first().map(|row| row.cells.len()) else {
+        return rows;
+    };
+    let ragged = rows.iter().any(|row| row.cells.len() != columns);
+    if !ragged {
+        return rows;
+    }
+
+    let found: Vec<usize> = rows.iter().map(|row| row.cells.len()).collect();
+    tracing::warn!(
+        expected = columns,
+        ?found,
+        "Table: the rows do not all have the first row's cell count; short \
+         rows are padded with empty cells and extra cells are dropped. Give \
+         every row the same number of cells."
+    );
+
+    for row in &mut rows {
+        row.cells.truncate(columns);
+        while row.cells.len() < columns {
+            row.cells.push(SizedBox::shrink().boxed());
+        }
+    }
+    rows
+}
+
 fn identified_cells(rows: &[TableRow]) -> Vec<KeyedCell> {
     let mut unkeyed_ordinal = 0usize;
     let mut cells = Vec::new();
@@ -369,13 +414,9 @@ impl RenderView for Table {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
+        // No shape check here: `Table::new` squared the rows up, so the grid
+        // this hands the render object always divides evenly.
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        debug_assert!(
-            self.rows
-                .iter()
-                .all(|row| row.cells.len() == self.column_count()),
-            "every Table row must have the same number of cells as the first row",
-        );
         impact |= render_object.set_column_count(self.column_count());
         impact |= render_object.set_column_widths(self.column_widths.clone());
         impact |= render_object.set_default_column_width(self.default_column_width.clone());
