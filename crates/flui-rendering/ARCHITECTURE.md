@@ -35,7 +35,7 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
-### The set-position pair is published, and the delegates do not wrap
+### The set POSITION is published; the set size waits, and the delegates do not wrap
 
 **Rule:** a screen reader announces "item 12 of 100" from the platform's set-position concept.
 Flutter carries the two halves separately — `SemanticsConfiguration.indexInParent` on the item and
@@ -43,12 +43,20 @@ Flutter carries the two halves separately — `SemanticsConfiguration.indexInPar
 delegates supply the first by wrapping every materialised item in an `IndexedSemantics`
 (`addSemanticIndexes`, on by default), a `SingleChildRenderObjectWidget`.
 
-**Choice:** AccessKit has the concept directly, so `accesskit_translation` emits the pair —
+**Choice:** AccessKit has the concept directly, so `accesskit_translation` can emit the pair —
 `position_in_set` (one-based, converted there from the framework's zero-based index) and
-`size_of_set` from the sliver's own `scroll_child_count`, which `RenderSliverList` now describes
-from its item count. A negative index is dropped rather than published as a nonsensical position.
+`size_of_set` — and a negative index is dropped rather than published as a nonsensical position.
 `IndexedSemantics` and `RenderIndexedSemantics` exist as public widgets; FLUI's delegates do
 **not** wrap items in them by default.
+
+**Only the position is published so far.** A first attempt put `size_of_set` on the enclosing
+sliver, from its `item_count`. That is wrong twice over: AccessKit's two properties describe the
+SAME node, so a total on the container is invisible to a reader querying the focused row; and a
+lazy sliver's count is its *render-child* count, which for `SliverList::separated` is the
+interleaved `2n − 1` and would announce "item 2 of 5" on a three-item list. Both properties belong
+on the item node, from a semantic child count that travels with the semantic index — the same
+threading the derivation needs — so the total waits for that rather than shipping a wrong one. A
+missing total degrades to "item 12 of ?"; a wrong one misleads.
 
 **Placement differs from the reference.** An `IndexedSemantics` goes *inside* the row's semantics
 container here, not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR
@@ -66,11 +74,12 @@ a derivation from the logical index alone announces separators as members and gi
 positions 1, 3, 5. Correcting that needs a semantic index carried beside the logical one through
 `ElementCore::sliver_slot` and both stamp sites, which is its own change. Tracked on #837.
 
-**Replacement test:** `an_indexed_item_publishes_its_position_and_the_sliver_its_set_size`
+**Replacement test:** `an_indexed_item_publishes_its_position_in_the_set`
 (`crates/flui-widgets/tests/semantics.rs`), asserting on the published AccessKit nodes rather than
 the framework configuration — the whole chain existed in pieces before this and connected to
-nothing, so the near end proves nothing about what a reader receives. Each half is separately
-load-bearing. Plus
+nothing, so the near end proves nothing about what a reader receives. It also asserts that
+*nothing* publishes a set size, so the deferral is a checked state rather than an oversight and
+the assertion fails the moment one is added without revisiting this entry. Plus
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
 (`crates/flui-objects/tests/render_object_harness.rs`), including that an unchanged index requests
 no semantics update.

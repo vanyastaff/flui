@@ -299,13 +299,11 @@ impl flui_view::View for RowBody {
     }
 }
 
-/// An `IndexedSemantics` publishes its child's set position, and an enclosing
-/// lazy sliver publishes the set size.
+/// An `IndexedSemantics` publishes its child's position within the set.
 ///
-/// Together these are the "12" and the "100" a screen reader reads out. They
-/// come from different places on purpose: only the item knows which one it is,
-/// and only the sliver knows how many there are — a virtualised list cannot
-/// count its own materialised children and get the total.
+/// That is the "12" a screen reader reads out in "item 12 of 100". The "100"
+/// is not published at all yet — see the assertion at the end for why the
+/// obvious place for it is the wrong one.
 ///
 /// The oracle is `position_in_set`/`size_of_set` on the published AccessKit
 /// nodes rather than the framework-side configuration: the whole chain
@@ -313,7 +311,7 @@ impl flui_view::View for RowBody {
 /// connected to nothing, so asserting the near end proves nothing about what a
 /// screen reader receives.
 #[test]
-fn an_indexed_item_publishes_its_position_and_the_sliver_its_set_size() {
+fn an_indexed_item_publishes_its_position_in_the_set() {
     use flui_view::ViewExt as _;
     use flui_widgets::{IndexedSemantics, ScrollController, SliverList, Viewport};
 
@@ -360,14 +358,24 @@ fn an_indexed_item_publishes_its_position_and_the_sliver_its_set_size() {
         );
     }
 
-    // The other half: only the sliver knows how many rows there are, so the
-    // total has to come from it. Asserted rather than merely described — a
-    // published position with no size is "item 12 of ?", which is what this
-    // shipped as before the sliver described its own configuration.
+    // No node publishes a set size yet, and that is the honest state rather
+    // than an oversight. AccessKit's `size_of_set` and `position_in_set`
+    // describe the SAME node, so a total on the enclosing sliver is not
+    // something a reader querying the focused row can see; and the count a
+    // lazy sliver holds is its render-child count, which for
+    // `SliverList::separated` is the interleaved `2n - 1` rather than the n
+    // items a caller indexes. Publishing that would announce "item 2 of 5" on
+    // a three-item list.
+    //
+    // Both belong on the item node, from a semantic child count that travels
+    // alongside the semantic index — one cannot land without the other,
+    // because the count a delegate should announce is the count of the items
+    // it indexes, not the render children it interleaves. So this asserts the
+    // absence rather than pinning a wrong value as the contract.
     let sizes: Vec<usize> = tree.nodes().filter_map(|node| node.size_of_set()).collect();
-    assert_eq!(
-        sizes,
-        vec![ROWS],
-        "exactly one node — the sliver — must publish the set size",
+    assert!(
+        sizes.is_empty(),
+        "no set size is published until it can be put on the item node with a \
+         semantic child count; found {sizes:?}",
     );
 }
