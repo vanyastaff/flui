@@ -124,20 +124,32 @@ fn run_checks(app: &mut Child, app_log: &std::path::Path) -> Result<()> {
         Ok(from - steps * 15)
     };
 
-    // First half of the drag, still held: the screen must ALREADY have
-    // moved by the second capture — a screen that only updates after the
-    // release means input stopped producing frames (the parked-loop bug:
-    // 125 pointer events, 2 frames). Deadline-polled, not fixed-sleep: a
-    // software raster on a 2-core CI runner can take hundreds of
-    // milliseconds per frame, and a fixed gap can straddle ZERO presents.
-    let reached = drag_to(drag_from_y, 10)?;
+    // Still held: the screen must ALREADY have moved before the release — a
+    // screen that only updates on release means input stopped producing
+    // frames (the parked-loop bug: 125 pointer events, 2 frames).
+    // Deadline-polled, not fixed-sleep: a software raster on a 2-core CI
+    // runner can take hundreds of milliseconds per frame, and a fixed gap can
+    // straddle ZERO presents.
+    //
+    // The baseline is taken after ONE step, not after ten. Comparing the
+    // second half of the drag against the first made the check depend on the
+    // list still having scroll room at the END of 150 px of travel: this drag
+    // starts at offset 0 and travels upward, so if the first half exhausted
+    // the content the second half moved nothing and the check failed with
+    // delivery perfectly healthy. How far the first half actually scrolls
+    // varies with how many XTEST motions the runner coalesces under load,
+    // which is why it failed intermittently (~1 in 8 on PR runs, never
+    // locally, and on doc-only changes). Anchoring at the first step spans
+    // nearly the whole drag and cannot start at the clamp.
+    fake_motion(&conn, root, center_x, drag_from_y - 15)?;
+    conn.sync()?;
     std::thread::sleep(Duration::from_millis(300));
     let mid_first = capture(&conn, window, &geometry)?;
-    let _ = drag_to(reached, 10)?;
+    let _ = drag_to(drag_from_y - 15, 19)?;
     wait_for_pixel_change(&conn, window, &geometry, &mid_first).map_err(|_| {
         anyhow::anyhow!(
-            "mid-drag check FAILED: pixels frozen between two held-drag \
-             segments 150px apart — input is not producing frames"
+            "mid-drag check FAILED: pixels frozen across 285px of held drag \
+             (baseline taken 15px in) — input is not producing frames"
         )
     })?;
     eprintln!("live-smoke: mid-drag tracking OK (screen follows the pointer)");
