@@ -68,31 +68,26 @@
 //! is either ported, cross-referenced to an existing/new pin, or named as a
 //! divergence.**
 //!
-//! ### Cases 1-2: zero-size paint-skip divergence
+//! ### Cases 1-2: the zero-size paint skip
 //!
 //! Flutter's `ColoredBox` (`_RenderColoredBox.paint`, `widgets/basic.dart`,
 //! tag `3.44.0`) guards its `Canvas.drawRect` call with `if (size >
 //! Size.zero)` — a zero-size `ColoredBox` never issues a fill command at
 //! all, which is exactly what cases 1-2's `mockCanvas.rects, isEmpty` /
-//! `mockCanvas.paints, isEmpty` assertions pin. FLUI's `RenderDecoratedBox`
-//! (`crates/flui-objects/src/proxy/decorated_box.rs`) →
-//! `paint_box_decoration` (`crates/flui-painting/src/decoration.rs`) has no
-//! equivalent guard and always calls `canvas.draw_rect`, zero-size rect
-//! included — a real, previously-undocumented divergence (zero visual
-//! impact, since a zero-area fill draws nothing on screen either way, but a
-//! genuine render-object contract difference: a caller inspecting the
-//! display list directly sees an extra command Flutter's contract says
-//! should not exist). This cannot be pinned through `LaidOut` (no
+//! `mockCanvas.paints, isEmpty` assertions pin. FLUI matches this since
+//! 2026-09-04; it did not before, and the divergence was real though
+//! invisible (a zero-area fill draws nothing either way, but a caller
+//! reading the display list saw a command that should not be there). This
+//! cannot be pinned through `LaidOut` (no
 //! paint-recording capability — see the divergence note above), so it is
 //! pinned instead at render level in
 //! `crates/flui-objects/tests/render_object_harness.rs`:
-//! `harness_decorated_box_paints_the_fill_rect_even_at_zero_size` (green,
-//! current behavior) and
-//! `harness_decorated_box_should_skip_the_fill_rect_at_zero_size_like_flutter`
-//! (`#[ignore]`d, pins the oracle's actual expectation — fails today).
-//! Filed as a new `docs/ROADMAP.md` Cross.H entry (search `ColoredBox`
-//! there) alongside the anti-alias gap below; implementing the
-//! `size > Size::ZERO` guard is out of scope for a test-porting pass.
+//! `harness_decorated_box_skips_the_fill_rect_at_zero_size_like_flutter`,
+//! green since 2026-09-04. The guard went on the FILL rather than on a
+//! caller — `paint_box_decoration` records no background when either
+//! dimension is zero — so `ColoredBox` matches the oracle exactly while
+//! `DecoratedBox`'s border, shadow and image passes still run on a
+//! degenerate box. The anti-alias gap below is still open.
 //!
 //! ### Cases 6-7: missing anti-alias knob
 //!

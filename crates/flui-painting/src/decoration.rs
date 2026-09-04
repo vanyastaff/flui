@@ -133,7 +133,27 @@ pub fn paint_box_decoration(
 
     // 2. Background: a gradient wins over a flat color (Flutter:
     //    "if gradient is specified, color has no effect").
-    if let Some(gradient) = &decoration.gradient {
+    //
+    // A background covering no area is not recorded at all. Flutter guards
+    // this in `_RenderColoredBox.paint` (`size > Size.zero`, false when
+    // EITHER dimension is zero) but not in `RenderDecoratedBox`, because
+    // there the guard lives on the class rather than on the primitive. FLUI
+    // has one decoration painter serving both `ColoredBox` and
+    // `DecoratedBox`, so the guard goes on the FILL instead of the caller:
+    // that matches `ColoredBox` exactly, and for `DecoratedBox` it drops a
+    // command that covers zero pixels either way. The border, shadows and
+    // image below are deliberately outside it — a border on a degenerate box
+    // still draws lines, and skipping the whole decoration would lose them.
+    //
+    // The test is `== 0`, not `<= 0`. A rect whose min exceeds its max is
+    // INVERTED, not empty, and this module deliberately normalizes those
+    // through `shortest_side`'s `.abs()` — `circle_zero_size_and_negative_area_rects_do_not_panic`
+    // pins an inverted 100x100 resolving to the same r=50 circle an upright
+    // one gives. A signed test would have swallowed that whole case.
+    let paints_no_area = rect.width() == Pixels::ZERO || rect.height() == Pixels::ZERO;
+    if paints_no_area {
+        // fall through to the border/shadow/image passes
+    } else if let Some(gradient) = &decoration.gradient {
         let shader = resolve_gradient(gradient, rect);
         match &silhouette {
             Silhouette::Circle(circle) => {

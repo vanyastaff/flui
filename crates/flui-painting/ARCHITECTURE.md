@@ -120,6 +120,42 @@ This section records places where the Rust shape diverges from the Dart/Skia sha
 
 **Accepted trade-off:** The first use of a distinct paint still pays one full `Paint::clone` (~80-200 bytes incl. optional `Box<Shader>` payload) to seed the pool, and every draw pays an O(distinct-paints) linear scan. Both amortise across a recording; no criterion benchmark has measured the win on a realistic workload (see Outstanding refactors "Paint interning at construction").
 
+### 7. The zero-area background guard sits on the FILL, not on a caller
+
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — behaviour is the floor, and an
+improvement over the reference owes a named record plus a replacement test.
+
+**Choice:** `paint_box_decoration` records no background — colour or gradient — when either
+dimension of its rect is exactly zero. Border, shadow and image passes stay outside the guard.
+
+**Why not where Flutter puts it:** Flutter guards this on the CLASS. `_RenderColoredBox.paint`
+(`widgets/basic.dart`) wraps its `drawRect` in `if (size > Size.zero)`, and `RenderDecoratedBox`
+(`rendering/proxy_box.dart`) has no such check, so a degenerate `DecoratedBox` there DOES record a
+zero-area fill. FLUI cannot copy that placement: `ColoredBox` here realizes as a
+`RenderDecoratedBox` with a colour-only `BoxDecoration`, so one painter serves both widgets and a
+class-level guard would have to pick which of the two to match while diverging from the other.
+
+**The divergence, stated:** a zero-area `DecoratedBox` in FLUI records no background where Flutter
+records one. Identical pixels — a zero-area fill rasterizes nothing either way — and one fewer
+display-list command. What a caller reading the display list sees is the difference, which is
+precisely the reason the guard was worth adding for `ColoredBox` in the first place.
+
+**Alternatives:**
+- Guard the whole decoration at zero size — rejected, and this is the edge case a naive port of
+  Flutter's class-level guard loses: a border on a degenerate box still draws lines, and a shadow
+  still has a silhouette. Skipping the decoration wholesale would drop them silently.
+- Give `ColoredBox` its own render object so each class can carry its own guard — rejected as
+  duplication for one boolean. `RenderColoredBox` exists but is `Leaf` arity, so it is not the
+  analogue of Flutter's child-bearing `_RenderColoredBox` either.
+- Signed comparison (`<= 0`) instead of `== 0` — rejected after it broke
+  `circle_zero_size_and_negative_area_rects_do_not_panic`. A rect whose min exceeds its max is
+  INVERTED, not empty, and this module deliberately normalizes those through `shortest_side`'s
+  `.abs()`; the signed test swallowed that whole case.
+
+**Replacement test:** `harness_decorated_box_skips_the_fill_rect_at_zero_size_like_flutter`
+(`crates/flui-objects/tests/render_object_harness.rs`) covers all three degenerate shapes. The twin
+that pinned the old unconditional behaviour is deleted rather than left contradicting it.
+
 ### Net unsafe delta: 0
 
 The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before and after the chain. Zero `unsafe` blocks introduced; zero removed. Distinct from the `flui-layer` chain's -39 net delta (flui-layer had 39 cargo-cult `unsafe impl Send + Sync` blocks to delete; flui-painting never had them).

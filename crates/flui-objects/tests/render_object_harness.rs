@@ -4057,65 +4057,18 @@ fn harness_decorated_box_foreground_paints_after_child() {
     );
 }
 
-/// Current FLUI behavior: a childless `RenderDecoratedBox` squeezed to zero
-/// size still emits its fill `DrawRect` unconditionally.
+/// A background covering no area is not recorded at all.
 ///
-/// Flutter parity gap: `ColoredBox`'s private render object
-/// (`_RenderColoredBox.paint`, `widgets/basic.dart`, tag `3.44.0`) guards
-/// its `Canvas.drawRect` call with `if (size > Size.zero)`, so a zero-size
-/// `ColoredBox` never issues a fill command at all. `RenderDecoratedBox`
-/// (`crates/flui-objects/src/proxy/decorated_box.rs`) → `paint_box_decoration`
-/// (`crates/flui-painting/src/decoration.rs`) has no equivalent guard and
-/// always calls `canvas.draw_rect`, zero-size rect included. See
-/// `docs/ROADMAP.md` Cross.H for the full writeup and
-/// [`harness_decorated_box_should_skip_the_fill_rect_at_zero_size_like_flutter`]
-/// pinning the oracle's actual expectation below.
+/// Flutter guards this in `_RenderColoredBox.paint` (`size > Size.zero`,
+/// which is false when EITHER dimension is zero) and not in
+/// `RenderDecoratedBox`, because there the guard sits on the class. FLUI has
+/// one decoration painter behind both `ColoredBox` and `DecoratedBox`, so the
+/// guard sits on the FILL: `ColoredBox` then matches exactly, and
+/// `DecoratedBox` drops a command that covers zero pixels either way. A
+/// border or shadow on a degenerate box still paints — those passes are
+/// outside the guard on purpose.
 #[test]
-fn harness_decorated_box_paints_the_fill_rect_even_at_zero_size() {
-    let run = RenderTester::mount(box_node(RenderDecoratedBox::new(
-        BoxDecoration::with_color(Color::RED),
-    )))
-    .with_size(Size::ZERO)
-    .run_frame();
-
-    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
-
-    let painted = run
-        .display_commands()
-        .into_iter()
-        .map(|cmd| cmd.line)
-        .collect::<Vec<_>>();
-    let rects = painted
-        .iter()
-        .filter(|line| line.contains("DrawRect"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        rects.len(),
-        1,
-        "current behavior: a zero-size RenderDecoratedBox still emits its \
-         fill DrawRect unconditionally; commands:\n{}",
-        painted.join("\n"),
-    );
-    assert!(
-        rects[0].contains("0.00x0.00"),
-        "the unconditional fill must be the zero-AREA rect itself, not some \
-         other draw; got: {}",
-        rects[0],
-    );
-}
-
-/// Oracle-pinning twin of
-/// [`harness_decorated_box_paints_the_fill_rect_even_at_zero_size`]: Flutter's
-/// `ColoredBox` skips the fill paint entirely at zero size. Fails today
-/// against FLUI's unconditional `draw_rect` — see the `#[ignore]` reason and
-/// `docs/ROADMAP.md` Cross.H. Un-ignore once `RenderDecoratedBox`'s paint
-/// path (or `paint_box_decoration`) gains a `size > Size::ZERO` guard; that
-/// production paint change is out of scope here.
-#[test]
-#[ignore = "FLUI's RenderDecoratedBox paints its fill rect unconditionally, \
-            even at zero size; Flutter's ColoredBox skips the paint entirely \
-            in that case -- see docs/ROADMAP.md Cross.H"]
-fn harness_decorated_box_should_skip_the_fill_rect_at_zero_size_like_flutter() {
+fn harness_decorated_box_skips_the_fill_rect_at_zero_size_like_flutter() {
     // Flutter's guard is `size > Size.zero`, which is false when EITHER
     // dimension is zero — all three degenerate shapes must skip.
     for degenerate in [
