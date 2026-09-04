@@ -7,6 +7,7 @@ use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::view::{CacheExtentStyle, ScrollPosition, SliverPaintOrder};
 use flui_types::layout::{Axis, AxisDirection};
+use flui_types::painting::Clip;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
@@ -65,6 +66,7 @@ pub struct Viewport<C = Vec<BoxedView>> {
     paint_order: SliverPaintOrder,
     anchor: f32,
     center: Option<usize>,
+    clip_behavior: Clip,
     children: C,
 }
 
@@ -78,6 +80,7 @@ impl<C> Viewport<C> {
             paint_order: SliverPaintOrder::FirstIsTop,
             anchor: 0.0,
             center: None,
+            clip_behavior: Clip::HardEdge,
             children,
         }
     }
@@ -155,6 +158,15 @@ impl<C> Viewport<C> {
         self
     }
 
+    /// Set how overflowing content is clipped (default [`Clip::HardEdge`]).
+    /// [`Clip::None`] clips nothing, so a child may paint outside the
+    /// viewport's bounds. Flutter's `Viewport.clipBehavior`.
+    #[must_use]
+    pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
+        self.clip_behavior = clip_behavior;
+        self
+    }
+
     fn build_render_object(&self) -> RenderViewport<ScrollPosition> {
         let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
         let position = match &self.offset_source {
@@ -178,6 +190,7 @@ impl<C> Viewport<C> {
         let _ = render_object.set_paint_order(self.paint_order);
         let _ = render_object.set_anchor(self.anchor);
         let _ = render_object.set_center(self.center);
+        let _ = render_object.set_clip_behavior(self.clip_behavior);
         render_object
     }
 }
@@ -191,6 +204,7 @@ impl<C: ViewSeq> fmt::Debug for Viewport<C> {
             .field("paint_order", &self.paint_order)
             .field("anchor", &self.anchor)
             .field("center", &self.center)
+            .field("clip_behavior", &self.clip_behavior)
             .field("children", &self.children.len())
             .finish()
     }
@@ -225,6 +239,7 @@ where
         impact |= render_object.set_paint_order(self.paint_order);
         impact |= render_object.set_anchor(self.anchor);
         impact |= render_object.set_center(self.center);
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
         match &self.offset_source {
             OffsetSource::Pixels(pixels) => {
                 // Compat with today's behavior: push the new value into the
@@ -284,6 +299,7 @@ pub struct ShrinkWrappingViewport<C = Vec<BoxedView>> {
     axis_direction: AxisDirection,
     offset_source: OffsetSource,
     paint_order: SliverPaintOrder,
+    clip_behavior: Clip,
     children: C,
 }
 
@@ -294,6 +310,7 @@ impl<C> ShrinkWrappingViewport<C> {
             axis_direction: AxisDirection::TopToBottom,
             offset_source: OffsetSource::Pixels(0.0),
             paint_order: SliverPaintOrder::FirstIsTop,
+            clip_behavior: Clip::HardEdge,
             children,
         }
     }
@@ -340,6 +357,14 @@ impl<C> ShrinkWrappingViewport<C> {
         self
     }
 
+    /// Set how overflowing content is clipped (default [`Clip::HardEdge`]).
+    /// [`Clip::None`] clips nothing. Flutter's `clipBehavior`.
+    #[must_use]
+    pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
+        self.clip_behavior = clip_behavior;
+        self
+    }
+
     fn build_render_object(&self) -> RenderShrinkWrappingViewport<ScrollPosition> {
         let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
         let position = match &self.offset_source {
@@ -356,6 +381,7 @@ impl<C> ShrinkWrappingViewport<C> {
         // and a caller may pass the render object's own default
         // (`FirstIsTop`), for which the setter correctly reports `NONE`.
         let _ = render_object.set_paint_order(self.paint_order);
+        let _ = render_object.set_clip_behavior(self.clip_behavior);
         render_object
     }
 }
@@ -366,6 +392,7 @@ impl<C: ViewSeq> fmt::Debug for ShrinkWrappingViewport<C> {
             .field("axis_direction", &self.axis_direction)
             .field("offset_source", &self.offset_source)
             .field("paint_order", &self.paint_order)
+            .field("clip_behavior", &self.clip_behavior)
             .field("children", &self.children.len())
             .finish()
     }
@@ -396,6 +423,7 @@ where
         // from construction.
         impact |= render_object.set_axis_direction(self.axis_direction);
         impact |= render_object.set_paint_order(self.paint_order);
+        impact |= render_object.set_clip_behavior(self.clip_behavior);
         match &self.offset_source {
             OffsetSource::Pixels(pixels) => {
                 // See `Viewport::update_render_object`'s matching arm for the

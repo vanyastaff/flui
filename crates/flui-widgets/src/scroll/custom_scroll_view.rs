@@ -5,6 +5,7 @@ use std::fmt;
 
 use flui_rendering::view::SliverPaintOrder;
 use flui_types::layout::Axis;
+use flui_types::painting::Clip;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
@@ -53,6 +54,7 @@ pub struct CustomScrollView {
     center: Option<usize>,
     anchor: f32,
     paint_order: SliverPaintOrder,
+    clip_behavior: Clip,
     slivers: Vec<BoxedView>,
 }
 
@@ -66,6 +68,7 @@ impl CustomScrollView {
             center: None,
             anchor: 0.0,
             paint_order: SliverPaintOrder::FirstIsTop,
+            clip_behavior: Clip::HardEdge,
             slivers: slivers.into_boxed_vec(),
         }
     }
@@ -125,6 +128,17 @@ impl CustomScrollView {
         self.paint_order = paint_order;
         self
     }
+
+    /// Set how overflowing content is clipped (default [`Clip::HardEdge`]).
+    /// [`Clip::None`] clips nothing, so a sliver may paint outside the
+    /// viewport's bounds; applies whether or not
+    /// [`CustomScrollView::shrink_wrap`] is set. Flutter's
+    /// `ScrollView.clipBehavior`.
+    #[must_use]
+    pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
+        self.clip_behavior = clip_behavior;
+        self
+    }
 }
 
 impl fmt::Debug for CustomScrollView {
@@ -135,6 +149,7 @@ impl fmt::Debug for CustomScrollView {
             .field("shrink_wrap", &self.shrink_wrap)
             .field("center", &self.center)
             .field("anchor", &self.anchor)
+            .field("clip_behavior", &self.clip_behavior)
             .field("paint_order", &self.paint_order)
             .field("sliver_count", &self.slivers.len())
             .finish()
@@ -155,6 +170,7 @@ impl StatelessView for CustomScrollView {
                 .axis_direction(axis_direction)
                 .offset(self.offset)
                 .paint_order(self.paint_order)
+                .clip_behavior(self.clip_behavior)
                 .boxed()
         } else {
             Viewport::new(self.slivers.clone())
@@ -163,6 +179,7 @@ impl StatelessView for CustomScrollView {
                 .center(self.center)
                 .anchor(self.anchor)
                 .paint_order(self.paint_order)
+                .clip_behavior(self.clip_behavior)
                 .boxed()
         }
     }

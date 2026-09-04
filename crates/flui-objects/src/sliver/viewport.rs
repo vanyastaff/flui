@@ -239,6 +239,10 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// The child positions the current pass decided; committed by
     /// `commit_positions` once the pass is accepted.
     staged_positions: Vec<StagedPosition>,
+    /// How content that overflows this viewport is clipped when it paints.
+    /// `Clip::None` clips nothing at all, so a child may paint outside the
+    /// viewport's bounds (Flutter's `clipBehavior`, default `hardEdge`).
+    clip_behavior: Clip,
 }
 
 impl RenderViewport<ScrollableViewportOffset> {
@@ -283,6 +287,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             render_invalidation_handle: None,
             offset_listener: None,
             staged_positions: Vec::new(),
+            clip_behavior: Clip::HardEdge,
         }
     }
 
@@ -324,6 +329,25 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             self.offset_listener = Some(register_offset_listener(&self.offset, handle));
         }
         flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// Sets how overflowing content is clipped when this viewport paints.
+    ///
+    /// `Clip::None` clips nothing, so a child may paint outside the
+    /// viewport's bounds; every other behaviour clips to them, and only when
+    /// the content actually overflows.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
+        if self.clip_behavior == clip_behavior {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.clip_behavior = clip_behavior;
+        flui_rendering::RenderUpdateImpact::PAINT
+    }
+
+    /// How overflowing content is clipped when this viewport paints.
+    #[must_use]
+    pub const fn clip_behavior(&self) -> Clip {
+        self.clip_behavior
     }
 
     /// Sets the sliver paint order. Hit testing uses the opposite order.
@@ -1011,9 +1035,9 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
             SliverPaintOrder::LastIsTop => ctx.paint_children(),
         };
 
-        if self.has_visual_overflow {
+        if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
-            ctx.with_clip_rect(clip_rect, Clip::HardEdge, paint_children);
+            ctx.with_clip_rect(clip_rect, self.clip_behavior, paint_children);
         } else {
             paint_children(ctx);
         }
@@ -1070,6 +1094,10 @@ pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     /// The child positions the current pass decided; committed by
     /// `commit_positions` once the pass is accepted.
     staged_positions: Vec<StagedPosition>,
+    /// How content that overflows this viewport is clipped when it paints.
+    /// `Clip::None` clips nothing at all, so a child may paint outside the
+    /// viewport's bounds (Flutter's `clipBehavior`, default `hardEdge`).
+    clip_behavior: Clip,
 }
 
 impl RenderShrinkWrappingViewport<ScrollableViewportOffset> {
@@ -1108,6 +1136,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             render_invalidation_handle: None,
             offset_listener: None,
             staged_positions: Vec::new(),
+            clip_behavior: Clip::HardEdge,
         }
     }
 
@@ -1137,6 +1166,25 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             self.offset_listener = Some(register_offset_listener(&self.offset, handle));
         }
         flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// Sets how overflowing content is clipped when this viewport paints.
+    ///
+    /// `Clip::None` clips nothing, so a child may paint outside the
+    /// viewport's bounds; every other behaviour clips to them, and only when
+    /// the content actually overflows.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
+        if self.clip_behavior == clip_behavior {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.clip_behavior = clip_behavior;
+        flui_rendering::RenderUpdateImpact::PAINT
+    }
+
+    /// How overflowing content is clipped when this viewport paints.
+    #[must_use]
+    pub const fn clip_behavior(&self) -> Clip {
+        self.clip_behavior
     }
 
     /// Sets the sliver paint order. Hit testing uses the opposite order.
@@ -1611,9 +1659,9 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
             SliverPaintOrder::LastIsTop => ctx.paint_children(),
         };
 
-        if self.has_visual_overflow {
+        if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
-            ctx.with_clip_rect(clip_rect, Clip::HardEdge, paint_children);
+            ctx.with_clip_rect(clip_rect, self.clip_behavior, paint_children);
         } else {
             paint_children(ctx);
         }
