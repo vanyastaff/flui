@@ -43,12 +43,20 @@ Flutter carries the two halves separately — `SemanticsConfiguration.indexInPar
 delegates supply the first by wrapping every materialised item in an `IndexedSemantics`
 (`addSemanticIndexes`, on by default), a `SingleChildRenderObjectWidget`.
 
-**Choice:** AccessKit has the concept directly, so `accesskit_translation` emits the pair —
+**Choice:** AccessKit has the concept directly, so `accesskit_translation` can emit the pair —
 `position_in_set` (one-based, converted there from the framework's zero-based index) and
-`size_of_set` from the sliver's own `scroll_child_count`, which `RenderSliverList` now describes
-from its item count. A negative index is dropped rather than published as a nonsensical position.
+`size_of_set` — and a negative index is dropped rather than published as a nonsensical position.
 `IndexedSemantics` and `RenderIndexedSemantics` exist as public widgets; FLUI's delegates do
 **not** wrap items in them by default.
+
+**Only the position is published so far.** A first attempt put `size_of_set` on the enclosing
+sliver, from its `item_count`. That is wrong twice over: AccessKit's two properties describe the
+SAME node, so a total on the container is invisible to a reader querying the focused row; and a
+lazy sliver's count is its *render-child* count, which for `SliverList::separated` is the
+interleaved `2n − 1` and would announce "item 2 of 5" on a three-item list. Both properties belong
+on the item node, from a semantic child count that travels with the semantic index — the same
+threading the derivation needs — so the total waits for that rather than shipping a wrong one. A
+missing total degrades to "item 12 of ?"; a wrong one misleads.
 
 **Placement differs from the reference.** An `IndexedSemantics` goes *inside* the row's semantics
 container here, not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR
