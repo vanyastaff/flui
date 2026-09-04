@@ -7805,6 +7805,247 @@ fn harness_shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_
 /// and item 1 at y = 0. The offsets are resolved once, from the accepted
 /// pass, against that size — not from a provisional size the pass laid out
 /// under.
+/// A sliver that lays out cleanly `healthy_layouts` times and panics on
+/// every layout after that, so a test can watch what a viewport does when a
+/// descendant's layout fails mid-frame. The pipeline catches the panic in
+/// the child's own walk frame and hands the parent `SliverGeometry::ZERO`,
+/// which is exactly the stand-in a viewport must not publish scroll
+/// dimensions from.
+#[derive(Debug)]
+struct PanicAfterNLayouts {
+    extent: f32,
+    layouts: Arc<std::sync::atomic::AtomicUsize>,
+    healthy_layouts: usize,
+}
+
+impl flui_rendering::traits::RenderSliver for PanicAfterNLayouts {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::SliverPhysicalParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::SliverLayoutContext<
+            '_,
+            flui_tree::Leaf,
+            Self::ParentData,
+        >,
+    ) -> flui_rendering::constraints::SliverGeometry {
+        let nth = self
+            .layouts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        assert!(
+            nth <= self.healthy_layouts,
+            "deliberate test failure on layout {nth}"
+        );
+        let constraints = *ctx.constraints();
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
+        flui_rendering::constraints::SliverGeometry {
+            scroll_extent: self.extent,
+            paint_extent,
+            layout_extent: paint_extent,
+            max_paint_extent: self.extent,
+            cache_extent: self.calculate_cache_offset(&constraints, 0.0, self.extent),
+            hit_test_extent: paint_extent,
+            visible: paint_extent > 0.0,
+            ..flui_rendering::constraints::SliverGeometry::ZERO
+        }
+    }
+}
+
+impl flui_foundation::Diagnosticable for PanicAfterNLayouts {}
+
+/// The box twin of [`PanicAfterNLayouts`], for the case that matters most:
+/// the failure is two levels below the viewport (under a
+/// `RenderSliverToBoxAdapter`), where a flag that only reports a direct
+/// child's failure sees nothing.
+#[derive(Debug)]
+struct PanicAfterNBoxLayouts {
+    size: Size,
+    layouts: Arc<std::sync::atomic::AtomicUsize>,
+    healthy_layouts: usize,
+}
+
+impl RenderBox for PanicAfterNBoxLayouts {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, flui_tree::Leaf, Self::ParentData>,
+    ) -> Size {
+        let nth = self
+            .layouts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        assert!(
+            nth <= self.healthy_layouts,
+            "deliberate test failure on box layout {nth}"
+        );
+        ctx.constraints().constrain(self.size)
+    }
+}
+
+impl flui_foundation::Diagnosticable for PanicAfterNBoxLayouts {}
+
+/// A pass that read a stand-in publishes no scroll dimensions, so a broken
+/// child cannot move the user's scroll offset.
+///
+/// Three 400 px slivers in a 400 px viewport give 1 200 px of content and a
+/// maximum scroll offset of 800; the position sits at 500. When the middle
+/// sliver's layout panics, the pipeline hands the viewport
+/// `SliverGeometry::ZERO` for it, so that pass sees 800 px of content and a
+/// maximum of 400 — publishing it would clamp the user's 500 down to 400 and
+/// teleport the view. The third pass repeats the check for the frame after:
+/// the child is poisoned by then and its stand-in is served without any
+/// failure being recorded, which is the arm a failure-flag design misses.
+#[test]
+fn harness_viewport_degraded_pass_does_not_move_the_scroll_position() {
+    use flui_rendering::view::{ScrollPosition, ViewportOffset};
+
+    let position = ScrollPosition::new(500.0);
+    let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let node = box_node(RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        position.clone(),
+    ))
+    .label("viewport")
+    .child(
+        fixed_extent_list(
+            400.0,
+            vec![box_node(RenderColoredBox::red(300.0, 1000.0)).label("head")],
+        )
+        .label("first"),
+    )
+    .child(
+        sliver_node(PanicAfterNLayouts {
+            extent: 400.0,
+            layouts: Arc::clone(&layouts),
+            healthy_layouts: 1,
+        })
+        .label("fragile"),
+    )
+    .child(
+        fixed_extent_list(
+            400.0,
+            vec![box_node(RenderColoredBox::green(300.0, 1000.0)).label("tail")],
+        )
+        .label("third"),
+    );
+    let mut run = RenderTester::mount(node)
+        .with_size(Size::new(px(300.0), px(400.0)))
+        .run_layout();
+    assert_eq!(
+        position.max_scroll_extent(),
+        800.0,
+        "the healthy pass publishes 1 200 px of content in a 400 px viewport"
+    );
+    assert_eq!(position.pixels(), 500.0);
+
+    // Pass 2: the middle sliver panics. Both it and the viewport are marked
+    // so the walk reaches the viewport's own `perform_layout` with a child
+    // that must really lay out (a clean child would serve cached geometry).
+    let fragile = run.id("fragile");
+    let viewport = run.id("viewport");
+    run.owner_mut().mark_needs_layout(fragile);
+    run.owner_mut().mark_needs_layout(viewport);
+    let _ = run.owner_mut().run_layout();
+    assert!(
+        layouts.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+        "the fragile sliver was laid out again and panicked"
+    );
+    assert_eq!(
+        position.pixels(),
+        500.0,
+        "a degraded pass must not clamp the user's offset to the stand-in's \
+         shorter content"
+    );
+    assert_eq!(
+        position.max_scroll_extent(),
+        800.0,
+        "and must not publish the stand-in's content extent"
+    );
+
+    // Pass 3: the child is poisoned now, so the walk serves its stand-in
+    // without recording a failure — the pass is still degraded.
+    run.owner_mut().mark_needs_layout(viewport);
+    let _ = run.owner_mut().run_layout();
+    assert_eq!(
+        position.pixels(),
+        500.0,
+        "the frame after the failure still reads a stand-in and still \
+         publishes nothing"
+    );
+}
+
+/// The same rule when the failure is two levels down: the box inside a
+/// `RenderSliverToBoxAdapter` panics, so the viewport's direct child (the
+/// adapter) returns `Ok` with a collapsed geometry. A parent that only
+/// learned about its own children's failures would publish that collapse
+/// and clamp the user's offset; the degradation count is taken over the
+/// whole subtree walk, so this case reads the same as the shallow one.
+#[test]
+fn harness_viewport_degraded_pass_sees_a_failure_two_levels_down() {
+    use flui_rendering::view::{ScrollPosition, ViewportOffset};
+
+    let position = ScrollPosition::new(500.0);
+    let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let node = box_node(RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        position.clone(),
+    ))
+    .label("viewport")
+    .child(
+        fixed_extent_list(
+            400.0,
+            vec![box_node(RenderColoredBox::red(300.0, 1000.0)).label("head")],
+        )
+        .label("first"),
+    )
+    .child(
+        sliver_node(RenderSliverToBoxAdapter::new())
+            .label("adapter")
+            .child(
+                box_node(PanicAfterNBoxLayouts {
+                    size: Size::new(px(300.0), px(400.0)),
+                    layouts: Arc::clone(&layouts),
+                    healthy_layouts: 1,
+                })
+                .label("fragile_box"),
+            ),
+    )
+    .child(
+        fixed_extent_list(
+            400.0,
+            vec![box_node(RenderColoredBox::green(300.0, 1000.0)).label("tail")],
+        )
+        .label("third"),
+    );
+    let mut run = RenderTester::mount(node)
+        .with_size(Size::new(px(300.0), px(400.0)))
+        .run_layout();
+    assert_eq!(position.max_scroll_extent(), 800.0);
+    assert_eq!(position.pixels(), 500.0);
+
+    let fragile = run.id("fragile_box");
+    let viewport = run.id("viewport");
+    run.owner_mut().mark_needs_layout(fragile);
+    run.owner_mut().mark_needs_layout(viewport);
+    let _ = run.owner_mut().run_layout();
+    assert!(
+        layouts.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+        "the fragile box was laid out again and panicked"
+    );
+    assert_eq!(
+        position.pixels(),
+        500.0,
+        "a failure below a direct child still degrades the viewport's pass"
+    );
+    assert_eq!(position.max_scroll_extent(), 800.0);
+}
+
 #[test]
 fn harness_shrink_wrapping_viewport_reverse_axis_positions_from_the_final_extent() {
     let run = RenderTester::mount(

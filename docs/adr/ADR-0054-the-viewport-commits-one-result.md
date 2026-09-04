@@ -80,5 +80,14 @@ committed that loop's result were inconsistent with each other and with Flutter
 
 ## Status of the decisions
 
-Decision 1 landed first (this record's first change), with the reverse-axis and one-layout-per-pass
-pins. Decisions 2, 3 and 4 land in that order as separate changes; decision 5 needs no code.
+Decision 1 landed first, with the reverse-axis and one-layout-per-pass pins. Decision 2 landed
+next: the walk counts every degradation event (a layout that failed and handed its caller a
+stand-in, or a poisoned node that served one), a layout context reports whether that count moved
+during its node's pass, and both viewports publish no scroll dimensions from such a pass — pinned
+at one level and at two levels below the viewport, each reading a clamped offset without the
+guard. Decisions 3 and 4 land in that order as separate changes; decision 5 needs no code.
+
+The degradation query is deliberately a count-since-context-creation rather than a failure flag:
+the pipeline catches a failure in the failing node's own walk frame and hands the parent a
+stand-in, so a flag on the direct child sees nothing when the failure is deeper, and a poisoned
+node's stand-in is served on later frames with no failure recorded at all. Both arms are pinned.

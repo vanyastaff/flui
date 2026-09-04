@@ -240,6 +240,16 @@ pub(super) struct SubtreeArena<'tree> {
     /// success clears the record).  Filtered at record time so the sink
     /// stays empty in the common all-healthy case.
     layout_successes: Mutex<Vec<flui_foundation::RenderId>>,
+    /// Every degradation event of this walk: a layout that failed and handed
+    /// its caller a stand-in, or a poisoned node that served one.
+    ///
+    /// A layout context takes a `DegradationProbe` over this counter when it
+    /// is built and reports whether the count moved during its node's pass.
+    /// The walk is depth-first and synchronous, so a count that moved between
+    /// a node's context creation and its query moved inside that node's
+    /// subtree, at any depth. A parent that must not act on a stand-in — a
+    /// viewport about to publish scroll dimensions — asks before it commits.
+    degradation_events: std::sync::atomic::AtomicU64,
     _lifetime: PhantomData<&'tree mut ()>,
 }
 
@@ -292,6 +302,7 @@ impl<'tree> SubtreeArena<'tree> {
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),
+            degradation_events: std::sync::atomic::AtomicU64::new(0),
             _lifetime: PhantomData,
         }
     }
@@ -384,6 +395,11 @@ impl<'tree> SubtreeArena<'tree> {
         self.layout_failures
             .lock()
             .push((parent, failed, LayoutFailureKind::of(err), attempt));
+        // Every failure recorded here handed its caller a stand-in size,
+        // geometry or intrinsic — the walk continues on a value this pass
+        // did not compute.
+        self.degradation_events
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Records a descendant layout success, but only for a node the
@@ -803,6 +819,11 @@ unsafe fn layout_subtree_borrowed_impl(
     // relies on below.
     if arena.layout_poison.is_poisoned(id) {
         let stand_in = || {
+            // Serving a stand-in is a degradation: the caller acts on
+            // geometry this pass did not compute.
+            arena
+                .degradation_events
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
             // an ancestor frame; this shared reborrow is the only live borrow.
             let node: &RenderNode = unsafe { &*node_ptr };
@@ -1223,6 +1244,9 @@ unsafe fn layout_subtree_borrowed_impl(
             baseline_cb_ref,
             Some(sliver_cb_ref),
             Some(box_intrinsic_cb_ref),
+            Some(crate::protocol::DegradationProbe::new(
+                &arena.degradation_events,
+            )),
         );
         let erased: &mut dyn BoxLayoutCtxErased = &mut ctx;
 
@@ -1592,6 +1616,10 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // of the slot.
     if arena.layout_poison.is_poisoned(id) {
         let stand_in = || {
+            // Serving a stand-in is a degradation (see the box twin).
+            arena
+                .degradation_events
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
             // an ancestor frame; this shared reborrow is the only live borrow.
             let node: &crate::storage::RenderNode = unsafe { &*node_ptr };
@@ -1860,6 +1888,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             id,
             &arena.pending_child_requests,
             &arena.pending_retain_bands,
+            Some(crate::protocol::DegradationProbe::new(
+                &arena.degradation_events,
+            )),
         );
         let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 
@@ -2074,6 +2105,7 @@ mod tests {
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),
+            degradation_events: std::sync::atomic::AtomicU64::new(0),
             _lifetime: PhantomData,
         };
 
@@ -2113,6 +2145,7 @@ mod tests {
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),
+            degradation_events: std::sync::atomic::AtomicU64::new(0),
             _lifetime: PhantomData,
         };
 

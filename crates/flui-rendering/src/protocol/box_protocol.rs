@@ -796,6 +796,14 @@ pub trait BoxLayoutCtxErased {
     /// Number of children visible to this context.
     fn child_count(&self) -> usize;
 
+    /// Whether a descendant's layout was degraded during this node's pass —
+    /// a failure turned into a stand-in, or a poisoned node served its
+    /// stand-in — at any depth. Contexts that carry no probe (direct and
+    /// test contexts) answer `false`.
+    fn descendant_layout_degraded(&self) -> bool {
+        false
+    }
+
     /// Performs synchronous layout on child at `index` with the given
     /// constraints; returns the child's computed `Size`.
     fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size;
@@ -927,6 +935,15 @@ pub trait BoxLayoutCtxErased {
 }
 
 impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
+    #[inline]
+    fn descendant_layout_degraded(&self) -> bool {
+        match &self.storage {
+            // A direct context runs no walk, so nothing can have degraded.
+            BoxLayoutCtxStorage::Direct { .. } => false,
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.descendant_layout_degraded(),
+        }
+    }
+
     #[inline]
     fn constraints(&self) -> BoxConstraints {
         // Owned by-value (Copy). Inner storage holds the canonical copy
@@ -1114,6 +1131,39 @@ impl ErasedChildState {
     }
 }
 
+/// How a layout context learns that a descendant's layout was degraded
+/// during its node's pass.
+///
+/// The arena counts every degradation event of the walk — a child failure
+/// turned into a stand-in size or geometry, a poisoned node served its
+/// stand-in — and a context captures the count when it is built. The walk
+/// is depth-first and synchronous, so any event counted between a node's
+/// context creation and its query happened inside that node's subtree, at
+/// any depth. A parent that must not act on a stand-in (a viewport
+/// publishing scroll dimensions) asks before it commits.
+#[derive(Debug, Clone, Copy)]
+pub struct DegradationProbe<'ctx> {
+    events: &'ctx std::sync::atomic::AtomicU64,
+    baseline: u64,
+}
+
+impl<'ctx> DegradationProbe<'ctx> {
+    /// A probe over the walk's counter, remembering its current value.
+    #[must_use]
+    pub fn new(events: &'ctx std::sync::atomic::AtomicU64) -> Self {
+        Self {
+            events,
+            baseline: events.load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+
+    /// Whether the counter moved since the probe was taken.
+    #[must_use]
+    pub fn degraded(&self) -> bool {
+        self.events.load(std::sync::atomic::Ordering::Relaxed) > self.baseline
+    }
+}
+
 /// Driver-native, parent-data-erased implementation of
 /// [`BoxLayoutCtxErased`] — the production layout walk's context.
 ///
@@ -1123,6 +1173,9 @@ impl ErasedChildState {
 /// `from_erased` with the node's OWN `Arity` and `ParentData`.
 pub struct ErasedBoxLayoutCtx<'ctx> {
     constraints: BoxConstraints,
+    /// See [`DegradationProbe`]: how this context learns of a degraded
+    /// descendant. `None` in contexts the production walk did not build.
+    degradation: Option<DegradationProbe<'ctx>>,
     children: &'ctx mut Vec<ErasedChildState>,
     child_ids: &'ctx [flui_foundation::RenderId],
     layout_child_callback: LayoutChildCallback<'ctx>,
@@ -1179,9 +1232,11 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
         actual_baseline_callback: ActualBaselineChildCallback<'ctx>,
         sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
         intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
+        degradation: Option<DegradationProbe<'ctx>>,
     ) -> Self {
         Self {
             constraints,
+            degradation,
             children,
             child_ids,
             layout_child_callback,
@@ -1195,6 +1250,10 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
 impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
     fn constraints(&self) -> BoxConstraints {
         self.constraints
+    }
+
+    fn descendant_layout_degraded(&self) -> bool {
+        self.degradation.is_some_and(|probe| probe.degraded())
     }
 
     fn child_count(&self) -> usize {

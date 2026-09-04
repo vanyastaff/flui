@@ -627,6 +627,12 @@ pub trait SliverLayoutCtxErased {
     /// Number of children visible to this context.
     fn child_count(&self) -> usize;
 
+    /// Whether a descendant's layout was degraded during this node's pass
+    /// (see `DegradationProbe`); contexts without a probe answer `false`.
+    fn descendant_layout_degraded(&self) -> bool {
+        false
+    }
+
     /// Performs synchronous layout on child at `index` with the given
     /// constraints; returns the child's computed [`SliverGeometry`].
     fn layout_child(&mut self, index: usize, constraints: SliverConstraints) -> SliverGeometry;
@@ -694,6 +700,15 @@ pub trait SliverLayoutCtxErased {
 }
 
 impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCtx<'_, A, P> {
+    #[inline]
+    fn descendant_layout_degraded(&self) -> bool {
+        match &self.storage {
+            // A direct context runs no walk, so nothing can have degraded.
+            SliverLayoutCtxStorage::Direct { .. } => false,
+            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.descendant_layout_degraded(),
+        }
+    }
+
     #[inline]
     fn constraints(&self) -> SliverConstraints {
         // Both Direct and Proxy cache constraints as an owned `Copy` value.
@@ -844,6 +859,10 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     /// render side never disposes a child itself, which is what avoids a
     /// double-remove ABA on the arena slot.
     pending_retain_bands: &'ctx parking_lot::Mutex<Vec<(RenderId, usize, usize)>>,
+    /// See [`DegradationProbe`](super::box_protocol::DegradationProbe): how
+    /// this context learns of a degraded descendant. `None` in contexts the
+    /// production walk did not build.
+    degradation: Option<super::box_protocol::DegradationProbe<'ctx>>,
 }
 
 impl std::fmt::Debug for ErasedSliverLayoutCtx<'_> {
@@ -877,6 +896,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
         node_id: RenderId,
         pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
         pending_retain_bands: &'ctx parking_lot::Mutex<Vec<(RenderId, usize, usize)>>,
+        degradation: Option<super::box_protocol::DegradationProbe<'ctx>>,
     ) -> Self {
         Self {
             constraints,
@@ -888,11 +908,16 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
             node_id,
             pending_child_requests,
             pending_retain_bands,
+            degradation,
         }
     }
 }
 
 impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
+    fn descendant_layout_degraded(&self) -> bool {
+        self.degradation.is_some_and(|probe| probe.degraded())
+    }
+
     fn constraints(&self) -> SliverConstraints {
         self.constraints
     }

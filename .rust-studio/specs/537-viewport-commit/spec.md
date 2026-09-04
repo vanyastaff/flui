@@ -6,7 +6,7 @@ later serves the stand-in through the `Ok` arm with no flag, and children commit
 before the viewport decides — an abort left new child geometry against old offsets). Order of work
 follows the review: D3 → D1 → D2 → D4/D5.
 
-## D3 (first PR) — logical offsets resolved once at commit
+## D3 (first PR, landed in #841) — logical offsets resolved once at commit
 - `layout_child_sequence` records `(slot, layout_offset, growth_direction, paint_extent)` per child
   instead of positioning immediately; after the loop accepts and the final size is known, one loop
   positions every child (`compute_absolute_paint_offset`). Nothing reads positions mid-loop
@@ -19,7 +19,7 @@ follows the review: D3 → D1 → D2 → D4/D5.
   the counting pin (a counting sliver laid out N times for N passes, not N+1). All existing
   shrink-wrap numbers unchanged.
 
-## D1 (second PR) — a degraded pass commits its geometry but publishes no dimensions
+## D1 (second PR, landed) — a degraded pass commits its geometry but publishes no dimensions
 - Arena: a per-walk `degradation_events: Cell<u64>` incremented when a child failure is caught and
   turned into a stand-in (`subtree_arena.rs` ~1047-1164) and when the poison skip serves a stand-in
   (~1593-1611, box twin ~804-823). Each `BoxLayoutContext` / `SliverLayoutContext` captures the
